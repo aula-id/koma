@@ -386,11 +386,7 @@ fn from_entry(
     // OpenAI-compat catalogue/API base (`COMMANDCODE_API_BASE` + `/chat/completions`).
     // `meta().chat_endpoint` stays the API base (API-first default).
     let endpoint = if conn.provider == OAuthProvider::KomaRun
-        && crate::service::catalogue_overlay::models_for(
-            crate::service::oauth::registry::KOMA_PREMIUM_CHAT_ENDPOINT,
-        )
-        .iter()
-        .any(|m| m.id == entry.model_id)
+        && crate::service::catalogue_overlay::is_premium_model(&entry.model_id)
     {
         crate::service::oauth::registry::KOMA_PREMIUM_CHAT_ENDPOINT.to_string()
     } else if conn.provider == OAuthProvider::CommandCode {
