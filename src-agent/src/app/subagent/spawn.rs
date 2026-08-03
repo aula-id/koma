@@ -147,7 +147,7 @@ pub fn spawn_subagent(
                 || n.starts_with("mcp__")
         });
     }
-    let convo = context::build_seed(agent, awareness, memory_md, task);
+    let convo = context::build_seed(agent, awareness, memory_md, &ctx.workspaces, &ctx.dir_cache, task);
     // None = unbounded (natural termination when model returns no tool calls).
     // Some(n) = explicit per-agent cap from the agent-def `steps` field.
     let max_steps: Option<usize> = agent.steps.map(|s| s as usize);
