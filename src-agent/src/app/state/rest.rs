@@ -96,6 +96,7 @@ pub struct AppStateRest {
     pub hub_history_offset: std::cell::Cell<usize>,
     pub rewind_offset: std::cell::Cell<usize>,
     pub todo_offset: std::cell::Cell<usize>,
+    pub skill_offset: std::cell::Cell<usize>,
     pub key_input_results_offset: std::cell::Cell<usize>,
     pub settings_dir_picker_offset: std::cell::Cell<usize>,
     /// Persisted scroll offset for the Appearance category's palette box list
@@ -530,6 +531,7 @@ impl AppStateRest {
             hub_history_offset: std::cell::Cell::new(0),
             rewind_offset: std::cell::Cell::new(0),
             todo_offset: std::cell::Cell::new(0),
+            skill_offset: std::cell::Cell::new(0),
             key_input_results_offset: std::cell::Cell::new(0),
             settings_dir_picker_offset: std::cell::Cell::new(0),
             settings_palette_offset: std::cell::Cell::new(0),

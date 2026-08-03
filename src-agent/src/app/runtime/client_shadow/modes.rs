@@ -30,7 +30,7 @@ use crate::ipc::proto::{
     ExtScreenSnapshot, ExtStoreRowWire, ExtStoreSnapshot, ExtensionsSnapshot, HelpSnapshot,
     KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModelCmdSnapshot, OnboardProviderSnapshot,
     OnboardSnapshot, PickerSnapshot, RewindSnapshot, SecuritySnapshot, SessionHubSnapshot,
-    TextEditorSnapshot, ToolPickerSnapshot, WarmStatusWire,
+    SkillCmdSnapshot, TextEditorSnapshot, ToolPickerSnapshot, WarmStatusWire,
 };
 use crate::model::app_config::McpTransport;
 use crate::model::store::SessionMeta;
@@ -559,6 +559,33 @@ pub(crate) fn shadow_ext_store(s: ExtStoreSnapshot) -> ExtStoreState {
         installing: s.installing,
         install_error: s.install_error,
         komarun_connected: s.komarun_connected,
+    }
+}
+
+/// Rebuild the `/skill` hub ([`SkillCmdState`]) from its projection.
+///
+/// Mirrors [`shadow_help`]: built as a struct literal so the daemon's query +
+/// filtered_idx + selected + chip are preserved exactly. Render-only — every key
+/// is forwarded to the daemon.
+pub(crate) fn shadow_skill_cmd(s: SkillCmdSnapshot) -> crate::app::mode::SkillCmdState {
+    use crate::app::mode::skill_cmd::{SkillCmdState, SkillEntry, SkillFilterChip};
+    crate::app::mode::SkillCmdState {
+        query: s.query,
+        chip: match s.chip.as_str() {
+            "active" => SkillFilterChip::Active,
+            _ => SkillFilterChip::All,
+        },
+        all: s
+            .all
+            .into_iter()
+            .map(|e| SkillEntry {
+                name: e.name,
+                description: e.description,
+                is_active: e.is_active,
+            })
+            .collect(),
+        filtered_idx: s.filtered_idx,
+        selected: s.selected,
     }
 }
 

@@ -160,6 +160,12 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
             paste_single_line(text, |c| h.query.push(c));
             h.refilter();
         }
+        Mode::Skill(s) => {
+            // The `/skill` hub has a live search field: paste feeds the
+            // query and re-runs the filter, exactly as a typed char does.
+            paste_single_line(text, |c| s.query.push(c));
+            s.refilter();
+        }
         Mode::OnboardProvider(op) => {
             use crate::app::mode::onboard_provider::OnboardProviderStep;
             use crate::app::mode::settings::OAuthFlowState;

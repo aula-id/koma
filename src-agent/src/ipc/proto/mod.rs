@@ -897,6 +897,7 @@ pub enum ModeSnapshot {
     Bash(Box<BashSnapshot>),
     Todo(Box<TodoSnapshot>),
     Help(Box<HelpSnapshot>),
+    Skill(Box<SkillCmdSnapshot>),
     Effort(EffortSnapshot),
     Model(Box<ModelCmdSnapshot>),
     Usage(Box<UsageSnapshot>),

@@ -37,6 +37,7 @@ pub(crate) mod model_cmd;
 pub(crate) mod extensions;
 mod misc;
 pub(crate) mod new_session;
+pub(crate) mod skill_cmd;
 // `pub(crate)` so the shared `kick_off_health_probe` helper is reachable from BOTH the
 // `/security` command (panel open) and the input-path self-heal (controller), which must
 // start the non-blocking health probe with identical semantics.
@@ -78,6 +79,7 @@ pub(super) fn apply_slash(
         Command::Task(args) => task::handle_task(args, state, client, handle)?,
         Command::Model(args) => model_cmd::handle_model(args, state)?,
         Command::Bash => bash::handle_bash(state)?,
+        Command::Skill(args) => skill_cmd::handle_skill(args, state)?,
         Command::Todo => todo::handle_todo(state)?,
         Command::Cd(path) => cd::handle_cd(path, state, client, handle)?,
         Command::AddDir(path) => cd::handle_adddir(path, state)?,
