@@ -1,6 +1,7 @@
 .serena/
 .env
 **/*.pyc
+.agents/
 
 # build artifacts — non-anchored so they match at ANY depth
 # (root-anchored /target missed src-agent/target etc.)
