@@ -669,15 +669,18 @@ fn append_ext_context(dst: &mut String, ctx: &std::collections::BTreeMap<String,
 
 /// Append each active skill's body to the volatile system tail. Iterated in
 /// `BTreeMap` KEY ORDER (deterministic). Empty map = no-op.
-fn append_active_skills(dst: &mut String, skills: &std::collections::BTreeMap<String, String>) {
-    for (name, body) in skills {
-        if body.trim().is_empty() {
+fn append_active_skills(
+    dst: &mut String,
+    skills: &std::collections::BTreeMap<String, crate::app::state::ActiveSkill>,
+) {
+    for (name, skill) in skills {
+        if skill.body.trim().is_empty() {
             continue;
         }
         dst.push_str("\n\n# Skill: ");
         dst.push_str(name);
         dst.push('\n');
-        dst.push_str(body);
+        dst.push_str(&skill.body);
     }
 }
 
@@ -717,14 +720,24 @@ mod ext_context_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod skill_tail_tests {
     use super::append_active_skills;
+    use crate::app::state::ActiveSkill;
     use std::collections::BTreeMap;
 
     #[test]
     fn append_skills_is_ordered_and_skips_blank() {
         let mut skills = BTreeMap::new();
-        skills.insert("zebra".to_string(), "z-body".to_string());
-        skills.insert("alpha".to_string(), "a-body".to_string());
-        skills.insert("blank".to_string(), "   ".to_string());
+        skills.insert(
+            "zebra".to_string(),
+            ActiveSkill { body: "z-body".to_string(), skill_dir: None },
+        );
+        skills.insert(
+            "alpha".to_string(),
+            ActiveSkill { body: "a-body".to_string(), skill_dir: None },
+        );
+        skills.insert(
+            "blank".to_string(),
+            ActiveSkill { body: "   ".to_string(), skill_dir: None },
+        );
         let mut dst = String::from("HEAD");
         append_active_skills(&mut dst, &skills);
         assert_eq!(

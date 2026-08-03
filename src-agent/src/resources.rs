@@ -258,7 +258,9 @@ pub fn build_system_prompt(
                 "Available skills (name + description only). Load one with \
                  skill({\"action\":\"load\",\"name\":\"...\"}) when the task matches; \
                  unload with action=unload when done. Only loaded skill bodies \
-                 appear below the cache split as \"# Skill: <name>\".\n",
+                 appear below the cache split as \"# Skill: <name>\". \
+                 Dir-form skills list companion files in the load result; \
+                 read them with `read` using absolute paths under skill_dir.\n",
             );
             s.push_str(sk);
         }
