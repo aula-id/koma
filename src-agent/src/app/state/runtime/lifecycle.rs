@@ -208,6 +208,7 @@ impl SessionRuntime {
                         &sess.path,
                         crate::dto::chat::Role::Assistant,
                         &content,
+                        reasoning.as_deref(),
                         usage,
                     );
                     sess.conversation.push_assistant(content, reasoning, false);

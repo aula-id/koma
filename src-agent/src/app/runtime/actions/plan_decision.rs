@@ -185,7 +185,7 @@ pub(super) fn handle_approve_plan_compact(
         let rt = &mut state.rest.sessions[fgi];
         if let Some(sess) = rt.session.as_mut() {
             for (id, result) in &staged {
-                let _ = msglog::append(&sess.path, Role::Tool, result, None);
+                let _ = msglog::append(&sess.path, Role::Tool, result, None, None);
                 sess.conversation.push_tool(id.clone(), result.clone());
             }
             for id in &trailing_ids {
@@ -193,6 +193,7 @@ pub(super) fn handle_approve_plan_compact(
                     &sess.path,
                     Role::Tool,
                     "skipped — plan approved, compacting context",
+                    None,
                     None,
                 );
                 sess.conversation.push_tool(

@@ -14,7 +14,7 @@ use super::final_answer;
 pub(crate) fn push_image_unsupported_notice(rest: &mut AppStateRest) {
     let notice = "Sorry, I can't see images on this model. Switch to a vision-capable model, or send your message without the image.".to_string();
     if let Some(sess) = rest.fg_mut().session.as_mut() {
-        let _ = crate::model::msglog::append(&sess.path, Role::Assistant, &notice, None);
+        let _ = crate::model::msglog::append(&sess.path, Role::Assistant, &notice, None, None);
         sess.conversation.push_assistant(notice, None, false);
         let _ = sess.save();
     }
@@ -87,6 +87,7 @@ pub(crate) fn finish_stream(rest: &mut AppStateRest, sess_idx: usize, error: Opt
                 &sess.path,
                 crate::dto::chat::Role::Assistant,
                 &content,
+                msg_reasoning.as_deref(),
                 usage,
             );
             sess.conversation
@@ -213,7 +214,7 @@ pub(crate) fn advance_turn(
     let usage = state.rest.sessions[sess_idx].pending_usage.take();
     // Display-only reasoning streamed this round. Taken unconditionally (so it
     // can never leak into the next round) and folded onto the committed message
-    // below; never logged to disk or sent to the API.
+    // below; persisted to messages.json for session resume but not sent on the wire.
     let reasoning = state.rest.sessions[sess_idx].take_reasoning();
     // Structured OpenRouter reasoning_details streamed this round. Drained
     // unconditionally (same as `reasoning`, so it can never leak into the next
@@ -305,7 +306,7 @@ pub(crate) fn advance_turn(
                 // so it decodes here; only decode — strip nothing else.
                 let raw = buf.clone().unwrap_or_default();
                 let content = crate::dto::chat::unescape_reasoning_tags(&raw).into_owned();
-                let _ = crate::model::msglog::append(&sess.path, Role::Assistant, &content, usage);
+                let _ = crate::model::msglog::append(&sess.path, Role::Assistant, &content, reasoning.as_deref(), usage);
                 sess.conversation.push_assistant_with_tools(
                     content,
                     pending.clone(),
@@ -320,7 +321,7 @@ pub(crate) fn advance_turn(
                     final_answer(buf.clone().unwrap_or_default(), reasoning);
                 if !content.is_empty() {
                     let _ =
-                        crate::model::msglog::append(&sess.path, Role::Assistant, &content, usage);
+                        crate::model::msglog::append(&sess.path, Role::Assistant, &content, msg_reasoning.as_deref(), usage);
                     sess.conversation
                         .push_assistant(content.clone(), msg_reasoning, promoted);
                     if let Err(e) = sess.save() {
@@ -408,7 +409,7 @@ pub(crate) fn advance_turn(
             // pub(super) in the actions module, so we inline the essentials here
             // rather than risk a module-visibility or borrow cycle.
             if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-                let _ = crate::model::msglog::append(&sess.path, Role::User, &joined, None);
+                let _ = crate::model::msglog::append(&sess.path, Role::User, &joined, None, None);
                 sess.conversation.push_user(joined);
                 let _ = sess.save();
             }
