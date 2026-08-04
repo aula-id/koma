@@ -89,6 +89,7 @@ pub(super) fn drain_deferred_and_resume(
                     crate::dto::chat::Role::User,
                     &content,
                     None,
+                    None,
                 );
                 sess.conversation.push_user(content);
                 let _ = sess.save();
@@ -263,7 +264,7 @@ pub(super) fn drain_deferred_and_resume(
             Some(s) => s,
             None => return dirty,
         };
-        let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None);
+        let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None, None);
         sess.conversation.push_user(body);
         let _ = sess.save();
         let history = sess.conversation.history();
@@ -338,7 +339,7 @@ pub(super) fn drain_deferred_and_resume(
             Some(s) => s,
             None => return dirty,
         };
-        let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None);
+        let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None, None);
         sess.conversation.push_user(body);
         let _ = sess.save();
         let history = sess.conversation.history();
@@ -431,7 +432,7 @@ pub(super) fn drain_deferred_and_resume(
             Some(s) => s,
             None => return dirty,
         };
-        let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None);
+        let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None, None);
         sess.conversation.push_user(body);
         let _ = sess.save();
         let history = sess.conversation.history();

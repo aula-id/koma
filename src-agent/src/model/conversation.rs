@@ -70,9 +70,10 @@ impl Conversation {
     ///
     /// `reasoning` is the display-only thinking block streamed for this turn
     /// (`None` when the model didn't think). It is attached BEFORE the message
-    /// enters the list so the transcript cache captures it on first render, and
-    /// it is never serialised (the field is `#[serde(skip)]`) — it only ever
-    /// shows above the answer, never re-entering the conversation or disk.
+    /// enters the list so the transcript cache captures it on first render. It
+    /// is persisted to `messages.json` (for session resume / transcript rehydrate)
+    /// but never sent on the wire (`to_wire` builds request bodies from fields
+    /// and omits this).
     pub fn push_assistant(
         &mut self,
         content: impl Into<String>,
@@ -89,11 +90,11 @@ impl Conversation {
     /// Append an assistant turn that requested tool calls. `content` is the
     /// assistant text accompanying the calls (often empty). `reasoning` is the
     /// display-only thinking block (the model may think before emitting tool
-    /// calls); attached before the push and never serialised — see
-    /// [`Self::push_assistant`]. `reasoning_details` is the structured OpenRouter
-    /// chain-of-thought (typed + signed) for this turn, echoed back on the
-    /// tool-continuation request so the model keeps its reasoning across tool calls;
-    /// also never persisted to disk.
+    /// calls); attached before the push and persisted to `messages.json` for
+    /// session resume — see [`Self::push_assistant`]. `reasoning_details` is the
+    /// structured OpenRouter chain-of-thought (typed + signed) for this turn,
+    /// echoed back on the tool-continuation request so the model keeps its
+    /// reasoning across tool calls; never persisted to disk.
     pub fn push_assistant_with_tools(
         &mut self,
         content: String,

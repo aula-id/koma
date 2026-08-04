@@ -9,30 +9,36 @@ use crate::dto::chat::Role;
 use super::blobs::classify_blob;
 use super::schema::{now_secs, open, role_str};
 
-/// One archived message row, role + content, as stored in `messages`.
-/// Used by [`fetch_messages_since`] for replaying history (P2/P3).
+/// One archived message row, role + content + optional reasoning, as stored in
+/// `messages`. Used by [`fetch_messages_since`] for replaying history (P2/P3).
 #[allow(dead_code)] // consumed by later phases (short-send summary/router)
 #[derive(Debug, Clone)]
 pub struct ArchivedMsg {
     pub id: i64,
     pub role: String,
     pub content: String,
+    pub reasoning: Option<String>,
 }
 
 /// A match from the FTS5 full-text search index (`messages_fts`).
 /// Returned by [`search_messages`]; the `snippet` field is the first 300
-/// characters of the matching message for coherent context.
+/// characters of the matching message for coherent context. `reasoning` holds
+/// the first 300 characters of the assistant's thinking trace when present,
+/// surfaced by the `message_find` tool for display.
 #[derive(Debug, Clone)]
 pub struct MessageMatch {
     pub id: i64,
     pub role: String,
     pub snippet: String,
     pub created_at: i64,
+    pub reasoning: Option<String>,
 }
 
 /// Append one message to the session's SQLite log, creating the DB + tables on
 /// first use, and return the inserted `messages.id`. `session_dir` is the
-/// session directory (where messages.json lives). `usage` is
+/// session directory (where messages.json lives). `reasoning` is the display-
+/// only thinking trace for assistant messages (stored as-is for later re-
+/// hydration; NOT indexed by FTS5). `usage` is
 /// `(prompt_tokens, completion_tokens, cost)` for assistant messages, or `None`
 /// (stored as zeros) for user messages. Best-effort — callers ignore the
 /// result.
@@ -46,18 +52,28 @@ pub fn append(
     session_dir: &Path,
     role: Role,
     content: &str,
+    reasoning: Option<&str>,
     usage: Option<(u64, u64, f64)>,
 ) -> Result<i64> {
     let mut conn = open(session_dir)?;
     let created_at = now_secs();
     let (pt, ct, cost) = usage.unwrap_or((0, 0, 0.0));
+    // Store reasoning only when non-empty; SQL NULL otherwise.
+    let reasoning = reasoning.and_then(|r| {
+        let trimmed = r.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
 
     let tx = conn.transaction()?;
     tx.execute(
         "INSERT INTO messages
-            (role, content, created_at, prompt_tokens, completion_tokens, cost)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![role_str(role), content, created_at, pt, ct, cost],
+            (role, content, reasoning, created_at, prompt_tokens, completion_tokens, cost)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![role_str(role), content, reasoning, created_at, pt, ct, cost],
     )?;
     let msg_id = tx.last_insert_rowid();
 
@@ -74,6 +90,8 @@ pub fn append(
     }
 
     // Keep the FTS5 index in sync: one row per message, keyed by rowid = msg_id.
+    // Only content + role are indexed (reasoning is NOT in FTS — keeps search
+    // focused on user-visible text; reasoning is rehydrated from messages.json).
     tx.execute(
         "INSERT INTO messages_fts(rowid, content, role) VALUES (?1, ?2, ?3)",
         rusqlite::params![msg_id, content, role_str(role)],
@@ -116,7 +134,7 @@ pub fn fetch_messages_since(session_dir: &Path, after_id: i64, limit: i64) -> Ve
     fn inner(session_dir: &Path, after_id: i64, limit: i64) -> Result<Vec<ArchivedMsg>> {
         let conn = open(session_dir)?;
         let mut stmt = conn.prepare(
-            "SELECT id, role, content FROM messages
+            "SELECT id, role, content, reasoning FROM messages
              WHERE id > ?1 ORDER BY id ASC LIMIT ?2",
         )?;
         let rows = stmt.query_map(rusqlite::params![after_id, limit], |r| {
@@ -124,6 +142,7 @@ pub fn fetch_messages_since(session_dir: &Path, after_id: i64, limit: i64) -> Ve
                 id: r.get(0)?,
                 role: r.get(1)?,
                 content: r.get(2)?,
+                reasoning: r.get(3)?,
             })
         })?;
         let mut out = Vec::new();
@@ -290,15 +309,19 @@ pub fn search_messages(
         let conn = open(session_dir)?;
         // Use substr() for the first 300 chars of the actual message content
         // instead of FTS5's snippet() — gives coherent, readable context.
+        // Reasoning is also returned as a first-300-chars snippet for display
+        // in `message_find` results; it is NOT in the FTS index.
         let sql = if role_filter.is_some() {
-            "SELECT m.id, m.role, substr(m.content, 1, 300) AS excerpt, m.created_at
+            "SELECT m.id, m.role, substr(m.content, 1, 300) AS excerpt, m.created_at,
+                    substr(m.reasoning, 1, 300)
              FROM messages_fts
              JOIN messages m ON m.id = messages_fts.rowid
              WHERE messages_fts MATCH ?1 AND m.role = ?2
              ORDER BY rank
              LIMIT ?3"
         } else {
-            "SELECT m.id, m.role, substr(m.content, 1, 300) AS excerpt, m.created_at
+            "SELECT m.id, m.role, substr(m.content, 1, 300) AS excerpt, m.created_at,
+                    substr(m.reasoning, 1, 300)
              FROM messages_fts
              JOIN messages m ON m.id = messages_fts.rowid
              WHERE messages_fts MATCH ?1
@@ -306,11 +329,13 @@ pub fn search_messages(
              LIMIT ?2"
         };
         fn map_row(r: &rusqlite::Row) -> rusqlite::Result<MessageMatch> {
+            let reasoning: Option<String> = r.get(4)?;
             Ok(MessageMatch {
                 id: r.get(0)?,
                 role: r.get(1)?,
                 snippet: r.get(2)?,
                 created_at: r.get(3)?,
+                reasoning: reasoning.filter(|s| !s.is_empty()),
             })
         }
         let mut stmt = conn.prepare(sql)?;
