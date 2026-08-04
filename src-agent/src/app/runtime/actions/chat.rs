@@ -90,7 +90,7 @@ pub(super) fn handle_submit(
         );
         return Ok(());
     };
-    let _ = msglog::append(&sess.path, Role::User, &text, None);
+    let _ = msglog::append(&sess.path, Role::User, &text, None, None);
     sess.conversation
         .push_user_with_attachments(text, attachments);
     if let Err(e) = sess.save() {
@@ -469,11 +469,11 @@ pub(super) fn handle_deny_tool(state: &mut AppState) -> Result<()> {
         .collect();
     if let Some(sess) = state.rest.fg_mut().session.as_mut() {
         for (id, result) in &results {
-            let _ = msglog::append(&sess.path, Role::Tool, result, None);
+            let _ = msglog::append(&sess.path, Role::Tool, result, None, None);
             sess.conversation.push_tool(id.clone(), result.clone());
         }
         for id in &denied_ids {
-            let _ = msglog::append(&sess.path, Role::Tool, "denied by user", None);
+            let _ = msglog::append(&sess.path, Role::Tool, "denied by user", None, None);
             sess.conversation
                 .push_tool(id.clone(), "denied by user".to_string());
         }

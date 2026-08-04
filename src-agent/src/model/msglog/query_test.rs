@@ -39,9 +39,9 @@ fn message_count_none_when_no_sqlite_yet() {
 #[test]
 fn message_count_counts_appended_rows() {
     let dir = TempDir::new("counts");
-    append(dir.path(), Role::User, "hi", None).unwrap();
-    append(dir.path(), Role::Assistant, "hello", Some((10, 5, 0.001))).unwrap();
-    append(dir.path(), Role::Tool, "tool output", None).unwrap();
+    append(dir.path(), Role::User, "hi", None, None).unwrap();
+    append(dir.path(), Role::Assistant, "hello", None, Some((10, 5, 0.001))).unwrap();
+    append(dir.path(), Role::Tool, "tool output", None, None).unwrap();
 
     assert_eq!(message_count(dir.path()), Some(3));
 }
@@ -54,8 +54,8 @@ fn message_count_is_a_plain_row_count() {
     // documents that the query itself does not special-case any role — if a
     // System row were ever appended, it would be counted too.
     let dir = TempDir::new("plain-count");
-    append(dir.path(), Role::System, "system prompt", None).unwrap();
-    append(dir.path(), Role::User, "hi", None).unwrap();
+    append(dir.path(), Role::System, "system prompt", None, None).unwrap();
+    append(dir.path(), Role::User, "hi", None, None).unwrap();
 
     assert_eq!(message_count(dir.path()), Some(2));
 }
@@ -63,8 +63,8 @@ fn message_count_is_a_plain_row_count() {
 #[test]
 fn clear_rolling_summary_freezes_watermark_and_empties_text() {
     let dir = TempDir::new("clear-summary");
-    append(dir.path(), Role::User, "hi", None).unwrap();
-    append(dir.path(), Role::Assistant, "hello", Some((10, 5, 0.0))).unwrap();
+    append(dir.path(), Role::User, "hi", None, None).unwrap();
+    append(dir.path(), Role::Assistant, "hello", None, Some((10, 5, 0.0))).unwrap();
     let tip = max_message_id(dir.path());
     assert!(tip >= 2);
     // Seed a non-empty summary covering the archive.
@@ -92,8 +92,8 @@ fn clear_rolling_summary_on_empty_archive_deletes_row() {
 #[test]
 fn search_messages_single_term_finds_match() {
     let dir = TempDir::new("fts-single");
-    append(dir.path(), Role::User, "hello world", None).unwrap();
-    append(dir.path(), Role::Assistant, "goodbye", Some((10, 5, 0.0))).unwrap();
+    append(dir.path(), Role::User, "hello world", None, None).unwrap();
+    append(dir.path(), Role::Assistant, "goodbye", None, Some((10, 5, 0.0))).unwrap();
 
     let hits = search_messages(dir.path(), "hello", 10, None);
     assert_eq!(hits.len(), 1);
@@ -108,15 +108,16 @@ fn search_messages_single_term_finds_match() {
 #[test]
 fn search_messages_multi_term_or_finds_any_match() {
     let dir = TempDir::new("fts-multi");
-    append(dir.path(), Role::User, "the quick brown fox", None).unwrap();
+    append(dir.path(), Role::User, "the quick brown fox", None, None).unwrap();
     append(
         dir.path(),
         Role::Assistant,
         "lazy dog sleeps",
+        None,
         Some((10, 5, 0.0)),
     )
     .unwrap();
-    append(dir.path(), Role::User, "unrelated text here", None).unwrap();
+    append(dir.path(), Role::User, "unrelated text here", None, None).unwrap();
 
     // "fox zebra" -> fox* OR zebra* -> should match message 1 but not 2 or 3.
     let hits = search_messages(dir.path(), "fox zebra", 10, None);
@@ -132,16 +133,18 @@ fn search_messages_or_ranks_multiple_hits() {
         Role::User,
         "security vulnerability found in parser",
         None,
+        None,
     )
     .unwrap();
     append(
         dir.path(),
         Role::Assistant,
         "security is important always",
+        None,
         Some((10, 5, 0.0)),
     )
     .unwrap();
-    append(dir.path(), Role::User, "nothing to see here", None).unwrap();
+    append(dir.path(), Role::User, "nothing to see here", None, None).unwrap();
 
     let hits = search_messages(dir.path(), "security", 10, None);
     assert_eq!(hits.len(), 2);
@@ -156,7 +159,7 @@ fn search_messages_or_ranks_multiple_hits() {
 #[test]
 fn search_messages_no_match_returns_empty() {
     let dir = TempDir::new("fts-nomatch");
-    append(dir.path(), Role::User, "hello", None).unwrap();
+    append(dir.path(), Role::User, "hello", None, None).unwrap();
 
     let hits = search_messages(dir.path(), "zzznotexist", 10, None);
     assert!(hits.is_empty());
@@ -170,6 +173,7 @@ fn search_messages_strips_fts5_syntax_chars() {
         Role::User,
         "the FOO constant is defined in config.rs",
         None,
+        None,
     )
     .unwrap();
 
@@ -177,4 +181,119 @@ fn search_messages_strips_fts5_syntax_chars() {
     let hits = search_messages(dir.path(), "FOO*", 10, None);
     assert!(!hits.is_empty());
     assert!(hits[0].snippet.contains("FOO"));
+}
+
+#[test]
+fn append_stores_and_fetch_reasoning() {
+    let dir = TempDir::new("reasoning-store");
+    append(
+        dir.path(),
+        Role::Assistant,
+        "The answer is 42",
+        Some("I considered many possibilities before settling on this"),
+        Some((10, 5, 0.001)),
+    )
+    .unwrap();
+    append(dir.path(), Role::User, "thanks", None, None).unwrap();
+
+    // Reasoning is returned by fetch_messages_since.
+    let msgs = fetch_messages_since(dir.path(), 0, 10);
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(
+        msgs[0].reasoning.as_deref(),
+        Some("I considered many possibilities before settling on this")
+    );
+    // User message has no reasoning.
+    assert!(msgs[1].reasoning.is_none());
+
+    // FTS search still matches on content (not reasoning).
+    let hits = search_messages(dir.path(), "answer", 10, None);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].role, "assistant");
+    // The reasoning snippet is populated in search results.
+    assert_eq!(
+        hits[0].reasoning.as_deref(),
+        Some("I considered many possibilities before settling on this")
+    );
+}
+
+#[test]
+fn append_empty_reasoning_stores_null() {
+    let dir = TempDir::new("reasoning-empty");
+    append(
+        dir.path(),
+        Role::Assistant,
+        "hello",
+        Some("   "),
+        Some((10, 5, 0.0)),
+    )
+    .unwrap();
+
+    let msgs = fetch_messages_since(dir.path(), 0, 10);
+    assert_eq!(msgs.len(), 1);
+    // Whitespace-only reasoning should be stored as NULL.
+    assert!(msgs[0].reasoning.is_none());
+}
+
+#[test]
+fn schema_meta_skips_fts_recount() {
+    let dir = TempDir::new("schema-meta");
+    // First append triggers ensure_schema + backfill.
+    append(dir.path(), Role::User, "first message", None, None).unwrap();
+
+    // Verify schema_meta has fts_backfilled=1.
+    let conn = crate::model::msglog::schema::open(dir.path()).unwrap();
+    let val: i64 = conn
+        .query_row(
+            "SELECT value FROM schema_meta WHERE key = 'fts_backfilled'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0);
+    assert_eq!(val, 1, "fts_backfilled should be set after first append");
+
+    // Second open should succeed without re-running backfill (schema ready).
+    let conn2 = crate::model::msglog::schema::open(dir.path()).unwrap();
+    let val2: i64 = conn2
+        .query_row(
+            "SELECT value FROM schema_meta WHERE key = 'fts_backfilled'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0);
+    assert_eq!(val2, 1, "meta unchanged after second open");
+}
+
+#[test]
+fn search_still_works_after_reasoning_column() {
+    let dir = TempDir::new("fts-after-reasoning");
+    append(
+        dir.path(),
+        Role::Assistant,
+        "we need to fix the parser bug",
+        Some("I analyzed the stack trace and found the root cause"),
+        Some((10, 5, 0.0)),
+    )
+    .unwrap();
+    append(
+        dir.path(),
+        Role::User,
+        "great, go ahead",
+        None,
+        None,
+    )
+    .unwrap();
+
+    // FTS matches on content, not reasoning.
+    let hits = search_messages(dir.path(), "parser", 10, None);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].snippet.contains("parser"));
+    assert_eq!(
+        hits[0].reasoning.as_deref(),
+        Some("I analyzed the stack trace and found the root cause")
+    );
+
+    // Reasoning-only terms don't match via FTS.
+    let hits = search_messages(dir.path(), "stack trace", 10, None);
+    assert!(hits.is_empty(), "FTS should not index reasoning");
 }

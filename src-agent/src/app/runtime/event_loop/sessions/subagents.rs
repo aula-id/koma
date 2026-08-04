@@ -444,6 +444,7 @@ pub(super) fn drain_subagents(
                     crate::dto::chat::Role::User,
                     &note,
                     None,
+                    None,
                 );
                 sess.conversation.push_user(note);
                 let _ = sess.save();

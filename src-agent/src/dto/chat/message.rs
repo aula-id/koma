@@ -108,12 +108,12 @@ pub struct ChatMessage {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<Attachment>,
     /// Display-only reasoning/thinking text accumulated from the model's
-    /// `delta.reasoning` channel during streaming. `#[serde(skip)]` means it is
-    /// NEVER serialised — not into a `ChatRequest` body nor `messages.json` — and
-    /// always defaults to `None` on deserialise. This keeps reasoning purely a
-    /// render-time concern: it shows above the answer but never re-enters the
-    /// conversation the model sees, and never touches disk.
-    #[serde(skip)]
+    /// `delta.reasoning` channel during streaming. Persisted to `messages.json`
+    /// for session resume / transcript rehydration, but NEVER sent on the wire
+    /// (`to_wire` builds request bodies from fields and omits this). Old
+    /// `messages.json` files without a `reasoning` key deserialize to `None`
+    /// via `#[serde(default)]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
     /// Display+replay-only OpenRouter reasoning_details for THIS assistant turn.
     /// `#[serde(skip)]` — never touches `messages.json` and never re-enters the
