@@ -8,12 +8,27 @@
 //! Writes are best-effort: callers ignore the error so a DB hiccup never
 //! interrupts the chat.
 //!
+//! ## Reasoning column
+//!
+//! The `messages` table carries an optional `reasoning TEXT` column that stores
+//! the display-only thinking trace from assistant turns. It is NOT indexed by
+//! FTS5 (search stays on user-visible content); reasoning is rehydrated from
+//! `messages.json` on session load and returned as a snippet by
+//! [`query::search_messages`] for display in `message_find` results.
+//!
 //! ## Full-text search (FTS5)
 //!
 //! The `messages_fts` virtual table indexes every message's `content` and `role`
 //! for full-text search via [`query::search_messages`]. It is populated on every
 //! `append()` and cleaned up on `truncate_after()`; existing DBs are backfilled
-//! once on first open. The `message_find` tool exposes this to the model.
+//! once on first open (gated by `schema_meta` to avoid expensive re-runs). The
+//! `message_find` tool exposes this to the model.
+//!
+//! ## Schema migration gate (`schema_meta`)
+//!
+//! A key/value table that tracks one-shot migrations (e.g. `fts_backfilled`).
+//! This replaces the old `COUNT(*)` probe on `messages_fts` which was O(n) on
+//! multi-million-row tables and caused multi-minute stalls on every `open()`.
 //!
 //! ## "Short-send" storage (Phase 1)
 //!

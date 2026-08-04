@@ -67,7 +67,7 @@ impl Tool for MessageFind {
         let out = format_matches(
             matches
                 .iter()
-                .map(|m| (m.id, m.role.as_str(), m.snippet.as_str(), m.created_at)),
+                .map(|m| (m.id, m.role.as_str(), m.snippet.as_str(), m.created_at, m.reasoning.as_deref())),
         );
 
         if out.is_empty() {
@@ -77,9 +77,9 @@ impl Tool for MessageFind {
     }
 }
 
-fn format_matches<'a>(matches: impl Iterator<Item = (i64, &'a str, &'a str, i64)>) -> String {
+fn format_matches<'a>(matches: impl Iterator<Item = (i64, &'a str, &'a str, i64, Option<&'a str>)>) -> String {
     let mut out = String::new();
-    for (msg_id, role, content, _created_at) in matches {
+    for (msg_id, role, content, _created_at, reasoning) in matches {
         let role_prefix = match role {
             "user" => "[user]",
             "assistant" => "[assistant]",
@@ -95,6 +95,18 @@ fn format_matches<'a>(matches: impl Iterator<Item = (i64, &'a str, &'a str, i64)
             snippet
         };
         out.push_str(&format!("{} #{}: {}\n\n", role_prefix, msg_id, snippet));
+        // Append a thinking snippet for assistant messages that have reasoning.
+        if let Some(thinking) = reasoning {
+            let thinking = thinking.trim();
+            if !thinking.is_empty() {
+                let t = if thinking.len() > 300 {
+                    &thinking[..300]
+                } else {
+                    thinking
+                };
+                out.push_str(&format!("  thinking: {}\n\n", t));
+            }
+        }
     }
     out
 }

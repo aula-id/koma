@@ -142,7 +142,7 @@ pub(super) fn finish_tool_round(
         let rt = &mut state.rest.sessions[sess_idx];
         if let Some(sess) = rt.session.as_mut() {
             for (id, result) in &cleaned_results {
-                let _ = crate::model::msglog::append(&sess.path, Role::Tool, result, None);
+                let _ = crate::model::msglog::append(&sess.path, Role::Tool, result, None, None);
                 sess.conversation.push_tool(id.clone(), result.clone());
             }
             let _ = sess.save();
@@ -188,7 +188,7 @@ pub(super) fn finish_tool_round(
     if !steers.is_empty() {
         let joined = steers.join("\n\n");
         if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-            let _ = crate::model::msglog::append(&sess.path, Role::User, &joined, None);
+            let _ = crate::model::msglog::append(&sess.path, Role::User, &joined, None, None);
             sess.conversation.push_user(joined);
             let _ = sess.save();
         }
@@ -320,11 +320,11 @@ pub(crate) fn deny_all_pending(state: &mut AppState, sess_idx: usize, reason: &s
         .collect();
     if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
         for (id, result) in &results {
-            let _ = crate::model::msglog::append(&sess.path, Role::Tool, result, None);
+            let _ = crate::model::msglog::append(&sess.path, Role::Tool, result, None, None);
             sess.conversation.push_tool(id.clone(), result.clone());
         }
         for id in &pending_ids {
-            let _ = crate::model::msglog::append(&sess.path, Role::Tool, reason, None);
+            let _ = crate::model::msglog::append(&sess.path, Role::Tool, reason, None, None);
             sess.conversation.push_tool(id.clone(), reason.to_string());
         }
         let _ = sess.save();
