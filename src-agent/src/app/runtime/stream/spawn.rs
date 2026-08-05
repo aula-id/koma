@@ -21,10 +21,22 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
     // allow-list / `[N]` multi-root set — cd repoints only the cwd, never the
     // allow-list (use `/adddir` to widen that).
     let workspace = rt.effective_cwd();
-    let workspaces = session_ref
-        .as_ref()
-        .map(|s| s.workdirs())
-        .unwrap_or_else(|| vec![workspace.clone()]);
+    // SDLC path ownership: during execute/integrate inside a mission worktree,
+    // tools may only write under the worktree root (slot 0). Extra roots and the
+    // stashed primary are denied until integrate exits the worktree.
+    let workspaces = if state.rest.agent_mode == crate::app::state::AgentMode::Sdlc
+        && matches!(state.rest.sdlc_phase.as_deref(), Some("execute") | Some("integrate"))
+        && session_ref
+            .as_ref()
+            .is_some_and(|s| s.settings.workdir_saved.is_some())
+    {
+        vec![workspace.clone()]
+    } else {
+        session_ref
+            .as_ref()
+            .map(|s| s.workdirs())
+            .unwrap_or_else(|| vec![workspace.clone()])
+    };
     // Per-PROJECT memory dir (shared by every session in this working dir), not
     // the old per-session `<session_dir>/memory`. Falls back to the per-session
     // path if the bucket dir can't be resolved (it always should).

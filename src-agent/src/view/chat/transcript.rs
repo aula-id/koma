@@ -432,7 +432,7 @@ pub(super) fn render_tool_lines(
         // arg to this composed digest (see approval::process_tools +
         // conversation::set_tool_call_args), so we just parse it out; on any parse
         // failure fall through to the generic tool-call line. Display-only.
-        if call.function.name == "plan_ready" {
+        if call.function.name == "plan_ready" || call.function.name == "mission_ready" {
             if let Some(digest) =
                 serde_json::from_str::<serde_json::Value>(&call.function.arguments)
                     .ok()
@@ -444,10 +444,15 @@ pub(super) fn render_tool_lines(
             {
                 // Header: "⚙/✓ plan ready" — the glyph flips to ✓ once the user
                 // decides and the plan_ready tool result lands.
+                let ready_label = if call.function.name == "mission_ready" {
+                    "mission ready"
+                } else {
+                    "plan ready"
+                };
                 lines.push(Line::from(vec![
                     prefix,
                     Span::styled(glyph, glyph_style),
-                    Span::styled("plan ready", Style::default().fg(palette.dim)),
+                    Span::styled(ready_label, Style::default().fg(palette.dim)),
                 ]));
                 // Digest body: the same dim left rule the reasoning block uses
                 // (THINK_BAR — one rail, never a box), hung under a 2-col indent and

@@ -113,7 +113,38 @@ pub(super) fn apply_compaction_result(
     } else {
         None
     };
-    let seeded = plan_seed.is_some();
+    // Mission-approval seed: full OPEN+SEALED capsule (force continuity).
+    let mission_seed: Option<String> = if state.rest.pending_mission_seed {
+        state.rest.pending_mission_seed = false;
+        state
+            .rest
+            .sessions
+            .get(idx)
+            .and_then(|rt| rt.session.as_ref())
+            .and_then(|s| {
+                let mission = crate::model::sdlc::Mission::load(&s.path)?;
+                if !mission.approved {
+                    return None;
+                }
+                let (open, sealed) = crate::model::msglog::open(&s.path)
+                    .ok()
+                    .map(|conn| {
+                        let _ = crate::model::sdlc::graph::ensure_tables(&conn);
+                        let open = crate::model::sdlc::graph::list_open(&conn).unwrap_or_default();
+                        let sealed =
+                            crate::model::sdlc::graph::list_sealed(&conn).unwrap_or_default();
+                        (open, sealed)
+                    })
+                    .unwrap_or_default();
+                Some(format!(
+                    "Approved mission (execute now):\n\n{}",
+                    crate::model::sdlc::mission::build_seed_capsule(&mission, &open, &sealed)
+                ))
+            })
+    } else {
+        None
+    };
+    let seeded = plan_seed.is_some() || mission_seed.is_some();
 
     if let Some(sess) = state
         .rest
@@ -123,9 +154,11 @@ pub(super) fn apply_compaction_result(
     {
         sess.conversation
             .apply_compaction(summary.clone(), kept_tail);
-        // Append the approved plan AFTER the summary so it rides into the wire
-        // history built below (the save + the later auto-wake both see it).
+        // Append the approved plan/mission AFTER the summary.
         if let Some(seed) = plan_seed {
+            sess.conversation.push_user(seed);
+        }
+        if let Some(seed) = mission_seed {
             sess.conversation.push_user(seed);
         }
         sess.rebuild_system();

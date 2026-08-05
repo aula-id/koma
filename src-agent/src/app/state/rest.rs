@@ -211,6 +211,14 @@ pub struct AppStateRest {
     /// whenever `agent_mode != Plan`. See `set_agent_mode`, the single
     /// choke-point that maintains this invariant.
     pub plan_return_mode: Option<AgentMode>,
+    /// The mode to restore when leaving SDLC mode.
+    pub sdlc_return_mode: Option<AgentMode>,
+    /// Prior short_send_enabled before SDLC forced it on; restored on exit.
+    pub sdlc_prev_short_send: Option<bool>,
+    /// Active mission phase for UI/seed: "assess" | "execute" | "integrate" | "done".
+    pub sdlc_phase: Option<String>,
+    /// One-shot signal: compact + seed the mission capsule post-approval.
+    pub pending_mission_seed: bool,
     /// One-shot signal set by `handle_approve_plan_compact`: after the
     /// plan-approval compaction completes, `apply_compaction_result` reads
     /// `<session>/plan.md` and appends it as the first post-compaction user turn
@@ -562,6 +570,10 @@ impl AppStateRest {
             transcript_cache: RefCell::new(TranscriptCache::default()),
             agent_mode: AgentMode::default(),
             plan_return_mode: None,
+            sdlc_return_mode: None,
+            sdlc_prev_short_send: None,
+            sdlc_phase: None,
+            pending_mission_seed: false,
             pending_plan_seed: false,
             launch_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             endpoints_rx: None,
@@ -673,31 +685,63 @@ impl AppStateRest {
         }
         let entering_plan = new_mode == AgentMode::Plan;
         let leaving_plan = old_mode == AgentMode::Plan;
+        let entering_sdlc = new_mode == AgentMode::Sdlc;
+        let leaving_sdlc = old_mode == AgentMode::Sdlc;
+
         if entering_plan {
             self.plan_return_mode = Some(old_mode);
-            // Belt-and-suspenders: a fresh plan cycle starts clean, so drop any
-            // approved-plan stash left from a prior cycle before the classifier could
-            // be fed a stale plan.
             self.fg_mut().approved_plan = None;
         } else if leaving_plan {
             self.plan_return_mode = None;
         }
+
+        // SDLC enter: stash return mode, force short_send on, set phase.
+        // Resume: if an approved mission already exists, restore its phase
+        // (not always assess) so execute/integrate continues cleanly.
+        if entering_sdlc {
+            self.sdlc_return_mode = Some(old_mode);
+            let resume_phase = self
+                .fg()
+                .session
+                .as_ref()
+                .and_then(|s| crate::model::sdlc::Mission::load(&s.path))
+                .filter(|m| m.approved)
+                .map(|m| m.phase);
+            self.sdlc_phase = Some(resume_phase.unwrap_or_else(|| "assess".to_string()));
+            let prev_ss = self
+                .fg()
+                .session
+                .as_ref()
+                .map(|s| s.settings.short_send_enabled);
+            self.sdlc_prev_short_send = prev_ss;
+            if let Some(sess) = self.fg_mut().session.as_mut() {
+                sess.settings.short_send_enabled = true;
+            }
+            // Arm keeper on resume into an active execute/integrate mission.
+            if matches!(
+                self.sdlc_phase.as_deref(),
+                Some("execute") | Some("integrate")
+            ) {
+                self.fg_mut().sdlc_keeper_due = true;
+            }
+        } else if leaving_sdlc {
+            // Restore short_send from saved value (take first so borrow ends).
+            let prev = self.sdlc_prev_short_send.take();
+            if let Some(prev) = prev {
+                if let Some(sess) = self.fg_mut().session.as_mut() {
+                    sess.settings.short_send_enabled = prev;
+                }
+            }
+            self.sdlc_return_mode = None;
+            self.sdlc_phase = None;
+            self.pending_mission_seed = false;
+        }
+
         self.agent_mode = new_mode;
-        // Captured inside the `sess` borrow below and applied to `self.fg_mut()`
-        // afterward (can't touch `self` again while `sess` — itself borrowed FROM
-        // `self.fg_mut()` — is still alive), so the GUI Explore "PLAN" section's
-        // in-memory mirror stays in lockstep with the rail seed/clear on disk.
         let mut plan_todos_after: Option<Vec<crate::app::mode::todo::TodoItem>> = None;
         if entering_plan || leaving_plan {
             if let Some(sess) = self.fg_mut().session.as_mut() {
                 sess.plan_mode_hint = entering_plan;
-                // Seed the two locked plan rails on entry, UNCONDITIONALLY. This
-                // guard-checking `old_mode == new_mode` early-returns above, and the
-                // `plan_enter` interception short-circuits when already in Plan, so
-                // `entering_plan` only ever fires on a genuine transition INTO plan —
-                // a fresh rail seed is always correct there, and overwrites any stale
-                // plan_todos.md left behind by an abnormal exit (crash/kill mid-plan,
-                // since `agent_mode` is process-local and resets on restart).
                 if entering_plan {
                     use crate::app::mode::todo::{
                         self, TodoItem, TodoPriority, TodoStatus, PLAN_RAIL_SAVE, PLAN_RAIL_SERVE,
@@ -720,29 +764,25 @@ impl AppStateRest {
                     let _ = todo::save_todos_to(&path, &rails);
                     plan_todos_after = Some(rails);
                 } else if leaving_plan {
-                    // Leaving Plan for any non-plan mode (plan approved, `/mode`,
-                    // Shift+Tab) drops the plan-specific `plan_todos.md` artifact so
-                    // it never lingers into the next planning session. Best-effort
-                    // remove — a missing file (NotFound) is fine. Deny STAYS in
-                    // Plan, so this never fires on "chat more".
                     let _ = std::fs::remove_file(sess.plan_todos_path());
-                    // The mirror itself does NOT clear to empty here: it mirrors
-                    // the session's CURRENT todo list, not Plan-mode membership.
-                    // Leaving Plan means the per-directory `memory/TODO.md` (the
-                    // regular working list) is now the source of truth — read
-                    // it immediately so an approved plan that carries into
-                    // execution keeps showing its checklist instead of the GUI
-                    // Explore "PLAN" section going blank until the model's next
-                    // `checklist`. Empty when that file doesn't exist yet.
                     plan_todos_after =
                         Some(crate::app::mode::todo::load_current_todos(sess, false));
                 }
                 sess.rebuild_system();
                 let _ = sess.save();
             }
-            if let Some(todos) = plan_todos_after {
-                self.fg_mut().plan_todos = todos;
+        }
+        // SDLC mode-hint rebuild: set the hint and rebuild so the system prompt
+        // picks up / drops the SDLC section.
+        if entering_sdlc || leaving_sdlc {
+            if let Some(sess) = self.fg_mut().session.as_mut() {
+                sess.sdlc_mode_hint = entering_sdlc;
+                sess.rebuild_system();
+                let _ = sess.save();
             }
+        }
+        if let Some(todos) = plan_todos_after {
+            self.fg_mut().plan_todos = todos;
         }
     }
 

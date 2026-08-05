@@ -198,7 +198,7 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, resolved_model: &str, palett
                 .fg()
                 .pending_tool_calls
                 .get(rest.fg().tool_idx)
-                .map(|c| c.function.name == "plan_ready")
+                .map(|c| c.function.name == "plan_ready" || c.function.name == "mission_ready")
                 .unwrap_or(false);
         let overlay_top = chunks[4].y.saturating_sub(overlays::PLAN_APPROVAL_HEIGHT);
         if plan_parked && overlay_top < chunks[1].y + chunks[1].height {

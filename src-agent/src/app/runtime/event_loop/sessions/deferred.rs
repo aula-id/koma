@@ -366,6 +366,213 @@ pub(super) fn drain_deferred_and_resume(
         dirty = true;
     }
 
+    // --- SDLC LLM-keeper result poll: drain async classify result + stage inject ---
+    // Non-blocking poll of the oneshot receiver. Result lands in
+    // `pending_sdlc_keeper_llm` for the inject block below to drain when idle.
+    if state.rest.sessions[idx].sdlc_keeper_llm_rx.is_some() {
+        let mut finished: Option<Option<String>> = None;
+        let mut closed = false;
+        if let Some(rx) = state.rest.sessions[idx].sdlc_keeper_llm_rx.as_mut() {
+            match rx.try_recv() {
+                Ok(opt) => finished = Some(opt),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => closed = true,
+            }
+        }
+        if finished.is_some() || closed {
+            state.rest.sessions[idx].sdlc_keeper_llm_rx = None;
+            state.rest.sessions[idx].sdlc_keeper_llm_inflight = false;
+            if let Some(Some(inject)) = finished {
+                state.rest.sessions[idx].pending_sdlc_keeper_llm = Some(inject);
+            }
+        }
+    }
+    // Drain pending LLM keeper inject when idle — same inject path as deterministic.
+    if !state.rest.sessions[idx].is_working()
+        && client.is_some()
+        && state.rest.sessions[idx].session.is_some()
+    {
+        if let Some(inject) = state.rest.sessions[idx].pending_sdlc_keeper_llm.take() {
+            let body = format!("{}{inject}", crate::dto::chat::BASH_NUDGE_MARK);
+            if let Some(sess) = state.rest.sessions[idx].session.as_mut() {
+                let _ = crate::model::msglog::append(
+                    &sess.path,
+                    crate::dto::chat::Role::User,
+                    &body,
+                    None,
+                    None,
+                );
+                sess.conversation.push_user(body);
+                let _ = sess.save();
+                sess.rebuild_system();
+                let _ = sess.save();
+                let history = sess.conversation.history();
+                {
+                    let rt = &mut state.rest.sessions[idx];
+                    rt.begin_stream();
+                    rt.waiting = true;
+                    rt.agent_steps = 0;
+                    rt.pending_tool_calls.clear();
+                    rt.awaiting_approval = false;
+                    rt.tool_idx = 0;
+                    rt.tool_results.clear();
+                    rt.pending_tool_tasks.clear();
+                    rt.awaiting_tool_tasks = false;
+                    rt.awaiting_classify = false;
+                    rt.pending_classify_verdict = None;
+                }
+                state.rest.reset_scroll_at(idx);
+                state.rest.sessions[idx].status = "thinking".into();
+                super::super::super::stream::start_stream_task(
+                    history, state, idx, client, handle,
+                );
+                dirty = true;
+            }
+        }
+    }
+
+    // --- SDLC keeper: false-done reopen + integrate nudge on idle ---
+    // Armed after mission approve and each finished tool round while in Sdlc.
+    // Runs only when idle so we never inject mid-tool-round. Dedupe lives inside
+    // keeper::evaluate (mission_meta hash). If bash/subagent already woke this
+    // tick, is_working() is true and we defer — same single-wake invariant.
+    //
+    // When deterministic has nothing to say, optionally spawn ONE Safeguard
+    // oneshot (classifier_enabled only) for stalled/dishonest progress. Spawn is
+    // gated on the same `sdlc_keeper_due` edge so we never thrash every idle tick.
+    if state.rest.agent_mode == crate::app::state::AgentMode::Sdlc
+        && state.rest.sessions[idx].sdlc_keeper_due
+        && !state.rest.sessions[idx].is_working()
+        && client.is_some()
+        && state.rest.sessions[idx].session.is_some()
+    {
+        state.rest.sessions[idx].sdlc_keeper_due = false;
+        let sess_path = state.rest.sessions[idx]
+            .session
+            .as_ref()
+            .map(|s| s.path.clone());
+        if let Some(path) = sess_path {
+            let report = crate::model::sdlc::keeper::evaluate(&path);
+            if !report.reopened.is_empty() {
+                state.rest.sessions[idx].set_toast_info(format!(
+                    "SDLC keeper reopened {} false-done task(s)",
+                    report.reopened.len()
+                ));
+                dirty = true;
+            }
+            if let Some(inject) = report.inject {
+                let body = format!(
+                    "{}{inject}",
+                    crate::dto::chat::BASH_NUDGE_MARK,
+                );
+                let sess = match state.rest.sessions[idx].session.as_mut() {
+                    Some(s) => s,
+                    None => return dirty,
+                };
+                let _ = crate::model::msglog::append(
+                    &sess.path,
+                    crate::dto::chat::Role::User,
+                    &body,
+                    None,
+                    None,
+                );
+                sess.conversation.push_user(body);
+                let _ = sess.save();
+                // Rebuild so OPEN/SEALED after reopen is visible next turn.
+                sess.rebuild_system();
+                let _ = sess.save();
+                let history = sess.conversation.history();
+                {
+                    let rt = &mut state.rest.sessions[idx];
+                    rt.begin_stream();
+                    rt.waiting = true;
+                    rt.agent_steps = 0;
+                    rt.pending_tool_calls.clear();
+                    rt.awaiting_approval = false;
+                    rt.tool_idx = 0;
+                    rt.tool_results.clear();
+                    rt.pending_tool_tasks.clear();
+                    rt.awaiting_tool_tasks = false;
+                    rt.awaiting_classify = false;
+                    rt.pending_classify_verdict = None;
+                }
+                state.rest.reset_scroll_at(idx);
+                state.rest.sessions[idx].status = "thinking".into();
+                super::super::super::stream::start_stream_task(
+                    history, state, idx, client, handle,
+                );
+                dirty = true;
+            } else if !state.rest.sessions[idx].sdlc_keeper_llm_inflight
+                && state.rest.sessions[idx].pending_sdlc_keeper_llm.is_none()
+                && state
+                    .rest
+                    .sessions[idx]
+                    .session
+                    .as_ref()
+                    .map(|s| s.settings.classifier_enabled)
+                    .unwrap_or(false)
+                && matches!(
+                    state.rest.sdlc_phase.as_deref(),
+                    Some("execute") | Some("integrate")
+                )
+            {
+                // Deterministic keeper quiet — optional second-model review.
+                let client = match client.clone() {
+                    Some(c) => c,
+                    None => return dirty,
+                };
+                let config = state.rest.config.clone();
+                let settings = match state.rest.sessions[idx]
+                    .session
+                    .as_ref()
+                    .map(|s| s.settings.clone())
+                {
+                    Some(s) => s,
+                    None => return dirty,
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                state.rest.sessions[idx].sdlc_keeper_llm_rx = Some(rx);
+                state.rest.sessions[idx].sdlc_keeper_llm_inflight = true;
+                handle.spawn(async move {
+                    let inject = async {
+                        let mission = match crate::model::sdlc::Mission::load(&path) {
+                            Some(m) if m.approved => m,
+                            _ => return None,
+                        };
+                        let conn = crate::model::msglog::open(&path).ok()?;
+                        let _ = crate::model::sdlc::graph::ensure_tables(&conn);
+                        let open =
+                            crate::model::sdlc::graph::list_open(&conn).unwrap_or_default();
+                        let sealed =
+                            crate::model::sdlc::graph::list_sealed(&conn).unwrap_or_default();
+                        let messages = crate::model::sdlc::keeper::llm_keeper_prompt(
+                            &mission, &open, &sealed,
+                        );
+                        let verdict = crate::app::harness::classify(
+                            &client,
+                            &config,
+                            &settings,
+                            messages,
+                            true,
+                        )
+                        .await;
+                        if !verdict.available {
+                            return None;
+                        }
+                        let reply = serde_json::json!({
+                            "allow": verdict.allow,
+                            "reason": verdict.reason,
+                        })
+                        .to_string();
+                        crate::model::sdlc::keeper::llm_verdict_to_inject(&reply)
+                    }
+                    .await;
+                    let _ = tx.send(inject);
+                });
+            }
+        }
+    }
+
     // --- extension-prompt injection: inject + auto-wake when idle ---
     // Extensions BUFFER `chat.prompt` texts into `pending_ext_prompts` via the grant
     // broker (buffer-only — the broker NEVER injects). Exactly like the two

@@ -238,6 +238,7 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
         "normal" => AgentMode::Normal,
         "plan" => AgentMode::Plan,
         "yolo" => AgentMode::Yolo,
+        "sdlc" => AgentMode::Sdlc,
         _ => AgentMode::Auto,
     };
     shadow.rest.latest_version =

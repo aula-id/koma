@@ -272,8 +272,64 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
             crate::app::state::AgentMode::Normal => "normal",
             crate::app::state::AgentMode::Plan => "plan",
             crate::app::state::AgentMode::Yolo => "yolo",
+            crate::app::state::AgentMode::Sdlc => "sdlc",
         }
         .to_string(),
+        // SDLC projection: phase + mission goal + graph counts when in Sdlc mode.
+        sdlc_phase: if matches!(state.rest.agent_mode, crate::app::state::AgentMode::Sdlc) {
+            state.rest.sdlc_phase.clone()
+        } else {
+            None
+        },
+        sdlc_goal: if matches!(state.rest.agent_mode, crate::app::state::AgentMode::Sdlc) {
+            state
+                .rest
+                .fg()
+                .session
+                .as_ref()
+                .and_then(|s| crate::model::sdlc::Mission::load(&s.path))
+                .map(|m| m.goal)
+        } else {
+            None
+        },
+        sdlc_open: if matches!(state.rest.agent_mode, crate::app::state::AgentMode::Sdlc) {
+            state
+                .rest
+                .fg()
+                .session
+                .as_ref()
+                .and_then(|s| {
+                    crate::model::msglog::open(&s.path)
+                        .ok()
+                        .map(|conn| {
+                            let _ = crate::model::sdlc::graph::ensure_tables(&conn);
+                            crate::model::sdlc::graph::list_open(&conn)
+                                .map(|v| v.len())
+                                .unwrap_or(0)
+                        })
+                })
+        } else {
+            None
+        },
+        sdlc_sealed: if matches!(state.rest.agent_mode, crate::app::state::AgentMode::Sdlc) {
+            state
+                .rest
+                .fg()
+                .session
+                .as_ref()
+                .and_then(|s| {
+                    crate::model::msglog::open(&s.path)
+                        .ok()
+                        .map(|conn| {
+                            let _ = crate::model::sdlc::graph::ensure_tables(&conn);
+                            crate::model::sdlc::graph::list_sealed(&conn)
+                                .map(|v| v.len())
+                                .unwrap_or(0)
+                        })
+                })
+        } else {
+            None
+        },
         latest_version: state
             .rest
             .latest_version
