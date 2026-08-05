@@ -62,6 +62,18 @@ pub struct GlobalSnapshot {
     pub pending_attachments: Vec<crate::dto::chat::Attachment>,
     pub file_palette: Option<Vec<String>>,
     pub agent_mode: String,
+    /// SDLC phase when mode is sdlc: assess|execute|integrate|done. Optional for back-compat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdlc_phase: Option<String>,
+    /// Approved mission goal when in SDLC with a mission on disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdlc_goal: Option<String>,
+    /// Count of open graph nodes (not done/cancelled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdlc_open: Option<usize>,
+    /// Count of sealed (done) graph nodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdlc_sealed: Option<usize>,
     /// Latest published koma version when newer than the running one (for the
     /// header update badge), else None. Projected from the daemon's version check.
     pub latest_version: Option<String>,
