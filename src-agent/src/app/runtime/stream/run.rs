@@ -573,10 +573,12 @@ over sec_remote (stateful socket).\n",
     if mode == AgentMode::Plan {
         advertise.retain(|n| crate::tool::tool_allowed_in_plan(n) || n.starts_with("mcp__"));
         advertise.push("seqthink".to_string());
-        // `plan_ready` (present the finished plan for approval) is advertised only
-        // while Plan is active — it lives in `INTERNAL_ONLY`, so `main_tool_names`
-        // never carries it, and it is pushed explicitly here alongside `seqthink`.
         advertise.push("plan_ready".to_string());
+    } else if mode == AgentMode::Sdlc {
+        // SDLC: full tool surface like Auto, PLUS mission lifecycle tools.
+        advertise.push("mission_ready".to_string());
+        advertise.push("mission_verify".to_string());
+        advertise.push("mission_integrate".to_string());
     } else {
         advertise.push("plan_enter".to_string());
     }

@@ -272,6 +272,7 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
             crate::app::state::AgentMode::Normal => "normal",
             crate::app::state::AgentMode::Plan => "plan",
             crate::app::state::AgentMode::Yolo => "yolo",
+            crate::app::state::AgentMode::Sdlc => "sdlc",
         }
         .to_string(),
         latest_version: state

@@ -27,6 +27,7 @@ pub(super) fn render_header(
         crate::app::state::AgentMode::Auto => ("»", "auto", palette.warn),
         crate::app::state::AgentMode::Plan => ("●", "planning", palette.info),
         crate::app::state::AgentMode::Yolo => ("!", "yooloo", palette.error),
+        crate::app::state::AgentMode::Sdlc => ("◆", "sdlc", palette.info),
     };
     // Build the right-side text ("● normal" or "» auto") so we can
     // measure it and pad the gap between brand and mode.
@@ -67,7 +68,10 @@ pub(super) fn render_header(
         .max(1);
     let mut header_spans = badge_spans;
     header_spans.push(Span::raw(" ".repeat(gap)));
-    if matches!(rest.agent_mode, crate::app::state::AgentMode::Plan) {
+    if matches!(
+        rest.agent_mode,
+        crate::app::state::AgentMode::Plan | crate::app::state::AgentMode::Sdlc
+    ) {
         // "planning" gets a bold shimmer sweep instead of a flat colour — see
         // `plan_shimmer_spans` below. Icon stays a plain bold dot of the same cyan.
         header_spans.push(Span::styled(

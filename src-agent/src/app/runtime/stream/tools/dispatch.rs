@@ -249,6 +249,12 @@ pub(super) fn finish_tool_round(
     state.rest.sessions[sess_idx].tool_idx = 0;
     state.rest.sessions[sess_idx].tool_results.clear();
 
+    // SDLC keeper: re-arm after every finished tool round so false-done /
+    // integrate nudges can fire on the next idle boundary.
+    if state.rest.agent_mode == crate::app::state::AgentMode::Sdlc {
+        state.rest.sessions[sess_idx].sdlc_keeper_due = true;
+    }
+
     // Continue the turn: hand the updated history back to the model. The
     // streaming buffer is re-armed so the next assistant text accumulates
     // cleanly. `waiting` stays true (the turn isn't finished yet). Compute the
