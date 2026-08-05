@@ -366,6 +366,12 @@ pub struct SessionRuntime {
     /// tool round while in SDLC. Deferred idle rail evaluates once then clears.
     /// Transient — never serialised.
     pub sdlc_keeper_due: bool,
+    /// Optional LLM keeper inject staged by async Safeguard oneshot; drained on idle.
+    pub pending_sdlc_keeper_llm: Option<String>,
+    /// True while an async SDLC LLM-keeper classify is in flight (dedupe spawns).
+    pub sdlc_keeper_llm_inflight: bool,
+    /// Receiver for the async SDLC LLM-keeper classify result.
+    pub sdlc_keeper_llm_rx: Option<tokio::sync::oneshot::Receiver<Option<String>>>,
     /// Consecutive EXTENSION-injected turn counter (cost-DoS guard, review finding):
     /// the number of synthetic user turns injected back-to-back by the `chat.prompt`
     /// broker path (see [`EXT_TURN_BUDGET`]) SINCE the last REAL user turn.
@@ -622,6 +628,9 @@ impl SessionRuntime {
             pending_subagent_nudges: Vec::new(),
             pending_ext_prompts: Vec::new(),
             sdlc_keeper_due: false,
+            pending_sdlc_keeper_llm: None,
+            sdlc_keeper_llm_inflight: false,
+            sdlc_keeper_llm_rx: None,
             ext_injected_turns: 0,
             subagents: Vec::new(),
             pending_subagents: VecDeque::new(),

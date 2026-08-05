@@ -112,6 +112,75 @@ pub fn evaluate(session_dir: &Path) -> KeeperReport {
 }
 
 
+/// Build the user+system messages for an optional Safeguard oneshot that looks
+/// for stalled / dishonest progress the deterministic keeper missed.
+pub fn llm_keeper_prompt(
+    mission: &Mission,
+    open: &[super::graph::GraphTask],
+    sealed: &[super::graph::GraphTask],
+) -> Vec<crate::dto::chat::ChatMessage> {
+    use crate::dto::chat::{ChatMessage, Role};
+    let system = ChatMessage::new(
+        Role::System,
+        "You are the SDLC keeper. You review an in-progress SDLC mission for stalled or \
+         dishonest progress.\n\
+         Reply ONLY with valid JSON: {\"allow\": bool, \"reason\": string}\n\
+         - allow=true means healthy progress, NO inject needed.\n\
+         - allow=false means the model needs a nudge; reason is the inject body.\n\
+         Be concise. Only flag genuine issues: stalled (no progress across sealed tasks), \
+         dishonest (tasks marked done without evidence), or off-track (not working toward the goal).",
+    );
+    let open_titles: Vec<String> = open.iter().map(|n| format!("- {} [{}]", n.title, n.status)).collect();
+    let sealed_titles: Vec<String> = sealed
+        .iter()
+        .map(|n| {
+            format!(
+                "- {} [done, verify={}]",
+                n.title,
+                if n.verify_bit { "1" } else { "0" }
+            )
+        })
+        .collect();
+    let user_body = format!(
+        "Mission goal: {}\nPhase: {}\nAcceptance: {}\n\nOPEN tasks:\n{}\n\nSEALED tasks:\n{}\n\n\
+         Assess whether progress is honest and on-track. Reply JSON only.",
+        mission.goal,
+        mission.phase,
+        mission.acceptance.join(", "),
+        if open_titles.is_empty() {
+            "(none)".to_string()
+        } else {
+            open_titles.join("\n")
+        },
+        if sealed_titles.is_empty() {
+            "(none)".to_string()
+        } else {
+            sealed_titles.join("\n")
+        },
+    );
+    vec![system, ChatMessage::new(Role::User, user_body)]
+}
+
+/// Parse a classify reply JSON into an optional inject body.
+/// `allow=true` → None (healthy). `allow=false` → Some(reason wrapped as keeper nudge).
+pub fn llm_verdict_to_inject(reply: &str) -> Option<String> {
+    let v: serde_json::Value = match serde_json::from_str(reply) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+    let allow = v.get("allow").and_then(|a| a.as_bool()).unwrap_or(true);
+    if allow {
+        None
+    } else {
+        let reason = v.get("reason").and_then(|r| r.as_str()).unwrap_or("");
+        if reason.is_empty() {
+            None
+        } else {
+            Some(format!("[SDLC keeper — review]\n{reason}"))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -184,5 +253,31 @@ mod tests {
         let report = evaluate(&dir);
         assert!(report.inject.is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn llm_verdict_allow_true_returns_none() {
+        let json = r#"{"allow": true, "reason": ""}"#;
+        assert!(super::llm_verdict_to_inject(json).is_none());
+    }
+
+    #[test]
+    fn llm_verdict_allow_false_returns_inject() {
+        let json = r#"{"allow": false, "reason": "Tasks stalled with no verify evidence"}"#;
+        let inject = super::llm_verdict_to_inject(json).unwrap();
+        assert!(inject.contains("[SDLC keeper — review]"));
+        assert!(inject.contains("Tasks stalled"));
+    }
+
+    #[test]
+    fn llm_verdict_allow_false_empty_reason_returns_none() {
+        let json = r#"{"allow": false, "reason": ""}"#;
+        assert!(super::llm_verdict_to_inject(json).is_none());
+    }
+
+    #[test]
+    fn llm_verdict_malformed_returns_none() {
+        assert!(super::llm_verdict_to_inject("not json").is_none());
+        assert!(super::llm_verdict_to_inject("{}").is_none());
     }
 }

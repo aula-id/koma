@@ -58,26 +58,113 @@ pub fn ensure_tables(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Replace the open node set from a checklist of titles. Each title becomes a
-/// new pending node; existing done/cancelled nodes are preserved.
+/// Derive a stable graph-node id from a title: `n-{slug}-{hash6}` where slug
+/// is the first 4 hyphenated ASCII-alphanumeric word groups (max 32 chars) and
+/// hash6 is the first 3 bytes of the SHA-256 hex digest.
+fn stable_id_for_title(title: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(title.as_bytes());
+    let hex: String = hasher.finalize()[..3]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let slug: String = title
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .take(4)
+        .collect::<Vec<_>>()
+        .join("-");
+    let slug = if slug.is_empty() {
+        "task".to_string()
+    } else {
+        slug.chars().take(32).collect()
+    };
+    format!("n-{slug}-{hex}")
+}
+
+/// Replace the open node set from a checklist of titles by TITLE identity.
+///
+/// - Match existing nodes by exact title; reuse id and preserve parent_id/phase/notes/verify_bit.
+/// - New titles get a stable id: `n-{slug}-{hash6}` from title (not positional t1..tn).
+/// - Open nodes whose titles are absent from `items` are cancelled.
+/// - Done/cancelled nodes not in items are left untouched (sealed history).
+/// - When an existing done+verified node is still listed as done, keep verify_bit=1.
+/// - When status moves away from done, clear verify_bit to 0.
 pub fn replace_nodes_from_checklist(
     conn: &Connection,
     items: &[(String, String)], // (title, status)
 ) -> Result<()> {
     let now = now_secs();
-    // Cancel any existing non-done nodes first
-    conn.execute(
-        "UPDATE sdlc_nodes SET status = 'cancelled', updated_at = ?1 WHERE status NOT IN ('done', 'cancelled')",
-        [now],
-    )?;
-    // Upsert each item
-    for (i, (title, status)) in items.iter().enumerate() {
-        let display_id = format!("t{}", i + 1);
-        conn.execute(
-            "INSERT OR REPLACE INTO sdlc_nodes (id, title, status, updated_at) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![display_id, title, status, now],
-        )?;
+
+    // 1. Load all existing nodes so we can match by title.
+    let all = list_all(conn)?;
+
+    // 2. Build title → most-recently-updated non-cancelled node for reuse.
+    use std::collections::HashMap;
+    let mut by_title: HashMap<String, GraphTask> = HashMap::new();
+    for node in &all {
+        if node.status == "cancelled" {
+            continue;
+        }
+        match by_title.get(&node.title) {
+            Some(existing) if existing.updated_at >= node.updated_at => {}
+            _ => {
+                by_title.insert(node.title.clone(), node.clone());
+            }
+        }
     }
+
+    // 3. Process each item: reuse existing or insert stable-id node.
+    let mut kept_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (title, status) in items {
+        if let Some(ex) = by_title.get(title) {
+            // Preserve id, parent_id, phase, notes. Preserve verify_bit only if still done.
+            let verify_bit = if status == "done" {
+                ex.verify_bit
+            } else {
+                false
+            };
+            conn.execute(
+                "UPDATE sdlc_nodes SET status = ?1, verify_bit = ?2, updated_at = ?3 \
+                 WHERE id = ?4",
+                rusqlite::params![status, verify_bit as i64, now, ex.id],
+            )?;
+            kept_ids.insert(ex.id.clone());
+        } else {
+            let id = stable_id_for_title(title);
+            conn.execute(
+                "INSERT OR REPLACE INTO sdlc_nodes \
+                 (id, parent_id, title, status, phase, notes, verify_bit, updated_at) \
+                 VALUES (?1, NULL, ?2, ?3, NULL, '', 0, ?4)",
+                rusqlite::params![id, title, status, now],
+            )?;
+            kept_ids.insert(id);
+        }
+    }
+
+    // 4. Cancel open nodes whose titles are absent from items.
+    for node in &all {
+        if node.status == "done" || node.status == "cancelled" {
+            continue;
+        }
+        if !kept_ids.contains(&node.id) {
+            conn.execute(
+                "UPDATE sdlc_nodes SET status = 'cancelled', updated_at = ?1 WHERE id = ?2",
+                rusqlite::params![now, node.id],
+            )?;
+        }
+    }
+
     Ok(())
 }
 
@@ -286,19 +373,58 @@ mod tests {
             &[("a".into(), "done".into()), ("b".into(), "pending".into())],
         )
         .unwrap();
-        // t1 done without verify → false done
+        // "a" done without verify → false done (look up by title since ids are now stable)
         let false_done = list_false_done(&conn).unwrap();
         assert_eq!(false_done.len(), 1);
-        assert_eq!(false_done[0].id, "t1");
+        assert_eq!(false_done[0].title, "a");
 
-        set_verify_bit(&conn, "t1", true).unwrap();
-        mark_status(&conn, "t1", "done").unwrap();
+        set_verify_bit(&conn, &false_done[0].id, true).unwrap();
+        mark_status(&conn, &false_done[0].id, "done").unwrap();
         assert!(list_false_done(&conn).unwrap().is_empty());
 
         // fail verify reopens
-        set_verify_bit(&conn, "t1", false).unwrap();
+        set_verify_bit(&conn, &false_done[0].id, false).unwrap();
         let open = list_open(&conn).unwrap();
-        assert!(open.iter().any(|n| n.id == "t1" && n.status == "active"));
+        assert!(open.iter().any(|n| n.id == false_done[0].id && n.status == "active"));
+    }
+
+    #[test]
+    fn stable_id_and_verify_preserve() {
+        let conn = mem();
+        // First checklist: "x" done + "y" pending
+        replace_nodes_from_checklist(
+            &conn,
+            &[("x".into(), "done".into()), ("y".into(), "pending".into())],
+        )
+        .unwrap();
+        // Verify "x"
+        let sealed = list_sealed(&conn).unwrap();
+        let x_node = sealed.iter().find(|n| n.title == "x").unwrap();
+        set_verify_bit(&conn, &x_node.id, true).unwrap();
+        mark_status(&conn, &x_node.id, "done").unwrap();
+        let x_id_before = x_node.id.clone();
+
+        // Second checklist: same titles — ids should be preserved
+        replace_nodes_from_checklist(
+            &conn,
+            &[("x".into(), "done".into()), ("y".into(), "pending".into())],
+        )
+        .unwrap();
+        let sealed = list_sealed(&conn).unwrap();
+        let x_node2 = sealed.iter().find(|n| n.title == "x").unwrap();
+        assert_eq!(x_node2.id, x_id_before, "stable id preserved across replace");
+        assert!(x_node2.verify_bit, "verify_bit preserved when done→done");
+
+        // Third checklist: "x" moved to pending → verify_bit cleared
+        replace_nodes_from_checklist(
+            &conn,
+            &[("x".into(), "pending".into()), ("y".into(), "done".into())],
+        )
+        .unwrap();
+        let open = list_open(&conn).unwrap();
+        let x_open = open.iter().find(|n| n.title == "x").unwrap();
+        assert_eq!(x_open.id, x_id_before, "stable id still preserved");
+        assert!(!x_open.verify_bit, "verify_bit cleared when done→pending");
     }
 
     #[test]

@@ -481,6 +481,7 @@ Only call mission_ready when your exploration is complete and you are confident 
 ## Post-approve (execute phase)\n\
 NO preference nags; research, decide, ship. Never invent APIs — read the code.\n\
 - Execute inside the mission worktree (cwd is switched on approve). Do not thrash the user's main tree.\n\
+- Path ownership: write/edit/delete only inside the mission worktree during execute. Do not mutate the primary tree until integrate.\n\
 - Keep the checklist/graph honest: SEALED done nodes must not be re-implemented.\n\
 - After real verify evidence (tests/build), call `mission_verify` with node_id + evidence before treating a node as sealed. Done without verify is false-done — the keeper will reopen it.\n\
 - When OPEN is empty, acceptance is green, and nodes are verified, call `mission_integrate`.\n\

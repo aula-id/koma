@@ -23,11 +23,17 @@ pub(super) fn render_header(
     palette: &Palette,
 ) {
     let (mode_icon, mode_label, mode_color) = match rest.agent_mode {
-        crate::app::state::AgentMode::Normal => ("●", "normal", palette.success),
-        crate::app::state::AgentMode::Auto => ("»", "auto", palette.warn),
-        crate::app::state::AgentMode::Plan => ("●", "planning", palette.info),
-        crate::app::state::AgentMode::Yolo => ("!", "yooloo", palette.error),
-        crate::app::state::AgentMode::Sdlc => ("◆", "sdlc", palette.info),
+        crate::app::state::AgentMode::Normal => ("●", "normal".to_string(), palette.success),
+        crate::app::state::AgentMode::Auto => ("»", "auto".to_string(), palette.warn),
+        crate::app::state::AgentMode::Plan => ("●", "planning".to_string(), palette.info),
+        crate::app::state::AgentMode::Yolo => ("!", "yooloo".to_string(), palette.error),
+        crate::app::state::AgentMode::Sdlc => {
+            if let Some(ref phase) = rest.sdlc_phase {
+                ("◆", format!("sdlc:{phase}"), palette.info)
+            } else {
+                ("◆", "sdlc".to_string(), palette.info)
+            }
+        }
     };
     // Build the right-side text ("● normal" or "» auto") so we can
     // measure it and pad the gap between brand and mode.
@@ -83,7 +89,7 @@ pub(super) fn render_header(
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
-        header_spans.extend(plan_shimmer_spans(mode_label, elapsed_ms, palette));
+        header_spans.extend(plan_shimmer_spans(&mode_label, elapsed_ms, palette));
     } else {
         header_spans.push(Span::styled(mode_icon, Style::default().fg(mode_color)));
         header_spans.push(Span::raw(" "));

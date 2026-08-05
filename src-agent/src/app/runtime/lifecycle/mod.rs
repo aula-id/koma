@@ -496,6 +496,24 @@ fn install_daemon_session(
         }
     }
 
+    // SDLC daemon restart: if this session has an existing mission (approved or
+    // mid-assess), restore Sdlc mode so the keeper + phase-aware tooling resume
+    // where they left off. Also snapshot the worktree cwd so tools bind to the
+    // right root immediately.
+    if crate::model::sdlc::Mission::load(&sess_path).is_some() {
+        if let Some(sess) = state.rest.fg().session.as_ref() {
+            if sess.settings.workdir_saved.is_some() {
+                if let Some(wt) = sess.settings.workdir.first().cloned() {
+                    let p = std::path::PathBuf::from(&wt);
+                    if p.is_dir() {
+                        state.rest.fg_mut().active_cwd = Some(p);
+                    }
+                }
+            }
+        }
+        state.rest.set_agent_mode(crate::app::state::AgentMode::Sdlc);
+    }
+
     if unconfigured {
         // Nothing configured yet — show the connection CHOOSER through the client. The
         // client renders `Mode::Onboard` and forwards the pick to the daemon; each
