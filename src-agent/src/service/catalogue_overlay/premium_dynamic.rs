@@ -360,8 +360,22 @@ mod tests {
 
     #[test]
     fn contains_respects_store() {
-        // Without init_from_disk, store is unset — contains returns false.
-        assert!(!contains("koma/peach"));
+        // Set up the store with known models so the test is self-contained
+        // and doesn't depend on parallel test execution order.
+        let store = PremiumDynamic {
+            models: vec![OverlayModel {
+                id: "koma/peach".to_string(),
+                supported_parameters: vec![],
+                reasoning: None,
+                context_length: Some(200_000),
+                pricing: None,
+            }],
+            fetched_at: None,
+        };
+        let _ = STORE.set(RwLock::new(store));
+
+        assert!(contains("koma/peach"));
+        assert!(!contains("koma/nonexistent"));
     }
 
     #[test]
