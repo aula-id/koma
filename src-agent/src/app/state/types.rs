@@ -36,6 +36,7 @@ pub enum AgentMode {
     Normal,
     Plan,
     Yolo,
+    Sdlc,
 }
 
 impl AgentMode {
@@ -46,13 +47,14 @@ impl AgentMode {
             AgentMode::Normal => "normal",
             AgentMode::Plan => "plan",
             AgentMode::Yolo => "yolo",
+            AgentMode::Sdlc => "sdlc",
         }
     }
     /// Advance to the next mode for the interactive toggle (Shift+Tab / bare
     /// `/mode`), respecting the YOLO arm gate.
     ///
-    /// - `yolo_armed == true`:  Auto → Normal → Plan → Yolo → Auto (full cycle).
-    /// - `yolo_armed == false`: Auto → Normal → Plan → Auto (Yolo is skipped). If
+    /// - `yolo_armed == true`:  Auto → Normal → Plan → Sdlc → Yolo → Auto (full cycle).
+    /// - `yolo_armed == false`: Auto → Normal → Plan → Sdlc → Auto (Yolo is skipped). If
     ///   `self` is somehow `Yolo` while unarmed (shouldn't happen — disarming
     ///   drops the mode), it folds straight back to Auto so the user can never
     ///   linger there.
@@ -61,18 +63,43 @@ impl AgentMode {
             match self {
                 AgentMode::Auto => AgentMode::Normal,
                 AgentMode::Normal => AgentMode::Plan,
-                AgentMode::Plan => AgentMode::Yolo,
+                AgentMode::Plan => AgentMode::Sdlc,
+                AgentMode::Sdlc => AgentMode::Yolo,
                 AgentMode::Yolo => AgentMode::Auto,
             }
         } else {
             match self {
                 AgentMode::Auto => AgentMode::Normal,
                 AgentMode::Normal => AgentMode::Plan,
-                AgentMode::Plan => AgentMode::Auto,
+                AgentMode::Plan => AgentMode::Sdlc,
+                AgentMode::Sdlc => AgentMode::Auto,
                 // Unarmed + Yolo (defensive): drop back to Auto.
                 AgentMode::Yolo => AgentMode::Auto,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod agent_mode_tests {
+    use super::AgentMode;
+
+    #[test]
+    fn cycle_includes_sdlc_when_unarmed() {
+        assert_eq!(AgentMode::Plan.cycle(false), AgentMode::Sdlc);
+        assert_eq!(AgentMode::Sdlc.cycle(false), AgentMode::Auto);
+    }
+
+    #[test]
+    fn cycle_includes_sdlc_when_armed() {
+        assert_eq!(AgentMode::Plan.cycle(true), AgentMode::Sdlc);
+        assert_eq!(AgentMode::Sdlc.cycle(true), AgentMode::Yolo);
+        assert_eq!(AgentMode::Yolo.cycle(true), AgentMode::Auto);
+    }
+
+    #[test]
+    fn label_sdlc() {
+        assert_eq!(AgentMode::Sdlc.label(), "sdlc");
     }
 }
 

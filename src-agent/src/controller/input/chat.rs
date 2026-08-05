@@ -233,7 +233,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             .fg()
             .pending_tool_calls
             .get(rest.fg().tool_idx)
-            .map(|c| c.function.name == "plan_ready")
+            .map(|c| c.function.name == "plan_ready" || c.function.name == "mission_ready")
             .unwrap_or(false);
         if is_plan_ready {
             return match key.code {

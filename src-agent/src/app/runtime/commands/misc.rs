@@ -28,6 +28,7 @@ pub(super) fn handle_mode(state: &mut AppState, arg: Option<String>) -> Result<(
         Some("auto") => state.rest.set_agent_mode(AgentMode::Auto),
         Some("normal") => state.rest.set_agent_mode(AgentMode::Normal),
         Some("plan") => state.rest.set_agent_mode(AgentMode::Plan),
+        Some("sdlc") => state.rest.set_agent_mode(AgentMode::Sdlc),
         Some("yolo") => {
             // Layer-2 gate: only an ARMED YOLO may be entered. Unarmed → refuse and
             // leave the mode untouched.
@@ -40,7 +41,7 @@ pub(super) fn handle_mode(state: &mut AppState, arg: Option<String>) -> Result<(
         }
         Some(other) => {
             state.rest.fg_mut().status =
-                format!("unknown mode: {other} (auto | normal | plan | yolo)");
+                format!("unknown mode: {other} (auto | normal | plan | sdlc | yolo)");
             return Ok(());
         }
     }

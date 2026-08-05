@@ -224,6 +224,7 @@ impl DaemonHub {
             "auto" => Some(AgentMode::Auto),
             "normal" => Some(AgentMode::Normal),
             "plan" => Some(AgentMode::Plan),
+            "sdlc" => Some(AgentMode::Sdlc),
             // Layer-2 gate: an ARMED YOLO only; unarmed → leave the mode untouched.
             "yolo" if state.rest.yolo_armed => Some(AgentMode::Yolo),
             _ => None,

@@ -366,6 +366,77 @@ pub(super) fn drain_deferred_and_resume(
         dirty = true;
     }
 
+    // --- SDLC keeper: false-done reopen + integrate nudge on idle ---
+    // Armed after mission approve and each finished tool round while in Sdlc.
+    // Runs only when idle so we never inject mid-tool-round. Dedupe lives inside
+    // keeper::evaluate (mission_meta hash). If bash/subagent already woke this
+    // tick, is_working() is true and we defer — same single-wake invariant.
+    if state.rest.agent_mode == crate::app::state::AgentMode::Sdlc
+        && state.rest.sessions[idx].sdlc_keeper_due
+        && !state.rest.sessions[idx].is_working()
+        && client.is_some()
+        && state.rest.sessions[idx].session.is_some()
+    {
+        state.rest.sessions[idx].sdlc_keeper_due = false;
+        let sess_path = state.rest.sessions[idx]
+            .session
+            .as_ref()
+            .map(|s| s.path.clone());
+        if let Some(path) = sess_path {
+            let report = crate::model::sdlc::keeper::evaluate(&path);
+            if !report.reopened.is_empty() {
+                state.rest.sessions[idx].set_toast_info(format!(
+                    "SDLC keeper reopened {} false-done task(s)",
+                    report.reopened.len()
+                ));
+                dirty = true;
+            }
+            if let Some(inject) = report.inject {
+                let body = format!(
+                    "{}{inject}",
+                    crate::dto::chat::BASH_NUDGE_MARK,
+                );
+                let sess = match state.rest.sessions[idx].session.as_mut() {
+                    Some(s) => s,
+                    None => return dirty,
+                };
+                let _ = crate::model::msglog::append(
+                    &sess.path,
+                    crate::dto::chat::Role::User,
+                    &body,
+                    None,
+                    None,
+                );
+                sess.conversation.push_user(body);
+                let _ = sess.save();
+                // Rebuild so OPEN/SEALED after reopen is visible next turn.
+                sess.rebuild_system();
+                let _ = sess.save();
+                let history = sess.conversation.history();
+                {
+                    let rt = &mut state.rest.sessions[idx];
+                    rt.begin_stream();
+                    rt.waiting = true;
+                    rt.agent_steps = 0;
+                    rt.pending_tool_calls.clear();
+                    rt.awaiting_approval = false;
+                    rt.tool_idx = 0;
+                    rt.tool_results.clear();
+                    rt.pending_tool_tasks.clear();
+                    rt.awaiting_tool_tasks = false;
+                    rt.awaiting_classify = false;
+                    rt.pending_classify_verdict = None;
+                }
+                state.rest.reset_scroll_at(idx);
+                state.rest.sessions[idx].status = "thinking".into();
+                super::super::super::stream::start_stream_task(
+                    history, state, idx, client, handle,
+                );
+                dirty = true;
+            }
+        }
+    }
+
     // --- extension-prompt injection: inject + auto-wake when idle ---
     // Extensions BUFFER `chat.prompt` texts into `pending_ext_prompts` via the grant
     // broker (buffer-only — the broker NEVER injects). Exactly like the two

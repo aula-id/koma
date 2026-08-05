@@ -147,15 +147,27 @@ pub(in crate::app::runtime) fn apply_action(
         }
 
         Action::ApprovePlan => {
-            plan_decision::handle_approve_plan(state, client, handle)?;
+            if plan_decision::is_pending_mission_ready(state) {
+                plan_decision::handle_approve_mission(state, client, handle)?;
+            } else {
+                plan_decision::handle_approve_plan(state, client, handle)?;
+            }
         }
 
         Action::ApprovePlanCompact => {
-            plan_decision::handle_approve_plan_compact(state, client, handle)?;
+            if plan_decision::is_pending_mission_ready(state) {
+                plan_decision::handle_approve_mission_compact(state, client, handle)?;
+            } else {
+                plan_decision::handle_approve_plan_compact(state, client, handle)?;
+            }
         }
 
         Action::DenyPlan => {
-            plan_decision::handle_deny_plan(state, client, handle)?;
+            if plan_decision::is_pending_mission_ready(state) {
+                plan_decision::handle_deny_mission(state, client, handle)?;
+            } else {
+                plan_decision::handle_deny_plan(state, client, handle)?;
+            }
         }
 
         Action::SetupKomaFree => {
