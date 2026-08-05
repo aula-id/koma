@@ -12,10 +12,8 @@ use crate::service::openrouter::OpenRouterClient;
 
 use crate::app::runtime::stream::process_tools;
 
-/// Answer the paused `plan_ready` call (at `tool_idx`) with `result` and advance
-/// past it. Unlike a risky tool, `plan_ready` is FULLY INTERCEPTED — it is never
-/// re-dispatched through `run_tool`; its result is pushed directly (like a
-/// denial) so the parked round can be resumed by `process_tools`.
+/// Answer the paused `plan_ready`/`mission_ready` call (at `tool_idx`) with
+/// `result` and advance past it.
 fn answer_plan_ready(state: &mut AppState, result: String) {
     if let Some(call) = state
         .rest
@@ -246,4 +244,297 @@ pub(super) fn handle_deny_plan(
     // `set_agent_mode`'s leaving-plan branch.
     process_tools(state, fgi, client, handle);
     Ok(())
+}
+
+/// True when the currently pending approval call is `mission_ready`.
+pub(super) fn is_pending_mission_ready(state: &AppState) -> bool {
+    state
+        .rest
+        .fg()
+        .pending_tool_calls
+        .get(state.rest.fg().tool_idx)
+        .map(|c| c.function.name == "mission_ready")
+        .unwrap_or(false)
+}
+
+/// Read the approved mission.json off disk and build a body string for the
+/// tool result. Falls back to a short pointer on failure.
+fn mission_body_for_result(state: &AppState) -> String {
+    state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .and_then(|s| crate::model::sdlc::Mission::load(&s.path))
+        .map(|m| {
+            serde_json::to_string_pretty(&m).unwrap_or_else(|_| format!("{:?}", m))
+        })
+        .unwrap_or_else(|| "the session mission.json".to_string())
+}
+
+/// Handle `Action::ApprovePlan` when the pending call is `mission_ready`:
+/// approve the mission, stay in SDLC, resume execution.
+pub(super) fn handle_approve_mission(
+    state: &mut AppState,
+    client: &mut Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+) -> Result<()> {
+    let fgi = state.rest.foreground;
+    state.rest.fg_mut().awaiting_approval = false;
+    state.rest.fg_mut().approval_reason = None;
+
+    // Mark mission approved, phase=execute, persist. Mission::load/save take the
+    // session directory (they join mission.json themselves).
+    if let Some(sess_path) = state.rest.fg().session.as_ref().map(|s| s.path.clone()) {
+        if let Some(mut mission) = crate::model::sdlc::Mission::load(&sess_path) {
+            mission.approved = true;
+            mission.phase = "execute".to_string();
+            let _ = mission.save(&sess_path);
+        }
+    }
+    state.rest.sdlc_phase = Some("execute".to_string());
+
+    // Best-effort worktree create+enter before composing the tool result so the
+    // model sees the bound workspace in the same approval turn.
+    let wt_note = attempt_create_worktree(state, client, handle);
+
+    let mut body = mission_body_for_result(state);
+    if let Some(note) = wt_note {
+        body.push_str("\n\n");
+        body.push_str(&note);
+    }
+    answer_plan_ready(state, crate::tool::sdlc::mission_approved_text(&body));
+
+    // Stash approved mission for the classifier (same pattern as plan).
+    let approved_mission = mission_body_for_result(state)
+        .chars()
+        .take(2000)
+        .collect::<String>();
+    state.rest.fg_mut().approved_plan = Some(approved_mission);
+
+    // Arm keeper for the first idle boundary after execute starts.
+    state.rest.fg_mut().sdlc_keeper_due = true;
+
+    // Rebuild system so the post-approve capsule (OPEN+SEALED) lands immediately.
+    if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+        sess.rebuild_system();
+        let _ = sess.save();
+    }
+
+    process_tools(state, fgi, client, handle);
+    Ok(())
+}
+
+/// Handle `Action::ApprovePlanCompact` when the pending call is `mission_ready`:
+/// like approve but compact first.
+pub(super) fn handle_approve_mission_compact(
+    state: &mut AppState,
+    client: &mut Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+) -> Result<()> {
+    let fgi = state.rest.foreground;
+    state.rest.fg_mut().awaiting_approval = false;
+    state.rest.fg_mut().approval_reason = None;
+
+    // Mark mission approved. Mission::load/save take the session directory.
+    if let Some(sess_path) = state.rest.fg().session.as_ref().map(|s| s.path.clone()) {
+        if let Some(mut mission) = crate::model::sdlc::Mission::load(&sess_path) {
+            mission.approved = true;
+            mission.phase = "execute".to_string();
+            let _ = mission.save(&sess_path);
+        }
+    }
+    state.rest.sdlc_phase = Some("execute".to_string());
+
+    // Create+enter worktree before compact so the post-seed stream runs inside it.
+    let _ = attempt_create_worktree(state, client, handle);
+
+    answer_plan_ready(
+        state,
+        crate::tool::sdlc::mission_approved_compact_text().to_string(),
+    );
+
+    // Stash approved mission for the classifier.
+    let approved_mission = mission_body_for_result(state)
+        .chars()
+        .take(2000)
+        .collect::<String>();
+    state.rest.fg_mut().approved_plan = Some(approved_mission);
+
+    // Arm mission seed for compaction + keeper for first idle after execute.
+    state.rest.pending_mission_seed = true;
+    state.rest.fg_mut().sdlc_keeper_due = true;
+
+    // Answer trailing pending tool calls.
+    let trailing_ids: Vec<String> = state.rest.sessions[fgi]
+        .pending_tool_calls
+        .iter()
+        .skip(state.rest.sessions[fgi].tool_idx)
+        .map(|c| c.id.clone())
+        .collect();
+
+    let staged: Vec<(String, String)> = state.rest.sessions[fgi].tool_results.clone();
+    {
+        let rt = &mut state.rest.sessions[fgi];
+        if let Some(sess) = rt.session.as_mut() {
+            for (id, result) in &staged {
+                let _ = msglog::append(&sess.path, Role::Tool, result, None, None);
+                sess.conversation.push_tool(id.clone(), result.clone());
+            }
+            for id in &trailing_ids {
+                let _ = msglog::append(
+                    &sess.path,
+                    Role::Tool,
+                    "skipped — mission approved, compacting context",
+                    None,
+                    None,
+                );
+                sess.conversation.push_tool(
+                    id.clone(),
+                    "skipped — mission approved, compacting context".to_string(),
+                );
+            }
+            let _ = sess.save();
+        }
+    }
+
+    state.rest.sessions[fgi].pending_tool_calls.clear();
+    state.rest.sessions[fgi].tool_idx = 0;
+    state.rest.sessions[fgi].tool_results.clear();
+
+    state.rest.fg_mut().waiting = false;
+    let _ = crate::app::runtime::commands::compact::handle_compact(state, client, handle, Some(0));
+    Ok(())
+}
+
+/// Handle `Action::DenyPlan` when the pending call is `mission_ready`:
+/// deny and stay in SDLC assess phase.
+pub(super) fn handle_deny_mission(
+    state: &mut AppState,
+    client: &mut Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+) -> Result<()> {
+    let fgi = state.rest.foreground;
+    state.rest.fg_mut().awaiting_approval = false;
+    state.rest.fg_mut().approval_reason = None;
+    answer_plan_ready(state, crate::tool::sdlc::mission_denied_text().to_string());
+    process_tools(state, fgi, client, handle);
+    Ok(())
+}
+
+/// Best-effort worktree creation + enter on mission approval.
+/// Returns a short status line for the approval tool result (or None).
+fn attempt_create_worktree(
+    state: &mut AppState,
+    client: &Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+) -> Option<String> {
+    let fgi = state.rest.foreground;
+    let Some(sess) = state.rest.fg().session.as_ref() else {
+        return None;
+    };
+    let Some(mission) = crate::model::sdlc::Mission::load(&sess.path) else {
+        return None;
+    };
+
+    let wt_name = mission
+        .worktree_name
+        .clone()
+        .unwrap_or_else(|| format!("sdlc-{}", &mission.id[..8.min(mission.id.len())]));
+    let wt_branch = mission.branch.clone().unwrap_or_else(|| {
+        let slug: String = mission
+            .goal
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+            .take(40)
+            .collect();
+        format!("sdlc/{slug}")
+    });
+
+    let worktrees_dir = match crate::model::store::worktrees_dir(&sess.pwd_hash) {
+        Ok(d) => d,
+        Err(_) => return None,
+    };
+    if std::fs::create_dir_all(&worktrees_dir).is_err() {
+        return None;
+    }
+
+    let shadow = worktrees_dir.join(&wt_name);
+    // Prefer the stashed primary root when already inside a worktree; otherwise
+    // current workdir is the repo root.
+    let repo_root = sess
+        .settings
+        .workdir_saved
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| sess.workdir());
+    let shadow_str = shadow.to_string_lossy().into_owned();
+
+    let existed = shadow.join(".git").exists();
+    let mut created_ok = existed;
+    if !existed {
+        // Prefer creating a new branch off HEAD (`-b`). If the branch already
+        // exists, retry without `-b` so re-approve / resume still works.
+        let mut output = std::process::Command::new("git")
+            .args(["worktree", "add", "-b", &wt_branch, &shadow_str])
+            .current_dir(&repo_root)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output();
+        if !matches!(&output, Ok(o) if o.status.success()) {
+            output = std::process::Command::new("git")
+                .args(["worktree", "add", &shadow_str, &wt_branch])
+                .current_dir(&repo_root)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output();
+        }
+        created_ok = matches!(&output, Ok(o) if o.status.success());
+    }
+
+    // Always persist intended name/branch so the model can discover them even
+    // when create failed (degraded SDLC without an isolated tree).
+    if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+        if let Some(mut m) = crate::model::sdlc::Mission::load(&sess.path) {
+            m.worktree_name = Some(wt_name.clone());
+            m.branch = Some(wt_branch.clone());
+            let _ = m.save(&sess.path);
+        }
+    }
+
+    if !shadow.join(".git").exists() {
+        return Some(format!(
+            "worktree: create failed for '{wt_name}' (branch {wt_branch}) — \
+             continuing in current cwd (degraded SDLC)"
+        ));
+    }
+
+    // Enter: register worktree as primary root + switch live cwd (same path as
+    // git_worktree create/enter intercepts).
+    {
+        if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+            sess.settings.enter_worktree(shadow_str.clone());
+            let _ = sess.save();
+        }
+    }
+    crate::app::runtime::stream::apply_workspace_change(
+        state,
+        fgi,
+        shadow.clone(),
+        client,
+        handle,
+    );
+
+    let verb = if existed {
+        "entered existing"
+    } else if created_ok {
+        "created and entered"
+    } else {
+        "entered"
+    };
+    Some(format!(
+        "worktree: {verb} '{wt_name}' at {} (branch {wt_branch}) — \
+         execute only inside this tree until integrate",
+        shadow.display()
+    ))
 }

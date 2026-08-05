@@ -271,7 +271,7 @@ const CLASSIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120
 /// (the caller decides per mode). The reason is preserved either way so the toast
 /// / approval box is accurate. Bounded by [`CLASSIFY_TIMEOUT`] so a parked round
 /// always resumes.
-async fn classify(
+pub(crate) async fn classify(
     client: &OpenRouterClient,
     config: &AppConfig,
     settings: &Settings,

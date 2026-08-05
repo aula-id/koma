@@ -244,12 +244,23 @@ pub(super) fn render_tool_approval(
         .fg()
         .pending_tool_calls
         .get(rest.fg().tool_idx)
-        .map(|c| c.function.name == "plan_ready")
+        .map(|c| c.function.name == "plan_ready" || c.function.name == "mission_ready")
         .unwrap_or(false);
     if is_plan_ready {
+        let is_mission = rest
+            .fg()
+            .pending_tool_calls
+            .get(rest.fg().tool_idx)
+            .map(|c| c.function.name == "mission_ready")
+            .unwrap_or(false);
+        let (question, title) = if is_mission {
+            (" proceed with the mission?", " mission ready ")
+        } else {
+            (" proceed with the plan?", " plan ready ")
+        };
         let rows: Vec<Line> = vec![
             Line::from(Span::styled(
-                " proceed with the plan?",
+                question,
                 Style::default().fg(palette.fg),
             )),
             Line::from(vec![
@@ -272,7 +283,7 @@ pub(super) fn render_tool_approval(
         };
         let block = Block::bordered()
             .border_style(Style::default().fg(warn))
-            .title(Span::styled(" plan ready ", Style::default().fg(warn)))
+            .title(Span::styled(title, Style::default().fg(warn)))
             .padding(Padding::horizontal(1));
         let inner = block.inner(rect);
         crate::view::clear_and_fill(frame, rect, palette.bg);

@@ -33,6 +33,7 @@
 mod bash;
 mod guard;
 mod plan;
+mod sdlc;
 mod task;
 
 pub(super) use bash::{intercept_bash_background, intercept_bash_kill, intercept_bash_output};
@@ -43,6 +44,10 @@ pub(super) use guard::{
 pub(super) use plan::{
     build_convo_context, intercept_checklist_plan, intercept_plan_enter,
     intercept_plan_readonly_gate, intercept_plan_ready,
+};
+pub(super) use sdlc::{
+    intercept_checklist_sdlc, intercept_mission_integrate, intercept_mission_ready,
+    intercept_mission_verify,
 };
 pub(super) use task::{
     intercept_task, intercept_task_kill, intercept_task_output, intercept_task_send,

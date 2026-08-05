@@ -59,6 +59,8 @@ pub struct Session {
     /// which is a `Session` method with no access to `AppStateRest`. Read only
     /// by `rebuild_system` to decide whether to append the planning nudge.
     pub plan_mode_hint: bool,
+    /// Whether the CURRENT `agent_mode` is `Sdlc`.
+    pub sdlc_mode_hint: bool,
     /// Skill catalogue loaded during `rebuild_system`. Contains name→path mappings
     /// so the `skill` tool can load bodies on demand. Refreshed every rebuild.
     pub skills: SkillRegistry,
@@ -91,6 +93,7 @@ impl Session {
             settings,
             conversation,
             plan_mode_hint: false,
+            sdlc_mode_hint: false,
             skills: SkillRegistry::default(),
         }
     }
@@ -108,6 +111,12 @@ impl Session {
     /// re-read to seed a compacted conversation. Mirrors [`Self::settings_path`].
     pub fn plan_path(&self) -> PathBuf {
         self.path.join("plan.md")
+    }
+
+    /// Path to this session's mission contract (`<session>/mission.json`).
+    #[allow(dead_code)] // used by mission load helpers / future UI
+    pub fn mission_path(&self) -> std::path::PathBuf {
+        self.path.join("mission.json")
     }
 
     /// Session-scoped plan-mode todo list (distinct from the per-directory
@@ -213,6 +222,7 @@ impl Session {
             settings,
             conversation,
             plan_mode_hint: false,
+            sdlc_mode_hint: false,
             skills: SkillRegistry::default(),
         };
 
@@ -446,6 +456,68 @@ Multiple workspace roots are configured. Paths written as [N]… (for example fr
             sys.push_str(
                 "\n\n# Plan mode\nPlan mode is active. Tools are read-only: explore the codebase and gather what you need, and use the seqthink tool to structure your reasoning. Build the plan as a todo list with the checklist tool — one item per step (two locked rail items are managed for you). When the plan is complete, call plan_ready with `highlights` (the key changes, decisions, and risks the user needs to approve) and `plan` (the full detailed plan — files, exact changes, reasoning — saved to plan.md). The user will approve it or discuss further."
             );
+        }
+
+        // SDLC mode: comprehensive envelope instruction.
+        if self.sdlc_mode_hint {
+            sys.push_str(
+                "\n\n# SDLC mode\n\
+You are PM+tech lead inside an SDLC envelope. The harness (WC/PC/TAC) is fully intact — tool approval works like Auto mode, not Yolo.\n\n\
+Phases: assess → user approves via mission_ready → execute in mission worktree → verify → integrate.\n\n\
+## Assess phase (current)\n\
+Explore, research best practice, build acceptance criteria and a graph of tasks via the checklist tool. \
+When ready, call `mission_ready` with:\n\
+- `highlights`: the key things the user must know to approve (changes, decisions, risks)\n\
+- `goal`: what this mission achieves\n\
+- `non_goals`: what it explicitly does NOT do\n\
+- `acceptance`: concrete criteria that must be met\n\
+- `lane`: express|standard|full (how much verification)\n\
+- `verify_plan`: steps to verify correctness\n\
+- `human_gates`: checkpoints requiring human review\n\
+- `risks`: known risks\n\
+- `rationale`: why this approach\n\
+- `graph_tasks`: array of task titles for the checklist\n\n\
+Only call mission_ready when your exploration is complete and you are confident in the contract.\n\n\
+## Post-approve (execute phase)\n\
+NO preference nags; research, decide, ship. Never invent APIs — read the code.\n\
+- Execute inside the mission worktree (cwd is switched on approve). Do not thrash the user's main tree.\n\
+- Path ownership: write/edit/delete only inside the mission worktree during execute. Do not mutate the primary tree until integrate.\n\
+- Keep the checklist/graph honest: SEALED done nodes must not be re-implemented.\n\
+- After real verify evidence (tests/build), call `mission_verify` with node_id + evidence before treating a node as sealed. Done without verify is false-done — the keeper will reopen it.\n\
+- When OPEN is empty, acceptance is green, and nodes are verified, call `mission_integrate`.\n\
+- Integrate never force-pushes. Dirty main → leave the mission branch ready (or PR); clean main may FF/merge.\n\
+- Human gates on the contract still require escalate — do not auto-bypass them.\n\n\
+## On confusion about mission/details\n\
+Re-read mission.json and the OPEN/SEALED capsule. The contract is the source of truth.\n"
+            );
+            // Mission capsule: when an approved mission exists, inject OPEN+SEALED
+            // so sealed work stays sealed across every turn/rebuild.
+            if let Some(mission) = crate::model::sdlc::Mission::load(&self.path) {
+                if mission.approved {
+                    let (open, sealed) = crate::model::msglog::open(&self.path)
+                        .ok()
+                        .map(|conn| {
+                            let _ = crate::model::sdlc::graph::ensure_tables(&conn);
+                            let open =
+                                crate::model::sdlc::graph::list_open(&conn).unwrap_or_default();
+                            let sealed =
+                                crate::model::sdlc::graph::list_sealed(&conn).unwrap_or_default();
+                            (open, sealed)
+                        })
+                        .unwrap_or_default();
+                    sys.push('\n');
+                    sys.push_str(&crate::model::sdlc::mission::build_seed_capsule(
+                        &mission, &open, &sealed,
+                    ));
+                    if let Some(ref wt) = mission.worktree_name {
+                        sys.push_str(&format!(
+                            "\nWorktree intent: {} (branch: {})\n",
+                            wt,
+                            mission.branch.as_deref().unwrap_or("n/a")
+                        ));
+                    }
+                }
+            }
         }
 
         self.conversation.set_system(sys);

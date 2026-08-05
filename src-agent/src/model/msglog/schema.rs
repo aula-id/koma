@@ -172,6 +172,30 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS schema_meta (
             key   TEXT PRIMARY KEY,
             value INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS sdlc_nodes (
+            id        TEXT PRIMARY KEY,
+            parent_id TEXT,
+            title     TEXT NOT NULL,
+            status    TEXT NOT NULL,
+            phase     TEXT,
+            notes     TEXT NOT NULL DEFAULT '',
+            verify_bit INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS sdlc_events (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            node_id    TEXT,
+            kind       TEXT NOT NULL,
+            detail     TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS mission_meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
         );",
     )?;
     // Migrate older DBs (created before the usage/reasoning columns existed).
