@@ -19,7 +19,6 @@
 
 mod fetch;
 mod model;
-pub(crate) mod premium_dynamic;
 
 // dead_code: infra-only for now — no consumer wired yet (W2/W3 will read this).
 #[allow(unused_imports)]
@@ -54,7 +53,6 @@ pub fn init() {
     let table = load_initial();
     let _ = OVERLAY.set(RwLock::new(table));
     fetch::spawn_refresh();
-    premium_dynamic::init_from_disk();
 }
 
 /// Load the starting table: on-disk cache if it parses, else the bundled
@@ -187,25 +185,33 @@ pub fn models_for_provider(provider: OAuthProvider) -> Vec<ModelInfo> {
             models.push(m);
         }
     }
-    // Merge dynamic premium catalogue (live-fetched from KomaRun /models).
-    premium_dynamic::merge_into(&mut models);
     models
 }
 
 /// Fast membership check: is `model_id` a premium-tier KomaRun model?
-/// Returns true if the id is in the static premium overlay OR the dynamic
-/// premium store. Used by `resolve.rs` to route requests to the premium
-/// endpoint instead of the base endpoint.
+///
+/// Returns true if the id is in the static premium overlay (e.g. `koma/peach`)
+/// OR is not found in the base-tier overlay — i.e. it must have come from the
+/// live `GET …/koma-premium/models` fetch and therefore routes to the premium
+/// endpoint. Used by `resolve.rs` to route requests to the premium endpoint
+/// instead of the base endpoint.
 pub fn is_premium_model(model_id: &str) -> bool {
-    // Check static overlay first.
+    // 1. Explicit static premium overlay hit (koma/peach + curated premium ids).
     if models_for(crate::service::oauth::registry::KOMA_PREMIUM_CHAT_ENDPOINT)
         .iter()
         .any(|m| m.id == model_id)
     {
         return true;
     }
-    // Then the dynamic store.
-    premium_dynamic::contains(model_id)
+    // 2. Not a known base-tier KomaRun id → treat as premium.
+    //    Live catalogue is sole-sourced from koma-premium/models, so any id
+    //    that isn't in the base overlay must hit the premium chat endpoint.
+    !models_for(
+        crate::service::oauth::registry::meta(crate::model::app_config::OAuthProvider::KomaRun)
+            .chat_endpoint,
+    )
+    .iter()
+    .any(|m| m.id == model_id)
 }
 
 #[cfg(test)]

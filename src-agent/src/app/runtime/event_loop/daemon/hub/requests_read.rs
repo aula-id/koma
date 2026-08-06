@@ -237,27 +237,61 @@ impl DaemonHub {
             .iter()
             .find(|c| c.uuid == provider)
         {
-            // OAuth-conn provider: resolve straight to the curated
-            // catalogue overlay for this provider's chat endpoint(s).
-            // For KomaRun, also trigger a TTL-gated refresh of the dynamic
-            // premium catalogue so the picker picks up new models.
             if conn.provider == crate::model::app_config::OAuthProvider::KomaRun
                 && !conn.access_token.is_empty()
             {
-                crate::service::catalogue_overlay::premium_dynamic::maybe_refresh(
-                    &conn.access_token,
-                    false,
-                );
+                // KomaRun: live-fetch from GET …/koma-premium/models with the
+                // OAuth bearer (mirrors the static-key provider branch above).
+                // On success, reply with live ids; on error/empty, fall back to
+                // the curated catalogue overlay so the picker isn't blank.
+                let endpoint = crate::service::oauth::registry::KOMA_PREMIUM_CHAT_ENDPOINT
+                    .to_string();
+                let access_token = conn.access_token.clone();
+                let oauth_uuid = conn.uuid.clone();
+                let c = crate::app::runtime::session_mgmt::build_client();
+                handle.spawn(async move {
+                    let conn = crate::service::openrouter::Conn {
+                        endpoint: &endpoint,
+                        api_key: &access_token,
+                        api_type: crate::model::app_config::ApiType::OpenAiCompatible,
+                        account_id: "",
+                        oauth_uuid: &oauth_uuid,
+                        install_id: "",
+                    };
+                    let mut models = c
+                        .list_models(conn)
+                        .await
+                        .map(|v| v.into_iter().map(|m| m.id).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    if models.is_empty() {
+                        models =
+                            crate::service::catalogue_overlay::models_for_provider(
+                                crate::model::app_config::OAuthProvider::KomaRun,
+                            )
+                            .into_iter()
+                            .map(|m| m.id)
+                            .collect();
+                    }
+                    let _ = tx.send(super::core::ListModelsReply {
+                        client_id,
+                        provider,
+                        models,
+                    });
+                });
+            } else {
+                // Other OAuth conns (Codex/Claude/xAI/Extension/CommandCode):
+                // resolve straight to the curated catalogue overlay, no network
+                // call needed.
+                let models = crate::service::catalogue_overlay::models_for_provider(conn.provider)
+                    .into_iter()
+                    .map(|m| m.id)
+                    .collect();
+                let _ = tx.send(super::core::ListModelsReply {
+                    client_id,
+                    provider,
+                    models,
+                });
             }
-            let models = crate::service::catalogue_overlay::models_for_provider(conn.provider)
-                .into_iter()
-                .map(|m| m.id)
-                .collect();
-            let _ = tx.send(super::core::ListModelsReply {
-                client_id,
-                provider,
-                models,
-            });
         } else {
             // Unknown provider uuid — reply empty so the GUI picker's spinner
             // clears rather than hanging with no answer.
