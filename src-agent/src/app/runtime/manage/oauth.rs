@@ -53,7 +53,9 @@ fn spawn_oauth_daemon() -> Result<u32> {
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
 
-    let child = cmd.spawn().context("failed to spawn `koma --oauth-daemon`")?;
+    let child = cmd
+        .spawn()
+        .context("failed to spawn `koma --oauth-daemon`")?;
     Ok(child.id())
 }
 

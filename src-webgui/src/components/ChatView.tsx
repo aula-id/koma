@@ -124,24 +124,29 @@ function TerseResult({ output }: { output: string }) {
 const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) {
   const done = call.status === 'done'
   const req = useKoma((s) => s.req)
-  // The session is PARKED on a plan decision when the approval gate is set AND
-  // the paused call is `plan_ready`. Only the currently-parked plan_ready row is
-  // still pending (`!done`); historical plan_ready rows in scrollback already
+  // The session is PARKED on a plan/mission decision when the approval gate is set AND
+  // the paused call is `plan_ready` or `mission_ready`. Only the currently-parked row is
+  // still pending (`!done`); historical rows in scrollback already
   // got answered → they have a result → done. So gate the controls on both, so
   // they show on exactly the one row awaiting a decision.
   const awaitingApproval = useKoma((s) => s.session.awaitingApproval)
-  const pendingIsPlan = useKoma((s) => s.session.pendingCall?.name === 'plan_ready')
+  const pendingIsPlan = useKoma(
+    (s) =>
+      s.session.pendingCall?.name === 'plan_ready' ||
+      s.session.pendingCall?.name === 'mission_ready',
+  )
 
-  // plan_ready: a "plan ready" header + the FULL Markdown digest (the rewritten
+  // plan_ready / mission_ready: a header + the FULL Markdown digest (the rewritten
   // `highlights` arg) rendered behind the dim quote rail — mirrors the TUI's
   // render_tool_lines special case, NOT the terse one-line signature. Falls
   // through to the generic row if the digest can't be parsed out.
-  if (call.name === 'plan_ready') {
+  if (call.name === 'plan_ready' || call.name === 'mission_ready') {
     const digest = planDigest(call.args)
     if (digest != null) {
       const showControls = !done && awaitingApproval && pendingIsPlan
       const decide = (decision: 'approve' | 'compact' | 'deny') =>
         req({ r: 'PlanDecision', decision })
+      const label = call.name === 'mission_ready' ? 'mission ready' : 'plan ready'
       return (
         <div>
           <div className="flex items-center gap-1.5 text-[12.5px] text-koma-dim">
@@ -150,7 +155,7 @@ const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) 
             ) : (
               <Cog size={12} className="flex-none text-koma-dim" />
             )}
-            <span>plan ready</span>
+            <span>{label}</span>
           </div>
           <div className="mt-1 border-l-2 border-koma-dim pl-3">
             <MessageBody text={digest} />
@@ -185,6 +190,7 @@ const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) 
     }
   }
 
+  // Fall through to generic tool row when plan/mission digest is absent.
   const meta = toolBoxMeta(call.name)
   const signature = call.signature ?? fallbackSignature(call.name, call.args)
   const hasOutput = call.output != null && call.output.trim() !== ''

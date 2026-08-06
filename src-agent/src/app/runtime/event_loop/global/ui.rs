@@ -233,7 +233,7 @@ pub(super) fn force_dirty_while_live(state: &AppState, shimmer_active: bool) -> 
         || super::has_running_subagents(state)
         || state.rest.sec_health_rx.is_some()
         || state.rest.oauth_rx.is_some()
-        || state.rest.agent_mode == crate::app::state::AgentMode::Plan
+        || state.rest.agent_mode() == crate::app::state::AgentMode::Plan
 }
 
 /// Auto-dismiss expired toasts. Toast is per-session now (C6), and this runs

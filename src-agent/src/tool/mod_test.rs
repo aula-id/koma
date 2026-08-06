@@ -13,6 +13,28 @@ fn plan_allowlist_blocks_mutating_and_offensive_tools() {
 }
 
 #[test]
+fn sdlc_assess_allowlist_blocks_workspace_mutations() {
+    assert!(!tool_allowed_in_sdlc_assess("write"));
+    assert!(!tool_allowed_in_sdlc_assess("edit"));
+    assert!(!tool_allowed_in_sdlc_assess("delete"));
+    assert!(!tool_allowed_in_sdlc_assess("bash"));
+    assert!(!tool_allowed_in_sdlc_assess("web_download"));
+    assert!(!tool_allowed_in_sdlc_assess("git_worktree"));
+    assert!(!tool_allowed_in_sdlc_assess("remember"));
+}
+
+#[test]
+fn sdlc_assess_allowlist_keeps_mission_prep_tools() {
+    assert!(tool_allowed_in_sdlc_assess("read"));
+    assert!(tool_allowed_in_sdlc_assess("grep"));
+    assert!(tool_allowed_in_sdlc_assess("glob"));
+    assert!(tool_allowed_in_sdlc_assess("checklist"));
+    assert!(tool_allowed_in_sdlc_assess("mission_ready"));
+    assert!(tool_allowed_in_sdlc_assess("web_search"));
+    assert!(tool_allowed_in_sdlc_assess("seqthink"));
+}
+
+#[test]
 fn plan_allowlist_allows_read_only_and_reasoning_tools() {
     assert!(tool_allowed_in_plan("read"));
     assert!(tool_allowed_in_plan("grep"));
@@ -40,20 +62,103 @@ fn plan_git_subcommand_denies_mutating() {
     assert!(!plan_git_subcommand_allowed("checkout"));
 }
 
+// --- SDLC assess git-form guards (gap 1) ---
+
+#[test]
+fn sdlc_assess_git_allows_safe_read_forms() {
+    assert!(sdlc_assess_git_args_allowed(&["status"]).is_ok());
+    assert!(sdlc_assess_git_args_allowed(&["log", "--oneline", "-5"]).is_ok());
+    assert!(sdlc_assess_git_args_allowed(&["branch"]).is_ok());
+    assert!(sdlc_assess_git_args_allowed(&["branch", "-vv"]).is_ok());
+    assert!(sdlc_assess_git_args_allowed(&["branch", "--show-current"]).is_ok());
+    assert!(sdlc_assess_git_args_allowed(&["branch", "--list", "feat/*"]).is_ok());
+    assert!(sdlc_assess_git_args_allowed(&["remote"]).is_ok());
+    assert!(sdlc_assess_git_args_allowed(&["remote", "-v"]).is_ok());
+    assert!(sdlc_assess_git_args_allowed(&["remote", "show", "origin"]).is_ok());
+    assert!(sdlc_assess_git_args_allowed(&["remote", "get-url", "origin"]).is_ok());
+}
+
+#[test]
+fn sdlc_assess_git_rejects_mutating_branch_forms() {
+    for args in [
+        &["branch", "new-feature"][..],
+        &["branch", "-d", "old"][..],
+        &["branch", "-D", "old"][..],
+        &["branch", "-m", "renamed"][..],
+        &["branch", "--set-upstream-to=origin/main"][..],
+        &["branch", "-u", "origin/main", "main"][..],
+        &["branch", "--force", "x", "y"][..],
+    ] {
+        let err = sdlc_assess_git_args_allowed(args).unwrap_err();
+        assert!(
+            err.contains("branch") || err.contains("mutating"),
+            "args={args:?} err={err}"
+        );
+    }
+}
+
+#[test]
+fn sdlc_assess_git_rejects_mutating_remote_forms() {
+    for args in [
+        &["remote", "add", "origin", "https://example.com/r.git"][..],
+        &["remote", "remove", "origin"][..],
+        &["remote", "rm", "origin"][..],
+        &["remote", "set-url", "origin", "https://example.com/n.git"][..],
+        &["remote", "rename", "origin", "upstream"][..],
+    ] {
+        let err = sdlc_assess_git_args_allowed(args).unwrap_err();
+        assert!(
+            err.contains("remote") || err.contains("mutating"),
+            "args={args:?} err={err}"
+        );
+    }
+}
+
+#[test]
+fn sdlc_assess_git_rejects_non_readonly_subcommands() {
+    assert!(sdlc_assess_git_args_allowed(&["commit", "-m", "x"]).is_err());
+    assert!(sdlc_assess_git_args_allowed(&["push"]).is_err());
+    assert!(sdlc_assess_git_args_allowed(&["checkout", "main"]).is_err());
+}
+
+// --- SDLC execute git confinement helpers (gap 2) ---
+
+#[test]
+fn sdlc_execute_git_rejects_cwd_override_and_branch_ops() {
+    assert!(sdlc_execute_git_args_allowed(&["status"], None, true, "").is_ok());
+    assert!(sdlc_execute_git_args_allowed(&["add", "."], None, true, "").is_ok());
+    assert!(sdlc_execute_git_args_allowed(&["commit", "-m", "x"], None, true, "").is_ok());
+
+    let err = sdlc_execute_git_args_allowed(&["status"], Some("/tmp/other"), true, "").unwrap_err();
+    assert!(err.contains("cwd"), "{err}");
+
+    let err = sdlc_execute_git_args_allowed(&["checkout", "main"], None, true, "").unwrap_err();
+    assert!(err.contains("checkout"), "{err}");
+
+    let err = sdlc_execute_git_args_allowed(&["switch", "main"], None, true, "").unwrap_err();
+    assert!(err.contains("switch"), "{err}");
+
+    let err =
+        sdlc_execute_git_args_allowed(&["status"], None, false, "worktree mismatch").unwrap_err();
+    assert!(err.contains("not live") || err.contains("binding"), "{err}");
+}
+
 // --- resolve_read skill-dir exemption tests ---
 
 #[test]
 fn resolve_read_allows_abs_path_under_active_skill_dir() {
-    let tmp = std::env::temp_dir().join(format!(
-        "koma-skill-test-allow-{}",
-        std::process::id()
-    ));
+    let tmp = std::env::temp_dir().join(format!("koma-skill-test-allow-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).unwrap();
     std::fs::write(tmp.join("helper.md"), "content").unwrap();
 
     let workspaces = vec![std::env::temp_dir().join("koma-nonexistent-workspace")];
     let skill_dirs = vec![tmp.clone()];
-    let path = resolve_read(&workspaces, tmp.join("helper.md").to_str().unwrap(), None, &skill_dirs);
+    let path = resolve_read(
+        &workspaces,
+        tmp.join("helper.md").to_str().unwrap(),
+        None,
+        &skill_dirs,
+    );
     assert!(path.is_ok(), "should allow read under active skill dir");
 
     let _ = std::fs::remove_dir_all(&tmp);
@@ -61,28 +166,30 @@ fn resolve_read_allows_abs_path_under_active_skill_dir() {
 
 #[test]
 fn resolve_read_denies_abs_path_under_inactive_skill_dir() {
-    let tmp = std::env::temp_dir().join(format!(
-        "koma-skill-test-deny-{}",
-        std::process::id()
-    ));
+    let tmp = std::env::temp_dir().join(format!("koma-skill-test-deny-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).unwrap();
     std::fs::write(tmp.join("secret.md"), "content").unwrap();
 
     let workspaces = vec![std::env::temp_dir().join("koma-nonexistent-workspace")];
     // Empty skill_dirs — skill is NOT active.
     let skill_dirs: Vec<PathBuf> = vec![];
-    let result = resolve_read(&workspaces, tmp.join("secret.md").to_str().unwrap(), None, &skill_dirs);
-    assert!(result.is_err(), "should deny read when skill dir is not active");
+    let result = resolve_read(
+        &workspaces,
+        tmp.join("secret.md").to_str().unwrap(),
+        None,
+        &skill_dirs,
+    );
+    assert!(
+        result.is_err(),
+        "should deny read when skill dir is not active"
+    );
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
 #[test]
 fn resolve_read_skill_dir_escape_via_dotdot_is_denied() {
-    let base = std::env::temp_dir().join(format!(
-        "koma-skill-test-escape-{}",
-        std::process::id()
-    ));
+    let base = std::env::temp_dir().join(format!("koma-skill-test-escape-{}", std::process::id()));
     let skill_dir = base.join("skill");
     let outside = base.join("outside");
     std::fs::create_dir_all(&skill_dir).unwrap();
@@ -92,17 +199,12 @@ fn resolve_read_skill_dir_escape_via_dotdot_is_denied() {
     let workspaces = vec![std::env::temp_dir().join("koma-nonexistent-workspace")];
     let skill_dirs = vec![skill_dir.clone()];
     // Attempt to read outside/secret.md via skill_dir/../outside/secret.md.
-    let escaped = skill_dir
-        .join("..")
-        .join("outside")
-        .join("secret.md");
-    let result = resolve_read(
-        &workspaces,
-        escaped.to_str().unwrap(),
-        None,
-        &skill_dirs,
+    let escaped = skill_dir.join("..").join("outside").join("secret.md");
+    let result = resolve_read(&workspaces, escaped.to_str().unwrap(), None, &skill_dirs);
+    assert!(
+        result.is_err(),
+        "dotdot escape from skill dir must be denied"
     );
-    assert!(result.is_err(), "dotdot escape from skill dir must be denied");
 
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -110,15 +212,62 @@ fn resolve_read_skill_dir_escape_via_dotdot_is_denied() {
 #[test]
 fn resolve_write_still_denies_skill_dir() {
     // resolve() (used by write/edit/delete) must NOT have the skill dir exemption.
-    let tmp = std::env::temp_dir().join(format!(
-        "koma-skill-test-write-{}",
-        std::process::id()
-    ));
+    let tmp = std::env::temp_dir().join(format!("koma-skill-test-write-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).unwrap();
 
     let workspaces = vec![std::env::temp_dir().join("koma-nonexistent-workspace")];
     let result = resolve(&workspaces, tmp.join("file.md").to_str().unwrap());
-    assert!(result.is_err(), "resolve() must deny paths outside workspaces");
+    assert!(
+        result.is_err(),
+        "resolve() must deny paths outside workspaces"
+    );
 
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn resolve_allows_scratch_by_default_non_sdlc() {
+    let scratch = crate::model::store::scratch_root()
+        .join(format!("resolve-scratch-ok-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let target = scratch.join("note.txt");
+    // Path need not exist yet — resolve accepts absolute under scratch.
+    let workspaces = vec![std::env::temp_dir().join("koma-nonexistent-workspace-x")];
+    let ok = resolve(&workspaces, target.to_str().expect("utf8 path"));
+    assert!(
+        ok.is_ok(),
+        "default resolve must keep scratch exemption: {ok:?}"
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn resolve_in_rejects_scratch_when_bypass_disabled() {
+    let scratch = crate::model::store::scratch_root()
+        .join(format!("resolve-scratch-deny-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let target = scratch.join("escape.txt");
+    let workspaces = vec![std::env::temp_dir().join("koma-bound-worktree-fake")];
+    let denied = resolve_in(&workspaces, target.to_str().expect("utf8 path"), false);
+    assert!(
+        denied.is_err(),
+        "SDLC execute/integrate must not write via scratch root: {denied:?}"
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn resolve_in_allows_path_inside_bound_worktree_without_scratch() {
+    let bound = std::env::temp_dir().join(format!("koma-bound-wt-{}", std::process::id()));
+    std::fs::create_dir_all(&bound).unwrap();
+    let target = bound.join("src").join("lib.rs");
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(&target, "fn main() {}").unwrap();
+    let workspaces = vec![bound.clone()];
+    let ok = resolve_in(&workspaces, target.to_str().expect("utf8 path"), false);
+    assert!(
+        ok.is_ok(),
+        "bound worktree absolute path must still resolve: {ok:?}"
+    );
+    let _ = std::fs::remove_dir_all(&bound);
 }

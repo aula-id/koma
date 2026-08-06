@@ -13,12 +13,12 @@ use std::path::Path;
 pub fn restrict_owner_only(path: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{LocalFree, HLOCAL};
-    use windows_sys::Win32::Security::{
-        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-        SetFileSecurityW,
-    };
     use windows_sys::Win32::Security::Authorization::{
         ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows_sys::Win32::Security::{
+        SetFileSecurityW, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+        PSECURITY_DESCRIPTOR,
     };
 
     // SDDL: Protected DACL, grants Full Access to SYSTEM, Administrators, and Owner.
@@ -27,7 +27,10 @@ pub fn restrict_owner_only(path: &Path) -> std::io::Result<()> {
     let mut psd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
     let ok = unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            SDDL.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>().as_ptr(),
+            SDDL.encode_utf16()
+                .chain(std::iter::once(0))
+                .collect::<Vec<u16>>()
+                .as_ptr(),
             SDDL_REVISION_1,
             &mut psd,
             std::ptr::null_mut(),

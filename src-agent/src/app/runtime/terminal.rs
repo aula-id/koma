@@ -16,11 +16,7 @@ pub(super) struct TerminalGuard;
 impl TerminalGuard {
     pub(super) fn enter() -> anyhow::Result<Self> {
         enable_raw_mode()?;
-        if let Err(e) = execute!(
-            stdout(),
-            EnterAlternateScreen,
-            EnableBracketedPaste
-        ) {
+        if let Err(e) = execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste) {
             let _ = disable_raw_mode();
             return Err(e.into());
         }
@@ -33,11 +29,7 @@ impl Drop for TerminalGuard {
         // Disable mouse capture FIRST — while stdout is still fully usable — so
         // the parent shell never receives stale mouse CSI sequences on hover.
         let _ = execute!(stdout(), DisableMouseCapture);
-        let _ = execute!(
-            stdout(),
-            LeaveAlternateScreen,
-            DisableBracketedPaste
-        );
+        let _ = execute!(stdout(), LeaveAlternateScreen, DisableBracketedPaste);
         let _ = disable_raw_mode();
         let _ = execute!(stdout(), ratatui::crossterm::cursor::Show);
     }

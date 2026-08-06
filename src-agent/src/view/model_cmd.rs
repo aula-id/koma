@@ -69,10 +69,7 @@ pub fn render_overlay(
 
     let block = Block::bordered()
         .border_style(Style::default().fg(palette.dim))
-        .title(Span::styled(
-            title_str,
-            Style::default().fg(palette.dim),
-        ));
+        .title(Span::styled(title_str, Style::default().fg(palette.dim)));
     let inner = block.inner(rect);
     crate::view::clear_and_fill(frame, rect, palette.bg);
     frame.render_widget(block, rect);
@@ -139,9 +136,7 @@ pub fn render_overlay(
                             } else {
                                 display
                             };
-                            let hl = Style::default()
-                                .fg(palette.sel_fg)
-                                .bg(palette.sel_bg);
+                            let hl = Style::default().fg(palette.sel_fg).bg(palette.sel_bg);
                             Line::from(Span::styled(padded, hl))
                         } else {
                             let style = if uuid.is_none() {
@@ -179,8 +174,7 @@ pub fn render_overlay(
             vertical: 0,
         });
         frame.render_widget(
-            Paragraph::new(state.note.as_str())
-                .style(Style::default().fg(palette.dim)),
+            Paragraph::new(state.note.as_str()).style(Style::default().fg(palette.dim)),
             note_area,
         );
     }

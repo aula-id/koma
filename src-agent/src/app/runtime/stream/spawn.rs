@@ -21,21 +21,44 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
     // allow-list / `[N]` multi-root set — cd repoints only the cwd, never the
     // allow-list (use `/adddir` to widen that).
     let workspace = rt.effective_cwd();
-    // SDLC path ownership: during execute/integrate inside a mission worktree,
-    // tools may only write under the worktree root (slot 0). Extra roots and the
-    // stashed primary are denied until integrate exits the worktree.
-    let workspaces = if state.rest.agent_mode == crate::app::state::AgentMode::Sdlc
-        && matches!(state.rest.sdlc_phase.as_deref(), Some("execute") | Some("integrate"))
-        && session_ref
+    // SDLC path ownership: during execute/integrate, tools may only write under
+    // the *validated* mission worktree binding (`Mission.worktree_path`), not
+    // merely because `workdir_saved` is set. If the live cwd matches the bound
+    // path use it; otherwise fall back to the frozen bound path alone so the
+    // primary tree stays out of the allow-list.
+    //
+    // Fail-closed: missing/invalid/tampered binding, unapproved mission, or
+    // missing bound path → expose NO writable workspace roots so regular
+    // workspace tools are denied (do not fall open to primary workdirs). Also
+    // poison `workspace` empty so bash cannot run against primary via cwd alone.
+    let sdlc_execute = state.rest.sessions[sess_idx].agent_mode
+        == crate::app::state::AgentMode::Sdlc
+        && matches!(
+            state.rest.sessions[sess_idx].sdlc_phase.as_deref(),
+            Some("execute") | Some("integrate")
+        );
+    // Close the process-global scratch-root write bypass during SDLC
+    // execute/integrate: mutating tools must stay inside the bound worktree.
+    // Assess/other modes keep historical scratch behaviour.
+    let allow_scratch = !sdlc_execute;
+    let sdlc_assess = state.rest.sessions[sess_idx].agent_mode
+        == crate::app::state::AgentMode::Sdlc
+        && state.rest.sessions[sess_idx].sdlc_phase.as_deref() == Some("assess");
+    let (workspace, workspaces) = if sdlc_execute {
+        match session_ref
             .as_ref()
-            .is_some_and(|s| s.settings.workdir_saved.is_some())
-    {
-        vec![workspace.clone()]
+            .and_then(|s| crate::model::sdlc::Mission::load(&s.path))
+        {
+            Some(m) => m.tool_sandbox_roots(&workspace),
+            // No mission under execute/integrate → deny all writable roots.
+            None => (std::path::PathBuf::new(), Vec::new()),
+        }
     } else {
-        session_ref
+        let workspaces = session_ref
             .as_ref()
             .map(|s| s.workdirs())
-            .unwrap_or_else(|| vec![workspace.clone()])
+            .unwrap_or_else(|| vec![workspace.clone()]);
+        (workspace, workspaces)
     };
     // Per-PROJECT memory dir (shared by every session in this working dir), not
     // the old per-session `<session_dir>/memory`. Falls back to the per-session
@@ -125,6 +148,8 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         bash_saving,
         bash_log_dir,
         session_dir,
+        allow_scratch,
+        sdlc_assess,
     }
 }
 
@@ -364,7 +389,7 @@ fn spawn_task_with_id(
         tool_call_id,
         detached,
         ext_owned,
-        state.rest.agent_mode,
+        state.rest.sessions[sess_idx].agent_mode,
         overrides,
         initial_injects,
     )
@@ -702,6 +727,8 @@ mod tests {
             bash_saving: true,
             bash_log_dir: None,
             session_dir: None,
+            allow_scratch: true,
+            sdlc_assess: false,
         }
     }
 

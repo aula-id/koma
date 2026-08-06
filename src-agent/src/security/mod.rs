@@ -185,7 +185,10 @@ pub fn install(force: bool) -> Result<()> {
         .status()
         .context("failed to launch pip install checksec.py")?;
     if !status.success() {
-        return Err(anyhow!("pip install checksec.py exited with status {}", status));
+        return Err(anyhow!(
+            "pip install checksec.py exited with status {}",
+            status
+        ));
     }
 
     println!("security daemon installed at {}", dest.display());

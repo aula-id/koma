@@ -237,7 +237,7 @@ pub(crate) fn process_tools(
         < state.rest.sessions[sess_idx].pending_tool_calls.len()
     {
         // re-read every iteration: plan_enter can flip the mode mid-round
-        let mode = state.rest.agent_mode;
+        let mode = state.rest.sessions[sess_idx].agent_mode;
         let call = state.rest.sessions[sess_idx].pending_tool_calls
             [state.rest.sessions[sess_idx].tool_idx]
             .clone();
@@ -264,6 +264,34 @@ pub(crate) fn process_tools(
         }
         if mode == AgentMode::Plan && !call.function.name.starts_with("mcp__") {
             match intercepts::intercept_plan_readonly_gate(state, sess_idx, &call) {
+                InterceptFlow::Continue => continue,
+                InterceptFlow::Return => return,
+                InterceptFlow::Fallthrough => {}
+            }
+        }
+        // SDLC assess: deny filesystem-mutating workspace tools at runtime
+        // (same pattern as Plan's readonly gate). mission_ready / checklist /
+        // read-search remain available so the contract can be prepared.
+        if mode == AgentMode::Sdlc
+            && state.rest.sessions[sess_idx].sdlc_phase.as_deref() == Some("assess")
+            && !call.function.name.starts_with("mcp__")
+        {
+            match intercepts::intercept_sdlc_assess_gate(state, sess_idx, &call) {
+                InterceptFlow::Continue => continue,
+                InterceptFlow::Return => return,
+                InterceptFlow::Fallthrough => {}
+            }
+        }
+        // SDLC execute/integrate: confine git_operator to the frozen bound
+        // worktree (no cwd override, no checkout/switch, binding must be live).
+        if mode == AgentMode::Sdlc
+            && matches!(
+                state.rest.sessions[sess_idx].sdlc_phase.as_deref(),
+                Some("execute") | Some("integrate")
+            )
+            && call.function.name == "git_operator"
+        {
+            match intercepts::intercept_sdlc_execute_git_gate(state, sess_idx, &call) {
                 InterceptFlow::Continue => continue,
                 InterceptFlow::Return => return,
                 InterceptFlow::Fallthrough => {}
@@ -419,7 +447,10 @@ pub(crate) fn process_tools(
                         }
                     };
                     if verdict.available && verdict.allow {
-                        if mode == AgentMode::Auto || mode == AgentMode::Plan || mode == AgentMode::Sdlc {
+                        if mode == AgentMode::Auto
+                            || mode == AgentMode::Plan
+                            || mode == AgentMode::Sdlc
+                        {
                             state.rest.sessions[sess_idx].approval_reason = None;
                         } else {
                             state.rest.sessions[sess_idx].approval_reason =
@@ -430,7 +461,10 @@ pub(crate) fn process_tools(
                             return;
                         }
                     } else if verdict.available {
-                        if mode == AgentMode::Auto || mode == AgentMode::Plan || mode == AgentMode::Sdlc {
+                        if mode == AgentMode::Auto
+                            || mode == AgentMode::Plan
+                            || mode == AgentMode::Sdlc
+                        {
                             state.rest.sessions[sess_idx].tool_results.push((
                                 call.id.clone(),
                                 format!("blocked by harness: {}", verdict.reason),

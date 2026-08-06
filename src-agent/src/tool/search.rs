@@ -51,7 +51,12 @@ impl Tool for Grep {
         };
 
         let search_path = args.get("path").and_then(Value::as_str).unwrap_or(".");
-        let base = resolve_read(&ctx.workspaces, search_path, ctx.session_dir.as_deref(), &ctx.active_skill_dirs)?;
+        let base = resolve_read(
+            &ctx.workspaces,
+            search_path,
+            ctx.session_dir.as_deref(),
+            &ctx.active_skill_dirs,
+        )?;
 
         // Optional glob filter.
         let glob_matcher: Option<globset::GlobMatcher> =
@@ -175,7 +180,12 @@ impl Tool for Glob {
             .ok_or_else(|| anyhow::anyhow!("missing required string argument 'pattern'"))?;
 
         let base_rel = args.get("path").and_then(Value::as_str).unwrap_or(".");
-        let base_abs = resolve_read(&ctx.workspaces, base_rel, ctx.session_dir.as_deref(), &ctx.active_skill_dirs)?;
+        let base_abs = resolve_read(
+            &ctx.workspaces,
+            base_rel,
+            ctx.session_dir.as_deref(),
+            &ctx.active_skill_dirs,
+        )?;
 
         let matcher = globset::Glob::new(pattern)
             .map_err(|e| anyhow::anyhow!("invalid glob '{pattern}': {e}"))?

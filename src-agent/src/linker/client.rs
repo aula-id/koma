@@ -221,10 +221,7 @@ pub fn normalize_query_path(path: &str, project_roots: &[PathBuf]) -> String {
     // File doesn't exist on disk: still return an absolute path under the
     // primary root so the daemon suffix-match has a chance.
     if let Some(root) = project_roots.first() {
-        return root
-            .join(p)
-            .to_string_lossy()
-            .replace('\\', "/");
+        return root.join(p).to_string_lossy().replace('\\', "/");
     }
 
     // No roots at all — return slash-normalized as-is.
@@ -238,10 +235,7 @@ mod tests {
     #[test]
     fn normalize_query_path_absolute_passthrough() {
         let roots = vec![PathBuf::from("/some/root")];
-        assert_eq!(
-            normalize_query_path("/foo/bar.rs", &roots),
-            "/foo/bar.rs"
-        );
+        assert_eq!(normalize_query_path("/foo/bar.rs", &roots), "/foo/bar.rs");
     }
 
     #[test]
@@ -258,10 +252,7 @@ mod tests {
     fn normalize_query_path_backslash() {
         // Windows-style backslashes should be normalized.
         let roots = vec![PathBuf::from("/some/root")];
-        assert_eq!(
-            normalize_query_path("/foo\\bar.rs", &roots),
-            "/foo/bar.rs"
-        );
+        assert_eq!(normalize_query_path("/foo\\bar.rs", &roots), "/foo/bar.rs");
     }
 
     #[test]
@@ -356,5 +347,3 @@ mod tests {
         assert_eq!(result, "/some/root/[0]");
     }
 }
-
-

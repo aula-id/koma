@@ -22,16 +22,16 @@ pub mod cd;
 pub mod dircache;
 pub mod fs;
 pub mod git_cred;
-pub mod graph;
 pub mod git_operator;
 pub mod git_worktree;
+pub mod graph;
 pub mod history;
 pub mod internet;
 pub mod memory;
 pub mod plan;
 pub mod pong;
-pub mod search;
 pub mod sdlc;
+pub mod search;
 pub mod seqthink;
 pub mod shell;
 pub mod shell_filter;
@@ -89,6 +89,14 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
     )
 }
 
+/// Tools reachable during SDLC **assess** (pre-approval): same read/search/
+/// reasoning/delegation surface as Plan, plus `mission_ready` so the contract
+/// can be parked. Filesystem-mutating workspace tools (`write`/`edit`/`delete`/
+/// `bash`/…) are denied at the runtime gate — not merely by prompt guidance.
+pub(crate) fn tool_allowed_in_sdlc_assess(name: &str) -> bool {
+    matches!(name, "mission_ready") || tool_allowed_in_plan(name)
+}
+
 /// True when `subcmd` (the first element of a `git_operator` call's `args`
 /// array) is a read-only git subcommand — the only ones Plan mode may run
 /// through `git_operator`.
@@ -108,6 +116,184 @@ pub(crate) fn plan_git_subcommand_allowed(subcmd: &str) -> bool {
             | "ls-files"
             | "ls-remote"
     )
+}
+
+/// SDLC assess is stricter than Plan's subcommand allow-list: `branch` and
+/// `remote` are only permitted in **safe read forms**. Mutating forms
+/// (branch create/force/upstream; remote add/remove/set-url/…) are rejected
+/// even though the bare subcommand is on the Plan allow-list.
+///
+/// `args` is the full `git_operator` argv (subcommand first).
+pub(crate) fn sdlc_assess_git_args_allowed(args: &[&str]) -> Result<(), String> {
+    let subcmd = args.first().copied().unwrap_or("");
+    if !plan_git_subcommand_allowed(subcmd) {
+        return Err(format!(
+            "git {subcmd} is not allowed (read-only git only until mission approval)"
+        ));
+    }
+    match subcmd {
+        "branch" => {
+            if sdlc_assess_branch_is_mutating(args) {
+                return Err("git branch mutating form is not allowed in assess \
+                     (no create/delete/rename/force/upstream; list/show only)"
+                    .into());
+            }
+        }
+        "remote" => {
+            if sdlc_assess_remote_is_mutating(args) {
+                return Err("git remote mutating form is not allowed in assess \
+                     (no add/remove/set-url/rename; list/show/get-url only)"
+                    .into());
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// True when a `git branch …` argv would create/delete/rename/force/set upstream
+/// rather than merely list or show branches.
+fn sdlc_assess_branch_is_mutating(args: &[&str]) -> bool {
+    // args[0] == "branch"
+    let mut i = 1;
+    // Explicit list/show intent absorbs subsequent pattern operands.
+    let mut list_mode = false;
+    let mut saw_positional = false;
+    while i < args.len() {
+        let a = args[i];
+        if a == "--" {
+            // Operands after `--`: create unless we are listing.
+            return if list_mode {
+                false
+            } else {
+                args.get(i + 1).is_some()
+            };
+        }
+        if a.starts_with('-') {
+            if a.starts_with("--") {
+                let (base, has_eq) = match a.split_once('=') {
+                    Some((b, _)) => (b, true),
+                    None => (a, false),
+                };
+                match base {
+                    "--delete" | "--move" | "--copy" | "--force" | "--set-upstream"
+                    | "--set-upstream-to" | "--track" | "--unset-upstream"
+                    | "--edit-description" => return true,
+                    "--list" => list_mode = true,
+                    "--show-current" | "--verbose" | "--no-verbose" | "--quiet"
+                    | "--ignore-case" | "--color" | "--no-color" | "--no-column" => {}
+                    "--all" | "--remotes" => list_mode = true,
+                    "--contains" | "--no-contains" | "--merged" | "--no-merged" | "--points-at"
+                    | "--format" | "--sort" | "--column" => {
+                        list_mode = true;
+                        if !has_eq {
+                            if let Some(n) = args.get(i + 1) {
+                                if !n.starts_with('-') {
+                                    i += 1;
+                                }
+                            }
+                        }
+                    }
+                    _ => return true, // unknown long option → fail closed
+                }
+            } else {
+                // Short cluster, e.g. -vv, -av, -d, -D, -m, -M, -c, -C, -f, -u, -l.
+                let chars: Vec<char> = a.chars().skip(1).collect();
+                for ch in &chars {
+                    match ch {
+                        'd' | 'D' | 'm' | 'M' | 'c' | 'C' | 'f' | 'u' => return true,
+                        'l' => list_mode = true, // --list
+                        // -a/--all and -r/--remotes imply list form when a
+                        // pattern follows (`git branch -a feat/*`).
+                        'a' | 'r' => list_mode = true,
+                        'v' | 'q' | 'i' => {}
+                        _ => return true, // unknown short → fail closed
+                    }
+                }
+            }
+            i += 1;
+            continue;
+        }
+        // Positional branch name / pattern.
+        saw_positional = true;
+        i += 1;
+    }
+    // Positional without list-mode is branch creation: `git branch foo`.
+    saw_positional && !list_mode
+}
+
+/// True when a `git remote …` argv would add/remove/set-url/rename rather than
+/// list/show/get-url.
+fn sdlc_assess_remote_is_mutating(args: &[&str]) -> bool {
+    // args[0] == "remote"
+    let mut i = 1;
+    // Skip global-ish flags before the remote subcommand (-v/--verbose).
+    while i < args.len() {
+        let a = args[i];
+        if a == "-v" || a == "--verbose" {
+            i += 1;
+            continue;
+        }
+        break;
+    }
+    let Some(action) = args.get(i).copied() else {
+        // bare `git remote` / `git remote -v` → list (safe)
+        return false;
+    };
+    if action.starts_with('-') {
+        // Unknown flag form — fail closed.
+        return true;
+    }
+    match action {
+        "show" | "get-url" => false,
+        "add" | "remove" | "rm" | "set-url" | "rename" | "set-head" | "set-branches" | "prune"
+        | "update" => true,
+        // A bare remote name is not a standard read form we allow.
+        _ => true,
+    }
+}
+
+/// Git subcommands that change the checked-out branch/HEAD — blocked during
+/// SDLC execute/integrate so the frozen mission binding cannot be escaped.
+pub(crate) fn sdlc_execute_git_branch_changing(subcmd: &str) -> bool {
+    matches!(subcmd, "checkout" | "switch" | "worktree")
+}
+
+/// Validate a `git_operator` invocation for SDLC execute/integrate:
+/// - no arbitrary `cwd` override (must run in the bound worktree via session cwd)
+/// - no branch-changing subcommands
+/// - binding must be live/valid (caller supplies the already-checked flag + detail)
+pub(crate) fn sdlc_execute_git_args_allowed(
+    args: &[&str],
+    cwd_override: Option<&str>,
+    binding_live: bool,
+    binding_detail: &str,
+) -> Result<(), String> {
+    if !binding_live {
+        return Err(format!(
+            "git_operator blocked: mission binding is not live/valid ({binding_detail})"
+        ));
+    }
+    if let Some(cwd) = cwd_override {
+        if !cwd.trim().is_empty() {
+            return Err(
+                "git_operator cwd override is not allowed during SDLC execute/integrate — \
+                 git runs only inside the frozen bound mission worktree"
+                    .into(),
+            );
+        }
+    }
+    let subcmd = args.first().copied().unwrap_or("");
+    if subcmd.is_empty() {
+        return Err("git_operator requires a git subcommand".into());
+    }
+    if sdlc_execute_git_branch_changing(subcmd) {
+        return Err(format!(
+            "git {subcmd} is not allowed during SDLC execute/integrate — \
+             branch/HEAD is frozen to the mission binding (no checkout/switch/…)"
+        ));
+    }
+    Ok(())
 }
 
 /// Shared context handed to every tool invocation.
@@ -143,6 +329,15 @@ pub struct ToolCtx {
     pub session_dir: Option<PathBuf>,
     /// Absolute paths of currently loaded dir-form skill directories.
     pub active_skill_dirs: Vec<PathBuf>,
+    /// When `false`, mutating path resolution (`resolve` / write/edit/delete)
+    /// must NOT accept absolute paths merely because they lie under the
+    /// process-global scratch root. SDLC execute/integrate sets this false so
+    /// writes stay inside the validated bound mission worktree. Non-SDLC keeps
+    /// the historical scratch exemption (`true`).
+    pub allow_scratch: bool,
+    /// When `true`, the session is in SDLC assess — sub-agent allow-lists fold
+    /// through the same assess surface as the main agent (no workspace writes).
+    pub sdlc_assess: bool,
 }
 
 /// Parse a `[N]` workspace-index prefix from the start of a path string.
@@ -288,70 +483,39 @@ pub fn main_tool_names() -> Vec<String> {
 }
 
 /// Resolve a path and enforce containment.
+///
+/// Absolute paths under the process-global scratch root are accepted when
+/// `allow_scratch` is true (historical non-SDLC behaviour). Callers that must
+/// confine writes to validated workspace roots (SDLC execute/integrate) pass
+/// `false` so scratch is not a bypass.
 pub fn resolve(workspaces: &[PathBuf], rel: &str) -> Result<PathBuf> {
+    resolve_in(workspaces, rel, true)
+}
+
+/// Like [`resolve`], with an explicit scratch-root policy.
+pub fn resolve_in(workspaces: &[PathBuf], rel: &str, allow_scratch: bool) -> Result<PathBuf> {
     let as_path = Path::new(rel);
     if as_path.is_absolute() {
-        let scratch = crate::model::store::scratch_root();
-        let candidate = match as_path.canonicalize() {
-            Ok(p) => p,
-            Err(_) => {
-                let mut existing = as_path;
-                let mut tail: Vec<std::ffi::OsString> = Vec::new();
-                while !existing.exists() {
-                    match existing.file_name() {
-                        Some(n) => tail.push(n.to_os_string()),
-                        None => break,
-                    }
-                    match existing.parent() {
-                        Some(p) => existing = p,
-                        None => break,
-                    }
-                }
-                let mut base = existing
-                    .canonicalize()
-                    .unwrap_or_else(|_| existing.to_path_buf());
-                for seg in tail.iter().rev() {
-                    base.push(seg);
-                }
-                base
+        let candidate = partial_canonicalize(as_path);
+        // Historical exemption: absolute paths under process-global scratch.
+        // SDLC execute/integrate disables this so mission binding cannot be bypassed.
+        if allow_scratch {
+            let scratch = crate::model::store::scratch_root();
+            if candidate.starts_with(&scratch) {
+                return Ok(candidate);
             }
-        };
-        if candidate.starts_with(&scratch) {
-            return Ok(candidate);
         }
-    }
-
-    if as_path.is_absolute() {
-        let candidate = match as_path.canonicalize() {
-            Ok(p) => p,
-            Err(_) => {
-                let mut existing = as_path;
-                let mut tail: Vec<std::ffi::OsString> = Vec::new();
-                while !existing.exists() {
-                    match existing.file_name() {
-                        Some(n) => tail.push(n.to_os_string()),
-                        None => break,
-                    }
-                    match existing.parent() {
-                        Some(p) => existing = p,
-                        None => break,
-                    }
-                }
-                let mut base = existing
-                    .canonicalize()
-                    .unwrap_or_else(|_| existing.to_path_buf());
-                for seg in tail.iter().rev() {
-                    base.push(seg);
-                }
-                base
-            }
-        };
         for ws in workspaces {
             let ws_canon = ws.canonicalize().unwrap_or_else(|_| ws.to_path_buf());
             if candidate.starts_with(&ws_canon) {
                 return Ok(candidate);
             }
         }
+        if !allow_scratch {
+            bail!("path is outside the bound workspace (scratch bypass disabled)");
+        }
+        // allow_scratch path outside workspaces falls through so the failure
+        // shape matches historical resolve() (workspace-join containment error).
     }
 
     let (ws_idx, bare) = parse_ws_prefix(rel);
@@ -363,30 +527,7 @@ pub fn resolve(workspaces: &[PathBuf], rel: &str) -> Result<PathBuf> {
     })?;
     let ws = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
     let joined = ws.join(bare);
-    let candidate = match joined.canonicalize() {
-        Ok(p) => p,
-        Err(_) => {
-            let mut existing = joined.as_path();
-            let mut tail: Vec<std::ffi::OsString> = Vec::new();
-            while !existing.exists() {
-                match existing.file_name() {
-                    Some(n) => tail.push(n.to_os_string()),
-                    None => break,
-                }
-                match existing.parent() {
-                    Some(p) => existing = p,
-                    None => break,
-                }
-            }
-            let mut base = existing
-                .canonicalize()
-                .unwrap_or_else(|_| existing.to_path_buf());
-            for seg in tail.iter().rev() {
-                base.push(seg);
-            }
-            base
-        }
-    };
+    let candidate = partial_canonicalize(&joined);
     if !candidate.starts_with(&ws) {
         bail!("path '{bare}' is outside workspace [{ws_idx}]");
     }

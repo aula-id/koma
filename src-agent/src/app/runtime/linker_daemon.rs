@@ -187,10 +187,7 @@ async fn connection_loop(
 }
 
 /// Serialise + frame-write one [`LinkerResponse`].
-async fn respond(
-    stream: &mut crate::ipc::IpcStream,
-    resp: &LinkerResponse,
-) -> std::io::Result<()> {
+async fn respond(stream: &mut crate::ipc::IpcStream, resp: &LinkerResponse) -> std::io::Result<()> {
     let bytes = match serde_json::to_vec(resp) {
         Ok(b) => b,
         Err(e) => serde_json::to_vec(&LinkerResponse::Error(format!("encode failed: {e}")))
@@ -206,9 +203,7 @@ fn handle_request(
     state: &Arc<DaemonState>,
 ) -> LinkerResponse {
     match req {
-        LinkerRequest::Fingerprint => {
-            LinkerResponse::Fingerprint(store::build_fingerprint())
-        }
+        LinkerRequest::Fingerprint => LinkerResponse::Fingerprint(store::build_fingerprint()),
         LinkerRequest::Shutdown => {
             shutting_down.store(true, std::sync::atomic::Ordering::Relaxed);
             LinkerResponse::Ack
@@ -253,7 +248,9 @@ fn handle_request(
                     graph.nodes.is_empty()
                 };
                 if should_scan || !new_roots.is_empty() {
-                    state.scanning.store(true, std::sync::atomic::Ordering::SeqCst);
+                    state
+                        .scanning
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
                     let state_clone = Arc::clone(state);
                     let scan_roots = all_roots.clone();
                     std::thread::Builder::new()
@@ -263,7 +260,9 @@ fn handle_request(
                             if let Ok(mut g) = state_clone.graph.write() {
                                 *g = graph;
                             }
-                            state_clone.scanning.store(false, std::sync::atomic::Ordering::SeqCst);
+                            state_clone
+                                .scanning
+                                .store(false, std::sync::atomic::Ordering::SeqCst);
                         })
                         .ok();
                 }
@@ -274,9 +273,16 @@ fn handle_request(
             } else {
                 crate::ipc::linker_proto::ScanStatus::Ready
             };
-            let gen = state.graph.read().unwrap_or_else(|e| e.into_inner()).generation;
+            let gen = state
+                .graph
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .generation;
 
-            LinkerResponse::Registered { status, generation: gen }
+            LinkerResponse::Registered {
+                status,
+                generation: gen,
+            }
         }
         LinkerRequest::Unregister { session_id } => {
             let removed_roots;
@@ -315,7 +321,9 @@ fn handle_request(
                     }
                 } else if !roots_to_drop.is_empty() {
                     // Rescan remaining roots (dropped roots are gone from all_roots).
-                    state.scanning.store(true, std::sync::atomic::Ordering::SeqCst);
+                    state
+                        .scanning
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
                     let state_clone = Arc::clone(state);
                     std::thread::Builder::new()
                         .name("linker-scan".to_string())
@@ -324,7 +332,9 @@ fn handle_request(
                             if let Ok(mut g) = state_clone.graph.write() {
                                 *g = graph;
                             }
-                            state_clone.scanning.store(false, std::sync::atomic::Ordering::SeqCst);
+                            state_clone
+                                .scanning
+                                .store(false, std::sync::atomic::Ordering::SeqCst);
                         })
                         .ok();
                 }
@@ -377,7 +387,11 @@ fn handle_request(
             }
         }
         LinkerRequest::Generation => {
-            let gen = state.graph.read().unwrap_or_else(|e| e.into_inner()).generation;
+            let gen = state
+                .graph
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .generation;
             LinkerResponse::Generation(gen)
         }
         LinkerRequest::Query(query) => {
@@ -417,7 +431,10 @@ fn stop_watcher(state: &DaemonState) {
 fn maybe_update_watcher(state: &Arc<DaemonState>, new_roots: &[PathBuf]) {
     // Check whether roots actually changed.
     let current_roots = {
-        let wr = state.watched_roots.read().unwrap_or_else(|e| e.into_inner());
+        let wr = state
+            .watched_roots
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
         wr.clone()
     };
 
@@ -435,12 +452,12 @@ fn maybe_update_watcher(state: &Arc<DaemonState>, new_roots: &[PathBuf]) {
     // Create new watcher.
     match crate::linker::watch::create_watcher(new_roots) {
         Ok((debouncer, rx)) => {
-            *state.watcher.lock().unwrap_or_else(|e| e.into_inner()) =
-                Some(debouncer);
-            *state.watcher_rx.lock().unwrap_or_else(|e| e.into_inner()) =
-                Some(rx);
-            *state.watched_roots.write().unwrap_or_else(|e| e.into_inner()) =
-                new_roots.to_vec();
+            *state.watcher.lock().unwrap_or_else(|e| e.into_inner()) = Some(debouncer);
+            *state.watcher_rx.lock().unwrap_or_else(|e| e.into_inner()) = Some(rx);
+            *state
+                .watched_roots
+                .write()
+                .unwrap_or_else(|e| e.into_inner()) = new_roots.to_vec();
 
             // Spawn the watcher event-processing thread.
             let state_clone = Arc::clone(state);
@@ -484,43 +501,79 @@ fn watcher_loop(state: Arc<DaemonState>, workspace_roots: Vec<PathBuf>) {
 }
 
 /// Dispatch a graph query and produce a response.
-fn handle_query(query: LinkerQuery, graph: &ImportGraph, state: &Arc<DaemonState>) -> LinkerResponse {
+fn handle_query(
+    query: LinkerQuery,
+    graph: &ImportGraph,
+    state: &Arc<DaemonState>,
+) -> LinkerResponse {
     match query {
         LinkerQuery::Dependencies { path } => {
             let key = match graph.resolve_key(&path) {
                 Some(k) => k,
-                None => return LinkerResponse::PathList { paths: vec![], total: 0 },
+                None => {
+                    return LinkerResponse::PathList {
+                        paths: vec![],
+                        total: 0,
+                    }
+                }
             };
             let deps = graph.dependencies(key);
             let total = deps.len();
-            let paths: Vec<String> = deps.into_iter().take(QUERY_RESULT_CAP).map(String::from).collect();
+            let paths: Vec<String> = deps
+                .into_iter()
+                .take(QUERY_RESULT_CAP)
+                .map(String::from)
+                .collect();
             LinkerResponse::PathList { paths, total }
         }
         LinkerQuery::Dependents { path } => {
             let key = match graph.resolve_key(&path) {
                 Some(k) => k,
-                None => return LinkerResponse::PathList { paths: vec![], total: 0 },
+                None => {
+                    return LinkerResponse::PathList {
+                        paths: vec![],
+                        total: 0,
+                    }
+                }
             };
             let deps = graph.dependents(key);
             let total = deps.len();
-            let paths: Vec<String> = deps.into_iter().take(QUERY_RESULT_CAP).map(String::from).collect();
+            let paths: Vec<String> = deps
+                .into_iter()
+                .take(QUERY_RESULT_CAP)
+                .map(String::from)
+                .collect();
             LinkerResponse::PathList { paths, total }
         }
         LinkerQuery::Impact { path, depth } => {
             let key = match graph.resolve_key(&path) {
                 Some(k) => k,
-                None => return LinkerResponse::PathList { paths: vec![], total: 0 },
+                None => {
+                    return LinkerResponse::PathList {
+                        paths: vec![],
+                        total: 0,
+                    }
+                }
             };
             let max_depth = depth.unwrap_or(10);
             let impact = graph.impact(key, max_depth);
             let total = impact.len();
-            let paths: Vec<String> = impact.into_iter().take(QUERY_RESULT_CAP).map(String::from).collect();
+            let paths: Vec<String> = impact
+                .into_iter()
+                .take(QUERY_RESULT_CAP)
+                .map(String::from)
+                .collect();
             LinkerResponse::PathList { paths, total }
         }
         LinkerQuery::Neighborhood { path } => {
             let key = match graph.resolve_key(&path) {
                 Some(k) => k,
-                None => return LinkerResponse::PathList { paths: vec![], total: 0 },
+                None => {
+                    return LinkerResponse::PathList {
+                        paths: vec![],
+                        total: 0,
+                    }
+                }
             };
             let (deps, dependents) = graph.neighborhood(key);
             let mut paths: Vec<String> = Vec::new();
@@ -571,7 +624,9 @@ fn handle_query(query: LinkerQuery, graph: &ImportGraph, state: &Arc<DaemonState
             if all_roots.is_empty() {
                 return LinkerResponse::Ack;
             }
-            state.scanning.store(true, std::sync::atomic::Ordering::SeqCst);
+            state
+                .scanning
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             let state_clone = Arc::clone(state);
             std::thread::Builder::new()
                 .name("linker-rescan".to_string())
@@ -580,7 +635,9 @@ fn handle_query(query: LinkerQuery, graph: &ImportGraph, state: &Arc<DaemonState
                     if let Ok(mut g) = state_clone.graph.write() {
                         *g = graph;
                     }
-                    state_clone.scanning.store(false, std::sync::atomic::Ordering::SeqCst);
+                    state_clone
+                        .scanning
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
                 })
                 .ok();
             LinkerResponse::Ack
@@ -589,10 +646,7 @@ fn handle_query(query: LinkerQuery, graph: &ImportGraph, state: &Arc<DaemonState
 }
 
 /// Idle reaper: exit when no registered clients and no session sockets.
-async fn reaper_loop(
-    shutting_down: Arc<std::sync::atomic::AtomicBool>,
-    state: Arc<DaemonState>,
-) {
+async fn reaper_loop(shutting_down: Arc<std::sync::atomic::AtomicBool>, state: Arc<DaemonState>) {
     use std::sync::atomic::Ordering;
 
     tokio::time::sleep(REAPER_INITIAL_GRACE).await;

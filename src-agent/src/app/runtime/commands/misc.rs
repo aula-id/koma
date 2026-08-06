@@ -19,19 +19,35 @@ use crate::model::store;
 ///   REFUSES: the mode is left unchanged and the status explains how to unlock it.
 /// - any other token → leave the mode unchanged and report the bad argument.
 pub(super) fn handle_mode(state: &mut AppState, arg: Option<String>) -> Result<()> {
+    let in_sdlc = state.rest.agent_mode() == AgentMode::Sdlc;
     match arg.as_deref() {
         None => {
-            // Bare `/mode`: armed-aware cycle (identical to the Shift+Tab toggle).
-            let next = state.rest.agent_mode.cycle(state.rest.yolo_armed);
-            state.rest.set_agent_mode(next);
+            if in_sdlc {
+                // Explicit exit via bare /mode while in SDLC → restore prior mode.
+                let ret = state.rest.fg().sdlc_return_mode.unwrap_or(AgentMode::Auto);
+                state.rest.set_agent_mode(ret);
+            } else {
+                let next = state.rest.agent_mode().cycle(state.rest.yolo_armed);
+                state.rest.set_agent_mode(next);
+            }
+        }
+        Some("auto") | Some("normal") | Some("plan") | Some("yolo") if in_sdlc => {
+            // Active SDLC: block hops to Auto/Plan/Normal/Yolo.
+            state.rest.fg_mut().status =
+                "sdlc active — use `/mode exit` (or bare `/mode`) to leave; \
+                 mode hops to auto/normal/plan/yolo are blocked"
+                    .into();
+            return Ok(());
+        }
+        Some("exit") if in_sdlc => {
+            let ret = state.rest.fg().sdlc_return_mode.unwrap_or(AgentMode::Auto);
+            state.rest.set_agent_mode(ret);
         }
         Some("auto") => state.rest.set_agent_mode(AgentMode::Auto),
         Some("normal") => state.rest.set_agent_mode(AgentMode::Normal),
         Some("plan") => state.rest.set_agent_mode(AgentMode::Plan),
         Some("sdlc") => state.rest.set_agent_mode(AgentMode::Sdlc),
         Some("yolo") => {
-            // Layer-2 gate: only an ARMED YOLO may be entered. Unarmed → refuse and
-            // leave the mode untouched.
             if state.rest.yolo_armed {
                 state.rest.set_agent_mode(AgentMode::Yolo);
             } else {
@@ -41,13 +57,13 @@ pub(super) fn handle_mode(state: &mut AppState, arg: Option<String>) -> Result<(
         }
         Some(other) => {
             state.rest.fg_mut().status =
-                format!("unknown mode: {other} (auto | normal | plan | sdlc | yolo)");
+                format!("unknown mode: {other} (auto | normal | plan | sdlc | yolo | exit)");
             return Ok(());
         }
     }
     // Per-session status (C6): `agent_mode` is a disjoint `rest` field; read its label
     // into a local first so it doesn't overlap the `fg_mut()` borrow.
-    let label = state.rest.agent_mode.label();
+    let label = state.rest.agent_mode().label();
     state.rest.fg_mut().status = format!("mode: {label}");
     Ok(())
 }

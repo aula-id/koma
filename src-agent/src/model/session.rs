@@ -23,8 +23,8 @@ use crate::model::agent_def::AgentRegistry;
 use crate::model::conversation::Conversation;
 use crate::model::memory::{load_agents, load_memory_index, migrate_legacy_memory};
 use crate::model::session_registry;
-use crate::model::skill::SkillRegistry;
 use crate::model::settings::{LocalConfig, Settings};
+use crate::model::skill::SkillRegistry;
 use crate::model::store::shared_settings_path;
 use crate::resources;
 use anyhow::Result;
@@ -411,12 +411,20 @@ Multiple workspace roots are configured. Paths written as [N]… (for example fr
         let skills_reg = SkillRegistry::load(Some(&self.workdir()));
         let skills_cat = {
             let t = skills_reg.catalogue_text();
-            if t.is_empty() { None } else { Some(t) }
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
         };
         self.skills = skills_reg;
 
-        let mut sys =
-            resources::build_system_prompt(mem.as_deref(), agents.as_deref(), subagents.as_deref(), skills_cat.as_deref());
+        let mut sys = resources::build_system_prompt(
+            mem.as_deref(),
+            agents.as_deref(),
+            subagents.as_deref(),
+            skills_cat.as_deref(),
+        );
 
         // Append the scratch space section so the model knows where it can
         // freely write temporary files and clone repositories.
@@ -465,28 +473,35 @@ Multiple workspace roots are configured. Paths written as [N]… (for example fr
 You are PM+tech lead inside an SDLC envelope. The harness (WC/PC/TAC) is fully intact — tool approval works like Auto mode, not Yolo.\n\n\
 Phases: assess → user approves via mission_ready → execute in mission worktree → verify → integrate.\n\n\
 ## Assess phase (current)\n\
-Explore, research best practice, build acceptance criteria and a graph of tasks via the checklist tool. \
+Assess is runtime-enforced read-only for workspace mutations: write/edit/delete/bash and other \
+mutating tools are denied until mission approval. Explore with read/search/web, build acceptance \
+and a hierarchical graph of tasks (epic→story→task) via the checklist tool, then call mission_ready. \
+Main agent is PM after approval — delegate OPEN leaves only.\n\
 When ready, call `mission_ready` with:\n\
 - `highlights`: the key things the user must know to approve (changes, decisions, risks)\n\
 - `goal`: what this mission achieves\n\
 - `non_goals`: what it explicitly does NOT do\n\
 - `acceptance`: concrete criteria that must be met\n\
-- `lane`: express|standard|full (how much verification)\n\
+- `lane`: express|standard|full (how much verification; full needs a tree or ≥3 leaves)\n\
 - `verify_plan`: steps to verify correctness\n\
 - `human_gates`: checkpoints requiring human review\n\
 - `risks`: known risks\n\
 - `rationale`: why this approach\n\
-- `graph_tasks`: array of task titles for the checklist\n\n\
-Only call mission_ready when your exploration is complete and you are confident in the contract.\n\n\
+- `graph_tasks`: array of task titles or {title, parent?} objects for the checklist tree\n\n\
+Only call mission_ready when your exploration is complete and you are confident in the contract.\n\
+Amending an approved contract: call mission_ready again (sets needs_reapproval); never silently overwrite.\n\n\
 ## Post-approve (execute phase)\n\
 NO preference nags; research, decide, ship. Never invent APIs — read the code.\n\
-- Execute inside the mission worktree (cwd is switched on approve). Do not thrash the user's main tree.\n\
+- Execute inside the bound mission worktree (cwd is switched only after binding succeeds). Do not thrash the user's main tree.\n\
 - Path ownership: write/edit/delete only inside the mission worktree during execute. Do not mutate the primary tree until integrate.\n\
-- Keep the checklist/graph honest: SEALED done nodes must not be re-implemented.\n\
-- After real verify evidence (tests/build), call `mission_verify` with node_id + evidence before treating a node as sealed. Done without verify is false-done — the keeper will reopen it.\n\
-- When OPEN is empty, acceptance is green, and nodes are verified, call `mission_integrate`.\n\
-- Integrate never force-pushes. Dirty main → leave the mission branch ready (or PR); clean main may FF/merge.\n\
-- Human gates on the contract still require escalate — do not auto-bypass them.\n\n\
+- Do NOT call git_worktree enter/exit/create/remove during execute/integrate — binding is frozen.\n\
+- Keep the checklist/graph honest: SEALED done nodes must not be re-implemented. Graph is authority; TODO.md is projection only.\n\
+- Delegate with `task` only to OPEN leaves and always pass `task.node_id`.\n\
+- After real verify evidence (tests/build), call `mission_verify` with leaf node_id + evidence before treating a node as sealed. Done without verify is false-done — the keeper will reopen it. Parents roll up; verify is leaf-only.\n\
+- When OPEN is empty, acceptance is green, leaves verified, binding valid, and human gates approved, call `mission_integrate`.\n\
+- Integrate never force-pushes. Dirty main → leave the mission branch ready (or PR); clean main may FF/merge. Branch-only cannot bypass evidence gates.\n\
+- Human gates on the contract require explicit user y/n via mission_verify(human_gate=...) — the model cannot self-approve gates. Integrate stays gated on persisted approvals.\n\
+- External shell/MCP is not OS-sandboxed — stay inside the mission tree by discipline.\n\n\
 ## On confusion about mission/details\n\
 Re-read mission.json and the OPEN/SEALED capsule. The contract is the source of truth.\n"
             );
@@ -494,7 +509,7 @@ Re-read mission.json and the OPEN/SEALED capsule. The contract is the source of 
             // so sealed work stays sealed across every turn/rebuild.
             if let Some(mission) = crate::model::sdlc::Mission::load(&self.path) {
                 if mission.approved {
-                    let (open, sealed) = crate::model::msglog::open(&self.path)
+                    let (open, sealed, all) = crate::model::msglog::open(&self.path)
                         .ok()
                         .map(|conn| {
                             let _ = crate::model::sdlc::graph::ensure_tables(&conn);
@@ -502,12 +517,14 @@ Re-read mission.json and the OPEN/SEALED capsule. The contract is the source of 
                                 crate::model::sdlc::graph::list_open(&conn).unwrap_or_default();
                             let sealed =
                                 crate::model::sdlc::graph::list_sealed(&conn).unwrap_or_default();
-                            (open, sealed)
+                            let all =
+                                crate::model::sdlc::graph::list_all(&conn).unwrap_or_default();
+                            (open, sealed, all)
                         })
                         .unwrap_or_default();
                     sys.push('\n');
-                    sys.push_str(&crate::model::sdlc::mission::build_seed_capsule(
-                        &mission, &open, &sealed,
+                    sys.push_str(&crate::model::sdlc::mission::build_seed_capsule_with_all(
+                        &mission, &open, &sealed, &all,
                     ));
                     if let Some(ref wt) = mission.worktree_name {
                         sys.push_str(&format!(
@@ -548,9 +565,18 @@ mod tests {
         ];
         let block = Session::format_workspaces_block(&dirs).unwrap();
         assert!(block.contains("# Workspaces"), "missing header");
-        assert!(block.contains("[0] /home/user/project-a  (primary)"), "primary wrong: {block}");
-        assert!(block.contains("[1] /home/user/project-b"), "second wrong: {block}");
-        assert!(block.contains("Bare relative tool paths target [0]"), "missing guidance");
+        assert!(
+            block.contains("[0] /home/user/project-a  (primary)"),
+            "primary wrong: {block}"
+        );
+        assert!(
+            block.contains("[1] /home/user/project-b"),
+            "second wrong: {block}"
+        );
+        assert!(
+            block.contains("Bare relative tool paths target [0]"),
+            "missing guidance"
+        );
     }
 
     #[test]

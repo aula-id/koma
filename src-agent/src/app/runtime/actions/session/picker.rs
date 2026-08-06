@@ -236,6 +236,9 @@ pub fn open_disk_session(
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
         *client = None;
         state.rest.spawn_pending = true;
+        // Fail-closed SDLC restore even while waiting for creds: mode/phase must
+        // not stay plain Auto over an active execute/integrate mission on disk.
+        restore_sdlc_on_open(state);
         *state.mode_mut() = Mode::KeyInput(KeyInputForm::prefilled(lk, lm, false, false));
     } else {
         state.rest.spawn_pending = false;
@@ -263,7 +266,163 @@ pub fn open_disk_session(
         // touches the (new) foreground's lock, which already matches the on-disk
         // lock we just wrote — a no-op for locks; no other session's lock is freed.
         *state.mode_mut() = Mode::Chat;
+
+        // SDLC local open/resume: same fail-closed restoration as daemon lifecycle.
+        // Only a validated active binding may resume execute/integrate; missing or
+        // invalid binding lands in assess with reapproval required — never plain
+        // Auto with an active mission on disk (unrestricted execution).
+        restore_sdlc_on_open(state);
+
         super::super::super::warm_session(state, client, handle);
     }
     Ok(())
+}
+
+/// Restore SDLC mode for a freshly-opened local session when `mission.json`
+/// exists. Mirrors the daemon lifecycle path: optional worktree cwd snap, then
+/// `set_agent_mode(Sdlc)` which fail-closes invalid/missing bindings into
+/// assess + needs_reapproval rather than resuming unrestricted Auto execution.
+fn restore_sdlc_on_open(state: &mut AppState) {
+    let sess_path = match state.rest.fg().session.as_ref().map(|s| s.path.clone()) {
+        Some(p) => p,
+        None => return,
+    };
+    if crate::model::sdlc::Mission::load(&sess_path).is_none() {
+        return;
+    }
+    if let Some(sess) = state.rest.fg().session.as_ref() {
+        if sess.settings.workdir_saved.is_some() {
+            if let Some(wt) = sess.settings.workdir.first().cloned() {
+                let p = std::path::PathBuf::from(&wt);
+                if p.is_dir() {
+                    state.rest.fg_mut().active_cwd = Some(p);
+                }
+            }
+        }
+    }
+    state
+        .rest
+        .set_agent_mode(crate::app::state::AgentMode::Sdlc);
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod restore_sdlc_tests {
+    use super::restore_sdlc_on_open;
+    use crate::app::state::{AgentMode, AppState};
+    use crate::model::conversation::Conversation;
+    use crate::model::sdlc::Mission;
+    use crate::model::session::Session;
+    use crate::model::settings::Settings;
+
+    fn scratch_session(tag: &str) -> (std::path::PathBuf, Session) {
+        let dir = std::env::temp_dir().join(format!(
+            "koma-open-sdlc-{}-{}-{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sess = Session::new(
+            format!("s-{tag}"),
+            dir.clone(),
+            "pwd".into(),
+            Settings::default(),
+            Conversation::from_messages(vec![]),
+        );
+        (dir, sess)
+    }
+
+    fn active_execute_mission(worktree_path: &str) -> Mission {
+        let goal = "ship X";
+        let acceptance = vec!["tests pass".into()];
+        let non_goals = vec!["rewrite Y".into()];
+        let lane = "standard";
+        let verify_plan = vec!["cargo test".into()];
+        let human_gates: Vec<String> = vec![];
+        let risks = vec!["api churn".into()];
+        let rationale = "match house style";
+        let worktree_name = Some("sdlc-test".into());
+        let branch = Some("sdlc/ship-x".into());
+        let wt = Some(worktree_path.to_string());
+        let hash = Mission::compute_contract_hash_full(
+            goal,
+            &acceptance,
+            &non_goals,
+            lane,
+            &verify_plan,
+            &human_gates,
+            &risks,
+            rationale,
+            None,
+            worktree_name.as_deref(),
+            branch.as_deref(),
+            wt.as_deref(),
+        );
+        Mission {
+            id: "m1".into(),
+            goal: goal.into(),
+            non_goals,
+            acceptance,
+            lane: lane.into(),
+            verify_plan,
+            human_gates,
+            human_gates_approved: vec![],
+            risks,
+            worktree_name,
+            branch,
+            worktree_path: wt,
+            rationale: rationale.into(),
+            phase: "execute".into(),
+            approved: true,
+            hash,
+            graph_hash: None,
+            needs_reapproval: false,
+            amendment_note: None,
+        }
+    }
+
+    #[test]
+    fn open_with_invalid_execute_binding_fails_closed_to_assess() {
+        let (dir, sess) = scratch_session("bad-bind");
+        // Bound path does not exist → re-entry must fail closed.
+        let m = active_execute_mission(&format!(
+            "/tmp/koma-missing-wt-{}-{}",
+            std::process::id(),
+            "nope"
+        ));
+        m.save(&dir).unwrap();
+
+        let mut state = AppState::new(crate::app::mode::Mode::Chat);
+        state.rest.fg_mut().session = Some(sess);
+        // Default is Auto — without restore this would leave unrestricted Auto
+        // over an active execute mission on disk.
+        assert_eq!(state.rest.fg().agent_mode, AgentMode::Auto);
+
+        restore_sdlc_on_open(&mut state);
+
+        assert_eq!(state.rest.fg().agent_mode, AgentMode::Sdlc);
+        assert_eq!(state.rest.fg().sdlc_phase.as_deref(), Some("assess"));
+        let loaded = Mission::load(&dir).unwrap();
+        assert!(!loaded.approved);
+        assert!(loaded.needs_reapproval);
+        assert_eq!(loaded.phase, "assess");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_without_mission_leaves_mode_untouched() {
+        let (dir, sess) = scratch_session("no-mission");
+        let mut state = AppState::new(crate::app::mode::Mode::Chat);
+        state.rest.fg_mut().session = Some(sess);
+        assert_eq!(state.rest.fg().agent_mode, AgentMode::Auto);
+        restore_sdlc_on_open(&mut state);
+        assert_eq!(state.rest.fg().agent_mode, AgentMode::Auto);
+        assert!(state.rest.fg().sdlc_phase.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

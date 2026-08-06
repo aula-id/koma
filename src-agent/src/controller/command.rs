@@ -42,10 +42,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "/task",
         "Run an agent on a task, or open the sub-agents viewer (no args)",
     ),
-    (
-        "/model",
-        "Switch session / agent model  (/model for help)",
-    ),
+    ("/model", "Switch session / agent model  (/model for help)"),
     ("/bash", "Manage background bash jobs"),
     ("/todo", "View the session task list"),
     ("/skill", "Load or unload agent skills"),
@@ -58,7 +55,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ),
     ("/usage", "Show the cost and token usage dashboard"),
     ("/rename", "Rename the current session"),
-    ("/select", "Dump full history to terminal for native copy (viewport is already selectable)"),
+    (
+        "/select",
+        "Dump full history to terminal for native copy (viewport is already selectable)",
+    ),
     ("/help", "List the available commands"),
     ("/quit", "Quit koma"),
 ];
@@ -284,19 +284,13 @@ mod parse_tests {
 
     #[test]
     fn parse_model_help() {
-        assert_eq!(
-            parse("/model help"),
-            Command::Model("help".to_string())
-        );
+        assert_eq!(parse("/model help"), Command::Model("help".to_string()));
         assert_eq!(parse("/model ?"), Command::Model("?".to_string()));
     }
 
     #[test]
     fn parse_model_role() {
-        assert_eq!(
-            parse("/model main"),
-            Command::Model("main".to_string())
-        );
+        assert_eq!(parse("/model main"), Command::Model("main".to_string()));
         assert_eq!(
             parse("/model awareness"),
             Command::Model("awareness".to_string())
@@ -309,10 +303,7 @@ mod parse_tests {
 
     #[test]
     fn parse_model_agent() {
-        assert_eq!(
-            parse("/model agent"),
-            Command::Model("agent".to_string())
-        );
+        assert_eq!(parse("/model agent"), Command::Model("agent".to_string()));
         assert_eq!(
             parse("/model agent explore"),
             Command::Model("agent explore".to_string())

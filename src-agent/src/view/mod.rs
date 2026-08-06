@@ -96,7 +96,7 @@ fn resolved_main_model(rest: &AppStateRest) -> String {
     if rest.mcp_manager.is_none() {
         return session.settings.model.clone();
     }
-    if let Some(r) = resolve_turn_model(&rest.config, &session.settings, rest.agent_mode) {
+    if let Some(r) = resolve_turn_model(&rest.config, &session.settings, rest.agent_mode()) {
         // Standalone: trust the live resolver. Suppress only the pure soft-
         // fallback case where the answer is still the unused serde default
         // (`openai/gpt-4o-mini`) AND a real Main ModelEntry exists in the

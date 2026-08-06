@@ -234,13 +234,15 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     // Agent mode: decode from the wire token so the header reflects the current mode.
     // "yolo" must be decoded explicitly — falling to the `_ => Auto` default would
     // silently drop the loud-red Yolo header on the thin client.
-    shadow.rest.agent_mode = match global.agent_mode.as_str() {
+    *shadow.rest.agent_mode_mut() = match global.agent_mode.as_str() {
         "normal" => AgentMode::Normal,
         "plan" => AgentMode::Plan,
         "yolo" => AgentMode::Yolo,
         "sdlc" => AgentMode::Sdlc,
         _ => AgentMode::Auto,
     };
+    // SDLC phase is per-session on the wire projection; keep shadow header in sync.
+    shadow.rest.fg_mut().sdlc_phase = global.sdlc_phase.clone();
     shadow.rest.latest_version =
         global
             .latest_version
