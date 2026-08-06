@@ -414,6 +414,21 @@ pub(crate) fn process_tools(
                 InterceptFlow::Fallthrough => {}
             }
         }
+        // SDLC execute/integrate: reject write/edit/delete to paths owned by a
+        // DIFFERENT active node (hard path-ownership enforcement via glob matching).
+        if mode == AgentMode::Sdlc
+            && matches!(
+                state.rest.sessions[sess_idx].sdlc_phase.as_deref(),
+                Some("execute") | Some("integrate")
+            )
+            && matches!(call.function.name.as_str(), "write" | "edit" | "delete")
+        {
+            match intercepts::intercept_sdlc_path_ownership_gate(state, sess_idx, &call) {
+                InterceptFlow::Continue => continue,
+                InterceptFlow::Return => return,
+                InterceptFlow::Fallthrough => {}
+            }
+        }
         if matches!(call.function.name.as_str(), "edit" | "write") {
             match intercepts::intercept_read_before_edit_guard(state, sess_idx, &call) {
                 InterceptFlow::Continue => continue,

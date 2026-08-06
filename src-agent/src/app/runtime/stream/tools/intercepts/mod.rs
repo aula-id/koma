@@ -48,6 +48,7 @@ pub(super) use plan::{
 pub(super) use sdlc::{
     intercept_checklist_sdlc, intercept_mission_integrate, intercept_mission_ready,
     intercept_mission_verify, intercept_sdlc_assess_gate, intercept_sdlc_execute_git_gate,
+    intercept_sdlc_path_ownership_gate,
 };
 pub(super) use task::{
     intercept_task, intercept_task_kill, intercept_task_output, intercept_task_send,

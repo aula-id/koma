@@ -477,6 +477,38 @@ pub async fn run_agent_loop(
                 // available && allow → fall through and run it.
             }
 
+            // 4b2. SDLC path ownership gate: reject write/edit/delete to paths
+            //      owned by a DIFFERENT active graph node (glob matching).
+            if matches!(name.as_str(), "write" | "edit" | "delete") {
+                let sanitized =
+                    crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+                let args: serde_json::Value =
+                    serde_json::from_str(&sanitized).unwrap_or(serde_json::json!({}));
+                if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
+                    if !path.trim().is_empty() {
+                        if let Some(session_dir) = &ctx.session_dir {
+                            if let Ok(conn) = crate::model::msglog::open(session_dir) {
+                                let _ = crate::model::sdlc::graph::ensure_tables(&conn);
+                                if let Err(e) = crate::model::sdlc::graph::check_path_ownership(
+                                    &conn,
+                                    ctx.sdlc_active_node_id.as_deref(),
+                                    path.trim(),
+                                ) {
+                                    emit(
+                                        &tx,
+                                        AgentEvent::ToolDone {
+                                            name: name.clone(),
+                                            result: e,
+                                        },
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // 4c. Permitted (and, if risky, classifier-approved) → run it.
             emit(
                 &tx,

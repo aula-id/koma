@@ -23,6 +23,7 @@ fn test_ctx() -> ToolCtx {
         session_dir: None,
         allow_scratch: true,
         sdlc_assess: false,
+        sdlc_active_node_id: None,
     }
 }
 

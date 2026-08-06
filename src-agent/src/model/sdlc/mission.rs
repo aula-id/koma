@@ -524,6 +524,7 @@ mod tests {
             notes: String::new(),
             verify_bit: false,
             updated_at: 0,
+            owned_paths: vec![],
         }];
         let sealed = vec![GraphTask {
             id: "t0".into(),
@@ -534,6 +535,7 @@ mod tests {
             notes: String::new(),
             verify_bit: true,
             updated_at: 0,
+            owned_paths: vec![],
         }];
         let cap = build_seed_capsule_with_all(&m, &open, &sealed, &[]);
         assert!(cap.contains("# SDLC mission capsule"));
@@ -567,6 +569,7 @@ mod tests {
                 notes: String::new(),
                 verify_bit: false,
                 updated_at: 0,
+                owned_paths: vec![],
             },
             GraphTask {
                 id: "t2".into(),
@@ -577,6 +580,7 @@ mod tests {
                 notes: String::new(),
                 verify_bit: true,
                 updated_at: 0,
+                owned_paths: vec![],
             },
         ];
         let cap = build_seed_capsule_with_all(&m, &[], &sealed, &[]);
@@ -870,7 +874,10 @@ mod tests {
                 status: "done".into(),
                 parent_title: None,
                 id: None,
-            }],
+
+                    owned_paths: vec![],
+
+                            }],
         )
         .unwrap();
         let leaf_id = crate::model::sdlc::graph::list_all(&conn).unwrap()[0]

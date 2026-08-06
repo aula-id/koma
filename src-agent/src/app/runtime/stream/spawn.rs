@@ -150,6 +150,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         session_dir,
         allow_scratch,
         sdlc_assess,
+        sdlc_active_node_id: rt.sdlc_pending_node_id.clone(),
     }
 }
 
@@ -729,6 +730,7 @@ mod tests {
             session_dir: None,
             allow_scratch: true,
             sdlc_assess: false,
+            sdlc_active_node_id: None,
         }
     }
 
