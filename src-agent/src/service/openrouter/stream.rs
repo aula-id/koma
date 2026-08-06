@@ -49,7 +49,7 @@ impl OpenRouterClient {
         // Send-time OAuth refresh hook: resolve a (possibly just-refreshed) bearer
         // token + provider account/org id. Non-OAuth conns (empty `oauth_uuid`)
         // fast-path to `(api_key, "")` with zero locking.
-        let (bearer, acct) =
+        let (mut bearer, acct) =
             crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
         // Prefer the manager's cached account (authoritative post-refresh); fall
         // back to whatever the route carried.
@@ -181,6 +181,9 @@ impl OpenRouterClient {
         };
 
         // ── 5xx / 429 retry with exponential backoff ─────────────────────
+        // Track whether we've already done a 401→force-refresh→retry so we
+        // don't loop infinitely on a genuinely dead token.
+        let mut auth_refreshed = false;
         let resp: reqwest::Response = 'retry: {
             for attempt in 1u32..=MAX_ATTEMPTS {
                 let send = auth_headers(
@@ -272,6 +275,36 @@ impl OpenRouterClient {
                             tx,
                         )
                         .await;
+                }
+
+                // 401 → force-refresh + single retry: the most common cause is a
+                // rotating refresh token — the OAuth keepalive daemon or another
+                // session refreshed, invalidating our cached access_token. Evict
+                // the stale cache entry, re-seed from disk (where the daemon
+                // already wrote the new token), re-fetch fresh_key, and retry
+                // exactly once. Non-OAuth conns (empty oauth_uuid) or a second
+                // 401 after refresh fall through to the final error.
+                if status == reqwest::StatusCode::UNAUTHORIZED
+                    && !conn.oauth_uuid.is_empty()
+                    && !auth_refreshed
+                {
+                    crate::service::oauth::manager::force_refresh(conn.oauth_uuid).await;
+                    let (new_bearer, _new_acct) =
+                        crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key)
+                            .await;
+                    if !new_bearer.is_empty() {
+                        bearer = new_bearer;
+                        auth_refreshed = true;
+                        emit(
+                            &tx,
+                            StreamEvent::Retrying {
+                                attempt: attempt + 1,
+                                max: MAX_ATTEMPTS,
+                                delay_ms: 0,
+                            },
+                        );
+                        continue;
+                    }
                 }
 
                 // Retryable + attempts remaining → sleep + retry

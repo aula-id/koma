@@ -218,11 +218,13 @@ pub fn meta(p: OAuthProvider) -> OAuthProviderMeta {
             chat_endpoint: "https://api.anthropic.com",
             catalogue_endpoint: "",
         },
-        // account login; not a model provider yet — placeholders until a future
-        // extension wires koma.run as an actual chat/catalogue backend.
+        // KomaRun: live-catalogue provider — the catalogue_endpoint drives
+        // `request_catalogue` on OAuth success (drains.rs) and the GUI
+        // ListModels live-fetch path so the model picker gets the real
+        // server-side list instead of only the static overlay seed.
         OAuthProvider::KomaRun => OAuthProviderMeta {
             chat_endpoint: "https://koma.run/api/v1",
-            catalogue_endpoint: "",
+            catalogue_endpoint: KOMA_PREMIUM_CHAT_ENDPOINT,
         },
         // W12: extension-backed conns are resolved DATA-DRIVEN from the conn's OWN stored
         // meta (endpoint captured at login from the manifest `OAuthProviderDef.chat_endpoint`

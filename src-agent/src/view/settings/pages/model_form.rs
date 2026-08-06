@@ -29,6 +29,7 @@ pub(crate) fn draw_model_form(
     omni: bool,
     is_or: bool,
     cache_matches: bool,
+    catalogue_failed: bool,
     cache: &[ModelInfo],
     palette: &Palette,
     area: Rect,
@@ -146,8 +147,13 @@ pub(crate) fn draw_model_form(
                     Vec::new()
                 };
                 if !cache_matches {
+                    let message = if catalogue_failed {
+                        "  live catalogue unavailable — type an id"
+                    } else {
+                        "  searching models\u{2026}"
+                    };
                     lines.push(Line::from(Span::styled(
-                        "  searching models\u{2026}",
+                        message,
                         Style::default().fg(palette.dim),
                     )));
                 } else if results.is_empty() {

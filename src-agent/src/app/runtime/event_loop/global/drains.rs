@@ -224,7 +224,6 @@ pub(super) fn drain_oauth(state: &mut AppState, handle: &tokio::runtime::Handle)
                 }
                 // Guided-wizard sessions: advance to the model picker bound to the new
                 // conn (or surface a save error).
-                let mut advanced = false;
                 for op in onboard_provider_states(state) {
                     match &save_err {
                         Some(e) => {
@@ -239,29 +238,16 @@ pub(super) fn drain_oauth(state: &mut AppState, handle: &tokio::runtime::Handle)
                             op.oauth_flow = OAuthFlowState::Idle;
                             op.query.clear();
                             op.result_sel = 0;
-                            advanced = true;
                         }
                     }
                 }
-                // Prime the network catalogue so ModelSelect can filter immediately
-                // (Codex serves its static list, so it needs no fetch). Done AFTER the
-                // `onboard_provider_states` borrow ends.
-                if advanced
-                    && save_err.is_none()
-                    && !crate::service::oauth::registry::meta(conn_provider)
-                        .catalogue_endpoint
-                        .is_empty()
-                {
+                // Prime any provider's live catalogue after persistence. This applies
+                // equally to Settings and onboarding; the endpoint guard keeps static
+                // OAuth providers (Codex/Claude) unchanged.
+                if should_prime_catalogue(conn_provider, save_err.is_none()) {
                     let ep =
                         crate::service::oauth::registry::meta(conn_provider).catalogue_endpoint;
                     state.rest.request_catalogue(ep, &conn_token, &conn_uuid);
-                }
-                // Fire a background refresh of the dynamic premium model catalogue
-                // for KomaRun (force=true so the freshly-logged-in token is used).
-                if conn_provider == crate::model::app_config::OAuthProvider::KomaRun {
-                    crate::service::catalogue_overlay::premium_dynamic::spawn_refresh(
-                        conn_token.clone(),
-                    );
                 }
                 state.rest.oauth_task = None;
                 // GUI side-channel: terminal `success` push (conns are rebuilt hub-side
@@ -856,15 +842,17 @@ pub(super) fn drain_warm(state: &mut AppState) -> bool {
                     }
                     dirty = true;
                 }
-                Ok(WarmEvent::WarmCatalogueFailed { endpoint }) => {
+                Ok(WarmEvent::WarmCatalogueFailed { endpoint, error }) => {
                     // Record a FAILED fetch for this endpoint without poisoning
                     // the cache: leave `models_cache` / `models_cache_endpoint`
                     // untouched so the image-capability tri-state helper returns
                     // `Unknown` (fail-open) instead of `DoesNotSupport` on an
-                    // empty cache. The `models_cache_failed` marker prevents
-                    // `request_catalogue` from re-fetching in a rapid loop; the
-                    // next user-driven re-trigger (keystroke / provider change)
-                    // clears the stale failure and retries.
+                    // empty cache. The failure marker is cleared on the next
+                    // explicit request, allowing re-login or query input to retry.
+                    crate::model::store::append_global_error_log(
+                        "model catalogue",
+                        &format!("{endpoint}: {error}"),
+                    );
                     state.rest.models_cache_failed = Some(endpoint.clone());
                     if state.rest.catalogue_fetching.as_deref() == Some(endpoint.as_str()) {
                         state.rest.catalogue_fetching = None;
@@ -932,6 +920,37 @@ pub(super) fn drain_warm(state: &mut AppState) -> bool {
     dirty
 }
 
+fn should_prime_catalogue(
+    provider: crate::model::app_config::OAuthProvider,
+    save_succeeded: bool,
+) -> bool {
+    save_succeeded
+        && !crate::service::oauth::registry::meta(provider)
+            .catalogue_endpoint
+            .is_empty()
+}
+
+/// Limit a background catalogue failure to a log-safe diagnostic. Request
+/// headers are never part of `reqwest` errors, but redact bearer-shaped words
+/// defensively before persisting the message.
+fn catalogue_error_diagnostic(error: &anyhow::Error) -> String {
+    error
+        .to_string()
+        .split_whitespace()
+        .map(|word| {
+            if word.matches('.').count() == 2 && word.len() > 20 {
+                "[redacted]"
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(200)
+        .collect()
+}
+
 /// Fire a DEBOUNCED, on-demand model-catalogue fetch. The model omnisearch
 /// arms `catalogue_pending` (via `request_catalogue`) on each keystroke /
 /// provider change, pushing `due` ~300ms forward so a typing burst collapses
@@ -993,7 +1012,10 @@ pub(super) fn fetch_catalogue_debounced(
             };
             let ev = match c.list_models(conn).await {
                 Ok(models) => WarmEvent::WarmCatalogue { endpoint, models },
-                Err(_) => WarmEvent::WarmCatalogueFailed { endpoint },
+                Err(error) => WarmEvent::WarmCatalogueFailed {
+                    endpoint,
+                    error: catalogue_error_diagnostic(&error),
+                },
             };
             // A dropped receiver (app closing) makes this a no-op.
             let _ = tx.send(ev);
