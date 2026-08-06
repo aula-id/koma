@@ -841,23 +841,93 @@ mod tests {
 
     #[test]
     fn integrate_gate_requires_live_binding() {
-        let m = sample_mission();
-        // Empty in-memory graph cannot satisfy structure/evidence, but binding
-        // must still be checked when those pass. Use a temp sqlite via msglog-less
-        // direct connection if available — structural fail is enough to prove
-        // the function fails closed without path fallbacks.
-        let dir = std::env::temp_dir().join(format!("koma-sdlc-igate-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        // Build a tiny on-disk messages db if open helper needs it.
-        // Fall back: just assert validate_binding is what integrate_gate uses.
-        let cwd = std::path::Path::new("/definitely/not/the/bound/path");
-        let err = m
-            .validate_binding(cwd, Some("sdlc/ship-x"))
+        use crate::model::sdlc::graph::{
+            ensure_tables, replace_nodes_from_checklist, set_verify_bit_with_evidence,
+            ChecklistNode,
+        };
+        use rusqlite::Connection;
+
+        // Real gate path: graph structure + verified leaves + human gates all
+        // satisfied so only the live binding check can reject. Mirrors the
+        // intercept order (integrate_gate before phase mutation / merge).
+        let bound = std::env::temp_dir().join(format!(
+            "koma-sdlc-igate-bound-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&bound);
+        std::fs::create_dir_all(&bound).unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_tables(&conn).unwrap();
+        replace_nodes_from_checklist(
+            &conn,
+            &[ChecklistNode {
+                title: "leaf".into(),
+                status: "done".into(),
+                parent_title: None,
+                id: None,
+            }],
+        )
+        .unwrap();
+        let leaf_id = crate::model::sdlc::graph::list_all(&conn).unwrap()[0]
+            .id
+            .clone();
+        set_verify_bit_with_evidence(&conn, &leaf_id, true, Some("tests pass")).unwrap();
+        assert!(crate::model::sdlc::graph::list_open_leaves(&conn)
+            .unwrap()
+            .is_empty());
+        assert!(crate::model::sdlc::graph::all_required_leaves_verified(&conn).unwrap());
+
+        let structural = structural_graph_hash(&conn).unwrap();
+        let mut m = sample_mission();
+        m.phase = "execute".into();
+        m.graph_hash = Some(structural);
+        m.worktree_path = Some(bound.to_string_lossy().into_owned());
+        m.branch = Some("sdlc/ship-x".into());
+        m.worktree_name = Some("sdlc-test".into());
+        m.human_gates = vec![];
+        m.human_gates_approved = vec![];
+        m.hash = m.recompute_hash();
+        assert!(m.validate_active().is_ok());
+
+        // Stale / missing live cwd must fail closed before integrate proceeds.
+        let wrong_cwd = std::path::Path::new("/definitely/not/the/bound/path");
+        let err = integrate_gate(&m, &conn, wrong_cwd, Some("sdlc/ship-x"))
             .unwrap_err()
             .to_string();
-        assert!(err.contains("worktree mismatch"), "unexpected: {err}");
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            err.contains("worktree mismatch"),
+            "expected worktree mismatch from integrate_gate, got: {err}"
+        );
+
+        // Correct cwd + wrong branch is also rejected (no path fallbacks).
+        let err_branch = integrate_gate(&m, &conn, &bound, Some("other-branch"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err_branch.contains("branch mismatch"),
+            "expected branch mismatch from integrate_gate, got: {err_branch}"
+        );
+
+        // Missing branch reading fails closed too.
+        let err_none = integrate_gate(&m, &conn, &bound, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err_none.contains("could not determine current git branch")
+                || err_none.contains("branch"),
+            "expected branch binding failure, got: {err_none}"
+        );
+
+        // Control: live cwd + bound branch passes the full gate (proves earlier
+        // failures were binding-only, not structure/evidence noise).
+        integrate_gate(&m, &conn, &bound, Some("sdlc/ship-x")).unwrap();
+
+        let _ = std::fs::remove_dir_all(&bound);
     }
 
     #[test]

@@ -169,6 +169,83 @@ fn deny_mission_from_execute_phase_forces_assess_rails() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Failed final bind validation must restore primary workspace + unbound valid draft
+/// (no stale binding fields, hash stays valid for the unbound contract).
+#[test]
+fn failed_bind_validation_restores_primary_and_unbound_draft() {
+    let (dir, mut sess) = scratch_session("bind-rollback");
+    // Fake primary + shadow worktree dirs (no real git required).
+    let primary = dir.join("primary");
+    let shadow = dir.join("shadow-wt");
+    std::fs::create_dir_all(&primary).unwrap();
+    std::fs::create_dir_all(&shadow).unwrap();
+
+    sess.settings.workdir = vec![primary.to_string_lossy().into_owned()];
+    // Simulate the post-enter_worktree state that establish_mission_binding reaches
+    // before the final live binding check.
+    sess.settings
+        .enter_worktree(shadow.to_string_lossy().into_owned());
+    assert!(sess.settings.workdir_saved.is_some());
+
+    // Mission already written as the failed path leaves it mid-bind: approved +
+    // binding fields hashed in — the bug left hash invalid after a partial clear.
+    let mut m = unapproved_amendment_mission();
+    m.worktree_name = Some("sdlc-test-wt".into());
+    m.branch = Some("sdlc/test-branch".into());
+    m.worktree_path = Some(shadow.to_string_lossy().into_owned());
+    m.approved = true;
+    m.phase = "execute".into();
+    m.needs_reapproval = false;
+    m.hash = m.recompute_hash();
+    assert!(m.hash_valid());
+    m.save(&dir).unwrap();
+
+    let mut state = AppState::new(Mode::Chat);
+    state.rest.fg_mut().session = Some(sess);
+    state.rest.fg_mut().agent_mode = AgentMode::Sdlc;
+    state.rest.fg_mut().sdlc_phase = Some("execute".to_string());
+    state.rest.fg_mut().active_cwd = Some(shadow.clone());
+
+    // Exercise the same rollback helpers the final validate_binding Err path uses.
+    restore_primary_workspace_after_failed_bind(&mut state, 0);
+    restore_unbound_draft_mission(&dir);
+
+    // Workspace back on primary.
+    assert!(
+        state.rest.fg().active_cwd.is_none(),
+        "active_cwd override must clear so effective_cwd uses primary"
+    );
+    let settings = &state.rest.fg().session.as_ref().unwrap().settings;
+    assert!(
+        settings.workdir_saved.is_none(),
+        "must exit_worktree (no stashed primary)"
+    );
+    let wd0 = std::path::PathBuf::from(&settings.workdir[0]);
+    let wd_canon = std::fs::canonicalize(&wd0).unwrap_or(wd0);
+    let primary_canon = std::fs::canonicalize(&primary).unwrap_or(primary.clone());
+    assert_eq!(wd_canon, primary_canon, "workdir[0] must be primary");
+
+    // Mission unbound draft with valid hash — no stale bind fields.
+    let loaded = Mission::load(&dir).unwrap();
+    assert!(!loaded.approved);
+    assert_eq!(loaded.phase, "assess");
+    assert!(loaded.worktree_name.is_none());
+    assert!(loaded.branch.is_none());
+    assert!(loaded.worktree_path.is_none());
+    assert!(
+        loaded.hash_valid(),
+        "unbound draft hash must remain valid (got hash={}, recomputed={})",
+        loaded.hash,
+        loaded.recompute_hash()
+    );
+    assert!(
+        loaded.needs_reapproval,
+        "failed bind must require re-approval"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn is_pending_plan_or_mission_ready_detects_both() {
     let mut state = AppState::new(Mode::Chat);
