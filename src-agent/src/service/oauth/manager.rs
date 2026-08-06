@@ -388,7 +388,6 @@ pub async fn fresh_key(oauth_uuid: &str, fallback_key: &str) -> (String, String)
 
 /// Force a re-check of the token for `uuid` by evicting + re-seeding from disk.
 /// Called after a 401 to pick up a token the OAuth daemon just refreshed.
-#[allow(dead_code)] // wired in a follow-up: 401 retry in stream/oneshot paths
 pub async fn force_refresh(uuid: &str) {
     cache().write().await.remove(uuid);
     let config = AppConfig::load();
