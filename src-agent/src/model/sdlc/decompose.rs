@@ -78,6 +78,8 @@ fn count_leaves(nodes: &[graph::ChecklistNode]) -> usize {
 pub struct LeafClaim {
     pub node_id: String,
     pub title: String,
+    /// Glob patterns this node owns (for path-ownership enforcement).
+    pub owned_paths: Vec<String>,
 }
 
 /// Validate that a `task` delegation targets exactly one OPEN leaf.
@@ -152,15 +154,28 @@ pub fn validate_task_delegation(
     Ok(LeafClaim {
         node_id: node.id.clone(),
         title: node.title.clone(),
+        owned_paths: node.owned_paths.clone(),
     })
 }
 
 /// Build the scope banner prepended to a subagent prompt.
 pub fn scope_banner(claim: &LeafClaim) -> String {
+    let ownership = if claim.owned_paths.is_empty() {
+        String::new()
+    } else {
+        let patterns: Vec<&str> = claim.owned_paths.iter().map(|s| s.as_str()).collect();
+        format!(
+            "owned_paths: [{}]\n\
+             Write/edit/delete to paths matching these patterns is your responsibility.\n\
+             Write/edit/delete to paths matching a DIFFERENT active node's patterns is FORBIDDEN.\n",
+            patterns.join(", ")
+        )
+    };
     format!(
         "[SDLC leaf scope]\n\
          node_id: {}\n\
          title: {}\n\
+         {ownership}\
          Stay inside this leaf only. Do not expand scope to sibling or parent nodes.\n\
          ---\n\n",
         claim.node_id, claim.title
@@ -187,7 +202,10 @@ mod tests {
             status: "pending".into(),
             parent_title: None,
             id: None,
-        }];
+
+                owned_paths: vec![],
+
+                    }];
         let err = validate_lane_graph("standard", &nodes, 3).unwrap_err();
         assert!(err.contains("megatask"));
     }
@@ -199,7 +217,10 @@ mod tests {
             status: "pending".into(),
             parent_title: None,
             id: None,
-        }];
+
+                owned_paths: vec![],
+
+                    }];
         assert!(validate_lane_graph("full", &one, 1).is_err());
 
         let three: Vec<_> = (0..3)
@@ -208,7 +229,10 @@ mod tests {
                 status: "pending".into(),
                 parent_title: None,
                 id: None,
-            })
+
+                    owned_paths: vec![],
+
+                            })
             .collect();
         assert!(validate_lane_graph("full", &three, 1).is_ok());
 
@@ -218,13 +242,19 @@ mod tests {
                 status: "pending".into(),
                 parent_title: None,
                 id: None,
-            },
+
+                    owned_paths: vec![],
+
+                            },
             ChecklistNode {
                 title: "leaf".into(),
                 status: "pending".into(),
                 parent_title: Some("epic".into()),
                 id: None,
-            },
+
+                    owned_paths: vec![],
+
+                            },
         ];
         assert!(validate_lane_graph("full", &tree, 1).is_ok());
     }
@@ -240,13 +270,19 @@ mod tests {
                     status: "pending".into(),
                     parent_title: None,
                     id: None,
-                },
+
+                        owned_paths: vec![],
+
+                                    },
                 ChecklistNode {
                     title: "child".into(),
                     status: "pending".into(),
                     parent_title: Some("parent".into()),
                     id: None,
-                },
+
+                        owned_paths: vec![],
+
+                                    },
             ],
         )
         .unwrap();
@@ -282,6 +318,7 @@ mod tests {
                 status: "pending".into(),
                 parent_title: None,
                 id: None,
+                owned_paths: vec![],
             }],
         )
         .unwrap();
@@ -289,5 +326,33 @@ mod tests {
         let big = "x".repeat(TASK_PROMPT_HARD_MAX + 1);
         let err = validate_task_delegation(&conn, Some(&id), &big).unwrap_err();
         assert!(err.contains("exceeds"));
+    }
+
+    #[test]
+    fn scope_banner_includes_owned_paths() {
+        let claim = LeafClaim {
+            node_id: "n-test-000".into(),
+            title: "test task".into(),
+            owned_paths: vec!["src/foo.rs".into(), "src/bar/**".into()],
+        };
+        let banner = scope_banner(&claim);
+        assert!(banner.contains("node_id: n-test-000"));
+        assert!(banner.contains("title: test task"));
+        assert!(banner.contains("src/foo.rs"));
+        assert!(banner.contains("src/bar/**"));
+        assert!(banner.contains("FORBIDDEN"));
+    }
+
+    #[test]
+    fn scope_banner_omits_ownership_when_empty() {
+        let claim = LeafClaim {
+            node_id: "n-test-001".into(),
+            title: "no ownership".into(),
+            owned_paths: vec![],
+        };
+        let banner = scope_banner(&claim);
+        assert!(banner.contains("node_id: n-test-001"));
+        assert!(!banner.contains("owned_paths"));
+        assert!(!banner.contains("FORBIDDEN"));
     }
 }

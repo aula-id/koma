@@ -167,6 +167,9 @@ fn checklist_node_roundtrip_shape() {
         status: "pending".into(),
         parent_title: Some("p".into()),
         id: None,
-    };
+
+            owned_paths: vec![],
+
+            };
     assert_eq!(n.parent_title.as_deref(), Some("p"));
 }
