@@ -117,12 +117,12 @@ pub enum WarmEvent {
         endpoint: String,
         models: Vec<crate::dto::openrouter::ModelInfo>,
     },
-    /// The catalogue fetch for `endpoint` failed (network / non-OpenAI provider).
     /// The drain records a `models_cache_failed` marker for that endpoint (so
-    /// `request_catalogue` doesn't re-fetch in a rapid loop) without poisoning
-    /// the cache — the tri-state image helper treats missing/stale cache as
-    /// "unknown" (fail-open). The in-flight guard is cleared.
-    WarmCatalogueFailed { endpoint: String },
+    /// a subsequent explicit catalogue request retries) without poisoning the
+    /// cache — the tri-state image helper treats missing/stale cache as
+    /// "unknown" (fail-open). `error` is a sanitized diagnostic that never
+    /// contains an OAuth bearer or request headers. The in-flight guard is cleared.
+    WarmCatalogueFailed { endpoint: String, error: String },
     /// The project-awareness summary resolved for the session identified by
     /// `session_id` (its stable [`crate::app::state::SessionRuntime`] UUID): `summary`
     /// is `Some(text)` on success, `None` when there were no docs / the call failed.

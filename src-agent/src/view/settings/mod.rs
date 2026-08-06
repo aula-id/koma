@@ -189,6 +189,10 @@ pub fn draw(
                             .unwrap_or(false);
                         (models_cache, cm)
                     };
+                let catalogue_failed = st
+                    .mm_provider_conn()
+                    .map(|(ep, _)| rest.models_cache_failed.as_deref() == Some(ep.as_str()))
+                    .unwrap_or(false);
                 pages::draw_model_form(
                     frame,
                     rest,
@@ -197,6 +201,7 @@ pub fn draw(
                     omni,
                     is_or,
                     cache_matches,
+                    catalogue_failed,
                     cache,
                     palette,
                     body_inner,
@@ -216,7 +221,12 @@ pub fn draw(
             OAuthFlowState::Pick(cursor) => {
                 oauth::draw_picker(frame, *cursor, palette, body);
             }
-            OAuthFlowState::CodexWait { provider, url, copied, .. } => {
+            OAuthFlowState::CodexWait {
+                provider,
+                url,
+                copied,
+                ..
+            } => {
                 let title = format!("{} login", provider.label());
                 oauth::draw_message(frame, palette, body, &title, Some(url), *copied);
             }
