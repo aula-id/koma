@@ -35,7 +35,12 @@ impl Tool for Read {
     }
     fn run(&self, ctx: &ToolCtx, args: &Value) -> Result<String> {
         let rel = arg_str(args, "path")?;
-        let path = resolve_read(&ctx.workspaces, rel, ctx.session_dir.as_deref(), &ctx.active_skill_dirs)?;
+        let path = resolve_read(
+            &ctx.workspaces,
+            rel,
+            ctx.session_dir.as_deref(),
+            &ctx.active_skill_dirs,
+        )?;
         if path.is_dir() {
             bail!("'{rel}' is a directory, not a file");
         }

@@ -123,7 +123,11 @@ pub(crate) fn append_neighborhood_footer(out: &mut String, path: &Path) {
     }
     out.push_str("\n---\n# Related (graph)\n");
     if !imports.is_empty() {
-        let display: Vec<_> = imports.iter().take(NEIGHBORHOOD_FOOTER_CAP).cloned().collect();
+        let display: Vec<_> = imports
+            .iter()
+            .take(NEIGHBORHOOD_FOOTER_CAP)
+            .cloned()
+            .collect();
         let suffix = if imports.len() > NEIGHBORHOOD_FOOTER_CAP {
             format!(" (and {} more)", imports.len() - NEIGHBORHOOD_FOOTER_CAP)
         } else {
@@ -138,7 +142,10 @@ pub(crate) fn append_neighborhood_footer(out: &mut String, path: &Path) {
             .cloned()
             .collect();
         let suffix = if imported_by.len() > NEIGHBORHOOD_FOOTER_CAP {
-            format!(" (and {} more)", imported_by.len() - NEIGHBORHOOD_FOOTER_CAP)
+            format!(
+                " (and {} more)",
+                imported_by.len() - NEIGHBORHOOD_FOOTER_CAP
+            )
         } else {
             String::new()
         };

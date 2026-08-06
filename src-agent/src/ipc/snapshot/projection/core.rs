@@ -267,7 +267,7 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
         palette_sel: state.rest.palette_sel,
         pending_attachments: state.rest.fg().pending_attachments.clone(),
         file_palette: file_palette_matches(state),
-        agent_mode: match state.rest.agent_mode {
+        agent_mode: match state.rest.agent_mode() {
             crate::app::state::AgentMode::Auto => "auto",
             crate::app::state::AgentMode::Normal => "normal",
             crate::app::state::AgentMode::Plan => "plan",
@@ -276,12 +276,12 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
         }
         .to_string(),
         // SDLC projection: phase + mission goal + graph counts when in Sdlc mode.
-        sdlc_phase: if matches!(state.rest.agent_mode, crate::app::state::AgentMode::Sdlc) {
-            state.rest.sdlc_phase.clone()
+        sdlc_phase: if matches!(state.rest.agent_mode(), crate::app::state::AgentMode::Sdlc) {
+            state.rest.fg().sdlc_phase.clone()
         } else {
             None
         },
-        sdlc_goal: if matches!(state.rest.agent_mode, crate::app::state::AgentMode::Sdlc) {
+        sdlc_goal: if matches!(state.rest.agent_mode(), crate::app::state::AgentMode::Sdlc) {
             state
                 .rest
                 .fg()
@@ -292,41 +292,32 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
         } else {
             None
         },
-        sdlc_open: if matches!(state.rest.agent_mode, crate::app::state::AgentMode::Sdlc) {
-            state
-                .rest
-                .fg()
-                .session
-                .as_ref()
-                .and_then(|s| {
-                    crate::model::msglog::open(&s.path)
-                        .ok()
-                        .map(|conn| {
-                            let _ = crate::model::sdlc::graph::ensure_tables(&conn);
-                            crate::model::sdlc::graph::list_open(&conn)
-                                .map(|v| v.len())
-                                .unwrap_or(0)
-                        })
+        sdlc_open: if matches!(state.rest.agent_mode(), crate::app::state::AgentMode::Sdlc) {
+            state.rest.fg().session.as_ref().and_then(|s| {
+                crate::model::msglog::open(&s.path).ok().map(|conn| {
+                    if crate::model::sdlc::graph::ensure_tables(&conn).is_err() {
+                        return 0;
+                    }
+                    // Project open LEAVES only (hierarchy-aware).
+                    crate::model::sdlc::graph::list_open_leaves(&conn)
+                        .map(|v| v.len())
+                        .unwrap_or(0)
                 })
+            })
         } else {
             None
         },
-        sdlc_sealed: if matches!(state.rest.agent_mode, crate::app::state::AgentMode::Sdlc) {
-            state
-                .rest
-                .fg()
-                .session
-                .as_ref()
-                .and_then(|s| {
-                    crate::model::msglog::open(&s.path)
-                        .ok()
-                        .map(|conn| {
-                            let _ = crate::model::sdlc::graph::ensure_tables(&conn);
-                            crate::model::sdlc::graph::list_sealed(&conn)
-                                .map(|v| v.len())
-                                .unwrap_or(0)
-                        })
+        sdlc_sealed: if matches!(state.rest.agent_mode(), crate::app::state::AgentMode::Sdlc) {
+            state.rest.fg().session.as_ref().and_then(|s| {
+                crate::model::msglog::open(&s.path).ok().map(|conn| {
+                    if crate::model::sdlc::graph::ensure_tables(&conn).is_err() {
+                        return 0;
+                    }
+                    crate::model::sdlc::graph::list_sealed(&conn)
+                        .map(|v| v.len())
+                        .unwrap_or(0)
                 })
+            })
         } else {
             None
         },

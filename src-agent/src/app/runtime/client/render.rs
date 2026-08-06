@@ -3,9 +3,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use ratatui::crossterm::event::{
-    self, Event, KeyCode, KeyEventKind, MouseEventKind,
-};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseEventKind};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -193,7 +191,9 @@ pub(super) fn render_loop(
                 Err(TryRecvError::Empty) => break,
                 // The reader task dropped its sender: the daemon's socket closed.
                 // Nothing more will ever arrive — leave the client.
-                Err(TryRecvError::Disconnected) => return Ok(ClientTransition::Exit { kill: false }),
+                Err(TryRecvError::Disconnected) => {
+                    return Ok(ClientTransition::Exit { kill: false })
+                }
             }
         }
 
@@ -560,7 +560,11 @@ pub(super) fn client_select_dump(
     // (4) Restore the alt-screen + mouse and force a full repaint next draw.
     execute!(stdout(), EnterAlternateScreen)?;
     // Re-apply the shadow session's mouse capture setting (not unconditional enable).
-    let mc = shadow.rest.fg().session.as_ref()
+    let mc = shadow
+        .rest
+        .fg()
+        .session
+        .as_ref()
         .map(|s| s.settings.mouse_capture)
         .unwrap_or_default();
     crate::app::runtime::actions::apply_mouse_capture(mc);

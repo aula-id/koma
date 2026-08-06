@@ -43,7 +43,10 @@ pub enum OAuthEvent {
     /// The browser flow reached the "open this URL" step (loopback listener is up).
     /// `provider` identifies the originating provider so the drain can title/label
     /// the wait screen correctly (shared by Codex, Claude, Koma, Command Code).
-    CodexUrl { provider: OAuthProvider, url: String },
+    CodexUrl {
+        provider: OAuthProvider,
+        url: String,
+    },
     /// A device flow issued a device code the user must approve. Reused as the
     /// generic device-code carrier for BOTH Kilo Code and xAI (Grok) — both show
     /// a `user_code` + a `verification_url`, and the downstream wait screen / GUI

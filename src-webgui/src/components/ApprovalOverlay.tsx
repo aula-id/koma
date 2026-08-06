@@ -95,8 +95,10 @@ export function ApprovalOverlay() {
     return active?.colors?.[8] || 'var(--koma-fg)'
   }, [palettes, theme])
 
-  // Only a non-plan pause is a modal approval; plan_ready is handled inline.
-  if (!awaiting || !pending || pending.name === 'plan_ready') return null
+  // Only a non-plan/mission pause is a modal approval; plan_ready and
+  // mission_ready are handled inline via PlanDecision (y/a/n).
+  if (!awaiting || !pending || pending.name === 'plan_ready' || pending.name === 'mission_ready')
+    return null
 
   const answer = (approve: boolean) => req({ r: 'ApproveTool', approve })
   const signature = pending.signature || fallbackSignature(pending.name, pending.args)

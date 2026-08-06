@@ -19,7 +19,7 @@ use ratatui::text::Line;
 ///   investigate freely without risking a change. It is exited either by the
 ///   model submitting a plan for approval, or manually via `/mode` /
 ///   Shift+Tab; leaving it restores whatever mode was active before entering
-///   (see `AppStateRest::plan_return_mode`). (Read-only tool enforcement and
+///   (see `SessionRuntime::plan_return_mode`). (Read-only tool enforcement and
 ///   the plan-approval flow land in a later wave — this variant currently
 ///   only changes the mode label + system-prompt nudge.)
 /// - `Yolo`: *risky* tools run inline with NO classifier call and NO `y/n`
@@ -53,18 +53,25 @@ impl AgentMode {
     /// Advance to the next mode for the interactive toggle (Shift+Tab / bare
     /// `/mode`), respecting the YOLO arm gate.
     ///
+    /// Active SDLC never hops via cycle — explicit `/mode <name>` or exiting
+    /// SDLC through `set_agent_mode` is required (returns self so callers stay put).
+    ///
     /// - `yolo_armed == true`:  Auto → Normal → Plan → Sdlc → Yolo → Auto (full cycle).
     /// - `yolo_armed == false`: Auto → Normal → Plan → Sdlc → Auto (Yolo is skipped). If
     ///   `self` is somehow `Yolo` while unarmed (shouldn't happen — disarming
     ///   drops the mode), it folds straight back to Auto so the user can never
     ///   linger there.
     pub fn cycle(self, yolo_armed: bool) -> Self {
+        // Active SDLC: refuse mode hops via the cycle key; require explicit exit.
+        if matches!(self, AgentMode::Sdlc) {
+            return AgentMode::Sdlc;
+        }
         if yolo_armed {
             match self {
                 AgentMode::Auto => AgentMode::Normal,
                 AgentMode::Normal => AgentMode::Plan,
                 AgentMode::Plan => AgentMode::Sdlc,
-                AgentMode::Sdlc => AgentMode::Yolo,
+                AgentMode::Sdlc => AgentMode::Sdlc, // unreachable
                 AgentMode::Yolo => AgentMode::Auto,
             }
         } else {
@@ -72,7 +79,7 @@ impl AgentMode {
                 AgentMode::Auto => AgentMode::Normal,
                 AgentMode::Normal => AgentMode::Plan,
                 AgentMode::Plan => AgentMode::Sdlc,
-                AgentMode::Sdlc => AgentMode::Auto,
+                AgentMode::Sdlc => AgentMode::Sdlc, // unreachable
                 // Unarmed + Yolo (defensive): drop back to Auto.
                 AgentMode::Yolo => AgentMode::Auto,
             }
@@ -87,13 +94,14 @@ mod agent_mode_tests {
     #[test]
     fn cycle_includes_sdlc_when_unarmed() {
         assert_eq!(AgentMode::Plan.cycle(false), AgentMode::Sdlc);
-        assert_eq!(AgentMode::Sdlc.cycle(false), AgentMode::Auto);
+        // Active SDLC does not hop via cycle.
+        assert_eq!(AgentMode::Sdlc.cycle(false), AgentMode::Sdlc);
     }
 
     #[test]
     fn cycle_includes_sdlc_when_armed() {
         assert_eq!(AgentMode::Plan.cycle(true), AgentMode::Sdlc);
-        assert_eq!(AgentMode::Sdlc.cycle(true), AgentMode::Yolo);
+        assert_eq!(AgentMode::Sdlc.cycle(true), AgentMode::Sdlc);
         assert_eq!(AgentMode::Yolo.cycle(true), AgentMode::Auto);
     }
 

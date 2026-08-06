@@ -194,10 +194,7 @@ fn empty_roots_gives_empty_registry() {
 
 #[test]
 fn flat_skill_discovered() {
-    let tmp = std::env::temp_dir().join(format!(
-        "koma-skill-test-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let tmp = std::env::temp_dir().join(format!("koma-skill-test-{}", uuid::Uuid::new_v4()));
     let root = tmp.join("skills");
     setup_skill_root(
         &root,
@@ -215,14 +212,14 @@ fn flat_skill_discovered() {
 
 #[test]
 fn dir_form_skill_discovered() {
-    let tmp = std::env::temp_dir().join(format!(
-        "koma-skill-dir-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let tmp = std::env::temp_dir().join(format!("koma-skill-dir-{}", uuid::Uuid::new_v4()));
     let root = tmp.join("skills");
     setup_skill_root(
         &root,
-        &[("bar/SKILL.md", "---\ndescription: Bar skill.\n---\nBar body.")],
+        &[(
+            "bar/SKILL.md",
+            "---\ndescription: Bar skill.\n---\nBar body.",
+        )],
     );
 
     let mut skills = BTreeMap::new();
@@ -236,10 +233,7 @@ fn dir_form_skill_discovered() {
 
 #[test]
 fn readme_md_skipped() {
-    let tmp = std::env::temp_dir().join(format!(
-        "koma-skill-readme-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let tmp = std::env::temp_dir().join(format!("koma-skill-readme-{}", uuid::Uuid::new_v4()));
     let root = tmp.join("skills");
     setup_skill_root(
         &root,
@@ -259,10 +253,7 @@ fn readme_md_skipped() {
 
 #[test]
 fn malformed_file_skipped_siblings_still_load() {
-    let tmp = std::env::temp_dir().join(format!(
-        "koma-skill-mal-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let tmp = std::env::temp_dir().join(format!("koma-skill-mal-{}", uuid::Uuid::new_v4()));
     let root = tmp.join("skills");
     setup_skill_root(
         &root,
@@ -282,14 +273,14 @@ fn malformed_file_skipped_siblings_still_load() {
 
 #[test]
 fn lowercase_skill_md_accepted() {
-    let tmp = std::env::temp_dir().join(format!(
-        "koma-skill-lc-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let tmp = std::env::temp_dir().join(format!("koma-skill-lc-{}", uuid::Uuid::new_v4()));
     let root = tmp.join("skills");
     setup_skill_root(
         &root,
-        &[("mydir/skill.md", "---\ndescription: Lowercase entry.\n---\nBody.")],
+        &[(
+            "mydir/skill.md",
+            "---\ndescription: Lowercase entry.\n---\nBody.",
+        )],
     );
 
     let mut skills = BTreeMap::new();
@@ -301,10 +292,7 @@ fn lowercase_skill_md_accepted() {
 
 #[test]
 fn non_md_files_ignored() {
-    let tmp = std::env::temp_dir().join(format!(
-        "koma-skill-nonmd-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let tmp = std::env::temp_dir().join(format!("koma-skill-nonmd-{}", uuid::Uuid::new_v4()));
     let root = tmp.join("skills");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("notes.txt"), "not a skill").unwrap();
@@ -319,10 +307,7 @@ fn non_md_files_ignored() {
 
 #[test]
 fn nested_junk_ignored() {
-    let tmp = std::env::temp_dir().join(format!(
-        "koma-skill-nested-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let tmp = std::env::temp_dir().join(format!("koma-skill-nested-{}", uuid::Uuid::new_v4()));
     let root = tmp.join("skills");
     // Create a dir without SKILL.md — should not be loaded.
     let nested = root.join("notaskill");
@@ -338,10 +323,7 @@ fn nested_junk_ignored() {
 
 #[test]
 fn duplicate_name_last_wins() {
-    let tmp = std::env::temp_dir().join(format!(
-        "koma-skill-dup-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let tmp = std::env::temp_dir().join(format!("koma-skill-dup-{}", uuid::Uuid::new_v4()));
     let root = tmp.join("skills");
     setup_skill_root(
         &root,
@@ -388,10 +370,7 @@ fn catalogue_sorted_by_name() {
 
 #[test]
 fn catalogue_text_format() {
-    let tmp = std::env::temp_dir().join(format!(
-        "koma-skill-cat-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let tmp = std::env::temp_dir().join(format!("koma-skill-cat-{}", uuid::Uuid::new_v4()));
     let root = tmp.join("skills");
     setup_skill_root(
         &root,
@@ -423,14 +402,10 @@ fn catalogue_text_format() {
 
 #[test]
 fn load_skill_file_flat() {
-    let tmp = std::env::temp_dir().join(format!(
-        "koma-skill-loadflat-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let tmp = std::env::temp_dir().join(format!("koma-skill-loadflat-{}", uuid::Uuid::new_v4()));
     let path = tmp.join("foo.md");
     std::fs::create_dir_all(&tmp).unwrap();
-    std::fs::write(&path, "---\ndescription: Flat load.\n---\nBody content.")
-        .unwrap();
+    std::fs::write(&path, "---\ndescription: Flat load.\n---\nBody content.").unwrap();
 
     let skill = load_skill_file(&path, SkillSource::ProjectAgent, None).unwrap();
     assert_eq!(skill.name, "foo");
@@ -444,18 +419,13 @@ fn load_skill_file_flat() {
 
 #[test]
 fn load_skill_file_with_skill_dir() {
-    let tmp = std::env::temp_dir().join(format!(
-        "koma-skill-loaddir-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let tmp = std::env::temp_dir().join(format!("koma-skill-loaddir-{}", uuid::Uuid::new_v4()));
     let skill_root = tmp.join("bar");
     let path = skill_root.join("SKILL.md");
     std::fs::create_dir_all(&skill_root).unwrap();
-    std::fs::write(&path, "---\ndescription: Dir load.\n---\nDir body.")
-        .unwrap();
+    std::fs::write(&path, "---\ndescription: Dir load.\n---\nDir body.").unwrap();
 
-    let skill =
-        load_skill_file(&path, SkillSource::Claude, Some(skill_root.clone())).unwrap();
+    let skill = load_skill_file(&path, SkillSource::Claude, Some(skill_root.clone())).unwrap();
     assert_eq!(skill.name, "bar");
     assert_eq!(skill.description, "Dir load.");
     assert_eq!(skill.body, "Dir body.");

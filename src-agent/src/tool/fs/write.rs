@@ -1,7 +1,7 @@
 //! `write` tool — create or overwrite a workspace-relative file.
 
 use super::helpers::arg_str;
-use crate::tool::{resolve, Tool, ToolCtx};
+use crate::tool::{resolve_in, Tool, ToolCtx};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
@@ -29,7 +29,7 @@ impl Tool for Write {
     fn run(&self, ctx: &ToolCtx, args: &Value) -> Result<String> {
         let rel = arg_str(args, "path")?;
         let content = arg_str(args, "content")?;
-        let path = resolve(&ctx.workspaces, rel)?;
+        let path = resolve_in(&ctx.workspaces, rel, ctx.allow_scratch)?;
         // Probe existence BEFORE the write so the file-change log can distinguish
         // "added" (new file) from "modified" (overwrite) — write is create-or-overwrite.
         let existed = path.exists();

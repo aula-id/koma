@@ -27,10 +27,10 @@
 
 use anyhow::Result;
 
+use super::signals::install_daemon_signals;
 use crate::ipc::frame::{read_frame_from, write_frame_to, FrameReader};
 use crate::ipc::oauth_proto::{OAuthRequest, OAuthResponse};
 use crate::model::{app_config::AppConfig, store};
-use super::signals::install_daemon_signals;
 
 /// How often the refresh task reloads config and refreshes tokens.
 const REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
@@ -248,10 +248,7 @@ async fn connection_loop(
 }
 
 /// Serialise + frame-write one [`OAuthResponse`].
-async fn respond(
-    stream: &mut crate::ipc::IpcStream,
-    resp: &OAuthResponse,
-) -> std::io::Result<()> {
+async fn respond(stream: &mut crate::ipc::IpcStream, resp: &OAuthResponse) -> std::io::Result<()> {
     let bytes = match serde_json::to_vec(resp) {
         Ok(b) => b,
         Err(e) => serde_json::to_vec(&OAuthResponse::Error(format!("encode failed: {e}")))
@@ -274,9 +271,7 @@ fn handle_request(
                 refreshed_count: 0, // v1: not tracked yet
             }
         }
-        OAuthRequest::Fingerprint => {
-            OAuthResponse::Fingerprint(store::build_fingerprint())
-        }
+        OAuthRequest::Fingerprint => OAuthResponse::Fingerprint(store::build_fingerprint()),
         OAuthRequest::Shutdown => {
             shutting_down.store(true, std::sync::atomic::Ordering::Relaxed);
             OAuthResponse::Ack

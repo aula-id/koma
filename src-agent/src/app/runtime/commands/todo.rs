@@ -13,7 +13,7 @@ use crate::app::state::{AgentMode, AppState};
 /// `checklist` interception + `plan_ready` write to. Outside plan mode,
 /// behaviour is unchanged. The panel re-reads on every key press.
 pub(super) fn handle_todo(state: &mut AppState) -> Result<()> {
-    let in_plan = state.rest.agent_mode == AgentMode::Plan;
+    let in_plan = state.rest.agent_mode() == AgentMode::Plan;
     let (items, pwd_hash, plan_path) = load_todos_with_pwd(state, in_plan);
     let mut st = TodoState::new(items, pwd_hash);
     st.plan_path = plan_path;

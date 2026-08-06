@@ -566,6 +566,17 @@ impl Tool for Bash {
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("missing required string argument 'command'"))?;
 
+        // Fail-closed: no writable workspace roots (e.g. SDLC execute/integrate
+        // with missing/invalid binding) → refuse rather than running against an
+        // empty/primary cwd.
+        if ctx.workspaces.is_empty() || ctx.workspace.as_os_str().is_empty() {
+            return Ok(
+                "error: no writable workspace root — SDLC execute/integrate binding \
+                 missing or invalid; cannot run bash against primary"
+                    .to_string(),
+            );
+        }
+
         // Redirect git commands to git_operator, which handles SSH key injection
         // and destructive-operation guards. Bash can't do either safely.
         // Match `git` as a command word anywhere in the command (not just at the

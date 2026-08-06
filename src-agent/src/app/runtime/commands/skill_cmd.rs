@@ -32,11 +32,7 @@ pub(super) fn handle_skill(args: String, state: &mut AppState) -> Result<()> {
 
 /// Activate (load) a skill by name from the registry into active_skills.
 /// Returns a status message. Errors are returned as Err.
-pub(crate) fn activate_skill(
-    state: &mut AppState,
-    sess_idx: usize,
-    name: &str,
-) -> Result<String> {
+pub(crate) fn activate_skill(state: &mut AppState, sess_idx: usize, name: &str) -> Result<String> {
     let skill_def = state.rest.sessions[sess_idx]
         .session
         .as_ref()
@@ -56,29 +52,26 @@ pub(crate) fn activate_skill(
     let skill_dir = skill_def.skill_dir.clone();
 
     // Build companion inventory when dir-form (same logic as intercept_skill in guard.rs)
-    let companion_msg = skill_dir.as_ref().map(|dir| {
-        list_companions(dir, &skill_def.name)
-    });
+    let companion_msg = skill_dir
+        .as_ref()
+        .map(|dir| list_companions(dir, &skill_def.name));
 
-    state.rest.sessions[sess_idx]
-        .active_skills
-        .insert(
-            skill_def.name.clone(),
-            crate::app::state::ActiveSkill { body, skill_dir },
-        );
+    state.rest.sessions[sess_idx].active_skills.insert(
+        skill_def.name.clone(),
+        crate::app::state::ActiveSkill { body, skill_dir },
+    );
 
     Ok(match companion_msg {
         Some(msg) => msg,
-        None => format!("loaded skill '{}' — body injected into context.", skill_def.name),
+        None => format!(
+            "loaded skill '{}' — body injected into context.",
+            skill_def.name
+        ),
     })
 }
 
 /// Deactivate (unload) a skill by name from active_skills.
-pub(crate) fn deactivate_skill(
-    state: &mut AppState,
-    sess_idx: usize,
-    name: &str,
-) -> String {
+pub(crate) fn deactivate_skill(state: &mut AppState, sess_idx: usize, name: &str) -> String {
     state.rest.sessions[sess_idx].active_skills.remove(name);
     format!("unloaded skill '{name}'.")
 }

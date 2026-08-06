@@ -54,9 +54,9 @@ pub fn render_overlay(
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),  // header text + BOTTOM border
-            Constraint::Length(1),  // search line
-            Constraint::Length(1),  // chip row
+            Constraint::Length(2), // header text + BOTTOM border
+            Constraint::Length(1), // search line
+            Constraint::Length(1), // chip row
             Constraint::Min(0),    // filtered list
             Constraint::Length(1), // footer hint
         ])
@@ -69,10 +69,7 @@ pub fn render_overlay(
     let header_inner = header_block.inner(outer[0]);
     frame.render_widget(header_block, outer[0]);
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            "skills",
-            Style::default().fg(palette.dim),
-        )),
+        Paragraph::new(Span::styled("skills", Style::default().fg(palette.dim))),
         header_inner.inner(Margin {
             horizontal: 2,
             vertical: 0,
@@ -86,10 +83,7 @@ pub fn render_overlay(
     });
     let search_line = Line::from(vec![
         Span::styled("› ", Style::default().fg(palette.dim)),
-        Span::styled(
-            st.query.as_str(),
-            Style::default().fg(palette.fg),
-        ),
+        Span::styled(st.query.as_str(), Style::default().fg(palette.fg)),
         Span::styled("█", Style::default().fg(palette.accent)),
     ]);
     frame.render_widget(Paragraph::new(search_line), search_inner);
@@ -130,10 +124,7 @@ pub fn render_overlay(
 
     if st.filtered_idx.is_empty() {
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                "no matches",
-                Style::default().fg(palette.dim),
-            )),
+            Paragraph::new(Span::styled("no matches", Style::default().fg(palette.dim))),
             list_inner,
         );
     } else if max_vis > 0 {

@@ -362,6 +362,24 @@ pub struct SessionRuntime {
     /// the buffer. Purely in-memory / transient — `SessionRuntime` is rebuilt fresh
     /// each launch (it is never serialised), so this is never persisted.
     pub pending_ext_prompts: Vec<(String, String)>,
+    /// THIS session's tool-approval / lifecycle mode (per-session, not global).
+    /// Shift+Tab and `/mode` mutate the FOREGROUND session via
+    /// [`super::AppStateRest::set_agent_mode`]; stream/harness paths that already
+    /// know a `sess_idx` must read `sessions[sess_idx].agent_mode` so a
+    /// background session never inherits another session's SDLC/Plan/Yolo envelope.
+    pub agent_mode: super::types::AgentMode,
+    /// Mode to restore when THIS session leaves `Plan`.
+    pub plan_return_mode: Option<super::types::AgentMode>,
+    /// Mode to restore when THIS session leaves SDLC.
+    pub sdlc_return_mode: Option<super::types::AgentMode>,
+    /// Prior `short_send_enabled` before THIS session forced it on for SDLC.
+    pub sdlc_prev_short_send: Option<bool>,
+    /// Active mission phase for THIS session: assess | execute | integrate | done.
+    pub sdlc_phase: Option<String>,
+    /// One-shot: after mission-approval compact, seed the mission capsule on THIS session.
+    pub pending_mission_seed: bool,
+    /// One-shot: after plan-approval compact, seed plan.md on THIS session.
+    pub pending_plan_seed: bool,
     /// SDLC keeper due-flag: set after mission approve and after each finished
     /// tool round while in SDLC. Deferred idle rail evaluates once then clears.
     /// Transient — never serialised.
@@ -371,7 +389,11 @@ pub struct SessionRuntime {
     /// True while an async SDLC LLM-keeper classify is in flight (dedupe spawns).
     pub sdlc_keeper_llm_inflight: bool,
     /// Receiver for the async SDLC LLM-keeper classify result.
-    pub sdlc_keeper_llm_rx: Option<tokio::sync::oneshot::Receiver<Option<String>>>,
+    /// Payload is `(epoch_at_spawn, inject)` so drain can drop stale results.
+    pub sdlc_keeper_llm_rx: Option<tokio::sync::oneshot::Receiver<(u64, Option<String>)>>,
+    /// Monotonic epoch bumped whenever in-flight LLM keeper results must be
+    /// cancelled/ignored (SDLC exit, phase change, contract-hash change).
+    pub sdlc_keeper_epoch: u64,
     /// Consecutive EXTENSION-injected turn counter (cost-DoS guard, review finding):
     /// the number of synthetic user turns injected back-to-back by the `chat.prompt`
     /// broker path (see [`EXT_TURN_BUDGET`]) SINCE the last REAL user turn.
@@ -627,10 +649,18 @@ impl SessionRuntime {
             pending_bash_nudges: Vec::new(),
             pending_subagent_nudges: Vec::new(),
             pending_ext_prompts: Vec::new(),
+            agent_mode: super::types::AgentMode::default(),
+            plan_return_mode: None,
+            sdlc_return_mode: None,
+            sdlc_prev_short_send: None,
+            sdlc_phase: None,
+            pending_mission_seed: false,
+            pending_plan_seed: false,
             sdlc_keeper_due: false,
             pending_sdlc_keeper_llm: None,
             sdlc_keeper_llm_inflight: false,
             sdlc_keeper_llm_rx: None,
+            sdlc_keeper_epoch: 0,
             ext_injected_turns: 0,
             subagents: Vec::new(),
             pending_subagents: VecDeque::new(),
@@ -670,6 +700,18 @@ impl SessionRuntime {
             self.graph_summary = Some(summary);
             self.graph_generation = generation;
         }
+    }
+
+    /// Cancel/ignore any in-flight or staged SDLC LLM-keeper result so a stale
+    /// oneshot cannot inject or start a non-SDLC (or wrong-phase) turn.
+    /// Bumps [`Self::sdlc_keeper_epoch`]; drops the receiver (task result is
+    /// ignored on drop); clears staged inject + inflight + due flags.
+    pub fn invalidate_sdlc_keeper_llm(&mut self) {
+        self.sdlc_keeper_epoch = self.sdlc_keeper_epoch.wrapping_add(1);
+        self.sdlc_keeper_llm_rx = None;
+        self.sdlc_keeper_llm_inflight = false;
+        self.pending_sdlc_keeper_llm = None;
+        self.sdlc_keeper_due = false;
     }
 
     /// Streaming lifecycle methods.

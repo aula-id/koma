@@ -19,10 +19,7 @@ pub fn extract_imports(content: &str) -> Vec<String> {
 
     let mut imports = Vec::new();
 
-    if let Ok(query) = tree_sitter::Query::new(
-        &lang,
-        "(import_declaration) @import_decl",
-    ) {
+    if let Ok(query) = tree_sitter::Query::new(&lang, "(import_declaration) @import_decl") {
         let mut cursor = tree_sitter::QueryCursor::new();
         for m in cursor.matches(&query, tree.root_node(), content.as_bytes()) {
             for cap in m.captures {

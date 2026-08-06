@@ -48,7 +48,7 @@ pub(super) fn serialize_and_push(
 
     // Current global agent mode label (decoded into the shadow from the snapshot), for the
     // composer mode selector. Rides the Snapshot below so a `SetMode` reflects live.
-    let mode = shadow.rest.agent_mode.label().to_string();
+    let mode = shadow.rest.agent_mode().label().to_string();
 
     // Title: the session's display name, falling back to its id, then a constant.
     let title = fg

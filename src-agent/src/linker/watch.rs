@@ -66,10 +66,7 @@ pub fn create_watcher(
 
     let mut debouncer = new_debouncer(
         Duration::from_millis(DEBOUNCE_MS),
-        move |res: Result<
-            Vec<notify_debouncer_mini::DebouncedEvent>,
-            notify::Error,
-        >| {
+        move |res: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
             if let Ok(events) = res {
                 let paths: Vec<PathBuf> = events
                     .iter()
@@ -111,9 +108,7 @@ pub fn is_source_file(path: &Path) -> bool {
     path.to_string_lossy()
         .rsplit('.')
         .next()
-        .is_some_and(|ext| {
-            SOURCE_EXTENSIONS.contains(&format!(".{ext}").as_str())
-        })
+        .is_some_and(|ext| SOURCE_EXTENSIONS.contains(&format!(".{ext}").as_str()))
 }
 
 /// Check if any component of a path is in the prune list.
@@ -133,11 +128,7 @@ pub fn is_pruned(path: &Path) -> bool {
 ///
 /// `workspace_roots` and `known_files` are needed for import resolution during
 /// re-scan. After processing all paths, the graph's counters are recomputed.
-pub fn handle_events(
-    paths: &[PathBuf],
-    graph: &mut ImportGraph,
-    workspace_roots: &[PathBuf],
-) {
+pub fn handle_events(paths: &[PathBuf], graph: &mut ImportGraph, workspace_roots: &[PathBuf]) {
     // Build the known_files set from the current graph nodes for resolution.
     let known_files: HashSet<String> = graph.nodes.keys().cloned().collect();
 
@@ -146,9 +137,7 @@ pub fn handle_events(
 
         if path.exists() {
             // File exists — re-scan and update.
-            if let Some((file_path, lang, edges)) =
-                scan_file(path, workspace_roots, &known_files)
-            {
+            if let Some((file_path, lang, edges)) = scan_file(path, workspace_roots, &known_files) {
                 graph.set_edges(&file_path, lang, edges);
             }
         } else {
@@ -195,9 +184,9 @@ mod tests {
     #[test]
     fn is_pruned_catches_target() {
         assert!(is_pruned(std::path::Path::new("/foo/target/debug/x.rs")));
-        assert!(is_pruned(
-            std::path::Path::new("/foo/node_modules/pkg/index.ts")
-        ));
+        assert!(is_pruned(std::path::Path::new(
+            "/foo/node_modules/pkg/index.ts"
+        )));
         assert!(!is_pruned(std::path::Path::new("/foo/src/main.rs")));
     }
 

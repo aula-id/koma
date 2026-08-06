@@ -10,13 +10,11 @@ use serde::{Deserialize, Serialize};
 pub enum LinkerRequest {
     /// Register one or more workspace roots for scanning.
     RegisterWorkspaces {
-        roots: Vec<String>,  // canonical abs paths as strings
+        roots: Vec<String>, // canonical abs paths as strings
         session_id: String,
     },
     /// Unregister a session (all its roots released).
-    Unregister {
-        session_id: String,
-    },
+    Unregister { session_id: String },
     /// Query the graph.
     Query(LinkerQuery),
     /// Get a summary for L1 injection.
@@ -53,10 +51,7 @@ pub enum LinkerResponse {
     /// Ready (scan complete for all registered roots).
     Ready,
     /// Registration result with scan status.
-    Registered {
-        status: ScanStatus,
-        generation: u64,
-    },
+    Registered { status: ScanStatus, generation: u64 },
     /// Summary for L1 injection.
     Summary {
         text: String,

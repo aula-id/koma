@@ -22,13 +22,13 @@ pub(super) fn render_header(
     rest: &AppStateRest,
     palette: &Palette,
 ) {
-    let (mode_icon, mode_label, mode_color) = match rest.agent_mode {
+    let (mode_icon, mode_label, mode_color) = match rest.agent_mode() {
         crate::app::state::AgentMode::Normal => ("●", "normal".to_string(), palette.success),
         crate::app::state::AgentMode::Auto => ("»", "auto".to_string(), palette.warn),
         crate::app::state::AgentMode::Plan => ("●", "planning".to_string(), palette.info),
         crate::app::state::AgentMode::Yolo => ("!", "yooloo".to_string(), palette.error),
         crate::app::state::AgentMode::Sdlc => {
-            if let Some(ref phase) = rest.sdlc_phase {
+            if let Some(ref phase) = rest.fg().sdlc_phase {
                 ("◆", format!("sdlc:{phase}"), palette.info)
             } else {
                 ("◆", "sdlc".to_string(), palette.info)
@@ -75,7 +75,7 @@ pub(super) fn render_header(
     let mut header_spans = badge_spans;
     header_spans.push(Span::raw(" ".repeat(gap)));
     if matches!(
-        rest.agent_mode,
+        rest.agent_mode(),
         crate::app::state::AgentMode::Plan | crate::app::state::AgentMode::Sdlc
     ) {
         // "planning" gets a bold shimmer sweep instead of a flat colour — see
