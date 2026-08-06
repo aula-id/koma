@@ -157,7 +157,14 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
         }
         Mode::Onboard(o) => onboard::draw(frame, o, &palette),
         Mode::OnboardProvider(op) => {
-            onboard_provider::draw(frame, op, cache, cache_endpoint, &palette)
+            let catalogue_failed = op
+                .provider
+                .map(crate::service::oauth::registry::meta)
+                .map(|meta| meta.catalogue_endpoint)
+                .filter(|endpoint| !endpoint.is_empty())
+                .map(|endpoint| state.rest.models_cache_failed.as_deref() == Some(endpoint))
+                .unwrap_or(false);
+            onboard_provider::draw(frame, op, cache, cache_endpoint, catalogue_failed, &palette)
         }
         Mode::KeyInput(form) => {
             key_input::draw(frame, &state.rest, form, cache, cache_endpoint, &palette)
@@ -235,14 +242,7 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             let resolved_model = resolved_main_model(&state.rest);
             chat::draw(frame, &state.rest, &resolved_model, &palette);
             let chunks = chat::layout_chunks(&state.rest, frame.area());
-            skill_cmd::render_overlay(
-                frame,
-                chunks[4],
-                chunks[1],
-                s,
-                &state.rest,
-                &palette,
-            );
+            skill_cmd::render_overlay(frame, chunks[4], chunks[1], s, &state.rest, &palette);
         }
         Mode::Help(h) => help::draw(frame, &state.rest, h, &palette),
         Mode::Effort(e) => effort::draw(frame, &state.rest, e, &palette),

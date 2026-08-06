@@ -109,3 +109,24 @@ fn enforce_cap_holds_across_interleaved_push_cycles() {
         .iter()
         .all(|(_, id, _)| id.as_str() != "p0" && id.as_str() != "p43"));
 }
+
+#[test]
+fn oauth_success_primes_only_live_catalogue_providers() {
+    use crate::model::app_config::OAuthProvider;
+
+    assert!(should_prime_catalogue(OAuthProvider::KomaRun, true));
+    assert!(!should_prime_catalogue(OAuthProvider::KomaRun, false));
+    assert!(!should_prime_catalogue(OAuthProvider::Codex, true));
+}
+
+#[test]
+fn catalogue_error_diagnostic_redacts_bearer_shaped_values() {
+    let token = "eyJhbGciOiJIUzI1NiJ9.payload.signature";
+    let error = anyhow::anyhow!("401 Unauthorized: Bearer {token}");
+
+    let diagnostic = catalogue_error_diagnostic(&error);
+
+    assert!(diagnostic.contains("401 Unauthorized"));
+    assert!(diagnostic.contains("[redacted]"));
+    assert!(!diagnostic.contains(token));
+}

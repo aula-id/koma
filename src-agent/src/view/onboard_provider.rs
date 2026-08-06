@@ -49,6 +49,7 @@ pub fn draw(
     state: &OnboardProviderState,
     cache: &[ModelInfo],
     cache_endpoint: Option<&str>,
+    catalogue_failed: bool,
     palette: &Palette,
 ) {
     let area = frame.area();
@@ -109,6 +110,14 @@ pub fn draw(
                 ]),
             );
             let ids = candidate_model_ids(state.provider, &state.query, cache, cache_endpoint);
+            if catalogue_failed {
+                put_line(
+                    frame,
+                    body,
+                    5,
+                    dim_line("live catalogue unavailable — showing fallback", palette),
+                );
+            }
             draw_model_list(frame, body, 6, &ids, state.result_sel, palette);
             put_line(
                 frame,

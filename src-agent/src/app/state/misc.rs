@@ -19,10 +19,8 @@ impl AppStateRest {
     /// - empty `endpoint` → no-op (nothing to fetch against);
     /// - the cache already holds this endpoint (`models_cache_endpoint` matches)
     ///   AND the fetch succeeded → no-op (filter locally);
-    /// - the cache failed for this endpoint (`models_cache_failed` matches) →
-    ///   no-op (don't re-fetch a just-failed endpoint in a rapid loop; the next
-    ///   user-driven re-trigger clears `models_cache_failed` and retries);
     /// - a fetch for this endpoint is already in flight → no-op (don't double-fire);
+    /// - a previous fetch for this endpoint failed → clear that failure and retry;
     /// - otherwise (re)arm a pending fetch ~300 ms out. Calling it again on the
     ///   next keystroke pushes `due` forward, collapsing a typing burst into one
     ///   request fired only once the user pauses.
@@ -38,7 +36,10 @@ impl AppStateRest {
             return; // already have a successful cache for this endpoint
         }
         if self.models_cache_failed.as_deref() == Some(endpoint) {
-            return; // this endpoint just failed — don't re-fetch in a loop
+            // A caller explicitly requested this endpoint again (for example
+            // after OAuth re-login). Retry instead of pinning the stale failure
+            // for the daemon lifetime.
+            self.models_cache_failed = None;
         }
         if self.catalogue_fetching.as_deref() == Some(endpoint) {
             return; // already fetching this endpoint
@@ -50,5 +51,25 @@ impl AppStateRest {
             oauth_uuid: oauth_uuid.to_string(),
             due: std::time::Instant::now() + std::time::Duration::from_millis(300),
         });
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_catalogue_retry_clears_prior_failure() {
+        let endpoint = "https://koma.run/api/v1/koma-premium";
+        let mut rest = AppStateRest::new();
+        rest.models_cache_failed = Some(endpoint.to_string());
+
+        rest.request_catalogue(endpoint, "access-token", "koma-uuid");
+
+        assert_eq!(rest.models_cache_failed, None);
+        let pending = rest.catalogue_pending.expect("retry must be scheduled");
+        assert_eq!(pending.endpoint, endpoint);
+        assert_eq!(pending.oauth_uuid, "koma-uuid");
     }
 }
