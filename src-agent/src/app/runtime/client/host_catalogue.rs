@@ -41,6 +41,36 @@ pub(super) async fn fetch_models_for_provider(provider: &str) -> Vec<String> {
         return models;
     }
     if let Some(conn) = cfg.oauth_conns.iter().find(|c| c.uuid == provider) {
+        if conn.provider == crate::model::app_config::OAuthProvider::KomaRun
+            && !conn.access_token.is_empty()
+        {
+            // KomaRun: live-fetch from GET …/koma-premium/models with the
+            // OAuth bearer, falling back to the curated overlay on error/empty.
+            let endpoint = crate::service::oauth::registry::KOMA_PREMIUM_CHAT_ENDPOINT;
+            let c = crate::app::runtime::session_mgmt::build_client();
+            let conn = crate::service::openrouter::Conn {
+                endpoint,
+                api_key: &conn.access_token,
+                api_type: crate::model::app_config::ApiType::OpenAiCompatible,
+                account_id: "",
+                oauth_uuid: &conn.uuid,
+                install_id: "",
+            };
+            let mut models = c
+                .list_models(conn)
+                .await
+                .map(|v| v.into_iter().map(|m| m.id).collect::<Vec<_>>())
+                .unwrap_or_default();
+            if models.is_empty() {
+                models = crate::service::catalogue_overlay::models_for_provider(
+                    crate::model::app_config::OAuthProvider::KomaRun,
+                )
+                .into_iter()
+                .map(|m| m.id)
+                .collect();
+            }
+            return models;
+        }
         return crate::service::catalogue_overlay::models_for_provider(conn.provider)
             .into_iter()
             .map(|m| m.id)
