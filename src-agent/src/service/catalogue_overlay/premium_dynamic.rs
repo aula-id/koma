@@ -91,9 +91,15 @@ pub fn merge_into(models: &mut Vec<ModelInfo>) {
     let Ok(guard) = lock.read() else {
         return;
     };
+    merge_into_impl(models, &guard.models);
+}
+
+/// Pure merge: append `premium` entries into `models`, deduplicating by id.
+/// Separated from [`merge_into`] so tests can exercise the dedup logic without
+/// touching the global `OnceLock` store.
+fn merge_into_impl(models: &mut Vec<ModelInfo>, premium: &[OverlayModel]) {
     let seen: std::collections::HashSet<&str> = models.iter().map(|m| m.id.as_str()).collect();
-    let new: Vec<ModelInfo> = guard
-        .models
+    let new: Vec<ModelInfo> = premium
         .iter()
         .filter(|m| !seen.contains(m.id.as_str()))
         .map(|m| m.to_model_info())
@@ -102,14 +108,15 @@ pub fn merge_into(models: &mut Vec<ModelInfo>) {
 }
 
 /// Spawn a non-blocking background refresh of the premium model list.
-/// `access_token` is the current KomaRun JWT. Uses the existing tokio handle
-/// (safe because this is only called from the event loop or after OAuth
-/// success, when a runtime is guaranteed).
-pub fn spawn_refresh(access_token: String) {
+/// `access_token` is the current KomaRun JWT. Requires an explicit
+/// `&tokio::runtime::Handle` because callers (the daemon loop) run on the
+/// main thread *outside* the tokio enter guard — bare `tokio::spawn` panics
+/// there.
+pub fn spawn_refresh(access_token: String, handle: &tokio::runtime::Handle) {
     if IN_FLIGHT.swap(true, Ordering::AcqRel) {
         return; // already running
     }
-    tokio::spawn(async move {
+    handle.spawn(async move {
         let result = fetch_and_swap(&access_token).await;
         IN_FLIGHT.store(false, Ordering::Release);
         if let Err(e) = result {
@@ -123,7 +130,7 @@ pub fn spawn_refresh(access_token: String) {
 
 /// TTL-gated refresh: only fetches if the cache is older than [`REFRESH_TTL`]
 /// or `force` is true. Does nothing if no KomaRun token is available.
-pub fn maybe_refresh(access_token: &str, force: bool) {
+pub fn maybe_refresh(access_token: &str, force: bool, handle: &tokio::runtime::Handle) {
     if !force {
         let Some(lock) = STORE.get() else {
             return;
@@ -141,7 +148,7 @@ pub fn maybe_refresh(access_token: &str, force: bool) {
             }
         }
     }
-    spawn_refresh(access_token.to_string());
+    spawn_refresh(access_token.to_string(), handle);
 }
 
 // ---------------------------------------------------------------------------
@@ -380,27 +387,22 @@ mod tests {
 
     #[test]
     fn merge_into_dedupes() {
-        // Directly set up a store for test.
-        let store = PremiumDynamic {
-            models: vec![
-                OverlayModel {
-                    id: "koma/peach".to_string(),
-                    supported_parameters: vec![],
-                    reasoning: None,
-                    context_length: Some(200_000),
-                    pricing: None,
-                },
-                OverlayModel {
-                    id: "openai/gpt-4o".to_string(),
-                    supported_parameters: vec!["tools".to_string()],
-                    reasoning: None,
-                    context_length: Some(128_000),
-                    pricing: None,
-                },
-            ],
-            fetched_at: None,
-        };
-        let _ = STORE.set(RwLock::new(store));
+        let premium = vec![
+            OverlayModel {
+                id: "koma/peach".to_string(),
+                supported_parameters: vec![],
+                reasoning: None,
+                context_length: Some(200_000),
+                pricing: None,
+            },
+            OverlayModel {
+                id: "openai/gpt-4o".to_string(),
+                supported_parameters: vec!["tools".to_string()],
+                reasoning: None,
+                context_length: Some(128_000),
+                pricing: None,
+            },
+        ];
 
         let mut existing = vec![ModelInfo {
             id: "koma/peach".to_string(),
@@ -412,7 +414,7 @@ mod tests {
             pricing: None,
             architecture: None,
         }];
-        merge_into(&mut existing);
+        merge_into_impl(&mut existing, &premium);
         // koma/peach deduped, gpt-4o added
         assert_eq!(existing.len(), 2);
         assert!(existing.iter().any(|m| m.id == "openai/gpt-4o"));
