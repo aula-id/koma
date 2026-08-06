@@ -256,14 +256,6 @@ pub(super) fn drain_oauth(state: &mut AppState, handle: &tokio::runtime::Handle)
                         crate::service::oauth::registry::meta(conn_provider).catalogue_endpoint;
                     state.rest.request_catalogue(ep, &conn_token, &conn_uuid);
                 }
-                // Fire a background refresh of the dynamic premium model catalogue
-                // for KomaRun (force=true so the freshly-logged-in token is used).
-                if conn_provider == crate::model::app_config::OAuthProvider::KomaRun {
-                    crate::service::catalogue_overlay::premium_dynamic::spawn_refresh(
-                        conn_token.clone(),
-                        handle,
-                    );
-                }
                 state.rest.oauth_task = None;
                 // GUI side-channel: terminal `success` push (conns are rebuilt hub-side
                 // from the now-updated `config.oauth_conns`). Terminal → disarm the client.
