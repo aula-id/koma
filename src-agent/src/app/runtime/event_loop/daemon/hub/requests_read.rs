@@ -247,6 +247,7 @@ impl DaemonHub {
                 crate::service::catalogue_overlay::premium_dynamic::maybe_refresh(
                     &conn.access_token,
                     false,
+                    handle,
                 );
             }
             let models = crate::service::catalogue_overlay::models_for_provider(conn.provider)

@@ -261,6 +261,7 @@ pub(super) fn drain_oauth(state: &mut AppState, handle: &tokio::runtime::Handle)
                 if conn_provider == crate::model::app_config::OAuthProvider::KomaRun {
                     crate::service::catalogue_overlay::premium_dynamic::spawn_refresh(
                         conn_token.clone(),
+                        handle,
                     );
                 }
                 state.rest.oauth_task = None;
