@@ -88,7 +88,12 @@ impl Tool for MissionReady {
                                 "properties": {
                                     "title": { "type": "string" },
                                     "parent": { "type": "string" },
-                                    "id": { "type": "string" }
+                                    "id": { "type": "string" },
+                                    "owned_paths": {
+                                        "type": "array",
+                                        "items": { "type": "string" },
+                                        "description": "Glob patterns for file paths this node owns. Write/edit/delete to paths matching a DIFFERENT active node's patterns is rejected."
+                                    }
                                 },
                                 "required": ["title"]
                             }
@@ -274,6 +279,7 @@ fn parse_graph_tasks(args: &Value) -> Result<Vec<ChecklistNode>, String> {
                 status: "pending".into(),
                 parent_title: None,
                 id: None,
+                owned_paths: vec![],
             });
         } else if let Some(obj) = v.as_object() {
             let title = obj
@@ -296,11 +302,21 @@ fn parse_graph_tasks(args: &Value) -> Result<Vec<ChecklistNode>, String> {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
+            let owned_paths: Vec<String> = obj
+                .get("owned_paths")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
             out.push(ChecklistNode {
                 title,
                 status: "pending".into(),
                 parent_title,
                 id,
+                owned_paths,
             });
         } else {
             return Err(format!(

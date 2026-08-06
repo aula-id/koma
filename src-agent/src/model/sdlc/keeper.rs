@@ -336,7 +336,10 @@ mod tests {
                 status: "done".into(),
                 parent_title: None,
                 id: None,
-            }],
+
+                    owned_paths: vec![],
+
+                            }],
         )
         .unwrap();
         drop(conn);
@@ -371,7 +374,10 @@ mod tests {
                 status: "pending".into(),
                 parent_title: None,
                 id: None,
-            }],
+
+                    owned_paths: vec![],
+
+                            }],
         )
         .unwrap();
         // Stamp tool round in the past.
