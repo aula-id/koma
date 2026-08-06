@@ -5,6 +5,7 @@ use super::InterceptFlow;
 use crate::app::state::AgentMode;
 use crate::app::state::AppState;
 use crate::dto::chat::ToolCall;
+use globset::{Glob, GlobSetBuilder};
 
 /// SDLC assess-phase tool gate — mirrors Plan's readonly gate.
 /// Denies filesystem-mutating workspace tools at runtime while leaving the
@@ -120,6 +121,120 @@ pub(in crate::app::runtime::stream::tools) fn intercept_sdlc_execute_git_gate(
         state.rest.sessions[sess_idx].tool_idx += 1;
         return InterceptFlow::Continue;
     }
+    InterceptFlow::Fallthrough
+}
+
+/// SDLC execute/integrate path-ownership gate for `write` / `edit` / `delete`.
+///
+/// Rejects mutations whose target path matches a DIFFERENT active node's
+/// `owned_paths` globs. Paths that match no ownership pattern, or only the
+/// current node's patterns, fall through. Graph/DB errors fail open so this
+/// gate never blocks tooling when the graph is unavailable.
+pub(in crate::app::runtime::stream::tools) fn intercept_sdlc_path_ownership_gate(
+    state: &mut AppState,
+    sess_idx: usize,
+    call: &ToolCall,
+) -> InterceptFlow {
+    // Only write/edit/delete carry a path ownership concern.
+    if !matches!(call.function.name.as_str(), "write" | "edit" | "delete") {
+        return InterceptFlow::Fallthrough;
+    }
+    // Same phase gate as intercept_sdlc_execute_git_gate.
+    let phase = state.rest.sessions[sess_idx].sdlc_phase.as_deref();
+    if !matches!(phase, Some("execute") | Some("integrate")) {
+        return InterceptFlow::Fallthrough;
+    }
+
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let args: serde_json::Value =
+        serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+    let Some(target_path) = args.get("path").and_then(|v| v.as_str()).map(str::trim) else {
+        return InterceptFlow::Fallthrough;
+    };
+    if target_path.is_empty() {
+        return InterceptFlow::Fallthrough;
+    }
+
+    let Some(sess_path) = state.rest.sessions[sess_idx]
+        .session
+        .as_ref()
+        .map(|s| s.path.clone())
+    else {
+        return InterceptFlow::Fallthrough;
+    };
+
+    // Fail open on graph/DB errors — never break existing functionality.
+    let conn = match crate::model::msglog::open(&sess_path) {
+        Ok(c) => c,
+        Err(_) => return InterceptFlow::Fallthrough,
+    };
+    if crate::model::sdlc::graph::ensure_tables(&conn).is_err() {
+        return InterceptFlow::Fallthrough;
+    }
+    let nodes = match crate::model::sdlc::graph::list_all(&conn) {
+        Ok(n) => n,
+        Err(_) => return InterceptFlow::Fallthrough,
+    };
+
+    // Use the session's tracked active node_id if available (set when a task
+    // was delegated). Otherwise, when only a single active leaf exists, infer it.
+    let tracked_id = state.rest.sessions[sess_idx]
+        .sdlc_pending_node_id
+        .as_deref();
+    let current_node_id: Option<&str> = if tracked_id.is_some() {
+        tracked_id
+    } else {
+        let active_leaves: Vec<&crate::model::sdlc::graph::GraphTask> = nodes
+            .iter()
+            .filter(|n| n.status == "active")
+            .filter(|n| {
+                crate::model::sdlc::graph::is_leaf(&conn, &n.id).unwrap_or(false)
+            })
+            .collect();
+        if active_leaves.len() == 1 {
+            Some(active_leaves[0].id.as_str())
+        } else {
+            None
+        }
+    };
+
+    for node in &nodes {
+        if node.status != "active" || node.owned_paths.is_empty() {
+            continue;
+        }
+        // Own patterns allowed when we can identify the current node.
+        if current_node_id.is_some_and(|id| id == node.id.as_str()) {
+            continue;
+        }
+
+        let mut builder = GlobSetBuilder::new();
+        let mut any = false;
+        for pat in &node.owned_paths {
+            if let Ok(g) = Glob::new(pat) {
+                builder.add(g);
+                any = true;
+            }
+        }
+        if !any {
+            continue;
+        }
+        let Ok(set) = builder.build() else {
+            continue;
+        };
+        if set.is_match(target_path) {
+            state.rest.sessions[sess_idx].tool_results.push((
+                call.id.clone(),
+                format!(
+                    "error: path '{target_path}' is owned by active node '{}' ({}) — \
+                     write/edit/delete to a DIFFERENT active node's owned_paths is forbidden",
+                    node.id, node.title
+                ),
+            ));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            return InterceptFlow::Continue;
+        }
+    }
+
     InterceptFlow::Fallthrough
 }
 
@@ -875,6 +990,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
                 status: status.to_string(),
                 parent_title: parent.clone(),
                 id: None,
+                owned_paths: vec![],
             }
         })
         .collect();
@@ -972,6 +1088,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod assess_gate_tests {
     use super::intercept_sdlc_assess_gate;
+    use super::intercept_sdlc_path_ownership_gate;
     use crate::app::mode::Mode;
     use crate::app::runtime::stream::tools::intercepts::InterceptFlow;
     use crate::app::state::{AgentMode, AppState};
@@ -1132,5 +1249,47 @@ mod assess_gate_tests {
                 "phase={phase:?} msg={msg}"
             );
         }
+    }
+
+    #[test]
+    fn path_ownership_gate_allows_unowned_and_own_paths() {
+        // In-memory session with no graph → fail-open (allows through).
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.sessions[0].agent_mode = AgentMode::Sdlc;
+        state.rest.sessions[0].sdlc_phase = Some("execute".into());
+        let c = call("write", r#"{"path":"src/lib.rs","content":"x"}"#);
+        let flow = intercept_sdlc_path_ownership_gate(&mut state, 0, &c);
+        // No session/graph → fail open
+        assert!(
+            matches!(flow, InterceptFlow::Fallthrough),
+            "must fail open when no session"
+        );
+    }
+
+    #[test]
+    fn path_ownership_gate_skips_non_mutation_tools() {
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.sessions[0].agent_mode = AgentMode::Sdlc;
+        state.rest.sessions[0].sdlc_phase = Some("execute".into());
+        for name in ["read", "grep", "bash", "task"] {
+            let c = call(name, r#"{"path":"src/foo.rs"}"#);
+            let flow = intercept_sdlc_path_ownership_gate(&mut state, 0, &c);
+            assert!(
+                matches!(flow, InterceptFlow::Fallthrough),
+                "{name} must not be intercepted"
+            );
+        }
+    }
+
+    #[test]
+    fn path_ownership_gate_skips_assess_phase() {
+        let mut state = assess_state();
+        // assess phase → should fall through
+        let c = call("write", r#"{"path":"src/foo.rs","content":"x"}"#);
+        let flow = intercept_sdlc_path_ownership_gate(&mut state, 0, &c);
+        assert!(
+            matches!(flow, InterceptFlow::Fallthrough),
+            "assess phase must not trigger gate"
+        );
     }
 }

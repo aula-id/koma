@@ -338,6 +338,10 @@ pub struct ToolCtx {
     /// When `true`, the session is in SDLC assess — sub-agent allow-lists fold
     /// through the same assess surface as the main agent (no workspace writes).
     pub sdlc_assess: bool,
+    /// SDLC path ownership: the graph node id this context is bound to during
+    /// execute/integrate. `None` for the main session (which doesn't own nodes);
+    /// set on sub-agent ToolCtxs when spawned for a claimed leaf.
+    pub sdlc_active_node_id: Option<String>,
 }
 
 /// Parse a `[N]` workspace-index prefix from the start of a path string.

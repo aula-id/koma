@@ -77,6 +77,10 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
                         &conn, node_id, &prompt,
                     ) {
                         Ok(claim) => {
+                            // Store the claimed node_id so build_tool_ctx propagates
+                            // it to the sub-agent's ToolCtx for path ownership.
+                            state.rest.sessions[sess_idx].sdlc_pending_node_id =
+                                Some(claim.node_id.clone());
                             prompt = format!(
                                 "{}{prompt}",
                                 crate::model::sdlc::decompose::scope_banner(&claim)
@@ -205,6 +209,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
             }
         }
     }
+    // Clear the pending SDLC node_id after spawn consumed it (build_tool_ctx reads
+    // it once and propagates to the sub-agent's ToolCtx).
+    state.rest.sessions[sess_idx].sdlc_pending_node_id = None;
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
 }

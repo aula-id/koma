@@ -394,6 +394,11 @@ pub struct SessionRuntime {
     /// Monotonic epoch bumped whenever in-flight LLM keeper results must be
     /// cancelled/ignored (SDLC exit, phase change, contract-hash change).
     pub sdlc_keeper_epoch: u64,
+    /// SDLC path ownership: the graph node id being delegated to a sub-agent.
+    /// Temporarily set by `intercept_task` before `spawn_or_queue` so that
+    /// `build_tool_ctx` can propagate it to the spawned sub-agent's ToolCtx.
+    /// Cleared after spawn completes. Transient — never serialised.
+    pub sdlc_pending_node_id: Option<String>,
     /// Consecutive EXTENSION-injected turn counter (cost-DoS guard, review finding):
     /// the number of synthetic user turns injected back-to-back by the `chat.prompt`
     /// broker path (see [`EXT_TURN_BUDGET`]) SINCE the last REAL user turn.
@@ -661,6 +666,7 @@ impl SessionRuntime {
             sdlc_keeper_llm_inflight: false,
             sdlc_keeper_llm_rx: None,
             sdlc_keeper_epoch: 0,
+            sdlc_pending_node_id: None,
             ext_injected_turns: 0,
             subagents: Vec::new(),
             pending_subagents: VecDeque::new(),

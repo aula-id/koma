@@ -18,6 +18,10 @@ pub struct GraphTask {
     pub notes: String,
     pub verify_bit: bool,
     pub updated_at: i64,
+    /// Glob patterns for file paths this node owns (e.g. `["src/foo.rs", "src/bar/**"]`).
+    /// During execute, write/edit/delete to paths matching a DIFFERENT active node's
+    /// patterns is rejected at the tool intercept level.
+    pub owned_paths: Vec<String>,
 }
 
 /// Input row for checklist / mission_ready graph upserts.
@@ -29,6 +33,8 @@ pub struct ChecklistNode {
     pub parent_title: Option<String>,
     /// Optional stable id; when set, preferred over title-derived id.
     pub id: Option<String>,
+    /// Glob patterns for file paths this node owns. Empty means no path ownership.
+    pub owned_paths: Vec<String>,
 }
 
 /// Current unix timestamp in seconds.
@@ -50,7 +56,8 @@ pub fn ensure_tables(conn: &Connection) -> Result<()> {
             phase TEXT,
             notes TEXT NOT NULL DEFAULT '',
             verify_bit INTEGER NOT NULL DEFAULT 0,
-            updated_at INTEGER NOT NULL
+            updated_at INTEGER NOT NULL,
+            owned_paths TEXT NOT NULL DEFAULT '[]'
         );
 
         CREATE TABLE IF NOT EXISTS sdlc_events (
@@ -66,7 +73,26 @@ pub fn ensure_tables(conn: &Connection) -> Result<()> {
             value TEXT NOT NULL
         );",
     )?;
+    // Migration: add owned_paths column if missing (existing databases).
+    let has_col: bool = conn
+        .prepare("SELECT owned_paths FROM sdlc_nodes LIMIT 0")
+        .is_ok();
+    if !has_col {
+        conn.execute_batch(
+            "ALTER TABLE sdlc_nodes ADD COLUMN owned_paths TEXT NOT NULL DEFAULT '[]';",
+        )?;
+    }
     Ok(())
+}
+
+/// Serialize owned_paths to JSON text for SQLite storage.
+fn owned_paths_to_json(paths: &[String]) -> String {
+    serde_json::to_string(paths).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Deserialize owned_paths from JSON text stored in SQLite.
+fn owned_paths_from_json(text: &str) -> Vec<String> {
+    serde_json::from_str(text).unwrap_or_default()
 }
 
 /// Derive a stable graph-node id from a title: `n-{slug}-{hash6}`.
@@ -115,6 +141,8 @@ pub fn graph_fingerprint(conn: &Connection) -> Result<String> {
         hasher.update(n.status.as_bytes());
         hasher.update(b"|");
         hasher.update([n.verify_bit as u8]);
+        hasher.update(b"|");
+        hasher.update(owned_paths_to_json(&n.owned_paths).as_bytes());
         hasher.update(b"\n");
     }
     let result = hasher.finalize();
@@ -263,6 +291,12 @@ pub fn replace_nodes_from_checklist(conn: &Connection, items: &[ChecklistNode]) 
         };
         let phase = ex.and_then(|e| e.phase.clone());
         let notes = ex.map(|e| e.notes.clone()).unwrap_or_default();
+        // Use provided owned_paths from checklist input; preserve existing when not provided.
+        let owned_paths = if it.owned_paths.is_empty() {
+            ex.map(|e| e.owned_paths.clone()).unwrap_or_default()
+        } else {
+            it.owned_paths.clone()
+        };
 
         // Prefer preserving an existing unambiguous parent_id when parent_title omitted.
         let parent_id = match (&parent_id, ex) {
@@ -272,8 +306,8 @@ pub fn replace_nodes_from_checklist(conn: &Connection, items: &[ChecklistNode]) 
         };
 
         tx.execute(
-            "INSERT INTO sdlc_nodes (id, parent_id, title, status, phase, notes, verify_bit, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "INSERT INTO sdlc_nodes (id, parent_id, title, status, phase, notes, verify_bit, updated_at, owned_paths)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(id) DO UPDATE SET
                parent_id = excluded.parent_id,
                title = excluded.title,
@@ -281,7 +315,8 @@ pub fn replace_nodes_from_checklist(conn: &Connection, items: &[ChecklistNode]) 
                phase = excluded.phase,
                notes = excluded.notes,
                verify_bit = excluded.verify_bit,
-               updated_at = excluded.updated_at",
+               updated_at = excluded.updated_at,
+               owned_paths = excluded.owned_paths",
             rusqlite::params![
                 id,
                 parent_id,
@@ -290,7 +325,8 @@ pub fn replace_nodes_from_checklist(conn: &Connection, items: &[ChecklistNode]) 
                 phase,
                 notes,
                 verify_bit as i64,
-                now
+                now,
+                owned_paths_to_json(&owned_paths)
             ],
         )?;
         tx.execute(
@@ -350,7 +386,7 @@ pub fn list_open_leaves(conn: &Connection) -> Result<Vec<GraphTask>> {
 pub fn list_open(conn: &Connection) -> Result<Vec<GraphTask>> {
     query_nodes(
         conn,
-        "SELECT id, parent_id, title, status, phase, notes, verify_bit, updated_at
+        "SELECT id, parent_id, title, status, phase, notes, verify_bit, updated_at, owned_paths
          FROM sdlc_nodes WHERE status NOT IN ('done', 'cancelled') ORDER BY updated_at",
     )
 }
@@ -359,7 +395,7 @@ pub fn list_open(conn: &Connection) -> Result<Vec<GraphTask>> {
 pub fn list_sealed(conn: &Connection) -> Result<Vec<GraphTask>> {
     query_nodes(
         conn,
-        "SELECT id, parent_id, title, status, phase, notes, verify_bit, updated_at
+        "SELECT id, parent_id, title, status, phase, notes, verify_bit, updated_at, owned_paths
          FROM sdlc_nodes WHERE status = 'done' ORDER BY updated_at",
     )
 }
@@ -368,7 +404,7 @@ pub fn list_sealed(conn: &Connection) -> Result<Vec<GraphTask>> {
 pub fn list_all(conn: &Connection) -> Result<Vec<GraphTask>> {
     query_nodes(
         conn,
-        "SELECT id, parent_id, title, status, phase, notes, verify_bit, updated_at
+        "SELECT id, parent_id, title, status, phase, notes, verify_bit, updated_at, owned_paths
          FROM sdlc_nodes ORDER BY updated_at",
     )
 }
@@ -385,6 +421,10 @@ fn query_nodes(conn: &Connection, sql: &str) -> Result<Vec<GraphTask>> {
             notes: row.get(5)?,
             verify_bit: row.get::<_, i64>(6)? != 0,
             updated_at: row.get(7)?,
+            owned_paths: {
+                let text: String = row.get(8)?;
+                owned_paths_from_json(&text)
+            },
         })
     })?;
     let mut result = Vec::new();
@@ -397,7 +437,7 @@ fn query_nodes(conn: &Connection, sql: &str) -> Result<Vec<GraphTask>> {
 /// Get one node by id.
 pub fn get_node(conn: &Connection, node_id: &str) -> Result<Option<GraphTask>> {
     let mut stmt = conn.prepare(
-        "SELECT id, parent_id, title, status, phase, notes, verify_bit, updated_at
+        "SELECT id, parent_id, title, status, phase, notes, verify_bit, updated_at, owned_paths
          FROM sdlc_nodes WHERE id = ?1",
     )?;
     let mut rows = stmt.query_map([node_id], |row| {
@@ -410,6 +450,10 @@ pub fn get_node(conn: &Connection, node_id: &str) -> Result<Option<GraphTask>> {
             notes: row.get(5)?,
             verify_bit: row.get::<_, i64>(6)? != 0,
             updated_at: row.get(7)?,
+            owned_paths: {
+                let text: String = row.get(8)?;
+                owned_paths_from_json(&text)
+            },
         })
     })?;
     match rows.next() {
@@ -614,6 +658,7 @@ pub fn snapshot_checklist(conn: &Connection) -> Result<Vec<ChecklistNode>> {
             status: n.status.clone(),
             parent_title,
             id: Some(n.id.clone()),
+            owned_paths: n.owned_paths.clone(),
         });
     }
     Ok(out)
@@ -941,6 +986,55 @@ pub fn stamp_tool_round(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Check if writing to `target_path` would violate SDLC path ownership.
+///
+/// Returns `Ok(())` when the write is allowed, or `Err(message)` when the path
+/// matches a DIFFERENT active node's owned_paths glob patterns.
+///
+/// - `active_node_id`: the node this actor is working on (`None` for the main
+///   session, which doesn't own nodes).
+/// - `conn`: an open graph connection.
+pub fn check_path_ownership(
+    conn: &Connection,
+    active_node_id: Option<&str>,
+    target_path: &str,
+) -> Result<(), String> {
+    let all = list_all(conn).map_err(|e| format!("error: graph read failed: {e}"))?;
+
+    // Build a glob set for each active node that has owned_paths.
+    for node in &all {
+        if node.status != "active" || node.owned_paths.is_empty() {
+            continue;
+        }
+        // Skip the actor's own node.
+        if Some(node.id.as_str()) == active_node_id {
+            continue;
+        }
+        let mut builder = globset::GlobSetBuilder::new();
+        let mut patterns_valid = true;
+        for pat in &node.owned_paths {
+            match globset::Glob::new(pat) {
+                Ok(g) => { builder.add(g); }
+                Err(_) => { patterns_valid = false; break; }
+            }
+        }
+        if !patterns_valid {
+            continue;
+        }
+        match builder.build() {
+            Ok(gs) if gs.is_match(target_path) => {
+                return Err(format!(
+                    "error: '{}' is owned by active node '{}' ({}) — \
+                     write/edit/delete to another node's owned paths is forbidden",
+                    target_path, node.id, node.title
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -961,6 +1055,7 @@ mod tests {
                 status: (*s).into(),
                 parent_title: None,
                 id: None,
+                owned_paths: vec![],
             })
             .collect()
     }
@@ -1016,19 +1111,28 @@ mod tests {
                     status: "pending".into(),
                     parent_title: None,
                     id: None,
-                },
+
+                        owned_paths: vec![],
+
+                                    },
                 ChecklistNode {
                     title: "leaf-a".into(),
                     status: "pending".into(),
                     parent_title: Some("epic".into()),
                     id: None,
-                },
+
+                        owned_paths: vec![],
+
+                                    },
                 ChecklistNode {
                     title: "leaf-b".into(),
                     status: "pending".into(),
                     parent_title: Some("epic".into()),
                     id: None,
-                },
+
+                        owned_paths: vec![],
+
+                                    },
             ],
         )
         .unwrap();
@@ -1075,13 +1179,19 @@ mod tests {
                     status: "pending".into(),
                     parent_title: None,
                     id: None,
-                },
+
+                        owned_paths: vec![],
+
+                                    },
                 ChecklistNode {
                     title: "c".into(),
                     status: "pending".into(),
                     parent_title: Some("p".into()),
                     id: None,
-                },
+
+                        owned_paths: vec![],
+
+                                    },
             ],
         )
         .unwrap();
@@ -1124,13 +1234,19 @@ mod tests {
                     status: "pending".into(),
                     parent_title: None,
                     id: None,
-                },
+
+                        owned_paths: vec![],
+
+                                    },
                 ChecklistNode {
                     title: "c".into(),
                     status: "pending".into(),
                     parent_title: Some("p".into()),
                     id: None,
-                },
+
+                        owned_paths: vec![],
+
+                                    },
             ],
         )
         .unwrap();
@@ -1154,13 +1270,19 @@ mod tests {
                 status: "pending".into(),
                 parent_title: Some("b".into()),
                 id: None,
-            },
+
+                    owned_paths: vec![],
+
+                            },
             ChecklistNode {
                 title: "b".into(),
                 status: "pending".into(),
                 parent_title: Some("a".into()),
                 id: None,
-            },
+
+                    owned_paths: vec![],
+
+                            },
         ])
         .unwrap_err();
         assert!(err.to_string().contains("cycle"));
@@ -1171,25 +1293,37 @@ mod tests {
                 status: "pending".into(),
                 parent_title: None,
                 id: None,
-            },
+
+                    owned_paths: vec![],
+
+                            },
             ChecklistNode {
                 title: "s".into(),
                 status: "pending".into(),
                 parent_title: Some("e".into()),
                 id: None,
-            },
+
+                    owned_paths: vec![],
+
+                            },
             ChecklistNode {
                 title: "t".into(),
                 status: "pending".into(),
                 parent_title: Some("s".into()),
                 id: None,
-            },
+
+                    owned_paths: vec![],
+
+                            },
             ChecklistNode {
                 title: "x".into(),
                 status: "pending".into(),
                 parent_title: Some("t".into()),
                 id: None,
-            },
+
+                    owned_paths: vec![],
+
+                            },
         ])
         .unwrap_err();
         assert!(err.to_string().contains("deeper"));
@@ -1261,13 +1395,19 @@ mod tests {
                     status: "pending".into(),
                     parent_title: None,
                     id: None,
-                },
+
+                        owned_paths: vec![],
+
+                                    },
                 ChecklistNode {
                     title: "c".into(),
                     status: "pending".into(),
                     parent_title: Some("p".into()),
                     id: None,
-                },
+
+                        owned_paths: vec![],
+
+                                    },
             ],
         )
         .unwrap();
@@ -1287,13 +1427,19 @@ mod tests {
                     status: "pending".into(),
                     parent_title: None,
                     id: None,
-                },
+
+                        owned_paths: vec![],
+
+                                    },
                 ChecklistNode {
                     title: "c".into(),
                     status: "active".into(),
                     parent_title: None,
                     id: None,
-                },
+
+                        owned_paths: vec![],
+
+                                    },
             ],
         )
         .unwrap();
@@ -1355,13 +1501,19 @@ mod tests {
                     status: "pending".into(),
                     parent_title: None,
                     id: None,
-                },
+
+                        owned_paths: vec![],
+
+                                    },
                 ChecklistNode {
                     title: "leaf".into(),
                     status: "active".into(),
                     parent_title: Some("epic".into()),
                     id: None,
-                },
+
+                        owned_paths: vec![],
+
+                                    },
             ],
         )
         .unwrap();
@@ -1402,5 +1554,110 @@ mod tests {
         // Done leaf also not claimable.
         update_node_status(&conn, &id, "done").unwrap();
         assert!(claim_leaf(&conn, &id).is_err());
+    }
+
+    #[test]
+    fn owned_paths_roundtrip_through_checklist() {
+        let conn = mem();
+        let items = vec![
+            ChecklistNode {
+                title: "task-a".into(),
+                status: "active".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec!["src/foo.rs".into(), "src/bar/**".into()],
+            },
+            ChecklistNode {
+                title: "task-b".into(),
+                status: "active".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec![],
+            },
+        ];
+        replace_nodes_from_checklist(&conn, &items).unwrap();
+
+        // Verify owned_paths are persisted in the graph.
+        let all = list_all(&conn).unwrap();
+        let a = all.iter().find(|n| n.title == "task-a").unwrap();
+        assert_eq!(a.owned_paths, vec!["src/foo.rs", "src/bar/**"]);
+        let b = all.iter().find(|n| n.title == "task-b").unwrap();
+        assert!(b.owned_paths.is_empty());
+
+        // Snapshot preserves owned_paths.
+        let snap = snapshot_checklist(&conn).unwrap();
+        let sa = snap.iter().find(|n| n.title == "task-a").unwrap();
+        assert_eq!(sa.owned_paths, vec!["src/foo.rs", "src/bar/**"]);
+
+        // get_node also returns owned_paths.
+        let ga = get_node(&conn, &a.id).unwrap().unwrap();
+        assert_eq!(ga.owned_paths, vec!["src/foo.rs", "src/bar/**"]);
+    }
+
+    #[test]
+    fn check_path_ownership_rejects_foreign_write() {
+        let conn = mem();
+        replace_nodes_from_checklist(
+            &conn,
+            &[
+                ChecklistNode {
+                    title: "node-a".into(),
+                    status: "active".into(),
+                    parent_title: None,
+                    id: None,
+                    owned_paths: vec!["src/foo.rs".into()],
+                },
+                ChecklistNode {
+                    title: "node-b".into(),
+                    status: "active".into(),
+                    parent_title: None,
+                    id: None,
+                    owned_paths: vec!["src/bar.rs".into()],
+                },
+            ],
+        )
+        .unwrap();
+        let all = list_all(&conn).unwrap();
+        let id_a = all.iter().find(|n| n.title == "node-a").unwrap().id.clone();
+        let id_b = all.iter().find(|n| n.title == "node-b").unwrap().id.clone();
+
+        // Node A writing to its own path is allowed.
+        assert!(check_path_ownership(&conn, Some(&id_a), "src/foo.rs").is_ok());
+        // Node A writing to node B's path is REJECTED.
+        assert!(check_path_ownership(&conn, Some(&id_a), "src/bar.rs").is_err());
+        // Node B writing to node A's path is REJECTED.
+        assert!(check_path_ownership(&conn, Some(&id_b), "src/foo.rs").is_err());
+        // Writing to an unowned path is allowed.
+        assert!(check_path_ownership(&conn, Some(&id_a), "README.md").is_ok());
+        // Main session (no active node) writing to any owned path is rejected.
+        assert!(check_path_ownership(&conn, None, "src/foo.rs").is_err());
+        assert!(check_path_ownership(&conn, None, "src/bar.rs").is_err());
+    }
+
+    #[test]
+    fn check_path_ownership_glob_matching() {
+        let conn = mem();
+        replace_nodes_from_checklist(
+            &conn,
+            &[ChecklistNode {
+                title: "glob-task".into(),
+                status: "active".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec!["src/**/*.rs".into(), "tests/*.rs".into()],
+            }],
+        )
+        .unwrap();
+        let id = list_all(&conn).unwrap()[0].id.clone();
+        let fake_id = "n-not-this-one-000";
+
+        // Glob match: src/sub/mod.rs matches src/**/*.rs
+        assert!(check_path_ownership(&conn, Some(fake_id), "src/sub/mod.rs").is_err());
+        // Glob match: tests/unit.rs matches tests/*.rs
+        assert!(check_path_ownership(&conn, Some(fake_id), "tests/unit.rs").is_err());
+        // No match: Cargo.toml is not under src/**/*.rs
+        assert!(check_path_ownership(&conn, Some(fake_id), "Cargo.toml").is_ok());
+        // Own node writing is always allowed.
+        assert!(check_path_ownership(&conn, Some(&id), "src/sub/mod.rs").is_ok());
     }
 }
