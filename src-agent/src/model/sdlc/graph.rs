@@ -1221,6 +1221,36 @@ mod tests {
     }
 
     #[test]
+    fn append_event_unknown_node_fails_closed() {
+        let conn = mem();
+        // Verification records its evidence event in the same transaction as the
+        // node mutation. Unknown membership must fail before any event is added.
+        let err = set_verify_bit_with_evidence(&conn, "nope", true, Some("detail")).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown node"),
+            "unexpected err: {err}"
+        );
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sdlc_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0, "failed evidence append must leave zero events");
+
+        // Known leaf: evidence event commits with verification.
+        replace_nodes_from_checklist(&conn, &flat(&[("a", "pending")])).unwrap();
+        let id = list_all(&conn).unwrap()[0].id.clone();
+        set_verify_bit_with_evidence(&conn, &id, true, Some("hello")).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sdlc_events \
+                 WHERE node_id = ?1 AND kind = 'verify_evidence'",
+                [&id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
     fn parent_identity_preserved_on_title_match() {
         let conn = mem();
         replace_nodes_from_checklist(

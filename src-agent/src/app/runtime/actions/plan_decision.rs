@@ -626,13 +626,12 @@ fn establish_mission_binding(
         .unwrap_or_else(|| canon.clone());
     if let Some(m) = crate::model::sdlc::Mission::load(&sess_path) {
         if let Err(e) = m.validate_binding(&cwd_now, Some(&wt_branch)) {
-            // Roll back approval.
-            if let Some(mut m2) = crate::model::sdlc::Mission::load(&sess_path) {
-                m2.approved = false;
-                m2.phase = "assess".into();
-                m2.worktree_path = None;
-                let _ = m2.save(&sess_path);
-            }
+            // Full rollback: leave primary workspace + unbound valid draft.
+            // Partial rollback previously left the session inside the shadow
+            // worktree with an approved-then-cleared mission whose hash still
+            // covered binding fields (hash_valid=false + stale name/branch).
+            restore_primary_workspace_after_failed_bind(state, fgi);
+            restore_unbound_draft_mission(&sess_path);
             return Err(e.to_string());
         }
     }
@@ -642,6 +641,49 @@ fn establish_mission_binding(
          execute only inside this tree until integrate",
         canon.display()
     ))
+}
+
+/// Exit mission worktree, clear live cwd override, and reindex primary.
+/// Mirrors `AppStateRest::try_reenter_mission_worktree_at` failure rollback.
+pub(super) fn restore_primary_workspace_after_failed_bind(state: &mut AppState, sess_idx: usize) {
+    if state.rest.sessions.get(sess_idx).is_none() {
+        return;
+    }
+    let dir_cache = state.rest.sessions[sess_idx].dir_cache.clone();
+    let primary = {
+        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+            if sess.settings.workdir_saved.is_some() {
+                sess.settings.exit_worktree();
+            }
+            let primary = sess.workdir();
+            let _ = sess.save();
+            primary
+        } else {
+            std::path::PathBuf::from(".")
+        }
+    };
+    // Clear override so effective_cwd falls back to restored primary workdir
+    // (same as try_reenter failure path in rest.rs).
+    state.rest.sessions[sess_idx].active_cwd = None;
+    crate::tool::dircache::reindex(vec![primary], dir_cache);
+}
+
+/// Restore mission.json to an unbound assess draft with a valid binding-free hash.
+/// Clears worktree_name/branch/path so no stale bind fields survive a failed approve.
+pub(super) fn restore_unbound_draft_mission(sess_path: &std::path::Path) {
+    if let Some(mut m) = crate::model::sdlc::Mission::load(sess_path) {
+        m.approved = false;
+        m.phase = "assess".into();
+        m.worktree_name = None;
+        m.branch = None;
+        m.worktree_path = None;
+        // Fail-closed: bind never completed, so active ops must not resume.
+        m.needs_reapproval = true;
+        // Hash must cover the unbound fields — leaving the post-bind hash would
+        // make hash_valid() false and wedge the contract.
+        m.hash = m.recompute_hash();
+        let _ = m.save(sess_path);
+    }
 }
 
 /// Default shadow worktree name for a mission. Includes a short goal fingerprint
