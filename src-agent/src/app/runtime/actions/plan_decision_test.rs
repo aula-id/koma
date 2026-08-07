@@ -40,23 +40,24 @@ fn unapproved_amendment_mission() -> Mission {
     let risks = vec!["api churn".into()];
     let rationale = "match house style";
     let graph_hash = Some("gh-test".into());
-    let hash = Mission::compute_contract_hash_full(
-        goal,
-        &acceptance,
-        &non_goals,
-        lane,
-        &verify_plan,
-        &human_gates,
-        &risks,
-        rationale,
-        graph_hash.as_deref(),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-    );
+    let hash =
+        Mission::compute_contract_hash_full(crate::model::sdlc::mission::ContractHashInput {
+            goal,
+            acceptance: &acceptance,
+            non_goals: &non_goals,
+            lane,
+            verify_plan: &verify_plan,
+            human_gates: &human_gates,
+            risks: &risks,
+            rationale,
+            graph_hash: graph_hash.as_deref(),
+            worktree_name: None,
+            branch: None,
+            worktree_path: None,
+            target_worktree_path: None,
+            target_branch: None,
+            target_head: None,
+        });
     Mission {
         contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
         id: "m1".into(),
@@ -288,43 +289,43 @@ fn amended_goal_default_worktree_name_differs_from_prior() {
     let mut a = unapproved_amendment_mission();
     a.id = "m-stable-id-001".into();
     a.goal = "ship feature alpha".into();
-    a.hash = Mission::compute_contract_hash_full(
-        &a.goal,
-        &a.acceptance,
-        &a.non_goals,
-        &a.lane,
-        &a.verify_plan,
-        &a.human_gates,
-        &a.risks,
-        &a.rationale,
-        a.graph_hash.as_deref(),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-    );
+    a.hash = Mission::compute_contract_hash_full(crate::model::sdlc::mission::ContractHashInput {
+        goal: &a.goal,
+        acceptance: &a.acceptance,
+        non_goals: &a.non_goals,
+        lane: &a.lane,
+        verify_plan: &a.verify_plan,
+        human_gates: &a.human_gates,
+        risks: &a.risks,
+        rationale: &a.rationale,
+        graph_hash: a.graph_hash.as_deref(),
+        worktree_name: None,
+        branch: None,
+        worktree_path: None,
+        target_worktree_path: None,
+        target_branch: None,
+        target_head: None,
+    });
 
     let mut b = a.clone();
     b.goal = "ship feature beta — different scope".into();
-    b.hash = Mission::compute_contract_hash_full(
-        &b.goal,
-        &b.acceptance,
-        &b.non_goals,
-        &b.lane,
-        &b.verify_plan,
-        &b.human_gates,
-        &b.risks,
-        &b.rationale,
-        b.graph_hash.as_deref(),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-    );
+    b.hash = Mission::compute_contract_hash_full(crate::model::sdlc::mission::ContractHashInput {
+        goal: &b.goal,
+        acceptance: &b.acceptance,
+        non_goals: &b.non_goals,
+        lane: &b.lane,
+        verify_plan: &b.verify_plan,
+        human_gates: &b.human_gates,
+        risks: &b.risks,
+        rationale: &b.rationale,
+        graph_hash: b.graph_hash.as_deref(),
+        worktree_name: None,
+        branch: None,
+        worktree_path: None,
+        target_worktree_path: None,
+        target_branch: None,
+        target_head: None,
+    });
 
     let wt_a = default_mission_worktree_name(&a);
     let wt_b = default_mission_worktree_name(&b);

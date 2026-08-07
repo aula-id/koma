@@ -288,23 +288,24 @@ mod tests {
         let target_worktree_path = Some("/tmp/primary".into());
         let target_branch = Some("main".into());
         let target_head = Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
-        let hash = Mission::compute_contract_hash_full(
-            "g",
-            &["a".into()],
-            &[],
-            "express",
-            &["cargo test".into()],
-            &[],
-            &[],
-            "",
-            graph_hash.as_deref(),
-            worktree_name.as_deref(),
-            branch.as_deref(),
-            worktree_path.as_deref(),
-            target_worktree_path.as_deref(),
-            target_branch.as_deref(),
-            target_head.as_deref(),
-        );
+        let hash =
+            Mission::compute_contract_hash_full(crate::model::sdlc::mission::ContractHashInput {
+                goal: "g",
+                acceptance: &["a".into()],
+                non_goals: &[],
+                lane: "express",
+                verify_plan: &["cargo test".into()],
+                human_gates: &[],
+                risks: &[],
+                rationale: "",
+                graph_hash: graph_hash.as_deref(),
+                worktree_name: worktree_name.as_deref(),
+                branch: branch.as_deref(),
+                worktree_path: worktree_path.as_deref(),
+                target_worktree_path: target_worktree_path.as_deref(),
+                target_branch: target_branch.as_deref(),
+                target_head: target_head.as_deref(),
+            });
         let m = Mission {
             contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
             id: "m-k".into(),

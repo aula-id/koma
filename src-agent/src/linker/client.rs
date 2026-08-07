@@ -261,7 +261,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("koma_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         std::fs::write(dir.join("hello.rs"), "fn main() {}").unwrap();
-        let result = normalize_query_path("hello.rs", &[dir.clone()]);
+        let result = normalize_query_path("hello.rs", std::slice::from_ref(&dir));
         // Should be the canonical absolute path.
         assert!(std::path::Path::new(&result).is_absolute());
         assert!(result.ends_with("hello.rs"));
@@ -280,7 +280,7 @@ mod tests {
         let root_a = std::env::temp_dir().join(format!("koma_test_{}_a", std::process::id()));
         let _ = std::fs::create_dir_all(root_a.join("src"));
         std::fs::write(root_a.join("src/main.rs"), "fn main() {}").unwrap();
-        let result = normalize_query_path("[0]src/main.rs", &[root_a.clone()]);
+        let result = normalize_query_path("[0]src/main.rs", std::slice::from_ref(&root_a));
         assert!(result.contains("src/main.rs"));
         // On macOS, temp_dir() symlinks /var → /private/var; canonicalize resolves
         // the symlink, so compare against the canonicalized + slash-normalized root.

@@ -139,12 +139,10 @@ pub(crate) fn sdlc_assess_git_args_allowed(args: &[&str]) -> Result<(), String> 
                     .into());
             }
         }
-        "remote" => {
-            if sdlc_assess_remote_is_mutating(args) {
-                return Err("git remote mutating form is not allowed in assess \
-                     (no add/remove/set-url/rename; list/show/get-url only)"
-                    .into());
-            }
+        "remote" if sdlc_assess_remote_is_mutating(args) => {
+            return Err("git remote mutating form is not allowed in assess \
+                 (no add/remove/set-url/rename; list/show/get-url only)"
+                .into());
         }
         _ => {}
     }

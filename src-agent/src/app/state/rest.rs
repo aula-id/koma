@@ -1156,8 +1156,10 @@ mod agent_mode_session_isolation_tests {
         std::fs::create_dir_all(&primary).unwrap();
         std::fs::create_dir_all(&shadow).unwrap();
 
-        let mut settings = Settings::default();
-        settings.workdir = vec![primary.to_string_lossy().into_owned()];
+        let mut settings = Settings {
+            workdir: vec![primary.to_string_lossy().into_owned()],
+            ..Settings::default()
+        };
         // Simulate entered mission worktree.
         settings.enter_worktree(shadow.to_string_lossy().into_owned());
         assert!(settings.workdir_saved.is_some());

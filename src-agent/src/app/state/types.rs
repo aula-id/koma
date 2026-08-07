@@ -56,33 +56,19 @@ impl AgentMode {
     /// Active SDLC never hops via cycle — explicit `/mode <name>` or exiting
     /// SDLC through `set_agent_mode` is required (returns self so callers stay put).
     ///
-    /// - `yolo_armed == true`:  Auto → Normal → Plan → Sdlc → Yolo → Auto (full cycle).
-    /// - `yolo_armed == false`: Auto → Normal → Plan → Sdlc → Auto (Yolo is skipped). If
-    ///   `self` is somehow `Yolo` while unarmed (shouldn't happen — disarming
-    ///   drops the mode), it folds straight back to Auto so the user can never
-    ///   linger there.
-    pub fn cycle(self, yolo_armed: bool) -> Self {
+    /// - `yolo_armed`: retained for call-site compatibility; Yolo folds back to
+    ///   Auto in either state because active SDLC mode owns the guarded cycle.
+    pub fn cycle(self, _yolo_armed: bool) -> Self {
         // Active SDLC: refuse mode hops via the cycle key; require explicit exit.
         if matches!(self, AgentMode::Sdlc) {
             return AgentMode::Sdlc;
         }
-        if yolo_armed {
-            match self {
-                AgentMode::Auto => AgentMode::Normal,
-                AgentMode::Normal => AgentMode::Plan,
-                AgentMode::Plan => AgentMode::Sdlc,
-                AgentMode::Sdlc => AgentMode::Sdlc, // unreachable
-                AgentMode::Yolo => AgentMode::Auto,
-            }
-        } else {
-            match self {
-                AgentMode::Auto => AgentMode::Normal,
-                AgentMode::Normal => AgentMode::Plan,
-                AgentMode::Plan => AgentMode::Sdlc,
-                AgentMode::Sdlc => AgentMode::Sdlc, // unreachable
-                // Unarmed + Yolo (defensive): drop back to Auto.
-                AgentMode::Yolo => AgentMode::Auto,
-            }
+        match self {
+            AgentMode::Auto => AgentMode::Normal,
+            AgentMode::Normal => AgentMode::Plan,
+            AgentMode::Plan => AgentMode::Sdlc,
+            AgentMode::Sdlc => AgentMode::Sdlc, // unreachable
+            AgentMode::Yolo => AgentMode::Auto,
         }
     }
 }
