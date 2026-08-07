@@ -100,6 +100,44 @@ impl SessionRuntime {
         self.cursor = (self.cursor + 1).min(self.char_len());
     }
 
+    /// Jump the caret to the start of the previous word (Ctrl+Left).
+    ///
+    /// Standard terminal word-jump: skip backward over separator (non-alphanumeric)
+    /// chars, then over the word (alphanumeric) chars. Stops at position 0.
+    pub fn cursor_word_left(&mut self) {
+        let chars: Vec<char> = self.input.chars().collect();
+        let mut pos = self.cursor;
+        // Skip backward over separators.
+        while pos > 0 && !chars[pos - 1].is_ascii_alphanumeric() {
+            pos -= 1;
+        }
+        // Skip backward over word chars.
+        while pos > 0 && chars[pos - 1].is_ascii_alphanumeric() {
+            pos -= 1;
+        }
+        self.cursor = pos;
+    }
+
+    /// Jump the caret to the start of the next word (Ctrl+Right).
+    ///
+    /// Standard terminal word-jump: skip forward over the current word
+    /// (alphanumeric) chars, then over separator (non-alphanumeric) chars.
+    /// Stops at the end of input.
+    pub fn cursor_word_right(&mut self) {
+        let chars: Vec<char> = self.input.chars().collect();
+        let len = chars.len();
+        let mut pos = self.cursor;
+        // Skip forward over word chars.
+        while pos < len && chars[pos].is_ascii_alphanumeric() {
+            pos += 1;
+        }
+        // Skip forward over separators.
+        while pos < len && !chars[pos].is_ascii_alphanumeric() {
+            pos += 1;
+        }
+        self.cursor = pos;
+    }
+
     /// Jump the caret to the start of the input.
     pub fn cursor_home(&mut self) {
         self.cursor = 0;

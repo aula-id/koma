@@ -50,6 +50,16 @@ impl AppStateRest {
         self.fg_mut().cursor_right();
     }
 
+    /// Jump the caret to the start of the previous word (Ctrl+Left).
+    pub fn cursor_word_left(&mut self) {
+        self.fg_mut().cursor_word_left();
+    }
+
+    /// Jump the caret to the start of the next word (Ctrl+Right).
+    pub fn cursor_word_right(&mut self) {
+        self.fg_mut().cursor_word_right();
+    }
+
     /// Jump the caret to the start of the input.
     pub fn cursor_home(&mut self) {
         self.fg_mut().cursor_home();
