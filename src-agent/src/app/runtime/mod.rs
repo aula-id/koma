@@ -39,6 +39,9 @@ pub(crate) mod bg_persist;
 #[cfg(feature = "gui")]
 pub mod gui;
 
+// Shared stall detector (subagent engine; main-chat nudge reuses later).
+pub(crate) use stream::is_stall;
+
 // Re-export the sync-loop <-> per-client-task bridge message so the per-client
 // connection task in `crate::ipc::conn` (outside this module tree) can name it.
 pub(crate) use event_loop::daemon::HubInbound;

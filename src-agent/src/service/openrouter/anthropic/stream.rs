@@ -233,6 +233,9 @@ impl OpenRouterClient {
         let mut prompt_tokens: u64 = 0;
         let mut cached_tokens: u64 = 0;
         let mut completion_tokens: u64 = 0;
+        // Protocol terminal success marker (`message_stop`). Soft EOF without
+        // this is incomplete; tracked for a later leaf — emission still Done.
+        let mut saw_terminal = false;
         while let Some(chunk) = stream.next().await {
             let bytes = match chunk {
                 Ok(b) => b,
@@ -355,6 +358,7 @@ impl OpenRouterClient {
                         }
                     }
                     AnthropicEvent::MessageStop => {
+                        saw_terminal = true;
                         // Terminal emission order: Usage, then the replay
                         // ReasoningDetails, then any ToolCalls, then Done (ToolCalls
                         // must land just before Done, MATCHING codex).
@@ -377,6 +381,10 @@ impl OpenRouterClient {
                             sanitize_tool_acc(&mut tools);
                             emit(&tx, StreamEvent::ToolCalls(tools));
                         }
+                        // Terminal marker seen; keep emission Done (next leaf may branch).
+                        debug_assert!(!super::super::stream::stream_ended_incompletely(
+                            saw_terminal
+                        ));
                         emit(&tx, StreamEvent::Done);
                         return Ok(());
                     }
@@ -401,8 +409,9 @@ impl OpenRouterClient {
             }
         }
         // Stream ended without an explicit `message_stop` (mirrors the codex EOF
-        // path): flush any accumulated thinking + tool calls, then Done. No Usage
-        // here — a clean run always delivers it at message_stop above.
+        // path): flush thinking, then tools+Done if tools assembled (lenient),
+        // else Error on incomplete soft EOF. No Usage here — a clean run always
+        // delivers it at message_stop above.
         let details = finalize_thinking(&thinking_blocks);
         if !details.is_empty() {
             emit(&tx, StreamEvent::ReasoningDetails(details));
@@ -410,9 +419,21 @@ impl OpenRouterClient {
         let mut tools = finalize_tools(&tool_blocks);
         if !tools.is_empty() {
             sanitize_tool_acc(&mut tools);
-            emit(&tx, StreamEvent::ToolCalls(tools));
         }
-        emit(&tx, StreamEvent::Done);
+        let has_tools = !tools.is_empty();
+        if super::super::stream::soft_eof_is_complete(saw_terminal, has_tools) {
+            if has_tools {
+                emit(&tx, StreamEvent::ToolCalls(tools));
+            }
+            emit(&tx, StreamEvent::Done);
+        } else {
+            emit(
+                &tx,
+                StreamEvent::Error(
+                    "stream ended incompletely (connection closed before terminal marker)".into(),
+                ),
+            );
+        }
         Ok(())
     }
 }

@@ -2,8 +2,11 @@
 
 mod run;
 mod spawn;
+pub(crate) mod stall;
 mod tools;
 mod turn;
+
+pub(crate) use stall::is_stall;
 
 pub(super) use run::{abort_current, start_stream_task};
 pub(crate) use tools::resume_after_subagents;

@@ -58,49 +58,6 @@ fn tool_is_risky(name: &str) -> bool {
     crate::tool::tool_is_risky(name)
 }
 
-/// Returns `true` when `text` looks like interstitial narration rather than a
-/// finished report — e.g. "Let me read a few more files:" — so the engine can
-/// nudge the model to keep going instead of accepting the half-thought as done.
-///
-/// Altitude-aware: a substantial or structured response (long, multi-line, or
-/// containing markdown headings/tables/lists) is NEVER a stall. Only short,
-/// bodyless lead-ins or dangling colons qualify.
-///
-/// Criteria for NOT a stall (any one is enough to return false):
-/// - trimmed length >= 300 chars
-/// - contains a newline (multi-line = has a body)
-/// - contains "##" (markdown heading)
-/// - contains "| " (table row)
-/// - contains "- " (list item)
-///
-/// A stall requires ALL of the following (after ruling out the above):
-/// - trimmed text is empty, OR
-/// - trimmed text ends with `:` (classic "Let me read…:" cliffhanger), OR
-/// - trimmed text starts with a known procrastination phrase (case-insensitive)
-fn is_stall(text: &str) -> bool {
-    let t = text.trim();
-    if t.is_empty() {
-        return true;
-    }
-    // Substantial -> long, multi-line, or structured (headings/tables/lists). Never a stall.
-    let substantial = t.len() >= 300
-        || t.contains('\n')
-        || t.contains("##")
-        || t.contains("| ")
-        || t.contains("- ");
-    if substantial {
-        return false;
-    }
-    // Short + bodyless: a "let me..."/"next I..." lead-in or a dangling colon.
-    let lower = t.to_lowercase();
-    let lead_in = [
-        "let me", "i'll", "i will", "let's", "now i", "next,", "next i", "first,",
-    ]
-    .iter()
-    .any(|p| lower.starts_with(p));
-    t.ends_with(':') || lead_in
-}
-
 /// One drained stream result: the assistant text, any requested tool calls,
 /// a fatal error if the stream failed, and the optional usage tuple from the
 /// final `StreamEvent::Usage` chunk (prompt_tokens, completion_tokens,
@@ -391,7 +348,7 @@ pub async fn run_agent_loop(
             //    instead of accepting the half-thought as a report. The gate runs
             //    on the cleaned report; commit the RAW text into history so the
             //    transcript still shows what the model literally said.
-            if nudges < 2 && is_stall(&report) {
+            if nudges < 2 && crate::app::runtime::is_stall(&report) {
                 convo.push_assistant(assistant_text, reasoning.clone(), false);
                 convo.push_user(
                     "Continue now: call the tools you need to finish the task, \
