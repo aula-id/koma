@@ -259,10 +259,7 @@ pub(super) fn render_tool_approval(
             (" proceed with the plan?", " plan ready ")
         };
         let rows: Vec<Line> = vec![
-            Line::from(Span::styled(
-                question,
-                Style::default().fg(palette.fg),
-            )),
+            Line::from(Span::styled(question, Style::default().fg(palette.fg))),
             Line::from(vec![
                 Span::styled(" [y] approve   ", Style::default().fg(warn)),
                 Span::styled("[a] approve & compact   ", Style::default().fg(warn)),

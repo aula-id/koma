@@ -27,11 +27,12 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .trim();
-    let prompt = args
+    let mut prompt = args
         .get("prompt")
         .and_then(|v| v.as_str())
         .unwrap_or("")
-        .trim();
+        .trim()
+        .to_string();
     // `run_in_background: true` makes the sub-agent DETACHED: the call is
     // answered IMMEDIATELY with its id (no park), mirroring bg-bash. The
     // model then polls it with `task_output` / stops it with `task_kill`.
@@ -44,7 +45,69 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
             call.id.clone(),
             "error: task requires non-empty 'agent' and 'prompt'".to_string(),
         ));
-    } else if background {
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    // SDLC execute/integrate: require OPEN leaf node_id + scope banner.
+    let sdlc_execute = state.rest.sessions[sess_idx].agent_mode
+        == crate::app::state::AgentMode::Sdlc
+        && matches!(
+            state.rest.sessions[sess_idx].sdlc_phase.as_deref(),
+            Some("execute") | Some("integrate")
+        );
+    if sdlc_execute {
+        let node_id = args.get("node_id").and_then(|v| v.as_str());
+        let sess_path = state.rest.sessions[sess_idx]
+            .session
+            .as_ref()
+            .map(|s| s.path.clone());
+        if let Some(path) = sess_path {
+            match crate::model::msglog::open(&path) {
+                Ok(conn) => {
+                    if let Err(e) = crate::model::sdlc::graph::ensure_tables(&conn) {
+                        state.rest.sessions[sess_idx].tool_results.push((
+                            call.id.clone(),
+                            format!("error: could not ensure graph tables: {e}"),
+                        ));
+                        state.rest.sessions[sess_idx].tool_idx += 1;
+                        return InterceptFlow::Continue;
+                    }
+                    match crate::model::sdlc::decompose::validate_task_delegation(
+                        &conn, node_id, &prompt,
+                    ) {
+                        Ok(claim) => {
+                            // Store the claimed node_id so build_tool_ctx propagates
+                            // it to the sub-agent's ToolCtx for path ownership.
+                            state.rest.sessions[sess_idx].sdlc_pending_node_id =
+                                Some(claim.node_id.clone());
+                            prompt = format!(
+                                "{}{prompt}",
+                                crate::model::sdlc::decompose::scope_banner(&claim)
+                            );
+                        }
+                        Err(e) => {
+                            state.rest.sessions[sess_idx]
+                                .tool_results
+                                .push((call.id.clone(), e));
+                            state.rest.sessions[sess_idx].tool_idx += 1;
+                            return InterceptFlow::Continue;
+                        }
+                    }
+                }
+                Err(e) => {
+                    state.rest.sessions[sess_idx].tool_results.push((
+                        call.id.clone(),
+                        format!("error: could not open graph for task.node_id check: {e}"),
+                    ));
+                    state.rest.sessions[sess_idx].tool_idx += 1;
+                    return InterceptFlow::Continue;
+                }
+            }
+        }
+    }
+
+    if background {
         // DETACHED branch (mirrors the bg-bash interception): spawn/queue
         // the agent NOT tied to this call (tool_call_id = None) and marked
         // detached, DO NOT record the call id in `pending_subagent_calls`
@@ -52,7 +115,6 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
         // On terminal the detached agent fires a completion nudge (see
         // `drain_subagents` + `deferred.rs`) so the model knows to poll it.
         let agent = agent.to_string();
-        let prompt = prompt.to_string();
         let result = match crate::app::runtime::stream::spawn::spawn_or_queue(
             state, sess_idx, client, handle, &agent, &prompt,
             None,  // detached: not tied to a blocking call
@@ -92,7 +154,6 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
             .push((call.id.clone(), result));
     } else {
         let agent = agent.to_string();
-        let prompt = prompt.to_string();
         // Spawn now if a slot is free, else ENQUEUE (unlimited pending; at
         // most MAX_SUBAGENTS run at once). In BOTH the spawned and queued
         // cases DEFER the result by recording the call id in
@@ -148,6 +209,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
             }
         }
     }
+    // Clear the pending SDLC node_id after spawn consumed it (build_tool_ctx reads
+    // it once and propagates to the sub-agent's ToolCtx).
+    state.rest.sessions[sess_idx].sdlc_pending_node_id = None;
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
 }

@@ -77,6 +77,41 @@ pub(in crate::app::runtime::stream::tools) fn intercept_git_worktree(
     handle: &tokio::runtime::Handle,
     convo_context: &str,
 ) -> InterceptFlow {
+    let wt_args: serde_json::Value = serde_json::from_str(
+        &crate::dto::chat::sanitize_tool_arguments(&call.function.arguments),
+    )
+    .unwrap_or_default();
+
+    // SDLC execute/integrate: block Koma-managed worktree/cwd escape calls.
+    // Known limitation: arbitrary external shell/MCP is not OS-sandboxed.
+    if mode == AgentMode::Sdlc
+        && matches!(
+            state.rest.sessions[sess_idx].sdlc_phase.as_deref(),
+            Some("execute") | Some("integrate")
+        )
+    {
+        let action = wt_args.get("action").and_then(|a| a.as_str()).unwrap_or("");
+        if matches!(action, "enter" | "exit" | "create" | "remove") {
+            // Own the phase string before mutating `tool_results` so the
+            // immutable borrow of `sessions[sess_idx]` ends first (E0502).
+            let phase = state.rest.sessions[sess_idx]
+                .sdlc_phase
+                .clone()
+                .unwrap_or_else(|| "execute".to_string());
+            state.rest.sessions[sess_idx].tool_results.push((
+                call.id.clone(),
+                format!(
+                    "error: git_worktree '{action}' blocked during SDLC {phase} — \
+                     mission worktree/branch binding is frozen. Use mission_integrate \
+                     (or `/mode exit`) rather than escaping the bound tree. \
+                     Note: arbitrary external shell/MCP is not OS-sandboxed."
+                ),
+            ));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            return InterceptFlow::Continue;
+        }
+    }
+
     // Gate the destructive `remove` action behind the approval classifier —
     // it deletes a worktree (hard to undo). The other actions (create /
     // enter / exit / list) only move cwd/roots and are cheap to reverse, so
@@ -85,10 +120,6 @@ pub(in crate::app::runtime::stream::tools) fn intercept_git_worktree(
     // the interception for real. Mirrors the generic risky gate below
     // (~line 622+) but lives here because git_worktree is intercepted before
     // that gate and can't reach it.
-    let wt_args: serde_json::Value = serde_json::from_str(
-        &crate::dto::chat::sanitize_tool_arguments(&call.function.arguments),
-    )
-    .unwrap_or_default();
     let is_remove = wt_args.get("action").and_then(|a| a.as_str()) == Some("remove");
     let pre_approved = state.rest.sessions[sess_idx]
         .approved_worktree_call
@@ -356,7 +387,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_read_before_edit_guard(
         let path_str = path_str.to_string();
         // Build workspaces the same way the tools do.
         let ctx = crate::app::runtime::stream::spawn::build_tool_ctx(state, sess_idx);
-        if let Ok(target_abs) = crate::tool::resolve(&ctx.workspaces, &path_str) {
+        if let Ok(target_abs) =
+            crate::tool::resolve_in(&ctx.workspaces, &path_str, ctx.allow_scratch)
+        {
             let is_edit = call.function.name == "edit";
             // write only guards when OVERWRITING an existing file; new file is exempt.
             let must_check = is_edit || target_abs.exists();
@@ -400,8 +433,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_skill(
     sess_idx: usize,
     call: &crate::dto::chat::ToolCall,
 ) -> InterceptFlow {
-    let result =
-        crate::app::runtime::stream::tools::dispatch::run_tool(state, sess_idx, call);
+    let result = crate::app::runtime::stream::tools::dispatch::run_tool(state, sess_idx, call);
     let final_result =
         if let Some(rest) = result.strip_prefix(crate::tool::skill::SKILL_LOAD_PREFIX) {
             // rest = "name\nbody" — split on first newline.
@@ -416,27 +448,19 @@ pub(in crate::app::runtime::stream::tools) fn intercept_skill(
                 .and_then(|sess| sess.skills.get(&name))
                 .and_then(|s| s.skill_dir.clone());
             // Build companion inventory when dir-form.
-            let companion_msg = skill_dir.as_ref().map(|dir| {
-                list_companions(dir, &name)
-            });
+            let companion_msg = skill_dir.as_ref().map(|dir| list_companions(dir, &name));
             // Install into active_skills.
-            state.rest.sessions[sess_idx]
-                .active_skills
-                .insert(name.clone(), crate::app::state::ActiveSkill {
-                    body,
-                    skill_dir,
-                });
+            state.rest.sessions[sess_idx].active_skills.insert(
+                name.clone(),
+                crate::app::state::ActiveSkill { body, skill_dir },
+            );
             match companion_msg {
                 Some(msg) => msg,
                 None => format!("loaded skill '{name}' — body injected into context."),
             }
-        } else if let Some(name) =
-            result.strip_prefix(crate::tool::skill::SKILL_UNLOAD_PREFIX)
-        {
+        } else if let Some(name) = result.strip_prefix(crate::tool::skill::SKILL_UNLOAD_PREFIX) {
             let name = name.trim().to_string();
-            state.rest.sessions[sess_idx]
-                .active_skills
-                .remove(&name);
+            state.rest.sessions[sess_idx].active_skills.remove(&name);
             format!("unloaded skill '{name}'.")
         } else {
             // list output or error: pass through unchanged.
@@ -512,10 +536,8 @@ mod tests {
 
     #[test]
     fn lists_companions_and_skips_entry_files() {
-        let tmp = std::env::temp_dir().join(format!(
-            "koma-guard-test-companions-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("koma-guard-test-companions-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("SKILL.md"), "# skill body").unwrap();
         std::fs::write(tmp.join("helper.md"), "helper content").unwrap();
@@ -534,10 +556,8 @@ mod tests {
 
     #[test]
     fn lists_subdir_companions_one_level_deep() {
-        let tmp = std::env::temp_dir().join(format!(
-            "koma-guard-test-subdir-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("koma-guard-test-subdir-{}", std::process::id()));
         let refs = tmp.join("references");
         std::fs::create_dir_all(&refs).unwrap();
         std::fs::write(tmp.join("SKILL.md"), "# skill").unwrap();
@@ -553,10 +573,8 @@ mod tests {
 
     #[test]
     fn flat_skill_dir_shows_no_companions() {
-        let tmp = std::env::temp_dir().join(format!(
-            "koma-guard-test-empty-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("koma-guard-test-empty-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("SKILL.md"), "# skill").unwrap();
         // No other files.

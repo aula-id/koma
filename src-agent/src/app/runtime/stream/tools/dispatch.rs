@@ -172,7 +172,7 @@ pub(super) fn finish_tool_round(
     // which isn't intercepted and never touches `rt.plan_todos` at its call
     // site — is reflected the instant this round finishes, in Auto/Normal/Yolo
     // just as much as Plan.
-    let in_plan = state.rest.agent_mode == crate::app::state::AgentMode::Plan;
+    let in_plan = state.rest.sessions[sess_idx].agent_mode == crate::app::state::AgentMode::Plan;
     if let Some(todos) = state.rest.sessions[sess_idx]
         .session
         .as_ref()
@@ -251,8 +251,20 @@ pub(super) fn finish_tool_round(
 
     // SDLC keeper: re-arm after every finished tool round so false-done /
     // integrate nudges can fire on the next idle boundary.
-    if state.rest.agent_mode == crate::app::state::AgentMode::Sdlc {
+    if state.rest.sessions[sess_idx].agent_mode == crate::app::state::AgentMode::Sdlc {
         state.rest.sessions[sess_idx].sdlc_keeper_due = true;
+        // Stamp tool-round time + graph fingerprint for deterministic stall detection.
+        if let Some(path) = state.rest.sessions[sess_idx]
+            .session
+            .as_ref()
+            .map(|s| s.path.clone())
+        {
+            if let Ok(conn) = crate::model::msglog::open(&path) {
+                if crate::model::sdlc::graph::ensure_tables(&conn).is_ok() {
+                    let _ = crate::model::sdlc::graph::stamp_tool_round(&conn);
+                }
+            }
+        }
     }
 
     // Continue the turn: hand the updated history back to the model. The

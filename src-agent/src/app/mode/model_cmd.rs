@@ -64,8 +64,7 @@ impl ModelCmdState {
 
     /// The uuid of the currently highlighted model (None for inherit).
     pub fn selected_uuid(&self) -> Option<String> {
-        self.selected()
-            .and_then(|(uuid, _)| uuid.clone())
+        self.selected().and_then(|(uuid, _)| uuid.clone())
     }
 }
 

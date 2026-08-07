@@ -572,13 +572,21 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
         // from the /security panel does the cycle include Yolo (Auto→Normal→Yolo→Auto).
         KeyCode::BackTab => {
             // `set_agent_mode` is the single choke-point (shared with `/mode`) that
-            // maintains `plan_return_mode` and rebuilds + saves the system prompt
-            // when the cycle crosses the Plan boundary.
-            let next = rest.agent_mode.cycle(rest.yolo_armed);
+            // maintains `plan_return_mode`/`sdlc_return_mode` and rebuilds + saves
+            // the system prompt when the cycle crosses Plan/SDLC boundaries.
+            // Active SDLC: BackTab is an explicit exit to the prior mode (cycle
+            // alone refuses hops).
+            let next = if rest.agent_mode() == crate::app::state::AgentMode::Sdlc {
+                rest.fg()
+                    .sdlc_return_mode
+                    .unwrap_or(crate::app::state::AgentMode::Auto)
+            } else {
+                rest.agent_mode().cycle(rest.yolo_armed)
+            };
             rest.set_agent_mode(next);
             // Per-session status (C6): label into a local (disjoint `agent_mode` read)
             // before the `fg_mut()` borrow.
-            let label = rest.agent_mode.label();
+            let label = rest.agent_mode().label();
             rest.fg_mut().status = format!("mode: {label}");
             Action::None
         }

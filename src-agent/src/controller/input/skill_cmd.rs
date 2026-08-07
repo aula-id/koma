@@ -17,11 +17,7 @@ use crate::app::state::AppStateRest;
 use super::Action;
 
 /// Handle a key press inside the `/skill` hub overlay.
-pub fn handle_skill_cmd(
-    st: &mut SkillCmdState,
-    _rest: &mut AppStateRest,
-    key: KeyEvent,
-) -> Action {
+pub fn handle_skill_cmd(st: &mut SkillCmdState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc => Action::CloseSkill,
 

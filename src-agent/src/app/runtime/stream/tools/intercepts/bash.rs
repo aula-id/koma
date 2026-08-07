@@ -32,29 +32,36 @@ pub(in crate::app::runtime::stream::tools) fn intercept_bash_background(
         let result = if command.trim().is_empty() {
             "error: bash requires a non-empty 'command'".to_string()
         } else {
-            // Lazily create THIS session's completion channel once, then
-            // reuse it (mirrors the deferred tool-task channel). The worker
-            // fires the finished job id over `bash_done_tx`; the event-loop
-            // deferred drain reads `bash_done_rx` to pop a toast.
-            if state.rest.sessions[sess_idx].bash_done_tx.is_none() {
-                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                state.rest.sessions[sess_idx].bash_done_tx = Some(tx);
-                state.rest.sessions[sess_idx].bash_done_rx = Some(rx);
+            // Fail-closed: same writable-root gate as inline bash via build_tool_ctx.
+            let ctx = crate::app::runtime::stream::spawn::build_tool_ctx(state, sess_idx);
+            if ctx.workspaces.is_empty() || ctx.workspace.as_os_str().is_empty() {
+                "error: no writable workspace root — SDLC execute/integrate binding \
+                 missing or invalid; cannot run bash against primary"
+                    .to_string()
+            } else {
+                // Lazily create THIS session's completion channel once, then
+                // reuse it (mirrors the deferred tool-task channel). The worker
+                // fires the finished job id over `bash_done_tx`; the event-loop
+                // deferred drain reads `bash_done_rx` to pop a toast.
+                if state.rest.sessions[sess_idx].bash_done_tx.is_none() {
+                    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                    state.rest.sessions[sess_idx].bash_done_tx = Some(tx);
+                    state.rest.sessions[sess_idx].bash_done_rx = Some(rx);
+                }
+                let id = state.rest.sessions[sess_idx].next_bash_id();
+                // Prefer the sandboxed tool cwd (bound worktree), not raw effective_cwd.
+                let cwd = ctx.workspace.clone();
+                let done_tx = state.rest.sessions[sess_idx].bash_done_tx.clone();
+                let job = crate::app::bgbash::spawn_bash_job(id, command, cwd, done_tx);
+                state.rest.sessions[sess_idx].bash_jobs.push(job);
+                // Persist the new job record so it survives close/reopen (#25).
+                crate::app::runtime::bg_persist::persist_bash_jobs(&state.rest.sessions[sess_idx]);
+                format!(
+                    "started background job bash-{id} (running). Poll with \
+                     bash_output{{\"job_id\":\"bash-{id}\"}}, stop with \
+                     bash_kill{{\"job_id\":\"bash-{id}\"}}."
+                )
             }
-            let id = state.rest.sessions[sess_idx].next_bash_id();
-            // Same effective cwd the inline `bash` runs in (the `cd`
-            // override, else the configured workdir).
-            let cwd = state.rest.sessions[sess_idx].effective_cwd();
-            let done_tx = state.rest.sessions[sess_idx].bash_done_tx.clone();
-            let job = crate::app::bgbash::spawn_bash_job(id, command, cwd, done_tx);
-            state.rest.sessions[sess_idx].bash_jobs.push(job);
-            // Persist the new job record so it survives close/reopen (#25).
-            crate::app::runtime::bg_persist::persist_bash_jobs(&state.rest.sessions[sess_idx]);
-            format!(
-                "started background job bash-{id} (running). Poll with \
-                 bash_output{{\"job_id\":\"bash-{id}\"}}, stop with \
-                 bash_kill{{\"job_id\":\"bash-{id}\"}}."
-            )
         };
         state.rest.sessions[sess_idx]
             .tool_results

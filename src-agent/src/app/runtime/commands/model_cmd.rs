@@ -81,10 +81,7 @@ fn open_help(state: &mut AppState) {
 
 /// Build the help text lines with current role bindings.
 fn help_lines(state: &AppState) -> Vec<String> {
-    let mut lines = vec![
-        "/model — session model switcher".to_string(),
-        String::new(),
-    ];
+    let mut lines = vec!["/model — session model switcher".to_string(), String::new()];
 
     if let Some(sess) = state.rest.fg().session.as_ref() {
         let cfg = &state.rest.config;
@@ -120,12 +117,7 @@ fn help_lines(state: &AppState) -> Vec<String> {
         let agent_names: Vec<String> = registry
             .list(true)
             .into_iter()
-            .filter(|a| {
-                !matches!(
-                    a.source,
-                    crate::model::agent_def::AgentSource::Extension
-                )
-            })
+            .filter(|a| !matches!(a.source, crate::model::agent_def::AgentSource::Extension))
             .map(|a| a.name.clone())
             .collect();
         if !agent_names.is_empty() {
@@ -200,28 +192,17 @@ fn open_role_pick(role: ModelRole, state: &mut AppState) {
 
 /// Open the AgentList picker.
 fn open_agent_list(state: &mut AppState) {
-    let session_path = state
-        .rest
-        .fg()
-        .session
-        .as_ref()
-        .map(|s| s.path.clone());
+    let session_path = state.rest.fg().session.as_ref().map(|s| s.path.clone());
 
-    let registry = crate::model::agent_def::load_registry(
-        session_path.as_deref().and_then(|p| p.parent()),
-    );
+    let registry =
+        crate::model::agent_def::load_registry(session_path.as_deref().and_then(|p| p.parent()));
 
     let config = &state.rest.config;
 
     let agents: Vec<String> = registry
         .list(true)
         .into_iter()
-        .filter(|a| {
-            !matches!(
-                a.source,
-                crate::model::agent_def::AgentSource::Extension
-            )
-        })
+        .filter(|a| !matches!(a.source, crate::model::agent_def::AgentSource::Extension))
         .map(|a| a.name.clone())
         .collect();
 
@@ -257,24 +238,17 @@ fn open_agent_list(state: &mut AppState) {
 fn open_agent_pick_by_name(agent_name: &str, state: &mut AppState) {
     use crate::model::agent_def::AgentSource;
 
-    let session_path = state
-        .rest
-        .fg()
-        .session
-        .as_ref()
-        .map(|s| s.path.clone());
+    let session_path = state.rest.fg().session.as_ref().map(|s| s.path.clone());
 
-    let registry = crate::model::agent_def::load_registry(
-        session_path.as_deref().and_then(|p| p.parent()),
-    );
+    let registry =
+        crate::model::agent_def::load_registry(session_path.as_deref().and_then(|p| p.parent()));
     let Some(agent) = registry.get(agent_name).cloned() else {
         state.rest.fg_mut().status = format!("unknown agent: {agent_name}");
         return;
     };
 
     if agent.source == AgentSource::Extension {
-        state.rest.fg_mut().status =
-            "cannot change extension agent model".to_string();
+        state.rest.fg_mut().status = "cannot change extension agent model".to_string();
         return;
     }
 

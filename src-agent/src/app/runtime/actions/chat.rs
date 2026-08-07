@@ -12,6 +12,55 @@ use crate::service::openrouter::OpenRouterClient;
 
 use crate::app::runtime::stream::{dispatch_deferred, process_tools, run_tool, start_stream_task};
 
+/// Extract a non-empty `human_gate` from a parked `mission_verify` call.
+fn human_gate_from_mission_verify_call(call: &crate::dto::chat::ToolCall) -> Result<String, ()> {
+    if call.function.name != "mission_verify" {
+        return Err(());
+    }
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let args: serde_json::Value =
+        serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+    args.get("human_gate")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .ok_or(())
+}
+
+/// Persist human-gate approval only after explicit user ApproveTool.
+fn approve_mission_human_gate(state: &mut AppState, sess_idx: usize, gate: &str) -> String {
+    let Some(sess_path) = state.rest.sessions[sess_idx]
+        .session
+        .as_ref()
+        .map(|s| s.path.clone())
+    else {
+        return "error: no active session".into();
+    };
+    let Some(mut m) = crate::model::sdlc::Mission::load(&sess_path) else {
+        return "error: human_gate requires an approved mission".into();
+    };
+    if !m.approved {
+        return "error: human_gate requires an approved mission".into();
+    }
+    if !m.human_gates.iter().any(|g| g == gate) {
+        return format!("error: unknown human_gate '{gate}'");
+    }
+    m.approve_human_gate(gate);
+    if let Err(e) = m.save(&sess_path) {
+        return format!("error: could not persist human_gate approval: {e}");
+    }
+    if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+        sess.rebuild_system();
+        let _ = sess.save();
+    }
+    format!(
+        "mission_verify: human_gate '{gate}' approved by user ({}/{})",
+        m.human_gates_approved.len(),
+        m.human_gates.len()
+    )
+}
+
 /// Handle `Action::Submit`: push the user message, spawn the stream task, and
 /// optionally kick off the advisory prompt-classifier on a background task.
 pub(super) fn handle_submit(
@@ -398,6 +447,14 @@ pub(super) fn handle_approve_tool(
     client: &mut Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
+    // Server-side UI guarantee: generic ApproveTool must never answer a parked
+    // plan_ready / mission_ready — those require PlanDecision (y/a/n). Reject
+    // without clearing the park so the correct handlers remain reachable.
+    if super::plan_decision::is_pending_plan_or_mission_ready(state) {
+        anyhow::bail!(
+            "plan_ready/mission_ready require PlanDecision (approve/compact/deny), not ApproveTool"
+        );
+    }
     // Run the paused risky call, record its result, advance past it, then
     // resume the machine (which may pause again on the next risky call or
     // finish the round). Clone the call out first so `run_tool`'s mutable
@@ -424,6 +481,21 @@ pub(super) fn handle_approve_tool(
             state.rest.fg_mut().approved_worktree_call = Some(call.id.clone());
             process_tools(state, fgi, client, handle);
             return Ok(());
+        }
+        // SDLC human gate: mission_verify(human_gate=...) parks for user y/n.
+        // Persist approval ONLY on explicit ApproveTool — never from the model.
+        if call.function.name == "mission_verify" {
+            if let Ok(gate) = human_gate_from_mission_verify_call(&call) {
+                let result = approve_mission_human_gate(state, fgi, &gate);
+                state
+                    .rest
+                    .fg_mut()
+                    .tool_results
+                    .push((call.id.clone(), result));
+                state.rest.fg_mut().tool_idx += 1;
+                process_tools(state, fgi, client, handle);
+                return Ok(());
+            }
         }
         // The approved call is a risky tool (write/edit/delete/bash) — all of which
         // are heavy/blocking and live in `DEFERRED_TOOLS`. Run it OFF the UI thread
@@ -452,30 +524,51 @@ pub(super) fn handle_approve_tool(
 /// Handle `Action::DenyTool`: answer every pending call with "denied by user",
 /// commit, and stop — do not re-stream.
 pub(super) fn handle_deny_tool(state: &mut AppState) -> Result<()> {
+    // Mirror ApproveTool: do not let DenyTool short-circuit a parked plan/mission
+    // decision (that would halt the turn instead of "chat more" via DenyPlan).
+    if super::plan_decision::is_pending_plan_or_mission_ready(state) {
+        anyhow::bail!(
+            "plan_ready/mission_ready require PlanDecision (approve/compact/deny), not DenyTool"
+        );
+    }
     state.rest.fg_mut().awaiting_approval = false;
     state.rest.fg_mut().approval_reason = None;
     // Denial halts the turn. Answer the denied call AND every remaining
     // pending call with "denied by user" (so the conversation stays
     // API-valid: every tool_call gets a result), commit any results
     // already collected this round, then STOP — do not re-stream.
+    //
+    // Special case: a parked mission_verify human_gate denial records an
+    // explicit gate-denial result (gate stays unapproved) for the first call.
     let results = state.rest.fg().tool_results.clone();
-    let denied_ids: Vec<String> = state
+    let denied_from = state.rest.fg().tool_idx;
+    let pending: Vec<crate::dto::chat::ToolCall> = state
         .rest
         .fg()
         .pending_tool_calls
         .iter()
-        .skip(state.rest.fg().tool_idx)
-        .map(|c| c.id.clone())
+        .skip(denied_from)
+        .cloned()
         .collect();
     if let Some(sess) = state.rest.fg_mut().session.as_mut() {
         for (id, result) in &results {
             let _ = msglog::append(&sess.path, Role::Tool, result, None, None);
             sess.conversation.push_tool(id.clone(), result.clone());
         }
-        for id in &denied_ids {
-            let _ = msglog::append(&sess.path, Role::Tool, "denied by user", None, None);
-            sess.conversation
-                .push_tool(id.clone(), "denied by user".to_string());
+        for (i, call) in pending.iter().enumerate() {
+            let msg = if i == 0 {
+                if let Ok(gate) = human_gate_from_mission_verify_call(call) {
+                    format!(
+                        "mission_verify: human_gate '{gate}' DENIED by user — gate remains unapproved"
+                    )
+                } else {
+                    "denied by user".to_string()
+                }
+            } else {
+                "denied by user".to_string()
+            };
+            let _ = msglog::append(&sess.path, Role::Tool, &msg, None, None);
+            sess.conversation.push_tool(call.id.clone(), msg);
         }
         let _ = sess.save();
     }
@@ -500,4 +593,102 @@ pub(super) fn handle_deny_tool(state: &mut AppState) -> Result<()> {
     state.rest.fg_mut().pending_classify_verdict = None;
     state.rest.fg_mut().status = "denied — stopped".into();
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod approval_tests {
+    //! Server-side UI guarantee: generic ApproveTool / DenyTool must not answer a
+    //! parked `plan_ready` or `mission_ready` — those require PlanDecision (y/a/n).
+
+    use super::*;
+    use crate::app::mode::Mode;
+    use crate::app::state::AppState;
+    use crate::dto::chat::{FunctionCall, ToolCall};
+
+    fn park_ready(state: &mut AppState, name: &str) {
+        let s = state.rest.fg_mut();
+        s.waiting = true;
+        s.awaiting_approval = true;
+        s.approval_reason = None;
+        s.pending_tool_calls = vec![ToolCall {
+            id: format!("call-{name}"),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: name.into(),
+                arguments: "{}".into(),
+            },
+        }];
+        s.tool_idx = 0;
+        s.tool_results.clear();
+    }
+
+    fn assert_park_intact(state: &AppState, name: &str) {
+        assert!(
+            state.rest.fg().awaiting_approval,
+            "park must remain awaiting approval"
+        );
+        assert_eq!(state.rest.fg().tool_idx, 0);
+        assert!(state.rest.fg().tool_results.is_empty());
+        assert_eq!(
+            state
+                .rest
+                .fg()
+                .pending_tool_calls
+                .first()
+                .map(|c| c.function.name.as_str()),
+            Some(name)
+        );
+    }
+
+    #[test]
+    fn approve_tool_rejects_parked_mission_ready() {
+        let mut state = AppState::new(Mode::Chat);
+        park_ready(&mut state, "mission_ready");
+        let mut client = None;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let err = handle_approve_tool(&mut state, &mut client, rt.handle())
+            .expect_err("ApproveTool must reject mission_ready");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("PlanDecision") || msg.contains("mission_ready"),
+            "error should name PlanDecision path: {msg}"
+        );
+        assert_park_intact(&state, "mission_ready");
+    }
+
+    #[test]
+    fn approve_tool_rejects_parked_plan_ready() {
+        let mut state = AppState::new(Mode::Chat);
+        park_ready(&mut state, "plan_ready");
+        let mut client = None;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let err = handle_approve_tool(&mut state, &mut client, rt.handle())
+            .expect_err("ApproveTool must reject plan_ready");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("PlanDecision") || msg.contains("plan_ready"),
+            "error should name PlanDecision path: {msg}"
+        );
+        assert_park_intact(&state, "plan_ready");
+    }
+
+    #[test]
+    fn deny_tool_rejects_parked_mission_ready() {
+        let mut state = AppState::new(Mode::Chat);
+        park_ready(&mut state, "mission_ready");
+        let err = handle_deny_tool(&mut state).expect_err("DenyTool must reject mission_ready");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("PlanDecision") || msg.contains("mission_ready"),
+            "error should name PlanDecision path: {msg}"
+        );
+        assert_park_intact(&state, "mission_ready");
+    }
 }

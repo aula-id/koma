@@ -119,7 +119,7 @@ pub(super) enum PushEnvelope {
         tokens_out: u64,
         cost: f64,
         /// The EFFECTIVE agent mode label (`"auto"`/`"normal"`/`"plan"`/`"yolo"`) —
-        /// identical source to the Snapshot's `mode` (`shadow.rest.agent_mode`), so
+        /// identical source to the Snapshot's `mode` (`shadow.rest.agent_mode()`), so
         /// e.g. a model-driven `plan_enter` while the selector reads "auto" still
         /// reports `"plan"` here the instant the round-trip lands (Status re-emits
         /// independently of the Snapshot fingerprint). Rides the status footer so it

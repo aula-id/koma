@@ -33,8 +33,9 @@ use crate::ipc::proto::{
     ModelModalSnapshot, OAuthDraftSnapshot, OnboardProviderSnapshot, OnboardSnapshot,
     PathPickerSnapshot, PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot,
     RewindEntrySnapshot, RewindSnapshot, RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot,
-    SessionMetaSnapshot, SettingsSnapshot, SkillCmdSnapshot, SkillEntrySnapshot, TextEditorSnapshot,
-    TodoItemSnapshot, TodoSnapshot, ToolPickerSnapshot, UsageSnapshot, WarmStatusWire,
+    SessionMetaSnapshot, SettingsSnapshot, SkillCmdSnapshot, SkillEntrySnapshot,
+    TextEditorSnapshot, TodoItemSnapshot, TodoSnapshot, ToolPickerSnapshot, UsageSnapshot,
+    WarmStatusWire,
 };
 
 pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
@@ -317,7 +318,12 @@ pub fn oauth_flow_snapshot(
             cursor: *cursor,
             ..Default::default()
         },
-        OAuthFlowState::CodexWait { provider, url, frame, copied } => OAuthFlowSnapshot {
+        OAuthFlowState::CodexWait {
+            provider,
+            url,
+            frame,
+            copied,
+        } => OAuthFlowSnapshot {
             kind: "codex_wait".to_string(),
             provider: provider.wire_id().to_string(),
             url: url.clone(),
@@ -325,7 +331,9 @@ pub fn oauth_flow_snapshot(
             copied: *copied,
             ..Default::default()
         },
-        OAuthFlowState::CodexPaste { input, provider, .. } => OAuthFlowSnapshot {
+        OAuthFlowState::CodexPaste {
+            input, provider, ..
+        } => OAuthFlowSnapshot {
             kind: "codex_paste".to_string(),
             input: input.clone(),
             provider: provider.wire_id().to_string(),

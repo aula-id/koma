@@ -83,6 +83,11 @@ impl DaemonHub {
 
     // Answer the foreground session's pending tool-approval prompt via the
     // local approve/deny handlers.
+    //
+    // Server-side UI guarantee: a generic ApproveTool must NOT answer a parked
+    // `plan_ready` / `mission_ready` call. Those require PlanDecision (y/a/n).
+    // `handle_approve_tool` / `handle_deny_tool` reject that case; the error is
+    // surfaced via ack_or_error so the park stays intact.
     pub(super) fn approve_tool(
         &mut self,
         idx: usize,
@@ -220,6 +225,30 @@ impl DaemonHub {
     // every attached client (incl. this GUI) reflects it live.
     pub(super) fn set_mode(&mut self, idx: usize, state: &mut AppState, mode: String) {
         use crate::app::state::AgentMode;
+        // Active SDLC blocks hops to Auto/Plan/Normal/Yolo; allow sdlc no-op and exit.
+        if state.rest.agent_mode() == AgentMode::Sdlc {
+            match mode.as_str() {
+                "sdlc" => {
+                    self.send_to(idx, DaemonEvent::Ack);
+                    return;
+                }
+                "exit" => {
+                    let ret = state.rest.fg().sdlc_return_mode.unwrap_or(AgentMode::Auto);
+                    state.rest.set_agent_mode(ret);
+                    self.send_to(idx, DaemonEvent::Ack);
+                    return;
+                }
+                "auto" | "normal" | "plan" | "yolo" => {
+                    // Refuse hop; ack so client doesn't hang.
+                    self.send_to(idx, DaemonEvent::Ack);
+                    return;
+                }
+                _ => {
+                    self.send_to(idx, DaemonEvent::Ack);
+                    return;
+                }
+            }
+        }
         let target = match mode.as_str() {
             "auto" => Some(AgentMode::Auto),
             "normal" => Some(AgentMode::Normal),

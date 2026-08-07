@@ -43,7 +43,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_plan_enter(
         if mode == AgentMode::Plan {
             "already in plan mode".to_string()
         } else {
-            state.rest.set_agent_mode(AgentMode::Plan);
+            // Index-targeted: stream-owned `sess_idx` must never transition the
+            // unrelated foreground session (background streams / multi-session).
+            state.rest.set_agent_mode_at(sess_idx, AgentMode::Plan);
             "entered plan mode - tools are read-only; explore, structure your \
              reasoning with seqthink, build the checklist with checklist, and \
              call plan_ready with highlights + the full plan when confident"

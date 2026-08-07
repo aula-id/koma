@@ -232,9 +232,7 @@ pub(crate) fn shadow_model_cmd(s: ModelCmdSnapshot) -> crate::app::mode::ModelCm
             agent_name: s.agent_name.unwrap_or_default(),
             current_model: None,
         },
-        _ => ModelCmdSub::Help {
-            lines: s.lines,
-        },
+        _ => ModelCmdSub::Help { lines: s.lines },
     };
 
     crate::app::mode::ModelCmdState {

@@ -372,10 +372,7 @@ mod tests {
 
     #[test]
     fn compute_dirs_multi_root_prefixes() {
-        let files = vec![
-            "[0]src/main.rs".into(),
-            "[1]pkg/README.md".into(),
-        ];
+        let files = vec!["[0]src/main.rs".into(), "[1]pkg/README.md".into()];
         let dirs = compute_dirs(&files);
         assert!(dirs.contains(&"[0]src/".to_string()));
         assert!(dirs.contains(&"[1]pkg/".to_string()));

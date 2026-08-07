@@ -50,10 +50,7 @@ pub fn scan_roots(roots: &[PathBuf]) -> ImportGraph {
 
     // Map of (root, relative_path) -> absolute_path for resolution.
     // Also build a set of all known source files for resolution.
-    let known_files: HashSet<String> = source_files
-        .iter()
-        .map(|sf| sf.abs_path.clone())
-        .collect();
+    let known_files: HashSet<String> = source_files.iter().map(|sf| sf.abs_path.clone()).collect();
 
     for sf in &source_files {
         let lang = detect_lang(&sf.rel_path);
@@ -153,10 +150,10 @@ fn collect_source_files(roots: &[PathBuf]) -> Vec<SourceFile> {
         }
 
         let walker = ignore::WalkBuilder::new(root)
-            .git_ignore(true)    // respect .gitignore
-            .git_global(true)    // respect global gitignore
-            .git_exclude(true)   // respect .git/info/exclude
-            .hidden(false)       // include hidden files (match DirCache policy)
+            .git_ignore(true) // respect .gitignore
+            .git_global(true) // respect global gitignore
+            .git_exclude(true) // respect .git/info/exclude
+            .hidden(false) // include hidden files (match DirCache policy)
             .filter_entry(|dent| {
                 if dent.depth() > 0 && dent.file_type().is_some_and(|t| t.is_dir()) {
                     if let Some(name) = dent.file_name().to_str() {
@@ -192,9 +189,7 @@ fn collect_source_files(roots: &[PathBuf]) -> Vec<SourceFile> {
 
 /// Check if a relative path has a source file extension.
 fn is_source_file(rel_path: &str) -> bool {
-    SOURCE_EXTENSIONS
-        .iter()
-        .any(|ext| rel_path.ends_with(ext))
+    SOURCE_EXTENSIONS.iter().any(|ext| rel_path.ends_with(ext))
 }
 
 /// Attempt to resolve a raw import string to an absolute file path.
@@ -212,9 +207,7 @@ fn resolve_import(
         Lang::Python => resolve_python_import(raw, root, known_files),
         Lang::Go => resolve_go_import(raw, file_path, root, known_files),
         Lang::Java => resolve_java_import(raw, root, known_files),
-        Lang::TypeScript | Lang::JavaScript => {
-            resolve_ts_import(raw, file_dir, root, known_files)
-        }
+        Lang::TypeScript | Lang::JavaScript => resolve_ts_import(raw, file_dir, root, known_files),
         Lang::Php => resolve_php_import(raw, root, known_files),
         Lang::Unknown => None,
     }
@@ -250,10 +243,7 @@ fn resolve_rust_import(
     let raw = raw.trim();
 
     // External crate — not `crate::`, `self::`, `super::`.
-    if !raw.starts_with("crate::")
-        && !raw.starts_with("self::")
-        && !raw.starts_with("super::")
-    {
+    if !raw.starts_with("crate::") && !raw.starts_with("self::") && !raw.starts_with("super::") {
         return None;
     }
 
@@ -367,19 +357,12 @@ fn resolve_rust_path_segments(
 /// Resolve a Python import to a file.
 ///
 /// `X.Y.Z` → look for `X/Y/Z.py` or `X/Y/Z/__init__.py` relative to workspace roots.
-fn resolve_python_import(
-    raw: &str,
-    root: &Path,
-    known_files: &HashSet<String>,
-) -> Option<String> {
+fn resolve_python_import(raw: &str, root: &Path, known_files: &HashSet<String>) -> Option<String> {
     let segments: Vec<&str> = raw.split('.').collect();
     let partial = segments.join("/");
 
     // Try each possible resolution.
-    let candidates = [
-        format!("{partial}.py"),
-        format!("{partial}/__init__.py"),
-    ];
+    let candidates = [format!("{partial}.py"), format!("{partial}/__init__.py")];
 
     for candidate in &candidates {
         let full = root.join(candidate).to_string_lossy().replace('\\', "/");
@@ -437,11 +420,7 @@ fn resolve_go_import(
 /// Resolve a Java import to a file.
 ///
 /// `com.example.Foo` → look for `com/example/Foo.java` relative to source roots.
-fn resolve_java_import(
-    raw: &str,
-    root: &Path,
-    known_files: &HashSet<String>,
-) -> Option<String> {
+fn resolve_java_import(raw: &str, root: &Path, known_files: &HashSet<String>) -> Option<String> {
     let path_str = raw.replace('.', "/");
     let candidate = format!("{path_str}.java");
     let full = root.join(&candidate).to_string_lossy().replace('\\', "/");
@@ -469,7 +448,18 @@ fn resolve_ts_import(
         let resolved_s = resolved.to_string_lossy().replace('\\', "/");
 
         // Try with extensions.
-        for ext in &[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", "/index.ts", "/index.tsx", "/index.js", "/index.jsx"] {
+        for ext in &[
+            ".ts",
+            ".tsx",
+            ".js",
+            ".jsx",
+            ".mjs",
+            ".cjs",
+            "/index.ts",
+            "/index.tsx",
+            "/index.js",
+            "/index.jsx",
+        ] {
             let candidate = format!("{resolved_s}{ext}");
             if known_files.contains(&candidate) {
                 return Some(candidate);
@@ -490,11 +480,7 @@ fn resolve_ts_import(
 ///
 /// - `Namespace\Path\Class` → look for `Namespace/Path/Class.php`.
 /// - Relative paths → resolve.
-fn resolve_php_import(
-    raw: &str,
-    root: &Path,
-    known_files: &HashSet<String>,
-) -> Option<String> {
+fn resolve_php_import(raw: &str, root: &Path, known_files: &HashSet<String>) -> Option<String> {
     let raw = raw.trim();
 
     // Relative path (starts with `.` or `/`).
@@ -632,8 +618,7 @@ mod tests {
         std::fs::create_dir_all(&src).unwrap();
 
         std::fs::write(src.join("main.rs"), "fn main() {}\n").unwrap();
-        std::fs::write(src.join("app.py"), "print('hello')\n")
-            .unwrap();
+        std::fs::write(src.join("app.py"), "print('hello')\n").unwrap();
         std::fs::write(src.join("lib.go"), "package main\n").unwrap();
 
         let graph = crate::linker::scan::scan_roots(&[proj]);
@@ -672,8 +657,7 @@ mod tests {
         let src = proj.join("src");
         std::fs::create_dir_all(&src).unwrap();
 
-        std::fs::write(proj.join("Cargo.toml"), "[package]\nname=\"test\"\n")
-            .unwrap();
+        std::fs::write(proj.join("Cargo.toml"), "[package]\nname=\"test\"\n").unwrap();
         std::fs::write(src.join("lib.rs"), "use crate::bar;\n").unwrap();
         std::fs::write(src.join("bar.rs"), "pub fn bar() {}\n").unwrap();
 
@@ -681,11 +665,13 @@ mod tests {
         let graph = crate::linker::scan::scan_roots(&roots);
 
         // Find the edge from lib.rs.
-        let lib_path = src.join("lib.rs")
-            .to_string_lossy()
-            .replace('\\', "/");
+        let lib_path = src.join("lib.rs").to_string_lossy().replace('\\', "/");
         let edges = graph.edges.get(&lib_path);
-        assert!(edges.is_some(), "lib.rs should have edges, graph nodes: {:?}", graph.nodes.keys().collect::<Vec<_>>());
+        assert!(
+            edges.is_some(),
+            "lib.rs should have edges, graph nodes: {:?}",
+            graph.nodes.keys().collect::<Vec<_>>()
+        );
 
         let edges = edges.unwrap();
         assert_eq!(edges.len(), 1, "lib.rs should have exactly 1 edge");
@@ -720,21 +706,16 @@ mod tests {
         let mode_dir = app.join("mode");
         std::fs::create_dir_all(&mode_dir).unwrap();
 
-        std::fs::write(proj.join("Cargo.toml"), "[package]\nname=\"test\"\n")
-            .unwrap();
-        std::fs::write(src.join("lib.rs"), "use crate::app::mode::editor::Foo;\n")
-            .unwrap();
+        std::fs::write(proj.join("Cargo.toml"), "[package]\nname=\"test\"\n").unwrap();
+        std::fs::write(src.join("lib.rs"), "use crate::app::mode::editor::Foo;\n").unwrap();
         std::fs::write(app.join("mod.rs"), "").unwrap();
         std::fs::write(app.join("mode.rs"), "pub mod editor;\n").unwrap();
-        std::fs::write(mode_dir.join("editor.rs"), "pub struct Foo;\n")
-            .unwrap();
+        std::fs::write(mode_dir.join("editor.rs"), "pub struct Foo;\n").unwrap();
 
         let roots = vec![proj];
         let graph = crate::linker::scan::scan_roots(&roots);
 
-        let lib_path = src.join("lib.rs")
-            .to_string_lossy()
-            .replace('\\', "/");
+        let lib_path = src.join("lib.rs").to_string_lossy().replace('\\', "/");
         let edges = graph.edges.get(&lib_path);
         assert!(edges.is_some(), "lib.rs should have edges");
 
@@ -767,17 +748,14 @@ mod tests {
         let src = proj.join("src");
         std::fs::create_dir_all(&src).unwrap();
 
-        std::fs::write(proj.join("Cargo.toml"), "[package]\nname=\"test\"\n")
-            .unwrap();
+        std::fs::write(proj.join("Cargo.toml"), "[package]\nname=\"test\"\n").unwrap();
         std::fs::write(src.join("lib.rs"), "use crate::foo::Bar;\n").unwrap();
         std::fs::write(src.join("foo.rs"), "pub struct Bar;\n").unwrap();
 
         let roots = vec![proj];
         let graph = crate::linker::scan::scan_roots(&roots);
 
-        let lib_path = src.join("lib.rs")
-            .to_string_lossy()
-            .replace('\\', "/");
+        let lib_path = src.join("lib.rs").to_string_lossy().replace('\\', "/");
         let edges = graph.edges.get(&lib_path);
         assert!(edges.is_some(), "lib.rs should have edges");
 
@@ -811,21 +789,14 @@ mod tests {
         let app = src.join("app");
         std::fs::create_dir_all(&app).unwrap();
 
-        std::fs::write(proj.join("Cargo.toml"), "[package]\nname=\"test\"\n")
-            .unwrap();
-        std::fs::write(
-            src.join("lib.rs"),
-            "use crate::app::does_not_exist::Bar;\n",
-        )
-        .unwrap();
+        std::fs::write(proj.join("Cargo.toml"), "[package]\nname=\"test\"\n").unwrap();
+        std::fs::write(src.join("lib.rs"), "use crate::app::does_not_exist::Bar;\n").unwrap();
         std::fs::write(app.join("mod.rs"), "").unwrap();
 
         let roots = vec![proj];
         let graph = crate::linker::scan::scan_roots(&roots);
 
-        let lib_path = src.join("lib.rs")
-            .to_string_lossy()
-            .replace('\\', "/");
+        let lib_path = src.join("lib.rs").to_string_lossy().replace('\\', "/");
         let edges = graph.edges.get(&lib_path);
         assert!(edges.is_some(), "lib.rs should have edges");
 
@@ -839,7 +810,10 @@ mod tests {
                     "should be marked External"
                 );
             }
-            other => panic!("expected External edge for invalid intermediate, got: {:?}", other),
+            other => panic!(
+                "expected External edge for invalid intermediate, got: {:?}",
+                other
+            ),
         }
     }
 }

@@ -21,6 +21,9 @@ fn test_ctx() -> ToolCtx {
         bash_saving: true,
         bash_log_dir: None,
         session_dir: None,
+        allow_scratch: true,
+        sdlc_assess: false,
+        sdlc_active_node_id: None,
     }
 }
 

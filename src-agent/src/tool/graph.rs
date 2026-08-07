@@ -45,9 +45,10 @@ impl Tool for GraphQuery {
 
         // Get path, normalized against session workspaces so relative paths
         // like `src/foo.rs` resolve to the actual absolute path in the graph.
-        let path = args.get("path").and_then(|v| v.as_str()).map(|p| {
-            crate::linker::client::normalize_query_path(p, &ctx.workspaces)
-        });
+        let path = args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(|p| crate::linker::client::normalize_query_path(p, &ctx.workspaces));
 
         // Connect to the linker daemon
         let sock_path = crate::model::store::linker_daemon_sock_path()
@@ -163,9 +164,7 @@ impl Tool for GraphQuery {
         stream
             .write_all(&payload)
             .map_err(|e| anyhow::anyhow!("write payload: {e}"))?;
-        stream
-            .flush()
-            .map_err(|e| anyhow::anyhow!("flush: {e}"))?;
+        stream.flush().map_err(|e| anyhow::anyhow!("flush: {e}"))?;
 
         // Read response (blocking frame reassembly)
         let mut frame_reader = crate::ipc::frame::FrameReader::new();

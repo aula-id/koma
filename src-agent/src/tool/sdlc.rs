@@ -1,17 +1,15 @@
-//! The SDLC tool suite: `mission_ready`, `mission_verify`, `mission_integrate`.
+//! The SDLC tool suite: `mission_ready`, `mission_verify`, `mission_integrate`,
+//! plus amendment / human-gate helpers parsed by the runtime intercepts.
 //!
 //! `mission_ready` mirrors `plan_ready`: the tool's `run` is a stub — the real
 //! work happens in the runtime interception in `process_tools`, BEFORE the
 //! generic dispatch path.
-//!
-//! `mission_verify` and `mission_integrate` follow the same intercepted stub
-//! pattern: the tool defines the schema so the model can call it, but the
-//! runtime intercepts the call and does the real work.
 
 use anyhow::Result;
 use serde_json::{json, Value};
 
 use super::{Tool, ToolCtx};
+use crate::model::sdlc::graph::ChecklistNode;
 
 /// Sentinel returned by a successful `mission_ready` call (never actually
 /// returned — the interception handles everything). Kept for pattern parity.
@@ -29,8 +27,10 @@ impl Tool for MissionReady {
     fn description(&self) -> &'static str {
         "Present your finished SDLC mission contract for user approval. Must include goal, \
          acceptance criteria, non_goals, lane, verify_plan, human_gates, risks, rationale, \
-         and graph_tasks (array of task titles). Only call this from SDLC mode when your \
-         exploration and contract-building is complete."
+         and graph_tasks (array of task titles or {title, parent?, id?} objects forming an \
+         epic→story→task tree). Only call this from SDLC mode when your exploration and \
+         contract-building is complete. Calling again on an approved mission starts the \
+         amendment/reapproval path."
     }
 
     fn parameters(&self) -> Value {
@@ -80,8 +80,30 @@ impl Tool for MissionReady {
                 },
                 "graph_tasks": {
                     "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Task titles for the execution checklist."
+                    "items": {
+                        "oneOf": [
+                            { "type": "string" },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "title": { "type": "string" },
+                                    "parent": { "type": "string" },
+                                    "id": { "type": "string" },
+                                    "owned_paths": {
+                                        "type": "array",
+                                        "items": { "type": "string" },
+                                        "description": "Glob patterns for file paths this node owns. Write/edit/delete to paths matching a DIFFERENT active node's patterns is rejected."
+                                    }
+                                },
+                                "required": ["title"]
+                            }
+                        ]
+                    },
+                    "description": "Task titles or {title, parent?, id?} for the execution graph."
+                },
+                "amendment_note": {
+                    "type": "string",
+                    "description": "If amending an approved mission, short note of what changed."
                 }
             },
             "required": ["highlights", "goal", "acceptance", "graph_tasks"]
@@ -89,7 +111,6 @@ impl Tool for MissionReady {
     }
 
     fn run(&self, _ctx: &ToolCtx, _args: &Value) -> Result<String> {
-        // Intercepted by the runtime before dispatch; never actually called.
         Ok("error: mission_ready must be handled by the runtime".into())
     }
 }
@@ -103,9 +124,11 @@ impl Tool for MissionVerify {
     }
 
     fn description(&self) -> &'static str {
-        "Mark verify_bit on a graph node after running verify evidence. \
+        "Mark verify_bit on a LEAF graph node after running verify evidence. \
          Pass evidence describing what was verified (e.g. test output). \
-         pass=false reopens the node to active (verify failed)."
+         pass=false reopens the leaf and its ancestors. Parents roll up automatically. \
+         To request a named human_gate, set human_gate — this PARKS for the user's \
+         explicit y/n; the model cannot mark the gate approved itself."
     }
 
     fn parameters(&self) -> Value {
@@ -114,7 +137,7 @@ impl Tool for MissionVerify {
             "properties": {
                 "node_id": {
                     "type": "string",
-                    "description": "The graph node id (e.g. t1, t2)."
+                    "description": "The leaf graph node id."
                 },
                 "evidence": {
                     "type": "string",
@@ -123,6 +146,10 @@ impl Tool for MissionVerify {
                 "pass": {
                     "type": "boolean",
                     "description": "Whether verification passed (default true). Pass false to reopen."
+                },
+                "human_gate": {
+                    "type": "string",
+                    "description": "Request USER approval of a named human_gate from the mission contract. Parks for explicit y/n; the model cannot self-approve. Approval is persisted only after the user accepts."
                 }
             },
             "required": ["evidence"]
@@ -134,7 +161,7 @@ impl Tool for MissionVerify {
     }
 }
 
-/// Enter integrate phase; merge to main if clean+safe.
+/// Enter integrate phase; merge into frozen target branch if clean+safe.
 pub struct MissionIntegrate;
 
 impl Tool for MissionIntegrate {
@@ -143,9 +170,12 @@ impl Tool for MissionIntegrate {
     }
 
     fn description(&self) -> &'static str {
-        "Enter the integrate phase: merge the mission branch into the primary workdir. \
-         If the working tree is dirty, the branch is left ready for manual merge or PR. \
-         Never force-pushes."
+        "Enter the integrate phase: merge the mission branch into the frozen target \
+         (target_worktree_path + target_branch captured at approval). \
+         Requires frozen graph complete, all required leaf evidence verified, valid binding, \
+         frozen target present, and approved human gates. Branch-only cannot bypass those gates. \
+         If the target working tree is dirty, the branch is left ready for manual merge or PR. \
+         Never force-pushes. Never infers destination from live cwd."
     }
 
     fn parameters(&self) -> Value {
@@ -158,7 +188,7 @@ impl Tool for MissionIntegrate {
                 },
                 "force_branch_only": {
                     "type": "boolean",
-                    "description": "If true, skip merge and leave the branch ready for manual integration."
+                    "description": "If true, skip merge and leave the branch ready (still requires evidence gates)."
                 }
             },
             "required": ["summary"]
@@ -170,8 +200,7 @@ impl Tool for MissionIntegrate {
     }
 }
 
-/// Parse mission_ready args from the model's tool call. Returns `(highlights,
-/// Mission-like fields)` on success, or an error string.
+/// Parse mission_ready args from the model's tool call.
 pub(crate) fn parse_mission_ready_args(args: &Value) -> Result<MissionArgs, String> {
     let highlights = args
         .get("highlights")
@@ -188,9 +217,10 @@ pub(crate) fn parse_mission_ready_args(args: &Value) -> Result<MissionArgs, Stri
     let acceptance = string_array(args, "acceptance")
         .filter(|v| !v.is_empty())
         .ok_or("error: mission_ready requires non-empty 'acceptance'")?;
-    let graph_tasks = string_array(args, "graph_tasks")
-        .filter(|v| !v.is_empty())
-        .ok_or("error: mission_ready requires non-empty 'graph_tasks'")?;
+    let graph_tasks = parse_graph_tasks(args)?;
+    if graph_tasks.is_empty() {
+        return Err("error: mission_ready requires non-empty 'graph_tasks'".into());
+    }
     let non_goals = string_array(args, "non_goals").unwrap_or_default();
     let verify_plan = string_array(args, "verify_plan").unwrap_or_default();
     let human_gates = string_array(args, "human_gates").unwrap_or_default();
@@ -199,12 +229,24 @@ pub(crate) fn parse_mission_ready_args(args: &Value) -> Result<MissionArgs, Stri
         .get("lane")
         .and_then(Value::as_str)
         .unwrap_or("standard")
-        .to_string();
+        .trim()
+        .to_ascii_lowercase();
+    if !matches!(lane.as_str(), "express" | "standard" | "full") {
+        return Err("error: lane must be express|standard|full".into());
+    }
     let rationale = args
         .get("rationale")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let amendment_note = args
+        .get("amendment_note")
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    // Lane / anti-megatask validation.
+    crate::model::sdlc::decompose::validate_lane_graph(&lane, &graph_tasks, acceptance.len())?;
 
     Ok(MissionArgs {
         highlights: highlights.to_string(),
@@ -217,16 +259,90 @@ pub(crate) fn parse_mission_ready_args(args: &Value) -> Result<MissionArgs, Stri
         risks,
         rationale,
         graph_tasks,
+        amendment_note,
     })
 }
 
-/// Parse mission_verify args. Returns `(node_id, evidence, pass)` on success.
+fn parse_graph_tasks(args: &Value) -> Result<Vec<ChecklistNode>, String> {
+    let arr = args
+        .get("graph_tasks")
+        .and_then(Value::as_array)
+        .ok_or("error: mission_ready requires non-empty 'graph_tasks'")?;
+    let mut out = Vec::new();
+    for (i, v) in arr.iter().enumerate() {
+        if let Some(s) = v.as_str() {
+            let t = s.trim();
+            if t.is_empty() {
+                continue;
+            }
+            out.push(ChecklistNode {
+                title: t.to_string(),
+                status: "pending".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec![],
+            });
+        } else if let Some(obj) = v.as_object() {
+            let title = obj
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| format!("error: graph_tasks[{i}] object needs non-empty title"))?
+                .to_string();
+            let parent_title = obj
+                .get("parent")
+                .or_else(|| obj.get("parent_title"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let id = obj
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let owned_paths: Vec<String> = obj
+                .get("owned_paths")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            out.push(ChecklistNode {
+                title,
+                status: "pending".into(),
+                parent_title,
+                id,
+                owned_paths,
+            });
+        } else {
+            return Err(format!(
+                "error: graph_tasks[{i}] must be a string or {{title, parent?}} object"
+            ));
+        }
+    }
+    Ok(out)
+}
+
+/// Parse mission_verify args. Returns `(node_id, evidence, pass, human_gate)`.
 pub(crate) fn parse_mission_verify_args(
     args: &Value,
-) -> Result<(Option<String>, String, bool), String> {
+) -> Result<(Option<String>, String, bool, Option<String>), String> {
     let node_id = args
         .get("node_id")
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let human_gate = args
+        .get("human_gate")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
         .map(str::to_string);
     let evidence = args
         .get("evidence")
@@ -235,7 +351,7 @@ pub(crate) fn parse_mission_verify_args(
         .filter(|s| !s.is_empty())
         .ok_or("error: mission_verify requires a non-empty 'evidence'")?;
     let pass = args.get("pass").and_then(Value::as_bool).unwrap_or(true);
-    Ok((node_id, evidence.to_string(), pass))
+    Ok((node_id, evidence.to_string(), pass, human_gate))
 }
 
 /// Parse mission_integrate args. Returns `(summary, force_branch_only)`.
@@ -277,7 +393,8 @@ pub(crate) struct MissionArgs {
     pub human_gates: Vec<String>,
     pub risks: Vec<String>,
     pub rationale: String,
-    pub graph_tasks: Vec<String>,
+    pub graph_tasks: Vec<ChecklistNode>,
+    pub amendment_note: Option<String>,
 }
 
 /// Tool-result text when user approves a mission.
@@ -301,12 +418,20 @@ pub(crate) fn mission_denied_text() -> &'static str {
      feedback, revise the contract, and call mission_ready again when ready."
 }
 
+/// Tool-result text when approve failed closed (binding).
+pub(crate) fn mission_binding_failed_text(detail: &str) -> String {
+    format!(
+        "mission NOT approved — worktree/branch binding failed ({detail}). \
+         Stay in assess, fix git/worktree, call mission_ready again."
+    )
+}
+
 /// Tool-result text for a successful verify.
 pub(crate) fn mission_verify_result(node_id: &str, pass: bool) -> String {
     if pass {
-        format!("mission_verify: node {node_id} marked verified")
+        format!("mission_verify: leaf {node_id} marked verified (parents rolled up if complete)")
     } else {
-        format!("mission_verify: node {node_id} verify failed — reopened to active")
+        format!("mission_verify: leaf {node_id} verify failed — reopened leaf + ancestors")
     }
 }
 

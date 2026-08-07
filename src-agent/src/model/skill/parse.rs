@@ -37,10 +37,7 @@ pub(crate) fn parse_skill(
     };
 
     if description.trim().is_empty() {
-        return Err(anyhow!(
-            "skill '{}' missing required 'description'",
-            name
-        ));
+        return Err(anyhow!("skill '{}' missing required 'description'", name));
     }
 
     Ok(SkillDef {

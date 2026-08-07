@@ -43,6 +43,10 @@ impl Tool for Task {
                     "type": "string",
                     "description": "The full task instruction for the sub-agent."
                 },
+                "node_id": {
+                    "type": "string",
+                    "description": "SDLC graph leaf id to claim (required in SDLC execute/integrate)."
+                },
                 "run_in_background": {
                     "type": "boolean",
                     "description": "Run the sub-agent in the background and return its id immediately; poll with task_output, stop with task_kill. Use for long autonomous tasks you want to run while continuing. Defaults to false."

@@ -49,10 +49,7 @@ impl Tool for Skill {
     }
 
     fn run(&self, ctx: &ToolCtx, args: &Value) -> Result<String> {
-        let action = args
-            .get("action")
-            .and_then(Value::as_str)
-            .unwrap_or("list");
+        let action = args.get("action").and_then(Value::as_str).unwrap_or("list");
 
         match action {
             "load" => {

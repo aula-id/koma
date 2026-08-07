@@ -1,7 +1,7 @@
 //! `edit` tool — replace an exact string in a file in place.
 
 use super::helpers::{arg_str, not_found_help};
-use crate::tool::{resolve, Tool, ToolCtx};
+use crate::tool::{resolve_in, Tool, ToolCtx};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
@@ -40,7 +40,7 @@ impl Tool for Edit {
             .and_then(Value::as_bool)
             .unwrap_or(false);
 
-        let path = resolve(&ctx.workspaces, rel)?;
+        let path = resolve_in(&ctx.workspaces, rel, ctx.allow_scratch)?;
         if path.is_dir() {
             bail!("'{rel}' is a directory, not a file");
         }

@@ -221,10 +221,7 @@ pub fn normalize_query_path(path: &str, project_roots: &[PathBuf]) -> String {
     // File doesn't exist on disk: still return an absolute path under the
     // primary root so the daemon suffix-match has a chance.
     if let Some(root) = project_roots.first() {
-        return root
-            .join(p)
-            .to_string_lossy()
-            .replace('\\', "/");
+        return root.join(p).to_string_lossy().replace('\\', "/");
     }
 
     // No roots at all — return slash-normalized as-is.
@@ -238,10 +235,7 @@ mod tests {
     #[test]
     fn normalize_query_path_absolute_passthrough() {
         let roots = vec![PathBuf::from("/some/root")];
-        assert_eq!(
-            normalize_query_path("/foo/bar.rs", &roots),
-            "/foo/bar.rs"
-        );
+        assert_eq!(normalize_query_path("/foo/bar.rs", &roots), "/foo/bar.rs");
     }
 
     #[test]
@@ -258,10 +252,7 @@ mod tests {
     fn normalize_query_path_backslash() {
         // Windows-style backslashes should be normalized.
         let roots = vec![PathBuf::from("/some/root")];
-        assert_eq!(
-            normalize_query_path("/foo\\bar.rs", &roots),
-            "/foo/bar.rs"
-        );
+        assert_eq!(normalize_query_path("/foo\\bar.rs", &roots), "/foo/bar.rs");
     }
 
     #[test]
@@ -270,7 +261,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("koma_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         std::fs::write(dir.join("hello.rs"), "fn main() {}").unwrap();
-        let result = normalize_query_path("hello.rs", &[dir.clone()]);
+        let result = normalize_query_path("hello.rs", std::slice::from_ref(&dir));
         // Should be the canonical absolute path.
         assert!(std::path::Path::new(&result).is_absolute());
         assert!(result.ends_with("hello.rs"));
@@ -289,7 +280,7 @@ mod tests {
         let root_a = std::env::temp_dir().join(format!("koma_test_{}_a", std::process::id()));
         let _ = std::fs::create_dir_all(root_a.join("src"));
         std::fs::write(root_a.join("src/main.rs"), "fn main() {}").unwrap();
-        let result = normalize_query_path("[0]src/main.rs", &[root_a.clone()]);
+        let result = normalize_query_path("[0]src/main.rs", std::slice::from_ref(&root_a));
         assert!(result.contains("src/main.rs"));
         // On macOS, temp_dir() symlinks /var → /private/var; canonicalize resolves
         // the symlink, so compare against the canonicalized + slash-normalized root.
@@ -356,5 +347,3 @@ mod tests {
         assert_eq!(result, "/some/root/[0]");
     }
 }
-
-

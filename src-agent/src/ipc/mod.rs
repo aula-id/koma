@@ -63,9 +63,9 @@ pub fn split_stream(stream: IpcStream) -> (IpcReadHalf, IpcWriteHalf) {
 pub mod client;
 pub mod conn;
 pub mod frame;
+pub mod linker_proto;
 pub mod mcp_proto;
 pub mod oauth_proto;
-pub mod linker_proto;
 pub mod proto;
 pub mod selftest;
 pub mod server;

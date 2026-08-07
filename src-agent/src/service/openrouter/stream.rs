@@ -253,8 +253,7 @@ impl OpenRouterClient {
                         conn.oauth_uuid,
                         crate::service::oauth::commandcode::CHAT_NDJSON,
                     );
-                    let ndjson_endpoint =
-                        crate::service::oauth::registry::COMMANDCODE_CHAT_BASE;
+                    let ndjson_endpoint = crate::service::oauth::registry::COMMANDCODE_CHAT_BASE;
                     let ndjson_conn = Conn {
                         endpoint: ndjson_endpoint,
                         api_key: conn.api_key,
@@ -339,7 +338,10 @@ impl OpenRouterClient {
                 emit(&tx, StreamEvent::Error(clean_error(status, &text)));
                 return Ok(());
             }
-            emit(&tx, StreamEvent::Error("all retry attempts exhausted".into()));
+            emit(
+                &tx,
+                StreamEvent::Error("all retry attempts exhausted".into()),
+            );
             return Ok(());
         };
 

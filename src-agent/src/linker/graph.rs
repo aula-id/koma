@@ -91,12 +91,10 @@ impl ImportGraph {
 
     /// Ensure a node exists for the given path and language.
     pub fn ensure_node(&mut self, path: &str, lang: Lang) {
-        self.nodes
-            .entry(path.to_string())
-            .or_insert_with(|| Node {
-                lang,
-                path: path.to_string(),
-            });
+        self.nodes.entry(path.to_string()).or_insert_with(|| Node {
+            lang,
+            path: path.to_string(),
+        });
     }
 
     /// Replace all edges for a source file, updating the reverse index.
@@ -279,11 +277,7 @@ impl ImportGraph {
         let mut eps: Vec<String> = self
             .nodes
             .keys()
-            .filter(|k| {
-                self.reverse
-                    .get(*k)
-                    .is_none_or(|v| v.is_empty())
-            })
+            .filter(|k| self.reverse.get(*k).is_none_or(|v| v.is_empty()))
             .cloned()
             .collect();
         eps.sort();
@@ -442,9 +436,6 @@ mod tests {
     fn resolve_key_trailing_slash_stripped() {
         let mut g = ImportGraph::new();
         g.ensure_node("/abs/src/main.rs", Lang::Rust);
-        assert_eq!(
-            g.resolve_key("/abs/src/main.rs/"),
-            Some("/abs/src/main.rs")
-        );
+        assert_eq!(g.resolve_key("/abs/src/main.rs/"), Some("/abs/src/main.rs"));
     }
 }

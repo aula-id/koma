@@ -1,9 +1,10 @@
 //! SDLC Keeper: deterministic post-turn check that catches false-done nodes
-//! (marked done without verify evidence) and nudges the model to verify or
-//! integrate. No second LLM required.
+//! (marked done without verify evidence), stalled progress, and nudges the
+//! model to verify or integrate. No second LLM required for the base path.
 
 use std::path::Path;
 
+use super::decompose::{KEEPER_STALL_SECS, META_LAST_GRAPH_FINGERPRINT, META_LAST_TOOL_ROUND_AT};
 use super::graph;
 use super::Mission;
 
@@ -27,16 +28,26 @@ const META_KEY_LAST_INJECT: &str = "keeper_last_inject";
 pub fn evaluate(session_dir: &Path) -> KeeperReport {
     let mut report = KeeperReport::default();
 
-    // 1. Load mission; bail if none or not approved.
+    // 1. Load mission; bail if none or not approved / not active.
     let mission = match Mission::load(session_dir) {
-        Some(m) if m.approved => m,
+        Some(m) if m.approved && !m.needs_reapproval => m,
         _ => return report,
     };
     report.phase_hint = Some(mission.phase.clone());
 
-    // Only meaningful during execute or integrate phases.
     if mission.phase != "execute" && mission.phase != "integrate" {
         return report;
+    }
+
+    // Fail-closed: invalid contract → reassess nudge once.
+    if !mission.hash_valid() || mission.graph_hash.is_none() {
+        report.inject = Some(
+            "[SDLC keeper]\n\
+             Mission contract hash/graph binding is invalid or legacy-unbound. \
+             Fail closed: return to assess, call mission_ready again (amendment path)."
+                .into(),
+        );
+        return finalize_dedupe(session_dir, report);
     }
 
     // 2. Open msglog, ensure tables.
@@ -46,14 +57,13 @@ pub fn evaluate(session_dir: &Path) -> KeeperReport {
     };
     let _ = graph::ensure_tables(&conn);
 
-    // 3. Reopen false-done nodes.
+    // 3. Reopen false-done nodes (leaves only; ancestors included).
     let reopened = match graph::reopen_false_done(&conn) {
         Ok(r) => r,
         Err(_) => return report,
     };
 
     if !reopened.is_empty() {
-        // Build inject body for false-done reopen.
         let reopened_lines: Vec<String> = reopened
             .iter()
             .map(|n| format!("- {}: {}", n.id, n.title))
@@ -67,14 +77,26 @@ pub fn evaluate(session_dir: &Path) -> KeeperReport {
             "[SDLC keeper]\n\
              False-done reopened (done without verify evidence). Do NOT treat these as finished.\n\
              Reopened:\n{}\n\
-             Run the verify_plan steps, then call mission_verify for each node \
-             (or mark verify via mission_verify tool) before sealing done again.\n\
-             OPEN/SEALED law still applies.",
+             Run the verify_plan steps, then call mission_verify for each LEAF node \
+             before sealing done again.\n\
+             OPEN/SEALED law still applies. Cancellation is never verification.",
             reopened_lines.join("\n")
         );
         report.inject = Some(inject);
-    } else if mission.phase == "execute" {
-        // 4. Soft nudge: all open nodes are sealed, no false-done left.
+        return finalize_dedupe_conn(&conn, report);
+    }
+
+    // 4. Deterministic stall detection: tools ran, open leaves remain, graph
+    // fingerprint unchanged for > KEEPER_STALL_SECS.
+    if mission.phase == "execute" {
+        if let Some(stall) = detect_stall(&conn) {
+            report.inject = Some(stall);
+            return finalize_dedupe_conn(&conn, report);
+        }
+    }
+
+    // 5. Soft nudge: all open nodes sealed, no false-done left.
+    if mission.phase == "execute" {
         let open = graph::list_open(&conn).unwrap_or_default();
         let sealed = graph::list_sealed(&conn).unwrap_or_default();
         if open.is_empty() && !sealed.is_empty() {
@@ -87,7 +109,61 @@ pub fn evaluate(session_dir: &Path) -> KeeperReport {
         }
     }
 
-    // 5. Dedupe: skip if this exact inject was already sent.
+    finalize_dedupe_conn(&conn, report)
+}
+
+fn detect_stall(conn: &rusqlite::Connection) -> Option<String> {
+    let open_leaves = graph::list_open_leaves(conn).ok()?;
+    if open_leaves.is_empty() {
+        return None;
+    }
+    let last_tool = graph::get_mission_meta(conn, META_LAST_TOOL_ROUND_AT)
+        .ok()
+        .flatten()?
+        .parse::<i64>()
+        .ok()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    if now.saturating_sub(last_tool) < KEEPER_STALL_SECS {
+        return None;
+    }
+    let prev_fp = graph::get_mission_meta(conn, META_LAST_GRAPH_FINGERPRINT)
+        .ok()
+        .flatten()?;
+    let cur_fp = graph::graph_fingerprint(conn).ok()?;
+    // Stall = fingerprint unchanged since last tool-round stamp (no graph progress).
+    if prev_fp != cur_fp {
+        // Graph moved since stamp — refresh fingerprint baseline, no inject.
+        let _ = graph::set_mission_meta(conn, META_LAST_GRAPH_FINGERPRINT, &cur_fp);
+        return None;
+    }
+    let lines: Vec<String> = open_leaves
+        .iter()
+        .take(8)
+        .map(|n| format!("- {}: {} [{}]", n.id, n.title, n.status))
+        .collect();
+    Some(format!(
+        "[SDLC keeper]\n\
+         Stall detected: tools ran but the graph has not advanced for >{KEEPER_STALL_SECS}s \
+         with open leaves remaining.\n\
+         Open leaves:\n{}\n\
+         Resume the next OPEN leaf (task.node_id required) or record verify evidence.",
+        lines.join("\n")
+    ))
+}
+
+fn finalize_dedupe(session_dir: &Path, report: KeeperReport) -> KeeperReport {
+    let conn = match crate::model::msglog::open(session_dir) {
+        Ok(c) => c,
+        Err(_) => return report,
+    };
+    let _ = graph::ensure_tables(&conn);
+    finalize_dedupe_conn(&conn, report)
+}
+
+fn finalize_dedupe_conn(conn: &rusqlite::Connection, mut report: KeeperReport) -> KeeperReport {
     if let Some(ref inject) = report.inject {
         let inject_hash = {
             use sha2::{Digest, Sha256};
@@ -99,18 +175,16 @@ pub fn evaluate(session_dir: &Path) -> KeeperReport {
                 .map(|b| format!("{b:02x}"))
                 .collect::<String>()
         };
-        if let Ok(Some(prev)) = graph::get_mission_meta(&conn, META_KEY_LAST_INJECT) {
+        if let Ok(Some(prev)) = graph::get_mission_meta(conn, META_KEY_LAST_INJECT) {
             if prev == inject_hash {
                 report.inject = None;
                 return report;
             }
         }
-        let _ = graph::set_mission_meta(&conn, META_KEY_LAST_INJECT, &inject_hash);
+        let _ = graph::set_mission_meta(conn, META_KEY_LAST_INJECT, &inject_hash);
     }
-
     report
 }
-
 
 /// Build the user+system messages for an optional Safeguard oneshot that looks
 /// for stalled / dishonest progress the deterministic keeper missed.
@@ -130,14 +204,18 @@ pub fn llm_keeper_prompt(
          Be concise. Only flag genuine issues: stalled (no progress across sealed tasks), \
          dishonest (tasks marked done without evidence), or off-track (not working toward the goal).",
     );
-    let open_titles: Vec<String> = open.iter().map(|n| format!("- {} [{}]", n.title, n.status)).collect();
+    let open_titles: Vec<String> = open
+        .iter()
+        .map(|n| format!("- {} [{}] ({})", n.title, n.status, n.id))
+        .collect();
     let sealed_titles: Vec<String> = sealed
         .iter()
         .map(|n| {
             format!(
-                "- {} [done, verify={}]",
+                "- {} [done, verify={}] ({})",
                 n.title,
-                if n.verify_bit { "1" } else { "0" }
+                if n.verify_bit { "1" } else { "0" },
+                n.id
             )
         })
         .collect();
@@ -162,7 +240,6 @@ pub fn llm_keeper_prompt(
 }
 
 /// Parse a classify reply JSON into an optional inject body.
-/// `allow=true` → None (healthy). `allow=false` → Some(reason wrapped as keeper nudge).
 pub fn llm_verdict_to_inject(reply: &str) -> Option<String> {
     let v: serde_json::Value = match serde_json::from_str(reply) {
         Ok(v) => v,
@@ -185,7 +262,7 @@ pub fn llm_verdict_to_inject(reply: &str) -> Option<String> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
-    use crate::model::sdlc::graph;
+    use crate::model::sdlc::graph::{self, ChecklistNode};
     use crate::model::sdlc::Mission;
     use std::path::PathBuf;
 
@@ -204,7 +281,33 @@ mod tests {
     }
 
     fn write_mission(dir: &std::path::Path, phase: &str, approved: bool) {
+        let graph_hash = Some("deadbeefdeadbeefdeadbeefdeadbeef".into());
+        let worktree_name = Some("wt".into());
+        let branch = Some("sdlc/g".into());
+        let worktree_path = Some("/tmp/wt".into());
+        let target_worktree_path = Some("/tmp/primary".into());
+        let target_branch = Some("main".into());
+        let target_head = Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
+        let hash =
+            Mission::compute_contract_hash_full(crate::model::sdlc::mission::ContractHashInput {
+                goal: "g",
+                acceptance: &["a".into()],
+                non_goals: &[],
+                lane: "express",
+                verify_plan: &["cargo test".into()],
+                human_gates: &[],
+                risks: &[],
+                rationale: "",
+                graph_hash: graph_hash.as_deref(),
+                worktree_name: worktree_name.as_deref(),
+                branch: branch.as_deref(),
+                worktree_path: worktree_path.as_deref(),
+                target_worktree_path: target_worktree_path.as_deref(),
+                target_branch: target_branch.as_deref(),
+                target_head: target_head.as_deref(),
+            });
         let m = Mission {
+            contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
             id: "m-k".into(),
             goal: "g".into(),
             non_goals: vec![],
@@ -212,13 +315,21 @@ mod tests {
             lane: "express".into(),
             verify_plan: vec!["cargo test".into()],
             human_gates: vec![],
+            human_gates_approved: vec![],
             risks: vec![],
-            worktree_name: Some("wt".into()),
-            branch: Some("sdlc/g".into()),
+            worktree_name,
+            branch,
+            worktree_path,
+            target_worktree_path,
+            target_branch,
+            target_head,
             rationale: String::new(),
             phase: phase.into(),
             approved,
-            hash: Mission::compute_hash("g", &["a".into()], &[]),
+            hash,
+            graph_hash,
+            needs_reapproval: false,
+            amendment_note: None,
         };
         m.save(dir).unwrap();
     }
@@ -227,12 +338,18 @@ mod tests {
     fn keeper_reopens_false_done() {
         let dir = tmp_session();
         write_mission(&dir, "execute", true);
-        // open messages.sqlite via graph ensure on msglog open
         let conn = crate::model::msglog::open(&dir).unwrap();
         graph::ensure_tables(&conn).unwrap();
         graph::replace_nodes_from_checklist(
             &conn,
-            &[("ship it".into(), "done".into())],
+            &[ChecklistNode {
+                title: "ship it".into(),
+                status: "done".into(),
+                parent_title: None,
+                id: None,
+
+                owned_paths: vec![],
+            }],
         )
         .unwrap();
         drop(conn);
@@ -240,7 +357,6 @@ mod tests {
         let report = evaluate(&dir);
         assert_eq!(report.reopened.len(), 1);
         assert!(report.inject.as_ref().unwrap().contains("False-done"));
-        // second call dedupes
         let report2 = evaluate(&dir);
         assert!(report2.inject.is_none());
         let _ = std::fs::remove_dir_all(&dir);
@@ -252,6 +368,48 @@ mod tests {
         write_mission(&dir, "execute", false);
         let report = evaluate(&dir);
         assert!(report.inject.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keeper_stall_when_graph_frozen() {
+        let dir = tmp_session();
+        write_mission(&dir, "execute", true);
+        let conn = crate::model::msglog::open(&dir).unwrap();
+        graph::ensure_tables(&conn).unwrap();
+        graph::replace_nodes_from_checklist(
+            &conn,
+            &[ChecklistNode {
+                title: "leaf".into(),
+                status: "pending".into(),
+                parent_title: None,
+                id: None,
+
+                owned_paths: vec![],
+            }],
+        )
+        .unwrap();
+        // Stamp tool round in the past.
+        let past = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64)
+            - KEEPER_STALL_SECS
+            - 5;
+        graph::set_mission_meta(&conn, META_LAST_TOOL_ROUND_AT, &past.to_string()).unwrap();
+        let fp = graph::graph_fingerprint(&conn).unwrap();
+        graph::set_mission_meta(&conn, META_LAST_GRAPH_FINGERPRINT, &fp).unwrap();
+        drop(conn);
+
+        let report = evaluate(&dir);
+        assert!(
+            report
+                .inject
+                .as_ref()
+                .is_some_and(|s| s.contains("Stall detected")),
+            "got {:?}",
+            report.inject
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

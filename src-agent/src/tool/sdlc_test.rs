@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use super::*;
+use crate::model::sdlc::graph::ChecklistNode;
 
 #[test]
 fn parse_mission_ready_accepts_required_fields() {
@@ -15,7 +16,8 @@ fn parse_mission_ready_accepts_required_fields() {
     assert_eq!(m.highlights, "ship feature X");
     assert_eq!(m.goal, "add feature X");
     assert_eq!(m.acceptance, vec!["tests green", "docs updated"]);
-    assert_eq!(m.graph_tasks, vec!["implement", "verify"]);
+    assert_eq!(m.graph_tasks.len(), 2);
+    assert_eq!(m.graph_tasks[0].title, "implement");
     assert_eq!(m.lane, "express");
     assert_eq!(m.non_goals, vec!["rewrite Y"]);
 }
@@ -62,6 +64,36 @@ fn parse_mission_ready_rejects_empty_acceptance() {
 }
 
 #[test]
+fn parse_mission_ready_accepts_parent_objects() {
+    let args = json!({
+        "highlights": "h",
+        "goal": "g",
+        "acceptance": ["a"],
+        "lane": "full",
+        "graph_tasks": [
+            "epic",
+            {"title": "leaf", "parent": "epic"}
+        ],
+    });
+    let m = parse_mission_ready_args(&args).unwrap();
+    assert_eq!(m.graph_tasks.len(), 2);
+    assert_eq!(m.graph_tasks[1].parent_title.as_deref(), Some("epic"));
+}
+
+#[test]
+fn parse_mission_ready_standard_rejects_megatask() {
+    let args = json!({
+        "highlights": "h",
+        "goal": "g",
+        "acceptance": ["a", "b", "c"],
+        "lane": "standard",
+        "graph_tasks": ["do everything"],
+    });
+    let err = parse_mission_ready_args(&args).unwrap_err();
+    assert!(err.contains("megatask"), "got {err}");
+}
+
+#[test]
 fn decision_texts_are_distinct() {
     assert_ne!(mission_approved_compact_text(), mission_denied_text());
     assert!(mission_approved_compact_text().contains("compact"));
@@ -69,6 +101,7 @@ fn decision_texts_are_distinct() {
     let body = mission_approved_text("{\"goal\":\"x\"}");
     assert!(body.contains("APPROVED MISSION"));
     assert!(body.contains("{\"goal\":\"x\"}"));
+    assert!(mission_binding_failed_text("x").contains("NOT approved"));
 }
 
 #[test]
@@ -77,10 +110,39 @@ fn parse_mission_verify_defaults_pass_true() {
         "node_id": "t1",
         "evidence": "cargo test ok",
     });
-    let (id, evidence, pass) = parse_mission_verify_args(&args).unwrap();
+    let (id, evidence, pass, gate) = parse_mission_verify_args(&args).unwrap();
     assert_eq!(id.as_deref(), Some("t1"));
     assert_eq!(evidence, "cargo test ok");
     assert!(pass);
+    assert!(gate.is_none());
+}
+
+#[test]
+fn parse_mission_verify_human_gate() {
+    let args = json!({
+        "evidence": "user signed off",
+        "human_gate": "review API",
+    });
+    let (_id, _e, _p, gate) = parse_mission_verify_args(&args).unwrap();
+    assert_eq!(gate.as_deref(), Some("review API"));
+}
+
+#[test]
+fn mission_verify_schema_human_gate_is_request_not_self_approve() {
+    let t = MissionVerify;
+    let desc = t.description();
+    assert!(
+        desc.contains("PARKS") || desc.to_lowercase().contains("user"),
+        "description must make clear human_gate is user-gated"
+    );
+    let params = t.parameters();
+    let hg = params["properties"]["human_gate"]["description"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        hg.to_lowercase().contains("user") || hg.contains("y/n"),
+        "schema must not claim model self-approves: {hg}"
+    );
 }
 
 #[test]
@@ -96,4 +158,17 @@ fn parse_mission_integrate_force_flag() {
     let (summary, force) = parse_mission_integrate_args(&args).unwrap();
     assert_eq!(summary, "shipped");
     assert!(force);
+}
+
+#[test]
+fn checklist_node_roundtrip_shape() {
+    let n = ChecklistNode {
+        title: "t".into(),
+        status: "pending".into(),
+        parent_title: Some("p".into()),
+        id: None,
+
+        owned_paths: vec![],
+    };
+    assert_eq!(n.parent_title.as_deref(), Some("p"));
 }

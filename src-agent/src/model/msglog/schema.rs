@@ -182,7 +182,8 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             phase     TEXT,
             notes     TEXT NOT NULL DEFAULT '',
             verify_bit INTEGER NOT NULL DEFAULT 0,
-            updated_at INTEGER NOT NULL
+            updated_at INTEGER NOT NULL,
+            owned_paths TEXT NOT NULL DEFAULT '[]'
         );
 
         CREATE TABLE IF NOT EXISTS sdlc_events (

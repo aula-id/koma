@@ -40,7 +40,14 @@ fn message_count_none_when_no_sqlite_yet() {
 fn message_count_counts_appended_rows() {
     let dir = TempDir::new("counts");
     append(dir.path(), Role::User, "hi", None, None).unwrap();
-    append(dir.path(), Role::Assistant, "hello", None, Some((10, 5, 0.001))).unwrap();
+    append(
+        dir.path(),
+        Role::Assistant,
+        "hello",
+        None,
+        Some((10, 5, 0.001)),
+    )
+    .unwrap();
     append(dir.path(), Role::Tool, "tool output", None, None).unwrap();
 
     assert_eq!(message_count(dir.path()), Some(3));
@@ -64,7 +71,14 @@ fn message_count_is_a_plain_row_count() {
 fn clear_rolling_summary_freezes_watermark_and_empties_text() {
     let dir = TempDir::new("clear-summary");
     append(dir.path(), Role::User, "hi", None, None).unwrap();
-    append(dir.path(), Role::Assistant, "hello", None, Some((10, 5, 0.0))).unwrap();
+    append(
+        dir.path(),
+        Role::Assistant,
+        "hello",
+        None,
+        Some((10, 5, 0.0)),
+    )
+    .unwrap();
     let tip = max_message_id(dir.path());
     assert!(tip >= 2);
     // Seed a non-empty summary covering the archive.
@@ -93,7 +107,14 @@ fn clear_rolling_summary_on_empty_archive_deletes_row() {
 fn search_messages_single_term_finds_match() {
     let dir = TempDir::new("fts-single");
     append(dir.path(), Role::User, "hello world", None, None).unwrap();
-    append(dir.path(), Role::Assistant, "goodbye", None, Some((10, 5, 0.0))).unwrap();
+    append(
+        dir.path(),
+        Role::Assistant,
+        "goodbye",
+        None,
+        Some((10, 5, 0.0)),
+    )
+    .unwrap();
 
     let hits = search_messages(dir.path(), "hello", 10, None);
     assert_eq!(hits.len(), 1);
@@ -275,14 +296,7 @@ fn search_still_works_after_reasoning_column() {
         Some((10, 5, 0.0)),
     )
     .unwrap();
-    append(
-        dir.path(),
-        Role::User,
-        "great, go ahead",
-        None,
-        None,
-    )
-    .unwrap();
+    append(dir.path(), Role::User, "great, go ahead", None, None).unwrap();
 
     // FTS matches on content, not reasoning.
     let hits = search_messages(dir.path(), "parser", 10, None);

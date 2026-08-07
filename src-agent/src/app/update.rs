@@ -40,7 +40,13 @@ pub fn run_update() -> Result<()> {
             url
         );
         match std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps_cmd])
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &ps_cmd,
+            ])
             .status()
         {
             Ok(status) if status.success() => {
@@ -49,7 +55,10 @@ pub fn run_update() -> Result<()> {
                 return Ok(());
             }
             Ok(status) => {
-                last_err = Some(format!("installer exited with status {}", status.code().unwrap_or(-1)));
+                last_err = Some(format!(
+                    "installer exited with status {}",
+                    status.code().unwrap_or(-1)
+                ));
             }
             Err(e) => {
                 last_err = Some(format!("failed to launch PowerShell: {e}"));
