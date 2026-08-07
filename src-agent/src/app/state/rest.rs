@@ -894,52 +894,25 @@ impl AppStateRest {
                     }
                 }
             }
-            // Done-phase cleanup: if leaving SDLC while in done, perform the
-            // same worktree removal + branch deletion + assess reset that
-            // intercept_mission_integrate does on success.
+            // Retry an interrupted done cleanup without ever discarding the
+            // contract when a checked git operation fails. A successful path
+            // resets the persisted mission to assess; a failure remains done
+            // for a later retry instead of pretending cleanup succeeded.
             if let Some(path) = self.sessions[sess_idx]
                 .session
                 .as_ref()
                 .map(|s| s.path.clone())
             {
-                if let Some(m) = crate::model::sdlc::Mission::load(&path) {
-                    if matches!(m.phase.as_str(), "done") {
-                        let wt_path = m.worktree_path.as_ref().filter(|p| !p.is_empty());
-                        let wt_branch = m.branch.as_ref().filter(|b| !b.is_empty());
-                        let target_repo =
-                            m.target_worktree_path
-                                .as_ref()
-                                .filter(|p| !p.is_empty());
-                        if let (Some(repo), Some(wt)) = (target_repo, wt_path) {
-                            let _ = std::process::Command::new("git")
-                                .args([
-                                    "worktree",
-                                    "remove",
-                                    wt.as_os_str().to_string_lossy().as_ref(),
-                                ])
-                                .current_dir(repo)
-                                .stdout(std::process::Stdio::piped())
-                                .stderr(std::process::Stdio::piped())
-                                .output();
-                        }
-                        if let (Some(repo), Some(br)) = (target_repo, wt_branch) {
-                            let _ = std::process::Command::new("git")
-                                .args(["branch", "-d", br])
-                                .current_dir(repo)
-                                .stdout(std::process::Stdio::piped())
-                                .stderr(std::process::Stdio::piped())
-                                .output();
-                        }
-                        // Reset to assess with cleared bindings.
-                        let mut m2 = m.clone();
-                        m2.phase = "assess".into();
-                        m2.approved = false;
-                        m2.worktree_name = None;
-                        m2.branch = None;
-                        m2.worktree_path = None;
-                        m2.needs_reapproval = true;
-                        m2.hash = m2.recompute_hash();
-                        let _ = m2.save(&path);
+                if matches!(
+                    crate::model::sdlc::Mission::load(&path)
+                        .as_ref()
+                        .map(|m| m.phase.as_str()),
+                    Some("done")
+                ) {
+                    if let Err(e) = crate::model::sdlc::mission::cleanup_done_mission(&path) {
+                        self.sessions[sess_idx].set_toast(format!(
+                            "SDLC done cleanup failed; mission remains intact: {e}"
+                        ));
                     }
                 }
             }
