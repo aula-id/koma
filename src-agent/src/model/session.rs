@@ -493,15 +493,18 @@ Amending an approved contract: call mission_ready again (sets needs_reapproval);
 ## Post-approve (execute phase)\n\
 NO preference nags; research, decide, ship. Never invent APIs — read the code.\n\
 - Execute inside the bound mission worktree (cwd is switched only after binding succeeds). Do not thrash the user's main tree.\n\
-- Path ownership: write/edit/delete only inside the mission worktree during execute. Do not mutate the primary tree until integrate.\n\
+- Never force-push; plain push only the mission branch.\n\
+- One OPEN leaf claim at a time (main: checklist in_progress or task.node_id). Second claim is denied until the active leaf is sealed.\n\
+- Path ownership: if the claimed leaf has owned_paths, stay inside them. Write/edit/delete only inside the mission worktree during execute. Do not mutate the primary tree until integrate.\n\
 - Do NOT call git_worktree enter/exit/create/remove during execute/integrate — binding is frozen.\n\
-- Keep the checklist/graph honest: SEALED done nodes must not be re-implemented. Graph is authority; TODO.md is projection only.\n\
+- Keep the checklist/graph honest: SEALED done nodes must not be re-implemented. Graph is authority; checklist cannot bare-done; TODO.md is projection only.\n\
 - Delegate with `task` only to OPEN leaves and always pass `task.node_id`.\n\
-- After real verify evidence (tests/build), call `mission_verify` with leaf node_id + evidence before treating a node as sealed. Done without verify is false-done — the keeper will reopen it. Parents roll up; verify is leaf-only.\n\
-- When OPEN is empty, acceptance is green, leaves verified, binding valid, and human gates approved, call `mission_integrate`.\n\
+- Seal only via `mission_verify` with leaf node_id + real evidence (tests/build) before treating a node as sealed. Done without verify is false-done — the keeper will reopen it (optional backstop). Parents roll up; verify is leaf-only.\n\
+- No auto-commit. When OPEN is empty, acceptance is green, leaves verified, binding valid, and human gates approved, call `mission_integrate` (needs clean mission WT + commits ahead).\n\
 - Integrate never force-pushes. Dirty target → leave the mission branch ready (or PR); clean target may FF/merge into the frozen target_branch (never hard-coded main). Branch-only cannot bypass evidence gates. Destination is exclusively frozen target_worktree_path.\n\
 - Human gates on the contract require explicit user y/n via mission_verify(human_gate=...) — the model cannot self-approve gates. Integrate stays gated on persisted approvals.\n\
-- External shell/MCP is not OS-sandboxed — stay inside the mission tree by discipline.\n\n\
+- External shell/MCP is not OS-sandboxed — stay inside the mission tree by discipline.\n\
+- Unsure: web_search → message_find → ask the user.\n\n\
 ## On confusion about mission/details\n\
 Re-read mission.json and the OPEN/SEALED capsule. The contract is the source of truth.\n"
             );
@@ -509,22 +512,35 @@ Re-read mission.json and the OPEN/SEALED capsule. The contract is the source of 
             // so sealed work stays sealed across every turn/rebuild.
             if let Some(mission) = crate::model::sdlc::Mission::load(&self.path) {
                 if mission.approved {
-                    let (open, sealed, all) = crate::model::msglog::open(&self.path)
-                        .ok()
-                        .map(|conn| {
-                            let _ = crate::model::sdlc::graph::ensure_tables(&conn);
-                            let open =
-                                crate::model::sdlc::graph::list_open(&conn).unwrap_or_default();
-                            let sealed =
-                                crate::model::sdlc::graph::list_sealed(&conn).unwrap_or_default();
-                            let all =
-                                crate::model::sdlc::graph::list_all(&conn).unwrap_or_default();
-                            (open, sealed, all)
-                        })
-                        .unwrap_or_default();
+                    let (open, sealed, all, sealed_commit_shas) =
+                        crate::model::msglog::open(&self.path)
+                            .ok()
+                            .map(|conn| {
+                                let _ = crate::model::sdlc::graph::ensure_tables(&conn);
+                                let open =
+                                    crate::model::sdlc::graph::list_open(&conn).unwrap_or_default();
+                                let sealed = crate::model::sdlc::graph::list_sealed(&conn)
+                                    .unwrap_or_default();
+                                let all =
+                                    crate::model::sdlc::graph::list_all(&conn).unwrap_or_default();
+                                let sealed_ids: Vec<String> =
+                                    sealed.iter().map(|n| n.id.clone()).collect();
+                                let sealed_commit_shas =
+                                    crate::model::sdlc::graph::latest_verified_commit_shas(
+                                        &conn,
+                                        &sealed_ids,
+                                    )
+                                    .unwrap_or_default();
+                                (open, sealed, all, sealed_commit_shas)
+                            })
+                            .unwrap_or_default();
                     sys.push('\n');
                     sys.push_str(&crate::model::sdlc::mission::build_seed_capsule_with_all(
-                        &mission, &open, &sealed, &all,
+                        &mission,
+                        &open,
+                        &sealed,
+                        &all,
+                        &sealed_commit_shas,
                     ));
                     if let Some(ref wt) = mission.worktree_name {
                         sys.push_str(&format!(

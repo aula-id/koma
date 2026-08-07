@@ -282,6 +282,25 @@ pub(crate) fn process_tools(
                 InterceptFlow::Fallthrough => {}
             }
         }
+        // Never force-push in ANY SDLC phase (including done/paused).
+        if mode == AgentMode::Sdlc && call.function.name == "git_operator" {
+            let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+            let args: serde_json::Value =
+                serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+            let git_args: Vec<&str> = args
+                .get("args")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|x| x.as_str()).collect::<Vec<&str>>())
+                .unwrap_or_default();
+            if let Some(reason) = crate::tool::sdlc_git_force_push_denied(&git_args) {
+                state.rest.sessions[sess_idx].tool_results.push((
+                    call.id.clone(),
+                    format!("error: Never force-push in SDLC ({reason})."),
+                ));
+                state.rest.sessions[sess_idx].tool_idx += 1;
+                continue;
+            }
+        }
         // SDLC execute/integrate: confine git_operator to the frozen bound
         // worktree (no cwd override, no checkout/switch, binding must be live).
         if mode == AgentMode::Sdlc

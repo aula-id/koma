@@ -290,6 +290,38 @@ pub(super) fn drain_subagents(
             dirty = true;
         }
 
+        // --- SDLC handoff transport ---
+        // Extract + apply structured handoff from terminal report text. Computed once
+        // per subagent per tick; the note is appended to the result text in the
+        // relevant terminal arms below.
+        let sdlc_handoff_note = {
+            let sa = &state.rest.sessions[idx].subagents[i];
+            let is_terminal = matches!(
+                &sa.status,
+                SubAgentStatus::Done(_) | SubAgentStatus::Error(_)
+            );
+            if is_terminal {
+                let report = match &sa.status {
+                    SubAgentStatus::Done(s) => s.as_str(),
+                    SubAgentStatus::Error(e) => e.as_str(),
+                    _ => "",
+                };
+                let sess_dir = state.rest.sessions[idx]
+                    .session
+                    .as_ref()
+                    .map(|s| s.path.as_path());
+                let claimed = sa.sdlc_active_node_id.as_deref();
+                let fallback = state.rest.sessions[idx].sdlc_pending_node_id.as_deref();
+                sess_dir.and_then(|dir| {
+                    crate::model::sdlc::handoff::try_apply_subagent_handoff(
+                        dir, claimed, fallback, report,
+                    )
+                })
+            } else {
+                None
+            }
+        };
+
         // --- terminal delivery / fold ---
         // Inspect the SETTLED status + origin once events are folded, capturing
         // owned values up front so the immutable borrow of `subagents[i]` is
@@ -333,12 +365,19 @@ pub(super) fn drain_subagents(
                     // not a short status label — it is injected verbatim into the
                     // wake-nudge user turn so the model receives the complete result
                     // without needing to poll task_output.
-                    Some(outcome) if !sa.nudged => (
-                        None,
-                        None,
-                        Some((sa.id, sa.agent_name.clone(), outcome)),
-                        true,
-                    ),
+                    Some(outcome) if !sa.nudged => {
+                        let outcome = if let Some(ref note) = sdlc_handoff_note {
+                            format!("{outcome}\n\n{note}")
+                        } else {
+                            outcome
+                        };
+                        (
+                            None,
+                            None,
+                            Some((sa.id, sa.agent_name.clone(), outcome)),
+                            true,
+                        )
+                    }
                     // Terminal but already nudged: nothing to do.
                     Some(_) => (None, None, None, false),
                     // Still running: nothing this tick.
@@ -361,6 +400,16 @@ pub(super) fn drain_subagents(
                             SubAgentStatus::Killed => Some("[sub-agent killed]".to_string()),
                             // Still running: nothing to deliver this tick.
                             SubAgentStatus::Running => None,
+                        };
+                        // Append SDLC handoff note to result if present.
+                        let result = if let Some(r) = result {
+                            if let Some(ref note) = sdlc_handoff_note {
+                                Some(format!("{r}\n\n{note}"))
+                            } else {
+                                Some(r)
+                            }
+                        } else {
+                            None
                         };
                         // Not gated on `sa.nudged` — this path's one-shot delivery is
                         // already latched by removing `call_id` from
@@ -385,17 +434,24 @@ pub(super) fn drain_subagents(
                     // falls through to the silent latch-only arm below — its spawner
                     // already gets the result via `agents.done`, so it must never
                     // interrupt the human's chat.
-                    (None, SubAgentStatus::Done(result)) if !sa.nudged && !sa.ext_owned => (
-                        Some(format!(
-                            "{}[sub-agent #{} {}] finished\n{result}",
-                            crate::dto::chat::BASH_NUDGE_MARK,
-                            sa.id,
-                            sa.agent_name
-                        )),
-                        None,
-                        None,
-                        true,
-                    ),
+                    (None, SubAgentStatus::Done(result)) if !sa.nudged && !sa.ext_owned => {
+                        let result_str = if let Some(ref note) = sdlc_handoff_note {
+                            format!("{result}\n\n{note}")
+                        } else {
+                            result.clone()
+                        };
+                        (
+                            Some(format!(
+                                "{}[sub-agent #{} {}] finished\n{result_str}",
+                                crate::dto::chat::BASH_NUDGE_MARK,
+                                sa.id,
+                                sa.agent_name
+                            )),
+                            None,
+                            None,
+                            true,
+                        )
+                    }
                     // Terminal with NO chat-fold note. Covers:
                     // - an EXT-OWNED Done (Tier B — completely silent in the human chat;
                     //   the spawner gets its `agents.done` callback instead), and

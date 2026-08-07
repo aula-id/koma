@@ -223,6 +223,7 @@ mod roundtrip_tests {
             agent_mode: "auto".to_string(),
             sdlc_phase: None,
             sdlc_goal: None,
+            sdlc_branch: None,
             sdlc_open: None,
             sdlc_sealed: None,
             latest_version: None,

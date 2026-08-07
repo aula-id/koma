@@ -52,11 +52,12 @@ pub fn validate_target_immediately_before_merge(mission: &Mission) -> Result<(),
 /// 1. Require frozen `target_worktree_path` + `target_branch` (never workdir_saved).
 /// 2. Re-validate target path+branch immediately before merge.
 /// 3. Read `mission.branch` (mission feature branch).
-/// 4. Check `git status --porcelain` for dirty on the frozen target.
-/// 5. If dirty OR `force_branch_only` → do NOT merge; return instructions.
-/// 6. If clean: try `git merge --ff-only <branch>`; on conflict abort and
-///    leave the branch ready for manual resolution.
-/// 7. On success set mission.phase = "done" (caller).
+/// 4. Dirty mission worktree → fail (commit or stash first).
+/// 5. Zero commits ahead of frozen `target_head` → fail (nothing to land).
+/// 6. Check `git status --porcelain` for dirty on the frozen target.
+/// 7. If dirty OR `force_branch_only` → do NOT merge; return instructions.
+/// 8. If clean: try `git merge --ff-only <branch>`; empty FF / already up to date is ERROR.
+/// 9. On success set mission.phase = "done" (caller) with ship summary.
 pub fn try_integrate(mission: &Mission, force_branch_only: bool) -> IntegrateResult {
     let target_branch = match mission.target_branch.as_deref().filter(|s| !s.is_empty()) {
         Some(b) => b.to_string(),
@@ -108,6 +109,39 @@ pub fn try_integrate(mission: &Mission, force_branch_only: bool) -> IntegrateRes
         };
     }
 
+    // Mission worktree must be clean before integrate (no auto-commit).
+    if let Some(ref wt) = mission.worktree_path {
+        let wt_path = PathBuf::from(wt);
+        if wt_path.is_dir() && is_dirty(&wt_path) {
+            return IntegrateResult {
+                message: "mission worktree dirty — commit or stash before integrate".to_string(),
+                success: false,
+            };
+        }
+    }
+
+    let Some(target_head) = mission.target_head.as_deref().filter(|s| !s.is_empty()) else {
+        return IntegrateResult {
+            message: "error: mission missing frozen target_head — re-approve required".to_string(),
+            success: false,
+        };
+    };
+
+    let Some(mission_tip) = resolve_ref_sha(&primary_workdir, &branch) else {
+        return IntegrateResult {
+            message: format!("error: could not resolve mission branch tip for `{branch}`"),
+            success: false,
+        };
+    };
+
+    let ahead = commits_ahead(&primary_workdir, target_head, &mission_tip).unwrap_or(0);
+    if ahead == 0 {
+        return IntegrateResult {
+            message: "nothing to land (mission tip not ahead of target_head)".to_string(),
+            success: false,
+        };
+    }
+
     // Check for dirty working tree on frozen target.
     let dirty = is_dirty(&primary_workdir);
     if dirty {
@@ -122,6 +156,8 @@ pub fn try_integrate(mission: &Mission, force_branch_only: bool) -> IntegrateRes
         };
     }
 
+    let head_before = super::mission::current_git_head(&primary_workdir);
+
     // Try fast-forward merge.
     let output = Command::new("git")
         .args(["merge", "--ff-only", &branch])
@@ -133,9 +169,32 @@ pub fn try_integrate(mission: &Mission, force_branch_only: bool) -> IntegrateRes
     match output {
         Ok(o) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout);
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            if is_already_up_to_date(&stdout, &stderr) {
+                return IntegrateResult {
+                    message: "error: empty fast-forward (Already up to date) — nothing landed"
+                        .to_string(),
+                    success: false,
+                };
+            }
+            let head_after = super::mission::current_git_head(&primary_workdir);
+            if let (Some(before), Some(after)) = (head_before.as_deref(), head_after.as_deref()) {
+                if before == after {
+                    return IntegrateResult {
+                        message: "error: empty fast-forward — target HEAD unchanged".to_string(),
+                        success: false,
+                    };
+                }
+            }
+            let new_head = head_after.as_deref().unwrap_or("?");
+            let short = if new_head.len() > 12 {
+                &new_head[..12]
+            } else {
+                new_head
+            };
             IntegrateResult {
                 message: format!(
-                    "Integrated `{branch}` into `{target_branch}` via fast-forward.\n{stdout}"
+                    "Shipped {ahead} commit(s): `{branch}` → `{target_branch}` @ {short}"
                 ),
                 success: true,
             }
@@ -151,9 +210,34 @@ pub fn try_integrate(mission: &Mission, force_branch_only: bool) -> IntegrateRes
             match output2 {
                 Ok(o2) if o2.status.success() => {
                     let stdout = String::from_utf8_lossy(&o2.stdout);
+                    let stderr = String::from_utf8_lossy(&o2.stderr);
+                    if is_already_up_to_date(&stdout, &stderr) {
+                        return IntegrateResult {
+                            message: "error: empty merge (Already up to date) — nothing landed"
+                                .to_string(),
+                            success: false,
+                        };
+                    }
+                    let head_after = super::mission::current_git_head(&primary_workdir);
+                    if let (Some(before), Some(after)) =
+                        (head_before.as_deref(), head_after.as_deref())
+                    {
+                        if before == after {
+                            return IntegrateResult {
+                                message: "error: empty merge — target HEAD unchanged".to_string(),
+                                success: false,
+                            };
+                        }
+                    }
+                    let new_head = head_after.as_deref().unwrap_or("?");
+                    let short = if new_head.len() > 12 {
+                        &new_head[..12]
+                    } else {
+                        new_head
+                    };
                     IntegrateResult {
                         message: format!(
-                            "Integrated `{branch}` into `{target_branch}` via merge.\n{stdout}"
+                            "Shipped {ahead} commit(s) via merge: `{branch}` → `{target_branch}` @ {short}"
                         ),
                         success: true,
                     }
@@ -180,6 +264,48 @@ pub fn try_integrate(mission: &Mission, force_branch_only: bool) -> IntegrateRes
             success: false,
         },
     }
+}
+
+fn is_already_up_to_date(stdout: &str, stderr: &str) -> bool {
+    let combined = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+    combined.contains("already up to date") || combined.contains("already up-to-date")
+}
+
+fn resolve_ref_sha(dir: &Path, reference: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--verify", reference])
+        .current_dir(dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+fn commits_ahead(dir: &Path, base: &str, tip: &str) -> Option<u64> {
+    let range = format!("{base}..{tip}");
+    let output = Command::new("git")
+        .args(["rev-list", "--count", &range])
+        .current_dir(dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u64>()
+        .ok()
 }
 
 /// Check if the git working tree has uncommitted changes.
@@ -254,6 +380,33 @@ mod tests {
         }
     }
 
+    fn tmp_root(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "koma-int-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            o.status.success(),
+            "{args:?} {:?}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+
     #[test]
     fn force_branch_only_is_not_success_leaves_branch_ready_message() {
         // force_branch_only short-circuits before path existence checks.
@@ -273,30 +426,13 @@ mod tests {
     fn missing_branch_fails() {
         let mut m = sample("x", "main");
         // Need a real dir so frozen target path check passes before branch check.
-        let dir = std::env::temp_dir().join(format!(
-            "koma-int-missing-br-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let run = |args: &[&str]| {
-            let o = Command::new("git")
-                .args(args)
-                .current_dir(&dir)
-                .output()
-                .unwrap();
-            assert!(o.status.success(), "{args:?}");
-        };
-        run(&["init", "-b", "main"]);
-        run(&["config", "user.email", "t@t"]);
-        run(&["config", "user.name", "t"]);
+        let dir = tmp_root("missing-br");
+        git(&dir, &["init", "-b", "main"]);
+        git(&dir, &["config", "user.email", "t@t"]);
+        git(&dir, &["config", "user.name", "t"]);
         std::fs::write(dir.join("a.txt"), "a").unwrap();
-        run(&["add", "."]);
-        run(&["commit", "-m", "init"]);
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-m", "init"]);
         m.target_worktree_path = Some(dir.to_string_lossy().into_owned());
         m.target_branch = Some("main".into());
         m.target_head = mission::current_git_head(&dir);
@@ -326,37 +462,16 @@ mod tests {
 
     #[test]
     fn target_branch_drift_rejects_before_merge() {
-        let root = std::env::temp_dir().join(format!(
-            "koma-int-drift-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        let run = |args: &[&str]| {
-            let o = Command::new("git")
-                .args(args)
-                .current_dir(&root)
-                .output()
-                .unwrap();
-            assert!(
-                o.status.success(),
-                "{args:?} {:?}",
-                String::from_utf8_lossy(&o.stderr)
-            );
-        };
-        run(&["init", "-b", "develop"]);
-        run(&["config", "user.email", "t@t"]);
-        run(&["config", "user.name", "t"]);
+        let root = tmp_root("drift");
+        git(&root, &["init", "-b", "develop"]);
+        git(&root, &["config", "user.email", "t@t"]);
+        git(&root, &["config", "user.name", "t"]);
         std::fs::write(root.join("a.txt"), "a").unwrap();
-        run(&["add", "."]);
-        run(&["commit", "-m", "init"]);
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "init"]);
         let head = mission::current_git_head(&root).unwrap();
         // Freeze target as develop, then switch to main → drift.
-        run(&["checkout", "-b", "main"]);
+        git(&root, &["checkout", "-b", "main"]);
 
         let mut m = sample("sdlc/feat", "develop");
         m.target_worktree_path = Some(root.to_string_lossy().into_owned());
@@ -374,53 +489,107 @@ mod tests {
     }
 
     #[test]
-    fn temp_git_ff_integrate_into_non_main_target() {
-        let root = std::env::temp_dir().join(format!(
-            "koma-integrate-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        let run = |args: &[&str]| {
-            let o = Command::new("git")
-                .args(args)
-                .current_dir(&root)
-                .output()
-                .unwrap();
-            assert!(
-                o.status.success(),
-                "{args:?} {:?}",
-                String::from_utf8_lossy(&o.stderr)
-            );
-        };
-        // Non-main target branch.
-        run(&["init", "-b", "develop"]);
-        run(&["config", "user.email", "t@t"]);
-        run(&["config", "user.name", "t"]);
+    fn nothing_to_land_when_zero_commits_ahead() {
+        let root = tmp_root("zero-ahead");
+        git(&root, &["init", "-b", "main"]);
+        git(&root, &["config", "user.email", "t@t"]);
+        git(&root, &["config", "user.name", "t"]);
         std::fs::write(root.join("a.txt"), "a").unwrap();
-        run(&["add", "."]);
-        run(&["commit", "-m", "init"]);
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "init"]);
         let head = mission::current_git_head(&root).unwrap();
-        run(&["checkout", "-b", "sdlc/feat"]);
+        git(&root, &["branch", "feat/empty"]);
+
+        let mut m = sample("feat/empty", "main");
+        m.target_worktree_path = Some(root.to_string_lossy().into_owned());
+        m.target_branch = Some("main".into());
+        m.target_head = Some(head);
+        m.worktree_path = None;
+        m.hash = m.recompute_hash();
+        let r = try_integrate(&m, false);
+        assert!(!r.success, "{}", r.message);
+        assert!(
+            r.message.contains("nothing to land"),
+            "unexpected: {}",
+            r.message
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dirty_mission_worktree_blocks_integrate() {
+        let root = tmp_root("dirty-wt");
+        let mission_wt = root.join("mission");
+        git(&root, &["init", "-b", "main"]);
+        git(&root, &["config", "user.email", "t@t"]);
+        git(&root, &["config", "user.name", "t"]);
+        std::fs::write(root.join("a.txt"), "a").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "init"]);
+        let head = mission::current_git_head(&root).unwrap();
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feat/dirty",
+                &mission_wt.to_string_lossy(),
+            ],
+        );
+        std::fs::write(mission_wt.join("b.txt"), "b").unwrap();
+        git(&mission_wt, &["add", "."]);
+        git(&mission_wt, &["commit", "-m", "feat"]);
+        // Dirty after commit.
+        std::fs::write(mission_wt.join("dirty.txt"), "x").unwrap();
+
+        let mut m = sample("feat/dirty", "main");
+        m.target_worktree_path = Some(root.to_string_lossy().into_owned());
+        m.target_branch = Some("main".into());
+        m.target_head = Some(head);
+        m.worktree_path = Some(mission_wt.to_string_lossy().into_owned());
+        m.hash = m.recompute_hash();
+        let r = try_integrate(&m, false);
+        assert!(!r.success, "{}", r.message);
+        assert!(
+            r.message.contains("mission worktree dirty"),
+            "unexpected: {}",
+            r.message
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn temp_git_ff_integrate_into_non_main_target() {
+        let root = tmp_root("ff-happy");
+        // Non-main target branch.
+        git(&root, &["init", "-b", "develop"]);
+        git(&root, &["config", "user.email", "t@t"]);
+        git(&root, &["config", "user.name", "t"]);
+        std::fs::write(root.join("a.txt"), "a").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "init"]);
+        let head = mission::current_git_head(&root).unwrap();
+        git(&root, &["checkout", "-b", "sdlc/feat"]);
         std::fs::write(root.join("b.txt"), "b").unwrap();
-        run(&["add", "."]);
-        run(&["commit", "-m", "feat"]);
-        run(&["checkout", "develop"]);
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "feat"]);
+        git(&root, &["checkout", "develop"]);
 
         let mut m = sample("sdlc/feat", "develop");
         m.target_worktree_path = Some(root.to_string_lossy().into_owned());
         m.target_branch = Some("develop".into());
         m.target_head = Some(head);
+        m.worktree_path = None;
         m.hash = m.recompute_hash();
         let r = try_integrate(&m, false);
         assert!(r.success, "{}", r.message);
         assert!(
-            r.message.contains("develop") && !r.message.contains("into main via"),
-            "status must name target branch, got: {}",
+            r.message.contains("1 commit")
+                && r.message.contains("develop")
+                && r.message.contains("sdlc/feat")
+                && !r.message.contains("into main via"),
+            "status must be ship summary with count, got: {}",
             r.message
         );
         let _ = std::fs::remove_dir_all(&root);

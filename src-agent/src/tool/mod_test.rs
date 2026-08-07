@@ -76,12 +76,15 @@ fn sdlc_assess_git_allows_safe_read_forms() {
     assert!(sdlc_assess_git_args_allowed(&["remote", "-v"]).is_ok());
     assert!(sdlc_assess_git_args_allowed(&["remote", "show", "origin"]).is_ok());
     assert!(sdlc_assess_git_args_allowed(&["remote", "get-url", "origin"]).is_ok());
+    // Assess may create/checkout local branches (no force/discard).
+    assert!(sdlc_assess_git_args_allowed(&["branch", "new-feature"]).is_ok());
+    assert!(sdlc_assess_git_args_allowed(&["checkout", "main"]).is_ok());
+    assert!(sdlc_assess_git_args_allowed(&["switch", "main"]).is_ok());
 }
 
 #[test]
 fn sdlc_assess_git_rejects_mutating_branch_forms() {
     for args in [
-        &["branch", "new-feature"][..],
         &["branch", "-d", "old"][..],
         &["branch", "-D", "old"][..],
         &["branch", "-m", "renamed"][..],
@@ -118,29 +121,114 @@ fn sdlc_assess_git_rejects_mutating_remote_forms() {
 fn sdlc_assess_git_rejects_non_readonly_subcommands() {
     assert!(sdlc_assess_git_args_allowed(&["commit", "-m", "x"]).is_err());
     assert!(sdlc_assess_git_args_allowed(&["push"]).is_err());
-    assert!(sdlc_assess_git_args_allowed(&["checkout", "main"]).is_err());
+    assert!(sdlc_assess_git_args_allowed(&["checkout", "-f", "main"]).is_err());
+    assert!(sdlc_assess_git_args_allowed(&["merge", "main"]).is_err());
 }
 
 // --- SDLC execute git confinement helpers (gap 2) ---
 
 #[test]
 fn sdlc_execute_git_rejects_cwd_override_and_branch_ops() {
-    assert!(sdlc_execute_git_args_allowed(&["status"], None, true, "").is_ok());
-    assert!(sdlc_execute_git_args_allowed(&["add", "."], None, true, "").is_ok());
-    assert!(sdlc_execute_git_args_allowed(&["commit", "-m", "x"], None, true, "").is_ok());
+    assert!(sdlc_execute_git_args_allowed(&["status"], None, true, "", Some("feat")).is_ok());
+    assert!(sdlc_execute_git_args_allowed(&["add", "."], None, true, "", Some("feat")).is_ok());
+    assert!(
+        sdlc_execute_git_args_allowed(&["commit", "-m", "x"], None, true, "", Some("feat")).is_ok()
+    );
 
-    let err = sdlc_execute_git_args_allowed(&["status"], Some("/tmp/other"), true, "").unwrap_err();
+    let err =
+        sdlc_execute_git_args_allowed(&["status"], Some("/tmp/other"), true, "", Some("feat"))
+            .unwrap_err();
     assert!(err.contains("cwd"), "{err}");
 
-    let err = sdlc_execute_git_args_allowed(&["checkout", "main"], None, true, "").unwrap_err();
+    let err = sdlc_execute_git_args_allowed(&["checkout", "main"], None, true, "", Some("feat"))
+        .unwrap_err();
     assert!(err.contains("checkout"), "{err}");
 
-    let err = sdlc_execute_git_args_allowed(&["switch", "main"], None, true, "").unwrap_err();
+    let err = sdlc_execute_git_args_allowed(&["switch", "main"], None, true, "", Some("feat"))
+        .unwrap_err();
     assert!(err.contains("switch"), "{err}");
 
     let err =
-        sdlc_execute_git_args_allowed(&["status"], None, false, "worktree mismatch").unwrap_err();
+        sdlc_execute_git_args_allowed(&["status"], None, false, "worktree mismatch", Some("feat"))
+            .unwrap_err();
     assert!(err.contains("not live") || err.contains("binding"), "{err}");
+}
+
+#[test]
+fn sdlc_git_force_push_denied_matrix() {
+    assert!(sdlc_git_force_push_denied(&["push", "origin", "main"]).is_none());
+    assert!(sdlc_git_force_push_denied(&["status"]).is_none());
+    for args in [
+        &["push", "--force"][..],
+        &["push", "-f", "origin", "main"][..],
+        &["push", "-uf", "origin", "main"][..],
+        &["push", "--force-with-lease"][..],
+        &["push", "--force-with-lease=origin/main"][..],
+        &["push", "--delete", "origin", "old"][..],
+        &["push", "-d", "origin", "old"][..],
+        &["push", "origin", ":old-branch"][..],
+    ] {
+        let reason = sdlc_git_force_push_denied(args).expect("should deny");
+        assert!(!reason.is_empty(), "{args:?}");
+    }
+    let err = sdlc_execute_git_args_allowed(
+        &["push", "--force", "origin", "main"],
+        None,
+        true,
+        "",
+        Some("main"),
+    )
+    .unwrap_err();
+    assert!(err.contains("Never force-push"), "{err}");
+}
+
+#[test]
+fn sdlc_execute_git_push_mission_branch_matrix() {
+    let mb = Some("feat/x");
+    // force still denied
+    assert!(sdlc_execute_git_args_allowed(
+        &["push", "--force", "origin", "feat/x"],
+        None,
+        true,
+        "",
+        mb
+    )
+    .is_err());
+    // wrong branch deny
+    let err =
+        sdlc_execute_git_args_allowed(&["push", "origin", "main"], None, true, "", mb).unwrap_err();
+    assert!(
+        err.contains("mission branch") || err.contains("feat/x"),
+        "{err}"
+    );
+    // correct branch ok
+    assert!(
+        sdlc_execute_git_args_allowed(&["push", "origin", "feat/x"], None, true, "", mb).is_ok()
+    );
+    assert!(sdlc_execute_git_args_allowed(
+        &["push", "origin", "refs/heads/feat/x"],
+        None,
+        true,
+        "",
+        mb
+    )
+    .is_ok());
+    assert!(
+        sdlc_execute_git_args_allowed(&["push", "origin", "HEAD:feat/x"], None, true, "", mb)
+            .is_ok()
+    );
+    // bare push deny
+    let err = sdlc_execute_git_args_allowed(&["push"], None, true, "", mb).unwrap_err();
+    assert!(err.contains("bare") || err.contains("push"), "{err}");
+    let err = sdlc_execute_git_args_allowed(&["push", "origin"], None, true, "", mb).unwrap_err();
+    assert!(err.contains("bare") || err.contains("push"), "{err}");
+    // missing branch deny
+    let err = sdlc_execute_git_args_allowed(&["push", "origin", "feat/x"], None, true, "", None)
+        .unwrap_err();
+    assert!(
+        err.contains("no bound branch") || err.contains("branch"),
+        "{err}"
+    );
 }
 
 // --- resolve_read skill-dir exemption tests ---
