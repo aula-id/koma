@@ -480,8 +480,7 @@ pub async fn run_agent_loop(
             // 4b2. SDLC path ownership gate: reject write/edit/delete to paths
             //      owned by a DIFFERENT active graph node (glob matching).
             if matches!(name.as_str(), "write" | "edit" | "delete") {
-                let sanitized =
-                    crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+                let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
                 let args: serde_json::Value =
                     serde_json::from_str(&sanitized).unwrap_or(serde_json::json!({}));
                 if let Some(path) = args.get("path").and_then(|v| v.as_str()) {

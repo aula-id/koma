@@ -53,8 +53,12 @@ fn unapproved_amendment_mission() -> Mission {
         None,
         None,
         None,
+        None,
+        None,
+        None,
     );
     Mission {
+        contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
         id: "m1".into(),
         goal: goal.into(),
         non_goals,
@@ -67,6 +71,9 @@ fn unapproved_amendment_mission() -> Mission {
         worktree_name: None,
         branch: None,
         worktree_path: None,
+        target_worktree_path: None,
+        target_branch: None,
+        target_head: None,
         rationale: rationale.into(),
         // Intercept writes assess/unapproved; the regression is a STALE runtime
         // phase still sitting on execute from the prior approval.
@@ -232,6 +239,9 @@ fn failed_bind_validation_restores_primary_and_unbound_draft() {
     assert!(loaded.worktree_name.is_none());
     assert!(loaded.branch.is_none());
     assert!(loaded.worktree_path.is_none());
+    assert!(loaded.target_worktree_path.is_none());
+    assert!(loaded.target_branch.is_none());
+    assert!(loaded.target_head.is_none());
     assert!(
         loaded.hash_valid(),
         "unbound draft hash must remain valid (got hash={}, recomputed={})",
@@ -291,6 +301,9 @@ fn amended_goal_default_worktree_name_differs_from_prior() {
         None,
         None,
         None,
+        None,
+        None,
+        None,
     );
 
     let mut b = a.clone();
@@ -305,6 +318,9 @@ fn amended_goal_default_worktree_name_differs_from_prior() {
         &b.risks,
         &b.rationale,
         b.graph_hash.as_deref(),
+        None,
+        None,
+        None,
         None,
         None,
         None,

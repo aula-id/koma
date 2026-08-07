@@ -483,7 +483,8 @@ fn apply_mission_denial_rails(state: &mut AppState, sess_idx: usize) {
 }
 
 /// Establish exact mission worktree+branch, enter it, and only then mark the
-/// mission approved. On any failure the mission remains unapproved (assess).
+/// mission approved. Captures frozen target (path/branch/HEAD) from the primary
+/// repo at approval. On any failure the mission remains unapproved (assess).
 /// Returns a status note on success.
 fn establish_mission_binding(
     state: &mut AppState,
@@ -521,12 +522,28 @@ fn establish_mission_binding(
     std::fs::create_dir_all(&worktrees_dir).map_err(|e| format!("create worktrees dir: {e}"))?;
 
     let shadow = worktrees_dir.join(&wt_name);
+    // Primary/target repo at approval time — never the mission shadow worktree.
+    // Prefer stashed primary when already inside a worktree; otherwise live workdir.
     let repo_root = sess
         .settings
         .workdir_saved
         .as_ref()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| sess.workdir());
+    let repo_root = std::fs::canonicalize(&repo_root).unwrap_or(repo_root);
+    let repo_root_str = repo_root.to_string_lossy().into_owned();
+
+    // Capture frozen integrate destination from the primary repo NOW.
+    let target_branch =
+        crate::model::sdlc::mission::current_git_branch(&repo_root).ok_or_else(|| {
+            "primary repo is detached HEAD or not a git branch — checkout a branch before approving"
+                .to_string()
+        })?;
+    let target_head =
+        crate::model::sdlc::mission::current_git_head(&repo_root).ok_or_else(|| {
+            "could not read primary repo HEAD — cannot freeze target_head".to_string()
+        })?;
+
     let shadow_str = shadow.to_string_lossy().into_owned();
 
     let existed = shadow.exists()
@@ -539,16 +556,52 @@ fn establish_mission_binding(
             .map(|s| s.success())
             .unwrap_or(false);
 
-    if !existed {
-        // Prefer creating a new branch off HEAD (`-b`). If the branch already
-        // exists, retry without `-b`.
+    if existed {
+        // Rebind of an existing mission worktree: reject if its branch tip does
+        // not contain the frozen target_head (unrelated history / stale branch).
+        let live_branch = crate::model::sdlc::mission::current_git_branch(&shadow);
+        if live_branch.as_deref() != Some(wt_branch.as_str()) {
+            return Err(format!(
+                "existing mission worktree branch mismatch (got {:?}, want {wt_branch})",
+                live_branch
+            ));
+        }
+        let tip = crate::model::sdlc::mission::current_git_head(&shadow).ok_or_else(|| {
+            "could not read existing mission worktree HEAD for target_head check".to_string()
+        })?;
+        if !crate::model::sdlc::mission::is_ancestor(&shadow, &target_head, &tip)
+            && tip != target_head
+        {
+            // Also try from primary repo (shared object db via worktree).
+            if !crate::model::sdlc::mission::is_ancestor(&repo_root, &target_head, &tip)
+                && tip != target_head
+            {
+                return Err(format!(
+                    "existing mission branch '{wt_branch}' does not contain frozen target_head \
+                     {target_head:.12} — refuse rebind of unrelated branch; remove worktree or \
+                     choose a new mission branch"
+                ));
+            }
+        }
+    } else {
+        // Create mission worktree explicitly from frozen target_head.
+        // Prefer: worktree add -b <branch> <path> <target_head>
         let mut output = std::process::Command::new("git")
-            .args(["worktree", "add", "-b", &wt_branch, &shadow_str])
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                &wt_branch,
+                &shadow_str,
+                &target_head,
+            ])
             .current_dir(&repo_root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output();
         if !matches!(&output, Ok(o) if o.status.success()) {
+            // Branch may already exist in the repo — try attaching without -b,
+            // still pin to target_head when possible.
             output = std::process::Command::new("git")
                 .args(["worktree", "add", &shadow_str, &wt_branch])
                 .current_dir(&repo_root)
@@ -566,10 +619,14 @@ fn establish_mission_binding(
                 m.approved = false;
                 m.phase = "assess".into();
                 m.worktree_path = None;
+                m.target_worktree_path = None;
+                m.target_branch = None;
+                m.target_head = None;
                 let _ = m.save(&sess_path);
             }
             return Err(format!(
-                "git worktree add failed for '{wt_name}' branch '{wt_branch}': {err}"
+                "git worktree add failed for '{wt_name}' branch '{wt_branch}' \
+                 from target_head {target_head:.12}: {err}"
             ));
         }
     }
@@ -581,6 +638,9 @@ fn establish_mission_binding(
             m.approved = false;
             m.phase = "assess".into();
             m.worktree_path = None;
+            m.target_worktree_path = None;
+            m.target_branch = None;
+            m.target_head = None;
             let _ = m.save(&sess_path);
         }
         return Err(format!(
@@ -592,12 +652,15 @@ fn establish_mission_binding(
     let canon = std::fs::canonicalize(&shadow).unwrap_or_else(|_| shadow.clone());
     let canon_str = canon.to_string_lossy().into_owned();
 
-    // Persist binding + approve only after validation. Re-hash WITH binding fields
-    // so the frozen contract covers worktree/branch/path.
+    // Persist binding + frozen target + approve only after validation.
+    // Re-hash WITH binding + target fields so the frozen contract covers them.
     if let Some(mut m) = crate::model::sdlc::Mission::load(&sess_path) {
         m.worktree_name = Some(wt_name.clone());
         m.branch = Some(wt_branch.clone());
         m.worktree_path = Some(canon_str.clone());
+        m.target_worktree_path = Some(repo_root_str.clone());
+        m.target_branch = Some(target_branch.clone());
+        m.target_head = Some(target_head.clone());
         m.approved = true;
         m.phase = "execute".into();
         m.needs_reapproval = false;
@@ -637,7 +700,8 @@ fn establish_mission_binding(
     }
 
     Ok(format!(
-        "worktree: bound '{wt_name}' at {} (branch {wt_branch}) — \
+        "worktree: bound '{wt_name}' at {} (branch {wt_branch}); \
+         target `{target_branch}` @ {target_head:.12} ({repo_root_str}) — \
          execute only inside this tree until integrate",
         canon.display()
     ))
@@ -669,7 +733,8 @@ pub(super) fn restore_primary_workspace_after_failed_bind(state: &mut AppState, 
 }
 
 /// Restore mission.json to an unbound assess draft with a valid binding-free hash.
-/// Clears worktree_name/branch/path so no stale bind fields survive a failed approve.
+/// Clears worktree_name/branch/path and frozen target so no stale bind fields
+/// survive a failed approve.
 pub(super) fn restore_unbound_draft_mission(sess_path: &std::path::Path) {
     if let Some(mut m) = crate::model::sdlc::Mission::load(sess_path) {
         m.approved = false;
@@ -677,6 +742,9 @@ pub(super) fn restore_unbound_draft_mission(sess_path: &std::path::Path) {
         m.worktree_name = None;
         m.branch = None;
         m.worktree_path = None;
+        m.target_worktree_path = None;
+        m.target_branch = None;
+        m.target_head = None;
         // Fail-closed: bind never completed, so active ops must not resume.
         m.needs_reapproval = true;
         // Hash must cover the unbound fields — leaving the post-bind hash would

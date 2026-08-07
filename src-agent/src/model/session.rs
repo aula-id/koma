@@ -499,7 +499,7 @@ NO preference nags; research, decide, ship. Never invent APIs — read the code.
 - Delegate with `task` only to OPEN leaves and always pass `task.node_id`.\n\
 - After real verify evidence (tests/build), call `mission_verify` with leaf node_id + evidence before treating a node as sealed. Done without verify is false-done — the keeper will reopen it. Parents roll up; verify is leaf-only.\n\
 - When OPEN is empty, acceptance is green, leaves verified, binding valid, and human gates approved, call `mission_integrate`.\n\
-- Integrate never force-pushes. Dirty main → leave the mission branch ready (or PR); clean main may FF/merge. Branch-only cannot bypass evidence gates.\n\
+- Integrate never force-pushes. Dirty target → leave the mission branch ready (or PR); clean target may FF/merge into the frozen target_branch (never hard-coded main). Branch-only cannot bypass evidence gates. Destination is exclusively frozen target_worktree_path.\n\
 - Human gates on the contract require explicit user y/n via mission_verify(human_gate=...) — the model cannot self-approve gates. Integrate stays gated on persisted approvals.\n\
 - External shell/MCP is not OS-sandboxed — stay inside the mission tree by discipline.\n\n\
 ## On confusion about mission/details\n\

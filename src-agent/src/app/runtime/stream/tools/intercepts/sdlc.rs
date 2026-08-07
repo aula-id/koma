@@ -187,9 +187,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_sdlc_path_ownership_gate
         let active_leaves: Vec<&crate::model::sdlc::graph::GraphTask> = nodes
             .iter()
             .filter(|n| n.status == "active")
-            .filter(|n| {
-                crate::model::sdlc::graph::is_leaf(&conn, &n.id).unwrap_or(false)
-            })
+            .filter(|n| crate::model::sdlc::graph::is_leaf(&conn, &n.id).unwrap_or(false))
             .collect();
         if active_leaves.len() == 1 {
             Some(active_leaves[0].id.as_str())
@@ -390,6 +388,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
         None,
         None,
         None,
+        None,
+        None,
+        None,
     );
 
     // Preserve previously approved human gates that still appear.
@@ -410,6 +411,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
     let amending_flag = amending;
 
     let mission = crate::model::sdlc::Mission {
+        contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
         id: mission_id,
         goal: mission_args.goal,
         non_goals: mission_args.non_goals,
@@ -419,10 +421,13 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
         human_gates: mission_args.human_gates,
         human_gates_approved,
         risks: mission_args.risks,
-        // Binding established only on successful approve.
+        // Binding + frozen target established only on successful approve.
         worktree_name: None,
         branch: None,
         worktree_path: None,
+        target_worktree_path: None,
+        target_branch: None,
+        target_head: None,
         rationale: mission_args.rationale,
         phase: "assess".to_string(),
         approved: false,
@@ -779,13 +784,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_integrate(
         return InterceptFlow::Continue;
     };
     let sess_path = sess.path.clone();
-    let primary_workdir = sess
-        .settings
-        .workdir_saved
-        .as_ref()
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| sess.workdir());
-    // Live session workdir (must match frozen binding — no path fallbacks).
+    // Live session workdir (must match frozen mission worktree binding).
+    // Integrate destination is NEVER inferred from workdir_saved/workdir —
+    // exclusively mission.target_worktree_path (validated in gate + try_integrate).
     let live_cwd = state.rest.sessions[sess_idx]
         .active_cwd
         .clone()
@@ -824,8 +825,8 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_integrate(
     }
 
     // Gate BEFORE phase mutation. Branch-only cannot bypass.
-    // Binding is validated against the LIVE session cwd + its branch — never
-    // against a synthetic bind_cwd derived solely from mission.worktree_path.
+    // Binding is validated against the LIVE session cwd + its branch; destination
+    // against frozen target_worktree_path + target_branch.
     let live_branch = crate::model::sdlc::mission::current_git_branch(&live_cwd);
     if let Err(e) = crate::model::sdlc::mission::integrate_gate(
         &mission,
@@ -850,8 +851,8 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_integrate(
     }
     state.rest.sessions[sess_idx].sdlc_phase = Some("integrate".to_string());
 
-    let result =
-        crate::model::sdlc::integrate::try_integrate(&primary_workdir, &mission, force_branch_only);
+    // Destination is exclusively frozen target_* on the mission — never workdir_saved.
+    let result = crate::model::sdlc::integrate::try_integrate(&mission, force_branch_only);
 
     let result_text = crate::tool::sdlc::mission_integrate_result(&format!(
         "{}\nSummary: {summary}",

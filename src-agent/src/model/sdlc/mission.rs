@@ -6,9 +6,21 @@ use sha2::{Digest, Sha256};
 
 use super::graph::{self, GraphTask};
 
+/// Legacy contracts predate a frozen integration target.
+const LEGACY_CONTRACT_VERSION: u32 = 1;
+/// Current contracts freeze both source and integration-target bindings.
+pub const CURRENT_CONTRACT_VERSION: u32 = 2;
+
+fn default_contract_version() -> u32 {
+    LEGACY_CONTRACT_VERSION
+}
+
 /// A frozen SDLC mission contract.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mission {
+    /// Contract schema version. Missing values deserialize as legacy v1.
+    #[serde(default = "default_contract_version")]
+    pub contract_version: u32,
     pub id: String,
     pub goal: String,
     #[serde(default)]
@@ -29,6 +41,16 @@ pub struct Mission {
     /// Absolute path of the bound mission worktree (set only after successful bind).
     #[serde(default)]
     pub worktree_path: Option<String>,
+    /// Frozen absolute path of the primary/target repo worktree at approval.
+    /// Integration merges exclusively into this path — never inferred from live cwd.
+    #[serde(default)]
+    pub target_worktree_path: Option<String>,
+    /// Frozen branch name of the primary/target at approval (never detached).
+    #[serde(default)]
+    pub target_branch: Option<String>,
+    /// Frozen full commit SHA of the primary/target HEAD at approval.
+    #[serde(default)]
+    pub target_head: Option<String>,
     #[serde(default)]
     pub rationale: String,
     /// Current phase: assess | execute | integrate | done | paused | draft.
@@ -48,7 +70,7 @@ pub struct Mission {
 }
 
 impl Mission {
-    /// Full contract hash including optional worktree binding fields.
+    /// Full contract hash including optional worktree binding + frozen target fields.
     pub fn compute_contract_hash_full(
         goal: &str,
         acceptance: &[String],
@@ -62,6 +84,9 @@ impl Mission {
         worktree_name: Option<&str>,
         branch: Option<&str>,
         worktree_path: Option<&str>,
+        target_worktree_path: Option<&str>,
+        target_branch: Option<&str>,
+        target_head: Option<&str>,
     ) -> String {
         let mut hasher = Sha256::new();
         fn add_str(h: &mut Sha256, s: &str) {
@@ -87,11 +112,15 @@ impl Mission {
         add_str(&mut hasher, worktree_name.unwrap_or(""));
         add_str(&mut hasher, branch.unwrap_or(""));
         add_str(&mut hasher, worktree_path.unwrap_or(""));
+        // Frozen integrate destination — required for active contracts (v2).
+        add_str(&mut hasher, target_worktree_path.unwrap_or(""));
+        add_str(&mut hasher, target_branch.unwrap_or(""));
+        add_str(&mut hasher, target_head.unwrap_or(""));
         let result = hasher.finalize();
         result[..16].iter().map(|b| format!("{b:02x}")).collect()
     }
 
-    /// Recompute hash from this mission's frozen fields (including binding).
+    /// Recompute hash from this mission's frozen fields (including binding + target).
     pub fn recompute_hash(&self) -> String {
         Self::compute_contract_hash_full(
             &self.goal,
@@ -106,12 +135,24 @@ impl Mission {
             self.worktree_name.as_deref(),
             self.branch.as_deref(),
             self.worktree_path.as_deref(),
+            self.target_worktree_path.as_deref(),
+            self.target_branch.as_deref(),
+            self.target_head.as_deref(),
         )
     }
 
     /// True when stored hash matches frozen fields + graph binding.
     pub fn hash_valid(&self) -> bool {
         !self.hash.is_empty() && self.hash == self.recompute_hash()
+    }
+
+    /// True when the frozen integrate destination is fully present.
+    pub fn has_frozen_target(&self) -> bool {
+        self.target_worktree_path
+            .as_deref()
+            .is_some_and(|s| !s.is_empty())
+            && self.target_branch.as_deref().is_some_and(|s| !s.is_empty())
+            && self.target_head.as_deref().is_some_and(|s| !s.is_empty())
     }
 
     /// Fail-closed active-ops check: approved, hash valid, bound, not draft/paused needing reapproval.
@@ -121,6 +162,12 @@ impl Mission {
         }
         if self.needs_reapproval {
             bail!("mission contract was amended and requires re-approval");
+        }
+        if self.contract_version < CURRENT_CONTRACT_VERSION || !self.has_frozen_target() {
+            bail!(
+                "mission has no frozen integration target (legacy contract v{}) — re-approval required",
+                self.contract_version
+            );
         }
         if !self.hash_valid() {
             bail!("mission contract hash mismatch — legacy/unbound contract fails closed");
@@ -138,6 +185,41 @@ impl Mission {
             );
         }
         Ok(())
+    }
+
+    /// Validate the frozen integrate destination still matches path + branch.
+    /// Never consults live session workdir — destination is exclusively the
+    /// frozen `target_worktree_path` / `target_branch`.
+    pub fn validate_target_destination(&self) -> Result<()> {
+        let path = self
+            .target_worktree_path
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("mission missing frozen target_worktree_path — re-approve required")
+            })?;
+        let expected_branch = self
+            .target_branch
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("mission missing frozen target_branch — re-approve required")
+            })?;
+        let p = std::path::Path::new(path);
+        if !p.is_dir() {
+            bail!("frozen target worktree path missing or not a directory: {path}");
+        }
+        let live = current_git_branch(p);
+        match live.as_deref() {
+            Some(b) if b == expected_branch => Ok(()),
+            Some(b) => bail!(
+                "target branch drift: frozen target_branch '{expected_branch}' but \
+                 target worktree is on '{b}'"
+            ),
+            None => bail!(
+                "could not determine branch at frozen target_worktree_path (detached or not a repo)"
+            ),
+        }
     }
 
     /// Validate live worktree + branch still match the frozen binding.
@@ -266,6 +348,40 @@ pub fn current_git_branch(dir: &std::path::Path) -> Option<String> {
     }
 }
 
+/// Read full `git rev-parse HEAD` in dir.
+pub fn current_git_head(dir: &std::path::Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// True when `candidate` is an ancestor of `descendant` (or equal), via
+/// `git merge-base --is-ancestor`. Used to reject rebinding an existing mission
+/// worktree whose branch does not contain the frozen target_head.
+pub fn is_ancestor(repo: &std::path::Path, ancestor: &str, descendant: &str) -> bool {
+    std::process::Command::new("git")
+        .args(["merge-base", "--is-ancestor", ancestor, descendant])
+        .current_dir(repo)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// Build the SDLC seed capsule for injection into a compacted or fresh
 /// conversation. Mandatory OPEN + SEALED sections so the model always
 /// sees the full contract context on resume. OPEN/SEALED prefer leaf-aware tree.
@@ -312,6 +428,20 @@ pub fn build_seed_capsule_with_all(
     }
     if let Some(ref p) = mission.worktree_path {
         s.push_str(&format!("**Worktree path:** {p}\n"));
+    }
+    if mission.has_frozen_target() {
+        s.push_str(&format!(
+            "**Target:** {} @ {} ({})\n",
+            mission.target_branch.as_deref().unwrap_or("n/a"),
+            mission
+                .target_head
+                .as_deref()
+                .map(|h| if h.len() > 12 { &h[..12] } else { h })
+                .unwrap_or("n/a"),
+            mission.target_worktree_path.as_deref().unwrap_or("n/a")
+        ));
+    } else {
+        s.push_str("**Target:** missing frozen target — legacy contract; re-approve required.\n");
     }
     if let Some(ref gh) = mission.graph_hash {
         s.push_str(&format!("**Frozen graph hash:** {gh}\n"));
@@ -417,8 +547,10 @@ pub fn integrate_gate(
     if !open_leaves.is_empty() {
         bail!("{} open leaf task(s) remain", open_leaves.len());
     }
-    // Live session cwd + branch must match the frozen binding (no path fallbacks).
+    // Live session cwd + branch must match the frozen mission worktree binding.
     mission.validate_binding(current_cwd, current_branch)?;
+    // Integrate destination is exclusively the frozen target — path + branch.
+    mission.validate_target_destination()?;
     if !mission.human_gates_satisfied() {
         bail!("human gates not all approved");
     }
@@ -450,7 +582,9 @@ pub fn structural_graph_hash(conn: &rusqlite::Connection) -> Result<String> {
 /// explicit re-entry into a still-valid ACTIVE execute/integrate contract
 /// (paused missions stay paused until the user re-approves / rebinds).
 pub fn should_auto_resume(mission: &Mission) -> bool {
-    mission.approved
+    mission.contract_version >= CURRENT_CONTRACT_VERSION
+        && mission.has_frozen_target()
+        && mission.approved
         && !mission.needs_reapproval
         && mission.hash_valid()
         && matches!(mission.phase.as_str(), "execute" | "integrate")
@@ -475,6 +609,9 @@ mod tests {
         let worktree_name = Some("sdlc-test".into());
         let branch = Some("sdlc/ship-x".into());
         let worktree_path = Some("/tmp/wt".into());
+        let target_worktree_path = Some("/tmp/primary".into());
+        let target_branch = Some("main".into());
+        let target_head = Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
         let hash = Mission::compute_contract_hash_full(
             "ship X",
             &["tests pass".into()],
@@ -488,8 +625,12 @@ mod tests {
             worktree_name.as_deref(),
             branch.as_deref(),
             worktree_path.as_deref(),
+            target_worktree_path.as_deref(),
+            target_branch.as_deref(),
+            target_head.as_deref(),
         );
         Mission {
+            contract_version: CURRENT_CONTRACT_VERSION,
             id: "m-test".into(),
             goal: "ship X".into(),
             non_goals: vec!["rewrite Y".into()],
@@ -502,6 +643,9 @@ mod tests {
             worktree_name,
             branch,
             worktree_path,
+            target_worktree_path,
+            target_branch,
+            target_head,
             rationale: "match house style".into(),
             phase: "execute".into(),
             approved: true,
@@ -613,6 +757,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         );
         let b = Mission::compute_contract_hash_full(
             "g",
@@ -627,6 +774,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         );
         let c = Mission::compute_contract_hash_full(
             "g2",
@@ -637,6 +787,9 @@ mod tests {
             &[],
             &[],
             "",
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -662,6 +815,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         );
         let b = Mission::compute_contract_hash_full(
             "g",
@@ -673,6 +829,9 @@ mod tests {
             &[],
             "",
             Some("gh2"),
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -696,6 +855,9 @@ mod tests {
                 wt,
                 br,
                 path,
+                None,
+                None,
+                None,
             )
         };
         let unbound = base(None, None, None);
@@ -704,6 +866,89 @@ mod tests {
         assert_ne!(unbound, bound);
         assert_ne!(bound, other_path);
         assert!(sample_mission().hash_valid());
+    }
+
+    #[test]
+    fn contract_hash_covers_frozen_target() {
+        let base = |tp: Option<&str>, tb: Option<&str>, th: Option<&str>| {
+            Mission::compute_contract_hash_full(
+                "g",
+                &["a".into()],
+                &[],
+                "standard",
+                &[],
+                &[],
+                &[],
+                "",
+                Some("gh"),
+                Some("wt"),
+                Some("sdlc/x"),
+                Some("/tmp/wt"),
+                tp,
+                tb,
+                th,
+            )
+        };
+        let no_target = base(None, None, None);
+        let with_target = base(Some("/tmp/p"), Some("main"), Some("abc123"));
+        let other_branch = base(Some("/tmp/p"), Some("develop"), Some("abc123"));
+        let other_head = base(Some("/tmp/p"), Some("main"), Some("def456"));
+        assert_ne!(no_target, with_target);
+        assert_ne!(with_target, other_branch);
+        assert_ne!(with_target, other_head);
+        assert!(sample_mission().has_frozen_target());
+        assert!(sample_mission().hash_valid());
+    }
+
+    #[test]
+    fn legacy_missing_target_deserializes_but_fails_active() {
+        // Simulate a pre-v2 mission.json without target_* fields.
+        let json = r#"{
+            "id": "m-legacy",
+            "goal": "ship X",
+            "non_goals": [],
+            "acceptance": ["tests pass"],
+            "lane": "standard",
+            "verify_plan": [],
+            "human_gates": [],
+            "risks": [],
+            "worktree_name": "sdlc-test",
+            "branch": "sdlc/ship-x",
+            "worktree_path": "/tmp/wt",
+            "rationale": "",
+            "phase": "execute",
+            "approved": true,
+            "hash": "deadbeefdeadbeefdeadbeefdeadbeef",
+            "graph_hash": "abc",
+            "needs_reapproval": false
+        }"#;
+        let m: Mission = serde_json::from_str(json).expect("legacy must deserialize");
+        assert_eq!(m.contract_version, LEGACY_CONTRACT_VERSION);
+        assert!(m.target_worktree_path.is_none());
+        assert!(m.target_branch.is_none());
+        assert!(m.target_head.is_none());
+        assert!(!m.has_frozen_target());
+        // Hash won't match recompute (target fields now hashed as empty), and
+        // validate_active fails closed either way.
+        assert!(m.validate_active().is_err());
+        let err = m.validate_active().unwrap_err().to_string();
+        assert!(
+            err.contains("hash mismatch")
+                || err.contains("missing frozen target")
+                || err.contains("legacy"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn seed_capsule_includes_frozen_target() {
+        let m = sample_mission();
+        let cap = build_seed_capsule_with_all(&m, &[], &[], &[]);
+        assert!(
+            cap.contains("**Target:** main @"),
+            "capsule must show frozen target branch, got: {cap}"
+        );
+        assert!(cap.contains("/tmp/primary"));
     }
 
     #[test]
@@ -844,26 +1089,56 @@ mod tests {
     }
 
     #[test]
-    fn integrate_gate_requires_live_binding() {
+    fn integrate_gate_requires_live_binding_and_frozen_target() {
         use crate::model::sdlc::graph::{
             ensure_tables, replace_nodes_from_checklist, set_verify_bit_with_evidence,
             ChecklistNode,
         };
         use rusqlite::Connection;
+        use std::process::Command;
 
-        // Real gate path: graph structure + verified leaves + human gates all
-        // satisfied so only the live binding check can reject. Mirrors the
-        // intercept order (integrate_gate before phase mutation / merge).
-        let bound = std::env::temp_dir().join(format!(
-            "koma-sdlc-igate-bound-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        let _ = std::fs::remove_dir_all(&bound);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root =
+            std::env::temp_dir().join(format!("koma-sdlc-igate-{}-{}", std::process::id(), stamp));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let primary = root.join("primary");
+        let bound = root.join("mission-wt");
+        std::fs::create_dir_all(&primary).unwrap();
         std::fs::create_dir_all(&bound).unwrap();
+
+        let run_in = |dir: &std::path::Path, args: &[&str]| {
+            let o = Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "{args:?} in {} → {}",
+                dir.display(),
+                String::from_utf8_lossy(&o.stderr)
+            );
+        };
+        // Primary on non-main target branch `develop`.
+        run_in(&primary, &["init", "-b", "develop"]);
+        run_in(&primary, &["config", "user.email", "t@t"]);
+        run_in(&primary, &["config", "user.name", "t"]);
+        std::fs::write(primary.join("a.txt"), "a").unwrap();
+        run_in(&primary, &["add", "."]);
+        run_in(&primary, &["commit", "-m", "init"]);
+        let target_head = current_git_head(&primary).expect("head");
+        // Mission worktree is a separate git dir on mission branch (path check only
+        // for validate_binding — no shared object db required for the gate).
+        run_in(&bound, &["init", "-b", "sdlc/ship-x"]);
+        run_in(&bound, &["config", "user.email", "t@t"]);
+        run_in(&bound, &["config", "user.name", "t"]);
+        std::fs::write(bound.join("b.txt"), "b").unwrap();
+        run_in(&bound, &["add", "."]);
+        run_in(&bound, &["commit", "-m", "feat"]);
 
         let conn = Connection::open_in_memory().unwrap();
         ensure_tables(&conn).unwrap();
@@ -874,10 +1149,8 @@ mod tests {
                 status: "done".into(),
                 parent_title: None,
                 id: None,
-
-                    owned_paths: vec![],
-
-                            }],
+                owned_paths: vec![],
+            }],
         )
         .unwrap();
         let leaf_id = crate::model::sdlc::graph::list_all(&conn).unwrap()[0]
@@ -896,10 +1169,14 @@ mod tests {
         m.worktree_path = Some(bound.to_string_lossy().into_owned());
         m.branch = Some("sdlc/ship-x".into());
         m.worktree_name = Some("sdlc-test".into());
+        m.target_worktree_path = Some(primary.to_string_lossy().into_owned());
+        m.target_branch = Some("develop".into());
+        m.target_head = Some(target_head);
         m.human_gates = vec![];
         m.human_gates_approved = vec![];
         m.hash = m.recompute_hash();
         assert!(m.validate_active().is_ok());
+        assert_eq!(m.target_branch.as_deref(), Some("develop"));
 
         // Stale / missing live cwd must fail closed before integrate proceeds.
         let wrong_cwd = std::path::Path::new("/definitely/not/the/bound/path");
@@ -920,21 +1197,36 @@ mod tests {
             "expected branch mismatch from integrate_gate, got: {err_branch}"
         );
 
-        // Missing branch reading fails closed too.
-        let err_none = integrate_gate(&m, &conn, &bound, None)
+        // Target branch drift: freeze says develop, but switch primary to main.
+        run_in(&primary, &["checkout", "-b", "main"]);
+        let err_target = integrate_gate(&m, &conn, &bound, Some("sdlc/ship-x"))
             .unwrap_err()
             .to_string();
         assert!(
-            err_none.contains("could not determine current git branch")
-                || err_none.contains("branch"),
-            "expected branch binding failure, got: {err_none}"
+            err_target.contains("target branch drift") || err_target.contains("develop"),
+            "expected target drift rejection, got: {err_target}"
         );
+        // Restore develop for the control case.
+        run_in(&primary, &["checkout", "develop"]);
 
-        // Control: live cwd + bound branch passes the full gate (proves earlier
-        // failures were binding-only, not structure/evidence noise).
+        // Control: live cwd + bound branch + matching frozen target passes.
         integrate_gate(&m, &conn, &bound, Some("sdlc/ship-x")).unwrap();
 
-        let _ = std::fs::remove_dir_all(&bound);
+        // Legacy: missing frozen target fails closed even with good mission binding.
+        let mut legacy = m.clone();
+        legacy.target_worktree_path = None;
+        legacy.target_branch = None;
+        legacy.target_head = None;
+        legacy.hash = legacy.recompute_hash();
+        let err_legacy = integrate_gate(&legacy, &conn, &bound, Some("sdlc/ship-x"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err_legacy.contains("frozen target") || err_legacy.contains("re-approval"),
+            "expected legacy target failure, got: {err_legacy}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -944,5 +1236,68 @@ mod tests {
         let mut m2 = m.clone();
         m2.goal = "other".into();
         assert!(!m2.hash_valid());
+    }
+
+    #[test]
+    fn is_ancestor_detects_related_history() {
+        use std::process::Command;
+        let root = std::env::temp_dir().join(format!(
+            "koma-sdlc-ancestor-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let run = |args: &[&str]| {
+            let o = Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "{args:?} {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+        };
+        run(&["init", "-b", "develop"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(root.join("a.txt"), "a").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "init"]);
+        let base = current_git_head(&root).unwrap();
+        run(&["checkout", "-b", "sdlc/feat"]);
+        std::fs::write(root.join("b.txt"), "b").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "feat"]);
+        let tip = current_git_head(&root).unwrap();
+        assert!(
+            is_ancestor(&root, &base, &tip),
+            "base must be ancestor of tip"
+        );
+        assert!(
+            is_ancestor(&root, &base, &base),
+            "commit is ancestor of itself"
+        );
+        // Unrelated: tip is NOT ancestor of base.
+        assert!(!is_ancestor(&root, &tip, &base) || tip == base);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn validate_active_requires_frozen_target() {
+        let mut m = sample_mission();
+        assert!(m.validate_active().is_ok());
+        m.target_branch = None;
+        m.hash = m.recompute_hash();
+        let err = m.validate_active().unwrap_err().to_string();
+        assert!(
+            err.contains("frozen target") || err.contains("re-approval"),
+            "unexpected: {err}"
+        );
     }
 }

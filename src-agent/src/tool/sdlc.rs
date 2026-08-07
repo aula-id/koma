@@ -161,7 +161,7 @@ impl Tool for MissionVerify {
     }
 }
 
-/// Enter integrate phase; merge to main if clean+safe.
+/// Enter integrate phase; merge into frozen target branch if clean+safe.
 pub struct MissionIntegrate;
 
 impl Tool for MissionIntegrate {
@@ -170,11 +170,12 @@ impl Tool for MissionIntegrate {
     }
 
     fn description(&self) -> &'static str {
-        "Enter the integrate phase: merge the mission branch into the primary workdir. \
+        "Enter the integrate phase: merge the mission branch into the frozen target \
+         (target_worktree_path + target_branch captured at approval). \
          Requires frozen graph complete, all required leaf evidence verified, valid binding, \
-         and approved human gates. Branch-only cannot bypass those gates. \
-         If the working tree is dirty, the branch is left ready for manual merge or PR. \
-         Never force-pushes."
+         frozen target present, and approved human gates. Branch-only cannot bypass those gates. \
+         If the target working tree is dirty, the branch is left ready for manual merge or PR. \
+         Never force-pushes. Never infers destination from live cwd."
     }
 
     fn parameters(&self) -> Value {
