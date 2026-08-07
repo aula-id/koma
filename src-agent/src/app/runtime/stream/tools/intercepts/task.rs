@@ -209,9 +209,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
             }
         }
     }
-    // Clear the pending SDLC node_id after spawn consumed it (build_tool_ctx reads
-    // it once and propagates to the sub-agent's ToolCtx).
-    state.rest.sessions[sess_idx].sdlc_pending_node_id = None;
+    // Keep session active card after spawn so main path ownership can resolve it.
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
 }

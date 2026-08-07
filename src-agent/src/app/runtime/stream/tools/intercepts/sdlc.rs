@@ -5,7 +5,6 @@ use super::InterceptFlow;
 use crate::app::state::AgentMode;
 use crate::app::state::AppState;
 use crate::dto::chat::ToolCall;
-use globset::{Glob, GlobSetBuilder};
 
 /// SDLC assess-phase tool gate — mirrors Plan's readonly gate.
 /// Denies filesystem-mutating workspace tools at runtime while leaving the
@@ -82,10 +81,10 @@ pub(in crate::app::runtime::stream::tools) fn intercept_sdlc_execute_git_gate(
     let cwd_override = args.get("cwd").and_then(|v| v.as_str());
 
     // Live binding check against mission.json + session cwd/branch.
-    let (binding_live, binding_detail) = {
+    let (binding_live, binding_detail, mission_branch) = {
         let sess = state.rest.sessions[sess_idx].session.as_ref();
         match sess {
-            None => (false, "no active session".to_string()),
+            None => (false, "no active session".to_string(), None),
             Some(s) => {
                 let live_cwd = state.rest.sessions[sess_idx]
                     .active_cwd
@@ -93,17 +92,18 @@ pub(in crate::app::runtime::stream::tools) fn intercept_sdlc_execute_git_gate(
                     .unwrap_or_else(|| s.workdir());
                 match crate::model::sdlc::Mission::load(&s.path) {
                     Some(m) => {
+                        let branch = m.branch.clone();
                         let live_branch =
                             crate::model::sdlc::mission::current_git_branch(&live_cwd);
                         match m
                             .validate_active()
                             .and_then(|_| m.validate_binding(&live_cwd, live_branch.as_deref()))
                         {
-                            Ok(()) => (true, String::new()),
-                            Err(e) => (false, e.to_string()),
+                            Ok(()) => (true, String::new(), branch),
+                            Err(e) => (false, e.to_string(), branch),
                         }
                     }
-                    None => (false, "mission.json missing".to_string()),
+                    None => (false, "mission.json missing".to_string(), None),
                 }
             }
         }
@@ -114,6 +114,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_sdlc_execute_git_gate(
         cwd_override,
         binding_live,
         &binding_detail,
+        mission_branch.as_deref(),
     ) {
         state.rest.sessions[sess_idx]
             .tool_results
@@ -126,10 +127,8 @@ pub(in crate::app::runtime::stream::tools) fn intercept_sdlc_execute_git_gate(
 
 /// SDLC execute/integrate path-ownership gate for `write` / `edit` / `delete`.
 ///
-/// Rejects mutations whose target path matches a DIFFERENT active node's
-/// `owned_paths` globs. Paths that match no ownership pattern, or only the
-/// current node's patterns, fall through. Graph/DB errors fail open so this
-/// gate never blocks tooling when the graph is unavailable.
+/// Prefer tracked pending id if still an active leaf; else exactly one active
+/// leaf (compat). Requires claim; graph/DB errors DENY (fail closed).
 pub(in crate::app::runtime::stream::tools) fn intercept_sdlc_path_ownership_gate(
     state: &mut AppState,
     sess_idx: usize,
@@ -160,77 +159,128 @@ pub(in crate::app::runtime::stream::tools) fn intercept_sdlc_path_ownership_gate
         .as_ref()
         .map(|s| s.path.clone())
     else {
-        return InterceptFlow::Fallthrough;
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            "error: path ownership denied — no active session".to_string(),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
     };
 
-    // Fail open on graph/DB errors — never break existing functionality.
     let conn = match crate::model::msglog::open(&sess_path) {
         Ok(c) => c,
-        Err(_) => return InterceptFlow::Fallthrough,
-    };
-    if crate::model::sdlc::graph::ensure_tables(&conn).is_err() {
-        return InterceptFlow::Fallthrough;
-    }
-    let nodes = match crate::model::sdlc::graph::list_all(&conn) {
-        Ok(n) => n,
-        Err(_) => return InterceptFlow::Fallthrough,
-    };
-
-    // Use the session's tracked active node_id if available (set when a task
-    // was delegated). Otherwise, when only a single active leaf exists, infer it.
-    let tracked_id = state.rest.sessions[sess_idx]
-        .sdlc_pending_node_id
-        .as_deref();
-    let current_node_id: Option<&str> = if tracked_id.is_some() {
-        tracked_id
-    } else {
-        let active_leaves: Vec<&crate::model::sdlc::graph::GraphTask> = nodes
-            .iter()
-            .filter(|n| n.status == "active")
-            .filter(|n| crate::model::sdlc::graph::is_leaf(&conn, &n.id).unwrap_or(false))
-            .collect();
-        if active_leaves.len() == 1 {
-            Some(active_leaves[0].id.as_str())
-        } else {
-            None
-        }
-    };
-
-    for node in &nodes {
-        if node.status != "active" || node.owned_paths.is_empty() {
-            continue;
-        }
-        // Own patterns allowed when we can identify the current node.
-        if current_node_id.is_some_and(|id| id == node.id.as_str()) {
-            continue;
-        }
-
-        let mut builder = GlobSetBuilder::new();
-        let mut any = false;
-        for pat in &node.owned_paths {
-            if let Ok(g) = Glob::new(pat) {
-                builder.add(g);
-                any = true;
-            }
-        }
-        if !any {
-            continue;
-        }
-        let Ok(set) = builder.build() else {
-            continue;
-        };
-        if set.is_match(target_path) {
+        Err(e) => {
             state.rest.sessions[sess_idx].tool_results.push((
                 call.id.clone(),
-                format!(
-                    "error: path '{target_path}' is owned by active node '{}' ({}) — \
-                     write/edit/delete to a DIFFERENT active node's owned_paths is forbidden",
-                    node.id, node.title
-                ),
+                format!("error: path ownership denied — graph open failed: {e}"),
             ));
             state.rest.sessions[sess_idx].tool_idx += 1;
             return InterceptFlow::Continue;
         }
+    };
+    if let Err(e) = crate::model::sdlc::graph::ensure_tables(&conn) {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            format!("error: path ownership denied — ensure_tables failed: {e}"),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    // Resolve current claim: prefer tracked pending if still an active leaf.
+    let mut current_node_id: Option<String> = None;
+    if let Some(pending) = state.rest.sessions[sess_idx].sdlc_pending_node_id.clone() {
+        let still_active_leaf = match crate::model::sdlc::graph::get_node(&conn, &pending) {
+            Ok(Some(n)) if n.status == "active" => {
+                match crate::model::sdlc::graph::is_leaf(&conn, &pending) {
+                    Ok(true) => true,
+                    Ok(false) => false,
+                    Err(e) => {
+                        state.rest.sessions[sess_idx].tool_results.push((
+                            call.id.clone(),
+                            format!("error: path ownership denied — leaf check failed: {e}"),
+                        ));
+                        state.rest.sessions[sess_idx].tool_idx += 1;
+                        return InterceptFlow::Continue;
+                    }
+                }
+            }
+            Ok(_) => false,
+            Err(e) => {
+                state.rest.sessions[sess_idx].tool_results.push((
+                    call.id.clone(),
+                    format!("error: path ownership denied — node lookup failed: {e}"),
+                ));
+                state.rest.sessions[sess_idx].tool_idx += 1;
+                return InterceptFlow::Continue;
+            }
+        };
+        if still_active_leaf {
+            current_node_id = Some(pending);
+        } else {
+            // Stale pending — clear and deny (must re-claim).
+            state.rest.sessions[sess_idx].sdlc_pending_node_id = None;
+            state.rest.sessions[sess_idx].tool_results.push((
+                call.id.clone(),
+                "error: claim exactly one OPEN leaf first".to_string(),
+            ));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            return InterceptFlow::Continue;
+        }
+    }
+
+    if current_node_id.is_none() {
+        let nodes = match crate::model::sdlc::graph::list_all(&conn) {
+            Ok(n) => n,
+            Err(e) => {
+                state.rest.sessions[sess_idx].tool_results.push((
+                    call.id.clone(),
+                    format!("error: path ownership denied — graph list failed: {e}"),
+                ));
+                state.rest.sessions[sess_idx].tool_idx += 1;
+                return InterceptFlow::Continue;
+            }
+        };
+        let mut active_leaves: Vec<&crate::model::sdlc::graph::GraphTask> = Vec::new();
+        for n in &nodes {
+            if n.status != "active" {
+                continue;
+            }
+            match crate::model::sdlc::graph::is_leaf(&conn, &n.id) {
+                Ok(true) => active_leaves.push(n),
+                Ok(false) => {}
+                Err(e) => {
+                    state.rest.sessions[sess_idx].tool_results.push((
+                        call.id.clone(),
+                        format!("error: path ownership denied — leaf check failed: {e}"),
+                    ));
+                    state.rest.sessions[sess_idx].tool_idx += 1;
+                    return InterceptFlow::Continue;
+                }
+            }
+        }
+        if active_leaves.len() == 1 {
+            current_node_id = Some(active_leaves[0].id.clone());
+        }
+    }
+
+    let Some(node_id) = current_node_id else {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            "error: claim exactly one OPEN leaf first".to_string(),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    };
+
+    if let Err(e) =
+        crate::model::sdlc::graph::check_path_ownership(&conn, Some(node_id.as_str()), target_path)
+    {
+        state.rest.sessions[sess_idx]
+            .tool_results
+            .push((call.id.clone(), e));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
     }
 
     InterceptFlow::Fallthrough
@@ -374,7 +424,17 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
         .map(|m| m.id.clone())
         .unwrap_or_else(|| format!("m-{}", &call.id[..8.min(call.id.len())]));
 
-    // Binding is established only on successful approve — hash unbound draft.
+    // Branch intent: user-provided (sanitized) wins; else classify from goal/lane.
+    let branch_intent = mission_args.branch.clone().or_else(|| {
+        Some(crate::model::sdlc::branch_name::classify_mission_branch(
+            &mission_args.goal,
+            &mission_args.lane,
+            &mission_args.non_goals,
+        ))
+    });
+
+    // Binding is established only on successful approve — hash unbound draft
+    // but include branch intent when set so approve bind uses the frozen name.
     let hash = crate::model::sdlc::Mission::compute_contract_hash_full(
         crate::model::sdlc::mission::ContractHashInput {
             goal: &mission_args.goal,
@@ -387,7 +447,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
             rationale: &mission_args.rationale,
             graph_hash: Some(&graph_hash),
             worktree_name: None,
-            branch: None,
+            branch: branch_intent.as_deref(),
             worktree_path: None,
             target_worktree_path: None,
             target_branch: None,
@@ -412,7 +472,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
     let highlights_for_digest = mission_args.highlights.clone();
     let amending_flag = amending;
 
-    let mission = crate::model::sdlc::Mission {
+    let mut mission = crate::model::sdlc::Mission {
         contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
         id: mission_id,
         goal: mission_args.goal,
@@ -424,8 +484,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
         human_gates_approved,
         risks: mission_args.risks,
         // Binding + frozen target established only on successful approve.
+        // Branch intent is set so approve bind / capsule can show it.
         worktree_name: None,
-        branch: None,
+        branch: branch_intent,
         worktree_path: None,
         target_worktree_path: None,
         target_branch: None,
@@ -502,9 +563,34 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
     // Mission on disk is unapproved/assess (including amendment path) — keep the
     // runtime phase aligned so a parked amendment never leaves the session in
     // execute/integrate over an unapproved contract.
-    // Phase/hash change: cancel any in-flight LLM keeper from the prior phase.
-    state.rest.sessions[sess_idx].invalidate_sdlc_keeper_llm();
-    state.rest.sessions[sess_idx].sdlc_phase = Some("assess".to_string());
+    // Clear active card claim on park/amend.
+    state.rest.sessions[sess_idx].sdlc_pending_node_id = None;
+    // Branch intent for header (may exist before bind).
+    state.rest.sessions[sess_idx].sdlc_branch = mission.branch.clone();
+    // Persistence boundary: use the already-saved mission to avoid redundant load.
+    if let Err(e) = state
+        .rest
+        .apply_sdlc_phase_with_mission(sess_idx, &mut mission, "assess")
+    {
+        // Persistence failed after graph staging + mission save.
+        // Restore prior graph, force safe assess, return error without parking.
+        if let Err(re) =
+            crate::model::sdlc::graph::replace_nodes_from_checklist(&conn, &prior_graph)
+        {
+            state.rest.sessions[sess_idx].tool_results.push((
+                call.id.clone(),
+                format!("error: phase persistence failed: {e}; graph restore also failed: {re}"),
+            ));
+        } else {
+            state.rest.sessions[sess_idx].tool_results.push((
+                call.id.clone(),
+                format!("error: phase persistence failed: {e} (graph restored)"),
+            ));
+        }
+        state.rest.force_sdlc_assess_safe(sess_idx);
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
     state.rest.sessions[sess_idx].awaiting_approval = true;
     state.rest.sessions[sess_idx].approval_reason = None;
     state.rest.sessions[sess_idx].status = if amending {
@@ -714,16 +800,36 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_verify(
         }
     };
 
+    // On verify pass, best-effort capture the bound worktree's current commit SHA
+    // and append it to the evidence string: "evidence | commit:<short_sha>".
+    let evidence_with_commit = if pass {
+        let sha = crate::model::sdlc::mission::capture_head_short_sha(&live_cwd);
+        match sha {
+            Some(s) => format!("{evidence} | commit:{s}"),
+            None => evidence.clone(),
+        }
+    } else {
+        evidence.clone()
+    };
+
     // Evidence + verify bit share one transaction (no dangling evidence on fail).
     let result = crate::model::sdlc::graph::set_verify_bit_with_evidence(
         &conn,
         &target_node,
         pass,
-        Some(evidence.as_str()),
+        Some(evidence_with_commit.as_str()),
     );
 
     match result {
         Ok(()) => {
+            if pass
+                && state.rest.sessions[sess_idx]
+                    .sdlc_pending_node_id
+                    .as_deref()
+                    == Some(target_node.as_str())
+            {
+                state.rest.sessions[sess_idx].sdlc_pending_node_id = None;
+            }
             let result_text = crate::tool::sdlc::mission_verify_result(&target_node, pass);
             state.rest.sessions[sess_idx]
                 .tool_results
@@ -844,14 +950,15 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_integrate(
         return InterceptFlow::Continue;
     }
 
-    // Gates passed — now mutate phase (per-session).
-    // Phase change execute→integrate: drop any stale LLM keeper from execute.
-    state.rest.sessions[sess_idx].invalidate_sdlc_keeper_llm();
-    if let Some(mut m) = crate::model::sdlc::Mission::load(&sess_path) {
-        m.phase = "integrate".to_string();
-        let _ = m.save(&sess_path);
+    // Gates passed — now mutate phase (per-session). Fail closed on dual-write.
+    if let Err(e) = state.rest.apply_sdlc_phase(sess_idx, "integrate") {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            format!("error: could not enter integrate phase: {e}"),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
     }
-    state.rest.sessions[sess_idx].sdlc_phase = Some("integrate".to_string());
 
     // Destination is exclusively frozen target_* on the mission — never workdir_saved.
     let result = crate::model::sdlc::integrate::try_integrate(&mission, force_branch_only);
@@ -861,18 +968,8 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_integrate(
         // A successful merge is the only transition into the terminal done
         // phase. It remains visible for reporting; checked cleanup runs only
         // when the human leaves SDLC from that terminal state.
-        let marked_done = if let Some(mut m) = crate::model::sdlc::Mission::load(&sess_path) {
-            m.phase = "done".to_string();
-            m.save(&sess_path).map_err(|e| e.to_string())
-        } else {
-            Err("mission disappeared after integration".to_string())
-        };
-
-        match marked_done {
+        match state.rest.apply_sdlc_phase(sess_idx, "done") {
             Ok(()) => {
-                state.rest.sessions[sess_idx].sdlc_phase = Some("done".to_string());
-                state.rest.sessions[sess_idx].invalidate_sdlc_keeper_llm();
-
                 // Leave the shadow worktree before the later done cleanup can
                 // remove it; its branch and bindings stay persisted for now.
                 let dir_cache = state.rest.sessions[sess_idx].dir_cache.clone();
@@ -1047,6 +1144,19 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
                                     if ex.status == n.status {
                                         continue;
                                     }
+                                    // Active leaf claim must go through claim_leaf
+                                    // (exclusive OPEN claim + pending card).
+                                    if n.status == "active" {
+                                        if let Err(e) =
+                                            crate::model::sdlc::graph::claim_leaf(&conn, &ex.id)
+                                        {
+                                            err = Some(format!("error: claim_leaf failed: {e}"));
+                                            break;
+                                        }
+                                        state.rest.sessions[sess_idx].sdlc_pending_node_id =
+                                            Some(ex.id.clone());
+                                        continue;
+                                    }
                                     // Atomic status + event (+ rollup) via graph API.
                                     if let Err(e) = crate::model::sdlc::graph::update_node_status(
                                         &conn, &ex.id, &n.status,
@@ -1175,6 +1285,8 @@ mod assess_gate_tests {
             r#"{"args":["branch"]}"#,
             r#"{"args":["branch","-vv"]}"#,
             r#"{"args":["branch","--show-current"]}"#,
+            r#"{"args":["branch","new-feature"]}"#,
+            r#"{"args":["checkout","main"]}"#,
             r#"{"args":["remote"]}"#,
             r#"{"args":["remote","-v"]}"#,
             r#"{"args":["remote","show","origin"]}"#,
@@ -1194,9 +1306,9 @@ mod assess_gate_tests {
     #[test]
     fn assess_gate_denies_mutating_git_branch_and_remote_forms() {
         for args in [
-            r#"{"args":["branch","new-feature"]}"#,
             r#"{"args":["branch","-d","old"]}"#,
             r#"{"args":["branch","--set-upstream-to=origin/main"]}"#,
+            r#"{"args":["checkout","-f","main"]}"#,
             r#"{"args":["remote","add","origin","https://example.com/r.git"]}"#,
             r#"{"args":["remote","set-url","origin","https://example.com/n.git"]}"#,
             r#"{"args":["remote","remove","origin"]}"#,
@@ -1236,15 +1348,20 @@ mod assess_gate_tests {
         // Even with a fake "live" path through the pure helper-level checks via
         // cwd override — the intercept should reject cwd regardless of binding
         // once we get past missing-session. Use helper directly for cwd/checkout.
-        assert!(
-            crate::tool::sdlc_execute_git_args_allowed(&["checkout", "main"], None, true, "")
-                .is_err()
-        );
+        assert!(crate::tool::sdlc_execute_git_args_allowed(
+            &["checkout", "main"],
+            None,
+            true,
+            "",
+            Some("feat")
+        )
+        .is_err());
         assert!(crate::tool::sdlc_execute_git_args_allowed(
             &["status"],
             Some("/tmp/escape"),
             true,
-            ""
+            "",
+            Some("feat")
         )
         .is_err());
     }
@@ -1275,16 +1392,20 @@ mod assess_gate_tests {
 
     #[test]
     fn path_ownership_gate_allows_unowned_and_own_paths() {
-        // In-memory session with no graph → fail-open (allows through).
+        // In-memory session with no graph → fail-closed (deny).
         let mut state = AppState::new(Mode::Chat);
         state.rest.sessions[0].agent_mode = AgentMode::Sdlc;
         state.rest.sessions[0].sdlc_phase = Some("execute".into());
         let c = call("write", r#"{"path":"src/lib.rs","content":"x"}"#);
         let flow = intercept_sdlc_path_ownership_gate(&mut state, 0, &c);
-        // No session/graph → fail open
         assert!(
-            matches!(flow, InterceptFlow::Fallthrough),
-            "must fail open when no session"
+            matches!(flow, InterceptFlow::Continue),
+            "must fail closed when no session/graph"
+        );
+        let msg = &state.rest.sessions[0].tool_results[0].1;
+        assert!(
+            msg.contains("path ownership denied") || msg.contains("claim exactly one"),
+            "{msg}"
         );
     }
 

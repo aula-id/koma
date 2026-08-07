@@ -6,7 +6,18 @@ use std::path::Path;
 
 use super::decompose::{KEEPER_STALL_SECS, META_LAST_GRAPH_FINGERPRINT, META_LAST_TOOL_ROUND_AT};
 use super::graph;
+use super::mission::current_git_branch;
 use super::Mission;
+
+/// Typed action produced by the keeper when the mission contract is invalid
+/// and requires a fail-closed reassessment rail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeeperAction {
+    /// Mission contract hash is invalid, graph hash is missing, or the
+    /// mission binding was lost. The runtime/deferred boundary must mark
+    /// the disk mission as needing reassessment and transition to assess.
+    RequireReassessment { reason: String },
+}
 
 /// Report produced by the keeper evaluation.
 #[derive(Debug, Clone, Default)]
@@ -17,6 +28,8 @@ pub struct KeeperReport {
     pub inject: Option<String>,
     /// Current mission phase hint.
     pub phase_hint: Option<String>,
+    /// Typed action for the runtime/deferred boundary to consume.
+    pub action: Option<KeeperAction>,
 }
 
 /// Content-hash of the last inject we sent, stored in mission_meta so we
@@ -39,8 +52,30 @@ pub fn evaluate(session_dir: &Path) -> KeeperReport {
         return report;
     }
 
-    // Fail-closed: invalid contract → reassess nudge once.
-    if !mission.hash_valid() || mission.graph_hash.is_none() {
+    // Fail-closed: invalid contract or lost binding → reassessment rail.
+    // Validate the bound worktree itself, never the session path: keeper may run
+    // outside the mission worktree, while the frozen binding remains authoritative.
+    let binding_lost = match mission.worktree_path.as_deref() {
+        Some(path) if Path::new(path).is_dir() && mission.branch.is_some() => {
+            let worktree = Path::new(path);
+            let live_branch = current_git_branch(worktree);
+            mission
+                .validate_binding(worktree, live_branch.as_deref())
+                .is_err()
+        }
+        _ => true,
+    };
+    if !mission.hash_valid() || mission.graph_hash.is_none() || binding_lost {
+        let reason = if !mission.hash_valid() {
+            "contract hash invalid"
+        } else if mission.graph_hash.is_none() {
+            "graph hash missing"
+        } else {
+            "mission binding lost"
+        };
+        report.action = Some(KeeperAction::RequireReassessment {
+            reason: reason.to_string(),
+        });
         report.inject = Some(
             "[SDLC keeper]\n\
              Mission contract hash/graph binding is invalid or legacy-unbound. \
@@ -265,6 +300,7 @@ mod tests {
     use crate::model::sdlc::graph::{self, ChecklistNode};
     use crate::model::sdlc::Mission;
     use std::path::PathBuf;
+    use std::process::Command;
 
     fn tmp_session() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -280,11 +316,41 @@ mod tests {
         dir
     }
 
+    fn run_git(dir: &std::path::Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?} in {} failed: {}",
+            dir.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn create_bound_worktree(dir: &std::path::Path) -> PathBuf {
+        let worktree = dir.join("wt");
+        std::fs::create_dir_all(&worktree).unwrap();
+        run_git(&worktree, &["init", "-b", "sdlc/g"]);
+        run_git(
+            &worktree,
+            &["config", "user.email", "keeper-test@example.invalid"],
+        );
+        run_git(&worktree, &["config", "user.name", "Keeper Test"]);
+        std::fs::write(worktree.join("README.md"), "test\n").unwrap();
+        run_git(&worktree, &["add", "README.md"]);
+        run_git(&worktree, &["commit", "-m", "initial"]);
+        worktree
+    }
+
     fn write_mission(dir: &std::path::Path, phase: &str, approved: bool) {
+        let worktree = create_bound_worktree(dir);
         let graph_hash = Some("deadbeefdeadbeefdeadbeefdeadbeef".into());
         let worktree_name = Some("wt".into());
         let branch = Some("sdlc/g".into());
-        let worktree_path = Some("/tmp/wt".into());
+        let worktree_path = Some(worktree.to_string_lossy().into_owned());
         let target_worktree_path = Some("/tmp/primary".into());
         let target_branch = Some("main".into());
         let target_head = Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
@@ -344,12 +410,19 @@ mod tests {
             &conn,
             &[ChecklistNode {
                 title: "ship it".into(),
-                status: "done".into(),
+                status: "pending".into(),
                 parent_title: None,
                 id: None,
 
                 owned_paths: vec![],
             }],
+        )
+        .unwrap();
+        let id = graph::list_all(&conn).unwrap()[0].id.clone();
+        // Legacy false-done row for keeper reopen path.
+        conn.execute(
+            "UPDATE sdlc_nodes SET status = 'done', verify_bit = 0 WHERE id = ?1",
+            rusqlite::params![id],
         )
         .unwrap();
         drop(conn);
@@ -437,5 +510,221 @@ mod tests {
     fn llm_verdict_malformed_returns_none() {
         assert!(super::llm_verdict_to_inject("not json").is_none());
         assert!(super::llm_verdict_to_inject("{}").is_none());
+    }
+
+    // --- Stage 2: reassessment rail tests ---
+
+    #[test]
+    fn keeper_reassessment_on_invalid_hash() {
+        let dir = tmp_session();
+        write_mission(&dir, "execute", true);
+        // Invalidate the stored hash so hash_valid() fails.
+        let mut m = Mission::load(&dir).unwrap();
+        m.hash = "wrong".to_string();
+        m.save(&dir).unwrap();
+
+        let report = evaluate(&dir);
+        assert!(
+            report.action.is_some(),
+            "should produce RequireReassessment"
+        );
+        match report.action.as_ref().unwrap() {
+            super::KeeperAction::RequireReassessment { reason } => {
+                assert!(
+                    reason.contains("contract hash invalid"),
+                    "unexpected reason: {reason}"
+                );
+            }
+        }
+        assert!(report.inject.is_some(), "should have inject text");
+
+        // Simulate deferred action handling: mark disk mission reassess.
+        let mut m = Mission::load(&dir).unwrap();
+        assert!(
+            m.approved,
+            "mission still approved before deferred mutation"
+        );
+        m.approved = false;
+        m.needs_reapproval = true;
+        m.amendment_note = Some("keeper reassessment: contract hash invalid".into());
+        let _ = m.try_transition("assess");
+        m.save(&dir).unwrap();
+
+        // Disk state: mission is in assess, unapproved, needs reapproval.
+        let m2 = Mission::load(&dir).unwrap();
+        assert!(!m2.approved);
+        assert!(m2.needs_reapproval);
+        assert_eq!(m2.phase, "assess");
+        assert!(m2.amendment_note.is_some());
+        // validate_active fails → tools blocked.
+        assert!(m2.validate_active().is_err());
+        let (ws, roots) = m2.tool_sandbox_roots(std::path::Path::new("/tmp"));
+        assert!(ws.as_os_str().is_empty());
+        assert!(roots.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keeper_reassessment_on_missing_graph_hash() {
+        let dir = tmp_session();
+        write_mission(&dir, "execute", true);
+        // Remove graph hash but keep contract hash valid.
+        let mut m = Mission::load(&dir).unwrap();
+        m.graph_hash = None;
+        m.hash = m.recompute_hash();
+        m.save(&dir).unwrap();
+
+        let report = evaluate(&dir);
+        assert!(report.action.is_some());
+        match report.action.as_ref().unwrap() {
+            super::KeeperAction::RequireReassessment { reason } => {
+                assert!(
+                    reason.contains("graph hash missing"),
+                    "unexpected reason: {reason}"
+                );
+            }
+        }
+        assert!(report.inject.is_some());
+
+        // Simulate deferred: mark disk mission reassess.
+        let mut m = Mission::load(&dir).unwrap();
+        m.approved = false;
+        m.needs_reapproval = true;
+        let _ = m.try_transition("assess");
+        m.save(&dir).unwrap();
+
+        let m2 = Mission::load(&dir).unwrap();
+        assert!(!m2.approved);
+        assert!(m2.needs_reapproval);
+        assert!(m2.validate_active().is_err());
+        let (ws, roots) = m2.tool_sandbox_roots(std::path::Path::new("/tmp"));
+        assert!(ws.as_os_str().is_empty());
+        assert!(roots.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keeper_reassessment_on_lost_binding() {
+        let dir = tmp_session();
+        write_mission(&dir, "execute", true);
+        // Lose the mission binding (worktree_path + branch cleared).
+        let mut m = Mission::load(&dir).unwrap();
+        m.worktree_path = None;
+        m.branch = None;
+        m.hash = m.recompute_hash();
+        m.save(&dir).unwrap();
+
+        let report = evaluate(&dir);
+        assert!(report.action.is_some());
+        match report.action.as_ref().unwrap() {
+            super::KeeperAction::RequireReassessment { reason } => {
+                assert!(
+                    reason.contains("mission binding lost"),
+                    "unexpected reason: {reason}"
+                );
+            }
+        }
+        assert!(report.inject.is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keeper_reassessment_on_missing_worktree() {
+        let dir = tmp_session();
+        write_mission(&dir, "execute", true);
+        let worktree = Mission::load(&dir)
+            .unwrap()
+            .worktree_path
+            .map(PathBuf::from)
+            .unwrap();
+        std::fs::remove_dir_all(&worktree).unwrap();
+
+        let report = evaluate(&dir);
+        assert!(matches!(
+            report.action,
+            Some(super::KeeperAction::RequireReassessment { ref reason })
+                if reason.contains("mission binding lost")
+        ));
+        assert!(report.inject.is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keeper_reassessment_on_live_branch_mismatch() {
+        let dir = tmp_session();
+        write_mission(&dir, "execute", true);
+        let worktree = Mission::load(&dir)
+            .unwrap()
+            .worktree_path
+            .map(PathBuf::from)
+            .unwrap();
+        run_git(&worktree, &["checkout", "-b", "sdlc/other"]);
+
+        let report = evaluate(&dir);
+        assert!(matches!(
+            report.action,
+            Some(super::KeeperAction::RequireReassessment { ref reason })
+                if reason.contains("mission binding lost")
+        ));
+        assert!(report.inject.is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keeper_reassessment_dedupe_on_repeated_eval() {
+        let dir = tmp_session();
+        write_mission(&dir, "execute", true);
+        let mut m = Mission::load(&dir).unwrap();
+        m.hash = "wrong".to_string();
+        m.save(&dir).unwrap();
+
+        // First evaluation: inject present.
+        let report1 = evaluate(&dir);
+        assert!(report1.inject.is_some(), "first eval should inject");
+        assert!(report1.action.is_some());
+        // Repeated evaluation: inject deduped (same hash), action still detected.
+        let report2 = evaluate(&dir);
+        assert!(report2.inject.is_none(), "second eval should be deduped");
+        assert!(
+            report2.action.is_some(),
+            "action should still detect invalid state"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keeper_repeated_action_does_not_reinject_after_disk_mutation() {
+        let dir = tmp_session();
+        write_mission(&dir, "execute", true);
+        let mut m = Mission::load(&dir).unwrap();
+        m.hash = "wrong".to_string();
+        m.save(&dir).unwrap();
+
+        // First evaluation: action + inject.
+        let report1 = evaluate(&dir);
+        assert!(report1.action.is_some());
+        assert!(report1.inject.is_some());
+
+        // Simulate deferred action handling (disk mutation).
+        let mut m = Mission::load(&dir).unwrap();
+        m.approved = false;
+        m.needs_reapproval = true;
+        m.amendment_note = Some("keeper reassessment: contract hash invalid".into());
+        let _ = m.try_transition("assess");
+        m.save(&dir).unwrap();
+
+        // Second evaluation: mission no longer approved → no action, no inject.
+        let report2 = evaluate(&dir);
+        assert!(report2.action.is_none());
+        assert!(report2.inject.is_none());
+        assert!(report2.reopened.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

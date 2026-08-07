@@ -380,6 +380,11 @@ pub struct SessionRuntime {
     pub sdlc_prev_short_send: Option<bool>,
     /// Active mission phase for THIS session: assess | execute | integrate | done.
     pub sdlc_phase: Option<String>,
+    /// Mission branch (intent or bound) for header/projection. Transient — not serialised.
+    pub sdlc_branch: Option<String>,
+    /// Primary branch captured once on SDLC enter; restored on leave/deny if clean.
+    /// Transient — never serialised.
+    pub sdlc_assess_entry_branch: Option<String>,
     /// One-shot: after mission-approval compact, seed the mission capsule on THIS session.
     pub pending_mission_seed: bool,
     /// One-shot: after plan-approval compact, seed plan.md on THIS session.
@@ -398,10 +403,13 @@ pub struct SessionRuntime {
     /// Monotonic epoch bumped whenever in-flight LLM keeper results must be
     /// cancelled/ignored (SDLC exit, phase change, contract-hash change).
     pub sdlc_keeper_epoch: u64,
-    /// SDLC path ownership: the graph node id being delegated to a sub-agent.
-    /// Temporarily set by `intercept_task` before `spawn_or_queue` so that
-    /// `build_tool_ctx` can propagate it to the spawned sub-agent's ToolCtx.
-    /// Cleared after spawn completes. Transient — never serialised.
+    /// Session active SDLC card (claimed leaf). Transient — never serialised.
+    ///
+    /// - Set on successful `claim_leaf` (task.node_id or checklist in_progress).
+    /// - Kept after task spawn so main-path ownership can resolve the claim.
+    /// - Cleared on mission_verify PASS when sealed node == pending,
+    ///   leave SDLC, deny, or mission_ready amend/park.
+    /// - Second claim still denied by `claim_leaf` exclusivity.
     pub sdlc_pending_node_id: Option<String>,
     /// Consecutive EXTENSION-injected turn counter (cost-DoS guard, review finding):
     /// the number of synthetic user turns injected back-to-back by the `chat.prompt`
@@ -664,6 +672,8 @@ impl SessionRuntime {
             sdlc_return_mode: None,
             sdlc_prev_short_send: None,
             sdlc_phase: None,
+            sdlc_branch: None,
+            sdlc_assess_entry_branch: None,
             pending_mission_seed: false,
             pending_plan_seed: false,
             sdlc_keeper_due: false,

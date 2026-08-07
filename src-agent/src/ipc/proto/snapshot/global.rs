@@ -68,6 +68,9 @@ pub struct GlobalSnapshot {
     /// Approved mission goal when in SDLC with a mission on disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sdlc_goal: Option<String>,
+    /// Mission branch (intent or bound) for header/clients when in SDLC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdlc_branch: Option<String>,
     /// Count of open graph nodes (not done/cancelled).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sdlc_open: Option<usize>,

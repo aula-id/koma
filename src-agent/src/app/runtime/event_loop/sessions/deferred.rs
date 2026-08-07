@@ -483,6 +483,34 @@ pub(super) fn drain_deferred_and_resume(
             .map(|s| s.path.clone());
         if let Some(path) = sess_path {
             let report = crate::model::sdlc::keeper::evaluate(&path);
+            // Handle typed reassessment action: fail-closed disk mutation + runtime assess.
+            // The action is produced when the keeper detects an invalid contract hash,
+            // missing graph hash, or lost mission binding during an active phase.
+            if let Some(crate::model::sdlc::keeper::KeeperAction::RequireReassessment {
+                ref reason,
+            }) = report.action
+            {
+                let reassess_note = format!("keeper reassessment: {reason}");
+                let mut disk_ok = false;
+                if let Some(mut m) = crate::model::sdlc::Mission::load(&path) {
+                    if m.approved && matches!(m.phase.as_str(), "execute" | "integrate") {
+                        m.approved = false;
+                        m.needs_reapproval = true;
+                        m.amendment_note = Some(reassess_note);
+                        if state
+                            .rest
+                            .apply_sdlc_phase_with_mission(idx, &mut m, "assess")
+                            .is_ok()
+                        {
+                            disk_ok = true;
+                        }
+                    }
+                }
+                // Make runtime assess even if disk persistence fails.
+                if !disk_ok {
+                    state.rest.force_sdlc_assess_safe(idx);
+                }
+            }
             if !report.reopened.is_empty() {
                 state.rest.sessions[idx].set_toast_info(format!(
                     "SDLC keeper reopened {} false-done task(s)",
