@@ -53,21 +53,20 @@ impl AgentMode {
     /// Advance to the next mode for the interactive toggle (Shift+Tab / bare
     /// `/mode`), respecting the YOLO arm gate.
     ///
-    /// Active SDLC never hops via cycle — explicit `/mode <name>` or exiting
-    /// SDLC through `set_agent_mode` is required (returns self so callers stay put).
+    /// Normal ordering is Auto → Normal → Plan → Sdlc → Auto. Callers that
+    /// must keep SDLC locked during execute/integrate (Shift+Tab) gate the
+    /// transition themselves using the session phase; this method always
+    /// returns the pure next mode in the cycle.
     ///
-    /// - `yolo_armed`: retained for call-site compatibility; Yolo folds back to
-    ///   Auto in either state because active SDLC mode owns the guarded cycle.
+    /// - `yolo_armed`: retained for call-site compatibility; Yolo folds back
+    ///   to Auto either way (Yolo is entered only via explicit `/mode yolo`
+    ///   when armed, not via this cycle).
     pub fn cycle(self, _yolo_armed: bool) -> Self {
-        // Active SDLC: refuse mode hops via the cycle key; require explicit exit.
-        if matches!(self, AgentMode::Sdlc) {
-            return AgentMode::Sdlc;
-        }
         match self {
             AgentMode::Auto => AgentMode::Normal,
             AgentMode::Normal => AgentMode::Plan,
             AgentMode::Plan => AgentMode::Sdlc,
-            AgentMode::Sdlc => AgentMode::Sdlc, // unreachable
+            AgentMode::Sdlc => AgentMode::Auto,
             AgentMode::Yolo => AgentMode::Auto,
         }
     }
@@ -80,14 +79,15 @@ mod agent_mode_tests {
     #[test]
     fn cycle_includes_sdlc_when_unarmed() {
         assert_eq!(AgentMode::Plan.cycle(false), AgentMode::Sdlc);
-        // Active SDLC does not hop via cycle.
-        assert_eq!(AgentMode::Sdlc.cycle(false), AgentMode::Sdlc);
+        // SDLC advances to Auto in the pure cycle; phase gating lives at the
+        // Shift+Tab call site.
+        assert_eq!(AgentMode::Sdlc.cycle(false), AgentMode::Auto);
     }
 
     #[test]
     fn cycle_includes_sdlc_when_armed() {
         assert_eq!(AgentMode::Plan.cycle(true), AgentMode::Sdlc);
-        assert_eq!(AgentMode::Sdlc.cycle(true), AgentMode::Sdlc);
+        assert_eq!(AgentMode::Sdlc.cycle(true), AgentMode::Auto);
         assert_eq!(AgentMode::Yolo.cycle(true), AgentMode::Auto);
     }
 

@@ -894,6 +894,28 @@ impl AppStateRest {
                     }
                 }
             }
+            // Retry an interrupted done cleanup without ever discarding the
+            // contract when a checked git operation fails. A successful path
+            // resets the persisted mission to assess; a failure remains done
+            // for a later retry instead of pretending cleanup succeeded.
+            if let Some(path) = self.sessions[sess_idx]
+                .session
+                .as_ref()
+                .map(|s| s.path.clone())
+            {
+                if matches!(
+                    crate::model::sdlc::Mission::load(&path)
+                        .as_ref()
+                        .map(|m| m.phase.as_str()),
+                    Some("done")
+                ) {
+                    if let Err(e) = crate::model::sdlc::mission::cleanup_done_mission(&path) {
+                        self.sessions[sess_idx].set_toast(format!(
+                            "SDLC done cleanup failed; mission remains intact: {e}"
+                        ));
+                    }
+                }
+            }
             self.sessions[sess_idx].sdlc_return_mode = None;
             self.sessions[sess_idx].sdlc_phase = None;
             self.sessions[sess_idx].pending_mission_seed = false;
