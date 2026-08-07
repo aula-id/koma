@@ -11,6 +11,21 @@ use ratatui::{
     Frame,
 };
 
+/// Format the SDLC mode label for the header (`sdlc:execute · branch…`).
+pub(crate) fn format_sdlc_mode_label(phase: &str, branch: Option<&str>) -> String {
+    match branch.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(b) => {
+            let short = if b.chars().count() > 24 {
+                format!("{}…", b.chars().take(23).collect::<String>())
+            } else {
+                b.to_string()
+            };
+            format!("sdlc:{phase} · {short}")
+        }
+        None => format!("sdlc:{phase}"),
+    }
+}
+
 /// Render the header line ("koma" + mode indicator) into `chunk`.
 ///
 /// Mode colours follow the palette's semantic roles: Normal = success (green),
@@ -29,7 +44,11 @@ pub(super) fn render_header(
         crate::app::state::AgentMode::Yolo => ("!", "yooloo".to_string(), palette.error),
         crate::app::state::AgentMode::Sdlc => {
             if let Some(ref phase) = rest.fg().sdlc_phase {
-                ("◆", format!("sdlc:{phase}"), palette.info)
+                (
+                    "◆",
+                    format_sdlc_mode_label(phase, rest.fg().sdlc_branch.as_deref()),
+                    palette.info,
+                )
             } else {
                 ("◆", "sdlc".to_string(), palette.info)
             }
@@ -183,4 +202,22 @@ pub(super) fn render_model_row(
         vertical: 0,
     });
     frame.render_widget(model_row, model_area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_sdlc_mode_label;
+
+    #[test]
+    fn format_sdlc_mode_label_includes_and_truncates_branch() {
+        assert_eq!(format_sdlc_mode_label("execute", None), "sdlc:execute");
+        assert_eq!(
+            format_sdlc_mode_label("assess", Some("  feat/rail-gaps  ")),
+            "sdlc:assess · feat/rail-gaps"
+        );
+        assert_eq!(
+            format_sdlc_mode_label("integrate", Some("1234567890123456789012345")),
+            "sdlc:integrate · 12345678901234567890123…"
+        );
+    }
 }

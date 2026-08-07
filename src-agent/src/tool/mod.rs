@@ -118,14 +118,24 @@ pub(crate) fn plan_git_subcommand_allowed(subcmd: &str) -> bool {
     )
 }
 
-/// SDLC assess is stricter than Plan's subcommand allow-list: `branch` and
-/// `remote` are only permitted in **safe read forms**. Mutating forms
-/// (branch create/force/upstream; remote add/remove/set-url/…) are rejected
-/// even though the bare subcommand is on the Plan allow-list.
+/// SDLC assess is stricter than Plan's subcommand allow-list for mutating remote
+/// forms, but allows local branch create + checkout/switch **without** force/discard
+/// so assess can prep the mission branch. Still rejects commit/merge/rebase/push/…
 ///
 /// `args` is the full `git_operator` argv (subcommand first).
 pub(crate) fn sdlc_assess_git_args_allowed(args: &[&str]) -> Result<(), String> {
     let subcmd = args.first().copied().unwrap_or("");
+
+    // checkout / switch: allow without force/discard flags (assess branch prep).
+    if matches!(subcmd, "checkout" | "switch") {
+        if sdlc_assess_checkout_force_denied(args) {
+            return Err(format!(
+                "git {subcmd} with force/discard is not allowed in assess"
+            ));
+        }
+        return Ok(());
+    }
+
     if !plan_git_subcommand_allowed(subcmd) {
         return Err(format!(
             "git {subcmd} is not allowed (read-only git only until mission approval)"
@@ -134,8 +144,12 @@ pub(crate) fn sdlc_assess_git_args_allowed(args: &[&str]) -> Result<(), String> 
     match subcmd {
         "branch" => {
             if sdlc_assess_branch_is_mutating(args) {
+                // Positional create is allowed; only delete/rename/force/upstream denied.
+                if sdlc_assess_branch_is_create_only(args) {
+                    return Ok(());
+                }
                 return Err("git branch mutating form is not allowed in assess \
-                     (no create/delete/rename/force/upstream; list/show only)"
+                     (no delete/rename/force/upstream; create/list/show only)"
                     .into());
             }
         }
@@ -147,6 +161,84 @@ pub(crate) fn sdlc_assess_git_args_allowed(args: &[&str]) -> Result<(), String> 
         _ => {}
     }
     Ok(())
+}
+
+/// True when checkout/switch argv includes force or discard-changes.
+fn sdlc_assess_checkout_force_denied(args: &[&str]) -> bool {
+    args.iter().skip(1).any(|a| {
+        *a == "-f"
+            || *a == "--force"
+            || *a == "--discard-changes"
+            || (a.starts_with('-') && !a.starts_with("--") && a.contains('f'))
+    })
+}
+
+/// True when `git branch …` is a simple positional create (no delete/rename/force/upstream).
+fn sdlc_assess_branch_is_create_only(args: &[&str]) -> bool {
+    // Reject if any mutating flag present; allow single positional name.
+    let mut i = 1;
+    let mut positionals = 0usize;
+    while i < args.len() {
+        let a = args[i];
+        if a == "--" {
+            positionals += args.len().saturating_sub(i + 1);
+            break;
+        }
+        if a.starts_with('-') {
+            if a.starts_with("--") {
+                let base = a.split_once('=').map(|(b, _)| b).unwrap_or(a);
+                match base {
+                    "--delete" | "--move" | "--copy" | "--force" | "--set-upstream"
+                    | "--set-upstream-to" | "--track" | "--unset-upstream"
+                    | "--edit-description" => return false,
+                    "--list" | "--show-current" | "--all" | "--remotes" => return false,
+                    _ => return false,
+                }
+            } else {
+                for ch in a.chars().skip(1) {
+                    match ch {
+                        'd' | 'D' | 'm' | 'M' | 'c' | 'C' | 'f' | 'u' => return false,
+                        'l' | 'a' | 'r' => return false, // list forms
+                        'v' | 'q' | 'i' => {}
+                        _ => return false,
+                    }
+                }
+            }
+        } else {
+            positionals += 1;
+        }
+        i += 1;
+    }
+    positionals == 1
+}
+
+/// Detect force-push / delete-push forms for ANY SDLC phase.
+/// Returns a short reason when denied.
+pub(crate) fn sdlc_git_force_push_denied(args: &[&str]) -> Option<&'static str> {
+    let subcmd = args.first().copied().unwrap_or("");
+    if subcmd != "push" {
+        return None;
+    }
+    let rest = &args[1..];
+    let has_flag = |needle: &str| rest.contains(&needle);
+    let has_prefix = |prefix: &str| rest.iter().any(|a| a.starts_with(prefix));
+    let has_bundle_char = |ch: char| {
+        rest.iter()
+            .any(|a| a.starts_with('-') && !a.starts_with("--") && a.contains(ch))
+    };
+    if has_flag("--force")
+        || has_flag("-f")
+        || has_bundle_char('f')
+        || has_prefix("--force-with-lease")
+        || has_flag("--delete")
+        || has_flag("-d")
+    {
+        return Some("push --force / --force-with-lease / --delete");
+    }
+    if rest.iter().any(|a| a.starts_with(':')) {
+        return Some("push with colon-prefixed refspec deletion");
+    }
+    None
 }
 
 /// True when a `git branch …` argv would create/delete/rename/force/set upstream
@@ -261,11 +353,13 @@ pub(crate) fn sdlc_execute_git_branch_changing(subcmd: &str) -> bool {
 /// - no arbitrary `cwd` override (must run in the bound worktree via session cwd)
 /// - no branch-changing subcommands
 /// - binding must be live/valid (caller supplies the already-checked flag + detail)
+/// - plain `push` only the mission branch (never bare push / wrong refspec)
 pub(crate) fn sdlc_execute_git_args_allowed(
     args: &[&str],
     cwd_override: Option<&str>,
     binding_live: bool,
     binding_detail: &str,
+    mission_branch: Option<&str>,
 ) -> Result<(), String> {
     if !binding_live {
         return Err(format!(
@@ -291,7 +385,72 @@ pub(crate) fn sdlc_execute_git_args_allowed(
              branch/HEAD is frozen to the mission binding (no checkout/switch/…)"
         ));
     }
+    if let Some(reason) = sdlc_git_force_push_denied(args) {
+        return Err(format!("Never force-push in SDLC ({reason})"));
+    }
+    if subcmd == "push" {
+        let Some(mb) = mission_branch.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Err(
+                "git push denied: mission has no bound branch — cannot push during SDLC".into(),
+            );
+        };
+        // Collect positionals after "push", skipping common flags.
+        let mut positionals: Vec<&str> = Vec::new();
+        let mut i = 1usize;
+        while i < args.len() {
+            let a = args[i];
+            if a == "--" {
+                i += 1;
+                while i < args.len() {
+                    positionals.push(args[i]);
+                    i += 1;
+                }
+                break;
+            }
+            if a.starts_with('-') {
+                // Flags that take a value (not covered by force-push deny).
+                if matches!(
+                    a,
+                    "--repo" | "--receive-pack" | "--exec" | "--push-option" | "-o" | "--signed"
+                ) {
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+            positionals.push(a);
+            i += 1;
+        }
+        // Need at least remote + one refspec.
+        if positionals.len() < 2 {
+            return Err(format!(
+                "git push denied: bare push is not allowed — use `push <remote> {mb}`"
+            ));
+        }
+        // positionals[0] is remote; remaining are refspecs.
+        for spec in positionals.iter().skip(1) {
+            if !sdlc_push_refspec_is_mission_branch(spec, mb) {
+                return Err(format!(
+                    "git push denied: refspec '{spec}' is not the mission branch '{mb}' — \
+                     push only `{mb}` (or refs/heads/{mb})"
+                ));
+            }
+        }
+    }
     Ok(())
+}
+
+/// Destination side of a push refspec must equal the mission branch
+/// (strip `refs/heads/`; for `src:dst` use dst, else whole token).
+fn sdlc_push_refspec_is_mission_branch(spec: &str, mission_branch: &str) -> bool {
+    let dest = match spec.rsplit_once(':') {
+        Some((_src, dst)) if !dst.is_empty() => dst,
+        _ => spec,
+    };
+    let dest = dest.strip_prefix('+').unwrap_or(dest);
+    let dest = dest.strip_prefix("refs/heads/").unwrap_or(dest);
+    dest == mission_branch
 }
 
 /// Shared context handed to every tool invocation.

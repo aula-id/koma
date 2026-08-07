@@ -233,6 +233,8 @@ pub(crate) fn shadow_subagent(sa: &SubAgentSnapshot) -> SubAgent {
         usage_tokens_in: 0,
         usage_tokens_out: 0,
         usage_cost: 0.0,
+        // Daemon-only; shadow carries no SDLC claim.
+        sdlc_active_node_id: None,
     }
 }
 

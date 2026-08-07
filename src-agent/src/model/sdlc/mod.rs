@@ -5,8 +5,10 @@
 //! + `sdlc_events`) lives in `messages.sqlite` alongside the chat log and
 //!   provides the live checklist/status authority (TODO.md is projection only).
 
+pub mod branch_name;
 pub mod decompose;
 pub mod graph;
+pub mod handoff;
 pub mod integrate;
 pub mod keeper;
 pub mod mission;

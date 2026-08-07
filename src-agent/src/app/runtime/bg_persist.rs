@@ -179,6 +179,9 @@ pub(crate) fn restore_bg_records(
             usage_tokens_in: 0,
             usage_tokens_out: 0,
             usage_cost: 0.0,
+            // Restored records are inert — the node_id claim is stale and
+            // must not drive handoff application on a restored session.
+            sdlc_active_node_id: None,
         });
     }
     if max_sub_id >= rt.next_subagent_id {

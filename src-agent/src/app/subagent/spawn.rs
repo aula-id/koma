@@ -178,6 +178,8 @@ pub fn spawn_subagent(
 
     // Save the model_id before `resolved` is moved into run_agent_loop.
     let spawned_model_id = resolved.model_id.clone();
+    // Save SDLC node id before `ctx` is moved into run_agent_loop.
+    let sdlc_active_node_id = ctx.sdlc_active_node_id.clone();
     let (tx, rx) = mpsc::unbounded_channel();
     // The INJECTION channel: `inject_tx` is stored on the returned `SubAgent` so
     // the broker / `task_send` can steer this agent; `inject_rx` is drained at each
@@ -225,5 +227,6 @@ pub fn spawn_subagent(
         usage_tokens_in: 0,
         usage_tokens_out: 0,
         usage_cost: 0.0,
+        sdlc_active_node_id,
     })
 }

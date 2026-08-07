@@ -296,7 +296,43 @@ pub(super) fn handle_approve_mission(
 
     match establish_mission_binding(state, client, handle) {
         Ok(wt_note) => {
-            state.rest.fg_mut().sdlc_phase = Some("execute".to_string());
+            if let Err(e) = state.rest.apply_sdlc_phase(fgi, "execute") {
+                // Phase persistence failed after binding succeeded.
+                // Roll back worktree + unbind mission; use binding failure response.
+                restore_primary_workspace_after_failed_bind(state, fgi);
+                if let Some(path) = state.rest.sessions[fgi]
+                    .session
+                    .as_ref()
+                    .map(|s| s.path.clone())
+                {
+                    restore_unbound_draft_mission(&path);
+                }
+                state.rest.force_sdlc_assess_safe(fgi);
+                state.rest.sessions[fgi].approved_plan = None;
+                state.rest.sessions[fgi].sdlc_pending_node_id = None;
+                let detail = format!("phase persistence failed: {e}");
+                answer_plan_ready(
+                    state,
+                    crate::tool::sdlc::mission_binding_failed_text(&detail),
+                );
+                if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+                    sess.rebuild_system();
+                    let _ = sess.save();
+                }
+                process_tools(state, fgi, client, handle);
+                return Ok(());
+            }
+            // Bound branch is now on mission; clear assess-entry restore + refresh header.
+            state.rest.sessions[fgi].sdlc_assess_entry_branch = None;
+            if let Some(path) = state.rest.sessions[fgi]
+                .session
+                .as_ref()
+                .map(|s| s.path.clone())
+            {
+                if let Some(m) = crate::model::sdlc::Mission::load(&path) {
+                    state.rest.sessions[fgi].sdlc_branch = m.branch.clone();
+                }
+            }
             let mut body = mission_body_for_result(state);
             body.push_str("\n\n");
             body.push_str(&wt_note);
@@ -316,11 +352,24 @@ pub(super) fn handle_approve_mission(
             process_tools(state, fgi, client, handle);
         }
         Err(detail) => {
-            state.rest.fg_mut().sdlc_phase = Some("assess".to_string());
-            answer_plan_ready(
-                state,
-                crate::tool::sdlc::mission_binding_failed_text(&detail),
-            );
+            if let Err(pe) = state.rest.apply_sdlc_phase(fgi, "assess") {
+                // Phase persistence itself failed — force safe assess, clear
+                // claim + keeper state, and surface a durable failure.
+                state.rest.force_sdlc_assess_safe(fgi);
+                state.rest.sessions[fgi].sdlc_pending_node_id = None;
+                state.rest.sessions[fgi].approved_plan = None;
+                answer_plan_ready(
+                    state,
+                    crate::tool::sdlc::mission_binding_failed_text(&format!(
+                        "{detail}; phase persistence also failed: {pe}"
+                    )),
+                );
+            } else {
+                answer_plan_ready(
+                    state,
+                    crate::tool::sdlc::mission_binding_failed_text(&detail),
+                );
+            }
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 sess.rebuild_system();
                 let _ = sess.save();
@@ -344,7 +393,42 @@ pub(super) fn handle_approve_mission_compact(
 
     match establish_mission_binding(state, client, handle) {
         Ok(_wt_note) => {
-            state.rest.fg_mut().sdlc_phase = Some("execute".to_string());
+            if let Err(e) = state.rest.apply_sdlc_phase(fgi, "execute") {
+                // Phase persistence failed after binding succeeded.
+                // Roll back worktree + unbind mission; use binding failure response.
+                restore_primary_workspace_after_failed_bind(state, fgi);
+                if let Some(path) = state.rest.sessions[fgi]
+                    .session
+                    .as_ref()
+                    .map(|s| s.path.clone())
+                {
+                    restore_unbound_draft_mission(&path);
+                }
+                state.rest.force_sdlc_assess_safe(fgi);
+                state.rest.sessions[fgi].approved_plan = None;
+                state.rest.sessions[fgi].sdlc_pending_node_id = None;
+                let detail = format!("phase persistence failed: {e}");
+                answer_plan_ready(
+                    state,
+                    crate::tool::sdlc::mission_binding_failed_text(&detail),
+                );
+                if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+                    sess.rebuild_system();
+                    let _ = sess.save();
+                }
+                process_tools(state, fgi, client, handle);
+                return Ok(());
+            }
+            state.rest.sessions[fgi].sdlc_assess_entry_branch = None;
+            if let Some(path) = state.rest.sessions[fgi]
+                .session
+                .as_ref()
+                .map(|s| s.path.clone())
+            {
+                if let Some(m) = crate::model::sdlc::Mission::load(&path) {
+                    state.rest.sessions[fgi].sdlc_branch = m.branch.clone();
+                }
+            }
             answer_plan_ready(
                 state,
                 crate::tool::sdlc::mission_approved_compact_text().to_string(),
@@ -404,11 +488,22 @@ pub(super) fn handle_approve_mission_compact(
             );
         }
         Err(detail) => {
-            state.rest.fg_mut().sdlc_phase = Some("assess".to_string());
-            answer_plan_ready(
-                state,
-                crate::tool::sdlc::mission_binding_failed_text(&detail),
-            );
+            if let Err(pe) = state.rest.apply_sdlc_phase(fgi, "assess") {
+                state.rest.force_sdlc_assess_safe(fgi);
+                state.rest.sessions[fgi].sdlc_pending_node_id = None;
+                state.rest.sessions[fgi].approved_plan = None;
+                answer_plan_ready(
+                    state,
+                    crate::tool::sdlc::mission_binding_failed_text(&format!(
+                        "{detail}; phase persistence also failed: {pe}"
+                    )),
+                );
+            } else {
+                answer_plan_ready(
+                    state,
+                    crate::tool::sdlc::mission_binding_failed_text(&detail),
+                );
+            }
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 sess.rebuild_system();
                 let _ = sess.save();
@@ -447,13 +542,13 @@ fn apply_mission_denial_rails(state: &mut AppState, sess_idx: usize) {
         return;
     }
     let prior_phase = state.rest.sessions[sess_idx].sdlc_phase.clone();
-    // Runtime phase must not stay execute/integrate over an unapproved mission.
-    state.rest.sessions[sess_idx].sdlc_phase = Some("assess".to_string());
     // Execution stashes from a prior approval must not leak past denial.
     state.rest.sessions[sess_idx].approved_plan = None;
     // Drop keeper rails (including any in-flight LLM oneshot).
     state.rest.sessions[sess_idx].invalidate_sdlc_keeper_llm();
     state.rest.sessions[sess_idx].pending_mission_seed = false;
+    state.rest.sessions[sess_idx].sdlc_pending_node_id = None;
+    state.rest.sessions[sess_idx].sdlc_branch = None;
 
     let sess_path = state.rest.sessions[sess_idx]
         .session
@@ -464,7 +559,6 @@ fn apply_mission_denial_rails(state: &mut AppState, sess_idx: usize) {
             // Intercept already unapproves + writes assess before parking; re-assert
             // so a stale execute/integrate on disk cannot survive denial.
             m.approved = false;
-            m.phase = "assess".into();
             // Leaving an active execute/integrate runtime phase, or any amendment
             // park, requires re-approval before tools/keeper treat the mission as live.
             if matches!(prior_phase.as_deref(), Some("execute") | Some("integrate"))
@@ -473,13 +567,30 @@ fn apply_mission_denial_rails(state: &mut AppState, sess_idx: usize) {
             {
                 m.needs_reapproval = true;
             }
-            let _ = m.save(&path);
+            // Persistence boundary: transition + save + runtime update.
+            if state
+                .rest
+                .apply_sdlc_phase_with_mission(sess_idx, &mut m, "assess")
+                .is_err()
+            {
+                // Persistence itself failed — force safe assess, clear claim + keeper.
+                state.rest.force_sdlc_assess_safe(sess_idx);
+                state.rest.sessions[sess_idx].sdlc_pending_node_id = None;
+            }
+        } else {
+            // Mission missing or corrupt — force safe assess.
+            state.rest.force_sdlc_assess_safe(sess_idx);
+            state.rest.sessions[sess_idx].sdlc_pending_node_id = None;
         }
         if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
             sess.rebuild_system();
             let _ = sess.save();
         }
+    } else {
+        state.rest.force_sdlc_assess_safe(sess_idx);
     }
+    // Unbound deny: restore primary entry branch when clean.
+    state.rest.maybe_restore_assess_entry_branch(sess_idx);
 }
 
 /// Establish exact mission worktree+branch, enter it, and only then mark the
@@ -617,7 +728,7 @@ fn establish_mission_binding(
             // Ensure mission stays unapproved.
             if let Some(mut m) = crate::model::sdlc::Mission::load(&sess_path) {
                 m.approved = false;
-                m.phase = "assess".into();
+                let _ = m.try_transition("assess");
                 m.worktree_path = None;
                 m.target_worktree_path = None;
                 m.target_branch = None;
@@ -636,7 +747,7 @@ fn establish_mission_binding(
     if live_branch.as_deref() != Some(wt_branch.as_str()) {
         if let Some(mut m) = crate::model::sdlc::Mission::load(&sess_path) {
             m.approved = false;
-            m.phase = "assess".into();
+            let _ = m.try_transition("assess");
             m.worktree_path = None;
             m.target_worktree_path = None;
             m.target_branch = None;
@@ -662,7 +773,9 @@ fn establish_mission_binding(
         m.target_branch = Some(target_branch.clone());
         m.target_head = Some(target_head.clone());
         m.approved = true;
-        m.phase = "execute".into();
+        if let Err(e) = m.try_transition("execute") {
+            return Err(format!("phase transition to execute failed: {e}"));
+        }
         m.needs_reapproval = false;
         m.hash = m.recompute_hash();
         let _ = m.save(&sess_path);
@@ -738,7 +851,7 @@ pub(super) fn restore_primary_workspace_after_failed_bind(state: &mut AppState, 
 pub(super) fn restore_unbound_draft_mission(sess_path: &std::path::Path) {
     if let Some(mut m) = crate::model::sdlc::Mission::load(sess_path) {
         m.approved = false;
-        m.phase = "assess".into();
+        let _ = m.try_transition("assess");
         m.worktree_name = None;
         m.branch = None;
         m.worktree_path = None;
@@ -762,24 +875,13 @@ pub(crate) fn default_mission_worktree_name(mission: &crate::model::sdlc::Missio
     format!("sdlc-{id}-{goal_fp}")
 }
 
-/// Default branch for a mission, derived from the goal (stable for same goal,
-/// distinct when the goal changes).
+/// Default branch for a mission via the intent classifier (no forced `sdlc/` prefix).
 pub(crate) fn default_mission_branch(mission: &crate::model::sdlc::Mission) -> String {
-    let slug: String = mission
-        .goal
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-        .take(40)
-        .collect();
-    let slug = if slug.is_empty() {
-        mission_goal_fingerprint(&mission.goal)
-    } else {
-        slug.to_lowercase()
-    };
-    // Include a short fingerprint so two goals that share a 40-char alphanumeric
-    // prefix still get distinct branches after amendment.
-    let fp = mission_goal_fingerprint(&mission.goal);
-    format!("sdlc/{slug}-{fp}")
+    crate::model::sdlc::branch_name::classify_mission_branch(
+        &mission.goal,
+        &mission.lane,
+        &mission.non_goals,
+    )
 }
 
 fn mission_goal_fingerprint(goal: &str) -> String {

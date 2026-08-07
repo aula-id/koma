@@ -350,3 +350,51 @@ fn amended_goal_default_worktree_name_differs_from_prior() {
     a.goal = "tampered".into();
     assert!(!a.hash_valid());
 }
+
+/// Caller-level regression: when the mission is missing on disk (persistence
+/// cannot succeed), deny must still force the runtime into safe assess and
+/// clear approval state — no success should leak past a persist failure.
+#[test]
+fn deny_mission_missing_mission_forces_assess_and_clears() {
+    let (dir, sess) = scratch_session("deny-missing");
+    // No mission.json on disk → apply_sdlc_phase_with_mission will fail to load.
+
+    let mut state = AppState::new(Mode::Chat);
+    state.rest.fg_mut().session = Some(sess);
+    state.rest.fg_mut().agent_mode = AgentMode::Sdlc;
+    state.rest.fg_mut().sdlc_phase = Some("execute".to_string());
+    state.rest.fg_mut().approved_plan = Some("stale".into());
+    state.rest.fg_mut().sdlc_keeper_due = true;
+    state.rest.fg_mut().pending_mission_seed = true;
+    state.rest.fg_mut().sdlc_pending_node_id = Some("node-1".into());
+    park_mission_ready(&mut state);
+
+    let mut client = None;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let handle = rt.handle().clone();
+    handle_deny_mission(&mut state, &mut client, &handle).unwrap();
+
+    // Runtime forced to assess even though mission persistence failed.
+    assert_eq!(
+        state.rest.fg().sdlc_phase.as_deref(),
+        Some("assess"),
+        "must force assess on missing mission"
+    );
+    assert!(
+        !state.rest.fg().awaiting_approval,
+        "approval must not remain parked"
+    );
+    assert!(
+        state.rest.fg().approved_plan.is_none(),
+        "prior approval stash must be cleared"
+    );
+    assert!(
+        !state.rest.fg().pending_mission_seed,
+        "compact-seed arm must not survive denial"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
