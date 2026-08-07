@@ -14,7 +14,7 @@ use crate::model::store;
 /// - `None` → armed-aware CYCLE (Auto→Normal→Plan→[Yolo when armed]→Auto), the
 ///   same transition as Shift+Tab.
 /// - `Some("auto")` / `Some("normal")` / `Some("plan")` → explicitly set that
-///   mode (always allowed).
+///   mode. During SDLC execute/integrate this is blocked; assess/done/paused allow it.
 /// - `Some("yolo")` → enter YOLO **only when armed** (Layer 2). When NOT armed it
 ///   REFUSES: the mode is left unchanged and the status explains how to unlock it.
 /// - any other token → leave the mode unchanged and report the bad argument.
@@ -32,12 +32,26 @@ pub(super) fn handle_mode(state: &mut AppState, arg: Option<String>) -> Result<(
             }
         }
         Some("auto") | Some("normal") | Some("plan") | Some("yolo") if in_sdlc => {
-            // Active SDLC: block hops to Auto/Plan/Normal/Yolo.
-            state.rest.fg_mut().status =
-                "sdlc active — use `/mode exit` (or bare `/mode`) to leave; \
-                 mode hops to auto/normal/plan/yolo are blocked"
-                    .into();
-            return Ok(());
+            // Active SDLC: block hops to Auto/Plan/Normal/Yolo only during
+            // active phases (execute/integrate). The human may switch modes
+            // during assess or done; the agent cannot call /mode at all.
+            let phase = state.rest.fg().sdlc_phase.as_deref();
+            if matches!(phase, Some("execute") | Some("integrate")) {
+                state.rest.fg_mut().status =
+                    "sdlc active — use `/mode exit` (or bare `/mode`) to leave; \
+                     mode hops to auto/normal/plan/yolo are blocked during execute/integrate"
+                        .into();
+                return Ok(());
+            }
+            // assess/done/paused: set the requested mode directly.
+            let target = match arg.as_deref().unwrap() {
+                "auto" => AgentMode::Auto,
+                "normal" => AgentMode::Normal,
+                "plan" => AgentMode::Plan,
+                "yolo" => AgentMode::Yolo,
+                _ => unreachable!(),
+            };
+            state.rest.set_agent_mode(target);
         }
         Some("exit") if in_sdlc => {
             let ret = state.rest.fg().sdlc_return_mode.unwrap_or(AgentMode::Auto);

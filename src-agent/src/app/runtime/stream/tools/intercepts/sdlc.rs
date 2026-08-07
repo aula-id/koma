@@ -865,13 +865,56 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_integrate(
         .push((call.id.clone(), result_text));
 
     if result.success {
+        // Collect worktree/branch info BEFORE resetting mission state.
+        let wt_path: Option<std::path::PathBuf> = mission
+            .worktree_path
+            .as_ref()
+            .filter(|p| !p.is_empty())
+            .map(std::path::PathBuf::from);
+        let wt_branch = mission
+            .branch
+            .as_ref()
+            .filter(|b| !b.is_empty())
+            .cloned();
+        let target_repo: Option<std::path::PathBuf> = mission
+            .target_worktree_path
+            .as_ref()
+            .filter(|p| !p.is_empty())
+            .map(std::path::PathBuf::from);
+
+        // --- Worktree + branch cleanup (best-effort) ---
+        if let (Some(repo), Some(wt)) = (&target_repo, &wt_path) {
+            let _ = std::process::Command::new("git")
+                .args(["worktree", "remove", &wt.to_string_lossy()])
+                .current_dir(repo)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output();
+        }
+        if let (Some(repo), Some(br)) = (&target_repo, &wt_branch) {
+            let _ = std::process::Command::new("git")
+                .args(["branch", "-d", br])
+                .current_dir(repo)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output();
+        }
+
+        // --- Reset mission to assess with cleared bindings ---
         if let Some(mut m) = crate::model::sdlc::Mission::load(&sess_path) {
-            m.phase = "done".to_string();
+            m.phase = "assess".into();
+            m.approved = false;
+            m.worktree_name = None;
+            m.branch = None;
+            m.worktree_path = None;
+            // Keep target fields for reference; needs_reapproval forces re-bind.
+            m.needs_reapproval = true;
+            m.hash = m.recompute_hash();
             let _ = m.save(&sess_path);
         }
-        // done is not an active keeper phase — drop any in-flight LLM result.
+
         state.rest.sessions[sess_idx].invalidate_sdlc_keeper_llm();
-        state.rest.sessions[sess_idx].sdlc_phase = Some("done".to_string());
+        state.rest.sessions[sess_idx].sdlc_phase = Some("assess".to_string());
 
         let dir_cache = state.rest.sessions[sess_idx].dir_cache.clone();
         let primary = {
