@@ -43,12 +43,13 @@ pub(super) fn handle_mode(state: &mut AppState, arg: Option<String>) -> Result<(
                         .into();
                 return Ok(());
             }
-            let target = match arg.as_deref().unwrap() {
-                "auto" => AgentMode::Auto,
-                "normal" => AgentMode::Normal,
-                "plan" => AgentMode::Plan,
-                "yolo" => AgentMode::Yolo,
-                _ => unreachable!(),
+            let target = match arg.as_deref() {
+                Some("auto") => AgentMode::Auto,
+                Some("normal") => AgentMode::Normal,
+                Some("plan") => AgentMode::Plan,
+                Some("yolo") => AgentMode::Yolo,
+                // SAFETY: outer match arm only enters for these four values.
+                _ => return Ok(()),
             };
             state.rest.set_agent_mode(target);
         }
