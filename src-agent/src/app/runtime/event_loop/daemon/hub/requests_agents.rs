@@ -9,9 +9,39 @@
 //! An error surfaces as a [`DaemonEvent::Error`]; a success's re-push IS the reply.
 
 use crate::app::state::AppState;
-use crate::ipc::proto::{ClientRequest, DaemonEvent};
+use crate::ipc::proto::{AgentEntry, ClientRequest, DaemonEvent};
 
 use super::core::DaemonHub;
+
+/// Build `AgentEntry` IPC snapshots from a registry — shared by `set_agent` and
+/// `delete_agent` so the caller loads the registry once and reuses it for both
+/// `rebuild_system_with` and `send_agents_values`.
+fn agent_entries_from_registry(
+    registry: &crate::model::agent_def::AgentRegistry,
+) -> Vec<AgentEntry> {
+    use crate::model::agent_def::AgentSource;
+    registry
+        .list(false)
+        .into_iter()
+        .map(|ag| AgentEntry {
+            name: ag.name.clone(),
+            description: ag.description.clone(),
+            conditions: ag.conditions.clone(),
+            source: match ag.source {
+                AgentSource::Session => "session",
+                AgentSource::Global => "global",
+                AgentSource::Builtin => "builtin",
+                AgentSource::Extension => "extension",
+            }
+            .to_string(),
+            model_uuid: ag.model_uuid.clone(),
+            model: ag.model.clone(),
+            tools: ag.tools.clone(),
+            prompt: ag.prompt.clone(),
+            ext_id: ag.ext_id.clone(),
+        })
+        .collect()
+}
 
 impl DaemonHub {
     /// Upsert one sub-agent definition (the /agents editor's create / save / rename).
@@ -74,7 +104,7 @@ impl DaemonHub {
         // seed (preserve non-editor frontmatter) AND its `source` is the derived write tier.
         // The pre-edit name (`original_name`) is what an edit / rename looks up.
         let lookup = original_name.clone().unwrap_or_else(|| name.clone());
-        let registry = load_registry(session_dir.as_deref());
+        let mut registry = load_registry(session_dir.as_deref());
         let existing = registry.get(&lookup).cloned();
 
         // Derive the write scope (the root decision — mirror `handle_save_agent`):
@@ -156,10 +186,26 @@ impl DaemonHub {
                         }
                     }
                 }
-                if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-                    sess.rebuild_system();
+                // Rebuild the roster and re-push `AgentsValues` using the registry
+                // we already loaded — avoids a redundant second `load_registry()`.
+                // Update the in-memory registry to reflect the mutation so the
+                // re-push sends post-save data (not the pre-save snapshot).
+                // On a rename, remove the old entry first.
+                if let Some(orig) = original_name.as_deref() {
+                    if orig != name.as_str() {
+                        registry.remove(orig);
+                    }
                 }
-                self.send_agents_values(idx, state, req_seq);
+                registry.upsert(def);
+                let entries = agent_entries_from_registry(&registry);
+                // Split borrow: `config` and `sessions` are disjoint fields of
+                // `AppStateRest`, so both can be borrowed simultaneously.
+                let config = &state.rest.config;
+                let fg = &mut state.rest.sessions[state.rest.foreground];
+                if let Some(sess) = fg.session.as_mut() {
+                    sess.rebuild_system_with(&registry, config);
+                }
+                self.send_agents_values(idx, state, req_seq, Some(entries));
             }
             Err(e) => self.send_to(
                 idx,
@@ -194,7 +240,7 @@ impl DaemonHub {
         let session_dir = state.rest.fg().session.as_ref().map(|s| s.path.clone());
 
         // Built-in protection: never delete a built-in (it has no file anyway).
-        let registry = load_registry(session_dir.as_deref());
+        let mut registry = load_registry(session_dir.as_deref());
         if registry.get(&name).map(|d| d.source) == Some(AgentSource::Builtin) {
             self.send_to(
                 idx,
@@ -225,10 +271,14 @@ impl DaemonHub {
 
         match delete_agent_file(scope_target, &name) {
             Ok(()) => {
-                if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-                    sess.rebuild_system();
+                registry.remove(&name);
+                let entries = agent_entries_from_registry(&registry);
+                let config = &state.rest.config;
+                let fg = &mut state.rest.sessions[state.rest.foreground];
+                if let Some(sess) = fg.session.as_mut() {
+                    sess.rebuild_system_with(&registry, config);
                 }
-                self.send_agents_values(idx, state, req_seq);
+                self.send_agents_values(idx, state, req_seq, Some(entries));
             }
             Err(e) => self.send_to(
                 idx,

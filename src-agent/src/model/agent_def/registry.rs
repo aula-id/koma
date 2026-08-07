@@ -165,6 +165,19 @@ impl AgentRegistry {
     pub fn is_empty(&self) -> bool {
         self.agents.is_empty()
     }
+
+    /// Insert or replace an agent (keyed by lowercased name).
+    ///
+    /// Used by callers that just persisted a mutation (`save_agent` / cascade)
+    /// so they can update the in-memory registry without a redundant disk reload.
+    pub fn upsert(&mut self, agent: AgentDef) {
+        self.agents.insert(agent.name.to_lowercase(), agent);
+    }
+
+    /// Remove an agent by name (case-insensitive, idempotent).
+    pub fn remove(&mut self, name: &str) {
+        self.agents.remove(&name.to_lowercase());
+    }
 }
 
 /// Load every `*.md` file in `dir`, parse it, and merge into `agents`.
