@@ -209,23 +209,24 @@ mod tests {
 
     fn sample(branch: &str, target_branch: &str) -> Mission {
         let gh = Some("g".into());
-        let hash = Mission::compute_contract_hash_full(
-            "g",
-            &["a".into()],
-            &[],
-            "express",
-            &[],
-            &[],
-            &[],
-            "",
-            gh.as_deref(),
-            Some("wt"),
-            Some(branch),
-            Some("/tmp/x"),
-            Some("/tmp/primary"),
-            Some(target_branch),
-            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-        );
+        let hash =
+            Mission::compute_contract_hash_full(crate::model::sdlc::mission::ContractHashInput {
+                goal: "g",
+                acceptance: &["a".into()],
+                non_goals: &[],
+                lane: "express",
+                verify_plan: &[],
+                human_gates: &[],
+                risks: &[],
+                rationale: "",
+                graph_hash: gh.as_deref(),
+                worktree_name: Some("wt"),
+                branch: Some(branch),
+                worktree_path: Some("/tmp/x"),
+                target_worktree_path: Some("/tmp/primary"),
+                target_branch: Some(target_branch),
+                target_head: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            });
         Mission {
             contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
             id: "m".into(),

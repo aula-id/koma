@@ -69,25 +69,46 @@ pub struct Mission {
     pub amendment_note: Option<String>,
 }
 
+/// Frozen fields used to compute a mission contract hash.
+#[derive(Debug, Clone, Copy)]
+pub struct ContractHashInput<'a> {
+    pub goal: &'a str,
+    pub acceptance: &'a [String],
+    pub non_goals: &'a [String],
+    pub lane: &'a str,
+    pub verify_plan: &'a [String],
+    pub human_gates: &'a [String],
+    pub risks: &'a [String],
+    pub rationale: &'a str,
+    pub graph_hash: Option<&'a str>,
+    pub worktree_name: Option<&'a str>,
+    pub branch: Option<&'a str>,
+    pub worktree_path: Option<&'a str>,
+    pub target_worktree_path: Option<&'a str>,
+    pub target_branch: Option<&'a str>,
+    pub target_head: Option<&'a str>,
+}
+
 impl Mission {
     /// Full contract hash including optional worktree binding + frozen target fields.
-    pub fn compute_contract_hash_full(
-        goal: &str,
-        acceptance: &[String],
-        non_goals: &[String],
-        lane: &str,
-        verify_plan: &[String],
-        human_gates: &[String],
-        risks: &[String],
-        rationale: &str,
-        graph_hash: Option<&str>,
-        worktree_name: Option<&str>,
-        branch: Option<&str>,
-        worktree_path: Option<&str>,
-        target_worktree_path: Option<&str>,
-        target_branch: Option<&str>,
-        target_head: Option<&str>,
-    ) -> String {
+    pub fn compute_contract_hash_full(input: ContractHashInput<'_>) -> String {
+        let ContractHashInput {
+            goal,
+            acceptance,
+            non_goals,
+            lane,
+            verify_plan,
+            human_gates,
+            risks,
+            rationale,
+            graph_hash,
+            worktree_name,
+            branch,
+            worktree_path,
+            target_worktree_path,
+            target_branch,
+            target_head,
+        } = input;
         let mut hasher = Sha256::new();
         fn add_str(h: &mut Sha256, s: &str) {
             h.update(s.as_bytes());
@@ -122,23 +143,23 @@ impl Mission {
 
     /// Recompute hash from this mission's frozen fields (including binding + target).
     pub fn recompute_hash(&self) -> String {
-        Self::compute_contract_hash_full(
-            &self.goal,
-            &self.acceptance,
-            &self.non_goals,
-            &self.lane,
-            &self.verify_plan,
-            &self.human_gates,
-            &self.risks,
-            &self.rationale,
-            self.graph_hash.as_deref(),
-            self.worktree_name.as_deref(),
-            self.branch.as_deref(),
-            self.worktree_path.as_deref(),
-            self.target_worktree_path.as_deref(),
-            self.target_branch.as_deref(),
-            self.target_head.as_deref(),
-        )
+        Self::compute_contract_hash_full(ContractHashInput {
+            goal: &self.goal,
+            acceptance: &self.acceptance,
+            non_goals: &self.non_goals,
+            lane: &self.lane,
+            verify_plan: &self.verify_plan,
+            human_gates: &self.human_gates,
+            risks: &self.risks,
+            rationale: &self.rationale,
+            graph_hash: self.graph_hash.as_deref(),
+            worktree_name: self.worktree_name.as_deref(),
+            branch: self.branch.as_deref(),
+            worktree_path: self.worktree_path.as_deref(),
+            target_worktree_path: self.target_worktree_path.as_deref(),
+            target_branch: self.target_branch.as_deref(),
+            target_head: self.target_head.as_deref(),
+        })
     }
 
     /// True when stored hash matches frozen fields + graph binding.
@@ -612,23 +633,23 @@ mod tests {
         let target_worktree_path = Some("/tmp/primary".into());
         let target_branch = Some("main".into());
         let target_head = Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
-        let hash = Mission::compute_contract_hash_full(
-            "ship X",
-            &["tests pass".into()],
-            &["rewrite Y".into()],
-            "standard",
-            &["cargo test".into()],
-            &[],
-            &["api churn".into()],
-            "match house style",
-            graph_hash.as_deref(),
-            worktree_name.as_deref(),
-            branch.as_deref(),
-            worktree_path.as_deref(),
-            target_worktree_path.as_deref(),
-            target_branch.as_deref(),
-            target_head.as_deref(),
-        );
+        let hash = Mission::compute_contract_hash_full(ContractHashInput {
+            goal: "ship X",
+            acceptance: &["tests pass".into()],
+            non_goals: &["rewrite Y".into()],
+            lane: "standard",
+            verify_plan: &["cargo test".into()],
+            human_gates: &[],
+            risks: &["api churn".into()],
+            rationale: "match house style",
+            graph_hash: graph_hash.as_deref(),
+            worktree_name: worktree_name.as_deref(),
+            branch: branch.as_deref(),
+            worktree_path: worktree_path.as_deref(),
+            target_worktree_path: target_worktree_path.as_deref(),
+            target_branch: target_branch.as_deref(),
+            target_head: target_head.as_deref(),
+        });
         Mission {
             contract_version: CURRENT_CONTRACT_VERSION,
             id: "m-test".into(),
@@ -744,57 +765,57 @@ mod tests {
 
     #[test]
     fn hash_is_stable_for_same_inputs() {
-        let a = Mission::compute_contract_hash_full(
-            "g",
-            &["a".into()],
-            &["n".into()],
-            "standard",
-            &[],
-            &[],
-            &[],
-            "",
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
-        let b = Mission::compute_contract_hash_full(
-            "g",
-            &["a".into()],
-            &["n".into()],
-            "standard",
-            &[],
-            &[],
-            &[],
-            "",
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
-        let c = Mission::compute_contract_hash_full(
-            "g2",
-            &["a".into()],
-            &["n".into()],
-            "standard",
-            &[],
-            &[],
-            &[],
-            "",
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
+        let a = Mission::compute_contract_hash_full(ContractHashInput {
+            goal: "g",
+            acceptance: &["a".into()],
+            non_goals: &["n".into()],
+            lane: "standard",
+            verify_plan: &[],
+            human_gates: &[],
+            risks: &[],
+            rationale: "",
+            graph_hash: None,
+            worktree_name: None,
+            branch: None,
+            worktree_path: None,
+            target_worktree_path: None,
+            target_branch: None,
+            target_head: None,
+        });
+        let b = Mission::compute_contract_hash_full(ContractHashInput {
+            goal: "g",
+            acceptance: &["a".into()],
+            non_goals: &["n".into()],
+            lane: "standard",
+            verify_plan: &[],
+            human_gates: &[],
+            risks: &[],
+            rationale: "",
+            graph_hash: None,
+            worktree_name: None,
+            branch: None,
+            worktree_path: None,
+            target_worktree_path: None,
+            target_branch: None,
+            target_head: None,
+        });
+        let c = Mission::compute_contract_hash_full(ContractHashInput {
+            goal: "g2",
+            acceptance: &["a".into()],
+            non_goals: &["n".into()],
+            lane: "standard",
+            verify_plan: &[],
+            human_gates: &[],
+            risks: &[],
+            rationale: "",
+            graph_hash: None,
+            worktree_name: None,
+            branch: None,
+            worktree_path: None,
+            target_worktree_path: None,
+            target_branch: None,
+            target_head: None,
+        });
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_eq!(a.len(), 32);
@@ -802,63 +823,63 @@ mod tests {
 
     #[test]
     fn full_contract_hash_covers_lane_and_graph() {
-        let a = Mission::compute_contract_hash_full(
-            "g",
-            &["a".into()],
-            &[],
-            "full",
-            &[],
-            &[],
-            &[],
-            "",
-            Some("gh1"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
-        let b = Mission::compute_contract_hash_full(
-            "g",
-            &["a".into()],
-            &[],
-            "full",
-            &[],
-            &[],
-            &[],
-            "",
-            Some("gh2"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
+        let a = Mission::compute_contract_hash_full(ContractHashInput {
+            goal: "g",
+            acceptance: &["a".into()],
+            non_goals: &[],
+            lane: "full",
+            verify_plan: &[],
+            human_gates: &[],
+            risks: &[],
+            rationale: "",
+            graph_hash: Some("gh1"),
+            worktree_name: None,
+            branch: None,
+            worktree_path: None,
+            target_worktree_path: None,
+            target_branch: None,
+            target_head: None,
+        });
+        let b = Mission::compute_contract_hash_full(ContractHashInput {
+            goal: "g",
+            acceptance: &["a".into()],
+            non_goals: &[],
+            lane: "full",
+            verify_plan: &[],
+            human_gates: &[],
+            risks: &[],
+            rationale: "",
+            graph_hash: Some("gh2"),
+            worktree_name: None,
+            branch: None,
+            worktree_path: None,
+            target_worktree_path: None,
+            target_branch: None,
+            target_head: None,
+        });
         assert_ne!(a, b);
     }
 
     #[test]
     fn contract_hash_covers_worktree_binding() {
         let base = |wt: Option<&str>, br: Option<&str>, path: Option<&str>| {
-            Mission::compute_contract_hash_full(
-                "g",
-                &["a".into()],
-                &[],
-                "standard",
-                &[],
-                &[],
-                &[],
-                "",
-                Some("gh"),
-                wt,
-                br,
-                path,
-                None,
-                None,
-                None,
-            )
+            Mission::compute_contract_hash_full(ContractHashInput {
+                goal: "g",
+                acceptance: &["a".into()],
+                non_goals: &[],
+                lane: "standard",
+                verify_plan: &[],
+                human_gates: &[],
+                risks: &[],
+                rationale: "",
+                graph_hash: Some("gh"),
+                worktree_name: wt,
+                branch: br,
+                worktree_path: path,
+                target_worktree_path: None,
+                target_branch: None,
+                target_head: None,
+            })
         };
         let unbound = base(None, None, None);
         let bound = base(Some("wt"), Some("sdlc/x"), Some("/tmp/wt"));
@@ -871,23 +892,23 @@ mod tests {
     #[test]
     fn contract_hash_covers_frozen_target() {
         let base = |tp: Option<&str>, tb: Option<&str>, th: Option<&str>| {
-            Mission::compute_contract_hash_full(
-                "g",
-                &["a".into()],
-                &[],
-                "standard",
-                &[],
-                &[],
-                &[],
-                "",
-                Some("gh"),
-                Some("wt"),
-                Some("sdlc/x"),
-                Some("/tmp/wt"),
-                tp,
-                tb,
-                th,
-            )
+            Mission::compute_contract_hash_full(ContractHashInput {
+                goal: "g",
+                acceptance: &["a".into()],
+                non_goals: &[],
+                lane: "standard",
+                verify_plan: &[],
+                human_gates: &[],
+                risks: &[],
+                rationale: "",
+                graph_hash: Some("gh"),
+                worktree_name: Some("wt"),
+                branch: Some("sdlc/x"),
+                worktree_path: Some("/tmp/wt"),
+                target_worktree_path: tp,
+                target_branch: tb,
+                target_head: th,
+            })
         };
         let no_target = base(None, None, None);
         let with_target = base(Some("/tmp/p"), Some("main"), Some("abc123"));

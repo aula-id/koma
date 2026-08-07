@@ -351,23 +351,24 @@ mod restore_sdlc_tests {
         let target_worktree_path = Some("/tmp/primary".into());
         let target_branch = Some("main".into());
         let target_head = Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
-        let hash = Mission::compute_contract_hash_full(
-            goal,
-            &acceptance,
-            &non_goals,
-            lane,
-            &verify_plan,
-            &human_gates,
-            &risks,
-            rationale,
-            None,
-            worktree_name.as_deref(),
-            branch.as_deref(),
-            wt.as_deref(),
-            target_worktree_path.as_deref(),
-            target_branch.as_deref(),
-            target_head.as_deref(),
-        );
+        let hash =
+            Mission::compute_contract_hash_full(crate::model::sdlc::mission::ContractHashInput {
+                goal,
+                acceptance: &acceptance,
+                non_goals: &non_goals,
+                lane,
+                verify_plan: &verify_plan,
+                human_gates: &human_gates,
+                risks: &risks,
+                rationale,
+                graph_hash: None,
+                worktree_name: worktree_name.as_deref(),
+                branch: branch.as_deref(),
+                worktree_path: wt.as_deref(),
+                target_worktree_path: target_worktree_path.as_deref(),
+                target_branch: target_branch.as_deref(),
+                target_head: target_head.as_deref(),
+            });
         Mission {
             contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
             id: "m1".into(),

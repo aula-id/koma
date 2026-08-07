@@ -727,23 +727,21 @@ fn rollup_parents_in_tx(tx: &rusqlite::Transaction<'_>) -> Result<()> {
                     }
                     changed = true;
                 }
-            } else if any_open {
-                if parent.status == "done" || parent.verify_bit {
-                    tx.execute(
-                        "UPDATE sdlc_nodes SET status = 'active', verify_bit = 0, updated_at = ?1 WHERE id = ?2",
-                        rusqlite::params![now, pid],
-                    )?;
-                    tx.execute(
-                        "INSERT INTO sdlc_events (node_id, kind, detail, created_at)
-                         VALUES (?1, 'rollup', 'child_open', ?2)",
-                        rusqlite::params![pid, now],
-                    )?;
-                    if let Some(p) = by_id.get_mut(pid) {
-                        p.status = "active".into();
-                        p.verify_bit = false;
-                    }
-                    changed = true;
+            } else if any_open && (parent.status == "done" || parent.verify_bit) {
+                tx.execute(
+                    "UPDATE sdlc_nodes SET status = 'active', verify_bit = 0, updated_at = ?1 WHERE id = ?2",
+                    rusqlite::params![now, pid],
+                )?;
+                tx.execute(
+                    "INSERT INTO sdlc_events (node_id, kind, detail, created_at)
+                     VALUES (?1, 'rollup', 'child_open', ?2)",
+                    rusqlite::params![pid, now],
+                )?;
+                if let Some(p) = by_id.get_mut(pid) {
+                    p.status = "active".into();
+                    p.verify_bit = false;
                 }
+                changed = true;
             }
         }
         if !changed {

@@ -376,21 +376,23 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
 
     // Binding is established only on successful approve — hash unbound draft.
     let hash = crate::model::sdlc::Mission::compute_contract_hash_full(
-        &mission_args.goal,
-        &mission_args.acceptance,
-        &mission_args.non_goals,
-        &mission_args.lane,
-        &mission_args.verify_plan,
-        &mission_args.human_gates,
-        &mission_args.risks,
-        &mission_args.rationale,
-        Some(&graph_hash),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
+        crate::model::sdlc::mission::ContractHashInput {
+            goal: &mission_args.goal,
+            acceptance: &mission_args.acceptance,
+            non_goals: &mission_args.non_goals,
+            lane: &mission_args.lane,
+            verify_plan: &mission_args.verify_plan,
+            human_gates: &mission_args.human_gates,
+            risks: &mission_args.risks,
+            rationale: &mission_args.rationale,
+            graph_hash: Some(&graph_hash),
+            worktree_name: None,
+            branch: None,
+            worktree_path: None,
+            target_worktree_path: None,
+            target_branch: None,
+            target_head: None,
+        },
     );
 
     // Preserve previously approved human gates that still appear.
