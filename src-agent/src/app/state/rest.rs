@@ -672,6 +672,11 @@ impl AppStateRest {
         if !mission.approved || mission.needs_reapproval || !mission.hash_valid() {
             return Err("mission not actively approved".into());
         }
+        if !mission.has_frozen_target() {
+            return Err(
+                "mission missing frozen target — legacy contract requires re-approval".into(),
+            );
+        }
         let wt_path = mission
             .worktree_path
             .clone()

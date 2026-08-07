@@ -1014,8 +1014,13 @@ pub fn check_path_ownership(
         let mut patterns_valid = true;
         for pat in &node.owned_paths {
             match globset::Glob::new(pat) {
-                Ok(g) => { builder.add(g); }
-                Err(_) => { patterns_valid = false; break; }
+                Ok(g) => {
+                    builder.add(g);
+                }
+                Err(_) => {
+                    patterns_valid = false;
+                    break;
+                }
             }
         }
         if !patterns_valid {
@@ -1112,27 +1117,24 @@ mod tests {
                     parent_title: None,
                     id: None,
 
-                        owned_paths: vec![],
-
-                                    },
+                    owned_paths: vec![],
+                },
                 ChecklistNode {
                     title: "leaf-a".into(),
                     status: "pending".into(),
                     parent_title: Some("epic".into()),
                     id: None,
 
-                        owned_paths: vec![],
-
-                                    },
+                    owned_paths: vec![],
+                },
                 ChecklistNode {
                     title: "leaf-b".into(),
                     status: "pending".into(),
                     parent_title: Some("epic".into()),
                     id: None,
 
-                        owned_paths: vec![],
-
-                                    },
+                    owned_paths: vec![],
+                },
             ],
         )
         .unwrap();
@@ -1180,18 +1182,16 @@ mod tests {
                     parent_title: None,
                     id: None,
 
-                        owned_paths: vec![],
-
-                                    },
+                    owned_paths: vec![],
+                },
                 ChecklistNode {
                     title: "c".into(),
                     status: "pending".into(),
                     parent_title: Some("p".into()),
                     id: None,
 
-                        owned_paths: vec![],
-
-                                    },
+                    owned_paths: vec![],
+                },
             ],
         )
         .unwrap();
@@ -1235,18 +1235,16 @@ mod tests {
                     parent_title: None,
                     id: None,
 
-                        owned_paths: vec![],
-
-                                    },
+                    owned_paths: vec![],
+                },
                 ChecklistNode {
                     title: "c".into(),
                     status: "pending".into(),
                     parent_title: Some("p".into()),
                     id: None,
 
-                        owned_paths: vec![],
-
-                                    },
+                    owned_paths: vec![],
+                },
             ],
         )
         .unwrap();
@@ -1271,18 +1269,16 @@ mod tests {
                 parent_title: Some("b".into()),
                 id: None,
 
-                    owned_paths: vec![],
-
-                            },
+                owned_paths: vec![],
+            },
             ChecklistNode {
                 title: "b".into(),
                 status: "pending".into(),
                 parent_title: Some("a".into()),
                 id: None,
 
-                    owned_paths: vec![],
-
-                            },
+                owned_paths: vec![],
+            },
         ])
         .unwrap_err();
         assert!(err.to_string().contains("cycle"));
@@ -1294,36 +1290,32 @@ mod tests {
                 parent_title: None,
                 id: None,
 
-                    owned_paths: vec![],
-
-                            },
+                owned_paths: vec![],
+            },
             ChecklistNode {
                 title: "s".into(),
                 status: "pending".into(),
                 parent_title: Some("e".into()),
                 id: None,
 
-                    owned_paths: vec![],
-
-                            },
+                owned_paths: vec![],
+            },
             ChecklistNode {
                 title: "t".into(),
                 status: "pending".into(),
                 parent_title: Some("s".into()),
                 id: None,
 
-                    owned_paths: vec![],
-
-                            },
+                owned_paths: vec![],
+            },
             ChecklistNode {
                 title: "x".into(),
                 status: "pending".into(),
                 parent_title: Some("t".into()),
                 id: None,
 
-                    owned_paths: vec![],
-
-                            },
+                owned_paths: vec![],
+            },
         ])
         .unwrap_err();
         assert!(err.to_string().contains("deeper"));
@@ -1396,18 +1388,16 @@ mod tests {
                     parent_title: None,
                     id: None,
 
-                        owned_paths: vec![],
-
-                                    },
+                    owned_paths: vec![],
+                },
                 ChecklistNode {
                     title: "c".into(),
                     status: "pending".into(),
                     parent_title: Some("p".into()),
                     id: None,
 
-                        owned_paths: vec![],
-
-                                    },
+                    owned_paths: vec![],
+                },
             ],
         )
         .unwrap();
@@ -1428,18 +1418,16 @@ mod tests {
                     parent_title: None,
                     id: None,
 
-                        owned_paths: vec![],
-
-                                    },
+                    owned_paths: vec![],
+                },
                 ChecklistNode {
                     title: "c".into(),
                     status: "active".into(),
                     parent_title: None,
                     id: None,
 
-                        owned_paths: vec![],
-
-                                    },
+                    owned_paths: vec![],
+                },
             ],
         )
         .unwrap();
@@ -1502,18 +1490,16 @@ mod tests {
                     parent_title: None,
                     id: None,
 
-                        owned_paths: vec![],
-
-                                    },
+                    owned_paths: vec![],
+                },
                 ChecklistNode {
                     title: "leaf".into(),
                     status: "active".into(),
                     parent_title: Some("epic".into()),
                     id: None,
 
-                        owned_paths: vec![],
-
-                                    },
+                    owned_paths: vec![],
+                },
             ],
         )
         .unwrap();

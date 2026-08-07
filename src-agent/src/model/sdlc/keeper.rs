@@ -285,6 +285,9 @@ mod tests {
         let worktree_name = Some("wt".into());
         let branch = Some("sdlc/g".into());
         let worktree_path = Some("/tmp/wt".into());
+        let target_worktree_path = Some("/tmp/primary".into());
+        let target_branch = Some("main".into());
+        let target_head = Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
         let hash = Mission::compute_contract_hash_full(
             "g",
             &["a".into()],
@@ -298,8 +301,12 @@ mod tests {
             worktree_name.as_deref(),
             branch.as_deref(),
             worktree_path.as_deref(),
+            target_worktree_path.as_deref(),
+            target_branch.as_deref(),
+            target_head.as_deref(),
         );
         let m = Mission {
+            contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
             id: "m-k".into(),
             goal: "g".into(),
             non_goals: vec![],
@@ -312,6 +319,9 @@ mod tests {
             worktree_name,
             branch,
             worktree_path,
+            target_worktree_path,
+            target_branch,
+            target_head,
             rationale: String::new(),
             phase: phase.into(),
             approved,
@@ -337,9 +347,8 @@ mod tests {
                 parent_title: None,
                 id: None,
 
-                    owned_paths: vec![],
-
-                            }],
+                owned_paths: vec![],
+            }],
         )
         .unwrap();
         drop(conn);
@@ -375,9 +384,8 @@ mod tests {
                 parent_title: None,
                 id: None,
 
-                    owned_paths: vec![],
-
-                            }],
+                owned_paths: vec![],
+            }],
         )
         .unwrap();
         // Stamp tool round in the past.

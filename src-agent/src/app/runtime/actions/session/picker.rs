@@ -348,6 +348,9 @@ mod restore_sdlc_tests {
         let worktree_name = Some("sdlc-test".into());
         let branch = Some("sdlc/ship-x".into());
         let wt = Some(worktree_path.to_string());
+        let target_worktree_path = Some("/tmp/primary".into());
+        let target_branch = Some("main".into());
+        let target_head = Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
         let hash = Mission::compute_contract_hash_full(
             goal,
             &acceptance,
@@ -361,8 +364,12 @@ mod restore_sdlc_tests {
             worktree_name.as_deref(),
             branch.as_deref(),
             wt.as_deref(),
+            target_worktree_path.as_deref(),
+            target_branch.as_deref(),
+            target_head.as_deref(),
         );
         Mission {
+            contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
             id: "m1".into(),
             goal: goal.into(),
             non_goals,
@@ -375,6 +382,9 @@ mod restore_sdlc_tests {
             worktree_name,
             branch,
             worktree_path: wt,
+            target_worktree_path,
+            target_branch,
+            target_head,
             rationale: rationale.into(),
             phase: "execute".into(),
             approved: true,

@@ -203,9 +203,8 @@ mod tests {
             parent_title: None,
             id: None,
 
-                owned_paths: vec![],
-
-                    }];
+            owned_paths: vec![],
+        }];
         let err = validate_lane_graph("standard", &nodes, 3).unwrap_err();
         assert!(err.contains("megatask"));
     }
@@ -218,9 +217,8 @@ mod tests {
             parent_title: None,
             id: None,
 
-                owned_paths: vec![],
-
-                    }];
+            owned_paths: vec![],
+        }];
         assert!(validate_lane_graph("full", &one, 1).is_err());
 
         let three: Vec<_> = (0..3)
@@ -230,9 +228,8 @@ mod tests {
                 parent_title: None,
                 id: None,
 
-                    owned_paths: vec![],
-
-                            })
+                owned_paths: vec![],
+            })
             .collect();
         assert!(validate_lane_graph("full", &three, 1).is_ok());
 
@@ -243,18 +240,16 @@ mod tests {
                 parent_title: None,
                 id: None,
 
-                    owned_paths: vec![],
-
-                            },
+                owned_paths: vec![],
+            },
             ChecklistNode {
                 title: "leaf".into(),
                 status: "pending".into(),
                 parent_title: Some("epic".into()),
                 id: None,
 
-                    owned_paths: vec![],
-
-                            },
+                owned_paths: vec![],
+            },
         ];
         assert!(validate_lane_graph("full", &tree, 1).is_ok());
     }
@@ -271,18 +266,16 @@ mod tests {
                     parent_title: None,
                     id: None,
 
-                        owned_paths: vec![],
-
-                                    },
+                    owned_paths: vec![],
+                },
                 ChecklistNode {
                     title: "child".into(),
                     status: "pending".into(),
                     parent_title: Some("parent".into()),
                     id: None,
 
-                        owned_paths: vec![],
-
-                                    },
+                    owned_paths: vec![],
+                },
             ],
         )
         .unwrap();
