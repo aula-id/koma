@@ -196,6 +196,7 @@ pub(super) fn handle_submit(
     // A new user turn starts fresh: no carried-over tool-call rounds or
     // a half-finished approval machine.
     state.rest.fg_mut().agent_steps = 0;
+    state.rest.fg_mut().main_stall_nudges = 0;
     state.rest.fg_mut().pending_tool_calls.clear();
     state.rest.fg_mut().awaiting_approval = false;
     state.rest.fg_mut().tool_idx = 0;

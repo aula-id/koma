@@ -165,6 +165,9 @@ impl OpenRouterClient {
         // Function calls arrive COMPLETE on their `output_item.done` event, so no
         // index-merge is needed — each is pushed whole.
         let mut tool_acc: Vec<ToolCall> = Vec::new();
+        // Protocol terminal success marker (`response.completed`). Soft EOF
+        // without this is incomplete; tracked for a later leaf — emission still Done.
+        let mut saw_terminal = false;
         while let Some(chunk) = stream.next().await {
             let bytes = match chunk {
                 Ok(b) => b,
@@ -254,6 +257,7 @@ impl OpenRouterClient {
                         OutputItem::Reasoning { .. } | OutputItem::Other => {}
                     },
                     ResponsesEvent::Completed { response } => {
+                        saw_terminal = true;
                         let (prompt_tokens, completion_tokens, cached_tokens) = response
                             .usage
                             .map(|u| {
@@ -276,6 +280,10 @@ impl OpenRouterClient {
                             sanitize_tool_acc(&mut tool_acc);
                             emit(&tx, StreamEvent::ToolCalls(tool_acc.clone()));
                         }
+                        // Terminal marker seen; keep emission Done (next leaf may branch).
+                        debug_assert!(!super::super::stream::stream_ended_incompletely(
+                            saw_terminal
+                        ));
                         emit(&tx, StreamEvent::Done);
                         return Ok(());
                     }
@@ -308,12 +316,25 @@ impl OpenRouterClient {
             }
         }
         // Stream ended without an explicit `response.completed` (mirrors the
-        // chat-completions EOF path): flush any accumulated tool calls, then Done.
+        // chat-completions EOF path): tools+Done if tools assembled (lenient),
+        // else Error on incomplete soft EOF.
         if !tool_acc.is_empty() {
             sanitize_tool_acc(&mut tool_acc);
-            emit(&tx, StreamEvent::ToolCalls(tool_acc.clone()));
         }
-        emit(&tx, StreamEvent::Done);
+        let has_tools = !tool_acc.is_empty();
+        if super::super::stream::soft_eof_is_complete(saw_terminal, has_tools) {
+            if has_tools {
+                emit(&tx, StreamEvent::ToolCalls(tool_acc.clone()));
+            }
+            emit(&tx, StreamEvent::Done);
+        } else {
+            emit(
+                &tx,
+                StreamEvent::Error(
+                    "stream ended incompletely (connection closed before terminal marker)".into(),
+                ),
+            );
+        }
         Ok(())
     }
 }
