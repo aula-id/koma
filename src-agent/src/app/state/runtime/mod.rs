@@ -204,6 +204,10 @@ pub struct SessionRuntime {
     /// new user turn starts / the turn ends; bounded so a runaway model can't
     /// loop forever.
     pub agent_steps: usize,
+    /// Consecutive main-chat stall nudges in the current turn (budget 2). Bumped
+    /// when the model returns no tools but text looks like a cliffhanger
+    /// ("Let me…"); reset on real end-of-turn, user submit, or stream error.
+    pub main_stall_nudges: u8,
     // --- tool-approval state machine (within a single agentic turn) ---
     /// Index of the next call in `pending_tool_calls` to process this round.
     pub tool_idx: usize,
@@ -630,6 +634,7 @@ impl SessionRuntime {
             tokens_cached: 0,
             pending_tool_calls: Vec::new(),
             agent_steps: 0,
+            main_stall_nudges: 0,
             tool_idx: 0,
             tool_results: Vec::new(),
             awaiting_approval: false,

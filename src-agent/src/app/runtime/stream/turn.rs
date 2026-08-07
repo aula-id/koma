@@ -8,6 +8,21 @@ use crate::service::openrouter::OpenRouterClient;
 
 use super::final_answer;
 
+/// Max consecutive main-chat stall nudges per user turn before accepting the
+/// no-tools answer as final (mirrors the sub-agent engine budget).
+const MAIN_STALL_NUDGE_BUDGET: u8 = 2;
+
+/// Synthetic user message injected when the model ends a no-tools round on a
+/// cliffhanger instead of calling tools or writing a complete answer.
+const MAIN_STALL_NUDGE_MSG: &str = "Continue now: call the tools you need to finish the task, \
+     then write your complete answer. Do not stop with a 'let me...' line.";
+
+/// Whether the main chat should auto-continue after a no-tools stall.
+/// Pure helper so the budget gate is unit-testable without driving a full turn.
+fn should_stall_nudge(content: &str, nudges: u8) -> bool {
+    nudges < MAIN_STALL_NUDGE_BUDGET && super::is_stall(content)
+}
+
 /// Post koma's friendly "this model can't read images" notice into the chat
 /// (assistant message + msglog + save). Shared by the submit-time capability
 /// guard and the stream-error interception so the wording lives in one place.
@@ -290,7 +305,12 @@ pub(crate) fn advance_turn(
     // 2. Commit the assistant message (and log + count it). The assistant text
     //    may be empty on a tool-call turn — we still record the row so usage
     //    accounting stays correct across rounds.
+    //
+    // `answer_content` holds the cleaned no-tools final-answer text (same string
+    // committed to history) so the stall-nudge gate below judges the deliverable
+    // content, not raw stream markup. Empty when tools were requested.
     let mut save_err = None;
+    let mut answer_content = String::new();
     {
         // Bind session `sess_idx`'s runtime directly (not via `fg_mut()`, a
         // `&mut self` method that would lock all of `rest`) so the per-session
@@ -325,6 +345,7 @@ pub(crate) fn advance_turn(
             } else {
                 let (content, msg_reasoning, promoted) =
                     final_answer(buf.clone().unwrap_or_default(), reasoning);
+                answer_content = content.clone();
                 if !content.is_empty() {
                     let _ = crate::model::msglog::append(
                         &sess.path,
@@ -334,7 +355,7 @@ pub(crate) fn advance_turn(
                         usage,
                     );
                     sess.conversation
-                        .push_assistant(content.clone(), msg_reasoning, promoted);
+                        .push_assistant(content, msg_reasoning, promoted);
                     if let Err(e) = sess.save() {
                         save_err = Some(e.to_string());
                     }
@@ -391,11 +412,59 @@ pub(crate) fn advance_turn(
         }
     }
 
-    // 3. No tool calls → the model produced its final answer; the turn is done.
+    // 3. No tool calls → either a genuine final answer, or a stall cliffhanger
+    //    that we auto-nudge (budget 2) so the model keeps going instead of
+    //    ending the turn on "Let me read…".
     if pending.is_empty() {
+        let nudges = state.rest.sessions[sess_idx].main_stall_nudges;
+        if should_stall_nudge(&answer_content, nudges) {
+            // Keep the turn alive: waiting stays true, agent_steps untouched,
+            // queued steers stay parked until a real end-of-turn.
+            state.rest.sessions[sess_idx].main_stall_nudges = nudges.saturating_add(1);
+            if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                let _ = crate::model::msglog::append(
+                    &sess.path,
+                    Role::User,
+                    MAIN_STALL_NUDGE_MSG,
+                    None,
+                    None,
+                );
+                sess.conversation
+                    .push_user(MAIN_STALL_NUDGE_MSG.to_string());
+                if let Err(e) = sess.save() {
+                    save_err = Some(e.to_string());
+                }
+            }
+            if let Some(e) = save_err {
+                state.rest.sessions[sess_idx].set_toast(e);
+            }
+            if client.is_some() && state.rest.sessions[sess_idx].session.is_some() {
+                let history = state.rest.sessions[sess_idx]
+                    .session
+                    .as_ref()
+                    .map(|s| s.conversation.history())
+                    .unwrap_or_default();
+                state.rest.sessions[sess_idx].begin_stream();
+                state.rest.sessions[sess_idx].waiting = true;
+                state.rest.sessions[sess_idx].pending_tool_calls.clear();
+                state.rest.sessions[sess_idx].status = "thinking".into();
+                super::run::start_stream_task(history, state, sess_idx, client, handle);
+            } else {
+                // No client/session to continue with — fall through to end-turn
+                // so we don't leave waiting stuck true forever.
+                state.rest.sessions[sess_idx].waiting = false;
+                state.rest.sessions[sess_idx].current_task = None;
+                state.rest.sessions[sess_idx].agent_steps = 0;
+                state.rest.sessions[sess_idx].main_stall_nudges = 0;
+                state.rest.sessions[sess_idx].status = "ready".into();
+            }
+            return;
+        }
+
         state.rest.sessions[sess_idx].waiting = false;
         state.rest.sessions[sess_idx].current_task = None;
         state.rest.sessions[sess_idx].agent_steps = 0;
+        state.rest.sessions[sess_idx].main_stall_nudges = 0;
         // Status + toast are per-session (C6); this runs per-session unbracketed, so
         // write them on `sessions[sess_idx]` — the projection shows them only to the
         // client(s) viewing this session.
@@ -491,4 +560,25 @@ pub(crate) fn advance_turn(
     state.rest.sessions[sess_idx].tool_idx = 0;
     state.rest.sessions[sess_idx].tool_results.clear();
     super::tools::process_tools(state, sess_idx, client, handle);
+}
+
+#[cfg(test)]
+mod stall_nudge_tests {
+    use super::should_stall_nudge;
+
+    #[test]
+    fn stall_under_budget_nudges() {
+        assert!(should_stall_nudge("Let me read more:", 0));
+        assert!(should_stall_nudge("Let me read more:", 1));
+    }
+
+    #[test]
+    fn stall_at_budget_stops() {
+        assert!(!should_stall_nudge("Let me read more:", 2));
+    }
+
+    #[test]
+    fn complete_answer_does_not_nudge() {
+        assert!(!should_stall_nudge("Here is the answer.\nDone.", 0));
+    }
 }

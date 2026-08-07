@@ -83,6 +83,7 @@ pub(super) fn drain_stream(
                     // half-stashed tool calls / step count / approval machine).
                     finish_stream(&mut state.rest, idx, Some(e));
                     state.rest.sessions[idx].agent_steps = 0;
+                    state.rest.sessions[idx].main_stall_nudges = 0;
                     state.rest.sessions[idx].pending_tool_calls.clear();
                     state.rest.sessions[idx].awaiting_approval = false;
                     state.rest.sessions[idx].approval_reason = None;
