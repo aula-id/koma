@@ -360,7 +360,26 @@ Multiple workspace roots are configured. Paths written as [N]… (for example fr
     /// result to `resources::build_system_prompt` which stitches together the
     /// embedded base prompt and the optional memory section, then calls
     /// `Conversation::set_system` to insert or replace `messages[0]`.
+    ///
+    /// Rebuild the system prompt from on-disk sources (the hot path: memory,
+    /// agent roster, skills, config). Convenience wrapper that loads
+    /// `AgentRegistry` and `AppConfig` from disk before delegating to
+    /// [`Self::rebuild_system_with`].
     pub fn rebuild_system(&mut self) {
+        let config = crate::model::app_config::AppConfig::load();
+        let registry = AgentRegistry::load(Some(&self.path));
+        self.rebuild_system_with(&registry, &config);
+    }
+
+    /// Rebuild the system prompt from pre-loaded registry and config, avoiding
+    /// redundant filesystem reads. The caller (e.g. `set_agent`, `delete_agent`)
+    /// already has a fresh `AgentRegistry` + `AppConfig` in scope, so this skips
+    /// the double/triple load that the no-arg `rebuild_system()` would perform.
+    pub fn rebuild_system_with(
+        &mut self,
+        registry: &AgentRegistry,
+        config: &crate::model::app_config::AppConfig,
+    ) {
         // Memory is now per-PROJECT (shared across every session in this
         // working dir). Resolve the project memory dir, run the best-effort
         // legacy migration (flat per-session MEMORY.md -> index store), then load
@@ -376,7 +395,6 @@ Multiple workspace roots are configured. Paths written as [N]… (for example fr
         let agents = load_agents(&self.workdir());
 
         // Build the sub-agent roster from the AgentRegistry (visible agents only).
-        let registry = AgentRegistry::load(Some(&self.path));
         let visible = registry.list(true); // exclude_hidden = true
         let roster: String = visible
             .iter()
@@ -445,7 +463,7 @@ Multiple workspace roots are configured. Paths written as [N]… (for example fr
         // may write there for that extension's tasks. Read-only: reads the live extension
         // registry + this session's current workdir roots (creates nothing, no side effects).
         let ext_ws = crate::model::ext_workspace::active_extension_workspaces(
-            &crate::model::app_config::AppConfig::load().installed_extensions,
+            &config.installed_extensions,
             &self.settings.workdir,
         );
         if !ext_ws.is_empty() {

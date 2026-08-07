@@ -510,49 +510,57 @@ impl DaemonHub {
     // snapshot / foreground move) and ALWAYS replies, even with no session (built-in +
     // global only) — mirrors the `get_settings` one-shot.
     pub(super) fn list_agents(&mut self, idx: usize, state: &AppState) {
-        self.send_agents_values(idx, state, 0);
+        self.send_agents_values(idx, state, 0, None);
     }
 
     /// Build + send client `idx` a [`DaemonEvent::AgentsValues`]: the merged sub-agent
     /// registry (built-in + global + the foreground session's, hidden INCLUDED, disabled
     /// already dropped by the loader) plus the editor's model / provider catalogue — the
     /// reply to a [`crate::ipc::proto::ClientRequest::ListAgents`] AND the re-push after a
-    /// `SetAgent` / `DeleteAgent`. The C2 LOAD bracket in `handle_request` already pointed
-    /// `fg()` at THIS client's foreground, so the registry loads that session's `agents/`
-    /// overlay and the catalogue seeds its local `session_models` FIRST (then the global
-    /// catalogue) — the SAME order the `agents_snapshot` projection uses. ALWAYS sends —
-    /// with no foreground session it loads built-in + global only and seeds from the global
-    /// config — so the dashboard never hangs. `send_to` delivers regardless of attach state
-    /// (like `send_settings_values`).
-    pub(super) fn send_agents_values(&mut self, idx: usize, state: &AppState, req_seq: u64) {
+    /// `SetAgent` / `DeleteAgent`. When `agents` is `Some`, uses the pre-built entries
+    /// directly (the caller already loaded the registry); when `None`, loads from disk
+    /// (the read-only `list_agents` path). ALWAYS sends — so the dashboard never hangs.
+    pub(super) fn send_agents_values(
+        &mut self,
+        idx: usize,
+        state: &AppState,
+        req_seq: u64,
+        agents: Option<Vec<crate::ipc::proto::AgentEntry>>,
+    ) {
         use crate::model::agent_def::{load_registry, AgentSource};
         let config = &state.rest.config;
         let session = state.rest.fg().session.as_ref();
 
-        // Registry roster: built-in < global < session, matching the TUI browse
-        // (`list(false)` = hidden included; the loader already dropped disabled).
-        let registry = load_registry(session.map(|s| s.path.as_path()));
-        let agents = registry
-            .list(false)
-            .into_iter()
-            .map(|ag| crate::ipc::proto::AgentEntry {
-                name: ag.name.clone(),
-                description: ag.description.clone(),
-                conditions: ag.conditions.clone(),
-                source: match ag.source {
-                    AgentSource::Session => "session",
-                    AgentSource::Global => "global",
-                    AgentSource::Builtin => "builtin",
-                    AgentSource::Extension => "extension",
-                }
-                .to_string(),
-                model_uuid: ag.model_uuid.clone(),
-                model: ag.model.clone(),
-                tools: ag.tools.clone(),
-                prompt: ag.prompt.clone(),
-                ext_id: ag.ext_id.clone(),
-            })
-            .collect();
+        // Registry roster: built-in < global < session, matching the TUI browse.
+        // When callers already have the registry, they pass pre-built entries;
+        // the read-only `list_agents` path passes `None` and loads from disk.
+        let agents = match agents {
+            Some(entries) => entries,
+            None => {
+                let registry = load_registry(session.map(|s| s.path.as_path()));
+                registry
+                    .list(false)
+                    .into_iter()
+                    .map(|ag| crate::ipc::proto::AgentEntry {
+                        name: ag.name.clone(),
+                        description: ag.description.clone(),
+                        conditions: ag.conditions.clone(),
+                        source: match ag.source {
+                            AgentSource::Session => "session",
+                            AgentSource::Global => "global",
+                            AgentSource::Builtin => "builtin",
+                            AgentSource::Extension => "extension",
+                        }
+                        .to_string(),
+                        model_uuid: ag.model_uuid.clone(),
+                        model: ag.model.clone(),
+                        tools: ag.tools.clone(),
+                        prompt: ag.prompt.clone(),
+                        ext_id: ag.ext_id.clone(),
+                    })
+                    .collect()
+            }
+        };
 
         // Catalogue: the foreground session's LOCAL overrides FIRST, then the global
         // catalogue — the SAME seeding order the `agents_snapshot` projection uses.
