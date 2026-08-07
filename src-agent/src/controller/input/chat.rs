@@ -459,14 +459,23 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             Action::None
         }
         // Caret movement within the input line (mid-text editing). Left/Right
-        // step one char; Home jumps to the start. End is handled below (it also
-        // doubles as "scroll to bottom" when the input is empty).
+        // step one char; Ctrl+Left/Right jump to word boundaries; Home jumps to
+        // the start. End is handled below (it also doubles as "scroll to bottom"
+        // when the input is empty).
         KeyCode::Left => {
-            rest.cursor_left();
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                rest.cursor_word_left();
+            } else {
+                rest.cursor_left();
+            }
             Action::None
         }
         KeyCode::Right => {
-            rest.cursor_right();
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                rest.cursor_word_right();
+            } else {
+                rest.cursor_right();
+            }
             Action::None
         }
         KeyCode::Home => {
