@@ -104,6 +104,10 @@ impl Tool for MissionReady {
                 "amendment_note": {
                     "type": "string",
                     "description": "If amending an approved mission, short note of what changed."
+                },
+                "branch": {
+                    "type": "string",
+                    "description": "Optional mission branch name. When omitted, a branch is classified from the goal (fix/|feat/|chore/|…). Worktree is still created only on approve."
                 }
             },
             "required": ["highlights", "goal", "acceptance", "graph_tasks"]
@@ -244,6 +248,13 @@ pub(crate) fn parse_mission_ready_args(args: &Value) -> Result<MissionArgs, Stri
         .and_then(Value::as_str)
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    let branch = match args.get("branch").and_then(Value::as_str) {
+        Some(s) if !s.trim().is_empty() => Some(
+            crate::model::sdlc::branch_name::sanitize_branch_name(s)
+                .map_err(|e| format!("error: invalid branch: {e}"))?,
+        ),
+        _ => None,
+    };
 
     // Lane / anti-megatask validation.
     crate::model::sdlc::decompose::validate_lane_graph(&lane, &graph_tasks, acceptance.len())?;
@@ -260,6 +271,7 @@ pub(crate) fn parse_mission_ready_args(args: &Value) -> Result<MissionArgs, Stri
         rationale,
         graph_tasks,
         amendment_note,
+        branch,
     })
 }
 
@@ -395,6 +407,9 @@ pub(crate) struct MissionArgs {
     pub rationale: String,
     pub graph_tasks: Vec<ChecklistNode>,
     pub amendment_note: Option<String>,
+    /// Optional user-requested mission branch (sanitized). When None at ready,
+    /// classifier fills intent before approve bind.
+    pub branch: Option<String>,
 }
 
 /// Tool-result text when user approves a mission.

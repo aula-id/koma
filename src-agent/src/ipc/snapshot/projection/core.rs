@@ -292,6 +292,11 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
         } else {
             None
         },
+        sdlc_branch: if matches!(state.rest.agent_mode(), crate::app::state::AgentMode::Sdlc) {
+            state.rest.fg().sdlc_branch.clone()
+        } else {
+            None
+        },
         sdlc_open: if matches!(state.rest.agent_mode(), crate::app::state::AgentMode::Sdlc) {
             state.rest.fg().session.as_ref().and_then(|s| {
                 crate::model::msglog::open(&s.path).ok().map(|conn| {

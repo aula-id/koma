@@ -140,23 +140,39 @@ pub(super) fn apply_compaction_result(
                 if !mission.approved {
                     return None;
                 }
-                let (open, sealed, all) = crate::model::msglog::open(&s.path)
+                let (open, sealed, all, sealed_commit_shas) = crate::model::msglog::open(&s.path)
                     .ok()
                     .map(|conn| {
                         if crate::model::sdlc::graph::ensure_tables(&conn).is_err() {
-                            return (Vec::new(), Vec::new(), Vec::new());
+                            return (
+                                Vec::new(),
+                                Vec::new(),
+                                Vec::new(),
+                                std::collections::HashMap::new(),
+                            );
                         }
                         let open = crate::model::sdlc::graph::list_open(&conn).unwrap_or_default();
                         let sealed =
                             crate::model::sdlc::graph::list_sealed(&conn).unwrap_or_default();
                         let all = crate::model::sdlc::graph::list_all(&conn).unwrap_or_default();
-                        (open, sealed, all)
+                        let sealed_ids: Vec<String> = sealed.iter().map(|n| n.id.clone()).collect();
+                        let sealed_commit_shas =
+                            crate::model::sdlc::graph::latest_verified_commit_shas(
+                                &conn,
+                                &sealed_ids,
+                            )
+                            .unwrap_or_default();
+                        (open, sealed, all, sealed_commit_shas)
                     })
                     .unwrap_or_default();
                 Some(format!(
                     "Approved mission (execute now):\n\n{}",
                     crate::model::sdlc::mission::build_seed_capsule_with_all(
-                        &mission, &open, &sealed, &all
+                        &mission,
+                        &open,
+                        &sealed,
+                        &all,
+                        &sealed_commit_shas
                     )
                 ))
             })

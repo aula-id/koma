@@ -243,6 +243,7 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     };
     // SDLC phase is per-session on the wire projection; keep shadow header in sync.
     shadow.rest.fg_mut().sdlc_phase = global.sdlc_phase.clone();
+    shadow.rest.fg_mut().sdlc_branch = global.sdlc_branch.clone();
     shadow.rest.latest_version =
         global
             .latest_version

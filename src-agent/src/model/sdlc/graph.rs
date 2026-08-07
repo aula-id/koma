@@ -7,6 +7,8 @@ use anyhow::{bail, Result};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
+use super::handoff::{HandoffStatus, ValidatedHandoff};
+
 /// A single graph node (task) in the SDLC graph.
 #[derive(Debug, Clone)]
 pub struct GraphTask {
@@ -35,6 +37,13 @@ pub struct ChecklistNode {
     pub id: Option<String>,
     /// Glob patterns for file paths this node owns. Empty means no path ownership.
     pub owned_paths: Vec<String>,
+}
+
+/// Result of applying a validated subagent handoff to the graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HandoffOutcome {
+    pub children_added: bool,
+    pub claim_must_be_cleared: bool,
 }
 
 /// Current unix timestamp in seconds.
@@ -284,6 +293,16 @@ pub fn replace_nodes_from_checklist(conn: &Connection, items: &[ChecklistNode]) 
             .and_then(|pt| title_to_id.get(pt).cloned());
 
         let ex = by_id.get(id).or_else(|| by_title.get(&it.title));
+        // Seal only via mission_verify: checklist cannot write bare done.
+        if it.status == "done" {
+            let existing_verified = ex.map(|e| e.verify_bit).unwrap_or(false);
+            if !existing_verified {
+                bail!(
+                    "cannot set node '{}' to done without mission_verify (verify_bit required)",
+                    it.title
+                );
+            }
+        }
         let verify_bit = if it.status == "done" {
             ex.map(|e| e.verify_bit).unwrap_or(false)
         } else {
@@ -500,6 +519,23 @@ pub fn claim_leaf(conn: &Connection, node_id: &str) -> Result<()> {
         bail!("leaf '{node_id}' not claimable (status {status})");
     }
 
+    // One OPEN leaf claim at a time: any OTHER non-cancelled leaf already active.
+    let other_active: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM sdlc_nodes n
+         WHERE n.status = 'active'
+           AND n.id != ?1
+           AND n.status != 'cancelled'
+           AND NOT EXISTS (
+             SELECT 1 FROM sdlc_nodes c
+             WHERE c.parent_id = n.id AND c.status != 'cancelled'
+           )",
+        rusqlite::params![node_id],
+        |r| r.get(0),
+    )?;
+    if other_active > 0 {
+        bail!("another leaf is already active — verify or finish it first");
+    }
+
     // CAS: only pending/blocked → active. A concurrent claim loses here.
     let n = tx.execute(
         "UPDATE sdlc_nodes SET status = 'active', updated_at = ?1
@@ -514,6 +550,208 @@ pub fn claim_leaf(conn: &Connection, node_id: &str) -> Result<()> {
         rusqlite::params![node_id, now],
     )?;
     tx.commit()?;
+    Ok(())
+}
+
+fn depth_of_node(nodes: &[GraphTask], node_id: &str) -> Result<usize> {
+    let by_id: std::collections::HashMap<&str, &GraphTask> =
+        nodes.iter().map(|node| (node.id.as_str(), node)).collect();
+    let mut current = node_id;
+    let mut seen = std::collections::HashSet::new();
+    let mut depth = 0;
+
+    loop {
+        if !seen.insert(current) {
+            bail!("cycle detected while finding depth of node '{node_id}'");
+        }
+        let node = by_id
+            .get(current)
+            .ok_or_else(|| anyhow::anyhow!("node '{current}' has an unknown parent"))?;
+        depth += 1;
+        match node.parent_id.as_deref() {
+            Some(parent_id) => current = parent_id,
+            None => return Ok(depth),
+        }
+    }
+}
+
+/// Apply one validated handoff as the graph's transaction-scoped authority.
+///
+/// Report `done` is deliberately not graph sealing; only verification may set
+/// `done` or `verify_bit`. A rejected application performs no writes, so its
+/// caller may use [`record_rejected_handoff`] to retain an audit record.
+pub fn apply_handoff(
+    conn: &Connection,
+    expected_active_leaf_id: &str,
+    handoff: &ValidatedHandoff,
+) -> Result<HandoffOutcome> {
+    let envelope = &handoff.envelope;
+    if expected_active_leaf_id != envelope.node_id {
+        bail!(
+            "handoff node_id '{}' does not match expected active leaf '{}'",
+            envelope.node_id,
+            expected_active_leaf_id
+        );
+    }
+
+    let accepted_audit = serde_json::to_string(&serde_json::json!({
+        "outcome": "accepted",
+        "expected_active_leaf_id": expected_active_leaf_id,
+        "node_id": &envelope.node_id,
+        "summary": &envelope.summary,
+        "status": &envelope.status,
+        "artifacts": &envelope.artifacts,
+        "evidence_refs": &envelope.evidence_refs,
+        "commit_shas": &envelope.commit_shas,
+        "decisions": &envelope.decisions,
+    }))?;
+
+    let tx = conn.unchecked_transaction()?;
+    let all = list_all(&tx)?;
+    let claimed = all
+        .iter()
+        .find(|node| node.id == expected_active_leaf_id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("unknown node_id '{expected_active_leaf_id}'"))?;
+    if claimed.status != "active" {
+        bail!(
+            "handoff node '{}' is stale: expected active leaf, found status {}",
+            expected_active_leaf_id,
+            claimed.status
+        );
+    }
+    if all.iter().any(|node| {
+        node.parent_id.as_deref() == Some(expected_active_leaf_id) && node.status != "cancelled"
+    }) {
+        bail!(
+            "handoff node '{}' is stale: it is no longer a leaf",
+            expected_active_leaf_id
+        );
+    }
+
+    // Validate every child against the transaction snapshot before the first
+    // write. This makes duplicate/depth failures all-or-nothing.
+    let mut children = Vec::with_capacity(envelope.updates.child_proposals.len());
+    let mut proposal_titles = std::collections::HashSet::new();
+    let mut proposal_ids = std::collections::HashSet::new();
+    if !envelope.updates.child_proposals.is_empty() {
+        let depth = depth_of_node(&all, expected_active_leaf_id)?;
+        if depth >= MAX_DEPTH {
+            bail!(
+                "cannot add child below '{}' at maximum graph depth {MAX_DEPTH}",
+                expected_active_leaf_id
+            );
+        }
+    }
+    if envelope.updates.child_proposals.len() > 16 {
+        bail!("too many child proposals (max 16)");
+    }
+    for proposal in &envelope.updates.child_proposals {
+        let title = proposal.title.trim();
+        if title.is_empty() || title.len() > 128 {
+            bail!("invalid child proposal title");
+        }
+        let normalized_title = title.to_ascii_lowercase();
+        if !proposal_titles.insert(normalized_title) {
+            bail!("duplicate child proposal title '{title}'");
+        }
+        if proposal.note.as_ref().is_some_and(|note| note.len() > 200) {
+            bail!("child proposal note exceeds 200 characters");
+        }
+        if all.iter().any(|node| {
+            node.parent_id.as_deref() == Some(expected_active_leaf_id)
+                && node.title.trim().eq_ignore_ascii_case(title)
+        }) {
+            bail!("duplicate sibling child title '{title}'");
+        }
+
+        let child_id = stable_id_for_title(&format!("{expected_active_leaf_id}:{title}"));
+        if all.iter().any(|node| node.id == child_id) || !proposal_ids.insert(child_id.clone()) {
+            bail!("child proposal id collision for title '{title}'");
+        }
+        children.push((
+            child_id,
+            title.to_string(),
+            proposal.note.clone().unwrap_or_default(),
+        ));
+    }
+
+    let now = now_secs();
+    if let Some(note) = &envelope.updates.node_note {
+        let updated = tx.execute(
+            "UPDATE sdlc_nodes
+             SET notes = CASE WHEN notes = '' THEN ?1 ELSE notes || char(10) || ?1 END,
+                 updated_at = ?2
+             WHERE id = ?3 AND status = 'active'",
+            rusqlite::params![note, now, expected_active_leaf_id],
+        )?;
+        if updated != 1 {
+            bail!("handoff node '{expected_active_leaf_id}' is no longer active");
+        }
+    }
+
+    if envelope.status == HandoffStatus::Blocked {
+        let updated = tx.execute(
+            "UPDATE sdlc_nodes SET status = 'blocked', updated_at = ?1
+             WHERE id = ?2 AND status = 'active'",
+            rusqlite::params![now, expected_active_leaf_id],
+        )?;
+        if updated != 1 {
+            bail!("handoff node '{expected_active_leaf_id}' is no longer active");
+        }
+    }
+
+    for (child_id, title, note) in &children {
+        tx.execute(
+            "INSERT INTO sdlc_nodes
+             (id, parent_id, title, status, phase, notes, verify_bit, updated_at, owned_paths)
+             VALUES (?1, ?2, ?3, 'pending', NULL, ?4, 0, ?5, ?6)",
+            rusqlite::params![
+                child_id,
+                expected_active_leaf_id,
+                title,
+                note,
+                now,
+                owned_paths_to_json(&claimed.owned_paths),
+            ],
+        )?;
+    }
+
+    tx.execute(
+        "INSERT INTO sdlc_events (node_id, kind, detail, created_at)
+         VALUES (?1, 'handoff_accepted', ?2, ?3)",
+        rusqlite::params![expected_active_leaf_id, accepted_audit, now],
+    )?;
+    tx.commit()?;
+
+    let children_added = !children.is_empty();
+    Ok(HandoffOutcome {
+        children_added,
+        claim_must_be_cleared: children_added || envelope.status == HandoffStatus::Blocked,
+    })
+}
+
+/// Write only a rejected-handoff audit event; it never changes graph nodes.
+///
+/// Accepts an optional raw node id so a transport can record parse or validation
+/// failures before a [`ValidatedHandoff`] exists.
+pub fn record_rejected_handoff(
+    conn: &Connection,
+    expected_active_leaf_id: Option<&str>,
+    reported_node_id: Option<&str>,
+    reason: &str,
+) -> Result<()> {
+    let detail = serde_json::to_string(&serde_json::json!({
+        "outcome": "rejected",
+        "expected_active_leaf_id": expected_active_leaf_id,
+        "node_id": reported_node_id,
+        "reason": reason,
+    }))?;
+    conn.execute(
+        "INSERT INTO sdlc_events (node_id, kind, detail, created_at)
+         VALUES (?1, 'handoff_rejected', ?2, ?3)",
+        rusqlite::params![reported_node_id, detail, now_secs()],
+    )?;
     Ok(())
 }
 
@@ -611,11 +849,15 @@ pub fn set_verify_bit_with_evidence(
 }
 
 /// Atomic status update + event for a known node. Clears verify when leaving done.
+/// Sealing to `done` requires verify_bit already true (mission_verify only path).
 pub fn update_node_status(conn: &Connection, node_id: &str, status: &str) -> Result<()> {
     let node =
         get_node(conn, node_id)?.ok_or_else(|| anyhow::anyhow!("unknown node '{node_id}'"))?;
     if node.status == status {
         return Ok(());
+    }
+    if status == "done" && !node.verify_bit {
+        bail!("cannot seal node '{node_id}' to done without mission_verify (verify_bit is false)");
     }
     let now = now_secs();
     let verify: i64 = if status == "done" {
@@ -830,8 +1072,54 @@ pub fn all_required_leaves_verified(conn: &Connection) -> Result<bool> {
     Ok(any_leaf)
 }
 
+/// Extract commit SHAs from the latest passing verify_evidence events for each node.
+/// Returns a map of node_id → list of commit SHAs (extracted from detail strings containing `commit:`).
+pub fn latest_verified_commit_shas(
+    conn: &Connection,
+    node_ids: &[String],
+) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    let mut result: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for id in node_ids {
+        result.insert(id.clone(), Vec::new());
+    }
+    for id in node_ids {
+        let mut stmt = conn.prepare(
+            "SELECT detail FROM sdlc_events
+             WHERE node_id = ?1 AND kind = 'verify_evidence'
+             ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([id], |row| row.get::<_, String>(0))?;
+        for detail in rows.flatten() {
+            for part in detail.split('|') {
+                let part = part.trim();
+                if let Some(sha) = part.strip_prefix("commit:") {
+                    let sha = sha.trim();
+                    if !sha.is_empty()
+                        && !result
+                            .get(id)
+                            .map(|v| v.contains(&sha.to_string()))
+                            .unwrap_or(false)
+                    {
+                        if let Some(v) = result.get_mut(id) {
+                            v.push(sha.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
 /// Format OPEN/SEALED tree lines for the capsule (marks leaves).
-pub fn format_tree(nodes: &[GraphTask], all: &[GraphTask], leaf_mark: bool) -> String {
+/// When `commit_shas` is `Some`, verified nodes also show the first commit SHA.
+pub fn format_tree(
+    nodes: &[GraphTask],
+    all: &[GraphTask],
+    leaf_mark: bool,
+    commit_shas: Option<&std::collections::HashMap<String, Vec<String>>>,
+) -> String {
     use std::collections::HashMap;
     let by_parent: HashMap<Option<&str>, Vec<&GraphTask>> = {
         let mut m: HashMap<Option<&str>, Vec<&GraphTask>> = HashMap::new();
@@ -846,12 +1134,32 @@ pub fn format_tree(nodes: &[GraphTask], all: &[GraphTask], leaf_mark: bool) -> S
         .filter_map(|n| n.parent_id.as_deref())
         .collect();
 
+    fn verified_display(
+        verify_bit: bool,
+        commit_shas: Option<&std::collections::HashMap<String, Vec<String>>>,
+        node_id: &str,
+    ) -> String {
+        if !verify_bit {
+            return " (UNVERIFIED)".to_string();
+        }
+        let commit_suffix = commit_shas
+            .and_then(|cs| cs.get(node_id))
+            .and_then(|v| v.first())
+            .map(|sha| {
+                let short = if sha.len() > 7 { &sha[..7] } else { sha };
+                format!(" (commit: {short})")
+            })
+            .unwrap_or_default();
+        format!(" (verified){commit_suffix}")
+    }
+
     fn walk(
         parent: Option<&str>,
         by_parent: &HashMap<Option<&str>, Vec<&GraphTask>>,
         child_ids: &std::collections::HashSet<&str>,
         depth: usize,
         leaf_mark: bool,
+        commit_shas: Option<&std::collections::HashMap<String, Vec<String>>>,
         out: &mut String,
     ) {
         let Some(kids) = by_parent.get(&parent) else {
@@ -865,13 +1173,9 @@ pub fn format_tree(nodes: &[GraphTask], all: &[GraphTask], leaf_mark: bool) -> S
                 ""
             };
             let v = if n.status == "done" {
-                if n.verify_bit {
-                    " (verified)"
-                } else {
-                    " (UNVERIFIED)"
-                }
+                verified_display(n.verify_bit, commit_shas, &n.id)
             } else {
-                ""
+                "".to_string()
             };
             out.push_str(&format!(
                 "{indent}- [{}] {} ({}){v}{leaf}\n",
@@ -883,13 +1187,15 @@ pub fn format_tree(nodes: &[GraphTask], all: &[GraphTask], leaf_mark: bool) -> S
                 child_ids,
                 depth + 1,
                 leaf_mark,
+                commit_shas,
                 out,
             );
         }
     }
 
     // Roots present in `nodes` OR whose descendants are in nodes.
-    let node_ids: std::collections::HashSet<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+    let node_ids_set: std::collections::HashSet<&str> =
+        nodes.iter().map(|n| n.id.as_str()).collect();
     let mut out = String::new();
     // Emit roots (no parent or parent not in this set) that are in nodes.
     let roots: Vec<&GraphTask> = nodes
@@ -897,7 +1203,7 @@ pub fn format_tree(nodes: &[GraphTask], all: &[GraphTask], leaf_mark: bool) -> S
         .filter(|n| {
             n.parent_id
                 .as_ref()
-                .map(|p| !node_ids.contains(p.as_str()))
+                .map(|p| !node_ids_set.contains(p.as_str()))
                 .unwrap_or(true)
         })
         .collect();
@@ -910,13 +1216,9 @@ pub fn format_tree(nodes: &[GraphTask], all: &[GraphTask], leaf_mark: bool) -> S
                 ""
             };
             let v = if n.status == "done" {
-                if n.verify_bit {
-                    " (verified)"
-                } else {
-                    " (UNVERIFIED)"
-                }
+                verified_display(n.verify_bit, commit_shas, &n.id)
             } else {
-                ""
+                "".to_string()
             };
             out.push_str(&format!(
                 "- [{}] {} ({}){v}{leaf}\n",
@@ -932,13 +1234,9 @@ pub fn format_tree(nodes: &[GraphTask], all: &[GraphTask], leaf_mark: bool) -> S
             ""
         };
         let v = if r.status == "done" {
-            if r.verify_bit {
-                " (verified)"
-            } else {
-                " (UNVERIFIED)"
-            }
+            verified_display(r.verify_bit, commit_shas, &r.id)
         } else {
-            ""
+            "".to_string()
         };
         out.push_str(&format!(
             "- [{}] {} ({}){v}{leaf}\n",
@@ -950,6 +1248,7 @@ pub fn format_tree(nodes: &[GraphTask], all: &[GraphTask], leaf_mark: bool) -> S
             &child_ids,
             1,
             leaf_mark,
+            commit_shas,
             &mut out,
         );
     }
@@ -986,11 +1285,16 @@ pub fn stamp_tool_round(conn: &Connection) -> Result<()> {
 
 /// Check if writing to `target_path` would violate SDLC path ownership.
 ///
-/// Returns `Ok(())` when the write is allowed, or `Err(message)` when the path
-/// matches a DIFFERENT active node's owned_paths glob patterns.
+/// Returns `Ok(())` when the write is allowed, or `Err(message)` when denied.
 ///
-/// - `active_node_id`: the node this actor is working on (`None` for the main
-///   session, which doesn't own nodes).
+/// Rules:
+/// 1. Path matching a *different* active node's non-empty `owned_paths` → deny.
+/// 2. When `active_node_id` is Some and that node has **non-empty** owned_paths,
+///    the path must match **own** globs; otherwise deny.
+/// 3. When the claim's owned_paths is empty (or node missing): allow any path
+///    not foreign-owned (worktree sandbox still applies elsewhere).
+///
+/// - `active_node_id`: the node this actor is working on.
 /// - `conn`: an open graph connection.
 pub fn check_path_ownership(
     conn: &Connection,
@@ -999,7 +1303,7 @@ pub fn check_path_ownership(
 ) -> Result<(), String> {
     let all = list_all(conn).map_err(|e| format!("error: graph read failed: {e}"))?;
 
-    // Build a glob set for each active node that has owned_paths.
+    // Foreign active owned_paths match → deny.
     for node in &all {
         if node.status != "active" || node.owned_paths.is_empty() {
             continue;
@@ -1027,14 +1331,45 @@ pub fn check_path_ownership(
         match builder.build() {
             Ok(gs) if gs.is_match(target_path) => {
                 return Err(format!(
-                    "error: '{}' is owned by active node '{}' ({}) — \
+                    "error: '{target_path}' is owned by active node '{}' ({}) — \
                      write/edit/delete to another node's owned paths is forbidden",
-                    target_path, node.id, node.title
+                    node.id, node.title
                 ));
             }
             _ => {}
         }
     }
+
+    // Own non-empty owned_paths: path must match own globs.
+    if let Some(aid) = active_node_id {
+        if let Some(own) = all.iter().find(|n| n.id == aid) {
+            if !own.owned_paths.is_empty() {
+                let mut builder = globset::GlobSetBuilder::new();
+                let mut any = false;
+                for pat in &own.owned_paths {
+                    if let Ok(g) = globset::Glob::new(pat) {
+                        builder.add(g);
+                        any = true;
+                    }
+                }
+                if any {
+                    match builder.build() {
+                        Ok(gs) if gs.is_match(target_path) => {}
+                        Ok(_) => {
+                            return Err(format!(
+                                "error: '{target_path}' is outside claimed leaf '{}' owned_paths \
+                                 ({}) — stay inside the leaf's owned paths",
+                                own.id,
+                                own.owned_paths.join(", ")
+                            ));
+                        }
+                        Err(_) => {}
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -1042,6 +1377,10 @@ pub fn check_path_ownership(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+    use crate::model::sdlc::handoff::{
+        validate_handoff, ChildProposal, HandoffStatus, HandoffUpdates, SdlcHandoff,
+        ValidatedHandoff, CURRENT_HANDOFF_VERSION,
+    };
     use rusqlite::Connection;
 
     fn mem() -> Connection {
@@ -1063,10 +1402,52 @@ mod tests {
             .collect()
     }
 
+    fn active_leaf(conn: &Connection, title: &str, owned_paths: Vec<String>) -> String {
+        replace_nodes_from_checklist(
+            conn,
+            &[ChecklistNode {
+                title: title.into(),
+                status: "active".into(),
+                parent_title: None,
+                id: None,
+                owned_paths,
+            }],
+        )
+        .unwrap();
+        list_all(conn).unwrap()[0].id.clone()
+    }
+
+    fn validated_handoff(node_id: &str, status: HandoffStatus) -> ValidatedHandoff {
+        validate_handoff(&SdlcHandoff {
+            version: CURRENT_HANDOFF_VERSION,
+            node_id: node_id.into(),
+            status,
+            summary: "handoff summary".into(),
+            artifacts: vec![],
+            evidence_refs: vec![],
+            commit_shas: vec![],
+            decisions: vec![],
+            updates: HandoffUpdates::default(),
+        })
+        .unwrap()
+    }
+
     #[test]
     fn verify_bit_and_false_done_reopen() {
         let conn = mem();
-        replace_nodes_from_checklist(&conn, &flat(&[("a", "done"), ("b", "pending")])).unwrap();
+        replace_nodes_from_checklist(&conn, &flat(&[("a", "pending"), ("b", "pending")])).unwrap();
+        let a_id = list_all(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|n| n.title == "a")
+            .unwrap()
+            .id;
+        // Legacy/raw false-done row (checklist path can no longer create bare done).
+        conn.execute(
+            "UPDATE sdlc_nodes SET status = 'done', verify_bit = 0 WHERE id = ?1",
+            rusqlite::params![a_id],
+        )
+        .unwrap();
         let false_done = list_false_done(&conn).unwrap();
         assert_eq!(false_done.len(), 1);
         assert_eq!(false_done[0].title, "a");
@@ -1084,11 +1465,14 @@ mod tests {
     #[test]
     fn stable_id_and_verify_preserve() {
         let conn = mem();
-        replace_nodes_from_checklist(&conn, &flat(&[("x", "done"), ("y", "pending")])).unwrap();
-        let sealed = list_sealed(&conn).unwrap();
-        let x_node = sealed.iter().find(|n| n.title == "x").unwrap();
-        set_verify_bit_with_evidence(&conn, &x_node.id, true, None).unwrap();
-        let x_id_before = x_node.id.clone();
+        replace_nodes_from_checklist(&conn, &flat(&[("x", "pending"), ("y", "pending")])).unwrap();
+        let x_id_before = list_all(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|n| n.title == "x")
+            .unwrap()
+            .id;
+        set_verify_bit_with_evidence(&conn, &x_id_before, true, None).unwrap();
 
         replace_nodes_from_checklist(&conn, &flat(&[("x", "done"), ("y", "pending")])).unwrap();
         let sealed = list_sealed(&conn).unwrap();
@@ -1096,7 +1480,7 @@ mod tests {
         assert_eq!(x_node2.id, x_id_before);
         assert!(x_node2.verify_bit);
 
-        replace_nodes_from_checklist(&conn, &flat(&[("x", "pending"), ("y", "done")])).unwrap();
+        replace_nodes_from_checklist(&conn, &flat(&[("x", "pending"), ("y", "pending")])).unwrap();
         let open = list_open(&conn).unwrap();
         let x_open = open.iter().find(|n| n.title == "x").unwrap();
         assert_eq!(x_open.id, x_id_before);
@@ -1322,7 +1706,19 @@ mod tests {
     #[test]
     fn cancellation_is_not_verification() {
         let conn = mem();
-        replace_nodes_from_checklist(&conn, &flat(&[("a", "cancelled"), ("b", "done")])).unwrap();
+        replace_nodes_from_checklist(&conn, &flat(&[("a", "cancelled"), ("b", "pending")]))
+            .unwrap();
+        let b_id = list_all(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|n| n.title == "b")
+            .unwrap()
+            .id;
+        conn.execute(
+            "UPDATE sdlc_nodes SET status = 'done', verify_bit = 0 WHERE id = ?1",
+            rusqlite::params![b_id],
+        )
+        .unwrap();
         // only b is false-done leaf
         let fd = list_false_done(&conn).unwrap();
         assert_eq!(fd.len(), 1);
@@ -1535,9 +1931,46 @@ mod tests {
         );
         // Still a single active node.
         assert_eq!(get_node(&conn, &id).unwrap().unwrap().status, "active");
-        // Done leaf also not claimable.
-        update_node_status(&conn, &id, "done").unwrap();
+        // Done leaf also not claimable — seal via verify first.
+        set_verify_bit_with_evidence(&conn, &id, true, Some("ok")).unwrap();
         assert!(claim_leaf(&conn, &id).is_err());
+    }
+
+    #[test]
+    fn claim_leaf_rejects_second_active_leaf() {
+        let conn = mem();
+        replace_nodes_from_checklist(&conn, &flat(&[("a", "pending"), ("b", "pending")])).unwrap();
+        let nodes = list_all(&conn).unwrap();
+        let a = nodes.iter().find(|n| n.title == "a").unwrap().id.clone();
+        let b = nodes.iter().find(|n| n.title == "b").unwrap().id.clone();
+        claim_leaf(&conn, &a).unwrap();
+        let err = claim_leaf(&conn, &b).unwrap_err().to_string();
+        assert!(
+            err.contains("another leaf is already active"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn bare_done_rejected_without_verify() {
+        let conn = mem();
+        replace_nodes_from_checklist(&conn, &flat(&[("a", "pending")])).unwrap();
+        let id = list_all(&conn).unwrap()[0].id.clone();
+        let err = update_node_status(&conn, &id, "done")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("mission_verify") || err.contains("verify_bit"),
+            "{err}"
+        );
+        // Checklist replace cannot invent bare done either.
+        let err = replace_nodes_from_checklist(&conn, &flat(&[("a", "done")]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("mission_verify") || err.contains("verify_bit") || err.contains("done"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -1607,15 +2040,52 @@ mod tests {
 
         // Node A writing to its own path is allowed.
         assert!(check_path_ownership(&conn, Some(&id_a), "src/foo.rs").is_ok());
-        // Node A writing to node B's path is REJECTED.
+        // Node A writing to node B's path is REJECTED (foreign).
         assert!(check_path_ownership(&conn, Some(&id_a), "src/bar.rs").is_err());
         // Node B writing to node A's path is REJECTED.
         assert!(check_path_ownership(&conn, Some(&id_b), "src/foo.rs").is_err());
-        // Writing to an unowned path is allowed.
-        assert!(check_path_ownership(&conn, Some(&id_a), "README.md").is_ok());
+        // Own non-empty owned_paths: unowned path outside own globs is denied.
+        assert!(check_path_ownership(&conn, Some(&id_a), "README.md").is_err());
         // Main session (no active node) writing to any owned path is rejected.
         assert!(check_path_ownership(&conn, None, "src/foo.rs").is_err());
         assert!(check_path_ownership(&conn, None, "src/bar.rs").is_err());
+    }
+
+    #[test]
+    fn check_path_ownership_empty_own_allows_unowned() {
+        let conn = mem();
+        replace_nodes_from_checklist(
+            &conn,
+            &[
+                ChecklistNode {
+                    title: "empty-own".into(),
+                    status: "active".into(),
+                    parent_title: None,
+                    id: None,
+                    owned_paths: vec![],
+                },
+                ChecklistNode {
+                    title: "foreign".into(),
+                    status: "active".into(),
+                    parent_title: None,
+                    id: None,
+                    owned_paths: vec!["src/secret.rs".into()],
+                },
+            ],
+        )
+        .unwrap();
+        let all = list_all(&conn).unwrap();
+        let id = all
+            .iter()
+            .find(|n| n.title == "empty-own")
+            .unwrap()
+            .id
+            .clone();
+        // Empty own: any non-foreign path ok.
+        assert!(check_path_ownership(&conn, Some(&id), "README.md").is_ok());
+        assert!(check_path_ownership(&conn, Some(&id), "src/other.rs").is_ok());
+        // Foreign still denied.
+        assert!(check_path_ownership(&conn, Some(&id), "src/secret.rs").is_err());
     }
 
     #[test]
@@ -1639,9 +2109,333 @@ mod tests {
         assert!(check_path_ownership(&conn, Some(fake_id), "src/sub/mod.rs").is_err());
         // Glob match: tests/unit.rs matches tests/*.rs
         assert!(check_path_ownership(&conn, Some(fake_id), "tests/unit.rs").is_err());
-        // No match: Cargo.toml is not under src/**/*.rs
+        // No match on foreign empty-own: Cargo.toml is not under foreign globs.
         assert!(check_path_ownership(&conn, Some(fake_id), "Cargo.toml").is_ok());
-        // Own node writing is always allowed.
+        // Own node writing inside globs is allowed.
         assert!(check_path_ownership(&conn, Some(&id), "src/sub/mod.rs").is_ok());
+        // Own node writing outside non-empty owned_paths is denied.
+        assert!(check_path_ownership(&conn, Some(&id), "Cargo.toml").is_err());
+    }
+
+    #[test]
+    fn handoff_partial_keeps_active_and_appends_note() {
+        let conn = mem();
+        let id = active_leaf(&conn, "leaf", vec![]);
+        let mut handoff = validated_handoff(&id, HandoffStatus::Partial);
+        handoff.envelope.updates.node_note = Some("progress note".into());
+
+        let outcome = apply_handoff(&conn, &id, &handoff).unwrap();
+        assert_eq!(
+            outcome,
+            HandoffOutcome {
+                children_added: false,
+                claim_must_be_cleared: false,
+            }
+        );
+        let node = get_node(&conn, &id).unwrap().unwrap();
+        assert_eq!(node.status, "active");
+        assert!(!node.verify_bit);
+        assert_eq!(node.notes, "progress note");
+    }
+
+    #[test]
+    fn handoff_blocked_only_blocks_claimed_leaf() {
+        let conn = mem();
+        let id = active_leaf(&conn, "leaf", vec![]);
+        let handoff = validated_handoff(&id, HandoffStatus::Blocked);
+
+        let outcome = apply_handoff(&conn, &id, &handoff).unwrap();
+        assert_eq!(
+            outcome,
+            HandoffOutcome {
+                children_added: false,
+                claim_must_be_cleared: true,
+            }
+        );
+        let node = get_node(&conn, &id).unwrap().unwrap();
+        assert_eq!(node.status, "blocked");
+        assert!(!node.verify_bit);
+        assert_eq!(list_all(&conn).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn handoff_done_never_seals_or_verifies() {
+        let conn = mem();
+        let id = active_leaf(&conn, "leaf", vec![]);
+        let handoff = validated_handoff(&id, HandoffStatus::Done);
+
+        let outcome = apply_handoff(&conn, &id, &handoff).unwrap();
+        // done is report-only: node stays active, claim stays valid until verify.
+        assert_eq!(
+            outcome,
+            HandoffOutcome {
+                children_added: false,
+                claim_must_be_cleared: false,
+            }
+        );
+        let node = get_node(&conn, &id).unwrap().unwrap();
+        assert_eq!(node.status, "active");
+        assert!(!node.verify_bit);
+    }
+
+    #[test]
+    fn handoff_wrong_and_stale_ids_are_denied_without_application_writes() {
+        let conn = mem();
+        let id = active_leaf(&conn, "leaf", vec![]);
+        let handoff = validated_handoff(&id, HandoffStatus::Partial);
+        let events_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sdlc_events", [], |row| row.get(0))
+            .unwrap();
+
+        assert!(apply_handoff(&conn, "n-wrong", &handoff).is_err());
+        assert_eq!(get_node(&conn, &id).unwrap().unwrap().status, "active");
+        let events_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sdlc_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(events_after, events_before);
+
+        update_node_status(&conn, &id, "blocked").unwrap();
+        let stale_events: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sdlc_events", [], |row| row.get(0))
+            .unwrap();
+        assert!(apply_handoff(&conn, &id, &handoff).is_err());
+        assert_eq!(get_node(&conn, &id).unwrap().unwrap().status, "blocked");
+        let stale_events_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sdlc_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(stale_events_after, stale_events);
+    }
+
+    #[test]
+    fn handoff_children_inherit_paths_and_require_claim_clear() {
+        let conn = mem();
+        let owned_paths = vec!["src/sdlc/**".into(), "tests/sdlc.rs".into()];
+        let id = active_leaf(&conn, "parent", owned_paths.clone());
+        let mut handoff = validated_handoff(&id, HandoffStatus::Partial);
+        handoff.envelope.updates.child_proposals = vec![ChildProposal {
+            title: "child work".into(),
+            note: Some("follow-up".into()),
+        }];
+
+        let outcome = apply_handoff(&conn, &id, &handoff).unwrap();
+        assert_eq!(
+            outcome,
+            HandoffOutcome {
+                children_added: true,
+                claim_must_be_cleared: true,
+            }
+        );
+        assert!(!is_leaf(&conn, &id).unwrap());
+        let child = list_all(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|node| node.title == "child work")
+            .unwrap();
+        assert_eq!(child.parent_id.as_deref(), Some(id.as_str()));
+        assert_eq!(child.status, "pending");
+        assert_eq!(child.owned_paths, owned_paths);
+        assert_eq!(child.notes, "follow-up");
+        assert_eq!(get_node(&conn, &id).unwrap().unwrap().status, "active");
+    }
+
+    #[test]
+    fn handoff_duplicate_and_depth_child_failures_rollback() {
+        let conn = mem();
+        replace_nodes_from_checklist(
+            &conn,
+            &[
+                ChecklistNode {
+                    title: "parent".into(),
+                    status: "active".into(),
+                    parent_title: None,
+                    id: None,
+                    owned_paths: vec![],
+                },
+                ChecklistNode {
+                    title: "taken".into(),
+                    status: "cancelled".into(),
+                    parent_title: Some("parent".into()),
+                    id: None,
+                    owned_paths: vec![],
+                },
+            ],
+        )
+        .unwrap();
+        let parent = list_all(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|node| node.title == "parent")
+            .unwrap()
+            .id;
+        let mut duplicate = validated_handoff(&parent, HandoffStatus::Partial);
+        duplicate.envelope.updates.node_note = Some("must not persist".into());
+        duplicate.envelope.updates.child_proposals = vec![
+            ChildProposal {
+                title: "new child".into(),
+                note: None,
+            },
+            ChildProposal {
+                title: "taken".into(),
+                note: None,
+            },
+        ];
+        let events_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sdlc_events", [], |row| row.get(0))
+            .unwrap();
+        assert!(apply_handoff(&conn, &parent, &duplicate).is_err());
+        assert_eq!(get_node(&conn, &parent).unwrap().unwrap().notes, "");
+        assert!(list_all(&conn)
+            .unwrap()
+            .iter()
+            .all(|node| node.title != "new child"));
+        let events_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sdlc_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(events_after, events_before);
+
+        let depth_conn = mem();
+        replace_nodes_from_checklist(
+            &depth_conn,
+            &[
+                ChecklistNode {
+                    title: "root".into(),
+                    status: "active".into(),
+                    parent_title: None,
+                    id: None,
+                    owned_paths: vec![],
+                },
+                ChecklistNode {
+                    title: "middle".into(),
+                    status: "active".into(),
+                    parent_title: Some("root".into()),
+                    id: None,
+                    owned_paths: vec![],
+                },
+                ChecklistNode {
+                    title: "deep leaf".into(),
+                    status: "active".into(),
+                    parent_title: Some("middle".into()),
+                    id: None,
+                    owned_paths: vec![],
+                },
+            ],
+        )
+        .unwrap();
+        let leaf = list_all(&depth_conn)
+            .unwrap()
+            .into_iter()
+            .find(|node| node.title == "deep leaf")
+            .unwrap()
+            .id;
+        let mut too_deep = validated_handoff(&leaf, HandoffStatus::Partial);
+        too_deep.envelope.updates.node_note = Some("must not persist".into());
+        too_deep.envelope.updates.child_proposals = vec![ChildProposal {
+            title: "fourth level".into(),
+            note: None,
+        }];
+        let depth_events: i64 = depth_conn
+            .query_row("SELECT COUNT(*) FROM sdlc_events", [], |row| row.get(0))
+            .unwrap();
+        assert!(apply_handoff(&depth_conn, &leaf, &too_deep).is_err());
+        assert_eq!(get_node(&depth_conn, &leaf).unwrap().unwrap().notes, "");
+        assert_eq!(list_all(&depth_conn).unwrap().len(), 3);
+        assert_eq!(
+            depth_conn
+                .query_row("SELECT COUNT(*) FROM sdlc_events", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            depth_events
+        );
+    }
+
+    #[test]
+    fn latest_verified_commit_shas_extracts_correctly() {
+        let conn = mem();
+        replace_nodes_from_checklist(&conn, &flat(&[("a", "pending"), ("b", "pending")])).unwrap();
+        let all = list_all(&conn).unwrap();
+        let a_id = all.iter().find(|n| n.title == "a").unwrap().id.clone();
+        let b_id = all.iter().find(|n| n.title == "b").unwrap().id.clone();
+
+        // Node a: two verify events, only second has commit
+        set_verify_bit_with_evidence(&conn, &a_id, true, Some("first pass")).unwrap();
+        set_verify_bit_with_evidence(&conn, &a_id, false, None).unwrap();
+        set_verify_bit_with_evidence(&conn, &a_id, true, Some("tests green | commit:abc1234def"))
+            .unwrap();
+
+        // Node b: verify with commit only
+        set_verify_bit_with_evidence(&conn, &b_id, true, Some("build ok | commit:ff00aa1"))
+            .unwrap();
+
+        let node_ids = vec![a_id.clone(), b_id.clone()];
+        let shas = latest_verified_commit_shas(&conn, &node_ids).unwrap();
+
+        // a: should have abc1234def
+        assert_eq!(shas.len(), 2);
+        let a_shas = shas.get(&a_id).unwrap();
+        assert!(
+            a_shas.iter().any(|s| s == "abc1234def"),
+            "expected abc1234def in a_shas: {a_shas:?}"
+        );
+
+        // b: should have ff00aa1
+        let b_shas = shas.get(&b_id).unwrap();
+        assert!(
+            b_shas.iter().any(|s| s == "ff00aa1"),
+            "expected ff00aa1 in b_shas: {b_shas:?}"
+        );
+
+        // Non-existent node: empty
+        let missing = latest_verified_commit_shas(&conn, &["n-missing-000".to_string()]).unwrap();
+        assert!(missing.get("n-missing-000").unwrap().is_empty());
+    }
+
+    #[test]
+    fn handoff_accepted_and_rejected_audits_are_json_and_rejection_is_audit_only() {
+        let conn = mem();
+        let id = active_leaf(&conn, "leaf", vec![]);
+        let mut handoff = validated_handoff(&id, HandoffStatus::Partial);
+        handoff.envelope.summary = "completed parser".into();
+        handoff.envelope.artifacts = vec!["src/parser.rs".into()];
+        handoff.envelope.evidence_refs = vec!["tests/parser.txt".into()];
+        handoff.envelope.commit_shas = vec!["abcdef1234567890abcdef1234567890abcdef12".into()];
+        handoff.envelope.decisions = vec!["kept the parser strict".into()];
+        apply_handoff(&conn, &id, &handoff).unwrap();
+
+        let accepted: String = conn
+            .query_row(
+                "SELECT detail FROM sdlc_events WHERE kind = 'handoff_accepted'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let accepted: serde_json::Value = serde_json::from_str(&accepted).unwrap();
+        assert_eq!(accepted["outcome"], "accepted");
+        assert_eq!(accepted["summary"], "completed parser");
+        assert_eq!(accepted["status"], "partial");
+        assert_eq!(accepted["artifacts"][0], "src/parser.rs");
+        assert_eq!(accepted["evidence_refs"][0], "tests/parser.txt");
+        assert_eq!(
+            accepted["commit_shas"][0],
+            "abcdef1234567890abcdef1234567890abcdef12"
+        );
+        assert_eq!(accepted["decisions"][0], "kept the parser strict");
+
+        let before = get_node(&conn, &id).unwrap().unwrap();
+        record_rejected_handoff(&conn, Some("n-other"), Some(&id), "stale claim").unwrap();
+        let after = get_node(&conn, &id).unwrap().unwrap();
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.notes, before.notes);
+        assert_eq!(after.verify_bit, before.verify_bit);
+        let rejected: String = conn
+            .query_row(
+                "SELECT detail FROM sdlc_events WHERE kind = 'handoff_rejected'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let rejected: serde_json::Value = serde_json::from_str(&rejected).unwrap();
+        assert_eq!(rejected["outcome"], "rejected");
+        assert_eq!(rejected["reason"], "stale claim");
     }
 }

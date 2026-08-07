@@ -2594,6 +2594,7 @@ mod tests {
             usage_tokens_in: 0,
             usage_tokens_out: 0,
             usage_cost: 0.0,
+            sdlc_active_node_id: None,
         }
     }
 

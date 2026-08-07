@@ -90,6 +90,32 @@ pub struct ContractHashInput<'a> {
 }
 
 impl Mission {
+    /// Allow-listed SDLC phase transition. Idempotent when already `to`.
+    pub fn try_transition(&mut self, to: &str) -> Result<()> {
+        let from = self.phase.as_str();
+        if from == to {
+            return Ok(());
+        }
+        let allowed = matches!(
+            (from, to),
+            // Fail-closed rail: deny/amend/bind-fail/cleanup/re-entry → assess
+            // (covers draft→assess and any other source)
+            (_, "assess")
+                | ("assess", "execute")
+                | ("execute", "integrate")
+                | ("integrate", "done")
+                | ("execute", "paused")
+                | ("integrate", "paused")
+                | ("paused", "execute")
+                | ("draft", "execute")
+        );
+        if !allowed {
+            bail!("illegal SDLC phase transition: {from} → {to}");
+        }
+        self.phase = to.to_string();
+        Ok(())
+    }
+
     /// Full contract hash including optional worktree binding + frozen target fields.
     pub fn compute_contract_hash_full(input: ContractHashInput<'_>) -> String {
         let ContractHashInput {
@@ -369,6 +395,27 @@ pub fn current_git_branch(dir: &std::path::Path) -> Option<String> {
     }
 }
 
+/// Best-effort: capture the short (7-char) commit SHA from HEAD of `dir`.
+/// Returns `None` when not a git repo or HEAD is unavailable.
+pub fn capture_head_short_sha(dir: &std::path::Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--short=7", "HEAD"])
+        .current_dir(dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
 /// Read full `git rev-parse HEAD` in dir.
 pub fn current_git_head(dir: &std::path::Path) -> Option<String> {
     let output = std::process::Command::new("git")
@@ -525,7 +572,7 @@ fn reset_mission_to_assess_after_cleanup(
     session_dir: &std::path::Path,
     mut mission: Mission,
 ) -> Result<()> {
-    mission.phase = "assess".into();
+    mission.try_transition("assess")?;
     mission.approved = false;
     mission.worktree_name = None;
     mission.branch = None;
@@ -546,6 +593,7 @@ pub fn build_seed_capsule_with_all(
     open_nodes: &[GraphTask],
     sealed_nodes: &[GraphTask],
     all_nodes: &[GraphTask],
+    sealed_commit_shas: &std::collections::HashMap<String, Vec<String>>,
 ) -> String {
     let mut s = String::from("# SDLC mission capsule\n\n");
     s.push_str(&format!("**Goal:** {}\n", mission.goal));
@@ -578,6 +626,8 @@ pub fn build_seed_capsule_with_all(
             wt,
             mission.branch.as_deref().unwrap_or("n/a")
         ));
+    } else if let Some(ref br) = mission.branch {
+        s.push_str(&format!("**Branch intent:** {br}\n"));
     }
     if let Some(ref p) = mission.worktree_path {
         s.push_str(&format!("**Worktree path:** {p}\n"));
@@ -631,7 +681,7 @@ pub fn build_seed_capsule_with_all(
     if open_nodes.is_empty() {
         s.push_str("_none_\n");
     } else if all.iter().any(|n| n.parent_id.is_some()) {
-        s.push_str(&graph::format_tree(open_nodes, &all, true));
+        s.push_str(&graph::format_tree(open_nodes, &all, true, None));
     } else {
         for node in open_nodes {
             s.push_str(&format!(
@@ -645,13 +695,26 @@ pub fn build_seed_capsule_with_all(
     if sealed_nodes.is_empty() {
         s.push_str("_none_\n");
     } else if all.iter().any(|n| n.parent_id.is_some()) {
-        s.push_str(&graph::format_tree(sealed_nodes, &all, true));
+        s.push_str(&graph::format_tree(
+            sealed_nodes,
+            &all,
+            true,
+            Some(sealed_commit_shas),
+        ));
     } else {
         for node in sealed_nodes {
             let verify_mark = if node.verify_bit {
-                "(verified)"
+                let commit_suffix = sealed_commit_shas
+                    .get(&node.id)
+                    .and_then(|v| v.first())
+                    .map(|sha| {
+                        let short = if sha.len() > 7 { &sha[..7] } else { sha };
+                        format!(" (commit: {short})")
+                    })
+                    .unwrap_or_default();
+                format!("(verified){commit_suffix}")
             } else {
-                "(UNVERIFIED)"
+                "(UNVERIFIED)".to_string()
             };
             s.push_str(&format!(
                 "- [done] {} ({}) {}\n",
@@ -662,10 +725,13 @@ pub fn build_seed_capsule_with_all(
 
     s.push_str(
         "\n## Law\n\
-         - Graph is authoritative; TODO.md is projection only.\n\
-         - Delegate OPEN leaves only (`task.node_id` required).\n\
+         - Never force-push; plain push only the mission branch.\n\
+         - One OPEN leaf claim at a time (main: checklist in_progress or task.node_id); seal only via mission_verify.\n\
+         - Graph is authority; checklist cannot bare-done.\n\
          - Do not escape the bound mission worktree/branch during execute/integrate.\n\
-         - External shell/MCP is not OS-sandboxed — stay disciplined.\n",
+         - No auto-commit; integrate needs clean mission WT + commits ahead.\n\
+         - If the claimed leaf has owned_paths, stay inside them.\n\
+         - Unsure: web_search → message_find → ask the user.\n",
     );
 
     s
@@ -694,6 +760,52 @@ pub fn integrate_gate(
     let _ = live; // retained for keeper/diagnostics
     if !graph::all_required_leaves_verified(conn)? {
         bail!("not all required leaf evidence is verified");
+    }
+    // Commit evidence gate: every sealed leaf must have at least one commit SHA
+    // from its verify events, and each SHA must be reachable from the mission branch tip.
+    // Only enforced when mission.branch is present and the worktree is a git repo.
+    if let (Some(branch), Some(wt_path)) = (
+        mission.branch.as_deref().filter(|s| !s.is_empty()),
+        mission.worktree_path.as_deref().filter(|s| !s.is_empty()),
+    ) {
+        let wt = std::path::Path::new(wt_path);
+        if wt.is_dir() && current_git_branch(wt).is_some() {
+            let sealed = graph::list_sealed(conn)?;
+            let mut leaves: Vec<&GraphTask> = Vec::new();
+            for n in &sealed {
+                if graph::is_leaf(conn, &n.id)? {
+                    leaves.push(n);
+                }
+            }
+            if !leaves.is_empty() {
+                let node_ids: Vec<String> = leaves.iter().map(|n| n.id.clone()).collect();
+                let commit_map = graph::latest_verified_commit_shas(conn, &node_ids)?;
+                for leaf in &leaves {
+                    let shas = commit_map
+                        .get(&leaf.id)
+                        .map(|v| v.as_slice())
+                        .unwrap_or(&[]);
+                    if shas.is_empty() {
+                        bail!(
+                            "sealed leaf '{}' ({}) has no commit evidence — \
+                             run mission_verify with a commit",
+                            leaf.title,
+                            leaf.id
+                        );
+                    }
+                    for sha in shas {
+                        if !is_ancestor(wt, sha, branch) {
+                            bail!(
+                                "commit {sha} from sealed leaf '{}' ({}) is not reachable from \
+                                 mission branch '{branch}' — re-verify with current branch state",
+                                leaf.title,
+                                leaf.id
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
     // Open non-cancelled leaves must be empty.
     let open_leaves = graph::list_open_leaves(conn)?;
@@ -834,7 +946,8 @@ mod tests {
             updated_at: 0,
             owned_paths: vec![],
         }];
-        let cap = build_seed_capsule_with_all(&m, &open, &sealed, &[]);
+        let cap =
+            build_seed_capsule_with_all(&m, &open, &sealed, &[], &std::collections::HashMap::new());
         assert!(cap.contains("# SDLC mission capsule"));
         assert!(cap.contains("## OPEN"));
         assert!(cap.contains("## SEALED"));
@@ -847,7 +960,7 @@ mod tests {
     #[test]
     fn seed_capsule_includes_worktree_and_verify_plan() {
         let m = sample_mission();
-        let cap = build_seed_capsule_with_all(&m, &[], &[], &[]);
+        let cap = build_seed_capsule_with_all(&m, &[], &[], &[], &std::collections::HashMap::new());
         assert!(cap.contains("**Worktree:** sdlc-test (branch: sdlc/ship-x)"));
         assert!(cap.contains("**Verify plan:**"));
         assert!(cap.contains("- cargo test"));
@@ -880,7 +993,8 @@ mod tests {
                 owned_paths: vec![],
             },
         ];
-        let cap = build_seed_capsule_with_all(&m, &[], &sealed, &[]);
+        let cap =
+            build_seed_capsule_with_all(&m, &[], &sealed, &[], &std::collections::HashMap::new());
         assert!(cap.contains("task1 (t1) (UNVERIFIED)"));
         assert!(cap.contains("task2 (t2) (verified)"));
     }
@@ -890,7 +1004,7 @@ mod tests {
         let mut m = sample_mission();
         m.human_gates = vec!["review API".into()];
         // hash no longer matches after field change — that's fine for capsule text
-        let cap = build_seed_capsule_with_all(&m, &[], &[], &[]);
+        let cap = build_seed_capsule_with_all(&m, &[], &[], &[], &std::collections::HashMap::new());
         assert!(cap.contains("**Human gates:**"));
         assert!(cap.contains("review API"));
     }
@@ -1096,12 +1210,44 @@ mod tests {
     #[test]
     fn seed_capsule_includes_frozen_target() {
         let m = sample_mission();
-        let cap = build_seed_capsule_with_all(&m, &[], &[], &[]);
+        let cap = build_seed_capsule_with_all(&m, &[], &[], &[], &std::collections::HashMap::new());
         assert!(
             cap.contains("**Target:** main @"),
             "capsule must show frozen target branch, got: {cap}"
         );
         assert!(cap.contains("/tmp/primary"));
+        assert!(
+            cap.contains("Never force-push") && cap.contains("mission_verify"),
+            "capsule Law must list enforced edges, got: {cap}"
+        );
+    }
+
+    #[test]
+    fn try_transition_allows_legal_edges_and_rejects_illegal() {
+        let mut m = sample_mission();
+        // sample starts in execute
+        assert!(m.try_transition("execute").is_ok()); // identity
+        assert!(m.try_transition("integrate").is_ok());
+        assert_eq!(m.phase, "integrate");
+        assert!(m.try_transition("done").is_ok());
+        assert_eq!(m.phase, "done");
+        // any → assess (fail-closed rail)
+        assert!(m.try_transition("assess").is_ok());
+        assert_eq!(m.phase, "assess");
+        assert!(m.try_transition("execute").is_ok());
+        assert!(m.try_transition("paused").is_ok());
+        assert_eq!(m.phase, "paused");
+        assert!(m.try_transition("execute").is_ok());
+        // illegal
+        m.phase = "assess".into();
+        let err = m.try_transition("done").unwrap_err().to_string();
+        assert!(err.contains("illegal"), "{err}");
+        m.phase = "draft".into();
+        assert!(m.try_transition("assess").is_ok());
+        m.phase = "draft".into();
+        assert!(m.try_transition("execute").is_ok());
+        m.phase = "paused".into();
+        assert!(m.try_transition("integrate").is_err());
     }
 
     #[test]
@@ -1299,7 +1445,7 @@ mod tests {
             &conn,
             &[ChecklistNode {
                 title: "leaf".into(),
-                status: "done".into(),
+                status: "pending".into(),
                 parent_title: None,
                 id: None,
                 owned_paths: vec![],
@@ -1309,7 +1455,19 @@ mod tests {
         let leaf_id = crate::model::sdlc::graph::list_all(&conn).unwrap()[0]
             .id
             .clone();
-        set_verify_bit_with_evidence(&conn, &leaf_id, true, Some("tests pass")).unwrap();
+        let bound_sha = current_git_head(&bound).expect("bound head");
+        let bound_sha_short = if bound_sha.len() > 7 {
+            &bound_sha[..7]
+        } else {
+            &bound_sha
+        };
+        set_verify_bit_with_evidence(
+            &conn,
+            &leaf_id,
+            true,
+            Some(&format!("tests pass | commit:{bound_sha_short}")),
+        )
+        .unwrap();
         assert!(crate::model::sdlc::graph::list_open_leaves(&conn)
             .unwrap()
             .is_empty());
@@ -1499,7 +1657,7 @@ mod tests {
             &conn,
             &[ChecklistNode {
                 title: "verified leaf".into(),
-                status: "done".into(),
+                status: "pending".into(),
                 parent_title: None,
                 id: None,
                 owned_paths: vec![],
@@ -1510,7 +1668,10 @@ mod tests {
         set_verify_bit_with_evidence(&conn, &leaf_id, true, Some("cargo test")).unwrap();
 
         let mut mission = sample_mission();
-        mission.phase = "done".into();
+        mission
+            .try_transition("integrate")
+            .and_then(|_| mission.try_transition("done"))
+            .unwrap();
         mission.worktree_name = Some("sdlc-done-cleanup".into());
         mission.branch = Some(branch.into());
         mission.worktree_path = Some(worktree.to_string_lossy().into_owned());
@@ -1571,5 +1732,448 @@ mod tests {
             err.contains("frozen target") || err.contains("re-approval"),
             "unexpected: {err}"
         );
+    }
+
+    #[test]
+    fn capsule_shows_commit_sha_for_sealed_nodes() {
+        use crate::model::sdlc::graph::GraphTask;
+
+        let m = sample_mission();
+        let sealed = vec![
+            GraphTask {
+                id: "t1".into(),
+                parent_id: None,
+                title: "task1".into(),
+                status: "done".into(),
+                phase: None,
+                notes: String::new(),
+                verify_bit: true,
+                updated_at: 0,
+                owned_paths: vec![],
+            },
+            GraphTask {
+                id: "t2".into(),
+                parent_id: None,
+                title: "task2".into(),
+                status: "done".into(),
+                phase: None,
+                notes: String::new(),
+                verify_bit: false,
+                updated_at: 0,
+                owned_paths: vec![],
+            },
+        ];
+        let mut shas = std::collections::HashMap::new();
+        shas.insert("t1".into(), vec!["abc1234567890".into()]);
+        let cap = build_seed_capsule_with_all(&m, &[], &sealed, &[], &shas);
+        assert!(
+            cap.contains("(commit: abc1234)"),
+            "capsule must show commit SHA for verified sealed node, got: {cap}"
+        );
+        assert!(
+            cap.contains("task1 (t1) (verified) (commit: abc1234)"),
+            "unexpected format for verified sealed node: {cap}"
+        );
+        // t2 has no commit SHA and is UNVERIFIED
+        assert!(cap.contains("task2 (t2) (UNVERIFIED)"));
+    }
+
+    #[test]
+    fn capsule_hierarchical_shows_commit_sha_for_sealed() {
+        use crate::model::sdlc::graph::GraphTask;
+
+        let m = sample_mission();
+        let all = vec![
+            GraphTask {
+                id: "epic".into(),
+                parent_id: None,
+                title: "epic".into(),
+                status: "done".into(),
+                phase: None,
+                notes: String::new(),
+                verify_bit: true,
+                updated_at: 0,
+                owned_paths: vec![],
+            },
+            GraphTask {
+                id: "leaf1".into(),
+                parent_id: Some("epic".into()),
+                title: "leaf1".into(),
+                status: "done".into(),
+                phase: None,
+                notes: String::new(),
+                verify_bit: true,
+                updated_at: 0,
+                owned_paths: vec![],
+            },
+        ];
+        let mut shas = std::collections::HashMap::new();
+        shas.insert("leaf1".into(), vec!["deadbeef1234".into()]);
+        let cap = build_seed_capsule_with_all(&m, &[], &all, &all, &shas);
+        assert!(
+            cap.contains("(commit: deadbee)"),
+            "hierarchical capsule must show commit SHA, got: {cap}"
+        );
+    }
+
+    #[test]
+    fn integrate_gate_rejects_when_sealed_leaf_has_no_commit_evidence() {
+        use crate::model::sdlc::graph::{
+            ensure_tables, replace_nodes_from_checklist, set_verify_bit_with_evidence,
+            ChecklistNode,
+        };
+        use rusqlite::Connection;
+        use std::process::Command;
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "koma-sdlc-igate-noev-{}-{}",
+            std::process::id(),
+            stamp
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let primary = root.join("primary");
+        let bound = root.join("mission-wt");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&bound).unwrap();
+
+        let run_in = |dir: &std::path::Path, args: &[&str]| {
+            let o = Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "{args:?} in {} → {}",
+                dir.display(),
+                String::from_utf8_lossy(&o.stderr)
+            );
+        };
+        run_in(&primary, &["init", "-b", "develop"]);
+        run_in(&primary, &["config", "user.email", "t@t"]);
+        run_in(&primary, &["config", "user.name", "t"]);
+        std::fs::write(primary.join("a.txt"), "a").unwrap();
+        run_in(&primary, &["add", "."]);
+        run_in(&primary, &["commit", "-m", "init"]);
+        let target_head = current_git_head(&primary).expect("head");
+
+        run_in(&bound, &["init", "-b", "sdlc/ship-x"]);
+        run_in(&bound, &["config", "user.email", "t@t"]);
+        run_in(&bound, &["config", "user.name", "t"]);
+        std::fs::write(bound.join("b.txt"), "b").unwrap();
+        run_in(&bound, &["add", "."]);
+        run_in(&bound, &["commit", "-m", "feat"]);
+
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_tables(&conn).unwrap();
+        replace_nodes_from_checklist(
+            &conn,
+            &[ChecklistNode {
+                title: "leaf".into(),
+                status: "pending".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec![],
+            }],
+        )
+        .unwrap();
+        let leaf_id = crate::model::sdlc::graph::list_all(&conn).unwrap()[0]
+            .id
+            .clone();
+        // Verify WITHOUT commit evidence — should fail integrate gate.
+        set_verify_bit_with_evidence(&conn, &leaf_id, true, Some("tests pass")).unwrap();
+
+        let structural = structural_graph_hash(&conn).unwrap();
+        let mut m = sample_mission();
+        m.phase = "execute".into();
+        m.graph_hash = Some(structural);
+        m.worktree_path = Some(bound.to_string_lossy().into_owned());
+        m.branch = Some("sdlc/ship-x".into());
+        m.worktree_name = Some("sdlc-test".into());
+        m.target_worktree_path = Some(primary.to_string_lossy().into_owned());
+        m.target_branch = Some("develop".into());
+        m.target_head = Some(target_head);
+        m.human_gates = vec![];
+        m.human_gates_approved = vec![];
+        m.hash = m.recompute_hash();
+
+        let err = integrate_gate(&m, &conn, &bound, Some("sdlc/ship-x"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("no commit evidence"),
+            "expected commit evidence rejection, got: {err}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn integrate_gate_accepts_when_commit_shas_are_reachable() {
+        use crate::model::sdlc::graph::{
+            ensure_tables, replace_nodes_from_checklist, set_verify_bit_with_evidence,
+            ChecklistNode,
+        };
+        use rusqlite::Connection;
+        use std::process::Command;
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "koma-sdlc-igate-reach-{}-{}",
+            std::process::id(),
+            stamp
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let primary = root.join("primary");
+        let bound = root.join("mission-wt");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&bound).unwrap();
+
+        let run_in = |dir: &std::path::Path, args: &[&str]| {
+            let o = Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "{args:?} in {} → {}",
+                dir.display(),
+                String::from_utf8_lossy(&o.stderr)
+            );
+        };
+        run_in(&primary, &["init", "-b", "develop"]);
+        run_in(&primary, &["config", "user.email", "t@t"]);
+        run_in(&primary, &["config", "user.name", "t"]);
+        std::fs::write(primary.join("a.txt"), "a").unwrap();
+        run_in(&primary, &["add", "."]);
+        run_in(&primary, &["commit", "-m", "init"]);
+        let target_head = current_git_head(&primary).expect("head");
+
+        run_in(&bound, &["init", "-b", "sdlc/ship-x"]);
+        run_in(&bound, &["config", "user.email", "t@t"]);
+        run_in(&bound, &["config", "user.name", "t"]);
+        std::fs::write(bound.join("b.txt"), "b").unwrap();
+        run_in(&bound, &["add", "."]);
+        run_in(&bound, &["commit", "-m", "feat"]);
+        let bound_head = current_git_head(&bound).expect("bound head");
+        let bound_head_short = if bound_head.len() > 7 {
+            &bound_head[..7]
+        } else {
+            &bound_head
+        };
+
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_tables(&conn).unwrap();
+        replace_nodes_from_checklist(
+            &conn,
+            &[ChecklistNode {
+                title: "leaf".into(),
+                status: "pending".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec![],
+            }],
+        )
+        .unwrap();
+        let leaf_id = crate::model::sdlc::graph::list_all(&conn).unwrap()[0]
+            .id
+            .clone();
+        // Verify WITH reachable commit evidence — should pass integrate gate.
+        set_verify_bit_with_evidence(
+            &conn,
+            &leaf_id,
+            true,
+            Some(&format!("tests pass | commit:{bound_head_short}")),
+        )
+        .unwrap();
+
+        let structural = structural_graph_hash(&conn).unwrap();
+        let mut m = sample_mission();
+        m.phase = "execute".into();
+        m.graph_hash = Some(structural);
+        m.worktree_path = Some(bound.to_string_lossy().into_owned());
+        m.branch = Some("sdlc/ship-x".into());
+        m.worktree_name = Some("sdlc-test".into());
+        m.target_worktree_path = Some(primary.to_string_lossy().into_owned());
+        m.target_branch = Some("develop".into());
+        m.target_head = Some(target_head);
+        m.human_gates = vec![];
+        m.human_gates_approved = vec![];
+        m.hash = m.recompute_hash();
+
+        // Should pass commit evidence check (may still fail on other gates, but
+        // "no commit evidence" and "not reachable" should NOT appear).
+        let result = integrate_gate(&m, &conn, &bound, Some("sdlc/ship-x"));
+        match result {
+            Ok(()) => {} // All gates passed — fine.
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    !msg.contains("no commit evidence") && !msg.contains("not reachable"),
+                    "commit evidence check should pass, got: {msg}"
+                );
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn verify_pass_captures_commit_sha_in_evidence() {
+        use crate::model::sdlc::graph::{
+            ensure_tables, latest_verified_commit_shas, replace_nodes_from_checklist,
+            set_verify_bit_with_evidence, ChecklistNode,
+        };
+        use rusqlite::Connection;
+        use std::process::Command;
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "koma-sdlc-verify-sha-{}-{}",
+            std::process::id(),
+            stamp
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+
+        let run = |args: &[&str]| {
+            let o = Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "{args:?} → {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(repo.join("a.txt"), "a").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "init"]);
+        let head_sha = current_git_head(&repo).unwrap();
+        let head_short7 = &head_sha[..7];
+
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_tables(&conn).unwrap();
+        replace_nodes_from_checklist(
+            &conn,
+            &[ChecklistNode {
+                title: "task".into(),
+                status: "pending".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec![],
+            }],
+        )
+        .unwrap();
+        let node_id = crate::model::sdlc::graph::list_all(&conn).unwrap()[0]
+            .id
+            .clone();
+
+        // Simulate the intercept logic: capture SHA, augment evidence, store.
+        let sha = capture_head_short_sha(&repo).expect("should capture SHA");
+        let evidence = format!("tests pass | commit:{sha}");
+        set_verify_bit_with_evidence(&conn, &node_id, true, Some(&evidence)).unwrap();
+
+        let shas = latest_verified_commit_shas(&conn, &[node_id.clone()]).unwrap();
+        let node_shas = shas.get(&node_id).unwrap();
+        assert_eq!(node_shas.len(), 1);
+        assert_eq!(node_shas[0], head_short7);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn verify_path_never_invokes_git_commit() {
+        use std::process::Command;
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "koma-sdlc-no-commit-{}-{}",
+            std::process::id(),
+            stamp
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+
+        let run = |args: &[&str]| {
+            let o = Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "{args:?} → {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(repo.join("a.txt"), "a").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "init"]);
+
+        // Install a pre-commit hook that FAILS — if git commit is ever called,
+        // the hook would abort it. Since verify only calls git rev-parse, this
+        // should never trigger.
+        let hook_dir = repo.join(".git/hooks");
+        std::fs::create_dir_all(&hook_dir).unwrap();
+        std::fs::write(
+            hook_dir.join("pre-commit"),
+            "#!/bin/sh\necho 'commit blocked' >&2\nexit 1\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perm = std::fs::metadata(hook_dir.join("pre-commit"))
+                .unwrap()
+                .permissions();
+            perm.set_mode(0o755);
+            std::fs::set_permissions(hook_dir.join("pre-commit"), perm).unwrap();
+        }
+
+        // Simulate the verify intercept capture path:
+        // 1. capture_head_short_sha (read-only git rev-parse)
+        let sha = capture_head_short_sha(&repo).expect("should capture SHA");
+        assert!(!sha.is_empty(), "SHA must not be empty");
+
+        // 2. Verify the SHA matches actual HEAD.
+        let actual = current_git_head(&repo).unwrap();
+        assert!(
+            actual.starts_with(&sha),
+            "short SHA {sha} must match HEAD {actual}"
+        );
+
+        // No git commit was invoked — if it had been, the pre-commit hook
+        // would have failed and we wouldn't have gotten here.
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

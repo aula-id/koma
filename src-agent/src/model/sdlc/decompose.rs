@@ -177,6 +177,13 @@ pub fn scope_banner(claim: &LeafClaim) -> String {
          title: {}\n\
          {ownership}\
          Stay inside this leaf only. Do not expand scope to sibling or parent nodes.\n\
+         \n\
+         To report completion, include a JSON block in your final output wrapped in:\n\
+         <!-- SDLC_HANDOFF_JSON_START -->\n\
+         {{ \"version\": 1, \"node_id\": \"...\", \"status\": \"done|partial|blocked\", \"summary\": \"...\", ... }}\n\
+         <!-- SDLC_HANDOFF_JSON_END -->\n\
+         Use status \"done\" when your work is complete, \"partial\" for progress, \"blocked\" for impediments.\n\
+         Do NOT set status to \"done\" expecting graph sealing — only mission_verify seals nodes.\n\
          ---\n\n",
         claim.node_id, claim.title
     )
@@ -334,6 +341,32 @@ mod tests {
         assert!(banner.contains("src/foo.rs"));
         assert!(banner.contains("src/bar/**"));
         assert!(banner.contains("FORBIDDEN"));
+    }
+
+    #[test]
+    fn scope_banner_includes_handoff_instructions() {
+        let claim = LeafClaim {
+            node_id: "n-test-h0".into(),
+            title: "handoff task".into(),
+            owned_paths: vec![],
+        };
+        let banner = scope_banner(&claim);
+        assert!(
+            banner.contains("SDLC_HANDOFF_JSON_START"),
+            "banner must include handoff start marker"
+        );
+        assert!(
+            banner.contains("SDLC_HANDOFF_JSON_END"),
+            "banner must include handoff end marker"
+        );
+        assert!(
+            banner.contains("done|partial|blocked"),
+            "banner must describe status values"
+        );
+        assert!(
+            banner.contains("mission_verify"),
+            "banner must warn that done does not seal"
+        );
     }
 
     #[test]

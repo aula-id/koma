@@ -767,6 +767,110 @@ impl AppStateRest {
         self.set_agent_mode_at(idx, new_mode);
     }
 
+    /// Persistence boundary for SDLC phase transitions. Loads the mission from
+    /// disk, applies [`crate::model::sdlc::Mission::try_transition`], saves, and
+    /// only then updates the runtime `sdlc_phase` and invalidates the LLM keeper
+    /// epoch. The runtime is NEVER advanced unless the disk commit succeeds.
+    ///
+    /// Prefer [`Self::apply_sdlc_phase_with_mission`] when the caller already has
+    /// the mission in hand (avoids a redundant load + save round-trip).
+    /// Leave-SDLC (runtime `None` + optional pause) stays special-cased outside
+    /// this helper.
+    pub fn apply_sdlc_phase(&mut self, sess_idx: usize, to: &str) -> anyhow::Result<()> {
+        if self.sessions.get(sess_idx).is_none() {
+            anyhow::bail!("invalid session index {sess_idx}");
+        }
+        let Some(path) = self.sessions[sess_idx]
+            .session
+            .as_ref()
+            .map(|s| s.path.clone())
+        else {
+            anyhow::bail!("no active session path");
+        };
+        let Some(mut m) = crate::model::sdlc::Mission::load(&path) else {
+            anyhow::bail!("mission.json missing or unloadable");
+        };
+        self.apply_sdlc_phase_with_mission(sess_idx, &mut m, to)
+    }
+
+    /// Persistence boundary accepting an already-loaded [`crate::model::sdlc::Mission`].
+    /// Applies [`crate::model::sdlc::Mission::try_transition`], saves the mission,
+    /// and only then updates runtime phase + keeper epoch. Prefer this over
+    /// [`Self::apply_sdlc_phase`] when the caller already has the mission to avoid
+    /// discarding mission metadata through a redundant load.
+    pub fn apply_sdlc_phase_with_mission(
+        &mut self,
+        sess_idx: usize,
+        mission: &mut crate::model::sdlc::Mission,
+        to: &str,
+    ) -> anyhow::Result<()> {
+        if self.sessions.get(sess_idx).is_none() {
+            anyhow::bail!("invalid session index {sess_idx}");
+        }
+        let path = self.sessions[sess_idx]
+            .session
+            .as_ref()
+            .map(|s| s.path.clone())
+            .ok_or_else(|| anyhow::anyhow!("no active session path"))?;
+        mission.try_transition(to)?;
+        mission.save(&path)?;
+        // Only after disk commit: update runtime.
+        let prev = self.sessions[sess_idx].sdlc_phase.as_deref();
+        if prev != Some(to) {
+            self.sessions[sess_idx].invalidate_sdlc_keeper_llm();
+        }
+        self.sessions[sess_idx].sdlc_phase = Some(to.to_string());
+        Ok(())
+    }
+
+    /// Force the runtime into safe assess state without disk persistence.
+    /// Used when the persistence boundary fails and execution must be blocked.
+    /// Sets `sdlc_phase` to `"assess"` and invalidates the LLM keeper.
+    pub fn force_sdlc_assess_safe(&mut self, sess_idx: usize) {
+        if self.sessions.get(sess_idx).is_none() {
+            return;
+        }
+        self.sessions[sess_idx].sdlc_phase = Some("assess".to_string());
+        self.sessions[sess_idx].invalidate_sdlc_keeper_llm();
+    }
+
+    /// Best-effort restore of the primary branch captured on SDLC enter when
+    /// leaving unbound assess / denying before bind. Skips if dirty or unset.
+    pub fn maybe_restore_assess_entry_branch(&mut self, sess_idx: usize) {
+        if self.sessions.get(sess_idx).is_none() {
+            return;
+        }
+        let Some(entry) = self.sessions[sess_idx].sdlc_assess_entry_branch.take() else {
+            return;
+        };
+        let entry = entry.trim().to_string();
+        if entry.is_empty() {
+            return;
+        }
+        // Restore the primary, never a stale active_cwd that still points at a
+        // just-exited mission worktree.
+        let cwd = self.sessions[sess_idx]
+            .session
+            .as_ref()
+            .map(|s| s.workdir())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        if git_working_tree_dirty(&cwd) {
+            self.sessions[sess_idx]
+                .set_toast("SDLC: skipped restore of entry branch (working tree dirty)".into());
+            return;
+        }
+        let current = crate::model::sdlc::mission::current_git_branch(&cwd);
+        if current.as_deref() == Some(entry.as_str()) {
+            return;
+        }
+        let _ = std::process::Command::new("git")
+            .args(["switch", &entry])
+            .current_dir(&cwd)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+
     /// Index-targeted agent-mode transition. Stream-owned `sess_idx` paths (e.g.
     /// `plan_enter`) MUST use this so a background session never mutates the
     /// unrelated foreground session's Plan/SDLC rails.
@@ -813,6 +917,18 @@ impl AppStateRest {
                 crate::model::sdlc::mission::resume_phase(&m)
             });
 
+            // Capture primary branch once for unbound-assess leave restore.
+            if self.sessions[sess_idx].sdlc_assess_entry_branch.is_none() {
+                let cwd = self.sessions[sess_idx]
+                    .session
+                    .as_ref()
+                    .map(|s| s.workdir())
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                if let Some(b) = crate::model::sdlc::mission::current_git_branch(&cwd) {
+                    self.sessions[sess_idx].sdlc_assess_entry_branch = Some(b);
+                }
+            }
+
             // Attempt fail-closed worktree re-entry when resume would be active.
             let mut final_phase = resume_phase.clone().unwrap_or_else(|| "assess".to_string());
             if matches!(final_phase.as_str(), "execute" | "integrate") {
@@ -832,7 +948,7 @@ impl AppStateRest {
                                     || m2.phase == "execute"
                                     || m2.phase == "integrate"
                                 {
-                                    m2.phase = "assess".into();
+                                    let _ = m2.try_transition("assess");
                                     // Unapprove so integrate/verify require re-bind.
                                     m2.approved = false;
                                     m2.needs_reapproval = true;
@@ -851,6 +967,14 @@ impl AppStateRest {
             }
 
             self.sessions[sess_idx].sdlc_phase = Some(final_phase);
+            // Refresh branch label from mission when present.
+            if let Some(path) = sess_path.as_ref() {
+                if let Some(m) = crate::model::sdlc::Mission::load(path) {
+                    if let Some(b) = m.branch.filter(|s| !s.trim().is_empty()) {
+                        self.sessions[sess_idx].sdlc_branch = Some(b);
+                    }
+                }
+            }
             let prev_ss = self.sessions[sess_idx]
                 .session
                 .as_ref()
@@ -889,7 +1013,7 @@ impl AppStateRest {
             {
                 if let Some(mut m) = crate::model::sdlc::Mission::load(&path) {
                     if m.approved && matches!(m.phase.as_str(), "execute" | "integrate") {
-                        m.phase = "paused".into();
+                        let _ = m.try_transition("paused");
                         let _ = m.save(&path);
                     }
                 }
@@ -916,8 +1040,12 @@ impl AppStateRest {
                     }
                 }
             }
+            // Restore entry branch when still on primary (unbound assess leave).
+            self.maybe_restore_assess_entry_branch(sess_idx);
             self.sessions[sess_idx].sdlc_return_mode = None;
             self.sessions[sess_idx].sdlc_phase = None;
+            self.sessions[sess_idx].sdlc_branch = None;
+            self.sessions[sess_idx].sdlc_pending_node_id = None;
             self.sessions[sess_idx].pending_mission_seed = false;
             // Drop any in-flight LLM keeper so a late result cannot start a turn
             // after SDLC has been left.
@@ -1038,6 +1166,20 @@ impl AppStateRest {
                 rt.cost = lt.cost;
             }
         }
+    }
+}
+
+/// True when `git status --porcelain` reports any change in `cwd`.
+fn git_working_tree_dirty(cwd: &std::path::Path) -> bool {
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output();
+    match output {
+        Ok(o) if o.status.success() => !String::from_utf8_lossy(&o.stdout).trim().is_empty(),
+        _ => false,
     }
 }
 
@@ -1249,5 +1391,194 @@ mod agent_mode_session_isolation_tests {
         rt.invalidate_sdlc_keeper_llm();
         assert!(rt.pending_sdlc_keeper_llm.is_none());
         assert_eq!(rt.sdlc_keeper_epoch, e0.wrapping_add(2));
+    }
+}
+
+#[cfg(test)]
+mod sdlc_phase_persistence_boundary_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use crate::app::state::AgentMode;
+    use crate::model::sdlc::Mission;
+
+    fn scratch(tag: &str) -> (std::path::PathBuf, crate::model::session::Session) {
+        let dir = std::env::temp_dir().join(format!(
+            "koma-sdlc-boundary-{}-{}-{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sess = crate::model::session::Session::new(
+            format!("s-{tag}"),
+            dir.clone(),
+            "pwd".into(),
+            crate::model::settings::Settings::default(),
+            crate::model::conversation::Conversation::from_messages(vec![]),
+        );
+        (dir, sess)
+    }
+
+    fn test_mission(phase: &str) -> Mission {
+        let hash =
+            Mission::compute_contract_hash_full(crate::model::sdlc::mission::ContractHashInput {
+                goal: "test",
+                acceptance: &[],
+                non_goals: &[],
+                lane: "standard",
+                verify_plan: &[],
+                human_gates: &[],
+                risks: &[],
+                rationale: "",
+                graph_hash: Some("gh-test"),
+                worktree_name: None,
+                branch: None,
+                worktree_path: None,
+                target_worktree_path: None,
+                target_branch: None,
+                target_head: None,
+            });
+        Mission {
+            contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
+            id: "m-test".into(),
+            goal: "test".into(),
+            non_goals: vec![],
+            acceptance: vec![],
+            lane: "standard".into(),
+            verify_plan: vec![],
+            human_gates: vec![],
+            human_gates_approved: vec![],
+            risks: vec![],
+            worktree_name: None,
+            branch: None,
+            worktree_path: None,
+            target_worktree_path: None,
+            target_branch: None,
+            target_head: None,
+            rationale: String::new(),
+            phase: phase.into(),
+            approved: false,
+            hash,
+            graph_hash: Some("gh-test".into()),
+            needs_reapproval: false,
+            amendment_note: None,
+        }
+    }
+
+    /// Normal dual-write: both disk and runtime are updated atomically.
+    #[test]
+    fn dual_write_updates_disk_and_runtime() {
+        let (dir, sess) = scratch("dual");
+        let mut m = test_mission("assess");
+        m.save(&dir).unwrap();
+
+        let mut rest = AppStateRest::new();
+        rest.sessions[0].session = Some(sess);
+        rest.sessions[0].sdlc_phase = Some("assess".to_string());
+        rest.sessions[0].pending_sdlc_keeper_llm = Some("stale".into());
+        rest.sessions[0].sdlc_keeper_llm_inflight = true;
+        let epoch_before = rest.sessions[0].sdlc_keeper_epoch;
+
+        let result = rest.apply_sdlc_phase_with_mission(0, &mut m, "execute");
+        assert!(result.is_ok(), "boundary should succeed: {result:?}");
+
+        // Runtime updated.
+        assert_eq!(rest.sessions[0].sdlc_phase.as_deref(), Some("execute"));
+        // Keeper invalidated (phase changed).
+        assert!(rest.sessions[0].pending_sdlc_keeper_llm.is_none());
+        assert!(!rest.sessions[0].sdlc_keeper_llm_inflight);
+        assert_eq!(rest.sessions[0].sdlc_keeper_epoch, epoch_before + 1);
+
+        // Disk updated.
+        let loaded = Mission::load(&dir).unwrap();
+        assert_eq!(loaded.phase, "execute");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Missing session index returns Err and does not panic.
+    #[test]
+    fn missing_session_returns_err() {
+        let mut rest = AppStateRest::new();
+        let mut m = test_mission("assess");
+        let result = rest.apply_sdlc_phase_with_mission(99, &mut m, "execute");
+        assert!(result.is_err());
+    }
+
+    /// Missing/corrupt mission on disk makes apply_sdlc_phase return Err.
+    /// force_sdlc_assess_safe then puts runtime into non-executable assess state.
+    #[test]
+    fn missing_mission_returns_err_and_force_assess_works() {
+        let (dir, sess) = scratch("no-mission");
+        let mut rest = AppStateRest::new();
+        rest.sessions[0].session = Some(sess);
+        rest.sessions[0].sdlc_phase = Some("execute".to_string());
+        rest.sessions[0].pending_sdlc_keeper_llm = Some("stale".into());
+        let e0 = rest.sessions[0].sdlc_keeper_epoch;
+
+        // No mission.json on disk → Err.
+        let result = rest.apply_sdlc_phase(0, "execute");
+        assert!(result.is_err());
+
+        // Force safe assess: runtime goes to assess, keeper invalidated.
+        rest.force_sdlc_assess_safe(0);
+        assert_eq!(rest.sessions[0].sdlc_phase.as_deref(), Some("assess"));
+        assert!(rest.sessions[0].pending_sdlc_keeper_llm.is_none());
+        assert_eq!(rest.sessions[0].sdlc_keeper_epoch, e0 + 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Phase change invalidates keeper exactly once; idempotent same-phase does
+    /// not bump the epoch.
+    #[test]
+    fn phase_change_invalidates_keeper_exactly_once() {
+        let (dir, sess) = scratch("keeper-once");
+        let mut m = test_mission("assess");
+        m.save(&dir).unwrap();
+
+        let mut rest = AppStateRest::new();
+        rest.sessions[0].session = Some(sess);
+        rest.sessions[0].sdlc_phase = Some("assess".to_string());
+        let epoch_before = rest.sessions[0].sdlc_keeper_epoch;
+
+        // Phase changes assess → execute → exactly one bump.
+        rest.apply_sdlc_phase_with_mission(0, &mut m, "execute")
+            .unwrap();
+        assert_eq!(rest.sessions[0].sdlc_keeper_epoch, epoch_before + 1);
+
+        // Same phase again → no additional bump.
+        rest.apply_sdlc_phase_with_mission(0, &mut m, "execute")
+            .unwrap();
+        assert_eq!(rest.sessions[0].sdlc_keeper_epoch, epoch_before + 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// force_sdlc_assess_safe sets assess, invalidates keeper, and is a no-op
+    /// for an invalid session index.
+    #[test]
+    fn force_assess_safe_sets_phase_and_is_noop_for_invalid() {
+        let mut rest = AppStateRest::new();
+        rest.sessions[0].agent_mode = AgentMode::Sdlc;
+        rest.sessions[0].sdlc_phase = Some("execute".to_string());
+        rest.sessions[0].pending_sdlc_keeper_llm = Some("stale".into());
+        rest.sessions[0].sdlc_keeper_llm_inflight = true;
+        rest.sessions[0].sdlc_keeper_due = true;
+        let epoch_before = rest.sessions[0].sdlc_keeper_epoch;
+
+        rest.force_sdlc_assess_safe(0);
+
+        assert_eq!(rest.sessions[0].sdlc_phase.as_deref(), Some("assess"));
+        assert!(rest.sessions[0].pending_sdlc_keeper_llm.is_none());
+        assert!(!rest.sessions[0].sdlc_keeper_llm_inflight);
+        assert!(!rest.sessions[0].sdlc_keeper_due);
+        assert_eq!(rest.sessions[0].sdlc_keeper_epoch, epoch_before + 1);
+
+        // Invalid index → no panic.
+        rest.force_sdlc_assess_safe(99);
     }
 }

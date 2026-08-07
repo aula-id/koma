@@ -151,6 +151,11 @@ pub struct SubAgent {
     pub usage_tokens_out: u64,
     /// Cumulative USD cost across all steps (sum).
     pub usage_cost: f64,
+    /// SDLC active node id claimed at spawn time. Propagated from the session's
+    /// `sdlc_pending_node_id` via `ToolCtx::sdlc_active_node_id` so the handoff
+    /// transport can match a subagent's terminal report to its graph leaf.
+    /// `None` when the subagent was not spawned in SDLC execute mode.
+    pub sdlc_active_node_id: Option<String>,
 }
 
 /// Per-call spawn overrides a caller may supply to steer a SINGLE delegation
