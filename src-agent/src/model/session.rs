@@ -471,7 +471,7 @@ Multiple workspace roots are configured. Paths written as [N]… (for example fr
             sys.push_str(
                 "\n\n# SDLC mode\n\
 You are PM+tech lead inside an SDLC envelope. The harness (WC/PC/TAC) is fully intact — tool approval works like Auto mode, not Yolo.\n\n\
-Phases: assess → user approves via mission_ready → execute in mission worktree → verify → integrate.\n\n\
+Phases: assess → user approves via mission_ready → execute in mission worktree → verify → integrate → done (cleanup/report) → assess.\n\n\
 ## Assess phase (current)\n\
 Assess is runtime-enforced read-only for workspace mutations: write/edit/delete/bash and other \
 mutating tools are denied until mission approval. Explore with read/search/web, build acceptance \

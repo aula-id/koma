@@ -225,7 +225,8 @@ impl DaemonHub {
     // every attached client (incl. this GUI) reflects it live.
     pub(super) fn set_mode(&mut self, idx: usize, state: &mut AppState, mode: String) {
         use crate::app::state::AgentMode;
-        // Active SDLC blocks hops to Auto/Plan/Normal/Yolo; allow sdlc no-op and exit.
+        // SDLC allows human hops only while the mission is being assessed;
+        // explicit exit remains available in every phase.
         if state.rest.agent_mode() == AgentMode::Sdlc {
             match mode.as_str() {
                 "sdlc" => {
@@ -238,11 +239,8 @@ impl DaemonHub {
                     self.send_to(idx, DaemonEvent::Ack);
                     return;
                 }
-                "auto" | "normal" | "plan" | "yolo" => {
-                    // Refuse hop; ack so client doesn't hang.
-                    self.send_to(idx, DaemonEvent::Ack);
-                    return;
-                }
+                "auto" | "normal" | "plan" | "yolo"
+                    if state.rest.fg().sdlc_phase.as_deref() == Some("assess") => {}
                 _ => {
                     self.send_to(idx, DaemonEvent::Ack);
                     return;

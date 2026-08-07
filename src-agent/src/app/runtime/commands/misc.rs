@@ -14,7 +14,7 @@ use crate::model::store;
 /// - `None` → armed-aware CYCLE (Auto→Normal→Plan→[Yolo when armed]→Auto), the
 ///   same transition as Shift+Tab.
 /// - `Some("auto")` / `Some("normal")` / `Some("plan")` → explicitly set that
-///   mode (always allowed).
+///   mode. During SDLC this is allowed only in the assess phase.
 /// - `Some("yolo")` → enter YOLO **only when armed** (Layer 2). When NOT armed it
 ///   REFUSES: the mode is left unchanged and the status explains how to unlock it.
 /// - any other token → leave the mode unchanged and report the bad argument.
@@ -32,12 +32,26 @@ pub(super) fn handle_mode(state: &mut AppState, arg: Option<String>) -> Result<(
             }
         }
         Some("auto") | Some("normal") | Some("plan") | Some("yolo") if in_sdlc => {
-            // Active SDLC: block hops to Auto/Plan/Normal/Yolo.
-            state.rest.fg_mut().status =
-                "sdlc active — use `/mode exit` (or bare `/mode`) to leave; \
-                 mode hops to auto/normal/plan/yolo are blocked"
-                    .into();
-            return Ok(());
+            // SDLC mode hops are a human assessment-only control. Once the
+            // mission leaves assess, execution, integration, cleanup, and
+            // pause states cannot be escaped by changing the agent mode.
+            let phase = state.rest.fg().sdlc_phase.as_deref();
+            if phase != Some("assess") {
+                state.rest.fg_mut().status =
+                    "sdlc mode hops are allowed only during assess; use `/mode exit` \
+                     (or bare `/mode`) to leave SDLC"
+                        .into();
+                return Ok(());
+            }
+            let target = match arg.as_deref() {
+                Some("auto") => AgentMode::Auto,
+                Some("normal") => AgentMode::Normal,
+                Some("plan") => AgentMode::Plan,
+                Some("yolo") => AgentMode::Yolo,
+                // SAFETY: outer match arm only enters for these four values.
+                _ => return Ok(()),
+            };
+            state.rest.set_agent_mode(target);
         }
         Some("exit") if in_sdlc => {
             let ret = state.rest.fg().sdlc_return_mode.unwrap_or(AgentMode::Auto);

@@ -855,47 +855,66 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_integrate(
 
     // Destination is exclusively frozen target_* on the mission — never workdir_saved.
     let result = crate::model::sdlc::integrate::try_integrate(&mission, force_branch_only);
+    let mut cleanup_detail = String::new();
+
+    if result.success {
+        // A successful merge is the only transition into the terminal done
+        // phase. It remains visible for reporting; checked cleanup runs only
+        // when the human leaves SDLC from that terminal state.
+        let marked_done = if let Some(mut m) = crate::model::sdlc::Mission::load(&sess_path) {
+            m.phase = "done".to_string();
+            m.save(&sess_path).map_err(|e| e.to_string())
+        } else {
+            Err("mission disappeared after integration".to_string())
+        };
+
+        match marked_done {
+            Ok(()) => {
+                state.rest.sessions[sess_idx].sdlc_phase = Some("done".to_string());
+                state.rest.sessions[sess_idx].invalidate_sdlc_keeper_llm();
+
+                // Leave the shadow worktree before the later done cleanup can
+                // remove it; its branch and bindings stay persisted for now.
+                let dir_cache = state.rest.sessions[sess_idx].dir_cache.clone();
+                let primary = {
+                    if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                        sess.settings.exit_worktree();
+                        Some(sess.workdir())
+                    } else {
+                        None
+                    }
+                };
+                if let Some(primary) = primary {
+                    state.rest.sessions[sess_idx].active_cwd = Some(primary.clone());
+                    crate::tool::dircache::reindex(vec![primary], dir_cache);
+                }
+                if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                    sess.rebuild_system();
+                    let _ = sess.save();
+                }
+                cleanup_detail =
+                    "\nIntegrated and entered terminal sdlc:done. Leave SDLC to run cleanup."
+                        .to_string();
+            }
+            Err(e) => {
+                cleanup_detail = format!(
+                    "\nIntegrated, but could not persist sdlc:done; cleanup was not attempted: {e}"
+                );
+            }
+        }
+    } else if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+        // Branch left ready — stay integrate; preserve dirty-primary behavior.
+        sess.rebuild_system();
+        let _ = sess.save();
+    }
 
     let result_text = crate::tool::sdlc::mission_integrate_result(&format!(
-        "{}\nSummary: {summary}",
+        "{}\nSummary: {summary}{cleanup_detail}",
         result.message
     ));
     state.rest.sessions[sess_idx]
         .tool_results
         .push((call.id.clone(), result_text));
-
-    if result.success {
-        if let Some(mut m) = crate::model::sdlc::Mission::load(&sess_path) {
-            m.phase = "done".to_string();
-            let _ = m.save(&sess_path);
-        }
-        // done is not an active keeper phase — drop any in-flight LLM result.
-        state.rest.sessions[sess_idx].invalidate_sdlc_keeper_llm();
-        state.rest.sessions[sess_idx].sdlc_phase = Some("done".to_string());
-
-        let dir_cache = state.rest.sessions[sess_idx].dir_cache.clone();
-        let primary = {
-            if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-                sess.settings.exit_worktree();
-                let primary = sess.workdir();
-                sess.rebuild_system();
-                let _ = sess.save();
-                Some(primary)
-            } else {
-                None
-            }
-        };
-        if let Some(primary) = primary {
-            state.rest.sessions[sess_idx].active_cwd = Some(primary.clone());
-            crate::tool::dircache::reindex(vec![primary], dir_cache);
-        }
-    } else {
-        // Branch left ready — stay integrate; preserve dirty-primary behavior.
-        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-            sess.rebuild_system();
-            let _ = sess.save();
-        }
-    }
 
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue

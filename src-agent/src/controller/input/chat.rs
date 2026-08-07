@@ -576,22 +576,18 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             Action::None
         }
         // Shift+Tab cycles the tool-approval mode. Crossterm reports Shift+Tab as
-        // BackTab, so it never collides with plain Tab. The cycle is ARMED-AWARE:
-        // unarmed it's Auto<->Normal (identical to before); only once YOLO is armed
-        // from the /security panel does the cycle include Yolo (Auto→Normal→Yolo→Auto).
+        // BackTab, so it never collides with plain Tab. During SDLC the cycle is
+        // phase-gated: assess/done iterate normally (Sdlc→Auto); execute/
+        // integrate stay locked so a mid-mission hop cannot escape the worktree.
         KeyCode::BackTab => {
             // `set_agent_mode` is the single choke-point (shared with `/mode`) that
             // maintains `plan_return_mode`/`sdlc_return_mode` and rebuilds + saves
             // the system prompt when the cycle crosses Plan/SDLC boundaries.
-            // Active SDLC: BackTab is an explicit exit to the prior mode (cycle
-            // alone refuses hops).
-            let next = if rest.agent_mode() == crate::app::state::AgentMode::Sdlc {
-                rest.fg()
-                    .sdlc_return_mode
-                    .unwrap_or(crate::app::state::AgentMode::Auto)
-            } else {
-                rest.agent_mode().cycle(rest.yolo_armed)
-            };
+            let next = next_mode_for_backtab(
+                rest.agent_mode(),
+                rest.fg().sdlc_phase.as_deref(),
+                rest.yolo_armed,
+            );
             rest.set_agent_mode(next);
             // Per-session status (C6): label into a local (disjoint `agent_mode` read)
             // before the `fg_mut()` borrow.
@@ -604,5 +600,80 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             Action::None
         }
         _ => Action::None,
+    }
+}
+
+/// Next agent mode for Shift+Tab / BackTab, phase-aware for active SDLC.
+///
+/// - Outside SDLC: normal `AgentMode::cycle`.
+/// - SDLC + `assess`/`done`: normal cycle (Sdlc → Auto) so the key iterates.
+/// - SDLC + any other/missing phase: stay on SDLC (locked mid-mission).
+fn next_mode_for_backtab(
+    mode: crate::app::state::AgentMode,
+    sdlc_phase: Option<&str>,
+    yolo_armed: bool,
+) -> crate::app::state::AgentMode {
+    use crate::app::state::AgentMode;
+    if mode == AgentMode::Sdlc {
+        match sdlc_phase {
+            Some("assess") | Some("done") => mode.cycle(yolo_armed),
+            _ => AgentMode::Sdlc,
+        }
+    } else {
+        mode.cycle(yolo_armed)
+    }
+}
+
+#[cfg(test)]
+mod backtab_mode_tests {
+    use super::next_mode_for_backtab;
+    use crate::app::state::AgentMode;
+
+    #[test]
+    fn assess_and_done_advance_sdlc_to_auto() {
+        assert_eq!(
+            next_mode_for_backtab(AgentMode::Sdlc, Some("assess"), false),
+            AgentMode::Auto
+        );
+        assert_eq!(
+            next_mode_for_backtab(AgentMode::Sdlc, Some("done"), false),
+            AgentMode::Auto
+        );
+    }
+
+    #[test]
+    fn execute_integrate_and_missing_phase_stay_locked() {
+        assert_eq!(
+            next_mode_for_backtab(AgentMode::Sdlc, Some("execute"), false),
+            AgentMode::Sdlc
+        );
+        assert_eq!(
+            next_mode_for_backtab(AgentMode::Sdlc, Some("integrate"), false),
+            AgentMode::Sdlc
+        );
+        assert_eq!(
+            next_mode_for_backtab(AgentMode::Sdlc, None, false),
+            AgentMode::Sdlc
+        );
+        assert_eq!(
+            next_mode_for_backtab(AgentMode::Sdlc, Some("paused"), false),
+            AgentMode::Sdlc
+        );
+    }
+
+    #[test]
+    fn non_sdlc_modes_use_normal_cycle() {
+        assert_eq!(
+            next_mode_for_backtab(AgentMode::Auto, None, false),
+            AgentMode::Normal
+        );
+        assert_eq!(
+            next_mode_for_backtab(AgentMode::Normal, None, false),
+            AgentMode::Plan
+        );
+        assert_eq!(
+            next_mode_for_backtab(AgentMode::Plan, None, false),
+            AgentMode::Sdlc
+        );
     }
 }
