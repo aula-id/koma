@@ -74,14 +74,13 @@ pub struct SessionMeta {
 pub fn base_dir() -> Result<PathBuf> {
     #[cfg(windows)]
     {
-        let data = dirs::data_local_dir()
-            .ok_or_else(|| anyhow!("cannot resolve %LOCALAPPDATA%"))?;
+        let data =
+            dirs::data_local_dir().ok_or_else(|| anyhow!("cannot resolve %LOCALAPPDATA%"))?;
         Ok(data.join("koma"))
     }
     #[cfg(not(windows))]
     {
-        let home = dirs::home_dir()
-            .ok_or_else(|| anyhow!("cannot resolve home directory"))?;
+        let home = dirs::home_dir().ok_or_else(|| anyhow!("cannot resolve home directory"))?;
         Ok(home.join(APP_DIR_NAME))
     }
 }
@@ -187,7 +186,11 @@ pub fn migrate_legacy_dir() {
                 }
                 append_global_error_log(
                     "config migration failed",
-                    &format!("could not migrate {} to {}: {e}", old_dir.display(), new_dir.display()),
+                    &format!(
+                        "could not migrate {} to {}: {e}",
+                        old_dir.display(),
+                        new_dir.display()
+                    ),
                 );
             }
         }
@@ -515,7 +518,13 @@ pub fn daemon_sock_path(session_id: &str) -> Result<PathBuf> {
 pub fn list_koma_session_pipes() -> Vec<String> {
     const PREFIX: &str = "koma-";
     // Exact non-session pipe names (checked with the shared `koma-` prefix still on).
-    const RESERVED_EXACT: &[&str] = &["koma-mcp", "koma-oauth", "koma-linker", "koma-ipc-selftest", "koma-daemon-selftest"];
+    const RESERVED_EXACT: &[&str] = &[
+        "koma-mcp",
+        "koma-oauth",
+        "koma-linker",
+        "koma-ipc-selftest",
+        "koma-daemon-selftest",
+    ];
     // Non-session pipe name PREFIXES (also checked before stripping `koma-`), so a
     // whole family — every extension host — is excluded without listing each id.
     const RESERVED_PREFIX: &[&str] = &["koma-ext-"];

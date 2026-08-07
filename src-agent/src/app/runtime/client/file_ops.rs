@@ -61,7 +61,8 @@ pub(super) fn handle_file_ctl(
             request_id,
             push,
             workdirs,
-        ) => {
+        ) =>
+        {
             refresh_git_status(push, session);
         }
         HostCtl::FileCreate {

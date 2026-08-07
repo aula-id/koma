@@ -264,7 +264,13 @@ pub(super) fn drain_deferred_and_resume(
             Some(s) => s,
             None => return dirty,
         };
-        let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None, None);
+        let _ = crate::model::msglog::append(
+            &sess.path,
+            crate::dto::chat::Role::User,
+            &body,
+            None,
+            None,
+        );
         sess.conversation.push_user(body);
         let _ = sess.save();
         let history = sess.conversation.history();
@@ -339,7 +345,13 @@ pub(super) fn drain_deferred_and_resume(
             Some(s) => s,
             None => return dirty,
         };
-        let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None, None);
+        let _ = crate::model::msglog::append(
+            &sess.path,
+            crate::dto::chat::Role::User,
+            &body,
+            None,
+            None,
+        );
         sess.conversation.push_user(body);
         let _ = sess.save();
         let history = sess.conversation.history();
@@ -369,8 +381,10 @@ pub(super) fn drain_deferred_and_resume(
     // --- SDLC LLM-keeper result poll: drain async classify result + stage inject ---
     // Non-blocking poll of the oneshot receiver. Result lands in
     // `pending_sdlc_keeper_llm` for the inject block below to drain when idle.
+    // Epoch-guarded: results spawned under a prior epoch (exit / phase / hash
+    // change) are dropped so they cannot inject a non-SDLC or wrong-phase turn.
     if state.rest.sessions[idx].sdlc_keeper_llm_rx.is_some() {
-        let mut finished: Option<Option<String>> = None;
+        let mut finished: Option<(u64, Option<String>)> = None;
         let mut closed = false;
         if let Some(rx) = state.rest.sessions[idx].sdlc_keeper_llm_rx.as_mut() {
             match rx.try_recv() {
@@ -382,15 +396,33 @@ pub(super) fn drain_deferred_and_resume(
         if finished.is_some() || closed {
             state.rest.sessions[idx].sdlc_keeper_llm_rx = None;
             state.rest.sessions[idx].sdlc_keeper_llm_inflight = false;
-            if let Some(Some(inject)) = finished {
-                state.rest.sessions[idx].pending_sdlc_keeper_llm = Some(inject);
+            if let Some((epoch, inject)) = finished {
+                let current = state.rest.sessions[idx].sdlc_keeper_epoch;
+                let still_sdlc =
+                    state.rest.sessions[idx].agent_mode == crate::app::state::AgentMode::Sdlc;
+                let phase_ok = matches!(
+                    state.rest.sessions[idx].sdlc_phase.as_deref(),
+                    Some("execute") | Some("integrate")
+                );
+                if epoch == current && still_sdlc && phase_ok {
+                    if let Some(inject) = inject {
+                        state.rest.sessions[idx].pending_sdlc_keeper_llm = Some(inject);
+                    }
+                }
+                // else: stale — drop on the floor
             }
         }
     }
     // Drain pending LLM keeper inject when idle — same inject path as deterministic.
+    // Re-check mode/phase so a staged inject cannot fire after SDLC exit.
     if !state.rest.sessions[idx].is_working()
         && client.is_some()
         && state.rest.sessions[idx].session.is_some()
+        && state.rest.sessions[idx].agent_mode == crate::app::state::AgentMode::Sdlc
+        && matches!(
+            state.rest.sessions[idx].sdlc_phase.as_deref(),
+            Some("execute") | Some("integrate")
+        )
     {
         if let Some(inject) = state.rest.sessions[idx].pending_sdlc_keeper_llm.take() {
             let body = format!("{}{inject}", crate::dto::chat::BASH_NUDGE_MARK);
@@ -423,9 +455,7 @@ pub(super) fn drain_deferred_and_resume(
                 }
                 state.rest.reset_scroll_at(idx);
                 state.rest.sessions[idx].status = "thinking".into();
-                super::super::super::stream::start_stream_task(
-                    history, state, idx, client, handle,
-                );
+                super::super::super::stream::start_stream_task(history, state, idx, client, handle);
                 dirty = true;
             }
         }
@@ -440,7 +470,7 @@ pub(super) fn drain_deferred_and_resume(
     // When deterministic has nothing to say, optionally spawn ONE Safeguard
     // oneshot (classifier_enabled only) for stalled/dishonest progress. Spawn is
     // gated on the same `sdlc_keeper_due` edge so we never thrash every idle tick.
-    if state.rest.agent_mode == crate::app::state::AgentMode::Sdlc
+    if state.rest.sessions[idx].agent_mode == crate::app::state::AgentMode::Sdlc
         && state.rest.sessions[idx].sdlc_keeper_due
         && !state.rest.sessions[idx].is_working()
         && client.is_some()
@@ -461,10 +491,7 @@ pub(super) fn drain_deferred_and_resume(
                 dirty = true;
             }
             if let Some(inject) = report.inject {
-                let body = format!(
-                    "{}{inject}",
-                    crate::dto::chat::BASH_NUDGE_MARK,
-                );
+                let body = format!("{}{inject}", crate::dto::chat::BASH_NUDGE_MARK,);
                 let sess = match state.rest.sessions[idx].session.as_mut() {
                     Some(s) => s,
                     None => return dirty,
@@ -498,21 +525,17 @@ pub(super) fn drain_deferred_and_resume(
                 }
                 state.rest.reset_scroll_at(idx);
                 state.rest.sessions[idx].status = "thinking".into();
-                super::super::super::stream::start_stream_task(
-                    history, state, idx, client, handle,
-                );
+                super::super::super::stream::start_stream_task(history, state, idx, client, handle);
                 dirty = true;
             } else if !state.rest.sessions[idx].sdlc_keeper_llm_inflight
                 && state.rest.sessions[idx].pending_sdlc_keeper_llm.is_none()
-                && state
-                    .rest
-                    .sessions[idx]
+                && state.rest.sessions[idx]
                     .session
                     .as_ref()
                     .map(|s| s.settings.classifier_enabled)
                     .unwrap_or(false)
                 && matches!(
-                    state.rest.sdlc_phase.as_deref(),
+                    state.rest.sessions[idx].sdlc_phase.as_deref(),
                     Some("execute") | Some("integrate")
                 )
             {
@@ -531,6 +554,7 @@ pub(super) fn drain_deferred_and_resume(
                     None => return dirty,
                 };
                 let (tx, rx) = tokio::sync::oneshot::channel();
+                let epoch_at_spawn = state.rest.sessions[idx].sdlc_keeper_epoch;
                 state.rest.sessions[idx].sdlc_keeper_llm_rx = Some(rx);
                 state.rest.sessions[idx].sdlc_keeper_llm_inflight = true;
                 handle.spawn(async move {
@@ -541,19 +565,13 @@ pub(super) fn drain_deferred_and_resume(
                         };
                         let conn = crate::model::msglog::open(&path).ok()?;
                         let _ = crate::model::sdlc::graph::ensure_tables(&conn);
-                        let open =
-                            crate::model::sdlc::graph::list_open(&conn).unwrap_or_default();
+                        let open = crate::model::sdlc::graph::list_open(&conn).unwrap_or_default();
                         let sealed =
                             crate::model::sdlc::graph::list_sealed(&conn).unwrap_or_default();
-                        let messages = crate::model::sdlc::keeper::llm_keeper_prompt(
-                            &mission, &open, &sealed,
-                        );
+                        let messages =
+                            crate::model::sdlc::keeper::llm_keeper_prompt(&mission, &open, &sealed);
                         let verdict = crate::app::harness::classify(
-                            &client,
-                            &config,
-                            &settings,
-                            messages,
-                            true,
+                            &client, &config, &settings, messages, true,
                         )
                         .await;
                         if !verdict.available {
@@ -567,7 +585,7 @@ pub(super) fn drain_deferred_and_resume(
                         crate::model::sdlc::keeper::llm_verdict_to_inject(&reply)
                     }
                     .await;
-                    let _ = tx.send(inject);
+                    let _ = tx.send((epoch_at_spawn, inject));
                 });
             }
         }
@@ -639,7 +657,13 @@ pub(super) fn drain_deferred_and_resume(
             Some(s) => s,
             None => return dirty,
         };
-        let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None, None);
+        let _ = crate::model::msglog::append(
+            &sess.path,
+            crate::dto::chat::Role::User,
+            &body,
+            None,
+            None,
+        );
         sess.conversation.push_user(body);
         let _ = sess.save();
         let history = sess.conversation.history();

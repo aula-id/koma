@@ -70,8 +70,8 @@ pub(super) fn handle_security_stop(state: &mut AppState) -> Result<()> {
 fn disarm_yolo_for_stop(state: &mut AppState) {
     if state.rest.yolo_armed {
         state.rest.yolo_armed = false;
-        if state.rest.agent_mode == AgentMode::Yolo {
-            state.rest.agent_mode = AgentMode::Auto;
+        if state.rest.agent_mode() == AgentMode::Yolo {
+            state.rest.set_agent_mode(AgentMode::Auto);
         }
     }
 }
@@ -179,8 +179,8 @@ pub(super) fn handle_security_toggle_tool(state: &mut AppState) -> Result<()> {
                 } else {
                     // Disarmed: if we're sitting in Yolo right now, fall straight back to
                     // Auto so the bypass turns off the instant it's disarmed.
-                    if state.rest.agent_mode == AgentMode::Yolo {
-                        state.rest.agent_mode = AgentMode::Auto;
+                    if state.rest.agent_mode() == AgentMode::Yolo {
+                        state.rest.set_agent_mode(AgentMode::Auto);
                     }
                     state.rest.fg_mut().status = "yolo disarmed".into();
                 }

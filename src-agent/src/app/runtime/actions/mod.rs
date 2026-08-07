@@ -41,8 +41,8 @@ mod rewind;
 mod security;
 // `pub(in crate::app::runtime)` so `runtime` can re-export `session::handle_live_switch` for
 // the extension grant broker's `sessions.switch` (W7); the module's own items stay `pub`.
-pub(in crate::app::runtime) mod session;
 mod config_reload;
+pub(in crate::app::runtime) mod session;
 mod settings;
 mod store;
 
@@ -57,8 +57,8 @@ pub(in crate::app::runtime) use session::create_session_for_pwd;
 // Re-export the mode-independent MCP save+reload so the daemon's GUI config setters
 // (`SetMcpServer`/`DeleteMcpServer`/`EnableMcpServer`) can persist + live-reconnect the
 // MCP manager without a `Mode::Mcp` in scope.
-pub(in crate::app::runtime) use mcp::save_and_reload_mcp;
 pub(crate) use config_reload::{apply_global_catalogue_reload, save_config_and_broadcast};
+pub(in crate::app::runtime) use mcp::save_and_reload_mcp;
 mod settings_creds;
 
 /// Apply mouse-capture mode to the terminal. Resolves `Auto` (always true),
@@ -387,7 +387,9 @@ pub(in crate::app::runtime) fn apply_action(
 
         Action::SkillToggle(name) => {
             let sess_idx = state.rest.foreground;
-            let is_active = state.rest.sessions[sess_idx].active_skills.contains_key(&name);
+            let is_active = state.rest.sessions[sess_idx]
+                .active_skills
+                .contains_key(&name);
             if is_active {
                 let msg = super::commands::skill_cmd::deactivate_skill(state, sess_idx, &name);
                 state.rest.fg_mut().status = msg;

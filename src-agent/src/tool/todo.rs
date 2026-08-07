@@ -43,6 +43,10 @@ impl Tool for Checklist {
                                 "type": "string",
                                 "description": "Priority level: high, medium, low",
                                 "enum": ["high", "medium", "low"]
+                            },
+                            "parent": {
+                                "type": "string",
+                                "description": "Optional parent task title (SDLC hierarchy)."
                             }
                         },
                         "required": ["content", "status", "priority"]

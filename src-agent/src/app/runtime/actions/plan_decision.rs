@@ -35,7 +35,7 @@ fn answer_plan_ready(state: &mut AppState, result: String) {
 fn restore_plan_return_mode(state: &mut AppState) {
     // Approving a plan always returns to Auto (default execution mode), regardless
     // of the pre-plan mode — keep only an armed Yolo.
-    let stashed = state.rest.plan_return_mode.take();
+    let stashed = state.rest.fg_mut().plan_return_mode.take();
     let ret = if stashed == Some(AgentMode::Yolo) && state.rest.yolo_armed {
         AgentMode::Yolo
     } else {
@@ -147,7 +147,7 @@ pub(super) fn handle_approve_plan_compact(
     restore_plan_return_mode(state);
     // Arm the one-shot seed so `apply_compaction_result` injects plan.md as the first
     // post-compaction user turn and auto-wakes execution.
-    state.rest.pending_plan_seed = true;
+    state.rest.fg_mut().pending_plan_seed = true;
 
     // Answer any TRAILING pending tool calls that follow `plan_ready` in the same
     // parallel batch. `answer_plan_ready` only advances `tool_idx` past the
@@ -248,13 +248,25 @@ pub(super) fn handle_deny_plan(
 
 /// True when the currently pending approval call is `mission_ready`.
 pub(super) fn is_pending_mission_ready(state: &AppState) -> bool {
+    pending_ready_name(state) == Some("mission_ready")
+}
+
+/// True when the currently pending approval call is `plan_ready` or `mission_ready`
+/// — those must go through PlanDecision (y/a/n), never generic ApproveTool/DenyTool.
+pub(super) fn is_pending_plan_or_mission_ready(state: &AppState) -> bool {
+    matches!(
+        pending_ready_name(state),
+        Some("plan_ready") | Some("mission_ready")
+    )
+}
+
+fn pending_ready_name(state: &AppState) -> Option<&str> {
     state
         .rest
         .fg()
         .pending_tool_calls
         .get(state.rest.fg().tool_idx)
-        .map(|c| c.function.name == "mission_ready")
-        .unwrap_or(false)
+        .map(|c| c.function.name.as_str())
 }
 
 /// Read the approved mission.json off disk and build a body string for the
@@ -266,14 +278,13 @@ fn mission_body_for_result(state: &AppState) -> String {
         .session
         .as_ref()
         .and_then(|s| crate::model::sdlc::Mission::load(&s.path))
-        .map(|m| {
-            serde_json::to_string_pretty(&m).unwrap_or_else(|_| format!("{:?}", m))
-        })
+        .map(|m| serde_json::to_string_pretty(&m).unwrap_or_else(|_| format!("{:?}", m)))
         .unwrap_or_else(|| "the session mission.json".to_string())
 }
 
 /// Handle `Action::ApprovePlan` when the pending call is `mission_ready`:
-/// approve the mission, stay in SDLC, resume execution.
+/// establish worktree binding FIRST; only then mark approved+execute.
+/// Failed/mismatched binding leaves the mission unapproved.
 pub(super) fn handle_approve_mission(
     state: &mut AppState,
     client: &mut Option<Arc<OpenRouterClient>>,
@@ -283,50 +294,45 @@ pub(super) fn handle_approve_mission(
     state.rest.fg_mut().awaiting_approval = false;
     state.rest.fg_mut().approval_reason = None;
 
-    // Mark mission approved, phase=execute, persist. Mission::load/save take the
-    // session directory (they join mission.json themselves).
-    if let Some(sess_path) = state.rest.fg().session.as_ref().map(|s| s.path.clone()) {
-        if let Some(mut mission) = crate::model::sdlc::Mission::load(&sess_path) {
-            mission.approved = true;
-            mission.phase = "execute".to_string();
-            let _ = mission.save(&sess_path);
+    match establish_mission_binding(state, client, handle) {
+        Ok(wt_note) => {
+            state.rest.fg_mut().sdlc_phase = Some("execute".to_string());
+            let mut body = mission_body_for_result(state);
+            body.push_str("\n\n");
+            body.push_str(&wt_note);
+            answer_plan_ready(state, crate::tool::sdlc::mission_approved_text(&body));
+
+            let approved_mission = mission_body_for_result(state)
+                .chars()
+                .take(2000)
+                .collect::<String>();
+            state.rest.fg_mut().approved_plan = Some(approved_mission);
+            state.rest.fg_mut().sdlc_keeper_due = true;
+
+            if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+                sess.rebuild_system();
+                let _ = sess.save();
+            }
+            process_tools(state, fgi, client, handle);
+        }
+        Err(detail) => {
+            state.rest.fg_mut().sdlc_phase = Some("assess".to_string());
+            answer_plan_ready(
+                state,
+                crate::tool::sdlc::mission_binding_failed_text(&detail),
+            );
+            if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+                sess.rebuild_system();
+                let _ = sess.save();
+            }
+            process_tools(state, fgi, client, handle);
         }
     }
-    state.rest.sdlc_phase = Some("execute".to_string());
-
-    // Best-effort worktree create+enter before composing the tool result so the
-    // model sees the bound workspace in the same approval turn.
-    let wt_note = attempt_create_worktree(state, client, handle);
-
-    let mut body = mission_body_for_result(state);
-    if let Some(note) = wt_note {
-        body.push_str("\n\n");
-        body.push_str(&note);
-    }
-    answer_plan_ready(state, crate::tool::sdlc::mission_approved_text(&body));
-
-    // Stash approved mission for the classifier (same pattern as plan).
-    let approved_mission = mission_body_for_result(state)
-        .chars()
-        .take(2000)
-        .collect::<String>();
-    state.rest.fg_mut().approved_plan = Some(approved_mission);
-
-    // Arm keeper for the first idle boundary after execute starts.
-    state.rest.fg_mut().sdlc_keeper_due = true;
-
-    // Rebuild system so the post-approve capsule (OPEN+SEALED) lands immediately.
-    if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-        sess.rebuild_system();
-        let _ = sess.save();
-    }
-
-    process_tools(state, fgi, client, handle);
     Ok(())
 }
 
 /// Handle `Action::ApprovePlanCompact` when the pending call is `mission_ready`:
-/// like approve but compact first.
+/// like approve but compact first. Binding must succeed before approve.
 pub(super) fn handle_approve_mission_compact(
     state: &mut AppState,
     client: &mut Option<Arc<OpenRouterClient>>,
@@ -336,79 +342,90 @@ pub(super) fn handle_approve_mission_compact(
     state.rest.fg_mut().awaiting_approval = false;
     state.rest.fg_mut().approval_reason = None;
 
-    // Mark mission approved. Mission::load/save take the session directory.
-    if let Some(sess_path) = state.rest.fg().session.as_ref().map(|s| s.path.clone()) {
-        if let Some(mut mission) = crate::model::sdlc::Mission::load(&sess_path) {
-            mission.approved = true;
-            mission.phase = "execute".to_string();
-            let _ = mission.save(&sess_path);
+    match establish_mission_binding(state, client, handle) {
+        Ok(_wt_note) => {
+            state.rest.fg_mut().sdlc_phase = Some("execute".to_string());
+            answer_plan_ready(
+                state,
+                crate::tool::sdlc::mission_approved_compact_text().to_string(),
+            );
+
+            let approved_mission = mission_body_for_result(state)
+                .chars()
+                .take(2000)
+                .collect::<String>();
+            state.rest.fg_mut().approved_plan = Some(approved_mission);
+
+            state.rest.fg_mut().pending_mission_seed = true;
+            state.rest.fg_mut().sdlc_keeper_due = true;
+
+            let trailing_ids: Vec<String> = state.rest.sessions[fgi]
+                .pending_tool_calls
+                .iter()
+                .skip(state.rest.sessions[fgi].tool_idx)
+                .map(|c| c.id.clone())
+                .collect();
+
+            let staged: Vec<(String, String)> = state.rest.sessions[fgi].tool_results.clone();
+            {
+                let rt = &mut state.rest.sessions[fgi];
+                if let Some(sess) = rt.session.as_mut() {
+                    for (id, result) in &staged {
+                        let _ = msglog::append(&sess.path, Role::Tool, result, None, None);
+                        sess.conversation.push_tool(id.clone(), result.clone());
+                    }
+                    for id in &trailing_ids {
+                        let _ = msglog::append(
+                            &sess.path,
+                            Role::Tool,
+                            "skipped — mission approved, compacting context",
+                            None,
+                            None,
+                        );
+                        sess.conversation.push_tool(
+                            id.clone(),
+                            "skipped — mission approved, compacting context".to_string(),
+                        );
+                    }
+                    let _ = sess.save();
+                }
+            }
+
+            state.rest.sessions[fgi].pending_tool_calls.clear();
+            state.rest.sessions[fgi].tool_idx = 0;
+            state.rest.sessions[fgi].tool_results.clear();
+
+            state.rest.fg_mut().waiting = false;
+            let _ = crate::app::runtime::commands::compact::handle_compact(
+                state,
+                client,
+                handle,
+                Some(0),
+            );
+        }
+        Err(detail) => {
+            state.rest.fg_mut().sdlc_phase = Some("assess".to_string());
+            answer_plan_ready(
+                state,
+                crate::tool::sdlc::mission_binding_failed_text(&detail),
+            );
+            if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+                sess.rebuild_system();
+                let _ = sess.save();
+            }
+            process_tools(state, fgi, client, handle);
         }
     }
-    state.rest.sdlc_phase = Some("execute".to_string());
-
-    // Create+enter worktree before compact so the post-seed stream runs inside it.
-    let _ = attempt_create_worktree(state, client, handle);
-
-    answer_plan_ready(
-        state,
-        crate::tool::sdlc::mission_approved_compact_text().to_string(),
-    );
-
-    // Stash approved mission for the classifier.
-    let approved_mission = mission_body_for_result(state)
-        .chars()
-        .take(2000)
-        .collect::<String>();
-    state.rest.fg_mut().approved_plan = Some(approved_mission);
-
-    // Arm mission seed for compaction + keeper for first idle after execute.
-    state.rest.pending_mission_seed = true;
-    state.rest.fg_mut().sdlc_keeper_due = true;
-
-    // Answer trailing pending tool calls.
-    let trailing_ids: Vec<String> = state.rest.sessions[fgi]
-        .pending_tool_calls
-        .iter()
-        .skip(state.rest.sessions[fgi].tool_idx)
-        .map(|c| c.id.clone())
-        .collect();
-
-    let staged: Vec<(String, String)> = state.rest.sessions[fgi].tool_results.clone();
-    {
-        let rt = &mut state.rest.sessions[fgi];
-        if let Some(sess) = rt.session.as_mut() {
-            for (id, result) in &staged {
-                let _ = msglog::append(&sess.path, Role::Tool, result, None, None);
-                sess.conversation.push_tool(id.clone(), result.clone());
-            }
-            for id in &trailing_ids {
-                let _ = msglog::append(
-                    &sess.path,
-                    Role::Tool,
-                    "skipped — mission approved, compacting context",
-                    None,
-                    None,
-                );
-                sess.conversation.push_tool(
-                    id.clone(),
-                    "skipped — mission approved, compacting context".to_string(),
-                );
-            }
-            let _ = sess.save();
-        }
-    }
-
-    state.rest.sessions[fgi].pending_tool_calls.clear();
-    state.rest.sessions[fgi].tool_idx = 0;
-    state.rest.sessions[fgi].tool_results.clear();
-
-    state.rest.fg_mut().waiting = false;
-    let _ = crate::app::runtime::commands::compact::handle_compact(state, client, handle, Some(0));
     Ok(())
 }
 
 /// Handle `Action::DenyPlan` when the pending call is `mission_ready`:
 /// deny and stay in SDLC assess phase.
+///
+/// Always force the *targeted* session + persisted mission back to unapproved
+/// assess rails. An amendment park can arrive while the runtime still shows
+/// execute/integrate from the prior approval; denying must not leave that
+/// execute/integrate phase paired with an unapproved mission on disk.
 pub(super) fn handle_deny_mission(
     state: &mut AppState,
     client: &mut Option<Arc<OpenRouterClient>>,
@@ -417,71 +434,174 @@ pub(super) fn handle_deny_mission(
     let fgi = state.rest.foreground;
     state.rest.fg_mut().awaiting_approval = false;
     state.rest.fg_mut().approval_reason = None;
+    apply_mission_denial_rails(state, fgi);
     answer_plan_ready(state, crate::tool::sdlc::mission_denied_text().to_string());
     process_tools(state, fgi, client, handle);
     Ok(())
 }
 
-/// Best-effort worktree creation + enter on mission approval.
-/// Returns a short status line for the approval tool result (or None).
-fn attempt_create_worktree(
+/// Force session `sess_idx` + its mission.json onto deny/assess rails.
+/// Idempotent: safe when the intercept already wrote unapproved/assess.
+fn apply_mission_denial_rails(state: &mut AppState, sess_idx: usize) {
+    if state.rest.sessions.get(sess_idx).is_none() {
+        return;
+    }
+    let prior_phase = state.rest.sessions[sess_idx].sdlc_phase.clone();
+    // Runtime phase must not stay execute/integrate over an unapproved mission.
+    state.rest.sessions[sess_idx].sdlc_phase = Some("assess".to_string());
+    // Execution stashes from a prior approval must not leak past denial.
+    state.rest.sessions[sess_idx].approved_plan = None;
+    // Drop keeper rails (including any in-flight LLM oneshot).
+    state.rest.sessions[sess_idx].invalidate_sdlc_keeper_llm();
+    state.rest.sessions[sess_idx].pending_mission_seed = false;
+
+    let sess_path = state.rest.sessions[sess_idx]
+        .session
+        .as_ref()
+        .map(|s| s.path.clone());
+    if let Some(path) = sess_path {
+        if let Some(mut m) = crate::model::sdlc::Mission::load(&path) {
+            // Intercept already unapproves + writes assess before parking; re-assert
+            // so a stale execute/integrate on disk cannot survive denial.
+            m.approved = false;
+            m.phase = "assess".into();
+            // Leaving an active execute/integrate runtime phase, or any amendment
+            // park, requires re-approval before tools/keeper treat the mission as live.
+            if matches!(prior_phase.as_deref(), Some("execute") | Some("integrate"))
+                || m.needs_reapproval
+                || m.amendment_note.is_some()
+            {
+                m.needs_reapproval = true;
+            }
+            let _ = m.save(&path);
+        }
+        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+            sess.rebuild_system();
+            let _ = sess.save();
+        }
+    }
+}
+
+/// Establish exact mission worktree+branch, enter it, and only then mark the
+/// mission approved. Captures frozen target (path/branch/HEAD) from the primary
+/// repo at approval. On any failure the mission remains unapproved (assess).
+/// Returns a status note on success.
+fn establish_mission_binding(
     state: &mut AppState,
     client: &Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
-) -> Option<String> {
+) -> Result<String, String> {
     let fgi = state.rest.foreground;
     let Some(sess) = state.rest.fg().session.as_ref() else {
-        return None;
+        return Err("no active session".into());
     };
-    let Some(mission) = crate::model::sdlc::Mission::load(&sess.path) else {
-        return None;
+    let sess_path = sess.path.clone();
+    let pwd_hash = sess.pwd_hash.clone();
+    let Some(mission) = crate::model::sdlc::Mission::load(&sess_path) else {
+        return Err("mission.json missing".into());
     };
+    // Fail closed on legacy/unbound contract fields.
+    if mission.hash.is_empty() || !mission.hash_valid() || mission.graph_hash.is_none() {
+        return Err("legacy or invalid contract hash/graph — revise via mission_ready".into());
+    }
 
+    // Default names incorporate a goal fingerprint so an amended mission whose
+    // goal changed cannot collide with the previous default worktree/branch
+    // (mission id is stable across amendments).
     let wt_name = mission
         .worktree_name
         .clone()
-        .unwrap_or_else(|| format!("sdlc-{}", &mission.id[..8.min(mission.id.len())]));
-    let wt_branch = mission.branch.clone().unwrap_or_else(|| {
-        let slug: String = mission
-            .goal
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-            .take(40)
-            .collect();
-        format!("sdlc/{slug}")
-    });
+        .unwrap_or_else(|| default_mission_worktree_name(&mission));
+    let wt_branch = mission
+        .branch
+        .clone()
+        .unwrap_or_else(|| default_mission_branch(&mission));
 
-    let worktrees_dir = match crate::model::store::worktrees_dir(&sess.pwd_hash) {
-        Ok(d) => d,
-        Err(_) => return None,
-    };
-    if std::fs::create_dir_all(&worktrees_dir).is_err() {
-        return None;
-    }
+    let worktrees_dir =
+        crate::model::store::worktrees_dir(&pwd_hash).map_err(|e| format!("worktrees dir: {e}"))?;
+    std::fs::create_dir_all(&worktrees_dir).map_err(|e| format!("create worktrees dir: {e}"))?;
 
     let shadow = worktrees_dir.join(&wt_name);
-    // Prefer the stashed primary root when already inside a worktree; otherwise
-    // current workdir is the repo root.
+    // Primary/target repo at approval time — never the mission shadow worktree.
+    // Prefer stashed primary when already inside a worktree; otherwise live workdir.
     let repo_root = sess
         .settings
         .workdir_saved
         .as_ref()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| sess.workdir());
+    let repo_root = std::fs::canonicalize(&repo_root).unwrap_or(repo_root);
+    let repo_root_str = repo_root.to_string_lossy().into_owned();
+
+    // Capture frozen integrate destination from the primary repo NOW.
+    let target_branch =
+        crate::model::sdlc::mission::current_git_branch(&repo_root).ok_or_else(|| {
+            "primary repo is detached HEAD or not a git branch — checkout a branch before approving"
+                .to_string()
+        })?;
+    let target_head =
+        crate::model::sdlc::mission::current_git_head(&repo_root).ok_or_else(|| {
+            "could not read primary repo HEAD — cannot freeze target_head".to_string()
+        })?;
+
     let shadow_str = shadow.to_string_lossy().into_owned();
 
-    let existed = shadow.join(".git").exists();
-    let mut created_ok = existed;
-    if !existed {
-        // Prefer creating a new branch off HEAD (`-b`). If the branch already
-        // exists, retry without `-b` so re-approve / resume still works.
+    let existed = shadow.exists()
+        && std::process::Command::new("git")
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .current_dir(&shadow)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+    if existed {
+        // Rebind of an existing mission worktree: reject if its branch tip does
+        // not contain the frozen target_head (unrelated history / stale branch).
+        let live_branch = crate::model::sdlc::mission::current_git_branch(&shadow);
+        if live_branch.as_deref() != Some(wt_branch.as_str()) {
+            return Err(format!(
+                "existing mission worktree branch mismatch (got {:?}, want {wt_branch})",
+                live_branch
+            ));
+        }
+        let tip = crate::model::sdlc::mission::current_git_head(&shadow).ok_or_else(|| {
+            "could not read existing mission worktree HEAD for target_head check".to_string()
+        })?;
+        if !crate::model::sdlc::mission::is_ancestor(&shadow, &target_head, &tip)
+            && tip != target_head
+        {
+            // Also try from primary repo (shared object db via worktree).
+            if !crate::model::sdlc::mission::is_ancestor(&repo_root, &target_head, &tip)
+                && tip != target_head
+            {
+                return Err(format!(
+                    "existing mission branch '{wt_branch}' does not contain frozen target_head \
+                     {target_head:.12} — refuse rebind of unrelated branch; remove worktree or \
+                     choose a new mission branch"
+                ));
+            }
+        }
+    } else {
+        // Create mission worktree explicitly from frozen target_head.
+        // Prefer: worktree add -b <branch> <path> <target_head>
         let mut output = std::process::Command::new("git")
-            .args(["worktree", "add", "-b", &wt_branch, &shadow_str])
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                &wt_branch,
+                &shadow_str,
+                &target_head,
+            ])
             .current_dir(&repo_root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output();
         if !matches!(&output, Ok(o) if o.status.success()) {
+            // Branch may already exist in the repo — try attaching without -b,
+            // still pin to target_head when possible.
             output = std::process::Command::new("git")
                 .args(["worktree", "add", &shadow_str, &wt_branch])
                 .current_dir(&repo_root)
@@ -489,52 +609,200 @@ fn attempt_create_worktree(
                 .stderr(std::process::Stdio::piped())
                 .output();
         }
-        created_ok = matches!(&output, Ok(o) if o.status.success());
-    }
-
-    // Always persist intended name/branch so the model can discover them even
-    // when create failed (degraded SDLC without an isolated tree).
-    if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-        if let Some(mut m) = crate::model::sdlc::Mission::load(&sess.path) {
-            m.worktree_name = Some(wt_name.clone());
-            m.branch = Some(wt_branch.clone());
-            let _ = m.save(&sess.path);
+        if !matches!(&output, Ok(o) if o.status.success()) {
+            let err = output
+                .as_ref()
+                .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
+                .unwrap_or_else(|e| e.to_string());
+            // Ensure mission stays unapproved.
+            if let Some(mut m) = crate::model::sdlc::Mission::load(&sess_path) {
+                m.approved = false;
+                m.phase = "assess".into();
+                m.worktree_path = None;
+                m.target_worktree_path = None;
+                m.target_branch = None;
+                m.target_head = None;
+                let _ = m.save(&sess_path);
+            }
+            return Err(format!(
+                "git worktree add failed for '{wt_name}' branch '{wt_branch}' \
+                 from target_head {target_head:.12}: {err}"
+            ));
         }
     }
 
-    if !shadow.join(".git").exists() {
-        return Some(format!(
-            "worktree: create failed for '{wt_name}' (branch {wt_branch}) — \
-             continuing in current cwd (degraded SDLC)"
+    // Validate branch inside the worktree.
+    let live_branch = crate::model::sdlc::mission::current_git_branch(&shadow);
+    if live_branch.as_deref() != Some(wt_branch.as_str()) {
+        if let Some(mut m) = crate::model::sdlc::Mission::load(&sess_path) {
+            m.approved = false;
+            m.phase = "assess".into();
+            m.worktree_path = None;
+            m.target_worktree_path = None;
+            m.target_branch = None;
+            m.target_head = None;
+            let _ = m.save(&sess_path);
+        }
+        return Err(format!(
+            "branch mismatch after worktree setup (got {:?}, want {wt_branch})",
+            live_branch
         ));
     }
 
-    // Enter: register worktree as primary root + switch live cwd (same path as
-    // git_worktree create/enter intercepts).
+    let canon = std::fs::canonicalize(&shadow).unwrap_or_else(|_| shadow.clone());
+    let canon_str = canon.to_string_lossy().into_owned();
+
+    // Persist binding + frozen target + approve only after validation.
+    // Re-hash WITH binding + target fields so the frozen contract covers them.
+    if let Some(mut m) = crate::model::sdlc::Mission::load(&sess_path) {
+        m.worktree_name = Some(wt_name.clone());
+        m.branch = Some(wt_branch.clone());
+        m.worktree_path = Some(canon_str.clone());
+        m.target_worktree_path = Some(repo_root_str.clone());
+        m.target_branch = Some(target_branch.clone());
+        m.target_head = Some(target_head.clone());
+        m.approved = true;
+        m.phase = "execute".into();
+        m.needs_reapproval = false;
+        m.hash = m.recompute_hash();
+        let _ = m.save(&sess_path);
+    } else {
+        return Err("mission disappeared during bind".into());
+    }
+
+    // Enter worktree as primary root + switch live cwd.
     {
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-            sess.settings.enter_worktree(shadow_str.clone());
+            sess.settings.enter_worktree(canon_str.clone());
             let _ = sess.save();
         }
     }
-    crate::app::runtime::stream::apply_workspace_change(
-        state,
-        fgi,
-        shadow.clone(),
-        client,
-        handle,
-    );
+    crate::app::runtime::stream::apply_workspace_change(state, fgi, canon.clone(), client, handle);
 
-    let verb = if existed {
-        "entered existing"
-    } else if created_ok {
-        "created and entered"
-    } else {
-        "entered"
-    };
-    Some(format!(
-        "worktree: {verb} '{wt_name}' at {} (branch {wt_branch}) — \
+    // Final binding check against live cwd.
+    let cwd_now = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .map(|s| s.workdir())
+        .unwrap_or_else(|| canon.clone());
+    if let Some(m) = crate::model::sdlc::Mission::load(&sess_path) {
+        if let Err(e) = m.validate_binding(&cwd_now, Some(&wt_branch)) {
+            // Full rollback: leave primary workspace + unbound valid draft.
+            // Partial rollback previously left the session inside the shadow
+            // worktree with an approved-then-cleared mission whose hash still
+            // covered binding fields (hash_valid=false + stale name/branch).
+            restore_primary_workspace_after_failed_bind(state, fgi);
+            restore_unbound_draft_mission(&sess_path);
+            return Err(e.to_string());
+        }
+    }
+
+    Ok(format!(
+        "worktree: bound '{wt_name}' at {} (branch {wt_branch}); \
+         target `{target_branch}` @ {target_head:.12} ({repo_root_str}) — \
          execute only inside this tree until integrate",
-        shadow.display()
+        canon.display()
     ))
 }
+
+/// Exit mission worktree, clear live cwd override, and reindex primary.
+/// Mirrors `AppStateRest::try_reenter_mission_worktree_at` failure rollback.
+pub(super) fn restore_primary_workspace_after_failed_bind(state: &mut AppState, sess_idx: usize) {
+    if state.rest.sessions.get(sess_idx).is_none() {
+        return;
+    }
+    let dir_cache = state.rest.sessions[sess_idx].dir_cache.clone();
+    let primary = {
+        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+            if sess.settings.workdir_saved.is_some() {
+                sess.settings.exit_worktree();
+            }
+            let primary = sess.workdir();
+            let _ = sess.save();
+            primary
+        } else {
+            std::path::PathBuf::from(".")
+        }
+    };
+    // Clear override so effective_cwd falls back to restored primary workdir
+    // (same as try_reenter failure path in rest.rs).
+    state.rest.sessions[sess_idx].active_cwd = None;
+    crate::tool::dircache::reindex(vec![primary], dir_cache);
+}
+
+/// Restore mission.json to an unbound assess draft with a valid binding-free hash.
+/// Clears worktree_name/branch/path and frozen target so no stale bind fields
+/// survive a failed approve.
+pub(super) fn restore_unbound_draft_mission(sess_path: &std::path::Path) {
+    if let Some(mut m) = crate::model::sdlc::Mission::load(sess_path) {
+        m.approved = false;
+        m.phase = "assess".into();
+        m.worktree_name = None;
+        m.branch = None;
+        m.worktree_path = None;
+        m.target_worktree_path = None;
+        m.target_branch = None;
+        m.target_head = None;
+        // Fail-closed: bind never completed, so active ops must not resume.
+        m.needs_reapproval = true;
+        // Hash must cover the unbound fields — leaving the post-bind hash would
+        // make hash_valid() false and wedge the contract.
+        m.hash = m.recompute_hash();
+        let _ = m.save(sess_path);
+    }
+}
+
+/// Default shadow worktree name for a mission. Includes a short goal fingerprint
+/// so goal-changing amendments do not reuse the previous default directory.
+pub(crate) fn default_mission_worktree_name(mission: &crate::model::sdlc::Mission) -> String {
+    let id = &mission.id[..8.min(mission.id.len())];
+    let goal_fp = mission_goal_fingerprint(&mission.goal);
+    format!("sdlc-{id}-{goal_fp}")
+}
+
+/// Default branch for a mission, derived from the goal (stable for same goal,
+/// distinct when the goal changes).
+pub(crate) fn default_mission_branch(mission: &crate::model::sdlc::Mission) -> String {
+    let slug: String = mission
+        .goal
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+        .take(40)
+        .collect();
+    let slug = if slug.is_empty() {
+        mission_goal_fingerprint(&mission.goal)
+    } else {
+        slug.to_lowercase()
+    };
+    // Include a short fingerprint so two goals that share a 40-char alphanumeric
+    // prefix still get distinct branches after amendment.
+    let fp = mission_goal_fingerprint(&mission.goal);
+    format!("sdlc/{slug}-{fp}")
+}
+
+fn mission_goal_fingerprint(goal: &str) -> String {
+    // Deterministic FNV-1a 32-bit — must be stable across process restarts so a
+    // re-approve of the same goal reuses the same default worktree/branch names.
+    let mut h: u32 = 2_166_136_261;
+    for b in goal.as_bytes() {
+        h ^= u32::from(*b);
+        h = h.wrapping_mul(16_777_619);
+    }
+    format!("{h:08x}")
+}
+
+/// Legacy name kept for any residual callers — routes to fail-closed bind.
+#[allow(dead_code)]
+fn attempt_create_worktree(
+    state: &mut AppState,
+    client: &Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+) -> Option<String> {
+    establish_mission_binding(state, client, handle).ok()
+}
+
+#[cfg(test)]
+#[path = "plan_decision_test.rs"]
+mod tests;

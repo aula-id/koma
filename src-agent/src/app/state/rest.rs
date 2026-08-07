@@ -201,30 +201,6 @@ pub struct AppStateRest {
     /// Borrowed mutably by the chat renderer through a shared `&rest` (the UI is
     /// single-threaded, so `RefCell` is fine).
     pub transcript_cache: RefCell<TranscriptCache>,
-    /// Tool-approval policy. `Auto` runs every tool immediately; `Normal` pauses
-    /// for `y/n` on risky (write/delete) tools. Toggled with Shift+Tab / `/mode`.
-    pub agent_mode: AgentMode,
-    /// The mode to restore when leaving `Plan` mode: set to the PREVIOUS mode
-    /// the moment `agent_mode` transitions INTO `Plan`, and cleared back to
-    /// `None` the moment it transitions back OUT (either manually via `/mode` /
-    /// Shift+Tab, or — in a later wave — via plan approval/denial). `None`
-    /// whenever `agent_mode != Plan`. See `set_agent_mode`, the single
-    /// choke-point that maintains this invariant.
-    pub plan_return_mode: Option<AgentMode>,
-    /// The mode to restore when leaving SDLC mode.
-    pub sdlc_return_mode: Option<AgentMode>,
-    /// Prior short_send_enabled before SDLC forced it on; restored on exit.
-    pub sdlc_prev_short_send: Option<bool>,
-    /// Active mission phase for UI/seed: "assess" | "execute" | "integrate" | "done".
-    pub sdlc_phase: Option<String>,
-    /// One-shot signal: compact + seed the mission capsule post-approval.
-    pub pending_mission_seed: bool,
-    /// One-shot signal set by `handle_approve_plan_compact`: after the
-    /// plan-approval compaction completes, `apply_compaction_result` reads
-    /// `<session>/plan.md` and appends it as the first post-compaction user turn
-    /// so the model executes from a clean context that leads with the plan. A
-    /// missing plan.md is silently skipped; the flag is cleared either way.
-    pub pending_plan_seed: bool,
     /// Process working directory captured at startup. The deterministic
     /// workspace check (WC) always allows this directory regardless of the
     /// allow-list, so running the agent in the folder you want to work in just
@@ -502,6 +478,21 @@ impl Default for AppStateRest {
 }
 
 impl AppStateRest {
+    /// FOREGROUND session's tool-approval / lifecycle mode.
+    ///
+    /// Storage is **per-session** on [`super::SessionRuntime::agent_mode`]. These
+    /// accessors exist so existing `rest.agent_mode` call sites keep compiling
+    /// while still isolating SDLC/Plan/Yolo envelopes between sessions.
+    pub fn agent_mode(&self) -> AgentMode {
+        self.fg().agent_mode
+    }
+
+    /// Mutable handle to the FOREGROUND session's agent mode. Prefer
+    /// [`Self::set_agent_mode`] for transitions that must maintain Plan/SDLC rails.
+    pub fn agent_mode_mut(&mut self) -> &mut AgentMode {
+        &mut self.fg_mut().agent_mode
+    }
+
     pub fn new() -> Self {
         // Version-check channel, created ONCE here: the sender is cloned per session
         // spawn into a background `spawn_check` thread; the receiver is drained each
@@ -568,13 +559,6 @@ impl AppStateRest {
             new_pending: None,
             ext_switch_pending: None,
             transcript_cache: RefCell::new(TranscriptCache::default()),
-            agent_mode: AgentMode::default(),
-            plan_return_mode: None,
-            sdlc_return_mode: None,
-            sdlc_prev_short_send: None,
-            sdlc_phase: None,
-            pending_mission_seed: false,
-            pending_plan_seed: false,
             launch_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             endpoints_rx: None,
             warm_rx: None,
@@ -666,20 +650,139 @@ impl AppStateRest {
         }
     }
 
-    /// Single choke-point for changing `agent_mode` — used by both the
-    /// Shift+Tab cycle and `/mode`, so `plan_return_mode` and the Plan-mode
-    /// system-prompt nudge never drift out of sync between the two entry
-    /// points.
+    /// Fail-closed re-entry into a frozen mission worktree on SDLC resume for
+    /// session `sess_idx`. Validates path existence + git branch match, enters
+    /// the worktree, and applies cwd/reindex. Does not touch mission approval
+    /// flags.
+    ///
+    /// If final binding validation fails after mutation, restores the primary
+    /// workspace configuration, clears the active cwd override, and reindexes
+    /// primary before returning Err — no failed re-entry may leave the session
+    /// pointed at an invalid worktree.
+    fn try_reenter_mission_worktree_at(
+        &mut self,
+        sess_idx: usize,
+        sess_path: &std::path::Path,
+    ) -> Result<(), String> {
+        if self.sessions.get(sess_idx).is_none() {
+            return Err("session index out of range".into());
+        }
+        let mission = crate::model::sdlc::Mission::load(sess_path)
+            .ok_or_else(|| "mission.json missing".to_string())?;
+        if !mission.approved || mission.needs_reapproval || !mission.hash_valid() {
+            return Err("mission not actively approved".into());
+        }
+        if !mission.has_frozen_target() {
+            return Err(
+                "mission missing frozen target — legacy contract requires re-approval".into(),
+            );
+        }
+        let wt_path = mission
+            .worktree_path
+            .clone()
+            .ok_or_else(|| "no worktree_path bound".to_string())?;
+        let expected_branch = mission
+            .branch
+            .clone()
+            .ok_or_else(|| "no branch bound".to_string())?;
+
+        let wt = std::path::Path::new(&wt_path);
+        if !wt.is_dir() {
+            return Err(format!("bound worktree missing: {wt_path}"));
+        }
+        let inside = std::process::Command::new("git")
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .current_dir(wt)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !inside {
+            return Err(format!("bound path is not a git worktree: {wt_path}"));
+        }
+        let live_branch = crate::model::sdlc::mission::current_git_branch(wt);
+        if live_branch.as_deref() != Some(expected_branch.as_str()) {
+            return Err(format!(
+                "branch mismatch on re-entry (got {:?}, want {expected_branch})",
+                live_branch
+            ));
+        }
+
+        let canon = std::fs::canonicalize(wt).unwrap_or_else(|_| wt.to_path_buf());
+        let canon_str = canon.to_string_lossy().into_owned();
+
+        // Enter worktree (stash primary) + snap live cwd + reindex.
+        let dir_cache = self.sessions[sess_idx].dir_cache.clone();
+        if let Some(sess) = self.sessions[sess_idx].session.as_mut() {
+            sess.settings.enter_worktree(canon_str);
+            let _ = sess.save();
+        }
+        self.sessions[sess_idx].active_cwd = Some(canon.clone());
+        crate::tool::dircache::reindex(vec![canon.clone()], dir_cache);
+
+        // Final binding check against live effective cwd.
+        let cwd_now = if let Some(c) = self.sessions[sess_idx].active_cwd.clone() {
+            c
+        } else if let Some(s) = self.sessions[sess_idx].session.as_ref() {
+            s.workdir()
+        } else {
+            canon.clone()
+        };
+        let bind_ok = match crate::model::sdlc::Mission::load(sess_path) {
+            Some(m) => m
+                .validate_binding(&cwd_now, Some(expected_branch.as_str()))
+                .map_err(|e| e.to_string()),
+            None => Err("mission disappeared during re-entry".into()),
+        };
+
+        if let Err(e) = bind_ok {
+            // Roll back session workspace to primary before surfacing the error.
+            let dir_cache = self.sessions[sess_idx].dir_cache.clone();
+            let primary = {
+                if let Some(sess) = self.sessions[sess_idx].session.as_mut() {
+                    if sess.settings.workdir_saved.is_some() {
+                        sess.settings.exit_worktree();
+                    }
+                    let primary = sess.workdir();
+                    let _ = sess.save();
+                    primary
+                } else {
+                    std::path::PathBuf::from(".")
+                }
+            };
+            self.sessions[sess_idx].active_cwd = None;
+            crate::tool::dircache::reindex(vec![primary], dir_cache);
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Single choke-point for changing the FOREGROUND session's `agent_mode` —
+    /// used by both the Shift+Tab cycle and `/mode`, so `plan_return_mode` and
+    /// the Plan-mode system-prompt nudge never drift out of sync between the
+    /// two entry points. Delegates to [`Self::set_agent_mode_at`].
+    pub fn set_agent_mode(&mut self, new_mode: AgentMode) {
+        let idx = self.foreground;
+        self.set_agent_mode_at(idx, new_mode);
+    }
+
+    /// Index-targeted agent-mode transition. Stream-owned `sess_idx` paths (e.g.
+    /// `plan_enter`) MUST use this so a background session never mutates the
+    /// unrelated foreground session's Plan/SDLC rails.
     ///
     /// - Entering `Plan` from anything else remembers the previous mode in
     ///   `plan_return_mode`.
     /// - Leaving `Plan` (to any other mode) clears `plan_return_mode`.
     /// - Crossing the Plan boundary (either direction) also flips the
-    ///   foreground session's `plan_mode_hint` and rebuilds + saves its
+    ///   target session's `plan_mode_hint` and rebuilds + saves its
     ///   system prompt, so the nudge appears/disappears immediately. A
     ///   same-tier move (Auto↔Normal↔Yolo) leaves the prompt untouched.
-    pub fn set_agent_mode(&mut self, new_mode: AgentMode) {
-        let old_mode = self.agent_mode;
+    pub fn set_agent_mode_at(&mut self, sess_idx: usize, new_mode: AgentMode) {
+        if self.sessions.get(sess_idx).is_none() {
+            return;
+        }
+        let old_mode = self.sessions[sess_idx].agent_mode;
         if old_mode == new_mode {
             return;
         }
@@ -689,58 +792,131 @@ impl AppStateRest {
         let leaving_sdlc = old_mode == AgentMode::Sdlc;
 
         if entering_plan {
-            self.plan_return_mode = Some(old_mode);
-            self.fg_mut().approved_plan = None;
+            self.sessions[sess_idx].plan_return_mode = Some(old_mode);
+            self.sessions[sess_idx].approved_plan = None;
         } else if leaving_plan {
-            self.plan_return_mode = None;
+            self.sessions[sess_idx].plan_return_mode = None;
         }
 
         // SDLC enter: stash return mode, force short_send on, set phase.
-        // Resume: if an approved mission already exists, restore its phase
-        // (not always assess) so execute/integrate continues cleanly.
+        // Resume execute/integrate only when the frozen worktree still exists,
+        // is branch-matched, and is successfully entered. Otherwise fail closed
+        // into assess (mission left unapproved / blocked from auto-resume).
         if entering_sdlc {
-            self.sdlc_return_mode = Some(old_mode);
-            let resume_phase = self
-                .fg()
+            self.sessions[sess_idx].sdlc_return_mode = Some(old_mode);
+            let sess_path = self.sessions[sess_idx]
                 .session
                 .as_ref()
-                .and_then(|s| crate::model::sdlc::Mission::load(&s.path))
-                .filter(|m| m.approved)
-                .map(|m| m.phase);
-            self.sdlc_phase = Some(resume_phase.unwrap_or_else(|| "assess".to_string()));
-            let prev_ss = self
-                .fg()
+                .map(|s| s.path.clone());
+            let resume_phase = sess_path.as_ref().and_then(|path| {
+                let m = crate::model::sdlc::Mission::load(path)?;
+                crate::model::sdlc::mission::resume_phase(&m)
+            });
+
+            // Attempt fail-closed worktree re-entry when resume would be active.
+            let mut final_phase = resume_phase.clone().unwrap_or_else(|| "assess".to_string());
+            if matches!(final_phase.as_str(), "execute" | "integrate") {
+                if let Some(path) = sess_path.as_ref() {
+                    match self.try_reenter_mission_worktree_at(sess_idx, path) {
+                        Ok(()) => {
+                            // Keep execute/integrate phase as restored from disk.
+                        }
+                        Err(_detail) => {
+                            // Fail closed: do not resume execute/integrate.
+                            // try_reenter already restored primary.
+                            final_phase = "assess".to_string();
+                            if let Some(mut m2) = crate::model::sdlc::Mission::load(path) {
+                                // Keep approved flag only if contract still valid; force
+                                // assess so tools/keeper do not treat this as active.
+                                if m2.phase == "paused"
+                                    || m2.phase == "execute"
+                                    || m2.phase == "integrate"
+                                {
+                                    m2.phase = "assess".into();
+                                    // Unapprove so integrate/verify require re-bind.
+                                    m2.approved = false;
+                                    m2.needs_reapproval = true;
+                                    m2.amendment_note = Some(
+                                        "re-entry failed: bound worktree missing or branch mismatch — re-approve to rebind"
+                                            .into(),
+                                    );
+                                    let _ = m2.save(path);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    final_phase = "assess".to_string();
+                }
+            }
+
+            self.sessions[sess_idx].sdlc_phase = Some(final_phase);
+            let prev_ss = self.sessions[sess_idx]
                 .session
                 .as_ref()
                 .map(|s| s.settings.short_send_enabled);
-            self.sdlc_prev_short_send = prev_ss;
-            if let Some(sess) = self.fg_mut().session.as_mut() {
+            self.sessions[sess_idx].sdlc_prev_short_send = prev_ss;
+            if let Some(sess) = self.sessions[sess_idx].session.as_mut() {
                 sess.settings.short_send_enabled = true;
             }
             // Arm keeper on resume into an active execute/integrate mission.
-            if matches!(
-                self.sdlc_phase.as_deref(),
-                Some("execute") | Some("integrate")
-            ) {
-                self.fg_mut().sdlc_keeper_due = true;
+            let phase = self.sessions[sess_idx].sdlc_phase.clone();
+            if matches!(phase.as_deref(), Some("execute") | Some("integrate")) {
+                self.sessions[sess_idx].sdlc_keeper_due = true;
             }
         } else if leaving_sdlc {
-            // Restore short_send from saved value (take first so borrow ends).
-            let prev = self.sdlc_prev_short_send.take();
+            // Explicit exit: restore short_send, previous mode target is applied
+            // by caller via set_agent_mode(next). Also exit mission worktree to
+            // primary when bound.
+            let prev = self.sessions[sess_idx].sdlc_prev_short_send.take();
             if let Some(prev) = prev {
-                if let Some(sess) = self.fg_mut().session.as_mut() {
+                if let Some(sess) = self.sessions[sess_idx].session.as_mut() {
                     sess.settings.short_send_enabled = prev;
                 }
             }
-            self.sdlc_return_mode = None;
-            self.sdlc_phase = None;
-            self.pending_mission_seed = false;
+            // Best-effort: leave shadow worktree so primary is restored.
+            if let Some(sess) = self.sessions[sess_idx].session.as_mut() {
+                if sess.settings.workdir_saved.is_some() {
+                    sess.settings.exit_worktree();
+                }
+            }
+            // Mark active mission paused (not done). Paused is NOT auto-resumed
+            // on re-entry — only still-active execute/integrate contracts resume.
+            if let Some(path) = self.sessions[sess_idx]
+                .session
+                .as_ref()
+                .map(|s| s.path.clone())
+            {
+                if let Some(mut m) = crate::model::sdlc::Mission::load(&path) {
+                    if m.approved && matches!(m.phase.as_str(), "execute" | "integrate") {
+                        m.phase = "paused".into();
+                        let _ = m.save(&path);
+                    }
+                }
+            }
+            self.sessions[sess_idx].sdlc_return_mode = None;
+            self.sessions[sess_idx].sdlc_phase = None;
+            self.sessions[sess_idx].pending_mission_seed = false;
+            // Drop any in-flight LLM keeper so a late result cannot start a turn
+            // after SDLC has been left.
+            self.sessions[sess_idx].invalidate_sdlc_keeper_llm();
+            // Snap live cwd + dir index back to primary (exit_worktree already
+            // restored settings.workdir; active_cwd must not keep pointing at the
+            // mission shadow tree).
+            let dir_cache = self.sessions[sess_idx].dir_cache.clone();
+            let primary = self.sessions[sess_idx]
+                .session
+                .as_ref()
+                .map(|s| s.workdir())
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            self.sessions[sess_idx].active_cwd = Some(primary.clone());
+            crate::tool::dircache::reindex(vec![primary], dir_cache);
         }
 
-        self.agent_mode = new_mode;
+        self.sessions[sess_idx].agent_mode = new_mode;
         let mut plan_todos_after: Option<Vec<crate::app::mode::todo::TodoItem>> = None;
         if entering_plan || leaving_plan {
-            if let Some(sess) = self.fg_mut().session.as_mut() {
+            if let Some(sess) = self.sessions[sess_idx].session.as_mut() {
                 sess.plan_mode_hint = entering_plan;
                 if entering_plan {
                     use crate::app::mode::todo::{
@@ -775,14 +951,14 @@ impl AppStateRest {
         // SDLC mode-hint rebuild: set the hint and rebuild so the system prompt
         // picks up / drops the SDLC section.
         if entering_sdlc || leaving_sdlc {
-            if let Some(sess) = self.fg_mut().session.as_mut() {
+            if let Some(sess) = self.sessions[sess_idx].session.as_mut() {
                 sess.sdlc_mode_hint = entering_sdlc;
                 sess.rebuild_system();
                 let _ = sess.save();
             }
         }
         if let Some(todos) = plan_todos_after {
-            self.fg_mut().plan_todos = todos;
+            self.sessions[sess_idx].plan_todos = todos;
         }
     }
 
@@ -840,5 +1016,216 @@ impl AppStateRest {
                 rt.cost = lt.cost;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod agent_mode_session_isolation_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use crate::app::state::SessionRuntime;
+
+    #[test]
+    fn agent_mode_and_sdlc_phase_are_per_session() {
+        let mut rest = AppStateRest::new();
+        // Second session slot (background).
+        rest.sessions.push(SessionRuntime::new());
+        assert_eq!(rest.sessions.len(), 2);
+        rest.foreground = 0;
+
+        rest.set_agent_mode(AgentMode::Sdlc);
+        assert_eq!(rest.sessions[0].agent_mode, AgentMode::Sdlc);
+        assert_eq!(rest.sessions[0].sdlc_phase.as_deref(), Some("assess"));
+        // Background session must remain Auto / no phase.
+        assert_eq!(rest.sessions[1].agent_mode, AgentMode::Auto);
+        assert!(rest.sessions[1].sdlc_phase.is_none());
+
+        // Flip foreground and enter SDLC on the other session independently.
+        rest.foreground = 1;
+        rest.set_agent_mode(AgentMode::Sdlc);
+        assert_eq!(rest.sessions[1].agent_mode, AgentMode::Sdlc);
+        assert_eq!(rest.sessions[1].sdlc_phase.as_deref(), Some("assess"));
+        // First session stays in its own envelope.
+        assert_eq!(rest.sessions[0].agent_mode, AgentMode::Sdlc);
+        assert_eq!(rest.sessions[0].sdlc_phase.as_deref(), Some("assess"));
+
+        // Exit only the current foreground.
+        let ret = rest.sessions[1].sdlc_return_mode.unwrap_or(AgentMode::Auto);
+        rest.set_agent_mode(ret);
+        assert_eq!(rest.sessions[1].agent_mode, AgentMode::Auto);
+        assert!(rest.sessions[1].sdlc_phase.is_none());
+        assert_eq!(rest.sessions[0].agent_mode, AgentMode::Sdlc);
+        assert_eq!(rest.sessions[0].sdlc_phase.as_deref(), Some("assess"));
+    }
+
+    #[test]
+    fn pending_mission_seed_is_per_session() {
+        let mut rest = AppStateRest::new();
+        rest.sessions.push(SessionRuntime::new());
+        rest.sessions[0].pending_mission_seed = true;
+        assert!(!rest.sessions[1].pending_mission_seed);
+        rest.sessions[1].pending_plan_seed = true;
+        assert!(rest.sessions[0].pending_mission_seed);
+        assert!(!rest.sessions[0].pending_plan_seed);
+    }
+
+    #[test]
+    fn set_agent_mode_at_plan_does_not_touch_unrelated_foreground() {
+        use crate::model::conversation::Conversation;
+        use crate::model::session::Session;
+        use crate::model::settings::Settings;
+
+        let mut rest = AppStateRest::new();
+        rest.sessions.push(SessionRuntime::new());
+        assert_eq!(rest.sessions.len(), 2);
+
+        // Distinct on-disk dirs so plan_todos / rebuild_system can write safely.
+        let mk_sess = |tag: &str| {
+            let dir = std::env::temp_dir().join(format!(
+                "koma-plan-iso-{}-{}-{}",
+                tag,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            (
+                dir.clone(),
+                Session::new(
+                    format!("s-{tag}"),
+                    dir,
+                    "pwd".into(),
+                    Settings::default(),
+                    Conversation::from_messages(vec![]),
+                ),
+            )
+        };
+        let (dir0, sess0) = mk_sess("fg");
+        let (dir1, sess1) = mk_sess("bg");
+        rest.sessions[0].session = Some(sess0);
+        rest.sessions[1].session = Some(sess1);
+
+        // Foreground stays Normal; stream targets background session 1.
+        rest.foreground = 0;
+        rest.sessions[0].agent_mode = AgentMode::Normal;
+        rest.sessions[1].agent_mode = AgentMode::Auto;
+
+        rest.set_agent_mode_at(1, AgentMode::Plan);
+
+        // Target only.
+        assert_eq!(rest.sessions[1].agent_mode, AgentMode::Plan);
+        assert_eq!(rest.sessions[1].plan_return_mode, Some(AgentMode::Auto));
+        assert!(rest.sessions[1]
+            .session
+            .as_ref()
+            .is_some_and(|s| s.plan_mode_hint));
+
+        // Unrelated foreground untouched.
+        assert_eq!(rest.sessions[0].agent_mode, AgentMode::Normal);
+        assert!(rest.sessions[0].plan_return_mode.is_none());
+        assert!(rest.sessions[0]
+            .session
+            .as_ref()
+            .is_some_and(|s| !s.plan_mode_hint));
+        assert_eq!(rest.foreground, 0);
+
+        let _ = std::fs::remove_dir_all(&dir0);
+        let _ = std::fs::remove_dir_all(&dir1);
+    }
+
+    #[test]
+    fn leaving_sdlc_resets_active_cwd_to_primary_and_invalidates_keeper() {
+        use crate::model::conversation::Conversation;
+        use crate::model::session::Session;
+        use crate::model::settings::Settings;
+
+        let dir = std::env::temp_dir().join(format!(
+            "koma-sdlc-exit-cwd-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Fake primary + shadow worktree dirs.
+        let primary = dir.join("primary");
+        let shadow = dir.join("shadow-wt");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&shadow).unwrap();
+
+        let mut settings = Settings {
+            workdir: vec![primary.to_string_lossy().into_owned()],
+            ..Settings::default()
+        };
+        // Simulate entered mission worktree.
+        settings.enter_worktree(shadow.to_string_lossy().into_owned());
+        assert!(settings.workdir_saved.is_some());
+
+        let sess = Session::new(
+            "s-exit".into(),
+            dir.clone(),
+            "pwd".into(),
+            settings,
+            Conversation::from_messages(vec![]),
+        );
+
+        let mut rest = AppStateRest::new();
+        rest.sessions[0].session = Some(sess);
+        rest.sessions[0].agent_mode = AgentMode::Sdlc;
+        rest.sessions[0].sdlc_phase = Some("execute".into());
+        rest.sessions[0].sdlc_return_mode = Some(AgentMode::Auto);
+        rest.sessions[0].sdlc_prev_short_send = Some(false);
+        rest.sessions[0].active_cwd = Some(shadow.clone());
+        rest.sessions[0].pending_sdlc_keeper_llm = Some("stale inject".into());
+        rest.sessions[0].sdlc_keeper_llm_inflight = true;
+        rest.sessions[0].sdlc_keeper_due = true;
+        let epoch_before = rest.sessions[0].sdlc_keeper_epoch;
+
+        rest.set_agent_mode(AgentMode::Auto);
+
+        assert_eq!(rest.sessions[0].agent_mode, AgentMode::Auto);
+        assert!(rest.sessions[0].sdlc_phase.is_none());
+        // active_cwd snapped to primary (post exit_worktree workdir).
+        let cwd = rest.sessions[0].active_cwd.clone().expect("active_cwd set");
+        let cwd_canon = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+        let primary_canon = std::fs::canonicalize(&primary).unwrap_or(primary.clone());
+        assert_eq!(
+            cwd_canon, primary_canon,
+            "exit must reset active_cwd to primary"
+        );
+        // settings no longer in entered worktree.
+        assert!(rest.sessions[0]
+            .session
+            .as_ref()
+            .is_some_and(|s| s.settings.workdir_saved.is_none()));
+        // Keeper rails cleared + epoch bumped.
+        assert!(rest.sessions[0].pending_sdlc_keeper_llm.is_none());
+        assert!(!rest.sessions[0].sdlc_keeper_llm_inflight);
+        assert!(!rest.sessions[0].sdlc_keeper_due);
+        assert!(rest.sessions[0].sdlc_keeper_epoch > epoch_before);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn invalidate_sdlc_keeper_llm_drops_staged_and_bumps_epoch() {
+        let mut rt = SessionRuntime::new();
+        rt.pending_sdlc_keeper_llm = Some("inject me".into());
+        rt.sdlc_keeper_llm_inflight = true;
+        rt.sdlc_keeper_due = true;
+        let e0 = rt.sdlc_keeper_epoch;
+        rt.invalidate_sdlc_keeper_llm();
+        assert!(rt.pending_sdlc_keeper_llm.is_none());
+        assert!(!rt.sdlc_keeper_llm_inflight);
+        assert!(!rt.sdlc_keeper_due);
+        assert_eq!(rt.sdlc_keeper_epoch, e0.wrapping_add(1));
+        // Second invalidate keeps dropping + bumping (idempotent clear).
+        rt.pending_sdlc_keeper_llm = Some("again".into());
+        rt.invalidate_sdlc_keeper_llm();
+        assert!(rt.pending_sdlc_keeper_llm.is_none());
+        assert_eq!(rt.sdlc_keeper_epoch, e0.wrapping_add(2));
     }
 }

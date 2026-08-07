@@ -153,7 +153,10 @@ impl OpenRouterClient {
                 emit(&tx, StreamEvent::Error(clean_error(status, &text)));
                 return Ok(());
             }
-            emit(&tx, StreamEvent::Error("all retry attempts exhausted".into()));
+            emit(
+                &tx,
+                StreamEvent::Error("all retry attempts exhausted".into()),
+            );
             return Ok(());
         };
 

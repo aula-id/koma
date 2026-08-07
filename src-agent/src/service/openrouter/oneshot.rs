@@ -6,9 +6,8 @@ use anyhow::{anyhow, Result};
 use super::client::OpenRouterClient;
 use super::codex::to_text_format;
 use super::helpers::{
-    accepts_reasoning_exclude, auth_headers, backoff_delay, clean_error,
-    is_retryable_send_err, is_retryable_status, parse_blob_ids, parse_summary,
-    provider_routing_for, MAX_ATTEMPTS,
+    accepts_reasoning_exclude, auth_headers, backoff_delay, clean_error, is_retryable_send_err,
+    is_retryable_status, parse_blob_ids, parse_summary, provider_routing_for, MAX_ATTEMPTS,
 };
 use super::types::Conn;
 use crate::dto::chat::{ChatMessage, Role};
@@ -146,13 +145,7 @@ impl OpenRouterClient {
                         }
                         // Final attempt or non-retryable: check commandcode 403 fallback
                         if let Some(out) = commandcode_oneshot_fallback(
-                            self,
-                            conn,
-                            &bearer,
-                            model,
-                            messages,
-                            status,
-                            &text,
+                            self, conn, &bearer, model, messages, status, &text,
                         )
                         .await?
                         {
@@ -282,13 +275,7 @@ impl OpenRouterClient {
                         }
                         // Final attempt or non-retryable: check commandcode 403 fallback
                         if let Some(out) = commandcode_oneshot_fallback(
-                            self,
-                            conn,
-                            &bearer,
-                            model,
-                            messages,
-                            status,
-                            &text,
+                            self, conn, &bearer, model, messages, status, &text,
                         )
                         .await?
                         {
@@ -490,13 +477,7 @@ impl OpenRouterClient {
                         }
                         // Final attempt or non-retryable: check commandcode 403 fallback
                         if let Some(out) = commandcode_oneshot_fallback(
-                            self,
-                            conn,
-                            &bearer,
-                            model,
-                            messages,
-                            status,
-                            &text,
+                            self, conn, &bearer, model, messages, status, &text,
                         )
                         .await?
                         {
@@ -694,13 +675,7 @@ impl OpenRouterClient {
                         }
                         // Final attempt or non-retryable: check commandcode 403 fallback
                         if let Some(out) = commandcode_oneshot_fallback(
-                            self,
-                            conn,
-                            &bearer,
-                            model,
-                            messages,
-                            status,
-                            &text,
+                            self, conn, &bearer, model, messages, status, &text,
                         )
                         .await?
                         {
@@ -909,13 +884,7 @@ impl OpenRouterClient {
                         }
                         // Final attempt or non-retryable: check commandcode 403 fallback
                         if let Ok(Some(out)) = commandcode_oneshot_fallback(
-                            self,
-                            conn,
-                            &bearer,
-                            model,
-                            messages,
-                            status,
-                            &text,
+                            self, conn, &bearer, model, messages, status, &text,
                         )
                         .await
                         {

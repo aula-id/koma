@@ -244,8 +244,8 @@ impl DaemonHub {
                 // OAuth bearer (mirrors the static-key provider branch above).
                 // On success, reply with live ids; on error/empty, fall back to
                 // the curated catalogue overlay so the picker isn't blank.
-                let endpoint = crate::service::oauth::registry::KOMA_PREMIUM_CHAT_ENDPOINT
-                    .to_string();
+                let endpoint =
+                    crate::service::oauth::registry::KOMA_PREMIUM_CHAT_ENDPOINT.to_string();
                 let access_token = conn.access_token.clone();
                 let oauth_uuid = conn.uuid.clone();
                 let c = crate::app::runtime::session_mgmt::build_client();
@@ -264,13 +264,12 @@ impl DaemonHub {
                         .map(|v| v.into_iter().map(|m| m.id).collect::<Vec<_>>())
                         .unwrap_or_default();
                     if models.is_empty() {
-                        models =
-                            crate::service::catalogue_overlay::models_for_provider(
-                                crate::model::app_config::OAuthProvider::KomaRun,
-                            )
-                            .into_iter()
-                            .map(|m| m.id)
-                            .collect();
+                        models = crate::service::catalogue_overlay::models_for_provider(
+                            crate::model::app_config::OAuthProvider::KomaRun,
+                        )
+                        .into_iter()
+                        .map(|m| m.id)
+                        .collect();
                     }
                     let _ = tx.send(super::core::ListModelsReply {
                         client_id,

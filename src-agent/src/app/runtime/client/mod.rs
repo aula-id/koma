@@ -669,9 +669,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
     // Enable mouse capture so scroll events arrive as Event::Mouse. Auto resolves
     // to ON (the default). If the session's mouse_capture is Off, the first
     // Snapshot in render_loop will re-apply it via a one-shot sync.
-    crate::app::runtime::actions::apply_mouse_capture(
-        crate::model::settings::MouseCapture::Auto,
-    );
+    crate::app::runtime::actions::apply_mouse_capture(crate::model::settings::MouseCapture::Auto);
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;

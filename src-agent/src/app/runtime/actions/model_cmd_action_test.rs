@@ -49,13 +49,15 @@ fn entry_label_oauth_provider() {
     let mut config = test_config();
     // Remove the regular provider so the oauth fallback path is tested.
     config.providers.clear();
-    config.oauth_conns.push(crate::model::app_config::OAuthConn {
-        uuid: "prov-1".to_string(),
-        name: "My OAuth".to_string(),
-        provider: crate::model::app_config::OAuthProvider::Codex,
-        access_token: "tok".to_string(),
-        ..crate::model::app_config::OAuthConn::default()
-    });
+    config
+        .oauth_conns
+        .push(crate::model::app_config::OAuthConn {
+            uuid: "prov-1".to_string(),
+            name: "My OAuth".to_string(),
+            provider: crate::model::app_config::OAuthProvider::Codex,
+            access_token: "tok".to_string(),
+            ..crate::model::app_config::OAuthConn::default()
+        });
     let label = entry_label(&config, &config.models[0]);
     assert_eq!(label, "test-model — test/model-v1 @ My OAuth");
 }

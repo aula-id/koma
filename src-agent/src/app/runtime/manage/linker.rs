@@ -50,7 +50,9 @@ fn spawn_linker_daemon() -> Result<u32> {
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
 
-    let child = cmd.spawn().context("failed to spawn `koma --linker-daemon`")?;
+    let child = cmd
+        .spawn()
+        .context("failed to spawn `koma --linker-daemon`")?;
     Ok(child.id())
 }
 
@@ -119,9 +121,7 @@ fn send_linker_shutdown_request() {
     let Ok(mut stream) = SyncIpcStream::connect(&sock) else {
         return;
     };
-    let Ok(payload) =
-        serde_json::to_vec(&crate::ipc::linker_proto::LinkerRequest::Shutdown)
-    else {
+    let Ok(payload) = serde_json::to_vec(&crate::ipc::linker_proto::LinkerRequest::Shutdown) else {
         return;
     };
     let prefix = (payload.len() as u32).to_be_bytes();

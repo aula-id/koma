@@ -28,28 +28,28 @@ pub(crate) fn handle_compact(
 ) -> Result<()> {
     if state.rest.fg().waiting {
         state.rest.fg_mut().status = "busy — wait for response".into();
-        state.rest.pending_plan_seed = false;
-        state.rest.pending_mission_seed = false;
+        state.rest.fg_mut().pending_plan_seed = false;
+        state.rest.fg_mut().pending_mission_seed = false;
         return Ok(());
     }
     if client.is_none() || state.rest.fg().session.is_none() {
         state.rest.fg_mut().status = "no active session".into();
-        state.rest.pending_plan_seed = false;
-        state.rest.pending_mission_seed = false;
+        state.rest.fg_mut().pending_plan_seed = false;
+        state.rest.fg_mut().pending_mission_seed = false;
         return Ok(());
     }
     let Some(sess) = state.rest.fg().session.as_ref() else {
         crate::model::store::append_global_error_log("compact", "BUG: fg session missing");
-        state.rest.pending_plan_seed = false;
-        state.rest.pending_mission_seed = false;
+        state.rest.fg_mut().pending_plan_seed = false;
+        state.rest.fg_mut().pending_mission_seed = false;
         return Ok(());
     };
     let pn = preserve_n_override.unwrap_or(sess.settings.compaction.preserve_n);
     let (to_sum, kept_tail) = sess.conversation.split_for_compaction(pn);
     if to_sum.is_empty() {
         state.rest.fg_mut().status = "nothing to compact".into();
-        state.rest.pending_plan_seed = false;
-        state.rest.pending_mission_seed = false;
+        state.rest.fg_mut().pending_plan_seed = false;
+        state.rest.fg_mut().pending_mission_seed = false;
         return Ok(());
     }
     let mut req = vec![ChatMessage::new(
@@ -87,8 +87,8 @@ pub(crate) fn handle_compact(
     state.rest.fg_mut().active_rx = Some(rx);
     let Some(c) = client.as_ref().cloned() else {
         crate::model::store::append_global_error_log("compact", "BUG: client missing");
-        state.rest.pending_plan_seed = false;
-        state.rest.pending_mission_seed = false;
+        state.rest.fg_mut().pending_plan_seed = false;
+        state.rest.fg_mut().pending_mission_seed = false;
         return Ok(());
     };
     let jh = handle.spawn(async move {

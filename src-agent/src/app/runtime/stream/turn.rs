@@ -306,7 +306,13 @@ pub(crate) fn advance_turn(
                 // so it decodes here; only decode — strip nothing else.
                 let raw = buf.clone().unwrap_or_default();
                 let content = crate::dto::chat::unescape_reasoning_tags(&raw).into_owned();
-                let _ = crate::model::msglog::append(&sess.path, Role::Assistant, &content, reasoning.as_deref(), usage);
+                let _ = crate::model::msglog::append(
+                    &sess.path,
+                    Role::Assistant,
+                    &content,
+                    reasoning.as_deref(),
+                    usage,
+                );
                 sess.conversation.push_assistant_with_tools(
                     content,
                     pending.clone(),
@@ -320,8 +326,13 @@ pub(crate) fn advance_turn(
                 let (content, msg_reasoning, promoted) =
                     final_answer(buf.clone().unwrap_or_default(), reasoning);
                 if !content.is_empty() {
-                    let _ =
-                        crate::model::msglog::append(&sess.path, Role::Assistant, &content, msg_reasoning.as_deref(), usage);
+                    let _ = crate::model::msglog::append(
+                        &sess.path,
+                        Role::Assistant,
+                        &content,
+                        msg_reasoning.as_deref(),
+                        usage,
+                    );
                     sess.conversation
                         .push_assistant(content.clone(), msg_reasoning, promoted);
                     if let Err(e) = sess.save() {
@@ -481,5 +492,3 @@ pub(crate) fn advance_turn(
     state.rest.sessions[sess_idx].tool_results.clear();
     super::tools::process_tools(state, sess_idx, client, handle);
 }
-
-

@@ -236,7 +236,8 @@ impl DaemonHub {
                 Ok(()) // no foreground session to hold a local override
             };
             state.rest.config.upsert_model(entry);
-            let config_result = crate::app::runtime::actions::save_config_and_broadcast(&state.rest.config);
+            let config_result =
+                crate::app::runtime::actions::save_config_and_broadcast(&state.rest.config);
             session_result.and(config_result)
         };
         state.rest.reset_effort_if_main_changed(before_main);

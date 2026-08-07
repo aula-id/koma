@@ -459,7 +459,7 @@ fn install_daemon_session(
         .map(|s| {
             crate::app::mode::todo::load_current_todos(
                 s,
-                state.rest.agent_mode == crate::app::state::AgentMode::Plan,
+                state.rest.agent_mode() == crate::app::state::AgentMode::Plan,
             )
         })
         .unwrap_or_default();
@@ -511,7 +511,9 @@ fn install_daemon_session(
                 }
             }
         }
-        state.rest.set_agent_mode(crate::app::state::AgentMode::Sdlc);
+        state
+            .rest
+            .set_agent_mode(crate::app::state::AgentMode::Sdlc);
     }
 
     if unconfigured {

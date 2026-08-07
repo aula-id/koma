@@ -102,17 +102,20 @@ pub(super) fn drain_stream(
                     // post-approval turn OR the compactor call) aborts it: drop the
                     // one-shot seeds so they can't fire on a later `/compact`.
                     // No-op when no plan/mission flow is armed.
-                    state.rest.pending_plan_seed = false;
-                    state.rest.pending_mission_seed = false;
+                    state.rest.sessions[idx].pending_plan_seed = false;
+                    state.rest.sessions[idx].pending_mission_seed = false;
                     still_streaming = false;
                     break;
                 }
-                StreamEvent::Retrying { attempt, max, delay_ms: _ } => {
+                StreamEvent::Retrying {
+                    attempt,
+                    max,
+                    delay_ms: _,
+                } => {
                     // Transient upstream failure; the stream task is sleeping
                     // and will re-POST.  Update the status line but do NOT
                     // finish the stream or clear any tool/approval state.
-                    state.rest.sessions[idx].status =
-                        format!("retrying {attempt}/{max}\u{2026}");
+                    state.rest.sessions[idx].status = format!("retrying {attempt}/{max}\u{2026}");
                     // still_streaming remains true — keep draining.
                 }
                 StreamEvent::Compacted { summary, kept_tail } => {

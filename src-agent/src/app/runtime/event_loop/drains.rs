@@ -100,8 +100,15 @@ pub(super) fn apply_compaction_result(
     // FIRST post-compaction user turn — the model then executes from a clean
     // context that leads with the plan. Cleared unconditionally (a missing plan.md
     // is silently skipped) so it can never re-fire on a later plain `/compact`.
-    let plan_seed: Option<String> = if state.rest.pending_plan_seed {
-        state.rest.pending_plan_seed = false;
+    let plan_seed: Option<String> = if state
+        .rest
+        .sessions
+        .get(idx)
+        .is_some_and(|rt| rt.pending_plan_seed)
+    {
+        if let Some(rt) = state.rest.sessions.get_mut(idx) {
+            rt.pending_plan_seed = false;
+        }
         state
             .rest
             .sessions
@@ -114,8 +121,15 @@ pub(super) fn apply_compaction_result(
         None
     };
     // Mission-approval seed: full OPEN+SEALED capsule (force continuity).
-    let mission_seed: Option<String> = if state.rest.pending_mission_seed {
-        state.rest.pending_mission_seed = false;
+    let mission_seed: Option<String> = if state
+        .rest
+        .sessions
+        .get(idx)
+        .is_some_and(|rt| rt.pending_mission_seed)
+    {
+        if let Some(rt) = state.rest.sessions.get_mut(idx) {
+            rt.pending_mission_seed = false;
+        }
         state
             .rest
             .sessions
@@ -126,19 +140,24 @@ pub(super) fn apply_compaction_result(
                 if !mission.approved {
                     return None;
                 }
-                let (open, sealed) = crate::model::msglog::open(&s.path)
+                let (open, sealed, all) = crate::model::msglog::open(&s.path)
                     .ok()
                     .map(|conn| {
-                        let _ = crate::model::sdlc::graph::ensure_tables(&conn);
+                        if crate::model::sdlc::graph::ensure_tables(&conn).is_err() {
+                            return (Vec::new(), Vec::new(), Vec::new());
+                        }
                         let open = crate::model::sdlc::graph::list_open(&conn).unwrap_or_default();
                         let sealed =
                             crate::model::sdlc::graph::list_sealed(&conn).unwrap_or_default();
-                        (open, sealed)
+                        let all = crate::model::sdlc::graph::list_all(&conn).unwrap_or_default();
+                        (open, sealed, all)
                     })
                     .unwrap_or_default();
                 Some(format!(
                     "Approved mission (execute now):\n\n{}",
-                    crate::model::sdlc::mission::build_seed_capsule(&mission, &open, &sealed)
+                    crate::model::sdlc::mission::build_seed_capsule_with_all(
+                        &mission, &open, &sealed, &all
+                    )
                 ))
             })
     } else {

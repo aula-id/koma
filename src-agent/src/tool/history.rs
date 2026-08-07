@@ -62,13 +62,16 @@ impl Tool for MessageFind {
             None => bail!("no active session to search"),
         };
 
-        let matches =
-            crate::model::msglog::search_messages(session_dir, query, 10, role_filter);
-        let out = format_matches(
-            matches
-                .iter()
-                .map(|m| (m.id, m.role.as_str(), m.snippet.as_str(), m.created_at, m.reasoning.as_deref())),
-        );
+        let matches = crate::model::msglog::search_messages(session_dir, query, 10, role_filter);
+        let out = format_matches(matches.iter().map(|m| {
+            (
+                m.id,
+                m.role.as_str(),
+                m.snippet.as_str(),
+                m.created_at,
+                m.reasoning.as_deref(),
+            )
+        }));
 
         if out.is_empty() {
             return Ok("(no matching messages found)".to_string());
@@ -77,7 +80,9 @@ impl Tool for MessageFind {
     }
 }
 
-fn format_matches<'a>(matches: impl Iterator<Item = (i64, &'a str, &'a str, i64, Option<&'a str>)>) -> String {
+fn format_matches<'a>(
+    matches: impl Iterator<Item = (i64, &'a str, &'a str, i64, Option<&'a str>)>,
+) -> String {
     let mut out = String::new();
     for (msg_id, role, content, _created_at, reasoning) in matches {
         let role_prefix = match role {

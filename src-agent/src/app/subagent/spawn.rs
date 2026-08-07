@@ -146,8 +146,24 @@ pub fn spawn_subagent(
                 && !matches!(n.as_str(), "seqthink" | "checklist"))
                 || n.starts_with("mcp__")
         });
+    } else if mode == AgentMode::Sdlc && ctx.sdlc_assess {
+        // SDLC assess: fold to the same read-only surface as the main assess gate.
+        // Execute/integrate leave the agent surface alone — path ownership is
+        // enforced by bound worktree roots + allow_scratch=false on ToolCtx.
+        tools.retain(|n| {
+            (crate::tool::tool_allowed_in_sdlc_assess(n)
+                && !matches!(n.as_str(), "seqthink" | "checklist" | "mission_ready"))
+                || n.starts_with("mcp__")
+        });
     }
-    let convo = context::build_seed(agent, awareness, memory_md, &ctx.workspaces, &ctx.dir_cache, task);
+    let convo = context::build_seed(
+        agent,
+        awareness,
+        memory_md,
+        &ctx.workspaces,
+        &ctx.dir_cache,
+        task,
+    );
     // None = unbounded (natural termination when model returns no tool calls).
     // Some(n) = explicit per-agent cap from the agent-def `steps` field.
     let max_steps: Option<usize> = agent.steps.map(|s| s as usize);

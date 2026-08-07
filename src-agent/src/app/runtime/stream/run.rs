@@ -16,7 +16,6 @@ const TOOL_NUDGE: &str = "\n\nIMPORTANT:\n\
 - If you need prior conversation context, use message_find.\n\
 - If internet and history having zero result, STOP and ASK me.";
 
-
 /// Fully cancel the foreground session's in-flight turn before its conversation is
 /// cut/replaced: abort the stream task, drop the active receiver (so late events
 /// vanish), clear `waiting`, AND tear down the whole agentic round — approval,
@@ -115,8 +114,7 @@ pub(crate) fn start_stream_task(
                     if cache.is_multi() && !workspaces.is_empty() {
                         first.content.push_str("|idx|path|\n|---|---|\n");
                         for (i, ws) in workspaces.iter().enumerate() {
-                            first.content
-                                .push_str(&format!("|{i}|{}|\n", ws.display()));
+                            first.content.push_str(&format!("|{i}|{}|\n", ws.display()));
                         }
                         first.content.push('\n');
                     }
@@ -326,7 +324,7 @@ over sec_remote (stateful socket).\n",
             crate::app::resolve::resolve_turn_model(
                 &state.rest.config,
                 &sess.settings,
-                state.rest.agent_mode,
+                state.rest.sessions[sess_idx].agent_mode,
             )
         });
     // Snapshot the model id that will actually be dispatched onto the session's
@@ -526,7 +524,7 @@ over sec_remote (stateful socket).\n",
     // stream's advertise filter keeps the model's calls to them. With no MCP servers
     // (or none connected yet) both are empty and the request is byte-identical to the
     // pre-MCP path. Sub-agents get NO MCP tools (kept simple) — only the main agent.
-    let mode = state.rest.agent_mode;
+    let mode = state.rest.sessions[sess_idx].agent_mode;
     let (mut mcp_tools, mut advertise): (Vec<crate::dto::openrouter::ToolDef>, Vec<String>) =
         match state.rest.mcp_manager.as_ref() {
             Some(mgr) => {
@@ -575,10 +573,24 @@ over sec_remote (stateful socket).\n",
         advertise.push("seqthink".to_string());
         advertise.push("plan_ready".to_string());
     } else if mode == AgentMode::Sdlc {
-        // SDLC: full tool surface like Auto, PLUS mission lifecycle tools.
-        advertise.push("mission_ready".to_string());
-        advertise.push("mission_verify".to_string());
-        advertise.push("mission_integrate".to_string());
+        // SDLC assess: fold to the assess surface (read/search/checklist/mission_ready).
+        // Execute/integrate keep the full Auto-like surface + mission lifecycle tools.
+        // done/paused/inactive: do NOT advertise mission_verify (or integrate).
+        let phase = state.rest.sessions[sess_idx].sdlc_phase.as_deref();
+        if phase == Some("assess") {
+            advertise
+                .retain(|n| crate::tool::tool_allowed_in_sdlc_assess(n) || n.starts_with("mcp__"));
+            advertise.push("seqthink".to_string());
+            advertise.push("mission_ready".to_string());
+        } else if matches!(phase, Some("execute") | Some("integrate")) {
+            advertise.push("mission_ready".to_string());
+            advertise.push("mission_verify".to_string());
+            advertise.push("mission_integrate".to_string());
+        } else {
+            // done / paused / None / unknown — contract lifecycle tools stay off
+            // the wire; mission_ready remains so an amendment can restart assess.
+            advertise.push("mission_ready".to_string());
+        }
     } else {
         advertise.push("plan_enter".to_string());
     }
@@ -741,15 +753,24 @@ mod skill_tail_tests {
         let mut skills = BTreeMap::new();
         skills.insert(
             "zebra".to_string(),
-            ActiveSkill { body: "z-body".to_string(), skill_dir: None },
+            ActiveSkill {
+                body: "z-body".to_string(),
+                skill_dir: None,
+            },
         );
         skills.insert(
             "alpha".to_string(),
-            ActiveSkill { body: "a-body".to_string(), skill_dir: None },
+            ActiveSkill {
+                body: "a-body".to_string(),
+                skill_dir: None,
+            },
         );
         skills.insert(
             "blank".to_string(),
-            ActiveSkill { body: "   ".to_string(), skill_dir: None },
+            ActiveSkill {
+                body: "   ".to_string(),
+                skill_dir: None,
+            },
         );
         let mut dst = String::from("HEAD");
         append_active_skills(&mut dst, &skills);

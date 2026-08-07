@@ -22,12 +22,12 @@ pub mod bash;
 pub mod editor;
 mod effort;
 pub mod ext_screen;
-mod model_cmd;
 pub mod extensions;
 pub mod help;
 mod key_input;
 mod loading;
 pub mod mcp;
+mod model_cmd;
 mod onboard;
 pub mod onboard_provider;
 mod picker;
@@ -52,13 +52,11 @@ pub use todo::{parse_todo_file, TodoState};
 // daemon Help projection (follow-up); re-exported now so that lands without
 // re-touching this line. `allow` silences the meanwhile-unused warning.
 pub use effort::EffortPickerState;
-pub use model_cmd::{ModelCmdState, ModelCmdSub};
-#[allow(unused_imports)]
-pub use skill_cmd::{SkillCmdState, SkillFilterChip, SkillEntry};
 #[allow(unused_imports)]
 pub use help::{HelpEntry, HelpKind, HelpState};
 pub use key_input::KeyInputForm;
 pub use loading::{LoadingState, WarmStatus};
+pub use model_cmd::{ModelCmdState, ModelCmdSub};
 pub use onboard::OnboardState;
 pub use onboard_provider::{OnboardProviderState, OnboardProviderStep};
 pub use picker::PickerState;
@@ -66,6 +64,8 @@ pub use quit_confirm::QuitConfirmState;
 pub use rewind::{RewindEntry, RewindState};
 pub use session_hub::{CookingEntry, HistoryEntry, HubPane, SessionHub, SessionKind};
 pub use settings::{filter_models, SettingField, SettingsState, GENERAL_FIELDS, PICKER_MAX};
+#[allow(unused_imports)]
+pub use skill_cmd::{SkillCmdState, SkillEntry, SkillFilterChip};
 
 // ── Usage dashboard nav state ────────────────────────────────────────────────
 

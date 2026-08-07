@@ -106,18 +106,12 @@ pub(crate) fn handle_model_agent_swap(
     model_uuid: Option<String>,
     state: &mut AppState,
 ) -> Result<()> {
-    use crate::model::agent_def::{AgentSource, save_agent, AgentScope as DefScope};
+    use crate::model::agent_def::{save_agent, AgentScope as DefScope, AgentSource};
 
-    let session_path = state
-        .rest
-        .fg()
-        .session
-        .as_ref()
-        .map(|s| s.path.clone());
+    let session_path = state.rest.fg().session.as_ref().map(|s| s.path.clone());
 
-    let registry = crate::model::agent_def::load_registry(
-        session_path.as_deref().and_then(|p| p.parent()),
-    );
+    let registry =
+        crate::model::agent_def::load_registry(session_path.as_deref().and_then(|p| p.parent()));
     let Some(agent) = registry.get(&agent_name).cloned() else {
         state.rest.fg_mut().status = format!("unknown agent: {agent_name}");
         return Ok(());
@@ -125,8 +119,7 @@ pub(crate) fn handle_model_agent_swap(
 
     // Refuse extension agents.
     if agent.source == AgentSource::Extension {
-        state.rest.fg_mut().status =
-            "cannot change extension agent model".to_string();
+        state.rest.fg_mut().status = "cannot change extension agent model".to_string();
         return Ok(());
     }
 
@@ -178,25 +171,14 @@ pub(crate) fn handle_model_agent_swap(
 
 /// Handle `Action::ModelBackToAgentList`: pop AgentPick back to AgentList.
 pub(crate) fn handle_model_back_to_agent_list(state: &mut AppState) {
-    let session_path = state
-        .rest
-        .fg()
-        .session
-        .as_ref()
-        .map(|s| s.path.clone());
+    let session_path = state.rest.fg().session.as_ref().map(|s| s.path.clone());
 
-    let registry = crate::model::agent_def::load_registry(
-        session_path.as_deref().and_then(|p| p.parent()),
-    );
+    let registry =
+        crate::model::agent_def::load_registry(session_path.as_deref().and_then(|p| p.parent()));
     let agents: Vec<String> = registry
         .list(true)
         .into_iter()
-        .filter(|a| {
-            !matches!(
-                a.source,
-                crate::model::agent_def::AgentSource::Extension
-            )
-        })
+        .filter(|a| !matches!(a.source, crate::model::agent_def::AgentSource::Extension))
         .map(|a| a.name.clone())
         .collect();
     let options: Vec<(Option<String>, String)> = agents
@@ -212,20 +194,11 @@ pub(crate) fn handle_model_back_to_agent_list(state: &mut AppState) {
 }
 
 /// Handle `Action::ModelOpenAgentPick`: open AgentPick for a named agent.
-pub(crate) fn handle_model_open_agent_pick(
-    agent_name: String,
-    state: &mut AppState,
-) {
-    let session_path = state
-        .rest
-        .fg()
-        .session
-        .as_ref()
-        .map(|s| s.path.clone());
+pub(crate) fn handle_model_open_agent_pick(agent_name: String, state: &mut AppState) {
+    let session_path = state.rest.fg().session.as_ref().map(|s| s.path.clone());
 
-    let registry = crate::model::agent_def::load_registry(
-        session_path.as_deref().and_then(|p| p.parent()),
-    );
+    let registry =
+        crate::model::agent_def::load_registry(session_path.as_deref().and_then(|p| p.parent()));
 
     let Some(agent) = registry.get(&agent_name).cloned() else {
         state.rest.fg_mut().status = format!("unknown agent: {agent_name}");
@@ -233,17 +206,12 @@ pub(crate) fn handle_model_open_agent_pick(
     };
 
     // Build model options: inherit main + session models + global models.
-    let mut options: Vec<(Option<String>, String)> =
-        vec![(None, "(inherit main)".to_string())];
+    let mut options: Vec<(Option<String>, String)> = vec![(None, "(inherit main)".to_string())];
 
     let sess_settings = state.rest.fg().session.as_ref().map(|s| &s.settings);
     let config = &state.rest.config;
     if let Some(settings) = sess_settings {
-        for entry in settings
-            .session_models
-            .iter()
-            .chain(config.models.iter())
-        {
+        for entry in settings.session_models.iter().chain(config.models.iter()) {
             let label = entry_label(config, entry);
             options.push((Some(entry.uuid.clone()), label));
         }

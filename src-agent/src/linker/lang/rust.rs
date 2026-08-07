@@ -22,10 +22,7 @@ pub fn extract_imports(content: &str) -> Vec<String> {
     let mut imports = Vec::new();
 
     // Extract use declarations: capture the full node text, then parse the path.
-    if let Ok(query) = tree_sitter::Query::new(
-        &lang,
-        "(use_declaration) @use_decl",
-    ) {
+    if let Ok(query) = tree_sitter::Query::new(&lang, "(use_declaration) @use_decl") {
         let mut cursor = tree_sitter::QueryCursor::new();
         for m in cursor.matches(&query, tree.root_node(), content.as_bytes()) {
             for cap in m.captures {
@@ -39,10 +36,7 @@ pub fn extract_imports(content: &str) -> Vec<String> {
     }
 
     // Extract mod declarations: `mod foo;`
-    if let Ok(query) = tree_sitter::Query::new(
-        &lang,
-        "(mod_item name: (identifier) @mod_name)",
-    ) {
+    if let Ok(query) = tree_sitter::Query::new(&lang, "(mod_item name: (identifier) @mod_name)") {
         let mut cursor = tree_sitter::QueryCursor::new();
         for m in cursor.matches(&query, tree.root_node(), content.as_bytes()) {
             for cap in m.captures {

@@ -101,11 +101,7 @@ fn global_skills_dir() -> anyhow::Result<PathBuf> {
 ///
 /// Supports both flat (`foo.md`) and dir-form (`bar/SKILL.md`).
 /// Missing directory is not an error. One malformed file is logged and skipped.
-fn scan_skills_root(
-    root: &Path,
-    source: SkillSource,
-    skills: &mut BTreeMap<String, SkillDef>,
-) {
+fn scan_skills_root(root: &Path, source: SkillSource, skills: &mut BTreeMap<String, SkillDef>) {
     let entries = match std::fs::read_dir(root) {
         Ok(e) => e,
         Err(_) => return,
@@ -124,11 +120,7 @@ fn scan_skills_root(
 }
 
 /// Try to load a flat skill file (`foo.md`) from a skills root.
-fn load_flat_skill(
-    path: &Path,
-    source: SkillSource,
-    skills: &mut BTreeMap<String, SkillDef>,
-) {
+fn load_flat_skill(path: &Path, source: SkillSource, skills: &mut BTreeMap<String, SkillDef>) {
     let name = match path.file_stem() {
         Some(s) => s.to_string_lossy().to_lowercase(),
         None => return,
@@ -154,11 +146,7 @@ fn load_flat_skill(
 }
 
 /// Try to load a dir-form skill (`<name>/SKILL.md` or `<name>/skill.md`).
-fn load_dir_skill(
-    dir: &Path,
-    source: SkillSource,
-    skills: &mut BTreeMap<String, SkillDef>,
-) {
+fn load_dir_skill(dir: &Path, source: SkillSource, skills: &mut BTreeMap<String, SkillDef>) {
     // Look for SKILL.md or skill.md (case-insensitive).
     let entry_file = SKILL_ENTRY_FILES
         .iter()
