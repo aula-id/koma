@@ -242,6 +242,21 @@ fn resolve_allows_scratch_by_default_non_sdlc() {
 }
 
 #[test]
+fn resolve_read_allows_canonicalized_scratch_path() {
+    let scratch = crate::model::store::scratch_root()
+        .join(format!("resolve-read-scratch-ok-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let target = scratch.join("note.txt");
+    let workspaces = vec![std::env::temp_dir().join("koma-nonexistent-workspace-read")];
+    let ok = resolve_read(&workspaces, target.to_str().expect("utf8 path"), None, &[]);
+    assert!(
+        ok.is_ok(),
+        "resolve_read must keep scratch exemption after canonicalization: {ok:?}"
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+#[test]
 fn resolve_in_rejects_scratch_when_bypass_disabled() {
     let scratch = crate::model::store::scratch_root()
         .join(format!("resolve-scratch-deny-{}", std::process::id()));

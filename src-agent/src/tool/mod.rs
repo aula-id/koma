@@ -504,7 +504,7 @@ pub fn resolve_in(workspaces: &[PathBuf], rel: &str, allow_scratch: bool) -> Res
         // Historical exemption: absolute paths under process-global scratch.
         // SDLC execute/integrate disables this so mission binding cannot be bypassed.
         if allow_scratch {
-            let scratch = crate::model::store::scratch_root();
+            let scratch = partial_canonicalize(&crate::model::store::scratch_root());
             if candidate.starts_with(&scratch) {
                 return Ok(candidate);
             }
@@ -547,10 +547,8 @@ pub fn resolve_read(
 ) -> Result<PathBuf> {
     let as_path = Path::new(rel);
     if as_path.is_absolute() {
-        let scratch = crate::model::store::scratch_root();
-        let candidate = as_path
-            .canonicalize()
-            .unwrap_or_else(|_| as_path.to_path_buf());
+        let scratch = partial_canonicalize(&crate::model::store::scratch_root());
+        let candidate = partial_canonicalize(as_path);
         if candidate.starts_with(&scratch) {
             return resolve(workspaces, rel);
         }
