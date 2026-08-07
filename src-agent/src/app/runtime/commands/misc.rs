@@ -14,7 +14,7 @@ use crate::model::store;
 /// - `None` → armed-aware CYCLE (Auto→Normal→Plan→[Yolo when armed]→Auto), the
 ///   same transition as Shift+Tab.
 /// - `Some("auto")` / `Some("normal")` / `Some("plan")` → explicitly set that
-///   mode. During SDLC execute/integrate this is blocked; assess/done/paused allow it.
+///   mode. During SDLC this is allowed only in the assess phase.
 /// - `Some("yolo")` → enter YOLO **only when armed** (Layer 2). When NOT armed it
 ///   REFUSES: the mode is left unchanged and the status explains how to unlock it.
 /// - any other token → leave the mode unchanged and report the bad argument.
@@ -32,18 +32,17 @@ pub(super) fn handle_mode(state: &mut AppState, arg: Option<String>) -> Result<(
             }
         }
         Some("auto") | Some("normal") | Some("plan") | Some("yolo") if in_sdlc => {
-            // Active SDLC: block hops to Auto/Plan/Normal/Yolo only during
-            // active phases (execute/integrate). The human may switch modes
-            // during assess or done; the agent cannot call /mode at all.
+            // SDLC mode hops are a human assessment-only control. Once the
+            // mission leaves assess, execution, integration, cleanup, and
+            // pause states cannot be escaped by changing the agent mode.
             let phase = state.rest.fg().sdlc_phase.as_deref();
-            if matches!(phase, Some("execute") | Some("integrate")) {
+            if phase != Some("assess") {
                 state.rest.fg_mut().status =
-                    "sdlc active — use `/mode exit` (or bare `/mode`) to leave; \
-                     mode hops to auto/normal/plan/yolo are blocked during execute/integrate"
+                    "sdlc mode hops are allowed only during assess; use `/mode exit` \
+                     (or bare `/mode`) to leave SDLC"
                         .into();
                 return Ok(());
             }
-            // assess/done/paused: set the requested mode directly.
             let target = match arg.as_deref().unwrap() {
                 "auto" => AgentMode::Auto,
                 "normal" => AgentMode::Normal,

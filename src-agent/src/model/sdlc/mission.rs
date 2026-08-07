@@ -403,6 +403,138 @@ pub fn is_ancestor(repo: &std::path::Path, ancestor: &str, descendant: &str) -> 
         .unwrap_or(false)
 }
 
+/// Result of cleaning up a successfully integrated mission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DoneCleanupOutcome {
+    ResetToAssess,
+}
+
+/// Remove a completed mission's worktree and merged branch, then make its
+/// persisted contract available for reassessment. This fails closed: cleanup
+/// is permitted only for a valid `done` mission whose graph is fully verified
+/// and whose mission branch is already contained in the frozen target branch.
+pub fn cleanup_done_mission(session_dir: &std::path::Path) -> Result<DoneCleanupOutcome> {
+    let mission =
+        Mission::load(session_dir).ok_or_else(|| anyhow::anyhow!("no mission to clean up"))?;
+    if mission.phase != "done" {
+        bail!(
+            "mission phase '{}' is not ready for done cleanup",
+            mission.phase
+        );
+    }
+    if !mission.approved || mission.needs_reapproval || !mission.hash_valid() {
+        bail!("done mission contract is not valid for cleanup");
+    }
+    if mission.contract_version < CURRENT_CONTRACT_VERSION || !mission.has_frozen_target() {
+        bail!("done mission has no frozen integration target");
+    }
+
+    let worktree_path = mission
+        .worktree_path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("done mission has no bound worktree path"))?;
+    let branch = mission
+        .branch
+        .as_deref()
+        .filter(|branch| !branch.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("done mission has no bound branch"))?;
+    let target_repo = mission
+        .target_worktree_path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("done mission has no frozen target path"))?;
+    let target_branch = mission
+        .target_branch
+        .as_deref()
+        .filter(|branch| !branch.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("done mission has no frozen target branch"))?;
+
+    let conn = crate::model::msglog::open(session_dir)?;
+    graph::ensure_tables(&conn)?;
+    if !graph::all_required_leaves_verified(&conn)? {
+        bail!("cannot clean up done mission until every required leaf is verified");
+    }
+    if !is_ancestor(&target_repo, branch, target_branch) {
+        bail!("cannot clean up done mission before branch '{branch}' is integrated into '{target_branch}'");
+    }
+
+    git_worktree_remove_checked(&target_repo, std::path::Path::new(worktree_path))?;
+    git_branch_delete_checked(&target_repo, branch)?;
+    reset_mission_to_assess_after_cleanup(session_dir, mission)?;
+    Ok(DoneCleanupOutcome::ResetToAssess)
+}
+
+fn git_worktree_remove_checked(repo: &std::path::Path, worktree: &std::path::Path) -> Result<()> {
+    // A prior interrupted cleanup may already have removed it; the branch and
+    // mission reset checks below still make retrying safe.
+    if !worktree.exists() {
+        return Ok(());
+    }
+    let output = std::process::Command::new("git")
+        .args([
+            "worktree",
+            "remove",
+            worktree.as_os_str().to_string_lossy().as_ref(),
+        ])
+        .current_dir(repo)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    bail!(
+        "could not remove mission worktree {}: {}",
+        worktree.display(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+}
+
+fn git_branch_delete_checked(repo: &std::path::Path, branch: &str) -> Result<()> {
+    let exists = std::process::Command::new("git")
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ])
+        .current_dir(repo)
+        .status()?
+        .success();
+    if !exists {
+        return Ok(());
+    }
+    let output = std::process::Command::new("git")
+        .args(["branch", "--delete", "--", branch])
+        .current_dir(repo)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    bail!(
+        "could not delete merged mission branch '{branch}': {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+}
+
+fn reset_mission_to_assess_after_cleanup(
+    session_dir: &std::path::Path,
+    mut mission: Mission,
+) -> Result<()> {
+    mission.phase = "assess".into();
+    mission.approved = false;
+    mission.worktree_name = None;
+    mission.branch = None;
+    mission.worktree_path = None;
+    mission.needs_reapproval = true;
+    mission.hash = mission.recompute_hash();
+    mission.save(session_dir)
+}
+
 /// Build the SDLC seed capsule for injection into a compacted or fresh
 /// conversation. Mandatory OPEN + SEALED sections so the model always
 /// sees the full contract context on resume. OPEN/SEALED prefer leaf-aware tree.
@@ -1306,6 +1438,125 @@ mod tests {
         );
         // Unrelated: tip is NOT ancestor of base.
         assert!(!is_ancestor(&root, &tip, &base) || tip == base);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cleanup_done_mission_removes_integrated_resources_then_resets() {
+        use crate::model::sdlc::graph::{
+            ensure_tables, replace_nodes_from_checklist, set_verify_bit_with_evidence,
+            ChecklistNode,
+        };
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "koma-sdlc-done-cleanup-{}-{stamp}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let primary = root.join("primary");
+        let worktree = root.join("mission-worktree");
+        let session_dir = root.join("session");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&session_dir).unwrap();
+
+        let git = |dir: &std::path::Path, args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&primary, &["init", "-b", "main"]);
+        git(&primary, &["config", "user.email", "test@example.com"]);
+        git(&primary, &["config", "user.name", "Test"]);
+        std::fs::write(primary.join("base.txt"), "base").unwrap();
+        git(&primary, &["add", "."]);
+        git(&primary, &["commit", "-m", "base"]);
+        let target_head = current_git_head(&primary).unwrap();
+
+        let branch = "sdlc/done-cleanup";
+        git(
+            &primary,
+            &["worktree", "add", "-b", branch, &worktree.to_string_lossy()],
+        );
+        std::fs::write(worktree.join("feature.txt"), "feature").unwrap();
+        git(&worktree, &["add", "."]);
+        git(&worktree, &["commit", "-m", "feature"]);
+        git(&primary, &["merge", "--ff-only", branch]);
+
+        let conn = crate::model::msglog::open(&session_dir).unwrap();
+        ensure_tables(&conn).unwrap();
+        replace_nodes_from_checklist(
+            &conn,
+            &[ChecklistNode {
+                title: "verified leaf".into(),
+                status: "done".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec![],
+            }],
+        )
+        .unwrap();
+        let leaf_id = graph::list_all(&conn).unwrap()[0].id.clone();
+        set_verify_bit_with_evidence(&conn, &leaf_id, true, Some("cargo test")).unwrap();
+
+        let mut mission = sample_mission();
+        mission.phase = "done".into();
+        mission.worktree_name = Some("sdlc-done-cleanup".into());
+        mission.branch = Some(branch.into());
+        mission.worktree_path = Some(worktree.to_string_lossy().into_owned());
+        mission.target_worktree_path = Some(primary.to_string_lossy().into_owned());
+        mission.target_branch = Some("main".into());
+        mission.target_head = Some(target_head);
+        mission.graph_hash = Some(structural_graph_hash(&conn).unwrap());
+        mission.hash = mission.recompute_hash();
+        mission.save(&session_dir).unwrap();
+
+        // A dirty worktree makes git refuse removal. The terminal contract must
+        // remain truthful and retryable rather than being reset to assess.
+        std::fs::write(worktree.join("untracked.txt"), "dirty").unwrap();
+        let cleanup_error = cleanup_done_mission(&session_dir).unwrap_err().to_string();
+        assert!(cleanup_error.contains("could not remove mission worktree"));
+        let retained = Mission::load(&session_dir).unwrap();
+        assert_eq!(retained.phase, "done");
+        assert_eq!(retained.branch.as_deref(), Some(branch));
+        assert_eq!(retained.worktree_path.as_deref(), worktree.to_str());
+        assert!(worktree.exists());
+        std::fs::remove_file(worktree.join("untracked.txt")).unwrap();
+
+        assert_eq!(
+            cleanup_done_mission(&session_dir).unwrap(),
+            DoneCleanupOutcome::ResetToAssess
+        );
+        let reset = Mission::load(&session_dir).unwrap();
+        assert_eq!(reset.phase, "assess");
+        assert!(!reset.approved);
+        assert!(reset.needs_reapproval);
+        assert!(reset.worktree_name.is_none());
+        assert!(reset.branch.is_none());
+        assert!(reset.worktree_path.is_none());
+        assert!(!worktree.exists());
+        assert!(!std::process::Command::new("git")
+            .args([
+                "show-ref",
+                "--verify",
+                "--quiet",
+                "refs/heads/sdlc/done-cleanup"
+            ])
+            .current_dir(&primary)
+            .status()
+            .unwrap()
+            .success());
+
         let _ = std::fs::remove_dir_all(&root);
     }
 
