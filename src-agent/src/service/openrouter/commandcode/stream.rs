@@ -147,6 +147,9 @@ impl OpenRouterClient {
         let mut stream = resp.bytes_stream();
         let mut buf: Vec<u8> = Vec::new();
         let mut tool_acc: Vec<ToolCall> = Vec::new();
+        // Protocol terminal success marker (`finish`). Soft EOF without this is
+        // incomplete; tracked for a later leaf — emission still Done.
+        // (Reuses the existing `finished` name as `saw_terminal`.)
         let mut finished = false;
 
         while let Some(chunk) = stream.next().await {
@@ -216,7 +219,7 @@ impl OpenRouterClient {
                                 },
                             );
                         }
-                        finished = true;
+                        finished = true; // saw_terminal
                     }
                     CcEvent::Error { error } => {
                         let msg = error
@@ -236,12 +239,26 @@ impl OpenRouterClient {
                 break;
             }
         }
-        // Finalize: emit accumulated tool calls, then Done.
+        // Finalize: tools+Done when we saw `finish` or assembled tool calls
+        // (lenient for providers that omit the terminal marker after tools).
+        // Incomplete soft EOF (no finish, no tools) emits Error, not Done.
         if !tool_acc.is_empty() {
             sanitize_tool_acc(&mut tool_acc);
-            emit(&tx, StreamEvent::ToolCalls(tool_acc));
         }
-        emit(&tx, StreamEvent::Done);
+        let has_tools = !tool_acc.is_empty();
+        if super::super::stream::soft_eof_is_complete(finished, has_tools) {
+            if has_tools {
+                emit(&tx, StreamEvent::ToolCalls(tool_acc));
+            }
+            emit(&tx, StreamEvent::Done);
+        } else {
+            emit(
+                &tx,
+                StreamEvent::Error(
+                    "stream ended incompletely (connection closed before terminal marker)".into(),
+                ),
+            );
+        }
         Ok(())
     }
 }

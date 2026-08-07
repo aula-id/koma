@@ -367,6 +367,9 @@ impl OpenRouterClient {
         // it to `"tool_calls"` on the frame that closes a tool-calling turn; we
         // record it so finalisation can confirm the model wants tools run.
         let mut finished_tool_calls = false;
+        // Protocol terminal success marker (`data: [DONE]`). Soft EOF without
+        // this is incomplete unless tool calls were assembled.
+        let mut saw_terminal = false;
         while let Some(chunk) = stream.next().await {
             let bytes = match chunk {
                 Ok(b) => b,
@@ -398,6 +401,7 @@ impl OpenRouterClient {
                     None => continue, // comments/keepalive
                 };
                 if data == "[DONE]" {
+                    saw_terminal = true;
                     // Flush any buffered think-tag tail (e.g. reasoning text
                     // held back waiting for a partial closer, or a partial
                     // opener that never completed).
@@ -426,6 +430,8 @@ impl OpenRouterClient {
                         sanitize_tool_acc(&mut tool_acc);
                         emit(&tx, StreamEvent::ToolCalls(tool_acc.clone()));
                     }
+                    // Terminal marker seen; keep emission Done (next leaf may branch).
+                    debug_assert!(!stream_ended_incompletely(saw_terminal));
                     emit(&tx, StreamEvent::Done);
                     return Ok(());
                 }
@@ -508,7 +514,8 @@ impl OpenRouterClient {
             }
         }
         // Stream ended without an explicit [DONE]: flush the think-tag buffer
-        // first (same as the [DONE] path), then tool calls, then Done.
+        // first (same as the [DONE] path), then either tools+Done (lenient when
+        // the provider omitted [DONE] but delivered tool calls) or Error.
         for e in think.finish() {
             match e {
                 ThinkEmit::Content(s) if !s.is_empty() => {
@@ -524,9 +531,65 @@ impl OpenRouterClient {
         // never sends [DONE] is also covered.
         if !tool_acc.is_empty() || finished_tool_calls {
             sanitize_tool_acc(&mut tool_acc);
-            emit(&tx, StreamEvent::ToolCalls(tool_acc.clone()));
         }
-        emit(&tx, StreamEvent::Done);
+        let has_tools = !tool_acc.is_empty() || finished_tool_calls;
+        if soft_eof_is_complete(saw_terminal, has_tools) {
+            if has_tools {
+                emit(&tx, StreamEvent::ToolCalls(tool_acc.clone()));
+            }
+            emit(&tx, StreamEvent::Done);
+        } else {
+            emit(
+                &tx,
+                StreamEvent::Error(
+                    "stream ended incompletely (connection closed before terminal marker)".into(),
+                ),
+            );
+        }
         Ok(())
+    }
+}
+
+/// Whether a stream soft-EOF lacked its protocol terminal success marker.
+///
+/// Each transport sets `saw_terminal` when it processes its clean close signal:
+/// chat-completions `[DONE]`, Codex `response.completed`, Anthropic
+/// `message_stop`, Command Code `finish`. Soft EOF with `!saw_terminal` is an
+/// incomplete end unless tool calls were assembled (lenient for providers that
+/// omit the terminal marker after a tool-calling turn).
+pub(in crate::service::openrouter) fn stream_ended_incompletely(saw_terminal: bool) -> bool {
+    !saw_terminal
+}
+
+/// Whether soft-EOF finalization should emit tools+Done rather than Error.
+///
+/// Complete when the transport saw its terminal success marker, or when tool
+/// calls were assembled (providers sometimes drop `[DONE]`/`message_stop`/
+/// `response.completed`/`finish` after a tool turn). Text-only soft EOF without
+/// a terminal marker is incomplete.
+pub(in crate::service::openrouter) fn soft_eof_is_complete(
+    saw_terminal: bool,
+    has_tools: bool,
+) -> bool {
+    saw_terminal || has_tools
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::{soft_eof_is_complete, stream_ended_incompletely};
+
+    #[test]
+    fn stream_ended_incompletely_tracks_terminal_marker() {
+        assert!(stream_ended_incompletely(false));
+        assert!(!stream_ended_incompletely(true));
+    }
+
+    #[test]
+    fn soft_eof_is_complete_terminal_or_tools() {
+        assert!(soft_eof_is_complete(true, false));
+        assert!(soft_eof_is_complete(true, true));
+        assert!(soft_eof_is_complete(false, true));
+        assert!(!soft_eof_is_complete(false, false));
     }
 }
