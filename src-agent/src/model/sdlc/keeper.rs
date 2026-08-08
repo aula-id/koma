@@ -48,7 +48,7 @@ pub fn evaluate(session_dir: &Path) -> KeeperReport {
     };
     report.phase_hint = Some(mission.phase.clone());
 
-    if mission.phase != "execute" && mission.phase != "integrate" {
+    if mission.phase != "execute" && mission.phase != "integrate" && mission.phase != "prepare" {
         return report;
     }
 
@@ -123,7 +123,7 @@ pub fn evaluate(session_dir: &Path) -> KeeperReport {
 
     // 4. Deterministic stall detection: tools ran, open leaves remain, graph
     // fingerprint unchanged for > KEEPER_STALL_SECS.
-    if mission.phase == "execute" {
+    if mission.phase == "execute" || mission.phase == "prepare" {
         if let Some(stall) = detect_stall(&conn) {
             report.inject = Some(stall);
             return finalize_dedupe_conn(&conn, report);
@@ -398,6 +398,109 @@ mod tests {
             amendment_note: None,
         };
         m.save(dir).unwrap();
+    }
+
+    // --- Prepare-phase keeper tests ---
+
+    #[test]
+    fn keeper_evaluates_during_prepare_phase() {
+        // Keeper does NOT early-exit when phase is prepare.
+        let dir = tmp_session();
+        write_mission(&dir, "prepare", true);
+        let conn = crate::model::msglog::open(&dir).unwrap();
+        graph::ensure_tables(&conn).unwrap();
+        graph::replace_nodes_from_checklist(
+            &conn,
+            &[ChecklistNode {
+                title: "setup task".into(),
+                status: "pending".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec![],
+            }],
+        )
+        .unwrap();
+        drop(conn);
+
+        let report = evaluate(&dir);
+        // Keeper ran (phase_hint should be prepare).
+        assert_eq!(report.phase_hint.as_deref(), Some("prepare"));
+        // No inject needed — single pending node is fine.
+        assert!(report.inject.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keeper_stall_detection_works_during_prepare() {
+        let dir = tmp_session();
+        write_mission(&dir, "prepare", true);
+        let conn = crate::model::msglog::open(&dir).unwrap();
+        graph::ensure_tables(&conn).unwrap();
+        graph::replace_nodes_from_checklist(
+            &conn,
+            &[ChecklistNode {
+                title: "pending setup".into(),
+                status: "pending".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec![],
+            }],
+        )
+        .unwrap();
+        // Stamp tool round in the past.
+        let past = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64)
+            - KEEPER_STALL_SECS
+            - 5;
+        graph::set_mission_meta(&conn, META_LAST_TOOL_ROUND_AT, &past.to_string()).unwrap();
+        let fp = graph::graph_fingerprint(&conn).unwrap();
+        graph::set_mission_meta(&conn, META_LAST_GRAPH_FINGERPRINT, &fp).unwrap();
+        drop(conn);
+
+        let report = evaluate(&dir);
+        assert!(
+            report
+                .inject
+                .as_ref()
+                .is_some_and(|s| s.contains("Stall detected")),
+            "prepare phase should trigger stall detection: {:?}",
+            report.inject
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keeper_reopens_false_done_in_prepare() {
+        let dir = tmp_session();
+        write_mission(&dir, "prepare", true);
+        let conn = crate::model::msglog::open(&dir).unwrap();
+        graph::ensure_tables(&conn).unwrap();
+        graph::replace_nodes_from_checklist(
+            &conn,
+            &[ChecklistNode {
+                title: "setup item".into(),
+                status: "pending".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec![],
+            }],
+        )
+        .unwrap();
+        let id = graph::list_all(&conn).unwrap()[0].id.clone();
+        // Fake false-done row.
+        conn.execute(
+            "UPDATE sdlc_nodes SET status = 'done', verify_bit = 0 WHERE id = ?1",
+            rusqlite::params![id],
+        )
+        .unwrap();
+        drop(conn);
+
+        let report = evaluate(&dir);
+        assert_eq!(report.reopened.len(), 1);
+        assert!(report.inject.as_ref().unwrap().contains("False-done"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

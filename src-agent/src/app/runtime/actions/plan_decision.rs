@@ -296,7 +296,7 @@ pub(super) fn handle_approve_mission(
 
     match establish_mission_binding(state, client, handle) {
         Ok(wt_note) => {
-            if let Err(e) = state.rest.apply_sdlc_phase(fgi, "execute") {
+            if let Err(e) = state.rest.apply_sdlc_phase(fgi, "prepare") {
                 // Phase persistence failed after binding succeeded.
                 // Roll back worktree + unbind mission; use binding failure response.
                 restore_primary_workspace_after_failed_bind(state, fgi);
@@ -393,7 +393,7 @@ pub(super) fn handle_approve_mission_compact(
 
     match establish_mission_binding(state, client, handle) {
         Ok(_wt_note) => {
-            if let Err(e) = state.rest.apply_sdlc_phase(fgi, "execute") {
+            if let Err(e) = state.rest.apply_sdlc_phase(fgi, "prepare") {
                 // Phase persistence failed after binding succeeded.
                 // Roll back worktree + unbind mission; use binding failure response.
                 restore_primary_workspace_after_failed_bind(state, fgi);
@@ -561,7 +561,7 @@ fn apply_mission_denial_rails(state: &mut AppState, sess_idx: usize) {
             m.approved = false;
             // Leaving an active execute/integrate runtime phase, or any amendment
             // park, requires re-approval before tools/keeper treat the mission as live.
-            if matches!(prior_phase.as_deref(), Some("execute") | Some("integrate"))
+            if matches!(prior_phase.as_deref(), Some("execute") | Some("integrate") | Some("prepare"))
                 || m.needs_reapproval
                 || m.amendment_note.is_some()
             {
@@ -773,8 +773,8 @@ fn establish_mission_binding(
         m.target_branch = Some(target_branch.clone());
         m.target_head = Some(target_head.clone());
         m.approved = true;
-        if let Err(e) = m.try_transition("execute") {
-            return Err(format!("phase transition to execute failed: {e}"));
+        if let Err(e) = m.try_transition("prepare") {
+            return Err(format!("phase transition to prepare failed: {e}"));
         }
         m.needs_reapproval = false;
         m.hash = m.recompute_hash();

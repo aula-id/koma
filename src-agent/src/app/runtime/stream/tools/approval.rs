@@ -301,12 +301,12 @@ pub(crate) fn process_tools(
                 continue;
             }
         }
-        // SDLC execute/integrate: confine git_operator to the frozen bound
+        // SDLC prepare/execute/integrate: confine git_operator to the frozen bound
         // worktree (no cwd override, no checkout/switch, binding must be live).
         if mode == AgentMode::Sdlc
             && matches!(
                 state.rest.sessions[sess_idx].sdlc_phase.as_deref(),
-                Some("execute") | Some("integrate")
+                Some("execute") | Some("integrate") | Some("prepare")
             )
             && call.function.name == "git_operator"
         {
@@ -335,6 +335,14 @@ pub(crate) fn process_tools(
         // Intercept `mission_integrate` BEFORE the generic dispatch path. Only when mode == Sdlc.
         if call.function.name == "mission_integrate" {
             match intercepts::intercept_mission_integrate(state, sess_idx, &call, mode) {
+                InterceptFlow::Continue => continue,
+                InterceptFlow::Return => return,
+                InterceptFlow::Fallthrough => {}
+            }
+        }
+        // Intercept `mission_prepare` BEFORE the generic dispatch path. Only when mode == Sdlc.
+        if call.function.name == "mission_prepare" {
+            match intercepts::intercept_mission_prepare(state, sess_idx, &call, mode) {
                 InterceptFlow::Continue => continue,
                 InterceptFlow::Return => return,
                 InterceptFlow::Fallthrough => {}

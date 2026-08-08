@@ -49,12 +49,12 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
         return InterceptFlow::Continue;
     }
 
-    // SDLC execute/integrate: require OPEN leaf node_id + scope banner.
+    // SDLC prepare/execute/integrate: require OPEN leaf node_id + scope banner.
     let sdlc_execute = state.rest.sessions[sess_idx].agent_mode
         == crate::app::state::AgentMode::Sdlc
         && matches!(
             state.rest.sessions[sess_idx].sdlc_phase.as_deref(),
-            Some("execute") | Some("integrate")
+            Some("prepare") | Some("execute") | Some("integrate")
         );
     if sdlc_execute {
         let node_id = args.get("node_id").and_then(|v| v.as_str());

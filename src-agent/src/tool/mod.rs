@@ -585,6 +585,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(plan::PlanReady),
         Box::new(sdlc::MissionReady),
         Box::new(sdlc::MissionVerify),
+        Box::new(sdlc::MissionPrepare),
         Box::new(sdlc::MissionIntegrate),
         Box::new(seqthink::SeqThink),
     ]

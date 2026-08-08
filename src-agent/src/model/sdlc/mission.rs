@@ -53,7 +53,7 @@ pub struct Mission {
     pub target_head: Option<String>,
     #[serde(default)]
     pub rationale: String,
-    /// Current phase: assess | execute | integrate | done | paused | draft.
+    /// Current phase: assess | prepare | execute | integrate | done | paused | draft.
     pub phase: String,
     pub approved: bool,
     /// Content hash of the frozen fields (for change detection).
@@ -101,6 +101,10 @@ impl Mission {
             // Fail-closed rail: deny/amend/bind-fail/cleanup/re-entry → assess
             // (covers draft→assess and any other source)
             (_, "assess")
+                | ("assess", "prepare")
+                | ("prepare", "execute")
+                | ("prepare", "paused")
+                | ("paused", "prepare")
                 | ("assess", "execute")
                 | ("execute", "integrate")
                 | ("integrate", "done")
@@ -225,7 +229,7 @@ impl Mission {
         if self.worktree_path.is_none() || self.branch.is_none() || self.worktree_name.is_none() {
             bail!("mission worktree binding incomplete — fails closed");
         }
-        if matches!(self.phase.as_str(), "draft" | "done" | "paused" | "assess") {
+        if matches!(self.phase.as_str(), "draft" | "done" | "paused" | "assess" | "prepare") {
             bail!(
                 "mission phase '{}' is not active execute/integrate",
                 self.phase
@@ -842,9 +846,9 @@ pub fn structural_graph_hash(conn: &rusqlite::Connection) -> Result<String> {
 
 /// Whether a mission phase should auto-resume when re-entering SDLC.
 ///
-/// Fail-closed: only actively approved execute/integrate missions resume.
+/// Fail-closed: only actively approved prepare/execute/integrate missions resume.
 /// `paused` / `draft` / `done` / `assess` never auto-resume — restart requires
-/// explicit re-entry into a still-valid ACTIVE execute/integrate contract
+/// explicit re-entry into a still-valid ACTIVE prepare/execute/integrate contract
 /// (paused missions stay paused until the user re-approves / rebinds).
 pub fn should_auto_resume(mission: &Mission) -> bool {
     mission.contract_version >= CURRENT_CONTRACT_VERSION
@@ -852,7 +856,7 @@ pub fn should_auto_resume(mission: &Mission) -> bool {
         && mission.approved
         && !mission.needs_reapproval
         && mission.hash_valid()
-        && matches!(mission.phase.as_str(), "execute" | "integrate")
+        && matches!(mission.phase.as_str(), "prepare" | "execute" | "integrate")
 }
 
 /// Phase to restore on SDLC re-entry for a still-active execute/integrate mission.
@@ -1248,6 +1252,21 @@ mod tests {
         assert!(m.try_transition("execute").is_ok());
         m.phase = "paused".into();
         assert!(m.try_transition("integrate").is_err());
+        // prepare phase edges
+        m.phase = "assess".into();
+        assert!(m.try_transition("prepare").is_ok());
+        assert_eq!(m.phase, "prepare");
+        assert!(m.try_transition("execute").is_ok());
+        m.phase = "prepare".into();
+        assert!(m.try_transition("paused").is_ok());
+        assert_eq!(m.phase, "paused");
+        assert!(m.try_transition("prepare").is_ok());
+        assert_eq!(m.phase, "prepare");
+        // prepare → integrate must FAIL (must go through execute first)
+        m.phase = "prepare".into();
+        assert!(m.try_transition("integrate").is_err());
+        // prepare → done must FAIL
+        assert!(m.try_transition("done").is_err());
     }
 
     #[test]
@@ -1289,6 +1308,10 @@ mod tests {
         m.phase = "assess".into();
         assert!(!should_auto_resume(&m));
         assert!(resume_phase(&m).is_none());
+        // prepare is an active setup phase — auto-resume is allowed
+        m.phase = "prepare".into();
+        assert!(should_auto_resume(&m));
+        assert_eq!(resume_phase(&m).as_deref(), Some("prepare"));
         // Only live execute/integrate resume.
         m.phase = "execute".into();
         assert!(should_auto_resume(&m));
