@@ -582,6 +582,12 @@ over sec_remote (stateful socket).\n",
                 .retain(|n| crate::tool::tool_allowed_in_sdlc_assess(n) || n.starts_with("mcp__"));
             advertise.push("seqthink".to_string());
             advertise.push("mission_ready".to_string());
+        } else if phase == Some("prepare") {
+            // Prepare: full tool surface (same as execute) + mission_ready (amendment)
+            // + mission_prepare (to transition prepare→execute). No mission_verify or
+            // mission_integrate during setup.
+            advertise.push("mission_ready".to_string());
+            advertise.push("mission_prepare".to_string());
         } else if matches!(phase, Some("execute") | Some("integrate")) {
             advertise.push("mission_ready".to_string());
             advertise.push("mission_verify".to_string());

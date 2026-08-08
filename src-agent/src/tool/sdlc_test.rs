@@ -172,3 +172,31 @@ fn checklist_node_roundtrip_shape() {
     };
     assert_eq!(n.parent_title.as_deref(), Some("p"));
 }
+
+
+#[test]
+fn parse_mission_prepare_empty_args_returns_none() {
+    let args = json!({});
+    let note = parse_mission_prepare_args(&args).unwrap();
+    assert!(note.is_none());
+}
+
+#[test]
+fn parse_mission_prepare_with_note() {
+    let args = json!({ "note": "  worktrees ready  " });
+    let note = parse_mission_prepare_args(&args).unwrap();
+    assert_eq!(note.as_deref(), Some("worktrees ready"));
+}
+
+#[test]
+fn parse_mission_prepare_blank_note_returns_none() {
+    let args = json!({ "note": "   " });
+    let note = parse_mission_prepare_args(&args).unwrap();
+    assert!(note.is_none());
+}
+
+#[test]
+fn mission_prepare_result_text() {
+    assert!(mission_prepare_result("").contains("transitioning to execute"));
+    assert!(mission_prepare_result("done").contains("(done)"));
+}

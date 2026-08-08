@@ -931,7 +931,7 @@ impl AppStateRest {
 
             // Attempt fail-closed worktree re-entry when resume would be active.
             let mut final_phase = resume_phase.clone().unwrap_or_else(|| "assess".to_string());
-            if matches!(final_phase.as_str(), "execute" | "integrate") {
+            if matches!(final_phase.as_str(), "execute" | "integrate" | "prepare") {
                 if let Some(path) = sess_path.as_ref() {
                     match self.try_reenter_mission_worktree_at(sess_idx, path) {
                         Ok(()) => {
@@ -947,6 +947,7 @@ impl AppStateRest {
                                 if m2.phase == "paused"
                                     || m2.phase == "execute"
                                     || m2.phase == "integrate"
+                                    || m2.phase == "prepare"
                                 {
                                     let _ = m2.try_transition("assess");
                                     // Unapprove so integrate/verify require re-bind.
@@ -983,9 +984,9 @@ impl AppStateRest {
             if let Some(sess) = self.sessions[sess_idx].session.as_mut() {
                 sess.settings.short_send_enabled = true;
             }
-            // Arm keeper on resume into an active execute/integrate mission.
+            // Arm keeper on resume into an active execute/integrate/prepare mission.
             let phase = self.sessions[sess_idx].sdlc_phase.clone();
-            if matches!(phase.as_deref(), Some("execute") | Some("integrate")) {
+            if matches!(phase.as_deref(), Some("execute") | Some("integrate") | Some("prepare")) {
                 self.sessions[sess_idx].sdlc_keeper_due = true;
             }
         } else if leaving_sdlc {
@@ -1012,7 +1013,7 @@ impl AppStateRest {
                 .map(|s| s.path.clone())
             {
                 if let Some(mut m) = crate::model::sdlc::Mission::load(&path) {
-                    if m.approved && matches!(m.phase.as_str(), "execute" | "integrate") {
+                    if m.approved && matches!(m.phase.as_str(), "execute" | "integrate" | "prepare") {
                         let _ = m.try_transition("paused");
                         let _ = m.save(&path);
                     }

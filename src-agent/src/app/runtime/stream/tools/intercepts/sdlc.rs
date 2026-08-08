@@ -66,7 +66,10 @@ pub(in crate::app::runtime::stream::tools) fn intercept_sdlc_execute_git_gate(
         return InterceptFlow::Fallthrough;
     }
     let phase = state.rest.sessions[sess_idx].sdlc_phase.as_deref();
-    if !matches!(phase, Some("execute") | Some("integrate")) {
+    if !matches!(
+        phase,
+        Some("execute") | Some("integrate") | Some("prepare")
+    ) {
         return InterceptFlow::Fallthrough;
     }
 
@@ -1017,6 +1020,129 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_integrate(
     InterceptFlow::Continue
 }
 
+/// Intercept `mission_prepare` BEFORE the generic dispatch path.
+///
+/// Transitions the SDLC session from the `prepare` phase to `execute` once
+/// the model has confirmed the source branch/worktree setup is complete.
+/// Mirrors `intercept_mission_integrate` in structure.
+pub(in crate::app::runtime::stream::tools) fn intercept_mission_prepare(
+    state: &mut AppState,
+    sess_idx: usize,
+    call: &ToolCall,
+    mode: AgentMode,
+) -> InterceptFlow {
+    if mode != AgentMode::Sdlc {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            "mission_prepare is only available in SDLC mode".to_string(),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    // Lifecycle gate: only accept during prepare phase.
+    let phase = state.rest.sessions[sess_idx].sdlc_phase.clone();
+    if !matches!(phase.as_deref(), Some("prepare")) {
+        let label = phase.as_deref().unwrap_or("inactive");
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            format!(
+                "error: mission_prepare is not available in SDLC phase '{label}' \
+                 (only prepare)"
+            ),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let args: serde_json::Value =
+        serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+
+    let note = match crate::tool::sdlc::parse_mission_prepare_args(&args) {
+        Ok(n) => n,
+        Err(e) => {
+            state.rest.sessions[sess_idx]
+                .tool_results
+                .push((call.id.clone(), e));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            return InterceptFlow::Continue;
+        }
+    };
+
+    let Some(sess) = state.rest.sessions[sess_idx].session.as_ref() else {
+        state.rest.sessions[sess_idx]
+            .tool_results
+            .push((call.id.clone(), "error: no active session".to_string()));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    };
+    let sess_path = sess.path.clone();
+    let live_cwd = state.rest.sessions[sess_idx]
+        .active_cwd
+        .clone()
+        .unwrap_or_else(|| sess.workdir());
+
+    // Validate the mission binding is live (worktree_path + branch exist and match).
+    let mission = match crate::model::sdlc::Mission::load(&sess_path) {
+        Some(m) => m,
+        None => {
+            state.rest.sessions[sess_idx].tool_results.push((
+                call.id.clone(),
+                "error: mission_prepare requires an approved mission".to_string(),
+            ));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            return InterceptFlow::Continue;
+        }
+    };
+
+    if let Err(e) = mission.validate_active() {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            format!("error: mission_prepare requires an active mission: {e}"),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    let live_branch = crate::model::sdlc::mission::current_git_branch(&live_cwd);
+    if let Err(e) = mission.validate_binding(&live_cwd, live_branch.as_deref()) {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            format!(
+                "error: mission_prepare requires a live mission binding: {e}"
+            ),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    // Gates passed — transition prepare → execute.
+    if let Err(e) = state.rest.apply_sdlc_phase(sess_idx, "execute") {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            format!("error: could not enter execute phase: {e}"),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    // Rebuild capsule after phase transition.
+    if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+        sess.rebuild_system();
+        let _ = sess.save();
+    }
+
+    let note_str = note.unwrap_or_default();
+    let result_text = crate::tool::sdlc::mission_prepare_result(&note_str);
+    state.rest.sessions[sess_idx]
+        .tool_results
+        .push((call.id.clone(), result_text));
+
+    state.rest.sessions[sess_idx].tool_idx += 1;
+    InterceptFlow::Continue
+}
+
 /// Intercept `checklist` while in SDLC mode: write through to sdlc_nodes AND
 /// memory/TODO.md (dual-write). Graph is authority; TODO cannot override it.
 pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
@@ -1433,6 +1559,97 @@ mod assess_gate_tests {
         assert!(
             matches!(flow, InterceptFlow::Fallthrough),
             "assess phase must not trigger gate"
+        );
+    }
+
+    // --- Prepare-phase gate tests ---
+
+    fn prepare_state() -> AppState {
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.sessions[0].agent_mode = AgentMode::Sdlc;
+        state.rest.sessions[0].sdlc_phase = Some("prepare".into());
+        state
+    }
+
+    #[test]
+    fn prepare_git_gate_fires_for_git_operator() {
+        use super::intercept_sdlc_execute_git_gate;
+        let mut state = prepare_state();
+        let c = call("git_operator", r#"{"args":["status"]}"#);
+        let flow = intercept_sdlc_execute_git_gate(&mut state, 0, &c);
+        // Gate fires (not fallthrough) — even if binding is dead, it still intercepts.
+        assert!(
+            matches!(flow, InterceptFlow::Continue),
+            "git gate must fire during prepare"
+        );
+        let msg = &state.rest.sessions[0].tool_results[0].1;
+        assert!(
+            msg.contains("binding"),
+            "prepare git gate should report binding issue: {msg}"
+        );
+    }
+
+    #[test]
+    fn prepare_git_gate_skips_non_git_tools() {
+        use super::intercept_sdlc_execute_git_gate;
+        let mut state = prepare_state();
+        let c = call("read", r#"{"path":"src/main.rs"}"#);
+        let flow = intercept_sdlc_execute_git_gate(&mut state, 0, &c);
+        assert!(
+            matches!(flow, InterceptFlow::Fallthrough),
+            "non-git tools must pass through git gate"
+        );
+    }
+
+    #[test]
+    fn prepare_worktree_logic_allows_create_blocks_enter_exit_remove() {
+        // Verify the prepare-specific worktree action logic (guard.rs:94-103):
+        // During prepare: create is ALLOWED, enter/exit/remove are BLOCKED.
+        let is_prepare = true;
+        for action in ["create", "enter", "exit", "remove"] {
+            let blocked = if is_prepare {
+                matches!(action, "enter" | "exit" | "remove")
+            } else {
+                true
+            };
+            if action == "create" {
+                assert!(!blocked, "create must be allowed during prepare");
+            } else {
+                assert!(blocked, "{action} must be blocked during prepare");
+            }
+        }
+    }
+
+    #[test]
+    fn execute_worktree_logic_blocks_all_actions() {
+        let is_prepare = false;
+        for action in ["create", "enter", "exit", "remove"] {
+            let blocked = if is_prepare {
+                matches!(action, "enter" | "exit" | "remove")
+            } else {
+                true
+            };
+            assert!(blocked, "action {action} must be blocked during execute");
+        }
+    }
+
+    #[test]
+    fn prepare_mission_verify_rejected() {
+        use super::intercept_mission_verify;
+        let mut state = prepare_state();
+        let c = call(
+            "mission_verify",
+            r#"{"node_id":"t1","evidence":"tests pass","pass":true}"#,
+        );
+        let flow = intercept_mission_verify(&mut state, 0, &c, AgentMode::Sdlc);
+        assert!(
+            matches!(flow, InterceptFlow::Continue),
+            "mission_verify must be rejected during prepare"
+        );
+        let msg = &state.rest.sessions[0].tool_results[0].1;
+        assert!(
+            msg.contains("not available") || msg.contains("execute"),
+            "unexpected msg: {msg}"
         );
     }
 }

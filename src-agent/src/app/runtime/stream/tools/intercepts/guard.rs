@@ -87,28 +87,39 @@ pub(in crate::app::runtime::stream::tools) fn intercept_git_worktree(
     if mode == AgentMode::Sdlc
         && matches!(
             state.rest.sessions[sess_idx].sdlc_phase.as_deref(),
-            Some("execute") | Some("integrate")
+            Some("execute") | Some("integrate") | Some("prepare")
         )
     {
         let action = wt_args.get("action").and_then(|a| a.as_str()).unwrap_or("");
         if matches!(action, "enter" | "exit" | "create" | "remove") {
-            // Own the phase string before mutating `tool_results` so the
-            // immutable borrow of `sessions[sess_idx]` ends first (E0502).
-            let phase = state.rest.sessions[sess_idx]
-                .sdlc_phase
-                .clone()
-                .unwrap_or_else(|| "execute".to_string());
-            state.rest.sessions[sess_idx].tool_results.push((
-                call.id.clone(),
-                format!(
-                    "error: git_worktree '{action}' blocked during SDLC {phase} — \
-                     mission worktree/branch binding is frozen. Use mission_integrate \
-                     (or `/mode exit`) rather than escaping the bound tree. \
-                     Note: arbitrary external shell/MCP is not OS-sandboxed."
-                ),
-            ));
-            state.rest.sessions[sess_idx].tool_idx += 1;
-            return InterceptFlow::Continue;
+            // During prepare, allow `create` (model spawns additional worktrees)
+            // but block enter/exit/remove (stay in the mission worktree).
+            let is_prepare = state.rest.sessions[sess_idx].sdlc_phase.as_deref()
+                == Some("prepare");
+            let blocked = if is_prepare {
+                matches!(action, "enter" | "exit" | "remove")
+            } else {
+                true
+            };
+            if blocked {
+                // Own the phase string before mutating `tool_results` so the
+                // immutable borrow of `sessions[sess_idx]` ends first (E0502).
+                let phase = state.rest.sessions[sess_idx]
+                    .sdlc_phase
+                    .clone()
+                    .unwrap_or_else(|| "execute".to_string());
+                state.rest.sessions[sess_idx].tool_results.push((
+                    call.id.clone(),
+                    format!(
+                        "error: git_worktree '{action}' blocked during SDLC {phase} — \
+                         mission worktree/branch binding is frozen. Use mission_integrate \
+                         (or `/mode exit`) rather than escaping the bound tree. \
+                         Note: arbitrary external shell/MCP is not OS-sandboxed."
+                    ),
+                ));
+                state.rest.sessions[sess_idx].tool_idx += 1;
+                return InterceptFlow::Continue;
+            }
         }
     }
 

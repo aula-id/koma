@@ -402,7 +402,7 @@ pub(super) fn drain_deferred_and_resume(
                     state.rest.sessions[idx].agent_mode == crate::app::state::AgentMode::Sdlc;
                 let phase_ok = matches!(
                     state.rest.sessions[idx].sdlc_phase.as_deref(),
-                    Some("execute") | Some("integrate")
+                    Some("execute") | Some("integrate") | Some("prepare")
                 );
                 if epoch == current && still_sdlc && phase_ok {
                     if let Some(inject) = inject {
@@ -421,7 +421,7 @@ pub(super) fn drain_deferred_and_resume(
         && state.rest.sessions[idx].agent_mode == crate::app::state::AgentMode::Sdlc
         && matches!(
             state.rest.sessions[idx].sdlc_phase.as_deref(),
-            Some("execute") | Some("integrate")
+            Some("execute") | Some("integrate") | Some("prepare")
         )
     {
         if let Some(inject) = state.rest.sessions[idx].pending_sdlc_keeper_llm.take() {
@@ -493,7 +493,7 @@ pub(super) fn drain_deferred_and_resume(
                 let reassess_note = format!("keeper reassessment: {reason}");
                 let mut disk_ok = false;
                 if let Some(mut m) = crate::model::sdlc::Mission::load(&path) {
-                    if m.approved && matches!(m.phase.as_str(), "execute" | "integrate") {
+                    if m.approved && matches!(m.phase.as_str(), "execute" | "integrate" | "prepare") {
                         m.approved = false;
                         m.needs_reapproval = true;
                         m.amendment_note = Some(reassess_note);
@@ -564,7 +564,7 @@ pub(super) fn drain_deferred_and_resume(
                     .unwrap_or(false)
                 && matches!(
                     state.rest.sessions[idx].sdlc_phase.as_deref(),
-                    Some("execute") | Some("integrate")
+                    Some("execute") | Some("integrate") | Some("prepare")
                 )
             {
                 // Deterministic keeper quiet — optional second-model review.

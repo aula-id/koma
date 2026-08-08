@@ -21,7 +21,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
     // allow-list / `[N]` multi-root set — cd repoints only the cwd, never the
     // allow-list (use `/adddir` to widen that).
     let workspace = rt.effective_cwd();
-    // SDLC path ownership: during execute/integrate, tools may only write under
+    // SDLC path ownership: during prepare/execute/integrate, tools may only write under
     // the *validated* mission worktree binding (`Mission.worktree_path`), not
     // merely because `workdir_saved` is set. If the live cwd matches the bound
     // path use it; otherwise fall back to the frozen bound path alone so the
@@ -35,10 +35,10 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         == crate::app::state::AgentMode::Sdlc
         && matches!(
             state.rest.sessions[sess_idx].sdlc_phase.as_deref(),
-            Some("execute") | Some("integrate")
+            Some("execute") | Some("integrate") | Some("prepare")
         );
     // Close the process-global scratch-root write bypass during SDLC
-    // execute/integrate: mutating tools must stay inside the bound worktree.
+    // prepare/execute/integrate: mutating tools must stay inside the bound worktree.
     // Assess/other modes keep historical scratch behaviour.
     let allow_scratch = !sdlc_execute;
     let sdlc_assess = state.rest.sessions[sess_idx].agent_mode

@@ -1,5 +1,6 @@
-//! The SDLC tool suite: `mission_ready`, `mission_verify`, `mission_integrate`,
-//! plus amendment / human-gate helpers parsed by the runtime intercepts.
+//! The SDLC tool suite: `mission_ready`, `mission_verify`, `mission_prepare`,
+//! `mission_integrate`, plus amendment / human-gate helpers parsed by the
+//! runtime intercepts.
 //!
 //! `mission_ready` mirrors `plan_ready`: the tool's `run` is a stub — the real
 //! work happens in the runtime interception in `process_tools`, BEFORE the
@@ -162,6 +163,40 @@ impl Tool for MissionVerify {
 
     fn run(&self, _ctx: &ToolCtx, _args: &Value) -> Result<String> {
         Ok("error: mission_verify must be handled by the runtime".into())
+    }
+}
+
+/// Transition from prepare to execute phase after source branch and worktrees
+/// are set up.
+pub struct MissionPrepare;
+
+impl Tool for MissionPrepare {
+    fn name(&self) -> &'static str {
+        "mission_prepare"
+    }
+
+    fn description(&self) -> &'static str {
+        "Transition from prepare to execute phase after source branch and worktrees are set up. \
+         This confirms the mission is ready for code execution — the source worktree exists, \
+         the branch is checked out, and the frozen graph is in place. Called by the model \
+         at the end of the prepare phase."
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "note": {
+                    "type": "string",
+                    "description": "Optional note about the prepare phase completion."
+                }
+            },
+            "required": []
+        })
+    }
+
+    fn run(&self, _ctx: &ToolCtx, _args: &Value) -> Result<String> {
+        Ok("error: mission_prepare must be handled by the runtime".into())
     }
 }
 
@@ -366,6 +401,17 @@ pub(crate) fn parse_mission_verify_args(
     Ok((node_id, evidence.to_string(), pass, human_gate))
 }
 
+/// Parse mission_prepare args. Returns the optional `note`.
+pub(crate) fn parse_mission_prepare_args(args: &Value) -> Result<Option<String>, String> {
+    let note = args
+        .get("note")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    Ok(note)
+}
+
 /// Parse mission_integrate args. Returns `(summary, force_branch_only)`.
 pub(crate) fn parse_mission_integrate_args(args: &Value) -> Result<(String, bool), String> {
     let summary = args
@@ -447,6 +493,15 @@ pub(crate) fn mission_verify_result(node_id: &str, pass: bool) -> String {
         format!("mission_verify: leaf {node_id} marked verified (parents rolled up if complete)")
     } else {
         format!("mission_verify: leaf {node_id} verify failed — reopened leaf + ancestors")
+    }
+}
+
+/// Tool-result text for a successful prepare transition.
+pub(crate) fn mission_prepare_result(note: &str) -> String {
+    if note.is_empty() {
+        "mission_prepare: prepare phase complete, transitioning to execute".into()
+    } else {
+        format!("mission_prepare: prepare phase complete, transitioning to execute ({note})")
     }
 }
 

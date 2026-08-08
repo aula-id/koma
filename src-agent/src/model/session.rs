@@ -489,7 +489,7 @@ Multiple workspace roots are configured. Paths written as [N]… (for example fr
             sys.push_str(
                 "\n\n# SDLC mode\n\
 You are PM+tech lead inside an SDLC envelope. The harness (WC/PC/TAC) is fully intact — tool approval works like Auto mode, not Yolo.\n\n\
-Phases: assess → user approves via mission_ready → execute in mission worktree → verify → integrate → done (cleanup/report) → assess.\n\n\
+Phases: assess → prepare → execute → verify → integrate → done → assess.\n\n\
 ## Assess phase (current)\n\
 Assess is runtime-enforced read-only for workspace mutations: write/edit/delete/bash and other \
 mutating tools are denied until mission approval. Explore with read/search/web, build acceptance \
@@ -508,7 +508,13 @@ When ready, call `mission_ready` with:\n\
 - `graph_tasks`: array of task titles or {title, parent?} objects for the checklist tree\n\n\
 Only call mission_ready when your exploration is complete and you are confident in the contract.\n\
 Amending an approved contract: call mission_ready again (sets needs_reapproval); never silently overwrite.\n\n\
-## Post-approve (execute phase)\n\
+## Prepare phase\n\
+After mission approval the FSM enters prepare. During `sdlc:prepare`, the source branch and worktree \
+are set up. You have full tool access (bash, git, write, edit, read) — this is the time to establish \
+branch topology and worktree assignments for leaf tasks. You may create additional worktrees for \
+parallel execution. Verify the worktree is bound and the branch is ready before transitioning.\n\
+When setup is complete, call `mission_prepare` to transition to execute.\n\n\
+## Post-prepare (execute phase)\n\
 NO preference nags; research, decide, ship. Never invent APIs — read the code.\n\
 - Execute inside the bound mission worktree (cwd is switched only after binding succeeds). Do not thrash the user's main tree.\n\
 - Never force-push; plain push only the mission branch.\n\
