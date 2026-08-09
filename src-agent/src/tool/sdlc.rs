@@ -31,7 +31,8 @@ impl Tool for MissionReady {
          and graph_tasks (array of task titles or {title, parent?, id?} objects forming an \
          epic→story→task tree). Only call this from SDLC mode when your exploration and \
          contract-building is complete. Calling again on an approved mission starts the \
-         amendment/reapproval path."
+         amendment/reapproval path. Optionally pass target_branch to specify which branch \
+         the mission merges into on integrate (defaults to current branch at approval time)."
     }
 
     fn parameters(&self) -> Value {
@@ -109,6 +110,10 @@ impl Tool for MissionReady {
                 "branch": {
                     "type": "string",
                     "description": "Optional mission branch name. When omitted, a branch is classified from the goal (fix/|feat/|chore/|…). Worktree is still created only on approve."
+                },
+                "target_branch": {
+                    "type": "string",
+                    "description": "Optional target branch for integration (where the mission branch merges into). When omitted, defaults to the current branch at approval time. SDLC never auto-merges into main/master — those require manual PR/merge."
                 }
             },
             "required": ["highlights", "goal", "acceptance", "graph_tasks"]
@@ -290,6 +295,13 @@ pub(crate) fn parse_mission_ready_args(args: &Value) -> Result<MissionArgs, Stri
         ),
         _ => None,
     };
+    let target_branch = match args.get("target_branch").and_then(Value::as_str) {
+        Some(s) if !s.trim().is_empty() => Some(
+            crate::model::sdlc::branch_name::sanitize_branch_name(s)
+                .map_err(|e| format!("error: invalid target_branch: {e}"))?,
+        ),
+        _ => None,
+    };
 
     // Lane / anti-megatask validation.
     crate::model::sdlc::decompose::validate_lane_graph(&lane, &graph_tasks, acceptance.len())?;
@@ -307,6 +319,7 @@ pub(crate) fn parse_mission_ready_args(args: &Value) -> Result<MissionArgs, Stri
         graph_tasks,
         amendment_note,
         branch,
+        target_branch,
     })
 }
 
@@ -456,6 +469,9 @@ pub(crate) struct MissionArgs {
     /// Optional user-requested mission branch (sanitized). When None at ready,
     /// classifier fills intent before approve bind.
     pub branch: Option<String>,
+    /// Optional user-requested target integration branch. When None at ready,
+    /// `establish_mission_binding` captures current_git_branch at approval time.
+    pub target_branch: Option<String>,
 }
 
 /// Tool-result text when user approves a mission.

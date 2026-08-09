@@ -200,3 +200,58 @@ fn mission_prepare_result_text() {
     assert!(mission_prepare_result("").contains("transitioning to execute"));
     assert!(mission_prepare_result("done").contains("(done)"));
 }
+
+#[test]
+fn parse_mission_ready_with_target_branch() {
+    let args = json!({
+        "highlights": "h",
+        "goal": "g",
+        "acceptance": ["a"],
+        "graph_tasks": ["t1"],
+        "target_branch": "  develop  ",
+    });
+    let m = parse_mission_ready_args(&args).unwrap();
+    assert_eq!(m.target_branch.as_deref(), Some("develop"));
+}
+
+#[test]
+fn parse_mission_ready_without_target_branch() {
+    let args = json!({
+        "highlights": "h",
+        "goal": "g",
+        "acceptance": ["a"],
+        "graph_tasks": ["t1"],
+    });
+    let m = parse_mission_ready_args(&args).unwrap();
+    assert!(m.target_branch.is_none());
+}
+
+#[test]
+fn parse_mission_ready_rejects_bad_target_branch() {
+    let args = json!({
+        "highlights": "h",
+        "goal": "g",
+        "acceptance": ["a"],
+        "graph_tasks": ["t1"],
+        "target_branch": "-bad",
+    });
+    let err = parse_mission_ready_args(&args).unwrap_err();
+    assert!(err.contains("target_branch"), "got: {err}");
+}
+
+#[test]
+fn mission_ready_schema_has_target_branch() {
+    let t = MissionReady;
+    let params = t.parameters();
+    let tb = params["properties"]["target_branch"]["description"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        tb.contains("integration") || tb.contains("merges into"),
+        "schema must describe target_branch purpose: {tb}"
+    );
+    assert!(
+        tb.contains("main/master") || tb.contains("main"),
+        "schema must mention main/master guard: {tb}"
+    );
+}
