@@ -173,7 +173,6 @@ fn checklist_node_roundtrip_shape() {
     assert_eq!(n.parent_title.as_deref(), Some("p"));
 }
 
-
 #[test]
 fn parse_mission_prepare_empty_args_returns_none() {
     let args = json!({});

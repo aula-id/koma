@@ -986,7 +986,10 @@ impl AppStateRest {
             }
             // Arm keeper on resume into an active execute/integrate/prepare mission.
             let phase = self.sessions[sess_idx].sdlc_phase.clone();
-            if matches!(phase.as_deref(), Some("execute") | Some("integrate") | Some("prepare")) {
+            if matches!(
+                phase.as_deref(),
+                Some("execute") | Some("integrate") | Some("prepare")
+            ) {
                 self.sessions[sess_idx].sdlc_keeper_due = true;
             }
         } else if leaving_sdlc {
@@ -1013,7 +1016,8 @@ impl AppStateRest {
                 .map(|s| s.path.clone())
             {
                 if let Some(mut m) = crate::model::sdlc::Mission::load(&path) {
-                    if m.approved && matches!(m.phase.as_str(), "execute" | "integrate" | "prepare") {
+                    if m.approved && matches!(m.phase.as_str(), "execute" | "integrate" | "prepare")
+                    {
                         let _ = m.try_transition("paused");
                         let _ = m.save(&path);
                     }

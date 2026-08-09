@@ -5,8 +5,8 @@ pub const MANIFEST_SCHEMA: &str = "koma-extension/v0";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtensionManifest {
-    pub schema: String,           // MANIFEST_SCHEMA
-    pub id: String,               // reverse-DNS, e.g. "run.koma.example.echo-tool-daemon"
+    pub schema: String, // MANIFEST_SCHEMA
+    pub id: String,     // reverse-DNS, e.g. "run.koma.example.echo-tool-daemon"
     pub name: String,
     pub version: String,
     #[serde(default)]
@@ -48,15 +48,21 @@ pub struct ExtensionManifest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Tier { Free, Paid }
+pub enum Tier {
+    Free,
+    Paid,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ExtensionKind { Daemon, Oneshot }
+pub enum ExtensionKind {
+    Daemon,
+    Oneshot,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Runtime {
-    pub exec: String,             // path to the executable, relative to the package root
+    pub exec: String, // path to the executable, relative to the package root
     #[serde(default)]
     pub args: Vec<String>,
 }
@@ -137,10 +143,18 @@ pub struct SubAgentDef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelDef { pub id: String, pub display_name: String }
+pub struct ModelDef {
+    pub id: String,
+    pub display_name: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PanelDef { pub id: String, pub title: String, #[serde(default)] pub icon: String }
+pub struct PanelDef {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub icon: String,
+}
 
 /// One TUI screen an extension drives via the server-driven TUI SCREEN PROTOCOL (v1),
 /// declared on [`Contributes::tui_screens`]. `id` is the stable screen id koma passes
@@ -150,7 +164,10 @@ pub struct PanelDef { pub id: String, pub title: String, #[serde(default)] pub i
 /// header until the extension's first `Screen` supplies its own `title`). Mirrors
 /// [`PanelDef`]'s shape (both required).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TuiScreenDef { pub id: String, pub title: String }
+pub struct TuiScreenDef {
+    pub id: String,
+    pub title: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDef {
@@ -247,33 +264,69 @@ pub enum Grant {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "lowercase")]
 pub enum ExtMsg {
-    Hello { protocol: String, token: String, manifest: Box<ExtensionManifest> },
-    Call { id: u64, method: String, params: serde_json::Value },   // ext drives koma (requires)
-    Result { id: u64, result: serde_json::Value },                 // reply to koma's Invoke
-    Health { ok: bool },
+    Hello {
+        protocol: String,
+        token: String,
+        manifest: Box<ExtensionManifest>,
+    },
+    Call {
+        id: u64,
+        method: String,
+        params: serde_json::Value,
+    }, // ext drives koma (requires)
+    Result {
+        id: u64,
+        result: serde_json::Value,
+    }, // reply to koma's Invoke
+    Health {
+        ok: bool,
+    },
     // Fire-and-forget ext->koma notification: no `id`, no `Result` reply expected
     // (e.g. `panel.push`). See `Koma::notify` in the SDK.
-    Notify { name: String, params: serde_json::Value },
+    Notify {
+        name: String,
+        params: serde_json::Value,
+    },
 }
 
 // koma -> extension
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "lowercase")]
 pub enum KomaMsg {
-    Welcome { protocol: String, koma_version: String, granted: Vec<Grant> },
-    Reject { reason: String },
-    Invoke { id: u64, method: String, params: serde_json::Value },  // koma drives ext (contributes)
-    Result { id: u64, result: serde_json::Value },                  // reply to ext's Call
+    Welcome {
+        protocol: String,
+        koma_version: String,
+        granted: Vec<Grant>,
+    },
+    Reject {
+        reason: String,
+    },
+    Invoke {
+        id: u64,
+        method: String,
+        params: serde_json::Value,
+    }, // koma drives ext (contributes)
+    Result {
+        id: u64,
+        result: serde_json::Value,
+    }, // reply to ext's Call
     Ping,
     Shutdown,
     // Fire-and-forget koma->ext notification: no `id`, no `Result` reply expected.
     // Dispatched to `Extension::on_event`.
-    Event { name: String, params: serde_json::Value },
+    Event {
+        name: String,
+        params: serde_json::Value,
+    },
 }
 
 // written by a daemon extension so koma can find its live socket
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RunInfo { pub socket: String, pub token: String, pub pid: u32 }
+pub struct RunInfo {
+    pub socket: String,
+    pub token: String,
+    pub pid: u32,
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -316,7 +369,11 @@ mod tests {
         assert!(def.api_type.is_none());
         assert!(def.refresh.is_none());
         let wire = serde_json::to_value(&def).expect("serializes");
-        assert_eq!(wire.get("chat_endpoint"), None, "absent W12 fields must not serialize");
+        assert_eq!(
+            wire.get("chat_endpoint"),
+            None,
+            "absent W12 fields must not serialize"
+        );
         assert_eq!(wire.get("refresh"), None);
 
         // Full form: the W12 fields (ignored in v1) still round-trip.
@@ -331,16 +388,25 @@ mod tests {
                 client_id: "cid".to_string(),
             }),
         };
-        let back: OAuthProviderDef =
-            serde_json::from_value(serde_json::to_value(&def2).unwrap()).expect("full def roundtrips");
-        assert_eq!(back.chat_endpoint.as_deref(), Some("https://api.acme.test/v1"));
-        assert_eq!(back.refresh.as_ref().unwrap().token_url, "https://acme.test/token");
+        let back: OAuthProviderDef = serde_json::from_value(serde_json::to_value(&def2).unwrap())
+            .expect("full def roundtrips");
+        assert_eq!(
+            back.chat_endpoint.as_deref(),
+            Some("https://api.acme.test/v1")
+        );
+        assert_eq!(
+            back.refresh.as_ref().unwrap().token_url,
+            "https://acme.test/token"
+        );
     }
 
     /// (b) `KomaMsg::Event` roundtrips through serde_json and tags as "event".
     #[test]
     fn koma_msg_event_roundtrips() {
-        let msg = KomaMsg::Event { name: "focus.changed".to_string(), params: json!({ "id": 42 }) };
+        let msg = KomaMsg::Event {
+            name: "focus.changed".to_string(),
+            params: json!({ "id": 42 }),
+        };
         let wire = serde_json::to_value(&msg).expect("serializes");
         assert_eq!(wire["t"], "event");
         assert_eq!(wire["name"], "focus.changed");
@@ -371,7 +437,10 @@ mod tests {
         match back {
             ExtMsg::Notify { name, params } => {
                 assert_eq!(name, "panel.push");
-                assert_eq!(params, json!({ "panelId": "sidebar", "payload": { "ok": true } }));
+                assert_eq!(
+                    params,
+                    json!({ "panelId": "sidebar", "payload": { "ok": true } })
+                );
             }
             other => panic!("expected ExtMsg::Notify, got {other:?}"),
         }

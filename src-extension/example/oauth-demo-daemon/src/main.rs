@@ -131,7 +131,10 @@ struct OAuthDemo {
 impl OAuthDemo {
     /// The provider id from an `oauth.*` invoke's `{ "providerId": ... }`.
     fn provider_id(params: &Value) -> &str {
-        params.get("providerId").and_then(|v| v.as_str()).unwrap_or("")
+        params
+            .get("providerId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
     }
 }
 

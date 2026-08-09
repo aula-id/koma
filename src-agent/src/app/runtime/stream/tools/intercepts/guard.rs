@@ -94,8 +94,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_git_worktree(
         if matches!(action, "enter" | "exit" | "create" | "remove") {
             // During prepare, allow `create` (model spawns additional worktrees)
             // but block enter/exit/remove (stay in the mission worktree).
-            let is_prepare = state.rest.sessions[sess_idx].sdlc_phase.as_deref()
-                == Some("prepare");
+            let is_prepare = state.rest.sessions[sess_idx].sdlc_phase.as_deref() == Some("prepare");
             let blocked = if is_prepare {
                 matches!(action, "enter" | "exit" | "remove")
             } else {
