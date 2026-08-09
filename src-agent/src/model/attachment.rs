@@ -14,7 +14,7 @@
 //! `(files already in images_dir) + 1`, zero-padded to two digits. The in-text
 //! marker number MATCHES the filename number (marker `[Image #3]` <-> `03-*`).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 
@@ -299,6 +299,40 @@ pub fn scan_at_image_tokens(
     }
 
     (result, attachments)
+}
+
+/// List all `.png` files in a project's `.screenshoot/` directory, returning
+/// their basenames sorted alphabetically. Returns an empty vec when the
+/// directory doesn't exist or contains no PNGs.
+pub fn list_screenshoot_pngs(workspace: &Path) -> Vec<String> {
+    let dir = workspace.join(".screenshoot");
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|ext| ext == "png")
+                .unwrap_or(false)
+        })
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    names.sort();
+    names
+}
+
+/// Resolve a `.screenshoot/` filename to an absolute path inside the project's
+/// `.screenshoot/` directory. Returns `None` if the resolved path doesn't
+/// exist or isn't a file.
+pub fn resolve_screenshoot_path(workspace: &Path, name: &str) -> Option<PathBuf> {
+    let p = workspace.join(".screenshoot").join(name);
+    if p.is_file() {
+        Some(p)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
