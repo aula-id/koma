@@ -94,6 +94,7 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
             | "describe_screenshot"
             | "browser_tabs"
             | "browser_inspect"
+            | "show_image"
     )
 }
 
@@ -599,6 +600,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(internet::BrowserInspect),
         Box::new(internet::BrowserInteract),
         Box::new(internet::BrowserEvaluate),
+        Box::new(internet::ShowImage),
         Box::new(git_cred::GitCred),
         Box::new(git_operator::GitOperator),
         Box::new(git_worktree::GitWorktree),

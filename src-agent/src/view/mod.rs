@@ -19,6 +19,7 @@ pub mod effort;
 pub mod extensions;
 pub mod extscreen;
 pub mod help;
+pub mod image_render;
 pub mod key_input;
 pub mod loading;
 pub mod markdown;
@@ -300,19 +301,67 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
                 }
             };
             use ratatui::layout::{Constraint, Layout, Alignment};
-            use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-            let chunks = Layout::default()
-                .direction(ratatui::layout::Direction::Vertical)
-                .constraints([
-                    Constraint::Percentage(30),
-                    Constraint::Min(3),
-                    Constraint::Percentage(65),
-                ])
-                .split(area);
-            let label = Paragraph::new(text)
-                .alignment(Alignment::Center)
-                .wrap(Wrap { trim: true });
-            frame.render_widget(label, chunks[1]);
+            use ratatui::widgets::{Paragraph, Wrap};
+
+            let renderer = image_render::ImageRenderer::detect();
+            let image_area = if ov.images.is_empty() {
+                area
+            } else {
+                // Layout: 30% top pad, image in middle, header with label at bottom.
+                let chunks = Layout::default()
+                    .direction(ratatui::layout::Direction::Vertical)
+                    .constraints([
+                        Constraint::Percentage(5),
+                        Constraint::Min(1),
+                        Constraint::Percentage(90),
+                        Constraint::Min(3),
+                    ])
+                    .split(area);
+
+                // Render the header.
+                let header = Paragraph::new(text)
+                    .alignment(Alignment::Center)
+                    .wrap(Wrap { trim: true });
+                frame.render_widget(header, chunks[3]);
+
+                chunks[2]
+            };
+
+            // Try to render the image.
+            if !ov.images.is_empty() {
+                let img = &ov.images[ov.active_index];
+                if img.path.exists() {
+                    match renderer.render_to_lines(&img.path, image_area.width) {
+                        Ok(lines) => {
+                            // Render the half-block lines into the image area.
+                            let total_h = lines.len() as u16;
+                            let render_h = image_area.height.min(total_h);
+                            for (i, line) in lines.iter().take(render_h as usize).enumerate() {
+                                let row = ratatui::layout::Rect {
+                                    x: image_area.x,
+                                    y: image_area.y + i as u16,
+                                    width: image_area.width,
+                                    height: 1,
+                                };
+                                let p = Paragraph::new(line.clone());
+                                frame.render_widget(p, row);
+                            }
+                        }
+                        Err(_) => {
+                            let msg = Paragraph::new(format!(
+                                "Failed to render: {}",
+                                img.path.display()
+                            ))
+                            .alignment(Alignment::Center);
+                            frame.render_widget(msg, image_area);
+                        }
+                    }
+                } else {
+                    let msg = Paragraph::new(format!("File not found: {}", img.path.display()))
+                        .alignment(Alignment::Center);
+                    frame.render_widget(msg, image_area);
+                }
+            }
         }
     }
 }
