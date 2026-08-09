@@ -574,6 +574,22 @@ Re-read mission.json and the OPEN/SEALED capsule. The contract is the source of 
                             mission.branch.as_deref().unwrap_or("n/a")
                         ));
                     }
+                    // Recent edit history rail: project what changed recently.
+                    if let Ok(conn) = crate::model::msglog::open(&self.path) {
+                        if crate::model::sdlc::graph::ensure_tables(&conn).is_ok() {
+                            if let Ok(history) =
+                                crate::model::sdlc::graph::recent_edit_history(&conn, 20)
+                            {
+                                let section =
+                                    crate::model::sdlc::mission::format_edit_history_section(
+                                        &history,
+                                    );
+                                if !section.is_empty() {
+                                    sys.push_str(&section);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
