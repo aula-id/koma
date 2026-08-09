@@ -21,7 +21,7 @@ import argparse
 os.environ["SCRAPION_SKIP_BROWSER_CHECK"] = "1"
 
 # Known subcommand names — used for first-argv detection.
-_SUBCOMMANDS = frozenset({"page", "search", "screenshot"})
+_SUBCOMMANDS = frozenset({"page", "search", "screenshot", "daemon"})
 
 
 def _emit_json(real_stdout, payload):
@@ -143,6 +143,13 @@ def cmd_legacy(args):
 
 def main():
     if len(sys.argv) >= 2 and sys.argv[1] in _SUBCOMMANDS:
+        # daemon is a special subcommand — delegate directly
+        if sys.argv[1] == "daemon":
+            from scrapion_agent.daemon import main as daemon_main
+            sys.argv = [sys.argv[0]] + sys.argv[2:]  # strip "daemon"
+            daemon_main()
+            return
+
         parser = _build_parser()
         args = parser.parse_args()
         if args.command == "page":
