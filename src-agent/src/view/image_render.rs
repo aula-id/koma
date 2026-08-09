@@ -133,13 +133,6 @@ impl ImageRenderer {
     }
 
     /// Generate Kitty Graphics Protocol escape sequences to display the image.
-    ///
-    /// Returns a string containing the escape sequences that should be written
-    /// to stdout before a ratatui frame, along with a deletion sequence for
-    /// cleanup.
-    ///
-    /// The `placement_id` is a unique integer used to manage (delete) the
-    /// placement later.
     pub fn kitty_display(path: &Path, placement_id: u32) -> Result<KittyImageEscapes> {
         let bytes = std::fs::read(path)?;
         let b64 = base64::Engine::encode(

@@ -131,6 +131,12 @@ impl SessionRuntime {
         if let Some(path) = self.held_lock.take() {
             crate::model::store::remove_lock(&path);
         }
+        // Shut down the browser daemon for this session so the subprocess is
+        // not leaked. Best-effort: a missing session dir or a missing daemon
+        // is not an error.
+        if let Some(sess) = self.session.as_ref() {
+            crate::internet::browser_daemon::cleanup(&sess.path);
+        }
         self.closed = true;
     }
 

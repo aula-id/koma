@@ -134,7 +134,7 @@ impl super::Tool for WebScreenshot {
                 let _ = daemon.request("navigate", json!({"tab_id": tid, "url": target_url}))?;
             }
 
-            let data = daemon.request(
+            let _data = daemon.request(
                 "screenshot",
                 json!({
                     "tab_id": tid,
