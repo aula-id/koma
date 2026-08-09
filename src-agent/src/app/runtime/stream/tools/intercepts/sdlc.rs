@@ -1096,10 +1096,10 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_prepare(
         }
     };
 
-    if let Err(e) = mission.validate_active() {
+    if let Err(e) = mission.validate_prepare_ready() {
         state.rest.sessions[sess_idx].tool_results.push((
             call.id.clone(),
-            format!("error: mission_prepare requires an active mission: {e}"),
+            format!("error: mission_prepare requires a ready mission: {e}"),
         ));
         state.rest.sessions[sess_idx].tool_idx += 1;
         return InterceptFlow::Continue;
