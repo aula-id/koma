@@ -241,6 +241,41 @@ impl Mission {
         Ok(())
     }
 
+    /// Pre-transition check for `mission_prepare`: validates that the mission is
+    /// approved, properly bound, and has a complete contract — without rejecting the
+    /// `prepare` phase itself (unlike [`validate_active`](Self::validate_active),
+    /// which is intentionally scoped to execute/integrate).
+    pub fn validate_prepare_ready(&self) -> Result<()> {
+        if !self.approved {
+            bail!("mission is not approved");
+        }
+        if self.needs_reapproval {
+            bail!("mission contract was amended and requires re-approval");
+        }
+        if self.contract_version < CURRENT_CONTRACT_VERSION || !self.has_frozen_target() {
+            bail!(
+                "mission has no frozen integration target (legacy contract v{}) — re-approval required",
+                self.contract_version
+            );
+        }
+        if !self.hash_valid() {
+            bail!("mission contract hash mismatch — legacy/unbound contract fails closed");
+        }
+        if self.graph_hash.is_none() {
+            bail!("mission has no frozen graph_hash — fails closed into reassessment");
+        }
+        if self.worktree_path.is_none() || self.branch.is_none() || self.worktree_name.is_none() {
+            bail!("mission worktree binding incomplete — fails closed");
+        }
+        if !matches!(self.phase.as_str(), "prepare") {
+            bail!(
+                "mission phase '{}' is not prepare — cannot transition to execute",
+                self.phase
+            );
+        }
+        Ok(())
+    }
+
     /// Validate the frozen integrate destination still matches path + branch.
     /// Never consults live session workdir — destination is exclusively the
     /// frozen `target_worktree_path` / `target_branch`.
