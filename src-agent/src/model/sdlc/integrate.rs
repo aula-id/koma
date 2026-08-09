@@ -70,6 +70,16 @@ pub fn try_integrate(mission: &Mission, force_branch_only: bool) -> IntegrateRes
         }
     };
 
+    // Block integration to main/master — those require manual PR/merge.
+    if target_branch == "main" || target_branch == "master" {
+        return IntegrateResult {
+            message: "SDLC integrate to main/master is blocked — merge to a feature/integration \
+                     branch and use PR or manual merge for main"
+                .to_string(),
+            success: false,
+        };
+    }
+
     let branch = match &mission.branch {
         Some(b) => b.clone(),
         None => {
@@ -424,17 +434,17 @@ mod tests {
 
     #[test]
     fn missing_branch_fails() {
-        let mut m = sample("x", "main");
+        let mut m = sample("x", "develop");
         // Need a real dir so frozen target path check passes before branch check.
         let dir = tmp_root("missing-br");
-        git(&dir, &["init", "-b", "main"]);
+        git(&dir, &["init", "-b", "develop"]);
         git(&dir, &["config", "user.email", "t@t"]);
         git(&dir, &["config", "user.name", "t"]);
         std::fs::write(dir.join("a.txt"), "a").unwrap();
         git(&dir, &["add", "."]);
         git(&dir, &["commit", "-m", "init"]);
         m.target_worktree_path = Some(dir.to_string_lossy().into_owned());
-        m.target_branch = Some("main".into());
+        m.target_branch = Some("develop".into());
         m.target_head = mission::current_git_head(&dir);
         m.branch = None;
         m.hash = m.recompute_hash();
@@ -491,7 +501,7 @@ mod tests {
     #[test]
     fn nothing_to_land_when_zero_commits_ahead() {
         let root = tmp_root("zero-ahead");
-        git(&root, &["init", "-b", "main"]);
+        git(&root, &["init", "-b", "develop"]);
         git(&root, &["config", "user.email", "t@t"]);
         git(&root, &["config", "user.name", "t"]);
         std::fs::write(root.join("a.txt"), "a").unwrap();
@@ -500,9 +510,9 @@ mod tests {
         let head = mission::current_git_head(&root).unwrap();
         git(&root, &["branch", "feat/empty"]);
 
-        let mut m = sample("feat/empty", "main");
+        let mut m = sample("feat/empty", "develop");
         m.target_worktree_path = Some(root.to_string_lossy().into_owned());
-        m.target_branch = Some("main".into());
+        m.target_branch = Some("develop".into());
         m.target_head = Some(head);
         m.worktree_path = None;
         m.hash = m.recompute_hash();
@@ -520,7 +530,7 @@ mod tests {
     fn dirty_mission_worktree_blocks_integrate() {
         let root = tmp_root("dirty-wt");
         let mission_wt = root.join("mission");
-        git(&root, &["init", "-b", "main"]);
+        git(&root, &["init", "-b", "develop"]);
         git(&root, &["config", "user.email", "t@t"]);
         git(&root, &["config", "user.name", "t"]);
         std::fs::write(root.join("a.txt"), "a").unwrap();
@@ -543,9 +553,9 @@ mod tests {
         // Dirty after commit.
         std::fs::write(mission_wt.join("dirty.txt"), "x").unwrap();
 
-        let mut m = sample("feat/dirty", "main");
+        let mut m = sample("feat/dirty", "develop");
         m.target_worktree_path = Some(root.to_string_lossy().into_owned());
-        m.target_branch = Some("main".into());
+        m.target_branch = Some("develop".into());
         m.target_head = Some(head);
         m.worktree_path = Some(mission_wt.to_string_lossy().into_owned());
         m.hash = m.recompute_hash();
@@ -603,5 +613,47 @@ mod tests {
         assert_eq!(m.target_branch.as_deref(), Some("release"));
         let err = frozen_target_workdir(&m).unwrap_err();
         assert!(err.contains("target_worktree_path") || err.contains("not a directory"));
+    }
+
+    #[test]
+    fn integrate_blocks_main_branch() {
+        let mut m = sample("feat/x", "main");
+        m.target_branch = Some("main".into());
+        m.hash = m.recompute_hash();
+        let r = try_integrate(&m, false);
+        assert!(!r.success);
+        assert!(
+            r.message.contains("main/master") || r.message.contains("blocked"),
+            "must block main: {}",
+            r.message
+        );
+    }
+
+    #[test]
+    fn integrate_blocks_master_branch() {
+        let mut m = sample("feat/x", "master");
+        m.target_branch = Some("master".into());
+        m.hash = m.recompute_hash();
+        let r = try_integrate(&m, false);
+        assert!(!r.success);
+        assert!(
+            r.message.contains("main/master") || r.message.contains("blocked"),
+            "must block master: {}",
+            r.message
+        );
+    }
+
+    #[test]
+    fn integrate_allows_non_main_branch() {
+        let m = sample("feat/x", "develop");
+        // force_branch_only short-circuits before path checks, so it tests
+        // that the main/master guard fires after target_branch is resolved.
+        let r = try_integrate(&m, true);
+        assert!(!r.success); // force_branch_only is not success
+        assert!(
+            !r.message.contains("blocked"),
+            "develop must not be blocked: {}",
+            r.message
+        );
     }
 }
