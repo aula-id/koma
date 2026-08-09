@@ -1396,11 +1396,8 @@ pub struct EditSummaryRecord {
 /// A single recent edit history entry for capsule projection.
 #[derive(Debug, Clone)]
 pub struct RecentEditEntry {
-    pub id: i64,
     pub kind: String,
-    pub node_id: Option<String>,
     pub detail: String,
-    pub created_at: i64,
 }
 
 /// Append a deterministic edit_audit event. Best-effort: serialization or
@@ -1431,20 +1428,17 @@ pub fn append_edit_summary(conn: &Connection, node_id: Option<&str>, record: &Ed
 /// When a batch has both audits and a summary, the summary is the
 /// primary entry and audits without a matching summary are retained as fallback.
 pub fn recent_edit_history(conn: &Connection, limit: usize) -> Result<Vec<RecentEditEntry>> {
-    let limit = limit.max(1).min(50);
+    let limit = limit.clamp(1, 50);
     let mut stmt = conn.prepare(
-        "SELECT id, kind, node_id, detail, created_at
+        "SELECT kind, detail
          FROM sdlc_events
          WHERE kind IN ('edit_audit', 'edit_summary')
          ORDER BY id DESC",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(RecentEditEntry {
-            id: row.get(0)?,
-            kind: row.get(1)?,
-            node_id: row.get(2)?,
-            detail: row.get(3)?,
-            created_at: row.get(4)?,
+            kind: row.get(0)?,
+            detail: row.get(1)?,
         })
     })?;
 
