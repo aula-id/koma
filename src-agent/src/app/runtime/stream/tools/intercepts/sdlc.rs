@@ -66,10 +66,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_sdlc_execute_git_gate(
         return InterceptFlow::Fallthrough;
     }
     let phase = state.rest.sessions[sess_idx].sdlc_phase.as_deref();
-    if !matches!(
-        phase,
-        Some("execute") | Some("integrate") | Some("prepare")
-    ) {
+    if !matches!(phase, Some("execute") | Some("integrate") | Some("prepare")) {
         return InterceptFlow::Fallthrough;
     }
 
@@ -1112,9 +1109,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_prepare(
     if let Err(e) = mission.validate_binding(&live_cwd, live_branch.as_deref()) {
         state.rest.sessions[sess_idx].tool_results.push((
             call.id.clone(),
-            format!(
-                "error: mission_prepare requires a live mission binding: {e}"
-            ),
+            format!("error: mission_prepare requires a live mission binding: {e}"),
         ));
         state.rest.sessions[sess_idx].tool_idx += 1;
         return InterceptFlow::Continue;
@@ -1362,10 +1357,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_sdlc_bash_git_gate(
         return InterceptFlow::Fallthrough;
     }
     let phase = state.rest.sessions[sess_idx].sdlc_phase.as_deref();
-    if !matches!(
-        phase,
-        Some("execute") | Some("prepare") | Some("integrate")
-    ) {
+    if !matches!(phase, Some("execute") | Some("prepare") | Some("integrate")) {
         return InterceptFlow::Fallthrough;
     }
 
@@ -1393,18 +1385,16 @@ pub(in crate::app::runtime::stream::tools) fn intercept_sdlc_bash_git_gate(
                 mission_branch = None;
                 mission_target_branch = None;
             }
-            Some(s) => {
-                match crate::model::sdlc::Mission::load(&s.path) {
-                    Some(m) => {
-                        mission_branch = m.branch.clone();
-                        mission_target_branch = m.target_branch.clone();
-                    }
-                    None => {
-                        mission_branch = None;
-                        mission_target_branch = None;
-                    }
+            Some(s) => match crate::model::sdlc::Mission::load(&s.path) {
+                Some(m) => {
+                    mission_branch = m.branch.clone();
+                    mission_target_branch = m.target_branch.clone();
                 }
-            }
+                None => {
+                    mission_branch = None;
+                    mission_target_branch = None;
+                }
+            },
         }
     }
 
@@ -1584,20 +1574,16 @@ fn validate_bash_git_subcommand(
                  branch is frozen to the mission binding"
             ))
         }
-        "reset" => {
-            Err(
-                "SDLC bash gate: git reset is blocked during execute/prepare/integrate — \
+        "reset" => Err(
+            "SDLC bash gate: git reset is blocked during execute/prepare/integrate — \
                  worktree state is managed by the SDLC lifecycle"
-                    .into(),
-            )
-        }
-        "rebase" => {
-            Err(
-                "SDLC bash gate: git rebase is blocked during execute/prepare/integrate — \
+                .into(),
+        ),
+        "rebase" => Err(
+            "SDLC bash gate: git rebase is blocked during execute/prepare/integrate — \
                  worktree state is managed by the SDLC lifecycle"
-                    .into(),
-            )
-        }
+                .into(),
+        ),
         // All other git subcommands (status, log, diff, add, commit, etc.) are allowed.
         _ => Ok(()),
     }
