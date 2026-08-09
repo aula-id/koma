@@ -46,6 +46,7 @@ pub(crate) mod security;
 // mappers) are reachable from `event_loop::global::drains::drain_store`, which folds a
 // landed catalogue/detail fetch into `Mode::ExtStore` the SAME way this module's own
 // `handle_store` seeds it.
+mod attach;
 pub(crate) mod store;
 mod task;
 
@@ -84,6 +85,7 @@ pub(super) fn apply_slash(
         Command::Cd(path) => cd::handle_cd(path, state, client, handle)?,
         Command::AddDir(path) => cd::handle_adddir(path, state)?,
         Command::Internet(target) => internet::handle_internet(target, state)?,
+        Command::Attach(arg) => attach::handle_attach(&arg, state)?,
         Command::Unknown(s) => {
             state.rest.fg_mut().status = format!("unknown command: /{s}");
         }
