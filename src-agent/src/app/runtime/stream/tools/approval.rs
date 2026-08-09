@@ -364,6 +364,14 @@ pub(crate) fn process_tools(
             }
         }
         if call.function.name == "bash" {
+            // SDLC bash git gate: block git ops that bypass git_operator
+            if mode == AgentMode::Sdlc {
+                match intercepts::intercept_sdlc_bash_git_gate(state, sess_idx, &call) {
+                    InterceptFlow::Continue => continue,
+                    InterceptFlow::Return => return,
+                    InterceptFlow::Fallthrough => {}
+                }
+            }
             match intercepts::intercept_bash_background(state, sess_idx, &call) {
                 InterceptFlow::Continue => continue,
                 InterceptFlow::Return => return,

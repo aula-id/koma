@@ -438,6 +438,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
 
     // Binding is established only on successful approve — hash unbound draft
     // but include branch intent when set so approve bind uses the frozen name.
+    // Also include target_branch when provided early so the contract hash covers it.
     let hash = crate::model::sdlc::Mission::compute_contract_hash_full(
         crate::model::sdlc::mission::ContractHashInput {
             goal: &mission_args.goal,
@@ -453,7 +454,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
             branch: branch_intent.as_deref(),
             worktree_path: None,
             target_worktree_path: None,
-            target_branch: None,
+            target_branch: mission_args.target_branch.as_deref(),
             target_head: None,
         },
     );
@@ -492,7 +493,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
         branch: branch_intent,
         worktree_path: None,
         target_worktree_path: None,
-        target_branch: None,
+        // User-provided target_branch (if any) stored here; establish_mission_binding
+        // will use it when set, otherwise falls back to current_git_branch.
+        target_branch: mission_args.target_branch,
         target_head: None,
         rationale: mission_args.rationale,
         phase: "assess".to_string(),
@@ -1342,6 +1345,264 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
     InterceptFlow::Continue
 }
 
+/// SDLC bash git gate: blocks git subcommands in bash that would bypass
+/// `git_operator` confinement during execute/prepare/integrate phases.
+///
+/// Blocked subcommands in execute/prepare: `push` (except mission branch only),
+/// `merge` (except mission branch), `checkout`, `switch`, `reset`, `rebase`.
+/// For `push`, must only push the mission branch refspec.
+/// For `merge`, blocks merge of anything other than the mission branch.
+/// For `checkout`/`switch`/`reset`/`rebase`: always blocked.
+pub(in crate::app::runtime::stream::tools) fn intercept_sdlc_bash_git_gate(
+    state: &mut AppState,
+    sess_idx: usize,
+    call: &ToolCall,
+) -> InterceptFlow {
+    if call.function.name != "bash" {
+        return InterceptFlow::Fallthrough;
+    }
+    let phase = state.rest.sessions[sess_idx].sdlc_phase.as_deref();
+    if !matches!(
+        phase,
+        Some("execute") | Some("prepare") | Some("integrate")
+    ) {
+        return InterceptFlow::Fallthrough;
+    }
+
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let args: serde_json::Value =
+        serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+    let command = match args.get("command").and_then(|v| v.as_str()) {
+        Some(c) => c,
+        None => return InterceptFlow::Fallthrough,
+    };
+
+    // Simple tokenization: look for `git <subcommand>` pattern.
+    // This is a pragmatic guard, not a full shell parser.
+    let Some((git_subcmd, subcmd_args)) = extract_git_subcommand(command) else {
+        return InterceptFlow::Fallthrough;
+    };
+
+    // Load mission for branch info (only when we actually need to validate).
+    let mission_branch;
+    let mission_target_branch;
+    {
+        let sess = state.rest.sessions[sess_idx].session.as_ref();
+        match sess {
+            None => {
+                mission_branch = None;
+                mission_target_branch = None;
+            }
+            Some(s) => {
+                match crate::model::sdlc::Mission::load(&s.path) {
+                    Some(m) => {
+                        mission_branch = m.branch.clone();
+                        mission_target_branch = m.target_branch.clone();
+                    }
+                    None => {
+                        mission_branch = None;
+                        mission_target_branch = None;
+                    }
+                }
+            }
+        }
+    }
+
+    let result = validate_bash_git_subcommand(
+        git_subcmd,
+        subcmd_args,
+        mission_branch.as_deref(),
+        mission_target_branch.as_deref(),
+    );
+
+    match result {
+        Ok(()) => InterceptFlow::Fallthrough,
+        Err(detail) => {
+            state.rest.sessions[sess_idx]
+                .tool_results
+                .push((call.id.clone(), format!("error: {detail}")));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            InterceptFlow::Continue
+        }
+    }
+}
+
+/// Simple extraction of `git <subcommand>` from a bash command string.
+/// Returns `(subcommand, remaining_args_string)` if found.
+fn extract_git_subcommand(command: &str) -> Option<(&str, &str)> {
+    let tokens = tokenize_bash_command(command);
+    // Find `git` as a bare word, then take the next token as subcommand.
+    for (i, tok) in tokens.iter().enumerate() {
+        if *tok == "git" {
+            // Next token after git is the subcommand.
+            if i + 1 < tokens.len() {
+                let subcmd = tokens[i + 1];
+                // Collect remaining tokens after subcommand.
+                let rest_start = command
+                    .find(subcmd)
+                    .map(|p| p + subcmd.len())
+                    .unwrap_or(command.len());
+                let rest = command[rest_start..].trim();
+                return Some((subcmd, rest));
+            }
+        }
+    }
+    None
+}
+
+/// Pragmatic bash tokenizer: splits on whitespace, handles simple single quotes.
+/// Does NOT handle double quotes, escapes, or complex shell — good enough to
+/// detect obvious `git push` / `git checkout` patterns.
+fn tokenize_bash_command(command: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut chars = command.char_indices().peekable();
+    while let Some(&(pos, c)) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        if c == '\'' {
+            // Single-quoted segment: read until closing quote.
+            chars.next(); // skip opening quote
+            let start = pos + 1;
+            let mut end = start;
+            for &(p, ch) in &chars.clone().collect::<Vec<_>>() {
+                if ch == '\'' {
+                    tokens.push(&command[start..p]);
+                    // Skip to after the closing quote.
+                    for _ in 0..=(p - start) {
+                        chars.next();
+                    }
+                    break;
+                }
+                end = p + 1;
+                chars.next();
+            }
+            // If no closing quote found, push rest as one token.
+            if end == start {
+                tokens.push(&command[start..]);
+                break;
+            }
+            continue;
+        }
+        // Unquoted token: read until whitespace.
+        let start = pos;
+        while let Some(&(p, ch)) = chars.peek() {
+            if ch.is_whitespace() || ch == '\'' {
+                break;
+            }
+            chars.next();
+            let _ = p;
+        }
+        // Find the actual end of this token.
+        let end = chars
+            .clone()
+            .next()
+            .map(|(p, _)| p)
+            .unwrap_or(command.len());
+        tokens.push(&command[start..end]);
+    }
+    tokens
+}
+
+/// Validate a git subcommand extracted from bash. Returns Ok(()) if allowed,
+/// Err with a reason if blocked.
+fn validate_bash_git_subcommand(
+    subcmd: &str,
+    subcmd_args: &str,
+    mission_branch: Option<&str>,
+    _mission_target_branch: Option<&str>,
+) -> Result<(), String> {
+    match subcmd {
+        "push" => {
+            // Push is allowed ONLY for the mission branch. Must not push to
+            // main/master or arbitrary refs.
+            if let Some(branch) = mission_branch {
+                // Check that the push args only reference the mission branch.
+                let args_lower = subcmd_args.to_ascii_lowercase();
+                // Block pushes that mention main/master.
+                if args_lower.contains("main") || args_lower.contains("master") {
+                    return Err(
+                        "SDLC bash gate: push to main/master is blocked — use PR or manual merge"
+                            .into(),
+                    );
+                }
+                // If there's a specific refspec, it should be the mission branch.
+                let tokens: Vec<&str> = subcmd_args.split_whitespace().collect();
+                for tok in &tokens {
+                    if tok.starts_with('+') || tok.contains(':') {
+                        // Refspec — check source side.
+                        let src = tok.trim_start_matches('+').split(':').next().unwrap_or("");
+                        if !src.is_empty() && src != branch {
+                            return Err(format!(
+                                "SDLC bash gate: push refspec '{tok}' does not match \
+                                 mission branch '{branch}' — push only the mission branch"
+                            ));
+                        }
+                    }
+                }
+                Ok(())
+            } else {
+                Err(
+                    "SDLC bash gate: push blocked — no mission branch set (re-approve required)"
+                        .into(),
+                )
+            }
+        }
+        "merge" => {
+            // Merge is allowed only for the mission branch (merging the branch into current).
+            // Block merge of main/master or unrelated branches.
+            let args_lower = subcmd_args.to_ascii_lowercase();
+            if args_lower.contains("main") || args_lower.contains("master") {
+                return Err(
+                    "SDLC bash gate: merge involving main/master is blocked — use PR or manual merge"
+                        .into(),
+                );
+            }
+            // If there are args, the first non-flag arg is the branch being merged.
+            let tokens: Vec<&str> = subcmd_args.split_whitespace().collect();
+            if let Some(branch) = mission_branch {
+                for tok in &tokens {
+                    if !tok.starts_with('-') && !tok.is_empty() {
+                        // This is the branch being merged — must be the mission branch.
+                        if *tok != branch {
+                            return Err(format!(
+                                "SDLC bash gate: merge of '{tok}' is not the mission branch \
+                                 '{branch}' — merge only the mission branch"
+                            ));
+                        }
+                        break;
+                    }
+                }
+            }
+            Ok(())
+        }
+        "checkout" | "switch" => {
+            // Always block branch-changing ops during execute/prepare/integrate.
+            Err(format!(
+                "SDLC bash gate: git {subcmd} is blocked during execute/prepare/integrate phase — \
+                 branch is frozen to the mission binding"
+            ))
+        }
+        "reset" => {
+            Err(
+                "SDLC bash gate: git reset is blocked during execute/prepare/integrate — \
+                 worktree state is managed by the SDLC lifecycle"
+                    .into(),
+            )
+        }
+        "rebase" => {
+            Err(
+                "SDLC bash gate: git rebase is blocked during execute/prepare/integrate — \
+                 worktree state is managed by the SDLC lifecycle"
+                    .into(),
+            )
+        }
+        // All other git subcommands (status, log, diff, add, commit, etc.) are allowed.
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod assess_gate_tests {
@@ -1650,6 +1911,191 @@ mod assess_gate_tests {
         assert!(
             msg.contains("not available") || msg.contains("execute"),
             "unexpected msg: {msg}"
+        );
+    }
+
+    // --- Bash git gate tests ---
+
+    use super::intercept_sdlc_bash_git_gate;
+
+    fn execute_state() -> AppState {
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.sessions[0].agent_mode = AgentMode::Sdlc;
+        state.rest.sessions[0].sdlc_phase = Some("execute".into());
+        state
+    }
+
+    #[test]
+    fn bash_git_gate_skips_non_bash_tools() {
+        let mut state = execute_state();
+        let c = call("read", r#"{"command":"git push origin main"}"#);
+        let flow = intercept_sdlc_bash_git_gate(&mut state, 0, &c);
+        assert!(
+            matches!(flow, InterceptFlow::Fallthrough),
+            "non-bash tools must pass through"
+        );
+    }
+
+    #[test]
+    fn bash_git_gate_skips_non_git_commands() {
+        let mut state = execute_state();
+        let c = call("bash", r#"{"command":"cargo test"}"#);
+        let flow = intercept_sdlc_bash_git_gate(&mut state, 0, &c);
+        assert!(
+            matches!(flow, InterceptFlow::Fallthrough),
+            "non-git commands must pass through"
+        );
+    }
+
+    #[test]
+    fn bash_git_gate_skips_assess_phase() {
+        let mut state = assess_state();
+        let c = call("bash", r#"{"command":"git push origin main"}"#);
+        let flow = intercept_sdlc_bash_git_gate(&mut state, 0, &c);
+        assert!(
+            matches!(flow, InterceptFlow::Fallthrough),
+            "assess phase must not trigger gate"
+        );
+    }
+
+    #[test]
+    fn bash_git_gate_blocks_checkout() {
+        let mut state = execute_state();
+        let c = call("bash", r#"{"command":"git checkout main"}"#);
+        let flow = intercept_sdlc_bash_git_gate(&mut state, 0, &c);
+        assert!(
+            matches!(flow, InterceptFlow::Continue),
+            "checkout must be blocked"
+        );
+        let msg = &state.rest.sessions[0].tool_results[0].1;
+        assert!(
+            msg.contains("blocked") && msg.contains("checkout"),
+            "unexpected msg: {msg}"
+        );
+    }
+
+    #[test]
+    fn bash_git_gate_blocks_switch() {
+        let mut state = execute_state();
+        let c = call("bash", r#"{"command":"git switch main"}"#);
+        let flow = intercept_sdlc_bash_git_gate(&mut state, 0, &c);
+        assert!(matches!(flow, InterceptFlow::Continue));
+    }
+
+    #[test]
+    fn bash_git_gate_blocks_reset() {
+        let mut state = execute_state();
+        let c = call("bash", r#"{"command":"git reset --hard HEAD~1"}"#);
+        let flow = intercept_sdlc_bash_git_gate(&mut state, 0, &c);
+        assert!(matches!(flow, InterceptFlow::Continue));
+    }
+
+    #[test]
+    fn bash_git_gate_blocks_rebase() {
+        let mut state = execute_state();
+        let c = call("bash", r#"{"command":"git rebase main"}"#);
+        let flow = intercept_sdlc_bash_git_gate(&mut state, 0, &c);
+        assert!(matches!(flow, InterceptFlow::Continue));
+    }
+
+    #[test]
+    fn bash_git_gate_allows_safe_git_commands() {
+        let mut state = execute_state();
+        for cmd in [
+            "git status",
+            "git log --oneline -5",
+            "git diff HEAD",
+            "git add src/foo.rs",
+            "git commit -m 'fix bug'",
+        ] {
+            let args = format!(r#"{{"command":"{}"}}"#, cmd);
+            let c = call("bash", &args);
+            let flow = intercept_sdlc_bash_git_gate(&mut state, 0, &c);
+            assert!(
+                matches!(flow, InterceptFlow::Fallthrough),
+                "safe command must pass: {cmd}"
+            );
+            assert!(
+                state.rest.sessions[0].tool_results.is_empty(),
+                "must not push denial for: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn bash_git_gate_push_blocks_main() {
+        let mut state = execute_state();
+        let c = call("bash", r#"{"command":"git push origin main"}"#);
+        let flow = intercept_sdlc_bash_git_gate(&mut state, 0, &c);
+        assert!(
+            matches!(flow, InterceptFlow::Continue),
+            "push to main must be blocked"
+        );
+    }
+
+    #[test]
+    fn bash_git_gate_push_blocks_master() {
+        let mut state = execute_state();
+        let c = call("bash", r#"{"command":"git push origin master"}"#);
+        let flow = intercept_sdlc_bash_git_gate(&mut state, 0, &c);
+        assert!(matches!(flow, InterceptFlow::Continue));
+    }
+
+    #[test]
+    fn bash_git_gate_merge_blocks_main() {
+        let mut state = execute_state();
+        let c = call("bash", r#"{"command":"git merge main"}"#);
+        let flow = intercept_sdlc_bash_git_gate(&mut state, 0, &c);
+        assert!(matches!(flow, InterceptFlow::Continue));
+    }
+
+    #[test]
+    fn bash_git_gate_prepare_blocks_checkout() {
+        let mut state = prepare_state();
+        let c = call("bash", r#"{"command":"git checkout -b new-branch"}"#);
+        let flow = intercept_sdlc_bash_git_gate(&mut state, 0, &c);
+        assert!(
+            matches!(flow, InterceptFlow::Continue),
+            "checkout must be blocked during prepare"
+        );
+    }
+
+    #[test]
+    fn bash_git_gate_extract_subcommand() {
+        use super::extract_git_subcommand;
+        assert_eq!(
+            extract_git_subcommand("git push origin main"),
+            Some(("push", "origin main"))
+        );
+        assert_eq!(
+            extract_git_subcommand("  git checkout foo  "),
+            Some(("checkout", "foo"))
+        );
+        assert_eq!(extract_git_subcommand("cargo test"), None);
+        assert_eq!(
+            extract_git_subcommand("echo hello && git status"),
+            Some(("status", ""))
+        );
+        assert_eq!(
+            extract_git_subcommand("git log --oneline -5"),
+            Some(("log", "--oneline -5"))
+        );
+    }
+
+    #[test]
+    fn bash_git_gate_tokenizer() {
+        use super::tokenize_bash_command;
+        assert_eq!(
+            tokenize_bash_command("git push origin main"),
+            vec!["git", "push", "origin", "main"]
+        );
+        assert_eq!(
+            tokenize_bash_command("  git   status  "),
+            vec!["git", "status"]
+        );
+        assert_eq!(
+            tokenize_bash_command("echo 'hello world'"),
+            vec!["echo", "hello world"]
         );
     }
 }
