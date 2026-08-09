@@ -306,9 +306,11 @@ fn manifest_with_tui_screens_roundtrips() {
     // Round-trip back through serde_json::Value and re-parse.
     let wire = serde_json::to_value(&manifest).expect("serializes");
     assert_eq!(wire["contributes"]["tui_screens"][0]["id"], "demo");
-    assert_eq!(wire["contributes"]["tui_screens"][1]["title"], "Second Screen");
-    let back: ExtensionManifest =
-        serde_json::from_value(wire).expect("re-parses after round-trip");
+    assert_eq!(
+        wire["contributes"]["tui_screens"][1]["title"],
+        "Second Screen"
+    );
+    let back: ExtensionManifest = serde_json::from_value(wire).expect("re-parses after round-trip");
     assert_eq!(back.contributes.tui_screens.len(), 2);
     assert_eq!(back.contributes.tui_screens[1].id, "second");
 
@@ -321,7 +323,10 @@ fn manifest_with_tui_screens_roundtrips() {
         description: String::new(),
         tier: Tier::Free,
         kind: ExtensionKind::Daemon,
-        runtime: Runtime { exec: "bin/x".to_string(), args: Vec::new() },
+        runtime: Runtime {
+            exec: "bin/x".to_string(),
+            args: Vec::new(),
+        },
         contributes: Contributes::default(),
         requires: Vec::new(),
         workspace_dir: None,
