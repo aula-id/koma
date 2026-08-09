@@ -44,9 +44,13 @@ def _build_parser():
     p_search = sub.add_parser("search", help="Navigate to a search URL and extract results")
     p_search.add_argument("--url", required=True, help="Fully-formed search URL")
 
-    p_ss = sub.add_parser("screenshot", help="Capture a full-page PNG screenshot")
+    p_ss = sub.add_parser("screenshot", help="Capture a PNG screenshot")
     p_ss.add_argument("--url", required=True, help="URL to screenshot")
     p_ss.add_argument("--output", required=True, help="Output PNG path")
+    p_ss.add_argument("--width", type=int, default=0, help="Viewport width in pixels (0 = default)")
+    p_ss.add_argument("--height", type=int, default=0, help="Viewport height in pixels (0 = default)")
+    p_ss.add_argument("--full-page", action=argparse.BooleanOptionalAction, default=True,
+                      help="Capture full scrollable page (default: True; use --no-full-page for viewport only)")
 
     return parser
 
@@ -106,7 +110,13 @@ def cmd_screenshot(args):
     real_stdout = sys.stdout
     sys.stdout = sys.stderr
     try:
-        result = asyncio.run(screenshot_capture(args.url, args.output))
+        result = asyncio.run(screenshot_capture(
+            args.url,
+            args.output,
+            width=args.width,
+            height=args.height,
+            full_page=args.full_page,
+        ))
     except Exception as exc:
         result = {
             "command": "screenshot",

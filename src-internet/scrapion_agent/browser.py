@@ -175,14 +175,19 @@ async def search_fetch(search_url: str) -> dict:
 # screenshot — capture a PNG screenshot to an explicit output path
 # ---------------------------------------------------------------------------
 
-async def screenshot_capture(url: str, output_path: str) -> dict:
-    """Navigate to *url* and save a full-page PNG screenshot to *output_path*.
+async def screenshot_capture(
+    url: str,
+    output_path: str,
+    width: int = 0,
+    height: int = 0,
+    full_page: bool = True,
+) -> dict:
+    """Navigate to *url* and save a PNG screenshot to *output_path*.
 
-    Returns ``{"command": "screenshot", "status": "success", "url": ...,
-    "output_path": ..., "width": ..., "height": ...}`` on success.
-
-    The caller **must** supply an output path — screenshots are never
-    written to a global default location.
+    When *width* and *height* are > 0 the page is created with that viewport;
+    otherwise the default no-viewport mode is used (full-page capture).
+    *full_page* controls whether Playwright captures the full scrollable page
+    or just the visible viewport.
     """
     from playwright.async_api import async_playwright
 
@@ -202,23 +207,33 @@ async def screenshot_capture(url: str, output_path: str) -> dict:
         async with async_playwright() as p:
             browser = await _launch_browser(p)
             try:
-                page = await _new_page(browser)
+                # Create page with optional explicit viewport.
+                if width > 0 and height > 0:
+                    page = await browser.new_page(
+                        viewport={"width": width, "height": height}
+                    )
+                    await page.add_init_script(
+                        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+                    )
+                else:
+                    page = await _new_page(browser)
+
                 await page.goto(url, timeout=90_000, wait_until="networkidle")
                 await asyncio.sleep(0.3)
 
                 # Capture viewport size for the response metadata.
                 viewport = page.viewport_size
-                width = viewport["width"] if viewport else 0
-                height = viewport["height"] if viewport else 0
+                vp_width = viewport["width"] if viewport else 0
+                vp_height = viewport["height"] if viewport else 0
 
-                await page.screenshot(path=str(out), full_page=True)
+                await page.screenshot(path=str(out), full_page=full_page)
                 return {
                     "command": "screenshot",
                     "status": "success",
                     "url": url,
                     "output_path": str(out.resolve()),
-                    "width": width,
-                    "height": height,
+                    "width": vp_width,
+                    "height": vp_height,
                 }
             finally:
                 await browser.close()

@@ -150,7 +150,23 @@ impl super::Tool for WebScreenshot {
         }
 
         // ── One-shot subprocess path (url only) ────────────────────────
-        let stdout = scrapion_run(&["screenshot", "--url", target_url, "--output", output_str])
+        let w = width.to_string();
+        let h = height.to_string();
+        let mut ss_args: Vec<&str> = vec![
+            "screenshot",
+            "--url",
+            target_url,
+            "--output",
+            output_str,
+        ];
+        if width != 1920 || height != 1080 {
+            ss_args.extend_from_slice(&["--width", &w]);
+            ss_args.extend_from_slice(&["--height", &h]);
+        }
+        if !full_page {
+            ss_args.push("--no-full-page");
+        }
+        let stdout = scrapion_run(&ss_args)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         let report: Value = serde_json::from_str(stdout.trim())
