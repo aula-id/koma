@@ -289,16 +289,16 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             } else {
                 let img = &ov.images[ov.active_index];
                 let total = ov.images.len();
-                if total == 1 {
-                    format!("{} — press Esc to close", img.label)
+                let nav = if total == 1 {
+                    "Esc to close".to_string()
                 } else {
                     format!(
-                        "{}/{} — {} — Left/Right to navigate, Esc to close",
+                        "{}/{} — Left/Right to navigate, Esc to close",
                         ov.active_index + 1,
                         total,
-                        img.label
                     )
-                }
+                };
+                format!("{}: {} — {nav}", ov.source_label, img.label)
             };
             use ratatui::layout::{Constraint, Layout, Alignment};
             use ratatui::widgets::{Paragraph, Wrap};

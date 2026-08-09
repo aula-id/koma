@@ -103,6 +103,33 @@ pub(super) fn run_loop(
         }
 
         if dirty && !state.rest.select_active {
+            // Pre-draw: if the foreground session is in ImageOverlay with Kitty,
+            // write the Kitty graphics escape sequences BEFORE ratatui draws so
+            // the terminal composites the image on top of the text.
+            if let Some(ov) = match state.mode() {
+                crate::app::mode::Mode::ImageOverlay(ov) => Some(ov),
+                _ => None,
+            } {
+                if ov.kitty && !ov.images.is_empty() {
+                    let img = &ov.images[ov.active_index.min(ov.images.len() - 1)];
+                    if img.path.exists() {
+                        if let Ok(escapes) =
+                            crate::view::image_render::ImageRenderer::kitty_display(
+                                &img.path,
+                                ov.kitty_placement,
+                            )
+                        {
+                            use std::io::Write;
+                            let mut out = std::io::stdout();
+                            // Delete previous placement at this ID (no-op if none).
+                            let _ = out.write_all(escapes.delete.as_bytes());
+                            // Place the new image.
+                            let _ = out.write_all(escapes.display.as_bytes());
+                            let _ = out.flush();
+                        }
+                    }
+                }
+            }
             terminal.draw(|f| view::draw(f, state))?;
             dirty = false;
         }

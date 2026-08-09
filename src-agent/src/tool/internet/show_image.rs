@@ -4,7 +4,6 @@
 //! opens the ImageOverlay mode so the user can view it in the terminal.
 
 use super::ToolCtx;
-use crate::app::mode::{ImageEntry, ImageOverlayState};
 use anyhow::Result;
 use serde_json::{json, Value};
 

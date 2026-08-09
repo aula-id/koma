@@ -127,7 +127,7 @@ impl super::Tool for BrowserInteract {
             params["tab_id"] = json!(tid);
         }
 
-        let data = daemon.request("interact", params)?;
+        let _data = daemon.request("interact", params)?;
 
         // Format result.
         match action {

@@ -129,7 +129,7 @@ impl super::Tool for BrowserTabs {
                     .get("tab_id")
                     .and_then(Value::as_str)
                     .ok_or_else(|| anyhow::anyhow!("tab_id is required for select"))?;
-                let data = daemon.request("select", json!({"tab_id": tab_id}))?;
+                let _data = daemon.request("select", json!({"tab_id": tab_id}))?;
                 Ok(format!("tab {} selected", tab_id))
             }
             _ => Ok(format!("error: unknown action '{action}'")),
