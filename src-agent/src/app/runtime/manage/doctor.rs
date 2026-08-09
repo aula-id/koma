@@ -705,6 +705,9 @@ fn check_internet_fullmode() -> CheckResult {
     #[cfg(not(windows))]
     {
         let mut details = Vec::new();
+        let mut any_issue = false;
+
+        // 1. python3 availability
         let python3 = std::process::Command::new("python3")
             .arg("--version")
             .output()
@@ -714,20 +717,83 @@ fn check_internet_fullmode() -> CheckResult {
             "python3 on PATH: {}",
             if python3 { "yes" } else { "no" }
         ));
+        if !python3 {
+            any_issue = true;
+        }
 
-        if crate::internet::is_installed() {
-            CheckResult {
-                status: Status::Ok,
-                headline: "Internet full-mode (installed)".to_string(),
-                details,
+        if !crate::internet::is_installed() {
+            if any_issue {
+                details.push("install python3 first, then:".to_string());
             }
-        } else {
             details.push("optional — install with: koma --internet-fullmode-install".to_string());
-            CheckResult {
-                status: Status::Warn,
-                headline: "Internet full-mode (optional, not installed)".to_string(),
+            return CheckResult::warn(
+                "Internet full-mode (optional, not installed)",
                 details,
+            );
+        }
+
+        // 2. scrapion_agent package importable?
+        let python = crate::internet::venv_python().ok();
+        let python_str = python.as_ref().and_then(|p| p.to_str()).unwrap_or("python");
+        let import_ok = std::process::Command::new(python_str)
+            .args(["-c", "import scrapion_agent"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        details.push(format!(
+            "scrapion_agent importable: {}",
+            if import_ok { "yes" } else { "no" }
+        ));
+        if !import_ok {
+            any_issue = true;
+            details.push(
+                "broken install — re-run: koma --internet-fullmode-install --force".to_string(),
+            );
+        }
+
+        // 3. playwright package importable?
+        let playwright_ok = std::process::Command::new(python_str)
+            .args(["-c", "import playwright"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        details.push(format!(
+            "playwright importable: {}",
+            if playwright_ok { "yes" } else { "no" }
+        ));
+        if !playwright_ok {
+            any_issue = true;
+            details.push(
+                "missing playwright — re-run: koma --internet-fullmode-install --force".to_string(),
+            );
+        }
+
+        // 4. playwright firefox browser installed?
+        let firefox_check = std::process::Command::new(python_str)
+            .args(["-c", "import pathlib,os;p=os.path.expanduser('~/.cache/ms-playwright');print(os.path.isdir(p) and any(pathlib.Path(p).glob('firefox-*')))"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        let firefox_installed = firefox_check == "True";
+        details.push(format!(
+            "playwright firefox: {}",
+            if firefox_installed {
+                "installed"
+            } else if !playwright_ok {
+                "unknown (playwright not importable)"
+            } else {
+                "not installed"
             }
+        ));
+        if !firefox_installed && playwright_ok {
+            any_issue = true;
+            details.push("install firefox: playwright install firefox (inside the venv)".to_string());
+        }
+
+        if any_issue {
+            CheckResult::warn("Internet full-mode (installed, issues detected)", details)
+        } else {
+            CheckResult::ok("Internet full-mode (installed)")
         }
     }
 }

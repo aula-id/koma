@@ -156,19 +156,15 @@ pub fn install(force: bool) -> Result<()> {
         return Err(anyhow!("`python3 -m venv` exited with status {}", status));
     }
 
-    // Step 6: install Python dependencies.
+    // Step 6: install scrapion_agent package + its dependencies from pyproject.toml.
     let pip = dest.join("venv").join("bin").join("pip");
-    let requirements = dest.join("requirements.txt");
     println!(
-        "installing Python dependencies from {}...",
-        requirements.display()
+        "installing scrapion_agent package from {}...",
+        dest.display()
     );
     let status = std::process::Command::new(&pip)
-        .args([
-            "install",
-            "-r",
-            requirements.to_str().unwrap_or("requirements.txt"),
-        ])
+        .args(["install", "."])
+        .current_dir(&dest)
         .status()
         .context("failed to launch pip install")?;
     if !status.success() {
