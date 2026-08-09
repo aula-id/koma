@@ -333,7 +333,22 @@ mod tests {
     fn create_bound_worktree(dir: &std::path::Path) -> PathBuf {
         let worktree = dir.join("wt");
         std::fs::create_dir_all(&worktree).unwrap();
-        run_git(&worktree, &["init", "-b", "sdlc/g"]);
+        // Avoid Homebrew git hook-template race on ARM macOS by pointing at an
+        // empty template dir so `git init` skips the problematic copy step.
+        let empty_templates = dir.join("empty-templates");
+        std::fs::create_dir_all(&empty_templates).unwrap();
+        let output = Command::new("git")
+            .args(["init", "-b", "sdlc/g"])
+            .current_dir(&worktree)
+            .env("GIT_TEMPLATE_DIR", &empty_templates)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git init in {} failed: {}",
+            worktree.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
         run_git(
             &worktree,
             &["config", "user.email", "keeper-test@example.invalid"],

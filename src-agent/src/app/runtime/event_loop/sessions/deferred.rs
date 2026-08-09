@@ -709,10 +709,12 @@ pub(super) fn drain_deferred_and_resume(
             Some(c) => c,
             None => return dirty,
         };
-        let batch = state.rest.sessions[idx]
+        let Some(batch) = state.rest.sessions[idx]
             .pending_sdlc_historian_batch
             .clone()
-            .unwrap();
+        else {
+            return dirty;
+        };
         let epoch_at_spawn = state.rest.sessions[idx].sdlc_historian_epoch;
         let (tx, rx) = tokio::sync::oneshot::channel();
         state.rest.sessions[idx].sdlc_historian_rx = Some(rx);
@@ -739,7 +741,7 @@ pub(super) fn drain_deferred_and_resume(
                     crate::dto::chat::ChatMessage::new(crate::dto::chat::Role::System, &system),
                     crate::dto::chat::ChatMessage::new(crate::dto::chat::Role::User, &user),
                 ];
-                match client
+                client
                     .complete_with(
                         route.conn(),
                         &route.model_id,
@@ -748,10 +750,7 @@ pub(super) fn drain_deferred_and_resume(
                         true,
                     )
                     .await
-                {
-                    Ok(reply) => Some(reply),
-                    Err(_) => None,
-                }
+                    .ok()
             }
             .await;
             let _ = tx.send((epoch_at_spawn, summary));
