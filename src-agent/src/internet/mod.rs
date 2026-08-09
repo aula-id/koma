@@ -19,6 +19,8 @@
 use anyhow::{anyhow, Context, Result};
 use include_dir::{include_dir, Dir};
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::time::Duration;
 
 use crate::model::store::base_dir;
 
@@ -218,4 +220,50 @@ pub fn uninstall() -> Result<()> {
         println!("nothing to remove (internet research was not installed)");
     }
     Ok(())
+}
+
+/// Maximum time to wait for a scrapion subprocess.
+const SCRAPION_TIMEOUT_SECS: u64 = 150;
+
+/// Run a scrapion subcommand in a dedicated OS thread and return its stdout.
+///
+/// Spawns `python -m scrapion_agent <args>` via the installed venv Python,
+/// collects stdout, and enforces a [`SCRAPION_TIMEOUT_SECS`] timeout. The
+/// subprocess runs in its own thread to avoid blocking the tokio runtime.
+pub fn scrapion_run(args: &[&str]) -> Result<String, String> {
+    let python = venv_python().map_err(|e| format!("internet dir error: {e}"))?;
+    if !python.exists() {
+        return Err(
+            "internet research environment not installed — run `koma --internet-fullmode-install`"
+                .into(),
+        );
+    }
+
+    let mut cmd = std::process::Command::new(&python);
+    cmd.arg("-m").arg("scrapion_agent");
+    cmd.args(args);
+
+    let (tx, rx) = mpsc::channel::<std::io::Result<std::process::Output>>();
+    std::thread::spawn(move || {
+        let output = cmd.output();
+        let _ = tx.send(output);
+    });
+
+    let timeout = Duration::from_secs(SCRAPION_TIMEOUT_SECS);
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(output)) => {
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                Err(format!(
+                    "scrapion exited with status {}: {}",
+                    output.status,
+                    stderr.trim()
+                ))
+            } else {
+                Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+            }
+        }
+        Ok(Err(e)) => Err(format!("failed to spawn scrapion: {e}")),
+        Err(_) => Err(format!("scrapion timed out after {SCRAPION_TIMEOUT_SECS}s")),
+    }
 }

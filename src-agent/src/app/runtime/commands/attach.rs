@@ -5,6 +5,7 @@
 use anyhow::Result;
 
 use crate::app::state::AppState;
+use crate::model::attachment::{list_screenshoot_pngs, resolve_screenshoot_path};
 
 /// Handle `/attach <path>`: resolve the path against the session cwd, ingest
 /// the image into the session's `images/` directory, stage the attachment
@@ -18,26 +19,7 @@ pub(super) fn handle_attach(arg: &str, state: &mut AppState) -> Result<()> {
     if arg.is_empty() {
         // List available captures from the project's `.screenshoot/` dir.
         let cwd = state.rest.fg().effective_cwd();
-        let dir = cwd.join(".screenshoot");
-        if !dir.is_dir() {
-            state.rest.fg_mut().status =
-                "no .screenshoot/ directory — use web_screenshot to capture a page first".into();
-            return Ok(());
-        }
-        let mut names: Vec<String> = std::fs::read_dir(&dir)
-            .ok()
-            .into_iter()
-            .flatten()
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map(|ext| ext == "png")
-                    .unwrap_or(false)
-            })
-            .filter_map(|e| e.file_name().into_string().ok())
-            .collect();
-        names.sort();
+        let names = list_screenshoot_pngs(&cwd);
         if names.is_empty() {
             state.rest.fg_mut().status =
                 "no .screenshoot/*.png captures found — use web_screenshot first".into();
@@ -61,8 +43,9 @@ pub(super) fn handle_attach(arg: &str, state: &mut AppState) -> Result<()> {
         return Ok(());
     }
 
-    // Resolve the path: bare filename → look in `.screenshoot/`; path with
-    // `.screenshoot/` prefix → strip it; absolute / relative → use as-is.
+    // Resolve the path via the shared helper: bare filename → look in
+    // `.screenshoot/`; prefix stripped internally; absolute paths rejected
+    // unless inside `.screenshoot/`.
     let cwd = state.rest.fg().effective_cwd();
     let src_path = resolve_screenshoot_arg(&cwd, arg);
 
@@ -82,20 +65,30 @@ pub(super) fn handle_attach(arg: &str, state: &mut AppState) -> Result<()> {
     Ok(())
 }
 
-/// Resolve an `/attach` argument to an absolute path:
-/// - bare filename `"shot.png"` → `<cwd>/.screenshoot/shot.png`
-/// - prefixed `".screenshoot/shot.png"` → `<cwd>/.screenshoot/shot.png`
-/// - absolute/relative path → as-is
+/// Resolve an `/attach` argument to an absolute path, normalizing various
+/// input forms to a bare `.screenshoot/` name before delegating to the
+/// shared helper:
+/// - bare filename `"shot.png"` → `resolve_screenshoot_path(cwd, "shot.png")`
+/// - prefixed `".screenshoot/shot.png"` → `resolve_screenshoot_path(cwd, "shot.png")`
+/// - absolute/relative path outside `.screenshoot/` → returned as-is
 fn resolve_screenshoot_arg(cwd: &std::path::Path, arg: &str) -> std::path::PathBuf {
-    let p = std::path::Path::new(arg);
-    if p.is_absolute() {
-        p.to_path_buf()
-    } else if arg.starts_with(".screenshoot/") || arg.starts_with("./.screenshoot/") {
-        cwd.join(arg)
-    } else if !arg.contains('/') && !arg.contains('\\') {
-        // Bare filename — look in `.screenshoot/`
-        cwd.join(".screenshoot").join(arg)
-    } else {
-        cwd.join(arg)
+    // Strip common prefixes to extract the bare filename.
+    let stripped = arg
+        .strip_prefix("./.screenshoot/")
+        .or_else(|| arg.strip_prefix(".screenshoot/"))
+        .or_else(|| arg.strip_prefix(".screenshoot\\"))
+        .unwrap_or(arg);
+
+    // For bare filenames (no path separators), delegate to the shared helper.
+    if !stripped.contains('/') && !stripped.contains('\\') {
+        if let Some(p) = resolve_screenshoot_path(cwd, stripped) {
+            return p;
+        }
+        // Fall through to cwd/.screenshoot/name even if not yet a file (caller
+        // checks existence).
+        return cwd.join(".screenshoot").join(stripped);
     }
+
+    // For anything else (relative/absolute), resolve against cwd.
+    cwd.join(stripped)
 }
