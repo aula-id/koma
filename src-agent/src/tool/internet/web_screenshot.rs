@@ -117,8 +117,23 @@ impl super::Tool for WebScreenshot {
 
         let size = meta.len();
         let saved = output_path.display().to_string();
+
+        // Register in the screenshot catalog.
+        let stem = filename.strip_suffix(".png").unwrap_or(&filename);
+        let catalog_msg = match crate::model::screenshot_catalog::register_screenshot(
+            &ctx.workspace,
+            stem,
+            url,
+        ) {
+            Ok(stem) => format!(
+                "catalog: registered as {stem} — description pending. \
+                 Use `load_screenshot` to inspect, then `describe_screenshot` to add a description."
+            ),
+            Err(e) => format!("catalog: registration failed ({e})"),
+        };
+
         Ok(format!(
-            "screenshot saved: {saved}\nsize: {size} bytes\nurl: {url}"
+            "screenshot saved: {saved}\nsize: {size} bytes\nurl: {url}\n{catalog_msg}"
         ))
     }
 }
