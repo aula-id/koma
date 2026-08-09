@@ -167,7 +167,11 @@ impl WindowsPipeStream {
         let path = path.as_ref();
         let mut attempts: usize = 0;
         loop {
-            match std::fs::OpenOptions::new().read(true).write(true).open(path) {
+            match std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+            {
                 Ok(file) => return Ok(WindowsPipeStream { file }),
                 Err(e) if e.raw_os_error() == Some(Self::ERROR_PIPE_BUSY) => {
                     attempts += 1;
@@ -184,7 +188,9 @@ impl WindowsPipeStream {
     /// Mirrors `UnixStream::try_clone`: an independent handle onto the same pipe
     /// instance, used for the reader/writer split in [`host_run`].
     fn try_clone(&self) -> std::io::Result<Self> {
-        Ok(WindowsPipeStream { file: self.file.try_clone()? })
+        Ok(WindowsPipeStream {
+            file: self.file.try_clone()?,
+        })
     }
 }
 
@@ -214,7 +220,9 @@ impl std::io::Write for WindowsPipeStream {
 struct HostHandle {
     writer: std::sync::Arc<std::sync::Mutex<SdkStream>>,
     pending: std::sync::Arc<
-        std::sync::Mutex<std::collections::HashMap<u64, std::sync::mpsc::Sender<serde_json::Value>>>,
+        std::sync::Mutex<
+            std::collections::HashMap<u64, std::sync::mpsc::Sender<serde_json::Value>>,
+        >,
     >,
     next_id: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
@@ -264,12 +272,22 @@ impl Koma {
             return host_call(h, method, params);
         }
 
-        let call = ExtMsg::Call { id: 0, method: method.to_string(), params: params.clone() };
+        let call = ExtMsg::Call {
+            id: 0,
+            method: method.to_string(),
+            params: params.clone(),
+        };
         print_err(&format!("EXT->KOMA Call {method}"), &to_value(&call));
 
         let result = self.canned_result(method, &params);
-        let result_msg = KomaMsg::Result { id: 0, result: result.clone() };
-        print_err(&format!("KOMA->EXT Result (reply to {method})"), &to_value(&result_msg));
+        let result_msg = KomaMsg::Result {
+            id: 0,
+            result: result.clone(),
+        };
+        print_err(
+            &format!("KOMA->EXT Result (reply to {method})"),
+            &to_value(&result_msg),
+        );
         result
     }
 
@@ -281,7 +299,10 @@ impl Koma {
     /// prints its demo output. Safe to call from `on_invoke`/`on_event` (see the
     /// DEADLOCK RULE on [`Extension`]).
     pub fn notify(&mut self, name: &str, params: serde_json::Value) {
-        let msg = ExtMsg::Notify { name: name.to_string(), params };
+        let msg = ExtMsg::Notify {
+            name: name.to_string(),
+            params,
+        };
 
         #[cfg(any(unix, windows))]
         if let Some(h) = &self.host {
@@ -310,13 +331,18 @@ impl Koma {
                 return;
             }
             Err(e) => {
-                eprintln!("koma-ext: panel_push({panel_id}) payload failed to serialize: {e}; dropping");
+                eprintln!(
+                    "koma-ext: panel_push({panel_id}) payload failed to serialize: {e}; dropping"
+                );
                 return;
             }
             Ok(_) => {}
         }
 
-        self.notify("panel.push", serde_json::json!({ "panelId": panel_id, "payload": payload }));
+        self.notify(
+            "panel.push",
+            serde_json::json!({ "panelId": panel_id, "payload": payload }),
+        );
     }
 
     /// Cheaply clone this handle so it can be shared across threads (e.g. a driver
@@ -413,12 +439,22 @@ pub fn run_daemon(mut ext: impl Extension, demo: DaemonDemo) {
     handshake(&manifest);
 
     if let Some((method, params)) = demo.invoke {
-        let invoke = KomaMsg::Invoke { id: 1, method: method.clone(), params: params.clone() };
+        let invoke = KomaMsg::Invoke {
+            id: 1,
+            method: method.clone(),
+            params: params.clone(),
+        };
         print_out(&format!("KOMA->EXT Invoke {method}"), &to_value(&invoke));
 
         let result = ext.on_invoke(&method, params);
-        let result_msg = ExtMsg::Result { id: 1, result: result.clone() };
-        print_out(&format!("EXT->KOMA Result (reply to {method})"), &to_value(&result_msg));
+        let result_msg = ExtMsg::Result {
+            id: 1,
+            result: result.clone(),
+        };
+        print_out(
+            &format!("EXT->KOMA Result (reply to {method})"),
+            &to_value(&result_msg),
+        );
     }
 
     if let Some(drive) = demo.driver {
@@ -454,13 +490,23 @@ pub fn run_oneshot(mut ext: impl Extension, demo: OneshotDemo) {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string();
-        let params = request.get("params").cloned().unwrap_or(serde_json::Value::Null);
+        let params = request
+            .get("params")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
 
-        let invoke = KomaMsg::Invoke { id: 1, method: method.clone(), params: params.clone() };
+        let invoke = KomaMsg::Invoke {
+            id: 1,
+            method: method.clone(),
+            params: params.clone(),
+        };
         print_out(&format!("KOMA->EXT Invoke {method}"), &to_value(&invoke));
 
         let result = ext.on_invoke(&method, params);
-        let result_msg = ExtMsg::Result { id: 1, result: result.clone() };
+        let result_msg = ExtMsg::Result {
+            id: 1,
+            result: result.clone(),
+        };
         print_out("EXT->KOMA Result (response)", &to_value(&result_msg));
     }
 
@@ -503,7 +549,9 @@ fn host_serve(ext: impl Extension, driver: Option<fn(&mut Koma)>) {
     #[cfg(not(any(unix, windows)))]
     {
         let _ = (ext, driver);
-        println!("koma-ext: host mode needs a unix socket or named pipe (unsupported on this platform)");
+        println!(
+            "koma-ext: host mode needs a unix socket or named pipe (unsupported on this platform)"
+        );
     }
 }
 
@@ -585,7 +633,11 @@ fn host_run(mut ext: impl Extension, driver: Option<fn(&mut Koma)>) {
     // If the sample drives koma, run its driver on a side thread with a host handle that
     // shares this connection's writer + pending map (so its `call()`s round-trip here).
     if let Some(drive) = driver {
-        let mut koma = Koma::new_host(Arc::clone(&writer), Arc::clone(&pending), Arc::clone(&next_id));
+        let mut koma = Koma::new_host(
+            Arc::clone(&writer),
+            Arc::clone(&pending),
+            Arc::clone(&next_id),
+        );
         std::thread::spawn(move || drive(&mut koma));
     }
 
@@ -634,7 +686,11 @@ fn host_call(h: &HostHandle, method: &str, params: serde_json::Value) -> serde_j
     let (tx, rx) = std::sync::mpsc::channel();
     lock(&h.pending).insert(id, tx);
 
-    let call = ExtMsg::Call { id, method: method.to_string(), params };
+    let call = ExtMsg::Call {
+        id,
+        method: method.to_string(),
+        params,
+    };
     if write_line(&h.writer, &call).is_err() {
         lock(&h.pending).remove(&id);
         return serde_json::json!({ "error": "koma call: write failed" });
@@ -685,10 +741,16 @@ fn to_value<T: serde::Serialize>(v: &T) -> serde_json::Value {
 
 fn print_out(label: &str, value: &serde_json::Value) {
     println!("\n--- {label} ---");
-    println!("{}", serde_json::to_string_pretty(value).unwrap_or_default());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).unwrap_or_default()
+    );
 }
 
 fn print_err(label: &str, value: &serde_json::Value) {
     eprintln!("\n--- {label} ---");
-    eprintln!("{}", serde_json::to_string_pretty(value).unwrap_or_default());
+    eprintln!(
+        "{}",
+        serde_json::to_string_pretty(value).unwrap_or_default()
+    );
 }
