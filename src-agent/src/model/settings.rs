@@ -335,6 +335,12 @@ pub struct Settings {
     /// (Firefox subprocess, higher token usage); `web_search` is unchanged.
     #[serde(default = "default_internet_mode")]
     pub internet_mode: InternetMode,
+    /// Preferred search-engine URL template for browser-backed searches.
+    /// Must contain `{query}` as a placeholder. The model builds a search URL
+    /// from this template and passes it to `web_search_full` via `--url`.
+    /// Defaults to DuckDuckGo HTML.
+    #[serde(default = "default_search_engine")]
+    pub search_engine: String,
     /// Per-session override layer for the global model catalogue: models the user
     /// saved for THIS session only (the `/settings` "Save session" path). They are
     /// never written to the global `config.json`; they are persisted HERE, in this
@@ -429,6 +435,38 @@ fn default_internet_mode() -> InternetMode {
     InternetMode::Simple
 }
 
+/// Default preferred search-engine URL template.
+pub const DEFAULT_SEARCH_ENGINE: &str = "https://html.duckduckgo.com/html/?q={query}";
+
+fn default_search_engine() -> String {
+    DEFAULT_SEARCH_ENGINE.to_string()
+}
+
+/// Validate a search-engine URL template. Must be HTTP(S) and contain `{query}`.
+pub fn validate_search_engine(template: &str) -> Result<(), String> {
+    if template.is_empty() {
+        return Err("search engine template is empty".into());
+    }
+    if !template.starts_with("http://") && !template.starts_with("https://") {
+        return Err(format!(
+            "search engine template must use http(s) scheme: {template}"
+        ));
+    }
+    if !template.contains("{query}") {
+        return Err(format!(
+            "search engine template must contain {{query}} placeholder: {template}"
+        ));
+    }
+    Ok(())
+}
+
+/// Build a search URL from the template by percent-encoding the query.
+pub fn build_search_url(template: &str, query: &str) -> Result<String, String> {
+    validate_search_engine(template)?;
+    let encoded: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
+    Ok(template.replace("{query}", &encoded))
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -454,6 +492,7 @@ impl Default for Settings {
             bash_saving: true,
             coding_autosave: default_coding_autosave(),
             internet_mode: InternetMode::Simple,
+            search_engine: default_search_engine(),
             session_models: Vec::new(),
             git_ssh_key: None,
             mouse_capture: MouseCapture::default(),
@@ -562,5 +601,43 @@ impl LocalConfig {
         let json = serde_json::to_vec_pretty(self)?;
         std::fs::write(path, json)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_search_engine_rejects_empty() {
+        assert!(validate_search_engine("").is_err());
+    }
+
+    #[test]
+    fn validate_search_engine_rejects_no_scheme() {
+        assert!(validate_search_engine("html.duckduckgo.com/html/?q={query}").is_err());
+    }
+
+    #[test]
+    fn validate_search_engine_rejects_no_query_placeholder() {
+        assert!(validate_search_engine("https://html.duckduckgo.com/html/").is_err());
+    }
+
+    #[test]
+    fn validate_search_engine_accepts_valid_ddg() {
+        assert!(validate_search_engine(DEFAULT_SEARCH_ENGINE).is_ok());
+    }
+
+    #[test]
+    fn build_search_url_percent_encodes_query() {
+        let url = build_search_url(DEFAULT_SEARCH_ENGINE, "hello world").unwrap();
+        assert!(url.contains("hello+world"));
+        assert!(!url.contains("{query}"));
+    }
+
+    #[test]
+    fn build_search_url_propagates_template_validation_error() {
+        assert!(build_search_url("ftp://bad", "test").is_err());
     }
 }

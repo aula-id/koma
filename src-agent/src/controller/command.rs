@@ -46,6 +46,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/bash", "Manage background bash jobs"),
     ("/todo", "View the session task list"),
     ("/skill", "Load or unload agent skills"),
+    ("/attach", "Attach a .screenshoot/*.png to the next message"),
     ("/cd", "Change the session working directory"),
     ("/adddir", "Add a directory to the workspace roots"),
     ("/compact", "Summarize and compact the conversation"),
@@ -179,6 +180,9 @@ pub enum Command {
     /// Open the `/skill` hub overlay. Inner string is the raw remainder after
     /// `/skill` — pre-seeds the hub's search query if non-empty.
     Skill(String),
+    /// Attach a `.screenshoot/*.png` to the next message.
+    /// Inner string is the raw path argument after `/attach`.
+    Attach(String),
     /// An unrecognised command verb; holds the raw verb for display.
     Unknown(String),
 }
@@ -247,6 +251,7 @@ pub fn parse(line: &str) -> Command {
         "help" => Command::Help,
         "usage" => Command::Usage,
         "quit" | "q" | "exit" => Command::Quit,
+        "attach" => Command::Attach(rest.to_string()),
         "rename" => {
             // Accept "/rename session <name>" as well as "/rename <name>".
             // Strip the optional literal "session" prefix from the remainder.
@@ -311,9 +316,18 @@ mod parse_tests {
     }
 
     #[test]
-    fn palette_lists_model() {
-        assert!(COMMANDS.iter().any(|(n, _)| *n == "/model"));
-        let matches = palette_matches("/mo");
-        assert!(matches.iter().any(|(n, _)| *n == "/model"));
+    fn parse_attach() {
+        assert_eq!(
+            parse("/attach .screenshoot/shot.png"),
+            Command::Attach(".screenshoot/shot.png".to_string())
+        );
+        assert_eq!(parse("/attach"), Command::Attach(String::new()));
+    }
+
+    #[test]
+    fn palette_lists_attach() {
+        assert!(COMMANDS.iter().any(|(n, _)| *n == "/attach"));
+        let matches = palette_matches("/att");
+        assert!(matches.iter().any(|(n, _)| *n == "/attach"));
     }
 }
