@@ -305,4 +305,35 @@ pub enum Mode {
     /// inner [`SkillCmdState`] holds the query, chip filter, entry list, and
     /// cursor. Boxed to keep `Mode` small, consistent with the other list variants.
     Skill(Box<SkillCmdState>),
+    /// Full-screen image viewer overlay: renders one or more images using Kitty
+    /// Graphics Protocol (when supported) or Unicode half-block fallback. Shows
+    /// source label, carousel indicator for multiple images, and navigation
+    /// hints. Left/Right navigate between images; Escape closes back to Chat.
+    ImageOverlay(Box<ImageOverlayState>),
+}
+
+// ── Image overlay state ──────────────────────────────────────────────────
+
+/// A single image entry in the image viewer carousel.
+#[derive(Debug, Clone)]
+pub struct ImageEntry {
+    /// Absolute path to the image file on disk.
+    pub path: std::path::PathBuf,
+    /// Human-readable label (e.g. "screenshot", "attachment").
+    pub label: String,
+}
+
+/// State for the full-screen image viewer overlay.
+#[derive(Debug, Clone)]
+pub struct ImageOverlayState {
+    /// The images to display (path, source label).
+    pub images: Vec<ImageEntry>,
+    /// Currently displayed image index.
+    pub active_index: usize,
+    /// Source label for the header (e.g. "screenshot", "attachment").
+    pub source_label: String,
+    /// Whether Kitty rendering is available.
+    pub kitty: bool,
+    /// The Kitty placement ID for the current image (0 if not using Kitty).
+    pub kitty_placement: u32,
 }

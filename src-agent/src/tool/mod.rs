@@ -53,6 +53,7 @@ pub(crate) fn tool_is_risky(name: &str) -> bool {
     matches!(
         name,
         "write" | "delete" | "edit" | "bash" | "git_operator" | "web_download"
+            | "browser_tabs" | "browser_interact" | "browser_evaluate"
     )
 }
 
@@ -91,6 +92,8 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
             | "search_screenshots"
             | "load_screenshot"
             | "describe_screenshot"
+            | "browser_tabs"
+            | "browser_inspect"
     )
 }
 
@@ -592,6 +595,10 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(internet::SearchScreenshots),
         Box::new(internet::DescribeScreenshot),
         Box::new(internet::LoadScreenshot),
+        Box::new(internet::BrowserTabs),
+        Box::new(internet::BrowserInspect),
+        Box::new(internet::BrowserInteract),
+        Box::new(internet::BrowserEvaluate),
         Box::new(git_cred::GitCred),
         Box::new(git_operator::GitOperator),
         Box::new(git_worktree::GitWorktree),
@@ -652,6 +659,10 @@ pub const DEFERRED_TOOLS: &[&str] = &[
     "describe_screenshot",
     "git_operator",
     "graph_query",
+    "browser_tabs",
+    "browser_inspect",
+    "browser_interact",
+    "browser_evaluate",
 ];
 
 /// Tool names advertised to the MAIN chat model.

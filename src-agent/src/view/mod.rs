@@ -277,5 +277,42 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             message_rewind::draw(frame, chunks[4], chunks[1], &state.rest, rw, &palette);
         }
         Mode::QuitConfirm(s) => quit_confirm::draw(frame, s, &palette),
+        Mode::ImageOverlay(ov) => {
+            // Draw chat underneath, then a placeholder overlay on top.
+            let resolved_model = resolved_main_model(&state.rest);
+            chat::draw(frame, &state.rest, &resolved_model, &palette);
+            // Full-body centered text placeholder — real rendering is a follow-up.
+            let area = frame.area();
+            let text = if ov.images.is_empty() {
+                "No images to display".to_string()
+            } else {
+                let img = &ov.images[ov.active_index];
+                let total = ov.images.len();
+                if total == 1 {
+                    format!("{} — press Esc to close", img.label)
+                } else {
+                    format!(
+                        "{}/{} — {} — Left/Right to navigate, Esc to close",
+                        ov.active_index + 1,
+                        total,
+                        img.label
+                    )
+                }
+            };
+            use ratatui::layout::{Constraint, Layout, Alignment};
+            use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+            let chunks = Layout::default()
+                .direction(ratatui::layout::Direction::Vertical)
+                .constraints([
+                    Constraint::Percentage(30),
+                    Constraint::Min(3),
+                    Constraint::Percentage(65),
+                ])
+                .split(area);
+            let label = Paragraph::new(text)
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true });
+            frame.render_widget(label, chunks[1]);
+        }
     }
 }

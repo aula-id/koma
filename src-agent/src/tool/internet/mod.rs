@@ -11,6 +11,10 @@
 //! returned via an `mpsc::channel` with `recv_timeout` — exactly the same pattern
 //! used by `shell::Bash`.
 
+mod browser_evaluate;
+mod browser_inspect;
+mod browser_interact;
+mod browser_tabs;
 mod describe_screenshot;
 mod load_screenshot;
 mod search_screenshots;
@@ -21,6 +25,10 @@ mod web_screenshot;
 mod web_search;
 mod web_search_full;
 
+pub use browser_evaluate::BrowserEvaluate;
+pub use browser_inspect::BrowserInspect;
+pub use browser_interact::BrowserInteract;
+pub use browser_tabs::BrowserTabs;
 pub use describe_screenshot::DescribeScreenshot;
 pub use load_screenshot::LoadScreenshot;
 pub use search_screenshots::SearchScreenshots;

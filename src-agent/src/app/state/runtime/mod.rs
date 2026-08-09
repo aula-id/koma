@@ -613,6 +613,8 @@ pub struct SessionRuntime {
     /// the cross-instance memory-sync poll to detect when another koma instance
     /// updated the shared memory store. `None` until first snapshot.
     pub last_memory_mtime: Option<SystemTime>,
+    /// Active image viewer overlay. `Some` when the viewer is open.
+    pub image_overlay: Option<crate::app::mode::ImageOverlayState>,
 }
 
 impl Default for SessionRuntime {
@@ -732,6 +734,7 @@ impl SessionRuntime {
             closed: false,
             park_started_at: None,
             last_memory_mtime: None,
+            image_overlay: None,
         }
     }
 

@@ -97,6 +97,8 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
             total: s.total,
             selected: s.selected,
         },
+        // ImageOverlay is a local-only viewer; project as Chat for thin clients.
+        Mode::ImageOverlay(_) => ModeSnapshot::Chat,
     }
 }
 

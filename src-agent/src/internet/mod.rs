@@ -16,6 +16,8 @@
 //! | [`install`] | provisions the environment (CLI mode, prints progress) |
 //! | [`uninstall`] | removes the install root |
 
+pub mod browser_daemon;
+
 use anyhow::{anyhow, Context, Result};
 use include_dir::{include_dir, Dir};
 use std::path::PathBuf;
