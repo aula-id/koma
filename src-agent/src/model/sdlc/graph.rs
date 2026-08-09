@@ -1373,6 +1373,117 @@ pub fn check_path_ownership(
     Ok(())
 }
 
+// --- SDLC edit history rail ---
+
+/// Compact audit record for a single successful workspace mutation.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EditAuditRecord {
+    pub tool: String,
+    pub path: String,
+    pub node_id: Option<String>,
+    pub batch_id: String,
+}
+
+/// Compact summary record for a completed edit batch.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EditSummaryRecord {
+    pub batch_id: String,
+    pub purpose: String,
+    pub paths: Vec<String>,
+    pub node_id: Option<String>,
+}
+
+/// A single recent edit history entry for capsule projection.
+#[derive(Debug, Clone)]
+pub struct RecentEditEntry {
+    pub id: i64,
+    pub kind: String,
+    pub node_id: Option<String>,
+    pub detail: String,
+    pub created_at: i64,
+}
+
+/// Append a deterministic edit_audit event. Best-effort: serialization or
+/// persistence failure is silently ignored (caller must not treat this as fatal).
+pub fn append_edit_audit(conn: &Connection, node_id: Option<&str>, record: &EditAuditRecord) {
+    let Ok(detail) = serde_json::to_string(record) else {
+        return;
+    };
+    let _ = conn.execute(
+        "INSERT INTO sdlc_events (node_id, kind, detail, created_at) VALUES (?1, 'edit_audit', ?2, ?3)",
+        rusqlite::params![node_id, detail, now_secs()],
+    );
+}
+
+/// Append a best-effort edit_summary event. Best-effort like audit.
+pub fn append_edit_summary(conn: &Connection, node_id: Option<&str>, record: &EditSummaryRecord) {
+    let Ok(detail) = serde_json::to_string(record) else {
+        return;
+    };
+    let _ = conn.execute(
+        "INSERT INTO sdlc_events (node_id, kind, detail, created_at) VALUES (?1, 'edit_summary', ?2, ?3)",
+        rusqlite::params![node_id, detail, now_secs()],
+    );
+}
+
+/// Query the newest edit history entries for capsule projection.
+/// Returns up to `limit` entries (default 20), preferring summaries.
+/// When a batch has both audits and a summary, the summary is the
+/// primary entry and audits without a matching summary are retained as fallback.
+pub fn recent_edit_history(conn: &Connection, limit: usize) -> Result<Vec<RecentEditEntry>> {
+    let limit = limit.max(1).min(50);
+    let mut stmt = conn.prepare(
+        "SELECT id, kind, node_id, detail, created_at
+         FROM sdlc_events
+         WHERE kind IN ('edit_audit', 'edit_summary')
+         ORDER BY id DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(RecentEditEntry {
+            id: row.get(0)?,
+            kind: row.get(1)?,
+            node_id: row.get(2)?,
+            detail: row.get(3)?,
+            created_at: row.get(4)?,
+        })
+    })?;
+
+    let mut all: Vec<RecentEditEntry> = rows.filter_map(|r| r.ok()).collect();
+    // Already DESC ordered; keep up to `limit` * 2 to allow summary-preferred
+    // filtering, then cap at `limit`.
+    all.truncate(limit * 2);
+    all.reverse(); // chronological (oldest first)
+
+    // Summary-preferred: collect batch_ids that have summaries, drop raw audits
+    // for those batches.
+    let summary_batches: std::collections::HashSet<String> = all
+        .iter()
+        .filter(|e| e.kind == "edit_summary")
+        .filter_map(|e| {
+            serde_json::from_str::<EditSummaryRecord>(&e.detail)
+                .ok()
+                .map(|r| r.batch_id)
+        })
+        .collect();
+
+    let filtered: Vec<RecentEditEntry> = all
+        .into_iter()
+        .filter(|e| {
+            if e.kind == "edit_audit" {
+                if let Ok(rec) = serde_json::from_str::<EditAuditRecord>(&e.detail) {
+                    return !summary_batches.contains(&rec.batch_id);
+                }
+            }
+            true
+        })
+        .collect();
+
+    // Take the last `limit` entries (most recent).
+    let len = filtered.len();
+    let skip = len.saturating_sub(limit);
+    Ok(filtered.into_iter().skip(skip).collect())
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]

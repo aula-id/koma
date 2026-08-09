@@ -9,6 +9,7 @@ pub mod branch_name;
 pub mod decompose;
 pub mod graph;
 pub mod handoff;
+pub mod history;
 pub mod integrate;
 pub mod keeper;
 pub mod mission;
