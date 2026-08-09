@@ -131,6 +131,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         .values()
         .filter_map(|s| s.skill_dir.clone())
         .collect();
+    let search_engine = session_ref.map(|s| s.settings.search_engine.clone());
     crate::tool::ToolCtx {
         workspace,
         workspaces,
@@ -151,6 +152,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         allow_scratch,
         sdlc_assess,
         sdlc_active_node_id: rt.sdlc_pending_node_id.clone(),
+        search_engine,
     }
 }
 
@@ -731,6 +733,7 @@ mod tests {
             allow_scratch: true,
             sdlc_assess: false,
             sdlc_active_node_id: None,
+            search_engine: None,
         }
     }
 

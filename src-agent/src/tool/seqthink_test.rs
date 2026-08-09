@@ -24,6 +24,7 @@ fn test_ctx() -> ToolCtx {
         allow_scratch: true,
         sdlc_assess: false,
         sdlc_active_node_id: None,
+        search_engine: None,
     }
 }
 
