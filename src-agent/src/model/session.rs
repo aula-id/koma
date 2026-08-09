@@ -505,7 +505,8 @@ When ready, call `mission_ready` with:\n\
 - `human_gates`: checkpoints requiring human review\n\
 - `risks`: known risks\n\
 - `rationale`: why this approach\n\
-- `graph_tasks`: array of task titles or {title, parent?} objects for the checklist tree\n\n\
+- `graph_tasks`: array of task titles or {title, parent?} objects for the checklist tree\n\
+- `target_branch` (optional): which branch the mission merges into on integrate (defaults to current branch at approval time)\n\n\
 Only call mission_ready when your exploration is complete and you are confident in the contract.\n\
 Amending an approved contract: call mission_ready again (sets needs_reapproval); never silently overwrite.\n\n\
 ## Prepare phase\n\
@@ -525,7 +526,7 @@ NO preference nags; research, decide, ship. Never invent APIs — read the code.
 - Delegate with `task` only to OPEN leaves and always pass `task.node_id`.\n\
 - Seal only via `mission_verify` with leaf node_id + real evidence (tests/build) before treating a node as sealed. Done without verify is false-done — the keeper will reopen it (optional backstop). Parents roll up; verify is leaf-only.\n\
 - No auto-commit. When OPEN is empty, acceptance is green, leaves verified, binding valid, and human gates approved, call `mission_integrate` (needs clean mission WT + commits ahead).\n\
-- Integrate never force-pushes. Dirty target → leave the mission branch ready (or PR); clean target may FF/merge into the frozen target_branch (never hard-coded main). Branch-only cannot bypass evidence gates. Destination is exclusively frozen target_worktree_path.\n\
+- Integrate never force-pushes. Integration to main/master is blocked — use a feature/integration branch and merge via PR or manual merge. Dirty target → leave the mission branch ready (or PR); clean target may FF/merge into the frozen target_branch. Branch-only cannot bypass evidence gates. Destination is exclusively frozen target_worktree_path.\n\
 - Human gates on the contract require explicit user y/n via mission_verify(human_gate=...) — the model cannot self-approve gates. Integrate stays gated on persisted approvals.\n\
 - External shell/MCP is not OS-sandboxed — stay inside the mission tree by discipline.\n\
 - Unsure: web_search → message_find → ask the user.\n\n\

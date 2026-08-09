@@ -645,11 +645,31 @@ fn establish_mission_binding(
     let repo_root_str = repo_root.to_string_lossy().into_owned();
 
     // Capture frozen integrate destination from the primary repo NOW.
-    let target_branch =
-        crate::model::sdlc::mission::current_git_branch(&repo_root).ok_or_else(|| {
-            "primary repo is detached HEAD or not a git branch — checkout a branch before approving"
-                .to_string()
-        })?;
+    // User-provided target_branch wins; fall back to current branch at approval time.
+    let target_branch = if let Some(ref user_tb) = mission.target_branch {
+        if user_tb == "main" || user_tb == "master" {
+            return Err(
+                "SDLC does not auto-integrate to main/master — use a feature/integration \
+                 branch and merge manually"
+                    .to_string(),
+            );
+        }
+        user_tb.clone()
+    } else {
+        let detected = crate::model::sdlc::mission::current_git_branch(&repo_root)
+            .ok_or_else(|| {
+                "primary repo is detached HEAD or not a git branch — checkout a branch before approving"
+                    .to_string()
+            })?;
+        if detected == "main" || detected == "master" {
+            return Err(
+                "SDLC does not auto-integrate to main/master — use a feature/integration \
+                 branch and merge manually"
+                    .to_string(),
+            );
+        }
+        detected
+    };
     let target_head =
         crate::model::sdlc::mission::current_git_head(&repo_root).ok_or_else(|| {
             "could not read primary repo HEAD — cannot freeze target_head".to_string()
