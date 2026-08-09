@@ -449,6 +449,16 @@ pub(crate) fn process_tools(
                 InterceptFlow::Fallthrough => {}
             }
         }
+        // Intercept `load_screenshot` before the generic dispatch: the tool validates
+        // + resolves, but the actual image-attachment injection into the conversation
+        // must happen here because `Tool::run()` cannot produce image-bearing results.
+        if call.function.name == "load_screenshot" {
+            match intercepts::intercept_load_screenshot(state, sess_idx, &call) {
+                InterceptFlow::Continue => continue,
+                InterceptFlow::Return => return,
+                InterceptFlow::Fallthrough => {}
+            }
+        }
         // SDLC execute/integrate: reject write/edit/delete to paths owned by a
         // DIFFERENT active node (hard path-ownership enforcement via glob matching).
         if mode == AgentMode::Sdlc

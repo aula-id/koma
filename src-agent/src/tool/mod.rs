@@ -88,6 +88,9 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
             | "plan_enter"
             | "checklist"
             | "graph_query"
+            | "search_screenshots"
+            | "load_screenshot"
+            | "describe_screenshot"
     )
 }
 
@@ -586,6 +589,9 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(internet::WebPage),
         Box::new(internet::WebSearchFull),
         Box::new(internet::WebScreenshot),
+        Box::new(internet::SearchScreenshots),
+        Box::new(internet::DescribeScreenshot),
+        Box::new(internet::LoadScreenshot),
         Box::new(git_cred::GitCred),
         Box::new(git_operator::GitOperator),
         Box::new(git_worktree::GitWorktree),
@@ -642,6 +648,8 @@ pub const DEFERRED_TOOLS: &[&str] = &[
     "web_page",
     "web_search_full",
     "web_screenshot",
+    "search_screenshots",
+    "describe_screenshot",
     "git_operator",
     "graph_query",
 ];

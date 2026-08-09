@@ -250,6 +250,19 @@ over sec_remote (stateful socket).\n",
                 }
             }
         }
+    // Screenshot catalog context: inject the top-10 newest screenshot records into the
+    // volatile tail so the model knows what screenshots have been captured. Read-only;
+    // rides the uncached tail so catalog changes never bust the prompt cache.
+    if let Some(sessions_dir) = state.rest.sessions[sess_idx]
+        .session
+        .as_ref()
+        .map(|s| std::path::PathBuf::from(s.settings.workdir.first().unwrap_or(&String::new())))
+    {
+        if let Some(block) = crate::model::screenshot_catalog::screenshot_context_block(&sessions_dir, 10) {
+            first.content.push_str("\n\n");
+            first.content.push_str(&block);
+        }
+    }
     }
 
     // Short-send reshape inputs, snapshotted out of `state` BEFORE the spawn so

@@ -23,6 +23,7 @@ pub mod msglog;
 #[cfg(windows)]
 pub mod proc_win;
 pub mod sdlc;
+pub mod screenshot_catalog;
 pub mod session;
 pub mod session_lock;
 pub mod session_registry;
