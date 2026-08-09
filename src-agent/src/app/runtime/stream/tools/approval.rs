@@ -459,7 +459,8 @@ pub(crate) fn process_tools(
                 InterceptFlow::Fallthrough => {}
             }
         }
-        // Intercept `show_image` to open the ImageOverlay mode.
+        // Intercept `show_image` to resolve path and confirm (no mode switch —
+        // images render inline in the chat transcript now).
         if call.function.name == "show_image" {
             match intercepts::intercept_show_image(state, sess_idx, &call) {
                 InterceptFlow::Continue => continue,

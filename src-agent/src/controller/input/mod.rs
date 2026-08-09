@@ -120,29 +120,8 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         Mode::Usage(nav) => usage::handle_usage(nav, key),
         Mode::MessageRewind(rw) => handle_rewind(rw, &mut state.rest, key),
         Mode::QuitConfirm(s) => handle_quit_confirm(s, &mut state.rest, key),
-        Mode::ImageOverlay(ov) => {
-            // Escape → close overlay (Chat); Left/Right navigate carousel.
-            match key.code {
-                KeyCode::Left | KeyCode::Char('h') if ov.images.len() > 1 => {
-                    ov.active_index = if ov.active_index > 0 {
-                        ov.active_index - 1
-                    } else {
-                        ov.images.len() - 1
-                    };
-                }
-                KeyCode::Right | KeyCode::Char('l') if ov.images.len() > 1 => {
-                    ov.active_index = (ov.active_index + 1) % ov.images.len();
-                }
-                _ => {}
-            }
-            Action::None
-        }
     };
-    let was_image_overlay = matches!(mode, Mode::ImageOverlay(_));
     state.set_mode(mode);
-    if was_image_overlay && matches!(key.code, KeyCode::Esc) {
-        *state.mode_mut() = Mode::Chat;
-    }
     action
 }
 
