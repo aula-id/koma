@@ -106,16 +106,16 @@ pub(super) fn render_transcript(
         // we zip them: the block carries the cached body, and for an Assistant turn
         // the tool-call lines are appended fresh here (glued to the same block, no
         // separator) with a live ⚙/✓ glyph from `completed_tool_ids`.
+        // Pre-extract the session path so we can resolve attachment image files.
+        let session_path = rest
+            .fg()
+            .session
+            .as_ref()
+            .map(|s| s.path.clone());
+
         let mut lines: Vec<Line<'static>> = Vec::new();
         let mut first = true;
         for (i, block) in cache.blocks.iter().enumerate() {
-            // The fresh tool-call lines for this block, if it's an assistant turn
-            // that requested calls. A finished call (its id is in the completed set)
-            // gets an accent `✓ `; an in-flight one keeps the dim `⚙ `. Normally
-            // indented 2 cols so they hang under the `●` bullet, BUT when the
-            // assistant body is empty (a pure tool-call turn → empty cached block)
-            // the FIRST tool line takes the `● ` bullet so the block isn't a
-            // bullet-less orphan.
             let has_body = !block.is_empty();
             let tool_lines: Vec<Line<'static>> = committed
                 .get(i)
@@ -131,9 +131,6 @@ pub(super) fn render_transcript(
                 })
                 .unwrap_or_default();
 
-            // Empty blocks (hidden harness messages) with no tool lines leave no
-            // visual trace: skip both the block AND its blank separator so the
-            // transcript is clean. (A hidden message never carries tool calls.)
             if block.is_empty() && tool_lines.is_empty() {
                 continue;
             }
@@ -143,6 +140,29 @@ pub(super) fn render_transcript(
             first = false;
             lines.extend(block.iter().cloned());
             lines.extend(tool_lines);
+
+            // Inline image rendering: when a user message carries image
+            // attachments, render each image as half-block art right in the
+            // transcript instead of just the text card.
+            if let Some(msg) = committed.get(i) {
+                if msg.role == Role::User && !msg.attachments.is_empty() {
+                    if let Some(ref sess_path) = session_path {
+                        for att in &msg.attachments {
+                            let img_path = sess_path.join(&att.rel_path);
+                            if img_path.exists() {
+                                let max_w = (body.width as u16).min(80);
+                                if let Ok(img_lines) =
+                                    crate::view::image_render::ImageRenderer::render_to_lines(&img_path, max_w)
+                                {
+                                    for line in &img_lines {
+                                        lines.push(line.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         // Live partial turn: the in-progress reasoning (dim+italic, on top) and
         // content (fg). Reasoning typically streams first (the model thinks, then

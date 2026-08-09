@@ -204,8 +204,7 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
         | Mode::ExtScreen(_)
         | Mode::ExtStore(_)
         | Mode::Bash(_)
-        | Mode::Todo(_)
-        | Mode::ImageOverlay(_) => {}
+        | Mode::Todo(_) => {}
     }
     // Put the (possibly edited) mode back onto the foreground session.
     state.set_mode(mode);

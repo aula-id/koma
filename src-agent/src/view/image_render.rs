@@ -1,8 +1,8 @@
-//! Terminal image renderer: Kitty Graphics Protocol + Unicode half-block fallback.
+//! Terminal image renderer: Unicode half-block fallback.
 //!
-//! The Kitty path writes escape sequences that the terminal interprets as
-//! inline images. The half-block path renders pixels as colored `▀`/`▄`
-//! characters using 24-bit true-color, scaled to fit a given terminal width.
+//! Renders pixels as colored `▀` characters using 24-bit true-color,
+//! scaled to fit a given terminal width. Each terminal cell represents
+//! 2 vertical pixels via foreground/background colors on `▀`.
 
 use std::path::Path;
 
@@ -12,43 +12,17 @@ use ratatui::text::{Line, Span};
 /// Maximum width in terminal cells for the rendered image.
 pub const MAX_IMAGE_WIDTH_CELLS: u16 = 80;
 
-/// Detected Kitty graphics protocol support.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KittySupport {
-    /// Protocol confirmed working.
-    Yes,
-    /// Protocol not available (or not detected).
-    No,
-}
-
-/// Image renderer that detects terminal capabilities and dispatches to the
-/// appropriate strategy.
-pub struct ImageRenderer {
-    pub kitty: KittySupport,
-}
+/// Image renderer that produces ratatui `Line`s from an image file.
+pub struct ImageRenderer;
 
 impl ImageRenderer {
-    /// Create a renderer and detect Kitty support from the environment.
-    ///
-    /// Detection checks `TERM`, `TERM_PROGRAM`, and `KITTY_WINDOW_ID`
-    /// environment variables. A proper Kitty probe (sending a tiny test
-    /// image) is not done here because it requires stdout access which is
-    /// not available from the tool layer.
-    pub fn detect() -> Self {
-        Self {
-            kitty: detect_kitty(),
-        }
-    }
-
     /// Render an image file into ratatui `Line`s for embedding in the
-    /// transcript or overlay.
+    /// chat transcript.
     ///
-    /// When Kitty is supported, returns a single line containing the Kitty
-    /// escape sequence (the terminal handles pixel rendering).
-    /// Otherwise, renders using Unicode half-block characters with 24-bit
-    /// true-color.
+    /// Uses Unicode half-block characters (`▀`) with 24-bit true-color.
+    /// Each cell represents 2 vertical pixels: the top pixel as foreground
+    /// and the bottom pixel as background of `▀`.
     pub fn render_to_lines(
-        &self,
         path: &Path,
         max_width_cells: u16,
     ) -> Result<Vec<Line<'static>>> {
@@ -112,7 +86,7 @@ impl ImageRenderer {
                     current_fg = Some(fg);
                     current_bg = Some(bg);
                 }
-                run.push('▀');
+                run.push('\u{2580}');
             }
 
             // Flush remaining run.
@@ -131,62 +105,6 @@ impl ImageRenderer {
 
         Ok(lines)
     }
-
-    /// Generate Kitty Graphics Protocol escape sequences to display the image.
-    pub fn kitty_display(path: &Path, placement_id: u32) -> Result<KittyImageEscapes> {
-        let bytes = std::fs::read(path)?;
-        let b64 = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            &bytes,
-        );
-
-        // Chunk into 4096-byte pieces for the protocol.
-        let chunk_size = 4096;
-        let chunks: Vec<&str> = b64.as_bytes()
-            .chunks(chunk_size)
-            .map(|c| std::str::from_utf8(c).unwrap_or(""))
-            .collect();
-
-        let mut payload = String::new();
-        for (i, chunk) in chunks.iter().enumerate() {
-            let m = if i == chunks.len() - 1 { "0" } else { "1" };
-            payload.push_str(&format!(
-                "\x1b_Gi={id},s={len},v=1,a=T,f=100,t=f,{m};{chunk}\x1b\\",
-                id = placement_id,
-                len = bytes.len(),
-                m = m,
-                chunk = chunk,
-            ));
-        }
-
-        Ok(KittyImageEscapes {
-            display: payload,
-            delete: format!("\x1b_Ga=d,i={id}\x1b\\", id = placement_id),
-        })
-    }
-}
-
-/// Kitty Graphics Protocol escape sequences for one image.
-pub struct KittyImageEscapes {
-    /// Write this to stdout to display the image.
-    pub display: String,
-    /// Write this to stdout to delete/clean up the image.
-    pub delete: String,
-}
-
-/// Detect Kitty terminal support from environment variables.
-fn detect_kitty() -> KittySupport {
-    // KITTY_WINDOW_ID is set by Kitty.
-    if std::env::var_os("KITTY_WINDOW_ID").is_some() {
-        return KittySupport::Yes;
-    }
-    // TERM_PROGRAM=kitty is also set by some configurations.
-    if let Ok(tp) = std::env::var("TERM_PROGRAM") {
-        if tp.to_lowercase().contains("kitty") {
-            return KittySupport::Yes;
-        }
-    }
-    KittySupport::No
 }
 
 #[cfg(test)]
@@ -194,28 +112,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detect_kitty_returns_known_variant() {
-        // Can't guarantee we're in a Kitty terminal, but the function should
-        // not panic and should return a valid variant.
-        let _ = detect_kitty();
-    }
-
-    #[test]
-    fn kitty_display_generates_escape_sequences() {
-        // Create a tiny 1x1 red PNG in memory.
-        let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]));
+    fn render_to_lines_basic() {
+        // Create a tiny 2x2 red image.
+        let img = image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]));
         let mut buf = std::io::Cursor::new(Vec::new());
         img.write_to(&mut buf, image::ImageFormat::Png).unwrap();
         let bytes = buf.into_inner();
 
-        let tmp = std::env::temp_dir().join("koma_test_kitty.png");
+        let tmp = std::env::temp_dir().join("koma_test_render.png");
         std::fs::write(&tmp, &bytes).unwrap();
 
-        let result = ImageRenderer::kitty_display(&tmp, 1);
+        let result = ImageRenderer::render_to_lines(&tmp, 80);
         assert!(result.is_ok());
-        let escapes = result.unwrap();
-        assert!(escapes.display.contains("\x1b_G"));
-        assert!(escapes.delete.contains("a=d"));
+        let lines = result.unwrap();
+        assert!(!lines.is_empty());
 
         let _ = std::fs::remove_file(tmp);
     }
