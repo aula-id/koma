@@ -9,5 +9,8 @@ target/
 node_modules/
 dist/
 
+# Python virtual environments
+.venv/
+
 # model caches (downloaded at runtime)
 .fastembed_cache/

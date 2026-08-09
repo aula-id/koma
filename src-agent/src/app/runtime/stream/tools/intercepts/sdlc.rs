@@ -387,6 +387,40 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
         state.rest.sessions[sess_idx].tool_idx += 1;
         return InterceptFlow::Continue;
     }
+
+    // Completed-mission guard: if the mission is already approved and ALL
+    // required leaves are verified, reject mission_ready — there is nothing
+    // left to amend or re-plan.  The model must call mission_integrate
+    // instead.  Without this guard, the model can (and does) call
+    // mission_ready after the last mission_verify as a "wrap-up", which
+    // enters the amendment path and triggers a spurious second approval prompt.
+    if amending {
+        match crate::model::sdlc::graph::all_required_leaves_verified(&conn) {
+            Ok(true) => {
+                state.rest.sessions[sess_idx].tool_results.push((
+                    call.id.clone(),
+                    "mission_ready rejected: the mission is already approved \
+                     and all required leaves are verified — the mission is \
+                     complete. Call mission_integrate to finalize, or use \
+                     mission_ready only to amend the contract (e.g. add new \
+                     tasks)."
+                        .to_string(),
+                ));
+                state.rest.sessions[sess_idx].tool_idx += 1;
+                return InterceptFlow::Continue;
+            }
+            Ok(false) => { /* not all verified — allow amend path */ }
+            Err(e) => {
+                state.rest.sessions[sess_idx].tool_results.push((
+                    call.id.clone(),
+                    format!("error: could not check leaf verification status: {e}"),
+                ));
+                state.rest.sessions[sess_idx].tool_idx += 1;
+                return InterceptFlow::Continue;
+            }
+        }
+    }
+
     let prior_graph = match crate::model::sdlc::graph::snapshot_checklist(&conn) {
         Ok(g) => g,
         Err(e) => {
@@ -2082,6 +2116,130 @@ mod assess_gate_tests {
         assert_eq!(
             tokenize_bash_command("echo 'hello world'"),
             vec!["echo", "hello world"]
+        );
+    }
+
+    /// When an approved mission has ALL required leaves verified, calling
+    /// mission_ready (amendment) must be rejected — the model should use
+    /// mission_integrate instead. This prevents a spurious second approval
+    /// prompt after the mission is already complete.
+    #[test]
+    fn mission_ready_rejected_when_all_leaves_verified() {
+        use super::intercept_mission_ready;
+        use crate::model::sdlc::graph;
+        use crate::model::sdlc::mission::ContractHashInput;
+        use crate::model::sdlc::Mission;
+
+        // Create a temp session dir with mission.json + messages.sqlite.
+        let sess_path = std::env::temp_dir().join(format!(
+            "koma-mission-ready-guard-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&sess_path).expect("create session dir");
+        // Clean up on drop — best-effort.
+        struct RmGuard(std::path::PathBuf);
+        impl Drop for RmGuard {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _guard = RmGuard(sess_path.clone());
+
+        // Build an approved mission with a valid hash.
+        let goal = "test mission".to_string();
+        let acceptance = vec!["done".to_string()];
+        let hash = Mission::compute_contract_hash_full(ContractHashInput {
+            goal: &goal,
+            acceptance: &acceptance,
+            non_goals: &[],
+            lane: "express",
+            verify_plan: &[],
+            human_gates: &[],
+            risks: &[],
+            rationale: "",
+            graph_hash: None,
+            worktree_name: None,
+            branch: None,
+            worktree_path: None,
+            target_worktree_path: None,
+            target_branch: None,
+            target_head: None,
+        });
+        let mission = Mission {
+            contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
+            id: "m-test".into(),
+            goal,
+            non_goals: vec![],
+            acceptance,
+            lane: "express".into(),
+            verify_plan: vec![],
+            human_gates: vec![],
+            human_gates_approved: vec![],
+            risks: vec![],
+            worktree_name: None,
+            branch: None,
+            worktree_path: None,
+            target_worktree_path: None,
+            target_branch: None,
+            target_head: None,
+            rationale: String::new(),
+            phase: "execute".into(),
+            approved: true,
+            hash,
+            graph_hash: None,
+            needs_reapproval: false,
+            amendment_note: None,
+        };
+        mission.save(&sess_path).expect("save mission");
+
+        // Create the graph with a single active leaf, then verify it.
+        let conn = crate::model::msglog::open(&sess_path).expect("open msglog");
+        graph::ensure_tables(&conn).expect("ensure_tables");
+        graph::replace_nodes_from_checklist(
+            &conn,
+            &[crate::model::sdlc::graph::ChecklistNode {
+                title: "leaf task".into(),
+                parent_title: None,
+                status: "active".into(),
+                id: None,
+                owned_paths: vec![],
+            }],
+        )
+        .expect("replace_nodes");
+        let nodes = graph::list_all(&conn).expect("list_all");
+        assert!(!nodes.is_empty(), "must have at least one node");
+        graph::set_verify_bit_with_evidence(&conn, &nodes[0].id, true, Some("test evidence"))
+            .expect("verify leaf");
+
+        // Build a state whose session points at the temp dir.
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.sessions[0].agent_mode = AgentMode::Sdlc;
+        state.rest.sessions[0].sdlc_phase = Some("execute".into());
+        state.rest.sessions[0].session = Some(crate::model::session::Session::new(
+            "test-session".into(),
+            sess_path,
+            "fake-hash".into(),
+            crate::model::settings::Settings::default(),
+            crate::model::conversation::Conversation::new(""),
+        ));
+
+        let c = call(
+            "mission_ready",
+            r#"{"goal":"test mission","lane":"express","acceptance":["done"],"highlights":"done","graph_tasks":[{"title":"leaf task","status":"done"}]}"#,
+        );
+        let flow = intercept_mission_ready(&mut state, 0, &c, AgentMode::Sdlc);
+        assert!(
+            matches!(flow, InterceptFlow::Continue),
+            "must reject mission_ready when all leaves verified"
+        );
+        let msg = &state.rest.sessions[0].tool_results[0].1;
+        assert!(
+            msg.contains("all required leaves are verified"),
+            "rejection message must explain why: {msg}"
+        );
+        assert!(
+            msg.contains("mission_integrate"),
+            "must direct model to mission_integrate: {msg}"
         );
     }
 }

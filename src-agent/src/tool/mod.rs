@@ -71,6 +71,8 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
             | "skill"
             | "web_search"
             | "web_fetch"
+            | "web_page"
+            | "web_search_full"
             | "pong"
             | "cd"
             | "git_cred"
@@ -499,6 +501,9 @@ pub struct ToolCtx {
     /// execute/integrate. `None` for the main session (which doesn't own nodes);
     /// set on sub-agent ToolCtxs when spawned for a claimed leaf.
     pub sdlc_active_node_id: Option<String>,
+    /// The session's preferred search engine URL template (e.g.
+    /// `https://html.duckduckgo.com/html/?q={query}`).
+    pub search_engine: Option<String>,
 }
 
 /// Parse a `[N]` workspace-index prefix from the start of a path string.
@@ -578,6 +583,9 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(internet::WebFetch),
         Box::new(internet::WebSearch),
         Box::new(internet::WebDownload),
+        Box::new(internet::WebPage),
+        Box::new(internet::WebSearchFull),
+        Box::new(internet::WebScreenshot),
         Box::new(git_cred::GitCred),
         Box::new(git_operator::GitOperator),
         Box::new(git_worktree::GitWorktree),
@@ -631,6 +639,9 @@ pub const DEFERRED_TOOLS: &[&str] = &[
     "web_fetch",
     "web_search",
     "web_download",
+    "web_page",
+    "web_search_full",
+    "web_screenshot",
     "git_operator",
     "graph_query",
 ];
