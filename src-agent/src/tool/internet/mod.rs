@@ -11,6 +11,9 @@
 //! returned via an `mpsc::channel` with `recv_timeout` — exactly the same pattern
 //! used by `shell::Bash`.
 
+mod describe_screenshot;
+mod load_screenshot;
+mod search_screenshots;
 mod web_download;
 mod web_fetch;
 mod web_page;
@@ -18,6 +21,9 @@ mod web_screenshot;
 mod web_search;
 mod web_search_full;
 
+pub use describe_screenshot::DescribeScreenshot;
+pub use load_screenshot::LoadScreenshot;
+pub use search_screenshots::SearchScreenshots;
 pub use web_download::WebDownload;
 pub use web_fetch::WebFetch;
 pub use web_page::WebPage;
