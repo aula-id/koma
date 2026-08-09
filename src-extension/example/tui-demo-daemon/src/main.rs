@@ -61,11 +61,13 @@ struct State {
 /// accessor, so there is only ever one `State` for the process's whole life).
 fn state() -> &'static Mutex<State> {
     static STATE: OnceLock<Mutex<State>> = OnceLock::new();
-    STATE.get_or_init(|| Mutex::new(State {
-        counter: 0,
-        last_action: "-".to_string(),
-        started_at: Instant::now(),
-    }))
+    STATE.get_or_init(|| {
+        Mutex::new(State {
+            counter: 0,
+            last_action: "-".to_string(),
+            started_at: Instant::now(),
+        })
+    })
 }
 
 /// Build the `Screen` model (`{ title, body:[Node], footer }`) for the current
@@ -111,7 +113,10 @@ impl Extension for TuiDemo {
             return json!({ "error": format!("unknown method: {method}") });
         }
         let payload = params.get("payload");
-        let kind = payload.and_then(|p| p.get("kind")).and_then(|k| k.as_str()).unwrap_or("");
+        let kind = payload
+            .and_then(|p| p.get("kind"))
+            .and_then(|k| k.as_str())
+            .unwrap_or("");
         match kind {
             "tui-open" => {
                 // Just show the current state — opening the screen isn't itself a
@@ -120,7 +125,10 @@ impl Extension for TuiDemo {
                 json!({ "screen": build_screen(&st) })
             }
             "tui-select" => {
-                let item = payload.and_then(|p| p.get("item")).and_then(|i| i.as_str()).unwrap_or("");
+                let item = payload
+                    .and_then(|p| p.get("item"))
+                    .and_then(|i| i.as_str())
+                    .unwrap_or("");
                 match item {
                     "increment" => {
                         let mut st = state().lock().expect("tui-demo state mutex poisoned");

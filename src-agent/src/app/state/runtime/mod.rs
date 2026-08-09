@@ -40,6 +40,17 @@ use crate::tool::DirCache;
 
 use super::types::ToastKind;
 
+/// An SDLC edit batch awaiting historian summary.
+#[derive(Debug, Clone)]
+pub struct HistorianBatch {
+    pub batch_id: String,
+    pub node_id: Option<String>,
+    pub mission_goal: String,
+    pub mission_phase: String,
+    pub node_title: Option<String>,
+    pub paths: Vec<String>,
+}
+
 /// Consecutive extension-injected-turn budget (cost-DoS guard, review finding — see
 /// [`SessionRuntime::ext_injected_turns`]): the max number of synthetic `chat.prompt`
 /// turns the deferred-drain injection gate
@@ -403,6 +414,14 @@ pub struct SessionRuntime {
     /// Monotonic epoch bumped whenever in-flight LLM keeper results must be
     /// cancelled/ignored (SDLC exit, phase change, contract-hash change).
     pub sdlc_keeper_epoch: u64,
+    /// Best-effort SDLC historian: audit batch awaiting summary, if any.
+    pub pending_sdlc_historian_batch: Option<HistorianBatch>,
+    /// True while an async SDLC historian summary is in flight.
+    pub sdlc_historian_inflight: bool,
+    /// Receiver for async SDLC historian summary result.
+    pub sdlc_historian_rx: Option<tokio::sync::oneshot::Receiver<(u64, Option<String>)>>,
+    /// Epoch bumped on SDLC exit/phase change to drop stale historian results.
+    pub sdlc_historian_epoch: u64,
     /// Session active SDLC card (claimed leaf). Transient — never serialised.
     ///
     /// - Set on successful `claim_leaf` (task.node_id or checklist in_progress).
@@ -681,6 +700,10 @@ impl SessionRuntime {
             sdlc_keeper_llm_inflight: false,
             sdlc_keeper_llm_rx: None,
             sdlc_keeper_epoch: 0,
+            pending_sdlc_historian_batch: None,
+            sdlc_historian_inflight: false,
+            sdlc_historian_rx: None,
+            sdlc_historian_epoch: 0,
             sdlc_pending_node_id: None,
             ext_injected_turns: 0,
             subagents: Vec::new(),
@@ -733,6 +756,11 @@ impl SessionRuntime {
         self.sdlc_keeper_llm_inflight = false;
         self.pending_sdlc_keeper_llm = None;
         self.sdlc_keeper_due = false;
+        // Stale historian results are invalid on SDLC exit / phase change.
+        self.sdlc_historian_epoch = self.sdlc_historian_epoch.saturating_add(1);
+        self.sdlc_historian_rx = None;
+        self.sdlc_historian_inflight = false;
+        self.pending_sdlc_historian_batch = None;
     }
 
     /// Streaming lifecycle methods.

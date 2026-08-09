@@ -96,7 +96,9 @@ impl Extension for FleetBoard {
                         let _ = self.cmd_tx.send(Cmd::Spawn { task });
                         serde_json::json!({ "ok": true, "queued": true })
                     }
-                    other => serde_json::json!({ "error": format!("unknown panel action: {other}") }),
+                    other => {
+                        serde_json::json!({ "error": format!("unknown panel action: {other}") })
+                    }
                 }
             }
             other => serde_json::json!({ "error": format!("unknown method: {other}") }),

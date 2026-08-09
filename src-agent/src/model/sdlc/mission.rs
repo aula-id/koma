@@ -229,7 +229,10 @@ impl Mission {
         if self.worktree_path.is_none() || self.branch.is_none() || self.worktree_name.is_none() {
             bail!("mission worktree binding incomplete — fails closed");
         }
-        if matches!(self.phase.as_str(), "draft" | "done" | "paused" | "assess" | "prepare") {
+        if matches!(
+            self.phase.as_str(),
+            "draft" | "done" | "paused" | "assess" | "prepare"
+        ) {
             bail!(
                 "mission phase '{}' is not active execute/integrate",
                 self.phase
@@ -738,6 +741,58 @@ pub fn build_seed_capsule_with_all(
          - Unsure: web_search → message_find → ask the user.\n",
     );
 
+    s
+}
+
+/// Format the recent edit history section for the SDLC capsule.
+pub fn format_edit_history_section(entries: &[graph::RecentEditEntry]) -> String {
+    use super::graph::{EditAuditRecord, EditSummaryRecord};
+
+    if entries.is_empty() {
+        return String::new();
+    }
+
+    let mut s = String::from("\n## Recent activity (edit rail)\n");
+    for entry in entries {
+        match entry.kind.as_str() {
+            "edit_summary" => {
+                if let Ok(rec) = serde_json::from_str::<EditSummaryRecord>(&entry.detail) {
+                    let paths_str = if rec.paths.len() <= 3 {
+                        rec.paths.join(", ")
+                    } else {
+                        format!(
+                            "{}, +{} more",
+                            rec.paths[..2].join(", "),
+                            rec.paths.len() - 2
+                        )
+                    };
+                    let node_str = rec
+                        .node_id
+                        .as_deref()
+                        .map(|n| format!(" [{n}]"))
+                        .unwrap_or_default();
+                    s.push_str(&format!(
+                        "-{node_str} {}\n  Files: {paths_str}\n",
+                        rec.purpose
+                    ));
+                }
+            }
+            "edit_audit" => {
+                if let Ok(rec) = serde_json::from_str::<EditAuditRecord>(&entry.detail) {
+                    let node_str = rec
+                        .node_id
+                        .as_deref()
+                        .map(|n| format!(" [{n}]"))
+                        .unwrap_or_default();
+                    s.push_str(&format!(
+                        "-{node_str} {} {} (summary pending)\n",
+                        rec.tool, rec.path
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
     s
 }
 

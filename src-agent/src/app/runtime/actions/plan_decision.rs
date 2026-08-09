@@ -561,8 +561,10 @@ fn apply_mission_denial_rails(state: &mut AppState, sess_idx: usize) {
             m.approved = false;
             // Leaving an active execute/integrate runtime phase, or any amendment
             // park, requires re-approval before tools/keeper treat the mission as live.
-            if matches!(prior_phase.as_deref(), Some("execute") | Some("integrate") | Some("prepare"))
-                || m.needs_reapproval
+            if matches!(
+                prior_phase.as_deref(),
+                Some("execute") | Some("integrate") | Some("prepare")
+            ) || m.needs_reapproval
                 || m.amendment_note.is_some()
             {
                 m.needs_reapproval = true;

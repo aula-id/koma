@@ -149,6 +149,85 @@ pub(super) fn finish_tool_round(
         }
     }
 
+    // --- SDLC edit history rail: capture deterministic audit records ---
+    if state.rest.sessions[sess_idx].agent_mode == crate::app::state::AgentMode::Sdlc {
+        if let Some(ref sess) = state.rest.sessions[sess_idx].session {
+            if let Some(mission) = crate::model::sdlc::Mission::load(&sess.path) {
+                if mission.approved
+                    && matches!(mission.phase.as_str(), "prepare" | "execute" | "integrate")
+                {
+                    if let Ok(conn) = crate::model::msglog::open(&sess.path) {
+                        let _ = crate::model::sdlc::graph::ensure_tables(&conn);
+                        let node_id = state.rest.sessions[sess_idx]
+                            .sdlc_pending_node_id
+                            .as_deref();
+                        let batch_id = format!(
+                            "batch-{}-{}",
+                            mission.id,
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis())
+                                .unwrap_or(0)
+                        );
+                        let mut audit_paths: Vec<String> = Vec::new();
+                        for (id, result) in &cleaned_results {
+                            // Find the matching ToolCall for this result id.
+                            if let Some(call) = state.rest.sessions[sess_idx]
+                                .pending_tool_calls
+                                .iter()
+                                .find(|c| c.id == *id)
+                            {
+                                if let Some(candidate) =
+                                    crate::model::sdlc::history::extract_edit_audit(
+                                        call, result, node_id, &batch_id,
+                                    )
+                                {
+                                    audit_paths.push(candidate.path.clone());
+                                    let nid = candidate.node_id.clone();
+                                    crate::model::sdlc::graph::append_edit_audit(
+                                        &conn,
+                                        nid.clone().as_deref(),
+                                        &crate::model::sdlc::graph::EditAuditRecord {
+                                            tool: candidate.tool,
+                                            path: candidate.path,
+                                            node_id: nid,
+                                            batch_id: candidate.batch_id,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                        // Stage a pending historian batch for async summary if edits occurred.
+                        if !audit_paths.is_empty()
+                            && state.rest.sessions[sess_idx]
+                                .pending_sdlc_historian_batch
+                                .is_none()
+                        {
+                            // Resolve the active node's title for the prompt.
+                            let node_title = node_id.and_then(|nid| {
+                                crate::model::sdlc::graph::get_node(&conn, nid)
+                                    .ok()
+                                    .flatten()
+                                    .map(|n| n.title)
+                            });
+                            state.rest.sessions[sess_idx].pending_sdlc_historian_batch =
+                                Some(crate::app::state::HistorianBatch {
+                                    batch_id,
+                                    node_id: state.rest.sessions[sess_idx]
+                                        .sdlc_pending_node_id
+                                        .clone(),
+                                    mission_goal: mission.goal,
+                                    mission_phase: mission.phase,
+                                    node_title,
+                                    paths: audit_paths,
+                                });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Refresh the cumulative file-change log (#24) from the per-session store: the
     // `write`/`edit`/`delete` tools recorded their ops event-driven during this
     // round, so re-read the mirror once here (cheap, once per round) — the GUI

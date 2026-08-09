@@ -493,7 +493,8 @@ pub(super) fn drain_deferred_and_resume(
                 let reassess_note = format!("keeper reassessment: {reason}");
                 let mut disk_ok = false;
                 if let Some(mut m) = crate::model::sdlc::Mission::load(&path) {
-                    if m.approved && matches!(m.phase.as_str(), "execute" | "integrate" | "prepare") {
+                    if m.approved && matches!(m.phase.as_str(), "execute" | "integrate" | "prepare")
+                    {
                         m.approved = false;
                         m.needs_reapproval = true;
                         m.amendment_note = Some(reassess_note);
@@ -617,6 +618,143 @@ pub(super) fn drain_deferred_and_resume(
                 });
             }
         }
+    }
+
+    // --- SDLC historian: poll async summary result + spawn when idle ---
+    // Non-blocking poll of the oneshot receiver. Result persists as an edit_summary
+    // event so the capsule can project it. Epoch-guarded like the keeper LLM.
+    if state.rest.sessions[idx].sdlc_historian_rx.is_some() {
+        let mut finished: Option<(u64, Option<String>)> = None;
+        let mut closed = false;
+        if let Some(rx) = state.rest.sessions[idx].sdlc_historian_rx.as_mut() {
+            match rx.try_recv() {
+                Ok(opt) => finished = Some(opt),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => closed = true,
+            }
+        }
+        if finished.is_some() || closed {
+            state.rest.sessions[idx].sdlc_historian_rx = None;
+            state.rest.sessions[idx].sdlc_historian_inflight = false;
+            if let Some((epoch, summary_json)) = finished {
+                let current = state.rest.sessions[idx].sdlc_historian_epoch;
+                let still_sdlc =
+                    state.rest.sessions[idx].agent_mode == crate::app::state::AgentMode::Sdlc;
+                if epoch == current && still_sdlc {
+                    // Consume the pending batch (it was moved into the task).
+                    if let Some(batch) =
+                        state.rest.sessions[idx].pending_sdlc_historian_batch.take()
+                    {
+                        if let Some(ref inject) = summary_json {
+                            if let Some(rec) = crate::model::sdlc::history::parse_historian_reply(
+                                inject,
+                                &batch.batch_id,
+                                batch.node_id.as_deref(),
+                                batch.paths.clone(),
+                            ) {
+                                // Best-effort persist the summary event.
+                                if let Some(path) = state.rest.sessions[idx]
+                                    .session
+                                    .as_ref()
+                                    .map(|s| s.path.clone())
+                                {
+                                    if let Ok(conn) = crate::model::msglog::open(&path) {
+                                        let _ = crate::model::sdlc::graph::ensure_tables(&conn);
+                                        crate::model::sdlc::graph::append_edit_summary(
+                                            &conn,
+                                            rec.node_id.as_deref(),
+                                            &rec,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // else: stale — drop on the floor
+            }
+        }
+    }
+    // Spawn historian when idle, batch pending, and no inflight historian.
+    // Uses the Awareness role — cheap secondary free-form completion.
+    if state.rest.sessions[idx].agent_mode == crate::app::state::AgentMode::Sdlc
+        && state.rest.sessions[idx]
+            .pending_sdlc_historian_batch
+            .is_some()
+        && !state.rest.sessions[idx].sdlc_historian_inflight
+        && !state.rest.sessions[idx].is_working()
+        && client.is_some()
+        && state.rest.sessions[idx].session.is_some()
+    {
+        let config = state.rest.config.clone();
+        let settings = match state.rest.sessions[idx]
+            .session
+            .as_ref()
+            .map(|s| s.settings.clone())
+        {
+            Some(s) => s,
+            None => return dirty,
+        };
+        let Some(route) = crate::app::resolve::resolve_role_dispatch(
+            &config,
+            &settings,
+            crate::model::app_config::ModelRole::Awareness,
+        )
+        .filter(|r| r.is_routable()) else {
+            // No Awareness route — drop the pending batch silently (best-effort).
+            state.rest.sessions[idx].pending_sdlc_historian_batch = None;
+            return dirty;
+        };
+        let client = match client.clone() {
+            Some(c) => c,
+            None => return dirty,
+        };
+        let Some(batch) = state.rest.sessions[idx]
+            .pending_sdlc_historian_batch
+            .clone()
+        else {
+            return dirty;
+        };
+        let epoch_at_spawn = state.rest.sessions[idx].sdlc_historian_epoch;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        state.rest.sessions[idx].sdlc_historian_rx = Some(rx);
+        state.rest.sessions[idx].sdlc_historian_inflight = true;
+        handle.spawn(async move {
+            let summary = async {
+                let audits: Vec<crate::model::sdlc::graph::EditAuditRecord> = batch
+                    .paths
+                    .iter()
+                    .map(|p| crate::model::sdlc::graph::EditAuditRecord {
+                        tool: "edit".into(),
+                        path: p.clone(),
+                        node_id: batch.node_id.clone(),
+                        batch_id: batch.batch_id.clone(),
+                    })
+                    .collect();
+                let (system, user) = crate::model::sdlc::history::build_historian_prompt(
+                    &batch.mission_goal,
+                    &batch.mission_phase,
+                    batch.node_title.as_deref(),
+                    &audits,
+                );
+                let messages = vec![
+                    crate::dto::chat::ChatMessage::new(crate::dto::chat::Role::System, &system),
+                    crate::dto::chat::ChatMessage::new(crate::dto::chat::Role::User, &user),
+                ];
+                client
+                    .complete_with(
+                        route.conn(),
+                        &route.model_id,
+                        route.provider(),
+                        messages,
+                        true,
+                    )
+                    .await
+                    .ok()
+            }
+            .await;
+            let _ = tx.send((epoch_at_spawn, summary));
+        });
     }
 
     // --- extension-prompt injection: inject + auto-wake when idle ---
