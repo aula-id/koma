@@ -1,0 +1,42 @@
+name: build
+
+# Builds the Nix flake's packages on every release tag - the artifact-producing
+# counterpart to ci.yml's flake check, kept out of the fast push/PR loop the
+# same way release.yml's binary builds are. Mirrors release.yml's tag trigger
+# and per-target job naming. Unlike release.yml these builds are not attached
+# to the release: install.sh fetches prebuilt binaries, not Nix outputs. This
+# exists to prove the flake still builds every supported system at release
+# time.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: nix build .#default
+        run: nix build .#default --print-build-logs
+
+      - name: nix build .#gui
+        run: nix build .#gui --print-build-logs
