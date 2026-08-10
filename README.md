@@ -71,28 +71,6 @@ cargo build -p agent --features gui
 
 Linux build prerequisite: `webkit2gtk-4.1` and its dev headers (e.g. `libwebkit2gtk-4.1-dev` on Debian/Ubuntu), plus GTK3 and libsoup3. macOS and Windows use the system-provided webview (WebKit / WebView2) — no extra deps. The default `cargo install` / build pulls none of these — the GUI deps (`wry`, `tao`, `portable-pty`) are optional and only compiled with `--features gui`.
 
-### Nix
-
-koma ships a flake with a headless package, a GUI package, and a devshell.
-
-Try it without installing anything:
-
-```sh
-nix run github:aula-id/koma
-```
-
-Build the GUI-featured binary instead:
-
-```sh
-nix build github:aula-id/koma#gui
-```
-
-Install either onto your profile or a NixOS/home-manager configuration the usual way, e.g. `environment.systemPackages = [ inputs.koma.packages.${system}.default ];`.
-
-For local development, `nix develop` drops you into a shell with the exact Rust toolchain, C toolchain and GUI native deps (webkitgtk, gtk3, libsoup3, Node 24) the build needs.
-
-`nix flake check` builds both packages. The default package links a vendored, statically-built OpenSSL to match koma's own `native-tls-vendored` build exactly; pass `useSystemOpenssl = true` to `packages.default.override` or `packages.gui.override` to link the system OpenSSL instead.
-
 More at **[koma.run](https://koma.run)**.
 
 ---

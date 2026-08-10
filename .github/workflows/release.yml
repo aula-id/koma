@@ -118,6 +118,41 @@ jobs:
           files: ${{ matrix.asset }}
 
   # ---------------------------------------------------------------------------
+  # Proves the Nix flake still builds on every tagged release. Matrix mirrors
+  # the build job's two Linux targets (x86_64-unknown-linux-gnu /
+  # aarch64-unknown-linux-gnu) above so this reads as the same two targets, not
+  # a third axis. Produces no release asset - install.sh fetches the binaries
+  # staged above, not Nix outputs - so it only needs read access, not the
+  # workflow's write token.
+  # ---------------------------------------------------------------------------
+  nix-build:
+    name: nix build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: nix build .#default
+        run: nix build .#default --print-build-logs
+
+      - name: nix build .#gui
+        run: nix build .#gui --print-build-logs
+
+  # ---------------------------------------------------------------------------
   # Linux desktop installers (.deb + .AppImage). Built NATIVELY per arch because
   # the AppImage tooling (linuxdeploy/appimagetool) cannot cross-compile. Output
   # names embed the version (e.g. koma_0.2.27_amd64.deb), so a rename step maps
