@@ -98,7 +98,7 @@ impl super::Tool for WebPage {
         }
 
         // ── One-shot subprocess path (url only) ────────────────────────
-        let url = url.unwrap(); // safe: at least one is Some
+        let url = url.ok_or_else(|| anyhow::anyhow!("url required for one-shot path"))?;
         let stdout = scrapion_run(&["page", "--url", url]).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         let report: Value = serde_json::from_str(stdout.trim())
