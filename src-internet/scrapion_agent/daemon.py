@@ -212,6 +212,7 @@ class Handler:
             # javascript
             "evaluate": self._action_evaluate,
             # lifecycle
+            "health": self._action_health,
             "shutdown": self._action_shutdown,
         }
 
@@ -434,7 +435,7 @@ class Handler:
                 return self._ok({"filled": True})
 
             elif action == "press":
-                key = action_params.get("key", "")
+                key = action_params.get("key") or action_params.get("value", "")
                 if not key:
                     return self._error("key is required for press")
                 await page.keyboard.press(key)
@@ -516,6 +517,9 @@ class Handler:
         return self._ok({"result": result})
 
     # -- lifecycle actions -------------------------------------------------
+
+    async def _action_health(self, _params: dict) -> dict:
+        return self._ok({"status": "healthy"})
 
     async def _action_shutdown(self, _params: dict) -> dict:
         log.info("shutdown requested")

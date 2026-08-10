@@ -550,12 +550,42 @@ pub(super) fn render_tool_lines(
         // the result has landed (`done`). Output tools get a box; others a terse line.
         if done {
             if let Some(result) = tool_results.get(call.id.as_str()) {
-                lines.extend(render_tool_result(
-                    result,
-                    &call.function.name,
-                    palette,
-                    wrap_w,
-                ));
+                // For show_image: render the actual image as half-block art inline
+                // under the call, then the terse status text below it.
+                if call.function.name == "show_image" {
+                    // Result format: "image resolved: {path} ({label})\nRendered inline..."
+                    if let Some(img_path) = result
+                        .strip_prefix("image resolved: ")
+                        .and_then(|r| r.split_once('\n').map(|(p, _)| p))
+                        .and_then(|p| p.rsplit_once(" (").map(|(path, _)| path))
+                    {
+                        let p = std::path::Path::new(img_path);
+                        if p.exists() {
+                            let max_w = (wrap_w as u16).min(80);
+                            if let Ok(img_lines) =
+                                crate::view::image_render::ImageRenderer::render_to_lines(p, max_w)
+                            {
+                                lines.extend(img_lines);
+                            }
+                        }
+                    }
+                    // Still show the terse status line below the image.
+                    let first = truncate_chars(result.lines().next().unwrap_or(""), 80);
+                    lines.extend(render_block(
+                        vec![vec![Span::styled(first, Style::default().fg(palette.dim))]],
+                        "    ",
+                        palette.dim,
+                        wrap_w,
+                        false,
+                    ));
+                } else {
+                    lines.extend(render_tool_result(
+                        result,
+                        &call.function.name,
+                        palette,
+                        wrap_w,
+                    ));
+                }
             }
         }
     }
