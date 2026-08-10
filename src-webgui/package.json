@@ -8,6 +8,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.8",
+    "@react-three/fiber": "^9.7.0",
     "@streamdown/code": "^1.1.1",
     "@tanstack/react-router": "^1.87.0",
     "framer-motion": "^12.42.2",
@@ -17,12 +19,14 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "streamdown": "^2.5.0",
+    "three": "^0.185.1",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/three": "^0.185.4",
     "@vitejs/plugin-react": "^4.3.4",
     "fflate": "^0.8.3",
     "tailwindcss": "^4.0.0",

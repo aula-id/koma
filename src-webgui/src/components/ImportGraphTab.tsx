@@ -1,46 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Network, RefreshCw, X, Maximize2, AlertTriangle, Search } from 'lucide-react'
+import { Network, RefreshCw, X, AlertTriangle, Search, ChevronRight } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { BrailleSpinner } from './BrailleSpinner'
-import {
-  computeImportGraphLayout,
-  type LayoutNode,
-  type LayoutEdge,
-} from '../lib/importGraphLayout'
+import { ImportGraphScene } from './ImportGraphScene'
 
 // Detail pane width constants (mirrors GraphTab).
 const DETAIL_W_MIN = 220
 const DETAIL_W_MAX = 480
 const DETAIL_W_DEFAULT = 300
 
-// Role → color mapping for nodes.
-const ROLE_COLORS: Record<string, { fill: string; stroke: string; text: string }> = {
-  Focus: { fill: '#3b82f6', stroke: '#2563eb', text: '#ffffff' },
-  Dependency: { fill: '#22c55e', stroke: '#16a34a', text: '#ffffff' },
-  Dependent: { fill: '#f97316', stroke: '#ea580c', text: '#ffffff' },
-  Overview: { fill: '#6b7280', stroke: '#4b5563', text: '#ffffff' },
-}
-
-// SVG arrowhead marker definition.
-function ArrowDefs() {
-  return (
-    <defs>
-      <marker
-        id="arrowhead"
-        markerWidth="8"
-        markerHeight="6"
-        refX="8"
-        refY="3"
-        orient="auto"
-      >
-        <path d="M0,0 L8,3 L0,6" fill="#94a3b8" />
-      </marker>
-    </defs>
-  )
+// Role → color mapping for detail pane badges (lightweight, no Three.js).
+const ROLE_COLORS: Record<string, string> = {
+  Focus: '#3b82f6',
+  Dependency: '#22c55e',
+  Dependent: '#f97316',
+  Overview: '#6b7280',
 }
 
 // ─── Main ImportGraphTab ────────────────────────────────────────────────
 export default function ImportGraphTab() {
+  // Store selectors
   const nodes = useKoma((s) => s.importGraph.nodes)
   const edges = useKoma((s) => s.importGraph.edges)
   const focus = useKoma((s) => s.importGraph.focus)
@@ -57,93 +36,23 @@ export default function ImportGraphTab() {
   const direction = useKoma((s) => s.importGraph.direction)
   const selectedPath = useKoma((s) => s.importGraph.selectedPath)
   const generation = useKoma((s) => s.importGraph.generation)
+  const breadcrumb = useKoma((s) => s.importGraph.breadcrumb)
 
   const refreshImportGraph = useKoma((s) => s.refreshImportGraph)
   const setImportGraphDepth = useKoma((s) => s.setImportGraphDepth)
   const setImportGraphDirection = useKoma((s) => s.setImportGraphDirection)
   const selectImportGraphNode = useKoma((s) => s.selectImportGraphNode)
   const clearImportGraphSelection = useKoma((s) => s.clearImportGraphSelection)
+  const navigateBreadcrumb = useKoma((s) => s.navigateBreadcrumb)
+  const popBreadcrumb = useKoma((s) => s.popBreadcrumb)
 
   const isActiveTab = useKoma((s) => s.ui.activeTabId === 'import-graph')
   const sessionId = useKoma((s) => s.session.id)
 
-  // Fetch on mount and session change (mirrors GraphTab's useEffect).
+  // Fetch on mount and session change.
   useEffect(() => {
     refreshImportGraph()
   }, [refreshImportGraph, sessionId])
-
-  // ── Layout ────────────────────────────────────────────────────────
-  const layout = useMemo(
-    () => computeImportGraphLayout(nodes, edges, focus),
-    [nodes, edges, focus],
-  )
-
-  // ── Pan / Zoom ────────────────────────────────────────────────────
-  const canvasRef = useRef<HTMLDivElement | null>(null)
-  const [offsetX, setOffsetX] = useState(0)
-  const [offsetY, setOffsetY] = useState(0)
-  const [scale, setScale] = useState(1)
-  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null)
-
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault()
-    setScale((prev) => {
-      const delta = e.deltaY > 0 ? -0.1 : 0.1
-      return Math.max(0.2, Math.min(3, prev + delta))
-    })
-  }, [])
-
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      // Only start pan on left-click on the background (not on nodes).
-      if (e.button !== 0) return
-      const target = e.target as HTMLElement
-      if (target.closest('[data-graph-node]')) return
-      dragRef.current = { startX: e.clientX, startY: e.clientY, origX: offsetX, origY: offsetY }
-      document.body.style.cursor = 'grabbing'
-      document.body.style.userSelect = 'none'
-    },
-    [offsetX, offsetY],
-  )
-
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!dragRef.current) return
-    const dx = e.clientX - dragRef.current.startX
-    const dy = e.clientY - dragRef.current.startY
-    setOffsetX(dragRef.current.origX + dx)
-    setOffsetY(dragRef.current.origY + dy)
-  }, [])
-
-  const handleMouseUp = useCallback(() => {
-    if (dragRef.current) {
-      dragRef.current = null
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-  }, [])
-
-  const fitToContent = useCallback(() => {
-    if (layout.width === 0 || layout.height === 0) return
-    const el = canvasRef.current
-    if (!el) return
-    const vw = el.clientWidth
-    const vh = el.clientHeight
-    const sx = vw / layout.width
-    const sy = vh / layout.height
-    const s = Math.min(sx, sy, 1.5) * 0.9
-    setScale(s)
-    setOffsetX((vw - layout.width * s) / 2)
-    setOffsetY((vh - layout.height * s) / 2)
-  }, [layout])
-
-  // Auto-fit on first data load.
-  const prevNodeCount = useRef(0)
-  useEffect(() => {
-    if (nodes.length > 0 && prevNodeCount.current === 0) {
-      requestAnimationFrame(fitToContent)
-    }
-    prevNodeCount.current = nodes.length
-  }, [nodes.length, fitToContent])
 
   // ── Detail pane resize ────────────────────────────────────────────
   const [detailW, setDetailW] = useState(DETAIL_W_DEFAULT)
@@ -242,34 +151,67 @@ export default function ImportGraphTab() {
     return edges.filter((e) => e.to === selectedPath).map((e) => e.from)
   }, [edges, selectedPath])
 
-  // ── Node click ────────────────────────────────────────────────────
-  const onNodeClick = useCallback(
-    (path: string) => {
-      selectImportGraphNode(path)
-    },
-    [selectImportGraphNode],
-  )
-
   return (
     <div className="flex h-full w-full min-w-0 flex-col">
       {/* ── Header bar ─────────────────────────────────────────────── */}
       <div className="flex flex-none items-center gap-2 border-b border-koma-border px-3 py-1.5 text-[12px] text-koma-dim">
         <Network size={13} className="flex-none opacity-70" />
 
-        {/* Search trigger (opens Cmd+K omnisearch) */}
-        <button
-          type="button"
-          onClick={() => {
-            setShowOmni(true)
-            setOmniQuery('')
-            setOmniIdx(0)
-          }}
-          className="flex items-center gap-1.5 rounded border border-koma-border bg-koma-bg px-2 py-0.5 text-[11px] text-koma-dim hover:border-koma-accent/40 hover:text-koma-fg"
-        >
-          <Search size={11} />
-          <span>Search files…</span>
-          <kbd className="ml-1 rounded bg-koma-panel2 px-1 py-px text-[9px] opacity-60">⌘K</kbd>
-        </button>
+        {/* Back button */}
+        {breadcrumb.length > 1 && (
+          <button
+            type="button"
+            onClick={popBreadcrumb}
+            title="Go back"
+            className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
+          >
+            ←
+          </button>
+        )}
+
+        {/* Breadcrumb trail */}
+        {breadcrumb.length > 0 && (
+          <div className="flex min-w-0 items-center gap-0.5 overflow-hidden">
+            {breadcrumb.map((path, idx) => {
+              const isLast = idx === breadcrumb.length - 1
+              const label = path.split('/').pop() ?? path
+              return (
+                <span key={`${path}-${idx}`} className="flex flex-none items-center gap-0.5">
+                  {idx > 0 && <ChevronRight size={10} className="flex-none text-koma-dim opacity-40" />}
+                  <button
+                    type="button"
+                    onClick={() => navigateBreadcrumb(idx)}
+                    className={`max-w-[120px] truncate rounded px-1 py-0.5 text-[11px] ${
+                      isLast
+                        ? 'font-medium text-koma-accent'
+                        : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'
+                    }`}
+                    title={path}
+                  >
+                    {label}
+                  </button>
+                </span>
+              )
+            })}
+          </div>
+        )}
+
+        {/* Search trigger — only show when no breadcrumb */}
+        {breadcrumb.length === 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              setShowOmni(true)
+              setOmniQuery('')
+              setOmniIdx(0)
+            }}
+            className="flex items-center gap-1.5 rounded border border-koma-border bg-koma-bg px-2 py-0.5 text-[11px] text-koma-dim hover:border-koma-accent/40 hover:text-koma-fg"
+          >
+            <Search size={11} />
+            <span>Search files…</span>
+            <kbd className="ml-1 rounded bg-koma-panel2 px-1 py-px text-[9px] opacity-60">⌘K</kbd>
+          </button>
+        )}
 
         {/* Depth selector */}
         <span className="text-[10px] text-koma-dim opacity-60">Depth:</span>
@@ -325,15 +267,6 @@ export default function ImportGraphTab() {
 
         <button
           type="button"
-          onClick={() => fitToContent()}
-          title="Fit to content"
-          aria-label="Fit to content"
-          className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
-        >
-          <Maximize2 size={12} />
-        </button>
-        <button
-          type="button"
           onClick={() => refreshImportGraph()}
           title="Refresh graph"
           aria-label="Refresh graph"
@@ -346,16 +279,8 @@ export default function ImportGraphTab() {
 
       {/* ── Main content ──────────────────────────────────────────── */}
       <div className="flex min-h-0 min-w-0 flex-1">
-        {/* SVG Canvas */}
-        <div
-          ref={canvasRef}
-          onWheel={handleWheel}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-          className="min-h-0 min-w-0 flex-1 overflow-hidden"
-        >
+        {/* 3D Graph Canvas */}
+        <div className="min-h-0 min-w-0 flex-1">
           {error ? (
             <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-center text-[12px] text-koma-dim">
               <AlertTriangle size={24} className="text-koma-warn opacity-70" />
@@ -385,82 +310,22 @@ export default function ImportGraphTab() {
               )}
             </div>
           ) : (
-            <svg
-              width="100%"
-              height="100%"
-              style={{
-                transform: `translate(${offsetX}px, ${offsetY}px) scale(${scale})`,
-                transformOrigin: '0 0',
+            <ImportGraphScene
+              nodes={nodes}
+              edges={edges}
+              focus={focus}
+              selectedPath={selectedPath}
+              onNodeClick={selectImportGraphNode}
+              onNodeSelect={(path) => {
+                useKoma.getState().clearImportGraphSelection()
+                // Small delay then select for detail pane (no chain navigation)
+                setTimeout(() => {
+                  useKoma.setState((s) => ({
+                    importGraph: { ...s.importGraph, selectedPath: path }
+                  }))
+                }, 0)
               }}
-            >
-              <ArrowDefs />
-
-              {/* Edges */}
-              {layout.edges.map((e, i) => {
-                const pts = e.points
-                if (pts.length < 2) return null
-                const d = pts.map((p, j) => `${j === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')
-                return (
-                  <path
-                    key={`${e.from}->${e.to}-${i}`}
-                    d={d}
-                    fill="none"
-                    stroke="#94a3b8"
-                    strokeWidth={1}
-                    strokeOpacity={0.5}
-                    markerEnd="url(#arrowhead)"
-                  />
-                )
-              })}
-
-              {/* Nodes */}
-              {layout.nodes.map((n) => {
-                const colors = ROLE_COLORS[n.role] ?? ROLE_COLORS.Overview
-                const isSelected = n.id === selectedPath
-                return (
-                  <g
-                    key={n.id}
-                    data-graph-node
-                    onClick={() => onNodeClick(n.id)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <rect
-                      x={n.x}
-                      y={n.y}
-                      width={n.width}
-                      height={n.height}
-                      rx={4}
-                      fill={colors.fill}
-                      fillOpacity={isSelected ? 1 : 0.85}
-                      stroke={isSelected ? '#ffffff' : colors.stroke}
-                      strokeWidth={isSelected ? 2 : 1}
-                    />
-                    <text
-                      x={n.x + 8}
-                      y={n.y + NODE_H_CENTER}
-                      fill={colors.text}
-                      fontSize={10}
-                      dominantBaseline="central"
-                      fontFamily="monospace"
-                    >
-                      {n.label.length > 20 ? n.label.slice(0, 19) + '…' : n.label}
-                    </text>
-                    {/* Language badge */}
-                    <text
-                      x={n.x + n.width - 6}
-                      y={n.y + NODE_H_CENTER}
-                      fill={colors.text}
-                      fontSize={8}
-                      textAnchor="end"
-                      dominantBaseline="central"
-                      opacity={0.6}
-                    >
-                      {n.language}
-                    </text>
-                  </g>
-                )
-              })}
-            </svg>
+            />
           )}
         </div>
 
@@ -503,8 +368,8 @@ export default function ImportGraphTab() {
                   <span
                     className="rounded px-1.5 py-0.5 text-[10px]"
                     style={{
-                      backgroundColor: ROLE_COLORS[selectedNode.role]?.fill + '30',
-                      color: ROLE_COLORS[selectedNode.role]?.fill,
+                      backgroundColor: (ROLE_COLORS[selectedNode.role] ?? ROLE_COLORS.Overview) + '30',
+                      color: ROLE_COLORS[selectedNode.role] ?? ROLE_COLORS.Overview,
                     }}
                   >
                     {selectedNode.role}
@@ -661,6 +526,3 @@ export default function ImportGraphTab() {
     </div>
   )
 }
-
-// Center y for 32px-high nodes (must match NODE_H in importGraphLayout.ts).
-const NODE_H_CENTER = 16

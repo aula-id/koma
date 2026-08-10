@@ -1634,6 +1634,8 @@ type ImportGraphSlice = {
   selectedPath: string | null
   depth: number
   direction: 'dependencies' | 'dependents' | 'both'
+  // Chain of visited focus paths for chained exploration.
+  breadcrumb: string[]
 }
 
 // The Analytics dashboard tab's slice — host-authoritative projection + local
@@ -1937,6 +1939,12 @@ type KomaState = {
   selectImportGraphNode: (path: string | null) => void
   // Deselect + close detail pane.
   clearImportGraphSelection: () => void
+  // Navigate to a specific breadcrumb entry (chained exploration).
+  navigateBreadcrumb: (idx: number) => void
+  // Go back one step in the breadcrumb chain.
+  popBreadcrumb: () => void
+  // Clear the breadcrumb trail (fresh start).
+  clearBreadcrumb: () => void
   // (Re)load the bubble/activity chart's commit series (GK5b): mark loading +
   // GitActivity{ path, limit:800 }. `path` narrows to one pathspec; omitted or
   // `null` means the whole active branch. Fired on GraphBubble mount + its
@@ -2366,6 +2374,7 @@ const initialImportGraph: ImportGraphSlice = {
   selectedPath: null,
   depth: 2,
   direction: 'both',
+  breadcrumb: [],
 }
 
 const initialActivity: ActivitySlice = {
@@ -3238,24 +3247,43 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         break
       case 'ImportGraph':
-        set((s) => ({
-          importGraph: {
-            ...s.importGraph,
-            nodes: env.nodes,
-            edges: env.edges,
-            focus: env.focus,
-            generation: env.generation,
-            fileCount: env.fileCount,
-            edgeCount: env.edgeCount,
-            languages: env.languages,
-            nodesTruncated: env.nodesTruncated,
-            edgesTruncated: env.edgesTruncated,
-            totalNodesAvailable: env.totalNodesAvailable,
-            totalEdgesAvailable: env.totalEdgesAvailable,
-            loading: false,
-            error: null,
-          },
-        }))
+        set((s) => {
+          // Merge new nodes/edges into accumulated state (chained exploration).
+          // Dedup by path/key so clicking deeper doesn't lose earlier nodes.
+          const existingNodes = new Map(s.importGraph.nodes.map((n) => [n.path, n]))
+          for (const n of env.nodes) {
+            existingNodes.set(n.path, n) // new overwrites stale
+          }
+          const mergedNodes = [...existingNodes.values()]
+
+          const edgeKey = (e: { from: string; to: string }) => `${e.from}\0${e.to}`
+          const existingEdgeSet = new Set(s.importGraph.edges.map(edgeKey))
+          const mergedEdges = [...s.importGraph.edges]
+          for (const e of env.edges) {
+            if (!existingEdgeSet.has(edgeKey(e))) {
+              mergedEdges.push(e)
+            }
+          }
+
+          return {
+            importGraph: {
+              ...s.importGraph,
+              nodes: mergedNodes,
+              edges: mergedEdges,
+              focus: env.focus,
+              generation: env.generation,
+              fileCount: env.fileCount,
+              edgeCount: env.edgeCount,
+              languages: env.languages,
+              nodesTruncated: env.nodesTruncated,
+              edgesTruncated: env.edgesTruncated,
+              totalNodesAvailable: env.totalNodesAvailable,
+              totalEdgesAvailable: env.totalEdgesAvailable,
+              loading: false,
+              error: null,
+            },
+          }
+        })
         break
       case 'GitGraph':
         set((s) => {
@@ -4010,16 +4038,17 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
   refreshImportGraph: (path) => {
     const g = get().importGraph
-    // Don't fire if already loading
     if (g.loading) return
     const focus = path !== undefined ? path : g.focus
+    const isFullRefresh = path === undefined
     set((s) => ({
       importGraph: {
         ...s.importGraph,
         loading: true,
         error: null,
         focus,
-        selectedPath: s.importGraph.selectedPath,
+        // Clear accumulated nodes/edges on full refresh (not chain navigation)
+        ...(isFullRefresh ? { nodes: [], edges: [], breadcrumb: [] } : {}),
       },
     }))
     get().req({
@@ -4043,16 +4072,28 @@ export const useKoma = create<KomaState>((set, get) => ({
     }
   },
   selectImportGraphNode: (path) => {
+    if (!path) {
+      set((s) => ({
+        importGraph: { ...s.importGraph, selectedPath: null },
+      }))
+      return
+    }
+    // Push to breadcrumb chain for navigation history
+    const s = get().importGraph
+    const alreadyFocused = s.focus === path
+    const newBreadcrumb = alreadyFocused
+      ? s.breadcrumb
+      : [...s.breadcrumb, path]
     set((s) => ({
       importGraph: {
         ...s.importGraph,
-        selectedPath: s.importGraph.selectedPath === path ? null : path,
+        selectedPath: path,
+        focus: path,
+        breadcrumb: newBreadcrumb,
       },
     }))
-    // Refetch with the newly-focused node
-    if (path) {
-      get().refreshImportGraph(path)
-    }
+    // Fetch the new neighborhood (merged in push reducer)
+    get().refreshImportGraph(path)
   },
   clearImportGraphSelection: () => {
     set((s) => ({
@@ -4060,6 +4101,47 @@ export const useKoma = create<KomaState>((set, get) => ({
         ...s.importGraph,
         selectedPath: null,
       },
+    }))
+  },
+  navigateBreadcrumb: (idx) => {
+    const bc = get().importGraph.breadcrumb
+    if (idx < 0 || idx >= bc.length) return
+    const path = bc[idx]
+    // Truncate breadcrumb to this point
+    set((s) => ({
+      importGraph: {
+        ...s.importGraph,
+        breadcrumb: s.importGraph.breadcrumb.slice(0, idx + 1),
+        selectedPath: path,
+        focus: path,
+      },
+    }))
+    get().refreshImportGraph(path)
+  },
+  popBreadcrumb: () => {
+    const bc = get().importGraph.breadcrumb
+    if (bc.length < 2) {
+      // Can't pop below 1; just clear breadcrumb
+      set((s) => ({
+        importGraph: { ...s.importGraph, breadcrumb: [], selectedPath: null, focus: null },
+      }))
+      return
+    }
+    const newBc = bc.slice(0, -1)
+    const path = newBc[newBc.length - 1]
+    set((s) => ({
+      importGraph: {
+        ...s.importGraph,
+        breadcrumb: newBc,
+        selectedPath: path,
+        focus: path,
+      },
+    }))
+    get().refreshImportGraph(path)
+  },
+  clearBreadcrumb: () => {
+    set((s) => ({
+      importGraph: { ...s.importGraph, breadcrumb: [] },
     }))
   },
   refreshActivity: (path) => {
