@@ -781,6 +781,11 @@ export type Tab =
   // tab. Content (commits/selection/detail) lives in the `graph` store slice, not
   // on the tab — the GraphTab reads it live and fires refreshGraph on mount.
   | { id: 'graph'; kind: 'graph' }
+  // The singleton import-graph tab (id 'import-graph'), opened from the Import
+  // Graph sidebar panel. Content (nodes/edges/selection) lives in the
+  // `importGraph` store slice — the ImportGraphTab reads it live and fires
+  // refreshImportGraph on mount.
+  | { id: 'import-graph'; kind: 'importGraph' }
   // The singleton Analytics dashboard tab (id 'analytics'), opened from the
   // Usage sidebar's pinned "See Analytics" footer. Deduped by the fixed id;
   // closeable like a graph tab. Content lives in the `analytics` store slice.
@@ -1320,6 +1325,23 @@ export type PushEnvelope =
       requestId: string
       error: string | null
     }
+  // Reply to GuiReq ImportGraph — the linker daemon's code-dependency graph.
+  // ALWAYS a reply (status ok/empty/error). Carries the full node+edge
+  // projection plus metadata for the tab's header.
+  | {
+      k: 'ImportGraph'
+      nodes: ImportGraphNode[]
+      edges: ImportGraphEdge[]
+      focus: string | null
+      generation: number
+      fileCount: number
+      edgeCount: number
+      languages: string[]
+      nodesTruncated: boolean
+      edgesTruncated: boolean
+      totalNodesAvailable: number
+      totalEdgesAvailable: number
+    }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -1534,6 +1556,22 @@ type UiSlice = {
   loadingDismissed: boolean
 }
 
+// A single node from the linker daemon's import graph.
+export type ImportGraphNode = {
+  path: string
+  language: string
+  outDegree: number
+  inDegree: number
+  role: 'Focus' | 'Dependency' | 'Dependent' | 'Overview'
+  depthFromFocus: number | null
+}
+
+// A single edge from the linker daemon's import graph.
+export type ImportGraphEdge = {
+  from: string
+  to: string
+}
+
 // The commit-graph tab's slice (G2) — the loaded commit page(s) + selection +
 // fetched detail. `loadMode` records how the LAST GitGraph req was issued so the
 // reducer knows whether to concat (append) or replace the incoming page. Global
@@ -1571,6 +1609,31 @@ type ActivitySlice = {
   loading: boolean
   error: string | null
   path: string | null
+}
+
+// The import-graph tab's slice — the loaded graph from the linker daemon.
+// Global (mirrors the graph slice; the host resolves it off the foreground
+// session's workspace). Reset naturally: a session switch closes the tab
+// (tabs reset to chat), and reopening remounts ImportGraphTab → a fresh
+// refreshImportGraph.
+type ImportGraphSlice = {
+  nodes: ImportGraphNode[]
+  edges: ImportGraphEdge[]
+  focus: string | null
+  generation: number
+  fileCount: number
+  edgeCount: number
+  languages: string[]
+  nodesTruncated: boolean
+  edgesTruncated: boolean
+  totalNodesAvailable: number
+  totalEdgesAvailable: number
+  loading: boolean
+  error: string | null
+  // Controls
+  selectedPath: string | null
+  depth: number
+  direction: 'dependencies' | 'dependents' | 'both'
 }
 
 // The Analytics dashboard tab's slice — host-authoritative projection + local
@@ -1792,6 +1855,8 @@ type KomaState = {
   activity: ActivitySlice
   // The Analytics dashboard tab's slice. See AnalyticsSlice.
   analytics: AnalyticsSlice
+  // The import-graph tab's slice — linker daemon code-dependency graph.
+  importGraph: ImportGraphSlice
   // Coding panel slice — workspace roots, lazy dir listings, open file docs.
   coding: CodingSlice
   // Open (or focus) the singleton commit-graph tab (id 'graph'). The GraphTab
@@ -1858,6 +1923,20 @@ type KomaState = {
   clearSelection: () => void
   // Rail-line/Bubble mode switch (GK2) — local UI toggle, no wire request.
   setGraphMode: (mode: 'rail' | 'bubble') => void
+  // ─── Import Graph tab actions ────────────────────────────────────────
+  // Open (or focus) the singleton import-graph tab (id 'import-graph').
+  openImportGraphTab: () => void
+  // (Re)load the import graph: mark loading + fire ImportGraph req with
+  // current controls (focus/depth/direction). `path` overrides the focus.
+  refreshImportGraph: (path?: string | null) => void
+  // Set the traversal depth and optionally re-fetch.
+  setImportGraphDepth: (depth: number) => void
+  // Set the direction and optionally re-fetch.
+  setImportGraphDirection: (dir: 'dependencies' | 'dependents' | 'both') => void
+  // Click a node: set selected + refetch with new focus.
+  selectImportGraphNode: (path: string | null) => void
+  // Deselect + close detail pane.
+  clearImportGraphSelection: () => void
   // (Re)load the bubble/activity chart's commit series (GK5b): mark loading +
   // GitActivity{ path, limit:800 }. `path` narrows to one pathspec; omitted or
   // `null` means the whole active branch. Fired on GraphBubble mount + its
@@ -2270,6 +2349,25 @@ const initialGraph: GraphSlice = {
   graphMode: 'rail',
 }
 
+const initialImportGraph: ImportGraphSlice = {
+  nodes: [],
+  edges: [],
+  focus: null,
+  generation: 0,
+  fileCount: 0,
+  edgeCount: 0,
+  languages: [],
+  nodesTruncated: false,
+  edgesTruncated: false,
+  totalNodesAvailable: 0,
+  totalEdgesAvailable: 0,
+  loading: false,
+  error: null,
+  selectedPath: null,
+  depth: 2,
+  direction: 'both',
+}
+
 const initialActivity: ActivitySlice = {
   commits: [],
   loading: false,
@@ -2396,6 +2494,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   graph: initialGraph,
   activity: initialActivity,
   analytics: initialAnalytics,
+  importGraph: initialImportGraph,
   coding: initialCoding,
   remoteBusy: null,
   commitDraft: '',
@@ -2494,6 +2593,7 @@ export const useKoma = create<KomaState>((set, get) => ({
                       : {}),
                   },
                   graph: { ...initialGraph, graphMode: s.graph.graphMode },
+                  importGraph: initialImportGraph,
                   // Coding panel is session/workdir-scoped — drop open docs + tree
                   // cache so session A's files never render under session B.
                   coding: {
@@ -3136,6 +3236,26 @@ export const useKoma = create<KomaState>((set, get) => ({
             },
           }
         })
+        break
+      case 'ImportGraph':
+        set((s) => ({
+          importGraph: {
+            ...s.importGraph,
+            nodes: env.nodes,
+            edges: env.edges,
+            focus: env.focus,
+            generation: env.generation,
+            fileCount: env.fileCount,
+            edgeCount: env.edgeCount,
+            languages: env.languages,
+            nodesTruncated: env.nodesTruncated,
+            edgesTruncated: env.edgesTruncated,
+            totalNodesAvailable: env.totalNodesAvailable,
+            totalEdgesAvailable: env.totalEdgesAvailable,
+            loading: false,
+            error: null,
+          },
+        }))
         break
       case 'GitGraph':
         set((s) => {
@@ -3877,6 +3997,71 @@ export const useKoma = create<KomaState>((set, get) => ({
   setGraphMode: (mode) => {
     set((s) => ({ graph: { ...s.graph, graphMode: mode } }))
   },
+  // ─── Import Graph actions ──────────────────────────────────────────
+  openImportGraphTab: () => {
+    set((s) => {
+      const exists = s.ui.tabs.some((t) => t.id === 'import-graph')
+      const tabs: Tab[] = exists
+        ? s.ui.tabs
+        : [...s.ui.tabs, { id: 'import-graph', kind: 'importGraph' }]
+      return { ui: { ...s.ui, tabs, activeTabId: 'import-graph' } }
+    })
+    // No wire fetch here — the ImportGraphTab fires refreshImportGraph on mount.
+  },
+  refreshImportGraph: (path) => {
+    const g = get().importGraph
+    // Don't fire if already loading
+    if (g.loading) return
+    const focus = path !== undefined ? path : g.focus
+    set((s) => ({
+      importGraph: {
+        ...s.importGraph,
+        loading: true,
+        error: null,
+        focus,
+        selectedPath: s.importGraph.selectedPath,
+      },
+    }))
+    get().req({
+      r: 'ImportGraph',
+      path: focus ?? null,
+      depth: g.depth,
+      direction: g.direction,
+    })
+  },
+  setImportGraphDepth: (depth) => {
+    set((s) => ({ importGraph: { ...s.importGraph, depth } }))
+    // Re-fetch if there's a focus or any data
+    if (get().importGraph.focus || get().importGraph.nodes.length > 0) {
+      get().refreshImportGraph()
+    }
+  },
+  setImportGraphDirection: (dir) => {
+    set((s) => ({ importGraph: { ...s.importGraph, direction: dir } }))
+    if (get().importGraph.focus || get().importGraph.nodes.length > 0) {
+      get().refreshImportGraph()
+    }
+  },
+  selectImportGraphNode: (path) => {
+    set((s) => ({
+      importGraph: {
+        ...s.importGraph,
+        selectedPath: s.importGraph.selectedPath === path ? null : path,
+      },
+    }))
+    // Refetch with the newly-focused node
+    if (path) {
+      get().refreshImportGraph(path)
+    }
+  },
+  clearImportGraphSelection: () => {
+    set((s) => ({
+      importGraph: {
+        ...s.importGraph,
+        selectedPath: null,
+      },
+    }))
+  },
   refreshActivity: (path) => {
     const p = path ?? null
     set((s) => ({ activity: { ...s.activity, loading: true, path: p } }))
@@ -3938,6 +4123,7 @@ export const useKoma = create<KomaState>((set, get) => ({
     set((s) => ({
       activeRepoRoot: root,
       graph: { ...initialGraph, graphMode: s.graph.graphMode },
+      importGraph: initialImportGraph,
       activity: initialActivity,
       branches: [],
       branchesLoading: false,
