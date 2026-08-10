@@ -49,7 +49,7 @@ impl super::Tool for SearchScreenshots {
 
         let total = screenshot_catalog::list_records(&ctx.workspace).len();
         if total == 0 {
-            return Ok("no screenshots captured yet — use `web_screenshot` to capture one"
+            return Ok("no screenshots captured yet — use `browser_interact` (action=screenshot) to capture one"
                 .to_string());
         }
 

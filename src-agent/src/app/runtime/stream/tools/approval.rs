@@ -459,6 +459,15 @@ pub(crate) fn process_tools(
                 InterceptFlow::Fallthrough => {}
             }
         }
+        // Intercept `show_image` to resolve path and confirm (no mode switch —
+        // images render inline in the chat transcript now).
+        if call.function.name == "show_image" {
+            match intercepts::intercept_show_image(state, sess_idx, &call) {
+                InterceptFlow::Continue => continue,
+                InterceptFlow::Return => return,
+                InterceptFlow::Fallthrough => {}
+            }
+        }
         // SDLC execute/integrate: reject write/edit/delete to paths owned by a
         // DIFFERENT active node (hard path-ownership enforcement via glob matching).
         if mode == AgentMode::Sdlc

@@ -529,8 +529,10 @@ pub struct SessionRuntime {
     pub awareness_summary: Option<String>,
     /// Cached graph summary text for L1 injection into the system prompt.
     /// Populated by the linker daemon on scan complete / generation change.
+    #[cfg(feature = "linker")]
     pub graph_summary: Option<String>,
     /// Generation counter of the last graph summary we fetched.
+    #[cfg(feature = "linker")]
     pub graph_generation: u64,
     /// Currently loaded skill bodies (name → [`ActiveSkill`]). Injected into the
     /// volatile system tail each request. Ephemeral, never persisted.
@@ -717,7 +719,9 @@ impl SessionRuntime {
             active_cwd: None,
             dir_cache: Arc::new(RwLock::new(DirCache::default())),
             awareness_summary: None,
+            #[cfg(feature = "linker")]
             graph_summary: None,
+            #[cfg(feature = "linker")]
             graph_generation: 0,
             active_skills: std::collections::BTreeMap::new(),
             compact_anim_start: None,
@@ -737,6 +741,7 @@ impl SessionRuntime {
 
     /// Update the cached graph summary if the generation changed or the text
     /// differs. Called by the warm path (L1) after a linker summary fetch.
+    #[cfg(feature = "linker")]
     pub fn update_graph_summary(&mut self, summary: String, generation: u64) {
         if generation > self.graph_generation
             || summary != self.graph_summary.as_deref().unwrap_or_default()

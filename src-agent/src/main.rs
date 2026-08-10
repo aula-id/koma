@@ -48,6 +48,7 @@ mod controller;
 mod dto;
 mod internet;
 mod ipc;
+#[cfg(feature = "linker")]
 mod linker;
 mod model;
 mod re_util;
@@ -169,7 +170,12 @@ fn main() -> anyhow::Result<()> {
     // here (best-effort) so it releases any session write-locks it holds and vacates disk.
     // Skip in the daemon/mcp-daemon children — they are spawned AFTER this migration runs
     // in the parent, and a child re-running migrate would be a no-op race anyway.
-    if !opts.daemon && !opts.mcp_daemon && !opts.oauth_daemon && !opts.linker_daemon {
+    if !opts.daemon && !opts.mcp_daemon && !opts.oauth_daemon {
+        #[cfg(feature = "linker")]
+        if !opts.linker_daemon {
+            app::migrate_legacy_daemon();
+        }
+        #[cfg(not(feature = "linker"))]
         app::migrate_legacy_daemon();
     }
 
@@ -250,6 +256,7 @@ fn main() -> anyhow::Result<()> {
     // --- headless path: run the GLOBAL linker daemon (no TUI) ---
     // A singleton process that owns an in-memory import graph for every registered
     // project. Session clients query it via IPC for dependency info.
+    #[cfg(feature = "linker")]
     if opts.linker_daemon {
         return app::run_linker_daemon(opts);
     }
