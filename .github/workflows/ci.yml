@@ -1,10 +1,10 @@
 name: ci
 
 # Runs the test suite across every OS/arch koma ships for, plus non-gating
-# formatting and lint checks, on pushes to main and on pull requests. Uses only
-# standard GitHub-hosted runners, which are free and unmetered for public
-# repositories, so this does not touch the Actions minute allotment used by the
-# release workflow.
+# formatting and lint checks and a Nix flake check, on pushes to main and on
+# pull requests. Uses only standard GitHub-hosted runners, which are free and
+# unmetered for public repositories, so this does not touch the Actions minute
+# allotment used by the release workflow.
 on:
   push:
     branches: [main]
@@ -72,6 +72,30 @@ jobs:
       - name: Tests (src-extension)
         working-directory: src-extension
         run: cargo test --workspace --all-targets
+
+  nix:
+    name: nix flake check (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # checks.default / checks.gui are the packages themselves (see flake.nix),
+      # so this already builds and validates both without a separate build step.
+      - name: nix flake check
+        run: nix flake check --print-build-logs
 
   lint:
     name: fmt (non-gating) + clippy (prod, gating)

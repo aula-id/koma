@@ -15,6 +15,9 @@ dist/
 # model caches (downloaded at runtime)
 .fastembed_cache/
 
+# nix build output symlinks
+result
+result-*
 # browser screenshots (transient)
 .screenshoot/
 .problems/
