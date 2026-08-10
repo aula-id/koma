@@ -44,7 +44,15 @@ pub fn internet_dir() -> Result<PathBuf> {
 /// The presence of this file is the canonical "installed" marker used by both
 /// [`is_installed`] and the Stage 6 gating logic.
 pub fn venv_python() -> Result<PathBuf> {
-    Ok(internet_dir()?.join("venv").join("bin").join("python"))
+    let venv = internet_dir()?.join("venv");
+    #[cfg(unix)]
+    {
+        Ok(venv.join("bin").join("python"))
+    }
+    #[cfg(windows)]
+    {
+        Ok(venv.join("Scripts").join("python.exe"))
+    }
 }
 
 /// Non-panicking predicate: `true` iff the venv Python binary exists on disk.
@@ -103,14 +111,13 @@ fn extract_assets(dir: &Dir, dest: &PathBuf) -> Result<()> {
 /// 7. Install Firefox via Playwright.
 #[allow(unreachable_code)]
 pub fn install(force: bool) -> Result<()> {
-    #[cfg(windows)]
-    {
-        let _ = force;
-        anyhow::bail!("full internet / research mode is not supported on Windows");
-    }
-
     // Step 1: verify python3 is available.
-    let py3_ok = std::process::Command::new("python3")
+    #[cfg(unix)]
+    let python_cmd = "python3";
+    #[cfg(windows)]
+    let python_cmd = "python";
+
+    let py3_ok = std::process::Command::new(python_cmd)
         .arg("--version")
         .output()
         .map(|o| o.status.success())
@@ -150,7 +157,7 @@ pub fn install(force: bool) -> Result<()> {
 
     // Step 5: create the virtual environment.
     println!("creating Python venv...");
-    let status = std::process::Command::new("python3")
+    let status = std::process::Command::new(python_cmd)
         .args(["-m", "venv", dest.join("venv").to_str().unwrap_or("venv")])
         .status()
         .context("failed to launch `python3 -m venv`")?;
@@ -159,7 +166,10 @@ pub fn install(force: bool) -> Result<()> {
     }
 
     // Step 6: install scrapion_agent package + its dependencies from pyproject.toml.
+    #[cfg(unix)]
     let pip = dest.join("venv").join("bin").join("pip");
+    #[cfg(windows)]
+    let pip = dest.join("venv").join("Scripts").join("pip.exe");
     println!(
         "installing scrapion_agent package from {}...",
         dest.display()
@@ -176,8 +186,14 @@ pub fn install(force: bool) -> Result<()> {
     // Step 7: install Firefox for Playwright (~80 MB download).
     // Prefer the `playwright` console script; fall back to `python -m playwright`
     // if the script is not executable (some environments strip it).
+    #[cfg(unix)]
     let playwright_script = dest.join("venv").join("bin").join("playwright");
+    #[cfg(windows)]
+    let playwright_script = dest.join("venv").join("Scripts").join("playwright.exe");
+    #[cfg(unix)]
     let python_bin = dest.join("venv").join("bin").join("python");
+    #[cfg(windows)]
+    let python_bin = dest.join("venv").join("Scripts").join("python.exe");
 
     println!("installing Firefox for Playwright (this downloads ~80 MB)...");
     let pw_status = if playwright_script.exists() {

@@ -1,16 +1,17 @@
 //! Browser-agent daemon client — manages a persistent Python subprocess and
-//! communicates via newline-delimited JSON over a Unix socket.
+//! communicates via newline-delimited JSON over a Unix socket or TCP loopback.
 //!
 //! The daemon runs `python -m scrapion_agent daemon --socket <path> --token <token>`
+//! (Unix) or `python -m scrapion_agent daemon --tcp-port 0 --token <token>` (Windows)
 //! and keeps a single Playwright Firefox instance alive for the session lifetime.
 //! Tools interact with it via [`get_or_start`] / [`BrowserDaemon::request`].
 //!
 //! # Thread safety
 //!
 //! The daemon client is [`Send + Sync`]. The internal [`Mutex`] guards are held
-//! only for the duration of a single socket write+read (blocking I/O on
-//! `std::os::unix::net::UnixStream`), never across an `.await`. Every browser
-//! tool runs on a deferred `std::thread` via `DEFERRED_TOOLS`, so there is no
+//! only for the duration of a single socket write+read (blocking I/O on the
+//! platform stream), never across an `.await`. Every browser tool runs on a
+//! deferred `std::thread` via `DEFERRED_TOOLS`, so there is no
 //! tokio-runtime interference.
 
 use std::collections::HashMap;
@@ -29,8 +30,23 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// Time to wait after sending a shutdown signal before killing the process.
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 
-/// Length of the random hex auth token.
+/// Length of the random hex auth token (32 bytes = 64 hex chars).
 const TOKEN_BYTES: usize = 32;
+
+// ---------------------------------------------------------------------------
+// Platform-specific stream types
+// ---------------------------------------------------------------------------
+
+/// The daemon communication stream type.
+#[cfg(unix)]
+type PlatformStream = std::os::unix::net::UnixStream;
+
+#[cfg(windows)]
+type PlatformStream = std::net::TcpStream;
+
+// ---------------------------------------------------------------------------
+// Unix-only socket path helper
+// ---------------------------------------------------------------------------
 
 /// Compute a short socket path for the browser daemon.
 ///
@@ -38,6 +54,7 @@ const TOKEN_BYTES: usize = 32;
 /// exceed the 108-byte `AF_UNIX` limit when combined with a socket filename.
 /// This helper places the socket under `~/.koma/internet/browser/<uuid>.sock`
 /// instead, keeping the total well under the limit.
+#[cfg(unix)]
 fn browser_daemon_sock_path(session_dir: &Path) -> Result<PathBuf> {
     // Extract the UUID (last path component) from the session directory.
     let uuid = session_dir
@@ -60,23 +77,29 @@ static DAEMONS: OnceLock<Mutex<HashMap<PathBuf, Arc<BrowserDaemon>>>> = OnceLock
 ///
 /// Created via [`BrowserDaemon::start`] (or the convenience wrapper
 /// [`get_or_start`]). Communicates with the Python subprocess over a
-/// newline-delimited JSON protocol on a Unix socket.
+/// newline-delimited JSON protocol.
 pub struct BrowserDaemon {
+    #[cfg(unix)]
     socket_path: PathBuf,
+    #[cfg(windows)]
+    daemon_port: u16,
     auth_token: String,
     child: Mutex<Option<Child>>,
-    stream: Mutex<Option<std::os::unix::net::UnixStream>>,
+    stream: Mutex<Option<PlatformStream>>,
 }
 
 impl BrowserDaemon {
     /// Spawn the Python daemon subprocess and authenticate.
     ///
-    /// The subprocess writes a single line (the auth token) to stdout, then
-    /// waits for a connection on `socket_path`. This method connects, sends
-    /// the token, and performs a health check.
+    /// The subprocess writes a single line to stdout:
+    /// - Unix: the auth token (or "ready")
+    /// - Windows: "ready <port>"
+    ///
+    /// This method connects, sends the token, and performs a health check.
     fn start(session_dir: &Path) -> Result<Arc<Self>> {
-        let python = crate::internet::venv_python()
-            .context("internet research environment not installed — run `koma --internet-fullmode-install`")?;
+        let python = crate::internet::venv_python().context(
+            "internet research environment not installed — run `koma --internet-fullmode-install`",
+        )?;
         if !python.exists() {
             anyhow::bail!(
                 "internet research environment not installed — run `koma --internet-fullmode-install`"
@@ -85,26 +108,34 @@ impl BrowserDaemon {
 
         // Generate auth token: 32 random bytes as hex.
         let token = generate_token()?;
-        // Socket path: `~/.koma/internet/browser/<uuid>.sock` (short enough
-        // for the 108-byte AF_UNIX limit, unlike the full session dir path).
-        let socket_path = browser_daemon_sock_path(session_dir)?;
-        // Remove stale socket file if it exists.
-        if socket_path.exists() {
-            let _ = std::fs::remove_file(&socket_path);
-        }
-
-        // Ensure the session directory exists.
-        std::fs::create_dir_all(session_dir)
-            .with_context(|| format!("create session dir {}", session_dir.display()))?;
 
         // Spawn the daemon subprocess.
         let mut cmd = Command::new(&python);
-        cmd.arg("-m")
-            .arg("scrapion_agent")
-            .arg("daemon")
-            .arg("--socket")
-            .arg(&socket_path)
-            .arg("--token")
+        cmd.arg("-m").arg("scrapion_agent").arg("daemon");
+
+        // Platform-specific: Unix uses a socket file, Windows uses TCP.
+        #[cfg(unix)]
+        let socket_path = {
+            // Socket path: `~/.koma/internet/browser/<uuid>.sock` (short enough
+            // for the 108-byte AF_UNIX limit, unlike the full session dir path).
+            let sp = browser_daemon_sock_path(session_dir)?;
+            // Remove stale socket file if it exists.
+            if sp.exists() {
+                let _ = std::fs::remove_file(&sp);
+            }
+            // Ensure the session directory exists.
+            std::fs::create_dir_all(session_dir)
+                .with_context(|| format!("create session dir {}", session_dir.display()))?;
+            cmd.arg("--socket").arg(&sp);
+            sp
+        };
+
+        #[cfg(windows)]
+        let _ = session_dir; // not used on Windows
+        #[cfg(windows)]
+        cmd.arg("--tcp-port").arg("0");
+
+        cmd.arg("--token")
             .arg(&token)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -116,8 +147,7 @@ impl BrowserDaemon {
             .spawn()
             .context("failed to spawn browser daemon subprocess")?;
 
-        // Read the first line from stdout — the daemon writes the token back
-        // to confirm it started successfully.
+        // Read the first line from stdout — the daemon writes a ready line.
         let stdout = child
             .stdout
             .as_mut()
@@ -130,6 +160,9 @@ impl BrowserDaemon {
             .context("failed to read daemon ready line")?;
 
         let ready_line = ready_line.trim();
+
+        // On Unix, the ready line is the token or "ready".
+        #[cfg(unix)]
         if ready_line != "ready" && ready_line != token {
             // Capture stderr before killing, so the user sees why the daemon failed.
             let stderr_msg = read_child_stderr(&mut child);
@@ -144,33 +177,62 @@ impl BrowserDaemon {
             anyhow::bail!("browser daemon {detail}");
         }
 
-        // Wait for the socket file to appear (the daemon creates it after
-        // binding). Give it up to 10 seconds.
-        let socket_wait = Duration::from_secs(10);
-        let deadline = std::time::Instant::now() + socket_wait;
-        while !socket_path.exists() {
-            if std::time::Instant::now() > deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                let detail = format!("socket did not appear within {socket_wait:?}");
-                crate::model::store::append_global_error_log("browser-daemon", &detail);
-                anyhow::bail!("browser daemon {detail}");
+        // On Unix, wait for the socket file to appear then connect.
+        #[cfg(unix)]
+        let stream = {
+            let socket_wait = Duration::from_secs(10);
+            let deadline = std::time::Instant::now() + socket_wait;
+            while !socket_path.exists() {
+                if std::time::Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let detail = format!("socket did not appear within {socket_wait:?}");
+                    crate::model::store::append_global_error_log("browser-daemon", &detail);
+                    anyhow::bail!("browser daemon {detail}");
+                }
+                std::thread::sleep(Duration::from_millis(50));
             }
-            std::thread::sleep(Duration::from_millis(50));
-        }
 
-        // Connect to the socket.
-        let stream = std::os::unix::net::UnixStream::connect(&socket_path)
-            .context("failed to connect to browser daemon socket")?;
+            std::os::unix::net::UnixStream::connect(&socket_path)
+                .context("failed to connect to browser daemon socket")?
+        };
+
+        // On Windows, parse "ready <port>" from stdout and connect via TCP.
+        #[cfg(windows)]
+        let (stream, daemon_port) = {
+            let port: u16 = ready_line
+                .strip_prefix("ready ")
+                .and_then(|p| p.parse().ok())
+                .ok_or_else(|| {
+                    let stderr_msg = read_child_stderr(&mut child);
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let detail = if stderr_msg.is_empty() {
+                        format!("unexpected ready line: {ready_line:?}")
+                    } else {
+                        format!("failed to start:\n{stderr_msg}")
+                    };
+                    crate::model::store::append_global_error_log("browser-daemon", &detail);
+                    anyhow::anyhow!("browser daemon {detail}")
+                })?;
+            let stream = std::net::TcpStream::connect(("127.0.0.1", port))
+                .context("failed to connect to browser daemon TCP port")?;
+            (stream, port)
+        };
+
+        // Set timeouts on the stream.
         stream
             .set_read_timeout(Some(REQUEST_TIMEOUT))
-            .context("failed to set socket read timeout")?;
+            .context("failed to set stream read timeout")?;
         stream
             .set_write_timeout(Some(REQUEST_TIMEOUT))
-            .context("failed to set socket write timeout")?;
+            .context("failed to set stream write timeout")?;
 
         let daemon = Arc::new(Self {
+            #[cfg(unix)]
             socket_path,
+            #[cfg(windows)]
+            daemon_port,
             auth_token: token,
             child: Mutex::new(Some(child)),
             stream: Mutex::new(Some(stream)),
@@ -232,7 +294,10 @@ impl BrowserDaemon {
             serde_json::from_str(response).context("daemon returned invalid auth response")?;
         let status = val.get("status").and_then(Value::as_str).unwrap_or("");
         if status != "ok" {
-            let err = val.get("error").and_then(Value::as_str).unwrap_or("unknown");
+            let err = val
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
             anyhow::bail!("daemon authentication failed: {err}");
         }
         Ok(())
@@ -260,8 +325,8 @@ impl BrowserDaemon {
             "params": params,
         });
 
-        let mut line = serde_json::to_string(&request)
-            .context("failed to serialize daemon request")?;
+        let mut line =
+            serde_json::to_string(&request).context("failed to serialize daemon request")?;
         line.push('\n');
 
         let response_line = {
@@ -275,15 +340,13 @@ impl BrowserDaemon {
                 .ok_or_else(|| anyhow::anyhow!("daemon not connected"))?;
 
             // Write the request.
-            stream
-                .write_all(line.as_bytes())
-                .map_err(|e| {
-                    if allow_retry {
-                        anyhow::anyhow!("WRITE_FAILED:{e}")
-                    } else {
-                        anyhow::anyhow!("failed to write to daemon: {e}")
-                    }
-                })?;
+            stream.write_all(line.as_bytes()).map_err(|e| {
+                if allow_retry {
+                    anyhow::anyhow!("WRITE_FAILED:{e}")
+                } else {
+                    anyhow::anyhow!("failed to write to daemon: {e}")
+                }
+            })?;
 
             // Read the response line.
             let mut reader = BufReader::new(&*stream);
@@ -300,8 +363,7 @@ impl BrowserDaemon {
         };
 
         // Check for dead-connection errors → retry once.
-        if (response_line.starts_with("WRITE_FAILED:")
-            || response_line.starts_with("READ_FAILED:"))
+        if (response_line.starts_with("WRITE_FAILED:") || response_line.starts_with("READ_FAILED:"))
             && allow_retry
         {
             self.reconnect()?;
@@ -328,9 +390,7 @@ impl BrowserDaemon {
                 self.reconnect()?;
                 return self.request_inner(action, params, false);
             }
-            anyhow::bail!(
-                "browser daemon response id mismatch: expected {id}, got {resp_id}"
-            );
+            anyhow::bail!("browser daemon response id mismatch: expected {id}, got {resp_id}");
         }
 
         // Check for error.
@@ -341,10 +401,7 @@ impl BrowserDaemon {
         }
 
         // Return the `data` field.
-        Ok(response
-            .get("data")
-            .cloned()
-            .unwrap_or(Value::Null))
+        Ok(response.get("data").cloned().unwrap_or(Value::Null))
     }
 
     /// Attempt to reconnect to the daemon after a broken connection.
@@ -392,11 +449,16 @@ impl BrowserDaemon {
             }
         }
 
-        // Try to connect.
-        let stream = match std::os::unix::net::UnixStream::connect(&self.socket_path) {
+        // Try to reconnect.
+        #[cfg(unix)]
+        let stream_result = std::os::unix::net::UnixStream::connect(&self.socket_path);
+
+        #[cfg(windows)]
+        let stream_result = std::net::TcpStream::connect(("127.0.0.1", self.daemon_port));
+
+        let stream = match stream_result {
             Ok(s) => s,
             Err(e) => {
-                // Socket gone — restart the daemon.
                 anyhow::bail!("reconnect failed (will restart): {e}");
             }
         };
@@ -436,7 +498,8 @@ impl BrowserDaemon {
             }
         }
 
-        // Remove stale socket.
+        // Remove stale socket (Unix only).
+        #[cfg(unix)]
         if self.socket_path.exists() {
             let _ = std::fs::remove_file(&self.socket_path);
         }
@@ -446,12 +509,15 @@ impl BrowserDaemon {
             .context("internet research environment not installed")?;
 
         let mut cmd = Command::new(&python);
-        cmd.arg("-m")
-            .arg("scrapion_agent")
-            .arg("daemon")
-            .arg("--socket")
-            .arg(&self.socket_path)
-            .arg("--token")
+        cmd.arg("-m").arg("scrapion_agent").arg("daemon");
+
+        #[cfg(unix)]
+        cmd.arg("--socket").arg(&self.socket_path);
+
+        #[cfg(windows)]
+        cmd.arg("--tcp-port").arg("0");
+
+        cmd.arg("--token")
             .arg(&self.auth_token)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -475,6 +541,9 @@ impl BrowserDaemon {
             .context("failed to read daemon ready line on restart")?;
 
         let ready_line = ready_line.trim();
+
+        // On Unix, validate the ready line.
+        #[cfg(unix)]
         if ready_line != "ready" && ready_line != self.auth_token {
             let stderr_msg = read_child_stderr(&mut child);
             let _ = child.kill();
@@ -488,22 +557,47 @@ impl BrowserDaemon {
             anyhow::bail!("browser daemon {detail}");
         }
 
-        // Wait for socket.
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !self.socket_path.exists() {
-            if std::time::Instant::now() > deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                let detail = "socket did not appear within 10s on restart".to_string();
-                crate::model::store::append_global_error_log("browser-daemon", &detail);
-                anyhow::bail!("browser daemon {detail}");
+        // On Unix, wait for socket file then connect.
+        #[cfg(unix)]
+        let stream = {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while !self.socket_path.exists() {
+                if std::time::Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let detail = "socket did not appear within 10s on restart".to_string();
+                    crate::model::store::append_global_error_log("browser-daemon", &detail);
+                    anyhow::bail!("browser daemon {detail}");
+                }
+                std::thread::sleep(Duration::from_millis(50));
             }
-            std::thread::sleep(Duration::from_millis(50));
-        }
 
-        // Connect + auth.
-        let stream = std::os::unix::net::UnixStream::connect(&self.socket_path)
-            .context("failed to connect to browser daemon on restart")?;
+            std::os::unix::net::UnixStream::connect(&self.socket_path)
+                .context("failed to connect to browser daemon on restart")?
+        };
+
+        // On Windows, parse port from ready line and connect via TCP.
+        #[cfg(windows)]
+        let stream = {
+            let port: u16 = ready_line
+                .strip_prefix("ready ")
+                .and_then(|p| p.parse().ok())
+                .ok_or_else(|| {
+                    let stderr_msg = read_child_stderr(&mut child);
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let detail = if stderr_msg.is_empty() {
+                        format!("unexpected ready line on restart: {ready_line:?}")
+                    } else {
+                        format!("failed to restart:\n{stderr_msg}")
+                    };
+                    crate::model::store::append_global_error_log("browser-daemon", &detail);
+                    anyhow::anyhow!("browser daemon {detail}")
+                })?;
+            std::net::TcpStream::connect(("127.0.0.1", port))
+                .context("failed to connect to browser daemon TCP port on restart")?
+        };
+
         stream
             .set_read_timeout(Some(REQUEST_TIMEOUT))
             .context("failed to set read timeout")?;
@@ -536,11 +630,7 @@ impl BrowserDaemon {
     /// Send a shutdown signal to the daemon and wait for it to exit.
     pub fn shutdown(&self) {
         // Best-effort shutdown request.
-        let _ = self.request_inner(
-            "shutdown",
-            serde_json::json!({}),
-            false,
-        );
+        let _ = self.request_inner("shutdown", serde_json::json!({}), false);
 
         // Wait up to SHUTDOWN_WAIT for graceful exit.
         std::thread::sleep(SHUTDOWN_WAIT);
@@ -559,7 +649,8 @@ impl BrowserDaemon {
             *guard = None;
         }
 
-        // Remove the socket file.
+        // Remove the socket file (Unix only).
+        #[cfg(unix)]
         if self.socket_path.exists() {
             let _ = std::fs::remove_file(&self.socket_path);
         }
@@ -573,7 +664,7 @@ impl BrowserDaemon {
             if let Some(ref mut child) = *guard {
                 match child.try_wait() {
                     Ok(Some(_)) => return false, // Process exited.
-                    Ok(None) => {}                // Still running.
+                    Ok(None) => {}               // Still running.
                     Err(_) => return false,
                 }
             } else {
@@ -591,10 +682,18 @@ impl BrowserDaemon {
         }
     }
 
-    /// Get the path to the daemon socket.
+    /// Get the path to the daemon socket (Unix only).
+    #[cfg(unix)]
     #[cfg(test)]
     fn socket_path(&self) -> &Path {
         &self.socket_path
+    }
+
+    /// Get the daemon TCP port (Windows only, test only).
+    #[cfg(windows)]
+    #[cfg(test)]
+    fn daemon_port(&self) -> u16 {
+        self.daemon_port
     }
 }
 
@@ -669,14 +768,15 @@ pub fn validate_url_safe(url: &str) -> Result<()> {
 
     // Check for localhost aliases.
     if host_str.eq_ignore_ascii_case("localhost") {
-        anyhow::bail!(
-            "URL targets localhost — blocked for SSRF protection"
-        );
+        anyhow::bail!("URL targets localhost — blocked for SSRF protection");
     }
 
     // If the host is an IP address, check private/reserved ranges.
     // Strip brackets for IPv6 (url crate returns "[::1]" with brackets).
-    let host_for_ip = host_str.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(host_str);
+    let host_for_ip = host_str
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(host_str);
     if let Ok(ip) = host_for_ip.parse::<IpAddr>() {
         match ip {
             IpAddr::V4(v4) => {
@@ -711,9 +811,7 @@ pub fn validate_url_safe(url: &str) -> Result<()> {
             }
             IpAddr::V6(v6) => {
                 if v6.is_loopback() {
-                    anyhow::bail!(
-                        "URL targets IPv6 loopback ({v6}) — blocked for SSRF protection"
-                    );
+                    anyhow::bail!("URL targets IPv6 loopback ({v6}) — blocked for SSRF protection");
                 }
                 if v6.is_unspecified() {
                     anyhow::bail!(
@@ -754,27 +852,15 @@ fn read_child_stderr(child: &mut Child) -> String {
     String::from_utf8_lossy(&buf[..n]).trim().to_string()
 }
 
-/// Generate a random hex token of `TOKEN_BYTES` bytes.
+/// Generate a random hex token of `TOKEN_BYTES` bytes using uuid v4.
 fn generate_token() -> anyhow::Result<String> {
+    let a = uuid::Uuid::new_v4();
+    let b = uuid::Uuid::new_v4();
+    // Combine 16+16 = 32 random bytes, encode as 64-char hex
     let mut bytes = [0u8; TOKEN_BYTES];
-    getrandom_fill(&mut bytes)?;
-    Ok(hex::encode(bytes))
-}
-
-/// Fill a byte slice with cryptographically random data.
-fn getrandom_fill(buf: &mut [u8]) -> anyhow::Result<()> {
-    use std::io::Read;
-    let mut f = std::fs::File::open("/dev/urandom")
-        .map_err(|e| anyhow::anyhow!("failed to open /dev/urandom: {e}"))?;
-    f.read_exact(buf)
-        .map_err(|e| anyhow::anyhow!("failed to read random bytes: {e}"))
-}
-
-// Minimal hex encoding (avoids pulling in a full hex crate).
-mod hex {
-    pub fn encode(bytes: [u8; super::TOKEN_BYTES]) -> String {
-        bytes.iter().map(|b| format!("{b:02x}")).collect()
-    }
+    bytes[..16].copy_from_slice(a.as_bytes());
+    bytes[16..].copy_from_slice(b.as_bytes());
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 #[cfg(test)]
