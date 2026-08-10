@@ -16,6 +16,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+IS_WINDOWS = sys.platform == "win32"
+
 # Ensure scrapion_agent is importable.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -679,6 +681,7 @@ class TestBufferLimits:
 # 11. DaemonServer — auth token validation
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(IS_WINDOWS, reason="Unix sockets not available on Windows")
 class TestDaemonServerAuth:
     """Test the auth protocol over a real (loopback) Unix socket."""
 
@@ -773,6 +776,7 @@ class TestDaemonServerAuth:
 # 12. DaemonServer — JSON framing
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(IS_WINDOWS, reason="Unix sockets not available on Windows")
 class TestDaemonServerFraming:
     """Verify newline-delimited JSON request/response protocol."""
 
@@ -827,6 +831,7 @@ class TestDaemonServerFraming:
 # 13. Daemon start/shutdown lifecycle (integration-style, mocked browser)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(IS_WINDOWS, reason="Unix sockets not available on Windows")
 class TestDaemonLifecycle:
     """Test the full lifecycle with mocked Playwright."""
 
