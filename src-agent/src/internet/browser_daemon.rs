@@ -32,6 +32,24 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 /// Length of the random hex auth token.
 const TOKEN_BYTES: usize = 32;
 
+/// Compute a short socket path for the browser daemon.
+///
+/// The per-session directory (`~/.koma/sessions/<pwd_hash>/<uuid>/`) can
+/// exceed the 108-byte `AF_UNIX` limit when combined with a socket filename.
+/// This helper places the socket under `~/.koma/internet/browser/<uuid>.sock`
+/// instead, keeping the total well under the limit.
+fn browser_daemon_sock_path(session_dir: &Path) -> Result<PathBuf> {
+    // Extract the UUID (last path component) from the session directory.
+    let uuid = session_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+    let dir = crate::internet::internet_dir()?.join("browser");
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("create browser daemon dir {}", dir.display()))?;
+    Ok(dir.join(format!("{uuid}.sock")))
+}
+
 /// Process-global map of active daemons keyed by session directory.
 ///
 /// Lazy-initialised on first access via [`get_or_start`]. Cleaned up via
@@ -68,8 +86,9 @@ impl BrowserDaemon {
         // Generate auth token: 32 random bytes as hex.
         let token = generate_token();
 
-        // Socket path: `<session_dir>/browser-daemon.sock`
-        let socket_path = session_dir.join("browser-daemon.sock");
+        // Socket path: `~/.koma/internet/browser/<uuid>.sock` (short enough
+        // for the 108-byte AF_UNIX limit, unlike the full session dir path).
+        let socket_path = browser_daemon_sock_path(session_dir)?;
         // Remove stale socket file if it exists.
         if socket_path.exists() {
             let _ = std::fs::remove_file(&socket_path);
@@ -90,7 +109,7 @@ impl BrowserDaemon {
             .arg(&token)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
 
         crate::tool::shell::no_console_window(&mut cmd);
 
@@ -113,13 +132,17 @@ impl BrowserDaemon {
 
         let ready_line = ready_line.trim();
         if ready_line != "ready" && ready_line != &token {
-            // The daemon may have written an error or crashed.
+            // Capture stderr before killing, so the user sees why the daemon failed.
+            let stderr_msg = read_child_stderr(&mut child);
             let _ = child.kill();
             let _ = child.wait();
-            anyhow::bail!(
-                "browser daemon unexpected ready line: {:?}",
-                ready_line
-            );
+            let detail = if stderr_msg.is_empty() {
+                format!("unexpected ready line: {ready_line:?}")
+            } else {
+                format!("failed to start:\n{stderr_msg}")
+            };
+            crate::model::store::append_global_error_log("browser-daemon", &detail);
+            anyhow::bail!("browser daemon {detail}");
         }
 
         // Wait for the socket file to appear (the daemon creates it after
@@ -130,7 +153,9 @@ impl BrowserDaemon {
             if std::time::Instant::now() > deadline {
                 let _ = child.kill();
                 let _ = child.wait();
-                anyhow::bail!("browser daemon socket did not appear within {socket_wait:?}");
+                let detail = format!("socket did not appear within {socket_wait:?}");
+                crate::model::store::append_global_error_log("browser-daemon", &detail);
+                anyhow::bail!("browser daemon {detail}");
             }
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -432,7 +457,7 @@ impl BrowserDaemon {
             .arg(&self.auth_token)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
 
         crate::tool::shell::no_console_window(&mut cmd);
 
@@ -453,12 +478,16 @@ impl BrowserDaemon {
 
         let ready_line = ready_line.trim();
         if ready_line != "ready" && ready_line != &self.auth_token {
+            let stderr_msg = read_child_stderr(&mut child);
             let _ = child.kill();
             let _ = child.wait();
-            anyhow::bail!(
-                "browser daemon unexpected ready line on restart: {:?}",
-                ready_line
-            );
+            let detail = if stderr_msg.is_empty() {
+                format!("unexpected ready line on restart: {ready_line:?}")
+            } else {
+                format!("failed to restart:\n{stderr_msg}")
+            };
+            crate::model::store::append_global_error_log("browser-daemon", &detail);
+            anyhow::bail!("browser daemon {detail}");
         }
 
         // Wait for socket.
@@ -467,7 +496,9 @@ impl BrowserDaemon {
             if std::time::Instant::now() > deadline {
                 let _ = child.kill();
                 let _ = child.wait();
-                anyhow::bail!("browser daemon socket did not appear within 10s on restart");
+                let detail = "socket did not appear within 10s on restart".to_string();
+                crate::model::store::append_global_error_log("browser-daemon", &detail);
+                anyhow::bail!("browser daemon {detail}");
             }
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -709,6 +740,20 @@ pub fn validate_url_safe(url: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Read up to 4 KB from a child process's stderr and return it as a trimmed string.
+///
+/// Used to surface Python tracebacks when the daemon crashes during startup.
+/// Consumes the stderr handle so the child can be killed/waited afterwards.
+fn read_child_stderr(child: &mut Child) -> String {
+    use std::io::Read;
+    let Some(ref mut stderr) = child.stderr else {
+        return String::new();
+    };
+    let mut buf = [0u8; 4096];
+    let n = stderr.read(&mut buf).unwrap_or(0);
+    String::from_utf8_lossy(&buf[..n]).trim().to_string()
 }
 
 /// Generate a random hex token of `TOKEN_BYTES` bytes.
