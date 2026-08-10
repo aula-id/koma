@@ -891,6 +891,7 @@ pub(super) fn drain_warm(state: &mut AppState) -> bool {
                     // simply dropped — there is no live session to carry it.
                     dirty = true;
                 }
+                #[cfg(feature = "linker")]
                 Ok(WarmEvent::WarmGraph {
                     session_id,
                     summary,

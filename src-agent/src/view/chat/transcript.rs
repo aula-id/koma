@@ -150,7 +150,7 @@ pub(super) fn render_transcript(
                         for att in &msg.attachments {
                             let img_path = sess_path.join(&att.rel_path);
                             if img_path.exists() {
-                                let max_w = (body.width as u16).min(80);
+                                let max_w = body.width.min(80);
                                 if let Ok(img_lines) =
                                     crate::view::image_render::ImageRenderer::render_to_lines(&img_path, max_w)
                                 {

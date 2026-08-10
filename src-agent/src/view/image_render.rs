@@ -74,14 +74,15 @@ impl ImageRenderer {
 
                 // Flush the run if colors change.
                 if current_fg != Some(fg) || current_bg != Some(bg) {
-                    if !run.is_empty() {
-                        let (f, b) = (current_fg.unwrap(), current_bg.unwrap());
-                        spans.push(Span::styled(
-                            std::mem::take(&mut run),
-                            ratatui::style::Style::default()
-                                .fg(ratatui::style::Color::Rgb(f.0, f.1, f.2))
-                                .bg(ratatui::style::Color::Rgb(b.0, b.1, b.2)),
-                        ));
+                    if let (Some(f), Some(b)) = (current_fg, current_bg) {
+                        if !run.is_empty() {
+                            spans.push(Span::styled(
+                                std::mem::take(&mut run),
+                                ratatui::style::Style::default()
+                                    .fg(ratatui::style::Color::Rgb(f.0, f.1, f.2))
+                                    .bg(ratatui::style::Color::Rgb(b.0, b.1, b.2)),
+                            ));
+                        }
                     }
                     current_fg = Some(fg);
                     current_bg = Some(bg);
@@ -91,13 +92,14 @@ impl ImageRenderer {
 
             // Flush remaining run.
             if !run.is_empty() {
-                let (f, b) = (current_fg.unwrap(), current_bg.unwrap());
-                spans.push(Span::styled(
-                    run,
-                    ratatui::style::Style::default()
-                        .fg(ratatui::style::Color::Rgb(f.0, f.1, f.2))
-                        .bg(ratatui::style::Color::Rgb(b.0, b.1, b.2)),
-                ));
+                if let (Some(f), Some(b)) = (current_fg, current_bg) {
+                    spans.push(Span::styled(
+                        run,
+                        ratatui::style::Style::default()
+                            .fg(ratatui::style::Color::Rgb(f.0, f.1, f.2))
+                            .bg(ratatui::style::Color::Rgb(b.0, b.1, b.2)),
+                    ));
+                }
             }
 
             lines.push(Line::from(spans));

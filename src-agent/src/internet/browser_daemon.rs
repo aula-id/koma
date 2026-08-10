@@ -84,8 +84,7 @@ impl BrowserDaemon {
         }
 
         // Generate auth token: 32 random bytes as hex.
-        let token = generate_token();
-
+        let token = generate_token()?;
         // Socket path: `~/.koma/internet/browser/<uuid>.sock` (short enough
         // for the 108-byte AF_UNIX limit, unlike the full session dir path).
         let socket_path = browser_daemon_sock_path(session_dir)?;
@@ -131,7 +130,7 @@ impl BrowserDaemon {
             .context("failed to read daemon ready line")?;
 
         let ready_line = ready_line.trim();
-        if ready_line != "ready" && ready_line != &token {
+        if ready_line != "ready" && ready_line != token {
             // Capture stderr before killing, so the user sees why the daemon failed.
             let stderr_msg = read_child_stderr(&mut child);
             let _ = child.kill();
@@ -301,13 +300,12 @@ impl BrowserDaemon {
         };
 
         // Check for dead-connection errors → retry once.
-        if response_line.starts_with("WRITE_FAILED:")
-            || response_line.starts_with("READ_FAILED:")
+        if (response_line.starts_with("WRITE_FAILED:")
+            || response_line.starts_with("READ_FAILED:"))
+            && allow_retry
         {
-            if allow_retry {
-                self.reconnect()?;
-                return self.request_inner(action, params, false);
-            }
+            self.reconnect()?;
+            return self.request_inner(action, params, false);
         }
 
         let response_str = response_line.trim();
@@ -477,7 +475,7 @@ impl BrowserDaemon {
             .context("failed to read daemon ready line on restart")?;
 
         let ready_line = ready_line.trim();
-        if ready_line != "ready" && ready_line != &self.auth_token {
+        if ready_line != "ready" && ready_line != self.auth_token {
             let stderr_msg = read_child_stderr(&mut child);
             let _ = child.kill();
             let _ = child.wait();
@@ -757,19 +755,19 @@ fn read_child_stderr(child: &mut Child) -> String {
 }
 
 /// Generate a random hex token of `TOKEN_BYTES` bytes.
-fn generate_token() -> String {
+fn generate_token() -> anyhow::Result<String> {
     let mut bytes = [0u8; TOKEN_BYTES];
-    // Use getrandom via the `sha2` crate's underlying OS random.
-    getrandom_fill(&mut bytes);
-    hex::encode(bytes)
+    getrandom_fill(&mut bytes)?;
+    Ok(hex::encode(bytes))
 }
 
 /// Fill a byte slice with cryptographically random data.
-fn getrandom_fill(buf: &mut [u8]) {
+fn getrandom_fill(buf: &mut [u8]) -> anyhow::Result<()> {
     use std::io::Read;
-    let mut f = std::fs::File::open("/dev/urandom").expect("failed to open /dev/urandom");
+    let mut f = std::fs::File::open("/dev/urandom")
+        .map_err(|e| anyhow::anyhow!("failed to open /dev/urandom: {e}"))?;
     f.read_exact(buf)
-        .expect("failed to read random bytes");
+        .map_err(|e| anyhow::anyhow!("failed to read random bytes: {e}"))
 }
 
 // Minimal hex encoding (avoids pulling in a full hex crate).
@@ -849,7 +847,7 @@ mod tests {
 
     #[test]
     fn generate_token_is_correct_length() {
-        let token = generate_token();
+        let token = generate_token().unwrap();
         assert_eq!(token.len(), TOKEN_BYTES * 2);
         // All hex chars.
         assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
