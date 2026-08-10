@@ -13,16 +13,18 @@ permissions:
   contents: read
 
 jobs:
-  flake:
-    name: flake check + build (${{ matrix.system }})
+  test:
+    name: test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - system: x86_64-linux
+          - name: linux-x64
+            system: x86_64-linux
             os: ubuntu-latest
-          - system: aarch64-linux
+          - name: linux-arm64
+            system: aarch64-linux
             os: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -32,11 +34,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
+      # checks.default / checks.gui are the packages themselves (see flake.nix),
+      # so this already builds and validates both without a separate build step.
       - name: nix flake check
         run: nix flake check --print-build-logs
-
-      - name: build packages.default
-        run: nix build .#default --print-build-logs
-
-      - name: build packages.gui
-        run: nix build .#gui --print-build-logs
