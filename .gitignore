@@ -18,3 +18,6 @@ dist/
 # nix build output symlinks
 result
 result-*
+# browser screenshots (transient)
+.screenshoot/
+.problems/

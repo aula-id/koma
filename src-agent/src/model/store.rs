@@ -646,23 +646,25 @@ pub fn write_oauth_daemon_pid() -> Result<()> {
 // --- Linker daemon ---
 
 /// Path to the GLOBAL linker daemon's unix-domain socket: `~/.koma/linker.sock`.
-#[cfg(unix)]
+#[cfg(all(feature = "linker", unix))]
 pub fn linker_daemon_sock_path() -> Result<PathBuf> {
     Ok(base_dir()?.join("linker.sock"))
 }
 
 /// Windows twin: named pipe `\\.\pipe\koma-linker`.
-#[cfg(windows)]
+#[cfg(all(feature = "linker", windows))]
 pub fn linker_daemon_sock_path() -> Result<PathBuf> {
     Ok(PathBuf::from(r"\\.\pipe\koma-linker"))
 }
 
 /// Advisory PID file: `~/.koma/linker.pid`.
+#[cfg(feature = "linker")]
 pub fn linker_daemon_pid_path() -> Result<PathBuf> {
     Ok(base_dir()?.join("linker.pid"))
 }
 
 /// Write the running linker daemon's PID into the pidfile.
+#[cfg(feature = "linker")]
 pub fn write_linker_daemon_pid() -> Result<()> {
     std::fs::write(linker_daemon_pid_path()?, std::process::id().to_string())?;
     Ok(())

@@ -239,12 +239,9 @@ class TestEmitJson(unittest.TestCase):
 
     def test_emit_json(self):
         mock_stdout = MagicMock()
-        with patch("scrapion_agent.__main__.sys") as mock_sys:
-            mock_sys.stdout = mock_stdout
-            from scrapion_agent.__main__ import _emit_json as emit
-            emit({"ok": True})
-        mock_stdout.write.assert_any_call(json.dumps({"ok": True}, ensure_ascii=False))
-        mock_stdout.write.assert_any_call("\n")
+        from scrapion_agent.__main__ import _emit_json as emit
+        emit(mock_stdout, {"ok": True})
+        mock_stdout.write.assert_called_once_with(json.dumps({"ok": True}, ensure_ascii=False))
         mock_stdout.flush.assert_called()
 
 

@@ -35,6 +35,7 @@ mod guard;
 mod plan;
 mod screenshot;
 mod sdlc;
+mod show_image;
 mod task;
 
 pub(super) use bash::{intercept_bash_background, intercept_bash_kill, intercept_bash_output};
@@ -47,6 +48,7 @@ pub(super) use plan::{
     intercept_plan_readonly_gate, intercept_plan_ready,
 };
 pub(super) use screenshot::intercept_load_screenshot;
+pub(super) use show_image::intercept_show_image;
 pub(super) use sdlc::{
     intercept_checklist_sdlc, intercept_mission_integrate, intercept_mission_prepare,
     intercept_mission_ready, intercept_mission_verify, intercept_sdlc_assess_gate,

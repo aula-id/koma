@@ -50,11 +50,23 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "v0.0.3-cache-rust"
+          prefix-key: "v0.0.4-cache-rust"
           save-if: ${{ github.event_name != 'pull_request' }}
 
       - name: Tests (agent)
         run: cargo test --workspace --no-default-features --all-targets
+
+      # Python daemon transport tests on Windows — validates the TCP transport
+      # path that replaces Unix sockets. Only on Windows where the TCP path is
+      # the primary transport.
+      - name: Tests (Python daemon, Windows)
+        if: runner.os == 'Windows'
+        working-directory: src-internet
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pytest pytest-asyncio
+          python -m pytest tests/test_daemon.py tests/test_protocol.py -v
 
       # src-extension is a separate workspace (serde-only, no GUI/OS deps).
       - name: Tests (src-extension)
@@ -100,7 +112,7 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "v0.0.3-cache-rust-lint"
+          prefix-key: "v0.0.4-cache-rust-lint"
           save-if: ${{ github.event_name != 'pull_request' }}
 
       # Formatting: non-gating until the tree is rustfmt-clean.
