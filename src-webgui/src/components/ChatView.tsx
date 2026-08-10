@@ -194,6 +194,19 @@ const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) 
   const meta = toolBoxMeta(call.name)
   const signature = call.signature ?? fallbackSignature(call.name, call.args)
   const hasOutput = call.output != null && call.output.trim() !== ''
+
+  // show_image: render the actual image inline when the call is done.
+  // Output format: "image resolved: {path} ({label})\nRendered inline..."
+  let imageUrl: string | null = null
+  if (call.name === 'show_image' && done && hasOutput) {
+    const output = call.output as string
+    const line = output.split('\n')[0] ?? ''
+    const match = line.match(/^image resolved: (.+?) \(/)
+    if (match) {
+      imageUrl = `koma://localhost/image/${encodeURIComponent(match[1])}`
+    }
+  }
+
   return (
     <div>
       <div className="flex items-center gap-1.5 text-[12.5px] text-koma-dim">
@@ -204,6 +217,11 @@ const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) 
         )}
         <span className="truncate">{signature}</span>
       </div>
+      {imageUrl && (
+        <div className="mt-1 ml-4 max-w-[480px] overflow-hidden rounded-md border border-koma-dim/30">
+          <img src={imageUrl} alt="show_image" className="block max-w-full h-auto" />
+        </div>
+      )}
       {hasOutput &&
         (meta ? (
           <ToolOutputBox label={meta.label} Icon={meta.Icon} output={call.output as string} />

@@ -44,6 +44,7 @@
 
 mod commands;
 mod doctor;
+#[cfg(feature = "linker")]
 mod linker;
 mod mcp;
 mod oauth;
@@ -61,6 +62,7 @@ pub use commands::print_daemon_usage;
 pub use doctor::run_doctor;
 // `stop_mcp_daemon` is re-exported for the detached extension-uninstall path (bounce the
 // global MCP daemon so the next ensure respawns it off the just-saved config).
+#[cfg(feature = "linker")]
 pub use linker::ensure_linker_daemon_running;
 pub use mcp::{ensure_mcp_daemon_running, stop_mcp_daemon};
 pub use oauth::ensure_oauth_daemon_running;

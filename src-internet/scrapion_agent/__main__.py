@@ -21,7 +21,7 @@ import argparse
 os.environ["SCRAPION_SKIP_BROWSER_CHECK"] = "1"
 
 # Known subcommand names — used for first-argv detection.
-_SUBCOMMANDS = frozenset({"page", "search", "screenshot"})
+_SUBCOMMANDS = frozenset({"page", "search", "screenshot", "daemon"})
 
 
 def _emit_json(real_stdout, payload):
@@ -44,9 +44,13 @@ def _build_parser():
     p_search = sub.add_parser("search", help="Navigate to a search URL and extract results")
     p_search.add_argument("--url", required=True, help="Fully-formed search URL")
 
-    p_ss = sub.add_parser("screenshot", help="Capture a full-page PNG screenshot")
+    p_ss = sub.add_parser("screenshot", help="Capture a PNG screenshot")
     p_ss.add_argument("--url", required=True, help="URL to screenshot")
     p_ss.add_argument("--output", required=True, help="Output PNG path")
+    p_ss.add_argument("--width", type=int, default=0, help="Viewport width in pixels (0 = default)")
+    p_ss.add_argument("--height", type=int, default=0, help="Viewport height in pixels (0 = default)")
+    p_ss.add_argument("--full-page", action=argparse.BooleanOptionalAction, default=False,
+                      help="Capture full scrollable page with auto-scroll (default: False; use --full-page for full page)")
 
     return parser
 
@@ -106,7 +110,13 @@ def cmd_screenshot(args):
     real_stdout = sys.stdout
     sys.stdout = sys.stderr
     try:
-        result = asyncio.run(screenshot_capture(args.url, args.output))
+        result = asyncio.run(screenshot_capture(
+            args.url,
+            args.output,
+            width=args.width,
+            height=args.height,
+            full_page=args.full_page,
+        ))
     except Exception as exc:
         result = {
             "command": "screenshot",
@@ -143,6 +153,13 @@ def cmd_legacy(args):
 
 def main():
     if len(sys.argv) >= 2 and sys.argv[1] in _SUBCOMMANDS:
+        # daemon is a special subcommand — delegate directly
+        if sys.argv[1] == "daemon":
+            from scrapion_agent.daemon import main as daemon_main
+            sys.argv = [sys.argv[0]] + sys.argv[2:]  # strip "daemon"
+            daemon_main()
+            return
+
         parser = _build_parser()
         args = parser.parse_args()
         if args.command == "page":

@@ -14,3 +14,7 @@ dist/
 
 # model caches (downloaded at runtime)
 .fastembed_cache/
+
+# browser screenshots (transient)
+.screenshoot/
+.problems/

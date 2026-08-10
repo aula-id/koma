@@ -120,7 +120,8 @@ pub(super) fn rewind_to_vec_index(state: &mut AppState, idx: usize) -> Result<()
     //    without a live `state.rest` borrow from `sess`.
     let messages = sess.conversation.messages();
     // Only user turns are ever offered by the picker; guard anyway.
-    let text = match messages.get(idx) {
+    // Snapshot both text AND attachments so they survive the truncation.
+    let text_and_attachments = match messages.get(idx) {
         Some(m) if m.role == Role::User => {
             // Strip synthetic nudge/shell markers so the user edits the real body, not the marker.
             let content = m
@@ -130,11 +131,11 @@ pub(super) fn rewind_to_vec_index(state: &mut AppState, idx: usize) -> Result<()
                 .or_else(|| m.content.strip_prefix(crate::dto::chat::EXT_PROMPT_MARK))
                 .map(str::to_string)
                 .unwrap_or_else(|| m.content.clone());
-            Some(content)
+            Some((content, m.attachments.clone()))
         }
         _ => None,
     };
-    let Some(text) = text else {
+    let Some((text, saved_attachments)) = text_and_attachments else {
         *state.mode_mut() = Mode::Chat;
         return Ok(());
     };
@@ -166,7 +167,11 @@ pub(super) fn rewind_to_vec_index(state: &mut AppState, idx: usize) -> Result<()
     {
         let fg = state.rest.fg_mut();
         fg.input = text;
-        fg.pending_attachments.clear();
+        // Restore the rewound message's attachments into the composer so the
+        // user can resend with the same images. If the user edits out an
+        // [Image #N] marker, reconcile_attachments() will drop the orphaned
+        // attachment on the next backspace/delete.
+        fg.pending_attachments = saved_attachments;
         fg.hist_idx = None;
         fg.input_stash.clear();
     }

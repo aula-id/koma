@@ -135,6 +135,7 @@ pub enum WarmEvent {
     },
     /// The linker daemon graph summary resolved for the session identified by
     /// `session_id`. The drain routes it to THAT session's `graph_summary` by id.
+    #[cfg(feature = "linker")]
     WarmGraph {
         session_id: String,
         summary: Option<String>,

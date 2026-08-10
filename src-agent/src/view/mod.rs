@@ -19,6 +19,7 @@ pub mod effort;
 pub mod extensions;
 pub mod extscreen;
 pub mod help;
+pub mod image_render;
 pub mod key_input;
 pub mod loading;
 pub mod markdown;

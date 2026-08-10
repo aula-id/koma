@@ -3,7 +3,6 @@
 use super::{Tool, ToolCtx};
 use anyhow::Result;
 use serde_json::{json, Value};
-use std::io::{Read, Write};
 
 pub struct GraphQuery;
 
@@ -37,50 +36,29 @@ impl Tool for GraphQuery {
         })
     }
     fn run(&self, ctx: &ToolCtx, args: &Value) -> Result<String> {
-        // Get action
+        use crate::ipc::linker_proto::{LinkerQuery, LinkerRequest};
+
         let action = args
             .get("action")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing required argument 'action'"))?;
 
-        // Get path, normalized against session workspaces so relative paths
-        // like `src/foo.rs` resolve to the actual absolute path in the graph.
         let path = args
             .get("path")
             .and_then(|v| v.as_str())
             .map(|p| crate::linker::client::normalize_query_path(p, &ctx.workspaces));
 
-        // Connect to the linker daemon
-        let sock_path = crate::model::store::linker_daemon_sock_path()
-            .map_err(|e| anyhow::anyhow!("cannot resolve linker socket: {e}"))?;
-
-        let mut stream = match crate::ipc::SyncIpcStream::connect(&sock_path) {
-            Ok(s) => s,
-            Err(e) => {
-                return Ok(format!(
-                    "linker daemon not running (connect failed: {e}). \
-                     The graph may not be ready yet."
-                ));
-            }
-        };
-
-        // Build the query
-        use crate::ipc::linker_proto::{LinkerQuery, LinkerRequest, LinkerResponse};
-
-        let query = match action {
+        // Build the request.
+        let req = match action {
             "dependencies" => {
                 let p = path
                     .ok_or_else(|| anyhow::anyhow!("'path' is required for dependencies"))?;
-                LinkerQuery::Dependencies {
-                    path: p.to_string(),
-                }
+                LinkerRequest::Query(LinkerQuery::Dependencies { path: p })
             }
             "dependents" => {
                 let p = path
                     .ok_or_else(|| anyhow::anyhow!("'path' is required for dependents"))?;
-                LinkerQuery::Dependents {
-                    path: p.to_string(),
-                }
+                LinkerRequest::Query(LinkerQuery::Dependents { path: p })
             }
             "impact" => {
                 let p =
@@ -89,63 +67,18 @@ impl Tool for GraphQuery {
                     .get("depth")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(1) as u32;
-                LinkerQuery::Impact {
-                    path: p.to_string(),
+                LinkerRequest::Query(LinkerQuery::Impact {
+                    path: p,
                     depth: Some(depth.min(3)),
-                }
+                })
             }
             "neighborhood" => {
                 let p = path
                     .ok_or_else(|| anyhow::anyhow!("'path' is required for neighborhood"))?;
-                LinkerQuery::Neighborhood {
-                    path: p.to_string(),
-                }
+                LinkerRequest::Query(LinkerQuery::Neighborhood { path: p })
             }
-            "summary" => {
-                // Use the dedicated Summary request for proper formatting.
-                let req = LinkerRequest::Summary;
-                let payload =
-                    serde_json::to_vec(&req).map_err(|e| anyhow::anyhow!("serialize request: {e}"))?;
-                let prefix = (payload.len() as u32).to_be_bytes();
-                stream.write_all(&prefix).map_err(|e| anyhow::anyhow!("write prefix: {e}"))?;
-                stream.write_all(&payload).map_err(|e| anyhow::anyhow!("write payload: {e}"))?;
-                stream.flush().map_err(|e| anyhow::anyhow!("flush: {e}"))?;
-
-                let mut frame_reader = crate::ipc::frame::FrameReader::new();
-                let frame = loop {
-                    if let Some(f) = frame_reader
-                        .next_frame()
-                        .map_err(|e| anyhow::anyhow!("frame reassembly: {e}"))?
-                    {
-                        break f;
-                    }
-                    let mut buf = [0u8; 64 * 1024];
-                    let n = stream
-                        .read(&mut buf)
-                        .map_err(|e| anyhow::anyhow!("read response: {e}"))?;
-                    if n == 0 {
-                        return Ok("linker daemon closed connection".into());
-                    }
-                    frame_reader.push(&buf[..n]);
-                };
-                let resp: LinkerResponse = serde_json::from_slice(&frame)
-                    .map_err(|e| anyhow::anyhow!("deserialize response: {e}"))?;
-                return match resp {
-                    LinkerResponse::Summary { text, generation, file_count, edge_count, languages } => {
-                        if text.is_empty() {
-                            Ok(format!(
-                                "graph: generation={generation}, {file_count} files, {edge_count} edges, langs=[{}]",
-                                languages.join(", ")
-                            ))
-                        } else {
-                            Ok(text)
-                        }
-                    }
-                    LinkerResponse::Error(e) => Ok(format!("linker error: {e}")),
-                    _ => Ok("unexpected response type".into()),
-                };
-            }
-            "rescan" => LinkerQuery::Rescan,
+            "summary" => LinkerRequest::Summary,
+            "rescan" => LinkerRequest::Query(LinkerQuery::Rescan),
             _ => {
                 return Ok(format!(
                     "unknown action: {action}. Use: dependencies, dependents, impact, neighborhood, summary, rescan"
@@ -153,43 +86,19 @@ impl Tool for GraphQuery {
             }
         };
 
-        let req = LinkerRequest::Query(query);
-        let payload =
-            serde_json::to_vec(&req).map_err(|e| anyhow::anyhow!("serialize request: {e}"))?;
-
-        let prefix = (payload.len() as u32).to_be_bytes();
-        stream
-            .write_all(&prefix)
-            .map_err(|e| anyhow::anyhow!("write prefix: {e}"))?;
-        stream
-            .write_all(&payload)
-            .map_err(|e| anyhow::anyhow!("write payload: {e}"))?;
-        stream.flush().map_err(|e| anyhow::anyhow!("flush: {e}"))?;
-
-        // Read response (blocking frame reassembly)
-        let mut frame_reader = crate::ipc::frame::FrameReader::new();
-        let frame = loop {
-            // Check buffered data first
-            if let Some(f) = frame_reader
-                .next_frame()
-                .map_err(|e| anyhow::anyhow!("frame reassembly: {e}"))?
-            {
-                break f;
+        // Send via the persistent connection pool.
+        use crate::ipc::linker_proto::LinkerResponse;
+        let resp = match crate::linker::client::connect_and_send(&req) {
+            Some(r) => r,
+            None => {
+                return Ok(
+                    "linker daemon not running or unreachable. The graph may not be ready yet."
+                        .into(),
+                )
             }
-            let mut buf = [0u8; 64 * 1024];
-            let n = stream
-                .read(&mut buf)
-                .map_err(|e| anyhow::anyhow!("read response: {e}"))?;
-            if n == 0 {
-                return Ok("linker daemon closed connection".into());
-            }
-            frame_reader.push(&buf[..n]);
         };
 
-        let resp: LinkerResponse = serde_json::from_slice(&frame)
-            .map_err(|e| anyhow::anyhow!("deserialize response: {e}"))?;
-
-        // Format response
+        // Format the response.
         match resp {
             LinkerResponse::PathList { paths, total } => {
                 let mut out = if paths.len() < total {

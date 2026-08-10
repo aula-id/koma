@@ -167,6 +167,7 @@ pub(super) fn cmd_kill() -> Result<()> {
         super::oauth::stop_oauth_daemon(false);
     }
     // Stop the GLOBAL Linker daemon too (best-effort). Same pattern as MCP/OAuth.
+    #[cfg(feature = "linker")]
     if super::linker::linker_daemon_alive() {
         super::linker::stop_linker_daemon(false);
     }
