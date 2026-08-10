@@ -896,11 +896,11 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             path,
             depth,
             direction,
+            filter_roots,
+            filter_languages,
         } => {
             let depth = depth.unwrap_or(2).clamp(1, 3);
-            let direction = direction
-                .as_deref()
-                .unwrap_or("both");
+            let direction = direction.as_deref().unwrap_or("both");
             let direction = match direction {
                 "dependencies" => crate::ipc::linker_proto::GraphDirection::Dependencies,
                 "dependents" => crate::ipc::linker_proto::GraphDirection::Dependents,
@@ -910,6 +910,8 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 path,
                 depth,
                 direction,
+                filter_roots,
+                filter_languages,
             });
         }
     }

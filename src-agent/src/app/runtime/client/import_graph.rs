@@ -22,6 +22,7 @@ pub struct ImportGraphResult {
     pub edges_truncated: bool,
     pub total_nodes_available: usize,
     pub total_edges_available: usize,
+    pub available_roots: Vec<ImportGraphRootInfo>,
 }
 
 #[derive(serde::Serialize)]
@@ -33,6 +34,7 @@ pub struct ImportGraphNode {
     pub in_degree: usize,
     pub role: String,
     pub depth_from_focus: Option<u32>,
+    pub workspace_root: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -41,10 +43,25 @@ pub struct ImportGraphEdge {
     pub to: String,
 }
 
+/// Per-root workspace metadata for filter pickers.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportGraphRootInfo {
+    pub root: String,
+    pub file_count: usize,
+    pub languages: Vec<ImportGraphLangCount>,
+}
+
+/// Language with count for per-root breakdown.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportGraphLangCount {
+    pub name: String,
+    pub count: usize,
+}
+
 /// Convert a daemon `GraphViewResult` into the workspace-relative GUI DTO.
-pub fn from_daemon_result(
-    result: crate::ipc::linker_proto::GraphViewResult,
-) -> ImportGraphResult {
+pub fn from_daemon_result(result: crate::ipc::linker_proto::GraphViewResult) -> ImportGraphResult {
     ImportGraphResult {
         nodes: result
             .nodes
@@ -56,6 +73,7 @@ pub fn from_daemon_result(
                 in_degree: n.in_degree,
                 role: format!("{:?}", n.role),
                 depth_from_focus: n.depth_from_focus,
+                workspace_root: n.workspace_root,
             })
             .collect(),
         edges: result
@@ -75,6 +93,22 @@ pub fn from_daemon_result(
         edges_truncated: result.edges_truncated,
         total_nodes_available: result.total_nodes_available,
         total_edges_available: result.total_edges_available,
+        available_roots: result
+            .available_roots
+            .into_iter()
+            .map(|r| ImportGraphRootInfo {
+                root: r.root,
+                file_count: r.file_count,
+                languages: r
+                    .languages
+                    .into_iter()
+                    .map(|l| ImportGraphLangCount {
+                        name: l.name,
+                        count: l.count,
+                    })
+                    .collect(),
+            })
+            .collect(),
     }
 }
 
@@ -85,6 +119,8 @@ pub fn spawn_import_graph_attached(
     path: Option<String>,
     depth: u32,
     direction: crate::ipc::linker_proto::GraphDirection,
+    filter_roots: Option<Vec<String>>,
+    filter_languages: Option<Vec<String>>,
 ) {
     std::thread::spawn(move || {
         let req = crate::ipc::linker_proto::VisualizationRequest {
@@ -93,22 +129,12 @@ pub fn spawn_import_graph_attached(
             direction,
             max_nodes: 200,
             max_edges: 400,
+            filter_roots,
+            filter_languages,
         };
         let result = match crate::linker::client::fetch_graph_view(&req) {
             Some(r) => from_daemon_result(r),
-            None => ImportGraphResult {
-                nodes: Vec::new(),
-                edges: Vec::new(),
-                focus: None,
-                generation: 0,
-                file_count: 0,
-                edge_count: 0,
-                languages: Vec::new(),
-                nodes_truncated: false,
-                edges_truncated: false,
-                total_nodes_available: 0,
-                total_edges_available: 0,
-            },
+            None => empty_result(),
         };
         let _ = tx.send(result);
     });
@@ -121,6 +147,8 @@ pub fn spawn_import_graph(
     path: Option<String>,
     depth: u32,
     direction: crate::ipc::linker_proto::GraphDirection,
+    filter_roots: Option<Vec<String>>,
+    filter_languages: Option<Vec<String>>,
 ) {
     std::thread::spawn(move || {
         let req = crate::ipc::linker_proto::VisualizationRequest {
@@ -129,24 +157,32 @@ pub fn spawn_import_graph(
             direction,
             max_nodes: 200,
             max_edges: 400,
+            filter_roots,
+            filter_languages,
         };
         let result = match crate::linker::client::fetch_graph_view(&req) {
             Some(r) => from_daemon_result(r),
-            None => ImportGraphResult {
-                nodes: Vec::new(),
-                edges: Vec::new(),
-                focus: None,
-                generation: 0,
-                file_count: 0,
-                edge_count: 0,
-                languages: Vec::new(),
-                nodes_truncated: false,
-                edges_truncated: false,
-                total_nodes_available: 0,
-                total_edges_available: 0,
-            },
+            None => empty_result(),
         };
         let env = super::push_proto::PushEnvelope::ImportGraph(result);
         super::render::emit(&push, &env);
     });
+}
+
+/// An empty result for when the linker daemon is unreachable.
+fn empty_result() -> ImportGraphResult {
+    ImportGraphResult {
+        nodes: Vec::new(),
+        edges: Vec::new(),
+        focus: None,
+        generation: 0,
+        file_count: 0,
+        edge_count: 0,
+        languages: Vec::new(),
+        nodes_truncated: false,
+        edges_truncated: false,
+        total_nodes_available: 0,
+        total_edges_available: 0,
+        available_roots: Vec::new(),
+    }
 }

@@ -1341,6 +1341,7 @@ export type PushEnvelope =
       edgesTruncated: boolean
       totalNodesAvailable: number
       totalEdgesAvailable: number
+      availableRoots: ImportGraphRootInfo[]
     }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
@@ -1564,12 +1565,20 @@ export type ImportGraphNode = {
   inDegree: number
   role: 'Focus' | 'Dependency' | 'Dependent' | 'Overview'
   depthFromFocus: number | null
+  workspaceRoot: string | null
 }
 
 // A single edge from the linker daemon's import graph.
 export type ImportGraphEdge = {
   from: string
   to: string
+}
+
+// Per-root workspace metadata for filter pickers.
+export type ImportGraphRootInfo = {
+  root: string
+  fileCount: number
+  languages: { name: string; count: number }[]
 }
 
 // The commit-graph tab's slice (G2) — the loaded commit page(s) + selection +
@@ -1636,6 +1645,14 @@ type ImportGraphSlice = {
   direction: 'dependencies' | 'dependents' | 'both'
   // Chain of visited focus paths for chained exploration.
   breadcrumb: string[]
+  // Available workspace roots (from daemon graph data, for filter pickers).
+  availableRoots: ImportGraphRootInfo[]
+  // Active filters: empty array = "all" (no filtering).
+  filterRoots: string[]
+  filterLanguages: string[]
+  // Request coalescing: when a refresh is requested while loading, set true.
+  // The ImportGraph reducer replays exactly one request when the in-flight reply lands.
+  queuedRefresh: boolean
 }
 
 // The Analytics dashboard tab's slice — host-authoritative projection + local
@@ -1929,7 +1946,7 @@ type KomaState = {
   // Open (or focus) the singleton import-graph tab (id 'import-graph').
   openImportGraphTab: () => void
   // (Re)load the import graph: mark loading + fire ImportGraph req with
-  // current controls (focus/depth/direction). `path` overrides the focus.
+  // current controls (focus/depth/direction/filters). `path` overrides the focus.
   refreshImportGraph: (path?: string | null) => void
   // Set the traversal depth and optionally re-fetch.
   setImportGraphDepth: (depth: number) => void
@@ -1945,6 +1962,10 @@ type KomaState = {
   popBreadcrumb: () => void
   // Clear the breadcrumb trail (fresh start).
   clearBreadcrumb: () => void
+  // Set workspace root filters and re-fetch. Empty = all roots.
+  setImportGraphRootFilter: (roots: string[]) => void
+  // Set language filters and re-fetch. Empty = all languages.
+  setImportGraphLanguageFilter: (langs: string[]) => void
   // (Re)load the bubble/activity chart's commit series (GK5b): mark loading +
   // GitActivity{ path, limit:800 }. `path` narrows to one pathspec; omitted or
   // `null` means the whole active branch. Fired on GraphBubble mount + its
@@ -2375,6 +2396,10 @@ const initialImportGraph: ImportGraphSlice = {
   depth: 2,
   direction: 'both',
   breadcrumb: [],
+  availableRoots: [],
+  filterRoots: [],
+  filterLanguages: [],
+  queuedRefresh: false,
 }
 
 const initialActivity: ActivitySlice = {
@@ -3246,7 +3271,23 @@ export const useKoma = create<KomaState>((set, get) => ({
           }
         })
         break
-      case 'ImportGraph':
+      case 'ImportGraph': {
+        const queued = get().importGraph.queuedRefresh
+        if (queued) {
+          // Keep the latest local controls/focus and discard this stale view.
+          // Workspace metadata is independent of the active filters and remains useful.
+          set((s) => ({
+            importGraph: {
+              ...s.importGraph,
+              availableRoots: env.availableRoots ?? [],
+              loading: false,
+              queuedRefresh: false,
+              error: null,
+            },
+          }))
+          get().refreshImportGraph(get().importGraph.focus)
+          break
+        }
         set((s) => ({
           importGraph: {
             ...s.importGraph,
@@ -3261,11 +3302,13 @@ export const useKoma = create<KomaState>((set, get) => ({
             edgesTruncated: env.edgesTruncated,
             totalNodesAvailable: env.totalNodesAvailable,
             totalEdgesAvailable: env.totalEdgesAvailable,
+            availableRoots: env.availableRoots ?? [],
             loading: false,
             error: null,
           },
         }))
         break
+      }
       case 'GitGraph':
         set((s) => {
           // Append (load-more) concatenates onto the existing page and dedupes;
@@ -4019,7 +4062,19 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
   refreshImportGraph: (path) => {
     const g = get().importGraph
-    if (g.loading) return
+    if (g.loading) {
+      // A request is in flight — coalesce: set the queued flag so the
+      // ImportGraph reducer replays once the old reply lands.
+      const focus = path !== undefined ? path : g.focus
+      set((s) => ({
+        importGraph: {
+          ...s.importGraph,
+          queuedRefresh: true,
+          focus,
+        },
+      }))
+      return
+    }
     const focus = path !== undefined ? path : g.focus
     const isFullRefresh = path === undefined
     set((s) => ({
@@ -4028,6 +4083,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         loading: true,
         error: null,
         focus,
+        queuedRefresh: false,
         // Clear accumulated nodes/edges on full refresh (not chain navigation)
         ...(isFullRefresh ? { nodes: [], edges: [], breadcrumb: [] } : {}),
       },
@@ -4037,19 +4093,21 @@ export const useKoma = create<KomaState>((set, get) => ({
       path: focus ?? null,
       depth: g.depth,
       direction: g.direction,
+      filterRoots: g.filterRoots.length > 0 ? g.filterRoots : null,
+      filterLanguages: g.filterLanguages.length > 0 ? g.filterLanguages : null,
     })
   },
   setImportGraphDepth: (depth) => {
     set((s) => ({ importGraph: { ...s.importGraph, depth } }))
     // Re-fetch if there's a focus or any data
     if (get().importGraph.focus || get().importGraph.nodes.length > 0) {
-      get().refreshImportGraph()
+      get().refreshImportGraph(get().importGraph.focus)
     }
   },
   setImportGraphDirection: (dir) => {
     set((s) => ({ importGraph: { ...s.importGraph, direction: dir } }))
     if (get().importGraph.focus || get().importGraph.nodes.length > 0) {
-      get().refreshImportGraph()
+      get().refreshImportGraph(get().importGraph.focus)
     }
   },
   selectImportGraphNode: (path) => {
@@ -4124,6 +4182,94 @@ export const useKoma = create<KomaState>((set, get) => ({
     set((s) => ({
       importGraph: { ...s.importGraph, breadcrumb: [] },
     }))
+  },
+  setImportGraphRootFilter: (roots) => {
+    const s = get().importGraph
+    // Determine if the current focus is excluded by the new root filter.
+    let focusCleared = false
+    let focus = s.focus
+    let selectedPath = s.selectedPath
+    let breadcrumb = s.breadcrumb
+    if (focus) {
+      const focusNode = s.nodes.find((n) => n.path === focus)
+      if (focusNode && roots.length > 0 && focusNode.workspaceRoot && !roots.includes(focusNode.workspaceRoot)) {
+        focus = null
+        selectedPath = null
+        breadcrumb = []
+        focusCleared = true
+      }
+    }
+    // Also clear selectedPath if the selected node would be excluded even if focus stays.
+    if (!focusCleared && selectedPath) {
+      const selNode = s.nodes.find((n) => n.path === selectedPath)
+      if (selNode && roots.length > 0 && selNode.workspaceRoot && !roots.includes(selNode.workspaceRoot)) {
+        selectedPath = null
+      }
+    }
+    // Prune language selections that have no files under the newly selected roots.
+    let filterLanguages = s.filterLanguages
+    if (filterLanguages.length > 0 && roots.length > 0) {
+      // Build set of languages present under the selected roots.
+      const langsUnderRoots = new Set<string>()
+      for (const node of s.nodes) {
+        if (node.workspaceRoot && roots.includes(node.workspaceRoot)) {
+          langsUnderRoots.add(node.language)
+        }
+      }
+      // Also check availableRoots for a comprehensive picture.
+      for (const r of s.availableRoots) {
+        if (roots.includes(r.root)) {
+          for (const lc of r.languages) {
+            langsUnderRoots.add(lc.name)
+          }
+        }
+      }
+      const pruned = filterLanguages.filter((l) => langsUnderRoots.has(l))
+      if (pruned.length !== filterLanguages.length) {
+        filterLanguages = pruned.length > 0 ? pruned : []
+      }
+    }
+    set((st) => ({
+      importGraph: { ...st.importGraph, filterRoots: roots, focus, selectedPath, breadcrumb, filterLanguages },
+    }))
+    if (focusCleared) {
+      // Fetch overview (no focus) since the focused node is excluded.
+      get().refreshImportGraph(null)
+    } else {
+      get().refreshImportGraph(focus)
+    }
+  },
+  setImportGraphLanguageFilter: (langs) => {
+    const s = get().importGraph
+    // Determine if the current focus is excluded by the new language filter.
+    let focusCleared = false
+    let focus = s.focus
+    let selectedPath = s.selectedPath
+    let breadcrumb = s.breadcrumb
+    if (focus) {
+      const focusNode = s.nodes.find((n) => n.path === focus)
+      if (focusNode && langs.length > 0 && !langs.includes(focusNode.language)) {
+        focus = null
+        selectedPath = null
+        breadcrumb = []
+        focusCleared = true
+      }
+    }
+    // Also clear selectedPath if excluded even if focus stays.
+    if (!focusCleared && selectedPath) {
+      const selNode = s.nodes.find((n) => n.path === selectedPath)
+      if (selNode && langs.length > 0 && !langs.includes(selNode.language)) {
+        selectedPath = null
+      }
+    }
+    set((st) => ({
+      importGraph: { ...st.importGraph, filterLanguages: langs, focus, selectedPath, breadcrumb },
+    }))
+    if (focusCleared) {
+      get().refreshImportGraph(null)
+    } else {
+      get().refreshImportGraph(focus)
+    }
   },
   refreshActivity: (path) => {
     const p = path ?? null

@@ -947,5 +947,9 @@ pub(super) enum GuiReq {
         depth: Option<u32>,
         #[serde(default)]
         direction: Option<String>,
+        #[serde(default, rename = "filterRoots")]
+        filter_roots: Option<Vec<String>>,
+        #[serde(default, rename = "filterLanguages")]
+        filter_languages: Option<Vec<String>>,
     },
 }

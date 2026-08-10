@@ -817,12 +817,16 @@ pub(super) fn push_loop(
                     path,
                     depth,
                     direction,
+                    filter_roots,
+                    filter_languages,
                 }) => {
                     super::import_graph::spawn_import_graph_attached(
                         import_graph_tx.clone(),
                         path,
                         depth,
                         direction,
+                        filter_roots,
+                        filter_languages,
                     );
                 }
                 Err(TryRecvError::Empty) => break,
@@ -975,10 +979,7 @@ pub(super) fn push_loop(
         // --- IMPORT GRAPH: push any completed off-thread linker daemon visualization ---
         #[cfg(feature = "linker")]
         while let Ok(result) = import_graph_rx.try_recv() {
-            super::render::emit(
-                push,
-                &super::push_proto::PushEnvelope::ImportGraph(result),
-            );
+            super::render::emit(push, &super::push_proto::PushEnvelope::ImportGraph(result));
         }
 
         // --- (b-ter) mirror the staged-attachment markers for the ipc Submit append ---

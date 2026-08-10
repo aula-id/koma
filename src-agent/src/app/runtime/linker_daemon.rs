@@ -646,6 +646,10 @@ fn handle_query(
             let result = graph.visualization_view(&req);
             LinkerResponse::GraphView(result)
         }
+        LinkerQuery::WorkspaceInfo => {
+            let info = graph.workspace_info();
+            LinkerResponse::WorkspaceInfo(info)
+        }
     }
 }
 

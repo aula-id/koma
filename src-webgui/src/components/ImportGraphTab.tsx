@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Network, RefreshCw, X, AlertTriangle, Search, ChevronRight } from 'lucide-react'
-import { useKoma } from '../store/koma'
+import { useKoma, type ImportGraphRootInfo } from '../store/koma'
 import { BrailleSpinner } from './BrailleSpinner'
 import { ImportGraphScene } from './ImportGraphScene'
 
@@ -9,12 +9,133 @@ const DETAIL_W_MIN = 220
 const DETAIL_W_MAX = 480
 const DETAIL_W_DEFAULT = 300
 
-// Role → color mapping for detail pane badges (lightweight, no Three.js).
+// Role → color mapping for detail pane badges (matches scene muted palette).
 const ROLE_COLORS: Record<string, string> = {
   Focus: '#3b82f6',
-  Dependency: '#22c55e',
-  Dependent: '#f97316',
-  Overview: '#6b7280',
+  Dependency: '#6ba3b0',
+  Dependent: '#b09070',
+  Overview: '#8896a4',
+}
+
+// ─── Compact filter dropdown (checkbox list + All/reset) ─────────────────
+function FilterDropdown<T extends string>({
+  label,
+  allLabel,
+  countLabel,
+  oneLabel,
+  items,
+  selected,
+  onChange,
+}: {
+  label: string
+  allLabel: string
+  countLabel: string
+  oneLabel?: string
+  items: { key: T; label: string; count?: number; sublabel?: string }[]
+  selected: T[]
+  onChange: (selected: T[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement | null>(null)
+
+  // Close on outside click.
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  // Close on Escape while focus is anywhere inside the dropdown container.
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && ref.current?.contains(document.activeElement)) {
+        setOpen(false)
+      }
+    }
+    // Use keydown on the document to catch Escape even when focus is on a
+    // descendant element that doesn't naturally fire keydown bubbles.
+    document.addEventListener('keydown', handler, true)
+    return () => document.removeEventListener('keydown', handler, true)
+  }, [open])
+
+  const isAll = selected.length === 0
+  const buttonLabel = isAll
+    ? allLabel
+    : selected.length === 1
+      ? (oneLabel ?? items.find((i) => i.key === selected[0])?.label ?? selected[0])
+      : countLabel.replace('{n}', String(selected.length))
+
+  return (
+    <div ref={ref} className="relative flex-none">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] ${
+          isAll
+            ? 'border-koma-border text-koma-dim hover:border-koma-accent/40 hover:text-koma-fg'
+            : 'border-koma-accent/40 bg-koma-accent/10 text-koma-accent'
+        }`}
+        aria-label={label}
+        aria-expanded={open}
+      >
+        <span className="opacity-60">{label}:</span>
+        <span className="font-medium">{buttonLabel}</span>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute left-0 top-full z-50 mt-1 min-w-[200px] max-h-[280px] overflow-y-auto rounded border border-koma-border bg-koma-panel shadow-lg"
+        >
+          {/* All / reset option */}
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={isAll}
+            onClick={() => { onChange([]); setOpen(false) }}
+            className={`flex w-full items-center justify-between px-2 py-1 text-[11px] ${
+              isAll ? 'bg-koma-accent/10 text-koma-accent' : 'text-koma-fg hover:bg-koma-hover'
+            }`}
+          >
+            <span>All</span>
+            {isAll && <span className="text-[9px] opacity-50">✓</span>}
+          </button>
+          <div className="border-t border-koma-border" />
+          {items.map((item) => {
+            const checked = selected.includes(item.key)
+            return (
+              <button
+                key={item.key}
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={checked}
+                onClick={() => {
+                  onChange(checked ? selected.filter((k) => k !== item.key) : [...selected, item.key])
+                }}
+                className={`flex w-full items-center gap-2 px-2 py-1 text-left text-[11px] ${
+                  checked ? 'bg-koma-accent/10 text-koma-accent' : 'text-koma-fg hover:bg-koma-hover'
+                }`}
+              >
+                <span className="w-3 flex-none text-center text-[10px]">{checked ? '✓' : ''}</span>
+                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                {item.sublabel && (
+                  <span className="flex-none truncate text-[9px] text-koma-dim opacity-50 max-w-[120px]" title={item.sublabel}>
+                    {item.sublabel}
+                  </span>
+                )}
+                {item.count !== undefined && (
+                  <span className="flex-none text-[9px] text-koma-dim opacity-60">{item.count}</span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ─── Main ImportGraphTab ────────────────────────────────────────────────
@@ -37,6 +158,9 @@ export default function ImportGraphTab() {
   const selectedPath = useKoma((s) => s.importGraph.selectedPath)
   const generation = useKoma((s) => s.importGraph.generation)
   const breadcrumb = useKoma((s) => s.importGraph.breadcrumb)
+  const availableRoots = useKoma((s) => s.importGraph.availableRoots)
+  const filterRoots = useKoma((s) => s.importGraph.filterRoots)
+  const filterLanguages = useKoma((s) => s.importGraph.filterLanguages)
 
   const refreshImportGraph = useKoma((s) => s.refreshImportGraph)
   const setImportGraphDepth = useKoma((s) => s.setImportGraphDepth)
@@ -45,9 +169,41 @@ export default function ImportGraphTab() {
   const clearImportGraphSelection = useKoma((s) => s.clearImportGraphSelection)
   const navigateBreadcrumb = useKoma((s) => s.navigateBreadcrumb)
   const popBreadcrumb = useKoma((s) => s.popBreadcrumb)
+  const setImportGraphRootFilter = useKoma((s) => s.setImportGraphRootFilter)
+  const setImportGraphLanguageFilter = useKoma((s) => s.setImportGraphLanguageFilter)
 
   const isActiveTab = useKoma((s) => s.ui.activeTabId === 'import-graph')
   const sessionId = useKoma((s) => s.session.id)
+
+  // Compute available languages with counts from availableRoots,
+  // scoped to selected root filter when active.
+  const availableLanguages = useMemo(() => {
+    const langCounts = new Map<string, number>()
+    const rootsToCount = filterRoots.length > 0
+      ? availableRoots.filter((r) => filterRoots.includes(r.root))
+      : availableRoots
+    for (const root of rootsToCount) {
+      for (const lc of root.languages) {
+        langCounts.set(lc.name, (langCounts.get(lc.name) ?? 0) + lc.count)
+      }
+    }
+    return [...langCounts.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([name, count]) => ({ name, count }))
+  }, [availableRoots, filterRoots])
+
+  // Total count per root.
+  const rootItems = useMemo(
+    () => availableRoots.map((r) => {
+      const base = r.root.split('/').pop() ?? r.root
+      return { key: r.root, label: base, count: r.fileCount, sublabel: r.root }
+    }),
+    [availableRoots],
+  )
+  const langItems = useMemo(
+    () => availableLanguages.map((l) => ({ key: l.name, label: l.name, count: l.count })),
+    [availableLanguages],
+  )
 
   // Fetch on mount and session change.
   useEffect(() => {
@@ -246,6 +402,30 @@ export default function ImportGraphTab() {
             {d === 'dependencies' ? 'deps' : d === 'dependents' ? 'rdeps' : 'both'}
           </button>
         ))}
+
+        {/* Workspace root filter (only when >1 root) */}
+        {rootItems.length > 1 && (
+          <FilterDropdown
+            label="Root"
+            allLabel="All roots"
+            countLabel="{n} roots"
+            items={rootItems}
+            selected={filterRoots}
+            onChange={setImportGraphRootFilter}
+          />
+        )}
+
+        {/* Language filter (only when >1 language) */}
+        {langItems.length > 1 && (
+          <FilterDropdown
+            label="Lang"
+            allLabel="All languages"
+            countLabel="{n} languages"
+            items={langItems}
+            selected={filterLanguages}
+            onChange={setImportGraphLanguageFilter}
+          />
+        )}
 
         <span className="flex-1" />
 

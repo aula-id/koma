@@ -90,6 +90,17 @@ pub fn scan_roots(roots: &[PathBuf]) -> ImportGraph {
     }
 
     graph.file_count = graph.nodes.len();
+    graph.workspace_roots = roots
+        .iter()
+        .map(|r| {
+            r.canonicalize()
+                .unwrap_or_else(|_| r.clone())
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+    graph.workspace_roots.sort();
+    graph.workspace_roots.dedup();
     graph
 }
 
@@ -509,11 +520,7 @@ fn resolve_php_import(raw: &str, root: &Path, known_files: &HashSet<String>) -> 
 ///
 /// - `#include "relative/path.h"` → resolve relative to the file's directory.
 /// - `#include <system/header.h>` → None (system header, can't resolve).
-fn resolve_c_import(
-    raw: &str,
-    root: &Path,
-    known_files: &HashSet<String>,
-) -> Option<String> {
+fn resolve_c_import(raw: &str, root: &Path, known_files: &HashSet<String>) -> Option<String> {
     let raw = raw.trim();
     // System headers (from angle brackets) → can't resolve.
     if raw.starts_with('<') {
