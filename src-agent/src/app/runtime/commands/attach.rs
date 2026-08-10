@@ -22,7 +22,7 @@ pub(super) fn handle_attach(arg: &str, state: &mut AppState) -> Result<()> {
         let names = list_screenshoot_pngs(&cwd);
         if names.is_empty() {
             state.rest.fg_mut().status =
-                "no .screenshoot/*.png captures found — use web_screenshot first".into();
+                "no .screenshoot/*.png captures found — use browser_interact with action=screenshot first".into();
         } else {
             let preview: Vec<String> = names.iter().take(8).cloned().collect();
             state.rest.fg_mut().status = format!(

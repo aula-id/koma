@@ -22,7 +22,6 @@ mod show_image;
 mod web_download;
 mod web_fetch;
 mod web_page;
-mod web_screenshot;
 mod web_search;
 mod web_search_full;
 
@@ -37,7 +36,6 @@ pub use show_image::ShowImage;
 pub use web_download::WebDownload;
 pub use web_fetch::WebFetch;
 pub use web_page::WebPage;
-pub use web_screenshot::WebScreenshot;
 pub use web_search::WebSearch;
 pub use web_search_full::WebSearchFull;
 
