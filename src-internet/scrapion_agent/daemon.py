@@ -454,6 +454,17 @@ class Handler:
                 await page.mouse.wheel(0, delta_y)
                 return self._ok({"scrolled": direction, "amount": amount})
 
+            elif action == "screenshot":
+                screenshot_params = {
+                    "tab_id": params.get("tab_id"),
+                    "output_path": action_params.get("output_path", ""),
+                    "width": int(action_params.get("width", 1920)),
+                    "height": int(action_params.get("height", 1080)),
+                    "delay_ms": int(action_params.get("delay_ms", 300)),
+                    "full_page": bool(action_params.get("full_page", True)),
+                }
+                return await self._action_screenshot(screenshot_params)
+
             elif action == "wait":
                 wait_what = action_params.get("what", "selector")
                 wait_value = action_params.get("value", "")
