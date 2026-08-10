@@ -1,48 +1,111 @@
-//! Thin one-shot IPC client for the linker daemon.
+//! Persistent IPC client for the linker daemon.
 //!
-//! Used by L1 (session graph summary injection) and L3 (auto-neighborhood
-//! footers on read/edit/write). All calls are best-effort: `None` on any
-//! failure (daemon not running, timeout, bad response).
+//! Uses a process-global connection pool so repeated calls (L1 summary,
+//! L3 auto-neighborhood, `graph_query` tool) reuse a single Unix socket
+//! instead of connect/teardown per call.  The daemon's `connection_loop`
+//! already supports multiple request/response cycles per connection.
+//!
+//! All calls remain best-effort: `None` on any failure (daemon not running,
+//! timeout, bad frame, decode error).  A broken connection is automatically
+//! evicted from the pool and re-established on the next call.
 
 use crate::ipc::frame::FrameReader;
 use crate::ipc::linker_proto::{LinkerQuery, LinkerRequest, LinkerResponse};
 use crate::ipc::SyncIpcStream;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 /// Timeout for linker daemon IPC round-trips.
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Open a sync Unix socket to the linker daemon, send a request, and read the
-/// response frame. Returns `None` if any step fails (daemon not running,
-/// timeout, bad frame, decode error).
-pub(crate) fn connect_and_send(req: &LinkerRequest) -> Option<LinkerResponse> {
-    let sock_path = crate::model::store::linker_daemon_sock_path().ok()?;
-    let mut stream = SyncIpcStream::connect(&sock_path).ok()?;
+// ---------------------------------------------------------------------------
+// Connection pool — one persistent socket shared across all callers.
+// ---------------------------------------------------------------------------
+
+/// A pooled connection: the stream plus its frame reader (buffer state must
+/// stay paired with the stream).
+struct PooledConn {
+    stream: SyncIpcStream,
+    reader: FrameReader,
+}
+
+/// Process-global pool holding at most one persistent connection.
+/// `OnceLock` avoids `lazy_static` / `once_cell` deps; the `Mutex` serialises
+/// access (all callers are on `std::thread` workers, contention is negligible).
+fn pool() -> &'static Mutex<Option<PooledConn>> {
+    static POOL: OnceLock<Mutex<Option<PooledConn>>> = OnceLock::new();
+    POOL.get_or_init(|| Mutex::new(None))
+}
+
+/// Open a new connection to the linker daemon.
+fn open_connection(sock_path: &std::path::Path) -> Option<PooledConn> {
+    let stream = SyncIpcStream::connect(sock_path).ok()?;
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok()?;
+    Some(PooledConn {
+        stream,
+        reader: FrameReader::new(),
+    })
+}
 
+/// Write a request frame and read one response frame on an existing connection.
+///
+/// Returns `None` on any I/O or protocol error — the caller should evict the
+/// connection from the pool.
+fn send_on_conn(conn: &mut PooledConn, req: &LinkerRequest) -> Option<LinkerResponse> {
     let payload = serde_json::to_vec(req).ok()?;
     let prefix = (payload.len() as u32).to_be_bytes();
-    stream.write_all(&prefix).ok()?;
-    stream.write_all(&payload).ok()?;
-    stream.flush().ok()?;
+    conn.stream.write_all(&prefix).ok()?;
+    conn.stream.write_all(&payload).ok()?;
+    conn.stream.flush().ok()?;
 
-    // Read response frame.
-    let mut reader = FrameReader::new();
+    // Read exactly one response frame, reusing the conn's FrameReader.
     let mut buf = [0u8; 64 * 1024];
     loop {
-        let n = stream.read(&mut buf).ok()?;
+        let n = conn.stream.read(&mut buf).ok()?;
         if n == 0 {
             return None;
         }
-        reader.push(&buf[..n]);
-        if let Some(frame) = reader.next_frame().ok()? {
+        conn.reader.push(&buf[..n]);
+        if let Some(frame) = conn.reader.next_frame().ok()? {
             return serde_json::from_slice(&frame).ok();
         }
     }
 }
+
+/// Send a [`LinkerRequest`] to the linker daemon and return the response.
+///
+/// Tries the pooled persistent connection first; if it fails (daemon
+/// restarted, broken pipe, timeout), evicts it and reconnects.  Returns
+/// `None` if the daemon is unreachable.
+pub(crate) fn connect_and_send(req: &LinkerRequest) -> Option<LinkerResponse> {
+    let sock_path = crate::model::store::linker_daemon_sock_path().ok()?;
+
+    let mut guard = pool().lock().ok()?;
+
+    // Try the existing pooled connection.
+    if let Some(ref mut conn) = *guard {
+        if let Some(resp) = send_on_conn(conn, req) {
+            return Some(resp);
+        }
+        // Connection broken — evict it.
+        *guard = None;
+    }
+
+    // Open a fresh connection and send.
+    let mut conn = open_connection(&sock_path)?;
+    let resp = send_on_conn(&mut conn, req);
+    if resp.is_some() {
+        *guard = Some(conn);
+    }
+    resp
+}
+
+// ---------------------------------------------------------------------------
+// High-level convenience wrappers (unchanged public API).
+// ---------------------------------------------------------------------------
 
 /// Result of a linker summary query, for L1 injection.
 pub struct SummaryResult {
