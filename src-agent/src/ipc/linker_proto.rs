@@ -45,6 +45,8 @@ pub enum LinkerQuery {
     Rescan,
     /// Structured bounded subgraph for GUI visualization.
     Visualization(VisualizationRequest),
+    /// Workspace info: per-root file/language counts (for filter pickers).
+    WorkspaceInfo,
 }
 
 /// Direction filter for the visualization query.
@@ -74,6 +76,15 @@ pub struct VisualizationRequest {
     pub max_nodes: usize,
     /// Maximum edges in the result (daemon-enforced).
     pub max_edges: usize,
+    /// Optional workspace root filter — only include nodes under these roots.
+    /// `None` or empty means "all roots".
+    #[serde(default)]
+    pub filter_roots: Option<Vec<String>>,
+    /// Optional language filter — only include nodes with these language names.
+    /// `None` or empty means "all languages". Uses daemon `Lang` names
+    /// (e.g. "Rust", "TypeScript") and must be exact/case-consistent.
+    #[serde(default)]
+    pub filter_languages: Option<Vec<String>>,
 }
 
 /// The linker daemon's reply.
@@ -105,6 +116,8 @@ pub enum LinkerResponse {
     Generation(u64),
     /// Bounded subgraph view for GUI visualization.
     GraphView(GraphViewResult),
+    /// Workspace info: per-root file/language counts.
+    WorkspaceInfo(Vec<WorkspaceRootInfo>),
     /// Error.
     Error(String),
 }
@@ -137,6 +150,9 @@ pub struct GraphViewNode {
     pub role: GraphNodeRole,
     /// BFS depth from the focal file (0 = focus, None = overview).
     pub depth_from_focus: Option<u32>,
+    /// The workspace root this node belongs to (longest matching registered root).
+    #[serde(default)]
+    pub workspace_root: Option<String>,
 }
 
 /// A directed edge in the bounded visualization graph.
@@ -173,6 +189,10 @@ pub struct GraphViewResult {
     pub total_nodes_available: usize,
     /// Total available edges matching the query (may exceed returned count).
     pub total_edges_available: usize,
+    /// Available workspace roots with per-root metadata (sorted deterministically).
+    /// Included regardless of active filters so the UI can populate filter pickers.
+    #[serde(default)]
+    pub available_roots: Vec<WorkspaceRootInfo>,
 }
 
 /// Status of the graph scan returned with registration.
@@ -182,4 +202,24 @@ pub enum ScanStatus {
     Scanning,
     /// Scan complete; graph is ready.
     Ready,
+}
+
+/// Per-root workspace metadata for filter pickers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceRootInfo {
+    /// Canonical absolute path of the workspace root.
+    pub root: String,
+    /// Number of files in this root.
+    pub file_count: usize,
+    /// Language name → file count for this root.
+    pub languages: Vec<LanguageCount>,
+}
+
+/// A language name with its file count (for per-root breakdown).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LanguageCount {
+    /// Language name (e.g. "Rust", "TypeScript").
+    pub name: String,
+    /// Number of files in this language.
+    pub count: usize,
 }

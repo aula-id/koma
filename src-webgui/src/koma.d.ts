@@ -507,13 +507,16 @@ declare global {
   // ─── Linker daemon import graph ─────────────────────────────────────
   // Fetch the linker daemon's code-dependency graph. `path` focuses on
   // one file (null = overview mode). `depth` limits traversal depth.
-  // `direction` picks which edges to include. Reply lands as the
+  // `direction` picks which edges to include. `filterRoots` and
+  // `filterLanguages` narrow the view server-side. Reply lands as the
   // ImportGraph push envelope.
   | {
       r: 'ImportGraph'
       path?: string | null
       depth?: number | null
       direction?: 'dependencies' | 'dependents' | 'both' | null
+      filterRoots?: string[] | null
+      filterLanguages?: string[] | null
     }
 
   // ─── Coding push envelope shapes (Rust → JS) ────────────────────────────

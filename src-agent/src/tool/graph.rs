@@ -20,8 +20,8 @@ impl Tool for GraphQuery {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["dependencies", "dependents", "impact", "neighborhood", "summary", "rescan"],
-                    "description": "What to query."
+                    "enum": ["dependencies", "dependents", "impact", "neighborhood", "summary", "rescan", "workspace_info"],
+                    "description": "What to query. workspace_info returns per-root file/language counts."
                 },
                 "path": {
                     "type": "string",
@@ -79,9 +79,10 @@ impl Tool for GraphQuery {
             }
             "summary" => LinkerRequest::Summary,
             "rescan" => LinkerRequest::Query(LinkerQuery::Rescan),
+            "workspace_info" => LinkerRequest::Query(LinkerQuery::WorkspaceInfo),
             _ => {
                 return Ok(format!(
-                    "unknown action: {action}. Use: dependencies, dependents, impact, neighborhood, summary, rescan"
+                    "unknown action: {action}. Use: dependencies, dependents, impact, neighborhood, summary, rescan, workspace_info"
                 ))
             }
         };
@@ -132,6 +133,19 @@ impl Tool for GraphQuery {
                 }
             }
             LinkerResponse::Ack => Ok("acknowledged".into()),
+            LinkerResponse::WorkspaceInfo(roots) => {
+                if roots.is_empty() {
+                    return Ok("no workspace roots registered".into());
+                }
+                let mut out = String::from("Workspace roots:\n");
+                for r in &roots {
+                    out.push_str(&format!("  {} ({} files)\n", r.root, r.file_count));
+                    for lc in &r.languages {
+                        out.push_str(&format!("    {}: {}\n", lc.name, lc.count));
+                    }
+                }
+                Ok(out)
+            }
             LinkerResponse::Error(e) => Ok(format!("linker error: {e}")),
             _ => Ok("unexpected response type".into()),
         }

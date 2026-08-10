@@ -10,7 +10,9 @@
 //! evicted from the pool and re-established on the next call.
 
 use crate::ipc::frame::FrameReader;
-use crate::ipc::linker_proto::{GraphViewResult, LinkerQuery, LinkerRequest, LinkerResponse, VisualizationRequest};
+use crate::ipc::linker_proto::{
+    GraphViewResult, LinkerQuery, LinkerRequest, LinkerResponse, VisualizationRequest,
+};
 use crate::ipc::SyncIpcStream;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -294,7 +296,9 @@ pub fn normalize_query_path(path: &str, project_roots: &[PathBuf]) -> String {
 /// Fetch a bounded subgraph view for GUI visualization.
 /// Returns `None` if the linker daemon is unreachable.
 pub fn fetch_graph_view(req: &VisualizationRequest) -> Option<GraphViewResult> {
-    let resp = connect_and_send(&LinkerRequest::Query(LinkerQuery::Visualization(req.clone())))?;
+    let resp = connect_and_send(&LinkerRequest::Query(LinkerQuery::Visualization(
+        req.clone(),
+    )))?;
     match resp {
         LinkerResponse::GraphView(v) => Some(v),
         _ => None,

@@ -372,12 +372,16 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 path,
                 depth,
                 direction,
+                filter_roots,
+                filter_languages,
             }) => {
                 super::import_graph::spawn_import_graph(
                     P::clone(push),
                     path,
                     depth,
                     direction,
+                    filter_roots,
+                    filter_languages,
                 );
             }
             // Explore GIT panel + Settings SSH-key vault, all opened/mutated while

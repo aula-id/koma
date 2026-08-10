@@ -635,6 +635,8 @@ pub(super) enum HostCtl {
         path: Option<String>,
         depth: u32,
         direction: crate::ipc::linker_proto::GraphDirection,
+        filter_roots: Option<Vec<String>>,
+        filter_languages: Option<Vec<String>>,
     },
 }
 
