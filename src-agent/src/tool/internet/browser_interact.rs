@@ -95,6 +95,37 @@ impl super::Tool for BrowserInteract {
                     .to_string(),
             );
         }
+
+        // ── Screenshot action (pure validation before env gate) ───────────
+        // These checks are pure (no daemon needed), so do them before the
+        // is_installed() gate to allow tests to verify error messages on CI.
+        if action == "screenshot" {
+            let url = args.get("url").and_then(Value::as_str);
+            let tab_id = args.get("tab_id").and_then(Value::as_str);
+
+            if url.is_none() && tab_id.is_none() {
+                return Ok("error: screenshot requires either 'url' or 'tab_id'".to_string());
+            }
+
+            if let Some(u) = url {
+                if !u.starts_with("http://") && !u.starts_with("https://") {
+                    return Ok(format!(
+                        "error: url must start with http:// or https://, got: {u}"
+                    ));
+                }
+            }
+
+            if !crate::internet::is_installed() {
+                return Ok(
+                    "error: browser_interact requires the internet research environment. \
+                     Run `koma --internet-fullmode-install`."
+                        .to_string(),
+                );
+            }
+
+            return self.run_screenshot(ctx, args);
+        }
+
         if !crate::internet::is_installed() {
             return Ok(
                 "error: browser_interact requires the internet research environment. \
@@ -103,18 +134,13 @@ impl super::Tool for BrowserInteract {
             );
         }
 
-        // ── Screenshot action (special path) ───────────────────────────
-        if action == "screenshot" {
-            return self.run_screenshot(ctx, args);
-        }
-
         let session_dir = ctx
             .session_dir
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("no active session directory"))?;
 
-        let daemon = browser_daemon::get_or_start(session_dir)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let daemon =
+            browser_daemon::get_or_start(session_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         // Build interaction params.
         let locator = args.get("locator").and_then(Value::as_str);
@@ -137,10 +163,7 @@ impl super::Tool for BrowserInteract {
                 .get("direction")
                 .and_then(Value::as_str)
                 .unwrap_or("down");
-            let amount = args
-                .get("amount")
-                .and_then(Value::as_u64)
-                .unwrap_or(500);
+            let amount = args.get("amount").and_then(Value::as_u64).unwrap_or(500);
             action_params["direction"] = json!(direction);
             action_params["amount"] = json!(amount);
         }
@@ -157,19 +180,13 @@ impl super::Tool for BrowserInteract {
 
         // Format result.
         match action {
-            "click" => Ok(format!(
-                "clicked on {}",
-                locator.unwrap_or("element")
-            )),
+            "click" => Ok(format!("clicked on {}", locator.unwrap_or("element"))),
             "fill" => Ok(format!(
                 "filled {} with \"{}\"",
                 locator.unwrap_or("element"),
                 value.unwrap_or("")
             )),
-            "press" => Ok(format!(
-                "pressed key {}",
-                value.unwrap_or("?")
-            )),
+            "press" => Ok(format!("pressed key {}", value.unwrap_or("?"))),
             "select" => Ok(format!(
                 "selected \"{}\" in {}",
                 value.unwrap_or(""),
@@ -184,7 +201,9 @@ impl super::Tool for BrowserInteract {
             }
             "wait" => Ok(format!(
                 "waited for {} {}",
-                args.get("what").and_then(Value::as_str).unwrap_or("condition"),
+                args.get("what")
+                    .and_then(Value::as_str)
+                    .unwrap_or("condition"),
                 value.unwrap_or("")
             )),
             _ => Ok(format!("action '{action}' completed")),
@@ -194,32 +213,15 @@ impl super::Tool for BrowserInteract {
 
 impl BrowserInteract {
     /// Handle the `screenshot` action — absorbs the former `web_screenshot` tool.
+    /// Input validation (url/tab_id presence, URL scheme) is done in `run()` before
+    /// the environment gate so tests can verify error messages without the daemon.
     fn run_screenshot(&self, ctx: &ToolCtx, args: &Value) -> Result<String> {
         let url = args.get("url").and_then(Value::as_str);
         let tab_id = args.get("tab_id").and_then(Value::as_str);
 
-        if url.is_none() && tab_id.is_none() {
-            return Ok("error: screenshot requires either 'url' or 'tab_id'".to_string());
-        }
-
-        if let Some(u) = url {
-            if !u.starts_with("http://") && !u.starts_with("https://") {
-                return Ok(format!("error: url must start with http:// or https://, got: {u}"));
-            }
-        }
-
-        let width = args
-            .get("width")
-            .and_then(Value::as_u64)
-            .unwrap_or(1920) as u32;
-        let height = args
-            .get("height")
-            .and_then(Value::as_u64)
-            .unwrap_or(1080) as u32;
-        let delay_ms = args
-            .get("delay_ms")
-            .and_then(Value::as_u64)
-            .unwrap_or(300) as u32;
+        let width = args.get("width").and_then(Value::as_u64).unwrap_or(1920) as u32;
+        let height = args.get("height").and_then(Value::as_u64).unwrap_or(1080) as u32;
+        let delay_ms = args.get("delay_ms").and_then(Value::as_u64).unwrap_or(300) as u32;
         let full_page = args
             .get("full_page")
             .and_then(Value::as_bool)
@@ -231,7 +233,11 @@ impl BrowserInteract {
             .map_err(|e| anyhow::anyhow!("failed to create .screenshoot dir: {e}"))?;
 
         let target_url = url.unwrap_or("");
-        let filename = screenshot_filename(if target_url.is_empty() { "tab" } else { target_url });
+        let filename = screenshot_filename(if target_url.is_empty() {
+            "tab"
+        } else {
+            target_url
+        });
         let output_path = screenshoot_dir.join(&filename);
         let output_str = output_path
             .to_str()
@@ -243,8 +249,8 @@ impl BrowserInteract {
                 .session_dir
                 .as_deref()
                 .ok_or_else(|| anyhow::anyhow!("no active session directory"))?;
-            let daemon = browser_daemon::get_or_start(session_dir)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let daemon =
+                browser_daemon::get_or_start(session_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
 
             // If URL given, navigate first.
             if !target_url.is_empty() {
@@ -270,13 +276,8 @@ impl BrowserInteract {
         // ── One-shot subprocess path (url only) ────────────────────────
         let w = width.to_string();
         let h = height.to_string();
-        let mut ss_args: Vec<&str> = vec![
-            "screenshot",
-            "--url",
-            target_url,
-            "--output",
-            output_str,
-        ];
+        let mut ss_args: Vec<&str> =
+            vec!["screenshot", "--url", target_url, "--output", output_str];
         if width != 1920 || height != 1080 {
             ss_args.extend_from_slice(&["--width", &w]);
             ss_args.extend_from_slice(&["--height", &h]);
@@ -284,8 +285,7 @@ impl BrowserInteract {
         if !full_page {
             ss_args.push("--no-full-page");
         }
-        let stdout =
-            scrapion_run(&ss_args).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let stdout = scrapion_run(&ss_args).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         let report: Value = serde_json::from_str(stdout.trim())
             .map_err(|e| anyhow::anyhow!("scrapion produced invalid JSON: {e}"))?;
@@ -331,17 +331,14 @@ fn finish_screenshot(
 
     // Register in the screenshot catalog.
     let stem = filename.strip_suffix(".png").unwrap_or(filename);
-    let catalog_msg = match crate::model::screenshot_catalog::register_screenshot(
-        &ctx.workspace,
-        stem,
-        url,
-    ) {
-        Ok(stem) => format!(
-            "catalog: registered as {stem} — description pending. \
+    let catalog_msg =
+        match crate::model::screenshot_catalog::register_screenshot(&ctx.workspace, stem, url) {
+            Ok(stem) => format!(
+                "catalog: registered as {stem} — description pending. \
              Use `load_screenshot` to inspect, then `describe_screenshot` to add a description."
-        ),
-        Err(e) => format!("catalog: registration failed ({e})"),
-    };
+            ),
+            Err(e) => format!("catalog: registration failed ({e})"),
+        };
 
     Ok(format!(
         "screenshot saved: {saved}\nsize: {size} bytes\nurl: {url}\n{catalog_msg}"

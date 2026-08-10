@@ -27,6 +27,8 @@ from scrapion_agent.daemon import (
     TabState,
     validate_url,
     _host_is_blocked,
+    parse_args,
+    DaemonServer,
 )
 
 # ---------------------------------------------------------------------------
@@ -915,3 +917,235 @@ class TestMainDaemonDetection:
         assert "search" in _SUBCOMMANDS
         assert "screenshot" in _SUBCOMMANDS
         assert "daemon" in _SUBCOMMANDS
+
+
+# ---------------------------------------------------------------------------
+# 15. Argument parsing
+# ---------------------------------------------------------------------------
+
+class TestDaemonArgs:
+    """Test CLI argument parsing for --socket / --tcp-port."""
+
+    def test_socket_and_tcp_port_mutually_exclusive(self):
+        with pytest.raises(SystemExit):
+            with patch("sys.argv", ["prog", "--socket", "/tmp/s.sock", "--tcp-port", "0"]):
+                parse_args()
+
+    def test_neither_socket_nor_tcp_port_fails(self):
+        with pytest.raises(SystemExit):
+            with patch("sys.argv", ["prog"]):
+                parse_args()
+
+    def test_tcp_port_zero(self):
+        with patch("sys.argv", ["prog", "--tcp-port", "0"]):
+            args = parse_args()
+            assert args.tcp_port == 0
+            assert args.socket is None
+
+    def test_socket_only(self):
+        with patch("sys.argv", ["prog", "--socket", "/tmp/s.sock"]):
+            args = parse_args()
+            assert args.socket == "/tmp/s.sock"
+            assert args.tcp_port is None
+
+
+# ---------------------------------------------------------------------------
+# 16. DaemonServer — TCP transport (platform-independent)
+# ---------------------------------------------------------------------------
+
+class TestDaemonServerTCP:
+    """Test auth and request/response over a TCP loopback connection."""
+
+    @pytest.mark.asyncio
+    async def test_auth_success_and_request(self):
+        """Start DaemonServer on TCP, authenticate, send request, shutdown."""
+        server = DaemonServer(token="tcp-token-abc", tcp_port=0)
+        # Mock browser lifecycle
+        server.handler._playwright = AsyncMock()
+        server.handler._browser = AsyncMock()
+        server.handler._context = AsyncMock()
+
+        # Start the TCP server
+        server._server = await asyncio.start_server(
+            server._handle_client,
+            host="127.0.0.1",
+            port=0,
+        )
+        actual_port = server._server.sockets[0].getsockname()[1]
+
+        try:
+            # Connect as a client via TCP
+            reader, writer = await asyncio.open_connection("127.0.0.1", actual_port)
+
+            # Send auth token
+            writer.write(b"tcp-token-abc\n")
+            await writer.drain()
+
+            # Read auth response
+            auth_line = await reader.readline()
+            auth_resp = json.loads(auth_line)
+            assert auth_resp["status"] == "ok"
+
+            # Send a request
+            request = {"id": "req-1", "action": "list", "params": {}}
+            writer.write((json.dumps(request) + "\n").encode())
+            await writer.drain()
+
+            resp_line = await reader.readline()
+            resp = json.loads(resp_line)
+            assert resp["id"] == "req-1"
+            assert resp["status"] == "ok"
+
+            # Send shutdown
+            shutdown_req = {"id": "req-2", "action": "shutdown", "params": {}}
+            writer.write((json.dumps(shutdown_req) + "\n").encode())
+            await writer.drain()
+            await reader.readline()
+
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            server._server.close()
+            await server._server.wait_closed()
+
+    @pytest.mark.asyncio
+    async def test_auth_rejects_wrong_token(self):
+        """Wrong token over TCP should be rejected."""
+        server = DaemonServer(token="correct-token", tcp_port=0)
+        server.handler._playwright = AsyncMock()
+        server.handler._browser = AsyncMock()
+        server.handler._context = AsyncMock()
+
+        server._server = await asyncio.start_server(
+            server._handle_client,
+            host="127.0.0.1",
+            port=0,
+        )
+        actual_port = server._server.sockets[0].getsockname()[1]
+
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", actual_port)
+
+            # Send wrong token
+            writer.write(b"wrong-token\n")
+            await writer.drain()
+
+            # Read auth response — should be error
+            auth_line = await reader.readline()
+            auth_resp = json.loads(auth_line)
+            assert auth_resp["status"] == "error"
+            assert "authentication failed" in auth_resp["error"]
+
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            server._server.close()
+            await server._server.wait_closed()
+
+    @pytest.mark.asyncio
+    async def test_malformed_json_handled(self):
+        """Malformed JSON over TCP should return error response."""
+        server = DaemonServer(token="test-token", tcp_port=0)
+        server.handler._playwright = AsyncMock()
+        server.handler._browser = AsyncMock()
+        server.handler._context = AsyncMock()
+
+        server._server = await asyncio.start_server(
+            server._handle_client,
+            host="127.0.0.1",
+            port=0,
+        )
+        actual_port = server._server.sockets[0].getsockname()[1]
+
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", actual_port)
+
+            # Auth
+            writer.write(b"test-token\n")
+            await writer.drain()
+            await reader.readline()  # auth response
+
+            # Send garbage
+            writer.write(b"not json at all\n")
+            await writer.drain()
+
+            resp_line = await reader.readline()
+            resp = json.loads(resp_line)
+            assert resp["status"] == "error"
+            assert "invalid JSON" in resp["error"]
+
+            # Shutdown
+            writer.write((json.dumps({"id": "x", "action": "shutdown", "params": {}}) + "\n").encode())
+            await writer.drain()
+            await reader.readline()
+
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            server._server.close()
+            await server._server.wait_closed()
+
+    @pytest.mark.asyncio
+    async def test_full_lifecycle_tcp(self):
+        """Full lifecycle over TCP: auth, open, list, close, shutdown."""
+        server = DaemonServer(token="lifecycle-tcp", tcp_port=0)
+
+        # Mock browser
+        mock_context = AsyncMock()
+        mock_page = _make_mock_page()
+        mock_context.new_page = AsyncMock(return_value=mock_page)
+
+        server.handler._playwright = AsyncMock()
+        server.handler._browser = AsyncMock()
+        server.handler._context = mock_context
+
+        server._server = await asyncio.start_server(
+            server._handle_client,
+            host="127.0.0.1",
+            port=0,
+        )
+        actual_port = server._server.sockets[0].getsockname()[1]
+
+        task = asyncio.create_task(server.run())
+        await asyncio.sleep(0.05)
+
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", actual_port)
+
+            writer.write(b"lifecycle-tcp\n")
+            await writer.drain()
+            await reader.readline()  # auth ok
+
+            # open
+            writer.write((json.dumps({"id": "1", "action": "open", "params": {"url": "https://example.com"}}) + "\n").encode())
+            await writer.drain()
+            resp = json.loads(await reader.readline())
+            assert resp["status"] == "ok"
+            tab_id = resp["data"]["tab_id"]
+
+            # list
+            writer.write((json.dumps({"id": "2", "action": "list", "params": {}}) + "\n").encode())
+            await writer.drain()
+            resp = json.loads(await reader.readline())
+            assert resp["status"] == "ok"
+            assert len(resp["data"]["tabs"]) == 1
+
+            # close
+            writer.write((json.dumps({"id": "3", "action": "close", "params": {"tab_id": tab_id}}) + "\n").encode())
+            await writer.drain()
+            resp = json.loads(await reader.readline())
+            assert resp["status"] == "ok"
+
+            # shutdown
+            writer.write((json.dumps({"id": "4", "action": "shutdown", "params": {}}) + "\n").encode())
+            await writer.drain()
+            resp = json.loads(await reader.readline())
+            assert resp["status"] == "ok"
+
+            writer.close()
+            await writer.wait_closed()
+            await task
+        finally:
+            if server._server and server._server.is_serving():
+                server._server.close()
+                await server._server.wait_closed()

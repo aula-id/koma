@@ -2,14 +2,15 @@
 
 Launches ONE Playwright Firefox instance and keeps it alive for the entire
 Koma session.  Communicates with the Rust side via newline-delimited JSON
-over a Unix-domain socket.
+over a Unix-domain socket or TCP loopback.
 
 Usage (internal — invoked by ``__main__.``)::
 
-    python -m scrapion_agent daemon --socket <path> --token <token>
+    python -m scrapion_agent daemon --socket <path> --token <token>   # Unix
+    python -m scrapion_agent daemon --tcp-port 0 --token <token>      # Windows
 
 All debug / logging output goes to stderr.  stdout is reserved for the
-initial token line and must never be written to after startup.
+initial token/ready line and must never be written to after startup.
 """
 
 from __future__ import annotations
@@ -668,10 +669,20 @@ class Handler:
 # ---------------------------------------------------------------------------
 
 class DaemonServer:
-    """Unix-socket JSON-line daemon that owns the browser lifecycle."""
+    """JSON-line daemon that owns the browser lifecycle.
 
-    def __init__(self, socket_path: str, token: str) -> None:
+    Listens on either a Unix-domain socket or TCP loopback depending on
+    construction parameters.
+    """
+
+    def __init__(
+        self,
+        socket_path: Optional[str] = None,
+        token: str = "",
+        tcp_port: Optional[int] = None,
+    ) -> None:
         self.socket_path = socket_path
+        self.tcp_port = tcp_port
         self.token = token
         self.handler = Handler()
         self._server: Optional[asyncio.AbstractServer] = None
@@ -819,33 +830,48 @@ class DaemonServer:
     # -- server main loop --------------------------------------------------
 
     async def run(self) -> None:
-        """Start the daemon: browser, socket, event loop."""
-        # Clean up stale socket file
-        sock_path = Path(self.socket_path)
-        if sock_path.exists():
-            sock_path.unlink()
-        sock_path.parent.mkdir(parents=True, exist_ok=True)
+        """Start the daemon: browser, socket/TCP, event loop."""
+        # Clean up stale socket file (Unix socket mode only)
+        if self.socket_path:
+            sock_path = Path(self.socket_path)
+            if sock_path.exists():
+                sock_path.unlink()
+            sock_path.parent.mkdir(parents=True, exist_ok=True)
 
         await self._start_browser()
 
-        # Create Unix socket server
-        self._server = await asyncio.start_unix_server(
-            self._handle_client,
-            path=self.socket_path,
-        )
+        if self.tcp_port is not None:
+            # TCP mode (Windows / cross-platform fallback)
+            self._server = await asyncio.start_server(
+                self._handle_client,
+                host="127.0.0.1",
+                port=self.tcp_port,
+            )
+            # Get the actual port (useful when port=0 for auto-assign)
+            actual_port = self._server.sockets[0].getsockname()[1]
+            # Print ready line with port for Rust to parse
+            stdout = sys.stdout
+            stdout.write(f"ready {actual_port}\n")
+            stdout.flush()
+            log.info("daemon listening on TCP 127.0.0.1:%d", actual_port)
+        else:
+            # Unix socket mode
+            self._server = await asyncio.start_unix_server(
+                self._handle_client,
+                path=self.socket_path,
+            )
+            # Print token to stdout as the FIRST line (for Rust side to read)
+            token_line = self.token + "\n"
+            stdout = sys.stdout
+            stdout.write(token_line)
+            stdout.flush()
+            log.info("daemon listening on %s", self.socket_path)
 
-        # Print token to stdout as the FIRST line (for Rust side to read)
-        # Use unbuffered write to ensure it's sent immediately.
-        token_line = self.token + "\n"
-        stdout = sys.stdout
-        stdout.write(token_line)
-        stdout.flush()
-        log.info("daemon listening on %s", self.socket_path)
-
-        # Install signal handlers
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, lambda: asyncio.ensure_future(self._signal_shutdown()))
+        # Install signal handlers — only on Unix (Windows lacks add_signal_handler)
+        if sys.platform != "win32":
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.add_signal_handler(sig, lambda: asyncio.ensure_future(self._signal_shutdown()))
 
         # Wait until shutdown
         await self._shutdown_event.wait()
@@ -874,10 +900,15 @@ def parse_args() -> argparse.Namespace:
         description="Persistent browser daemon for scrapion_agent",
         prog="python -m scrapion_agent daemon",
     )
-    parser.add_argument(
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
         "--socket",
-        required=True,
-        help="Path for the Unix-domain socket",
+        help="Path for a Unix-domain socket (Unix)",
+    )
+    group.add_argument(
+        "--tcp-port",
+        type=int,
+        help="TCP port to listen on (0 for auto-assign)",
     )
     parser.add_argument(
         "--token",
@@ -895,7 +926,11 @@ def main() -> None:
     # All logging goes to stderr
     log.info("starting daemon")
 
-    server = DaemonServer(socket_path=args.socket, token=token)
+    server = DaemonServer(
+        socket_path=args.socket,
+        token=token,
+        tcp_port=args.tcp_port,
+    )
 
     try:
         asyncio.run(server.run())
