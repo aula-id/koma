@@ -49,8 +49,8 @@ def _build_parser():
     p_ss.add_argument("--output", required=True, help="Output PNG path")
     p_ss.add_argument("--width", type=int, default=0, help="Viewport width in pixels (0 = default)")
     p_ss.add_argument("--height", type=int, default=0, help="Viewport height in pixels (0 = default)")
-    p_ss.add_argument("--full-page", action=argparse.BooleanOptionalAction, default=True,
-                      help="Capture full scrollable page (default: True; use --no-full-page for viewport only)")
+    p_ss.add_argument("--full-page", action=argparse.BooleanOptionalAction, default=False,
+                      help="Capture full scrollable page with auto-scroll (default: False; use --full-page for full page)")
 
     return parser
 

@@ -75,7 +75,7 @@ impl super::Tool for BrowserInteract {
                 },
                 "full_page": {
                     "type": "boolean",
-                    "description": "Capture the full scrollable page for screenshot (default true)."
+                    "description": "Capture the full scrollable page (auto-scrolls to trigger animations first, default false)."
                 }
             },
             "required": ["action"]
@@ -223,7 +223,7 @@ impl BrowserInteract {
         let full_page = args
             .get("full_page")
             .and_then(Value::as_bool)
-            .unwrap_or(true);
+            .unwrap_or(false);
 
         // ── Build output path ───────────────────────────────────────────
         let screenshoot_dir = ctx.workspace.join(".screenshoot");
