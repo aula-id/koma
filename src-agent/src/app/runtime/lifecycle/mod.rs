@@ -682,6 +682,7 @@ fn shutdown_runtime(state: &mut AppState, rt: tokio::runtime::Runtime) {
     // `/security` panel relies on.
     // Best-effort: unregister this process from the linker daemon so its
     // root refcounts decrement and the daemon can idle-reap.
+    #[cfg(feature = "linker")]
     for s in &mut state.rest.sessions {
         crate::linker::client::unregister_client(&s.id);
     }
