@@ -3247,43 +3247,24 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         break
       case 'ImportGraph':
-        set((s) => {
-          // Merge new nodes/edges into accumulated state (chained exploration).
-          // Dedup by path/key so clicking deeper doesn't lose earlier nodes.
-          const existingNodes = new Map(s.importGraph.nodes.map((n) => [n.path, n]))
-          for (const n of env.nodes) {
-            existingNodes.set(n.path, n) // new overwrites stale
-          }
-          const mergedNodes = [...existingNodes.values()]
-
-          const edgeKey = (e: { from: string; to: string }) => `${e.from}\0${e.to}`
-          const existingEdgeSet = new Set(s.importGraph.edges.map(edgeKey))
-          const mergedEdges = [...s.importGraph.edges]
-          for (const e of env.edges) {
-            if (!existingEdgeSet.has(edgeKey(e))) {
-              mergedEdges.push(e)
-            }
-          }
-
-          return {
-            importGraph: {
-              ...s.importGraph,
-              nodes: mergedNodes,
-              edges: mergedEdges,
-              focus: env.focus,
-              generation: env.generation,
-              fileCount: env.fileCount,
-              edgeCount: env.edgeCount,
-              languages: env.languages,
-              nodesTruncated: env.nodesTruncated,
-              edgesTruncated: env.edgesTruncated,
-              totalNodesAvailable: env.totalNodesAvailable,
-              totalEdgesAvailable: env.totalEdgesAvailable,
-              loading: false,
-              error: null,
-            },
-          }
-        })
+        set((s) => ({
+          importGraph: {
+            ...s.importGraph,
+            nodes: env.nodes,
+            edges: env.edges,
+            focus: env.focus,
+            generation: env.generation,
+            fileCount: env.fileCount,
+            edgeCount: env.edgeCount,
+            languages: env.languages,
+            nodesTruncated: env.nodesTruncated,
+            edgesTruncated: env.edgesTruncated,
+            totalNodesAvailable: env.totalNodesAvailable,
+            totalEdgesAvailable: env.totalEdgesAvailable,
+            loading: false,
+            error: null,
+          },
+        }))
         break
       case 'GitGraph':
         set((s) => {
