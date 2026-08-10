@@ -101,12 +101,14 @@ pub(crate) fn capture_baseline(ctx: &ToolCtx, path: &Path) {
 }
 
 /// Maximum number of paths shown per side in the L3 neighborhood footer.
+#[cfg(feature = "linker")]
 const NEIGHBORHOOD_FOOTER_CAP: usize = 8;
 
 /// Best-effort neighborhood footer for L3: queries the linker daemon for the
 /// 1-hop import graph of `path` (resolved absolute path) and appends a
 /// `# Related (graph)` section to `out`. If the daemon is not running, the
 /// file has no graph edges, or the fetch fails, this is a silent no-op.
+#[cfg(feature = "linker")]
 pub(crate) fn append_neighborhood_footer(out: &mut String, path: &Path) {
     // Graph nodes are keyed by canonicalized absolute paths (with forward slashes).
     // Try canonicalize first; fall back to slash-normalized absolute path.
@@ -152,3 +154,7 @@ pub(crate) fn append_neighborhood_footer(out: &mut String, path: &Path) {
         out.push_str(&format!("imported-by: {}{}\n", display.join(", "), suffix));
     }
 }
+
+/// No-op when the linker feature is disabled.
+#[cfg(not(feature = "linker"))]
+pub(crate) fn append_neighborhood_footer(_out: &mut String, _path: &Path) {}

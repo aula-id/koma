@@ -24,6 +24,7 @@ pub mod fs;
 pub mod git_cred;
 pub mod git_operator;
 pub mod git_worktree;
+#[cfg(feature = "linker")]
 pub mod graph;
 pub mod history;
 pub mod internet;
@@ -566,6 +567,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(fs::Read),
         Box::new(search::Grep),
         Box::new(search::Glob),
+        #[cfg(feature = "linker")]
         Box::new(graph::GraphQuery),
         Box::new(fs::Write),
         Box::new(fs::Edit),

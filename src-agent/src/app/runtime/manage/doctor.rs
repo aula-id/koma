@@ -360,7 +360,10 @@ fn check_daemons() -> CheckResult {
     };
 
     // GLOBAL linker daemon liveness.
+    #[cfg(feature = "linker")]
     let linker_live = super::linker::linker_daemon_alive();
+    #[cfg(not(feature = "linker"))]
+    let linker_live = false;
     let linker_note = if linker_live {
         "linker daemon running".to_string()
     } else {

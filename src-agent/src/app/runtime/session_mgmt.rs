@@ -113,6 +113,7 @@ fn warm_session_impl(
     // session's workspace roots, then fetch the summary. All linker IPC runs on
     // a dedicated std::thread so it never stalls the daemon event loop (which
     // must respond to hub probes within 500ms).
+    #[cfg(feature = "linker")]
     {
         let session_id = state.rest.fg().id.clone();
         let workdirs_clone = workdirs.clone();
