@@ -81,19 +81,13 @@ function FolderNode({
   depth,
   onFileClick,
   selectedPath,
-  breadcrumb,
 }: {
   group: FolderGroup
   depth: number
   onFileClick: (path: string) => void
   selectedPath: string | null
-  breadcrumb: string[]
 }) {
   const [expanded, setExpanded] = useState(depth < 1)
-
-  // Auto-expand folders on the breadcrumb chain
-  const isInBreadcrumb = breadcrumb.some((b) => b.startsWith(group.path + '/') || b === group.path)
-  const effectiveExpanded = isInBreadcrumb || expanded
 
   return (
     <div>
@@ -105,14 +99,14 @@ function FolderNode({
         >
           <ChevronRight
             size={10}
-            className={`flex-none transition-transform ${effectiveExpanded ? 'rotate-90' : ''}`}
+            className={`flex-none transition-transform ${expanded ? 'rotate-90' : ''}`}
           />
           <FolderOpen size={12} className="flex-none opacity-50" />
           <span className="truncate">{group.name}</span>
           <span className="ml-auto text-[9px] opacity-40">{countFiles(group)}</span>
         </button>
       )}
-      {effectiveExpanded && (
+      {expanded && (
         <>
           {group.children.map((child) => (
             <FolderNode
@@ -121,7 +115,6 @@ function FolderNode({
               depth={depth + 1}
               onFileClick={onFileClick}
               selectedPath={selectedPath}
-              breadcrumb={breadcrumb}
             />
           ))}
           {group.files.map((f) => (
@@ -157,10 +150,8 @@ export function ImportGraphPanel() {
   const edgeCount = useKoma((s) => s.importGraph.edgeCount)
   const languages = useKoma((s) => s.importGraph.languages)
   const selectedPath = useKoma((s) => s.importGraph.selectedPath)
-  const breadcrumb = useKoma((s) => s.importGraph.breadcrumb)
   const openImportGraphTab = useKoma((s) => s.openImportGraphTab)
   const selectImportGraphNode = useKoma((s) => s.selectImportGraphNode)
-  const navigateBreadcrumb = useKoma((s) => s.navigateBreadcrumb)
   const refreshImportGraph = useKoma((s) => s.refreshImportGraph)
   const [query, setQuery] = useState('')
 
@@ -192,29 +183,6 @@ export function ImportGraphPanel() {
           <Network size={14} className="flex-none opacity-80" />
           <span>Open Import Graph</span>
         </button>
-
-        {/* Breadcrumb chain */}
-        {breadcrumb.length > 0 && (
-          <div className="border-b border-koma-border px-3 py-1.5">
-            <div className="mb-1 text-[10px] text-koma-dim opacity-60">EXPLORATION CHAIN</div>
-            <div className="flex flex-wrap gap-1">
-              {breadcrumb.map((path, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => navigateBreadcrumb(idx)}
-                  className={`rounded px-1.5 py-0.5 text-[10px] ${
-                    idx === breadcrumb.length - 1
-                      ? 'bg-koma-accent/20 font-medium text-koma-accent'
-                      : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'
-                  }`}
-                  title={path}
-                >
-                  {path.split('/').pop()}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* Summary */}
         {fileCount > 0 && (
@@ -265,7 +233,6 @@ export function ImportGraphPanel() {
                 depth={0}
                 onFileClick={handleFileClick}
                 selectedPath={selectedPath}
-                breadcrumb={breadcrumb}
               />
             ))}
           </div>
