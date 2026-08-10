@@ -27,7 +27,8 @@ impl super::Tool for WebScreenshot {
         "Capture a screenshot via a headless browser (renders JavaScript, beats Cloudflare). \
          Full internet mode only. Supply `url` for a one-shot page, or `tab_id` for an existing \
          tab. Optional viewport params: `width` (default 1920), `height` (default 1080), \
-         `delay_ms` (default 300), `full_page` (default true). Saves PNG to `.screenshoot/`."
+         `delay_ms` (default 300), `full_page` (default false — set true to auto-scroll and \
+         capture entire page). Saves PNG to `.screenshoot/`."
     }
 
     fn parameters(&self) -> Value {
@@ -117,7 +118,7 @@ impl super::Tool for WebScreenshot {
         let full_page = args
             .get("full_page")
             .and_then(Value::as_bool)
-            .unwrap_or(true);
+            .unwrap_or(false);
 
         // ── Daemon path (tab_id provided) ──────────────────────────────
         if let Some(tid) = tab_id {

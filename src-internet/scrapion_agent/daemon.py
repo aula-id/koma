@@ -373,7 +373,7 @@ class Handler:
         width = int(params.get("width", DEFAULT_VIEWPORT_WIDTH))
         height = int(params.get("height", DEFAULT_VIEWPORT_HEIGHT))
         delay_ms = int(params.get("delay_ms", 300))
-        full_page = bool(params.get("full_page", True))
+        full_page = bool(params.get("full_page", False))
 
         out = Path(output_path)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -383,6 +383,11 @@ class Handler:
         if delay_ms > 0:
             await asyncio.sleep(delay_ms / 1000.0)
 
+        # For full_page: auto-scroll to trigger IntersectionObserver animations
+        # and lazy-loaded content before capturing.
+        if full_page:
+            await self._prepare_full_page(tab.page, height)
+
         await tab.page.screenshot(path=str(out), full_page=full_page)
 
         return self._ok({
@@ -390,6 +395,65 @@ class Handler:
             "width": width,
             "height": height,
         })
+
+    @staticmethod
+    async def _prepare_full_page(page: Any, viewport_height: int) -> None:
+        """Scroll through the page to trigger animations, then return to top.
+
+        Handles:
+        - IntersectionObserver fade-in animations
+        - Lazy-loaded images and components
+        - Infinite scroll (stops after height stabilises 3 times or 50 iterations)
+        """
+        scroll_step = max(viewport_height - 100, 400)  # overlap to avoid gaps
+        stable_count = 0
+        prev_height = 0
+        max_iterations = 50
+
+        # 1) Scroll to top first
+        await page.keyboard.press("Home")
+        await asyncio.sleep(0.3)
+
+        # 2) Scroll down in increments, letting animations fire
+        for _ in range(max_iterations):
+            await page.mouse.wheel(0, scroll_step)
+            await asyncio.sleep(0.4)  # let IntersectionObserver + lazy load settle
+
+            height_after = await page.evaluate("document.documentElement.scrollHeight")
+            if height_after == prev_height:
+                stable_count += 1
+                if stable_count >= 3:
+                    break  # no new content — we've reached the end
+            else:
+                stable_count = 0
+            prev_height = height_after
+
+        # 3) Scroll back to top so the screenshot starts from the beginning
+        await page.keyboard.press("Home")
+        await asyncio.sleep(0.5)
+
+        # 4) Force all elements visible — full_page resizes the viewport which
+        #    can re-trigger IntersectionObserver and reset opacity/transform.
+        #    This CSS override ensures everything stays visible during capture.
+        await page.evaluate("""() => {
+            const style = document.createElement('style');
+            style.id = '__koma_fullpage_fix';
+            style.textContent = `
+                *, *::before, *::after {
+                    animation-duration: 0s !important;
+                    animation-delay: 0s !important;
+                    transition-duration: 0s !important;
+                    transition-delay: 0s !important;
+                }
+            `;
+            document.head.appendChild(style);
+            // Force re-flow on all elements that look hidden
+            document.querySelectorAll('[style*="opacity"], [style*="transform"]').forEach(el => {
+                el.style.opacity = '1';
+                el.style.transform = 'none';
+            });
+        }""")
+        await asyncio.sleep(0.2)
 
     async def _action_inspect(self, params: dict) -> dict:
         tab, err = self._get_tab(params)
@@ -461,7 +525,7 @@ class Handler:
                     "width": int(action_params.get("width", 1920)),
                     "height": int(action_params.get("height", 1080)),
                     "delay_ms": int(action_params.get("delay_ms", 300)),
-                    "full_page": bool(action_params.get("full_page", True)),
+                    "full_page": bool(action_params.get("full_page", False)),
                 }
                 return await self._action_screenshot(screenshot_params)
 
