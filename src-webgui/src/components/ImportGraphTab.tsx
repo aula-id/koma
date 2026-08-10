@@ -1,184 +1,45 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import {
-  Network,
-  RefreshCw,
-  ChevronRight,
-  ChevronDown,
-  FolderClosed,
-  FolderOpen,
-  FileText,
-  X,
-  AlertTriangle,
-} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Network, RefreshCw, X, Maximize2, AlertTriangle, Search } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { BrailleSpinner } from './BrailleSpinner'
+import {
+  computeImportGraphLayout,
+  type LayoutNode,
+  type LayoutEdge,
+} from '../lib/importGraphLayout'
 
-// Role → color mapping.
-const ROLE_COLORS: Record<string, string> = {
-  Focus: '#3b82f6',
-  Dependency: '#22c55e',
-  Dependent: '#f97316',
-  Overview: '#6b7280',
+// Detail pane width constants (mirrors GraphTab).
+const DETAIL_W_MIN = 220
+const DETAIL_W_MAX = 480
+const DETAIL_W_DEFAULT = 300
+
+// Role → color mapping for nodes.
+const ROLE_COLORS: Record<string, { fill: string; stroke: string; text: string }> = {
+  Focus: { fill: '#3b82f6', stroke: '#2563eb', text: '#ffffff' },
+  Dependency: { fill: '#22c55e', stroke: '#16a34a', text: '#ffffff' },
+  Dependent: { fill: '#f97316', stroke: '#ea580c', text: '#ffffff' },
+  Overview: { fill: '#6b7280', stroke: '#4b5563', text: '#ffffff' },
 }
 
-// ── Tree node (directory or file) ──────────────────────────────────────────
-type TreeNodeData = {
-  name: string
-  fullPath: string
-  isDir: boolean
-  language?: string
-  inDegree?: number
-  outDegree?: number
-  role?: string
-  children: TreeNodeData[]
-}
-
-// Build a directory tree from the flat nodes list.
-function buildTree(nodes: { path: string; language: string; inDegree: number; outDegree: number; role: string }[]): TreeNodeData {
-  const root: TreeNodeData = { name: '', fullPath: '', isDir: true, children: [] }
-
-  for (const node of nodes) {
-    const parts = node.path.split('/')
-    let current = root
-
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i]
-      const isLast = i === parts.length - 1
-      const isDir = !isLast
-      const fullPath = parts.slice(0, i + 1).join('/')
-
-      let child = current.children.find((c) => c.name === part && c.isDir === isDir)
-      if (!child) {
-        child = isLast
-          ? { name: part, fullPath: node.path, isDir: false, language: node.language, inDegree: node.inDegree, outDegree: node.outDegree, role: node.role, children: [] }
-          : { name: part, fullPath, isDir: true, children: [] }
-        current.children.push(child)
-      }
-      current = child
-    }
-  }
-
-  // Sort children: dirs first, then alphabetical.
-  function sortTree(node: TreeNodeData) {
-    node.children.sort((a, b) => {
-      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
-      return a.name.localeCompare(b.name)
-    })
-    for (const child of node.children) {
-      if (child.isDir) sortTree(child)
-    }
-  }
-  sortTree(root)
-
-  return root
-}
-
-// ── TreeView component ─────────────────────────────────────────────────────
-function TreeView({
-  node,
-  depth,
-  expanded,
-  onToggleDir,
-  onSelectFile,
-  selectedPath,
-  edgeFrom,
-  edgeTo,
-}: {
-  node: TreeNodeData
-  depth: number
-  expanded: Set<string>
-  onToggleDir: (path: string) => void
-  onSelectFile: (path: string) => void
-  selectedPath: string | null
-  edgeFrom: Set<string> | null
-  edgeTo: Set<string> | null
-}) {
-  if (node.isDir) {
-    const isOpen = expanded.has(node.fullPath)
-    return (
-      <div>
-        <button
-          type="button"
-          onClick={() => onToggleDir(node.fullPath)}
-          className="flex w-full items-center gap-1 px-1 py-0.5 text-[11px] text-koma-fg/80 hover:bg-koma-hover"
-          style={{ paddingLeft: depth * 12 }}
-        >
-          {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          {isOpen ? <FolderOpen size={12} className="text-koma-accent opacity-70" /> : <FolderClosed size={12} className="opacity-60" />}
-          <span className="truncate">{node.name}</span>
-        </button>
-        {isOpen &&
-          node.children.map((child) => (
-            <TreeView
-              key={child.fullPath}
-              node={child}
-              depth={depth + 1}
-              expanded={expanded}
-              onToggleDir={onToggleDir}
-              onSelectFile={onSelectFile}
-              selectedPath={selectedPath}
-              edgeFrom={edgeFrom}
-              edgeTo={edgeTo}
-            />
-          ))}
-      </div>
-    )
-  }
-
-  // File node
-  const isSelected = node.fullPath === selectedPath
-  const hasDeps = edgeFrom?.has(node.fullPath)
-  const hasDependents = edgeTo?.has(node.fullPath)
-  const roleColor = ROLE_COLORS[node.role ?? 'Overview'] ?? ROLE_COLORS.Overview
-
+// SVG arrowhead marker definition.
+function ArrowDefs() {
   return (
-    <button
-      type="button"
-      onClick={() => onSelectFile(node.fullPath)}
-      className={`flex w-full items-center gap-1 px-1 py-0.5 text-[11px] hover:bg-koma-hover ${
-        isSelected ? 'bg-koma-accent/15 text-koma-accent' : 'text-koma-fg/80'
-      }`}
-      style={{ paddingLeft: depth * 12 }}
-    >
-      <span className="flex-none w-[12px]" />
-      <FileText size={12} className="flex-none opacity-60" />
-      <span className="truncate flex-1 text-left">{node.name}</span>
-      {/* Language badge */}
-      {node.language && (
-        <span className="flex-none text-[9px] text-koma-dim">{node.language}</span>
-      )}
-      {/* Deps/dependents indicators */}
-      {hasDeps && (
-        <span
-          className="flex-none rounded px-0.5 text-[8px] font-bold"
-          style={{ color: '#22c55e' }}
-          title={`${node.outDegree} deps`}
-        >
-          ↓{node.outDegree}
-        </span>
-      )}
-      {hasDependents && (
-        <span
-          className="flex-none rounded px-0.5 text-[8px] font-bold"
-          style={{ color: '#f97316' }}
-          title={`${node.inDegree} dependents`}
-        >
-          ↑{node.inDegree}
-        </span>
-      )}
-      {/* Role dot */}
-      {node.role && node.role !== 'Overview' && (
-        <span
-          className="flex-none h-[6px] w-[6px] rounded-full"
-          style={{ backgroundColor: roleColor }}
-          title={node.role}
-        />
-      )}
-    </button>
+    <defs>
+      <marker
+        id="arrowhead"
+        markerWidth="8"
+        markerHeight="6"
+        refX="8"
+        refY="3"
+        orient="auto"
+      >
+        <path d="M0,0 L8,3 L0,6" fill="#94a3b8" />
+      </marker>
+    </defs>
   )
 }
 
-// ── Main ImportGraphTab ────────────────────────────────────────────────────
+// ─── Main ImportGraphTab ────────────────────────────────────────────────
 export default function ImportGraphTab() {
   const nodes = useKoma((s) => s.importGraph.nodes)
   const edges = useKoma((s) => s.importGraph.edges)
@@ -203,98 +64,212 @@ export default function ImportGraphTab() {
   const selectImportGraphNode = useKoma((s) => s.selectImportGraphNode)
   const clearImportGraphSelection = useKoma((s) => s.clearImportGraphSelection)
 
+  const isActiveTab = useKoma((s) => s.ui.activeTabId === 'import-graph')
   const sessionId = useKoma((s) => s.session.id)
 
-  // Fetch on mount and session change.
+  // Fetch on mount and session change (mirrors GraphTab's useEffect).
   useEffect(() => {
     refreshImportGraph()
   }, [refreshImportGraph, sessionId])
 
-  // ── Build tree ──────────────────────────────────────────────────────────
-  const tree = useMemo(() => buildTree(nodes), [nodes])
+  // ── Layout ────────────────────────────────────────────────────────
+  const layout = useMemo(
+    () => computeImportGraphLayout(nodes, edges, focus),
+    [nodes, edges, focus],
+  )
 
-  // Edge lookup sets for indicator badges.
-  const edgeFrom = useMemo(() => {
-    const s = new Set<string>()
-    for (const e of edges) s.add(e.from)
-    return s
-  }, [edges])
-  const edgeTo = useMemo(() => {
-    const s = new Set<string>()
-    for (const e of edges) s.add(e.to)
-    return s
-  }, [edges])
+  // ── Pan / Zoom ────────────────────────────────────────────────────
+  const canvasRef = useRef<HTMLDivElement | null>(null)
+  const [offsetX, setOffsetX] = useState(0)
+  const [offsetY, setOffsetY] = useState(0)
+  const [scale, setScale] = useState(1)
+  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null)
 
-  // ── Expand/collapse ─────────────────────────────────────────────────────
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
-
-  // Auto-expand on first load.
-  const prevNodeCount = useMemo(() => nodes.length, []) // only initial
-  const [initialized, setInitialized] = useState(false)
-  useEffect(() => {
-    if (!initialized && nodes.length > 0) {
-      // Expand root-level directories.
-      const newExpanded = new Set<string>()
-      const topLevel = tree.children
-      for (const child of topLevel) {
-        if (child.isDir) newExpanded.add(child.fullPath)
-      }
-      setExpanded(newExpanded)
-      setInitialized(true)
-    }
-  }, [nodes.length, tree, initialized])
-
-  // Auto-expand path to selected file.
-  useEffect(() => {
-    if (selectedPath) {
-      setExpanded((prev) => {
-        const next = new Set(prev)
-        const parts = selectedPath.split('/')
-        for (let i = 1; i < parts.length; i++) {
-          next.add(parts.slice(0, i).join('/'))
-        }
-        return next
-      })
-    }
-  }, [selectedPath])
-
-  const onToggleDir = useCallback((path: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault()
+    setScale((prev) => {
+      const delta = e.deltaY > 0 ? -0.1 : 0.1
+      return Math.max(0.2, Math.min(3, prev + delta))
     })
   }, [])
 
-  const onSelectFile = useCallback(
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      // Only start pan on left-click on the background (not on nodes).
+      if (e.button !== 0) return
+      const target = e.target as HTMLElement
+      if (target.closest('[data-graph-node]')) return
+      dragRef.current = { startX: e.clientX, startY: e.clientY, origX: offsetX, origY: offsetY }
+      document.body.style.cursor = 'grabbing'
+      document.body.style.userSelect = 'none'
+    },
+    [offsetX, offsetY],
+  )
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!dragRef.current) return
+    const dx = e.clientX - dragRef.current.startX
+    const dy = e.clientY - dragRef.current.startY
+    setOffsetX(dragRef.current.origX + dx)
+    setOffsetY(dragRef.current.origY + dy)
+  }, [])
+
+  const handleMouseUp = useCallback(() => {
+    if (dragRef.current) {
+      dragRef.current = null
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+  }, [])
+
+  const fitToContent = useCallback(() => {
+    if (layout.width === 0 || layout.height === 0) return
+    const el = canvasRef.current
+    if (!el) return
+    const vw = el.clientWidth
+    const vh = el.clientHeight
+    const sx = vw / layout.width
+    const sy = vh / layout.height
+    const s = Math.min(sx, sy, 1.5) * 0.9
+    setScale(s)
+    setOffsetX((vw - layout.width * s) / 2)
+    setOffsetY((vh - layout.height * s) / 2)
+  }, [layout])
+
+  // Auto-fit on first data load.
+  const prevNodeCount = useRef(0)
+  useEffect(() => {
+    if (nodes.length > 0 && prevNodeCount.current === 0) {
+      requestAnimationFrame(fitToContent)
+    }
+    prevNodeCount.current = nodes.length
+  }, [nodes.length, fitToContent])
+
+  // ── Detail pane resize ────────────────────────────────────────────
+  const [detailW, setDetailW] = useState(DETAIL_W_DEFAULT)
+  const startDetailResize = (e: React.MouseEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = detailW
+    const onMove = (ev: MouseEvent) => {
+      setDetailW(Math.min(DETAIL_W_MAX, Math.max(DETAIL_W_MIN, startW - (ev.clientX - startX))))
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    document.body.style.cursor = 'ew-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  // ── Omnisearch (Cmd+K) ──────────────────────────────────────────────
+  const [showOmni, setShowOmni] = useState(false)
+  const [omniQuery, setOmniQuery] = useState('')
+  const [omniIdx, setOmniIdx] = useState(0)
+  const omniInputRef = useRef<HTMLInputElement | null>(null)
+
+  // Global Cmd+K / Ctrl+K listener.
+  useEffect(() => {
+    if (!isActiveTab) return
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        setShowOmni((prev) => !prev)
+        setOmniQuery('')
+        setOmniIdx(0)
+      }
+      if (e.key === 'Escape' && showOmni) {
+        setShowOmni(false)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [isActiveTab, showOmni])
+
+  // Focus the input when overlay opens.
+  useEffect(() => {
+    if (showOmni) {
+      requestAnimationFrame(() => omniInputRef.current?.focus())
+    }
+  }, [showOmni])
+
+  const omniResults = useMemo(() => {
+    if (!omniQuery.trim()) {
+      // Show nodes with highest connectivity first, then alphabetical.
+      return [...nodes]
+        .sort((a, b) => (b.inDegree + b.outDegree) - (a.inDegree + a.outDegree))
+        .slice(0, 50)
+    }
+    const q = omniQuery.toLowerCase()
+    return nodes
+      .filter((n) => n.path.toLowerCase().includes(q) || n.language.toLowerCase().includes(q))
+      .sort((a, b) => {
+        // Prioritize exact filename match, then path match.
+        const aName = a.path.split('/').pop()?.toLowerCase() ?? ''
+        const bName = b.path.split('/').pop()?.toLowerCase() ?? ''
+        const aExact = aName === q ? 0 : aName.startsWith(q) ? 1 : a.path.toLowerCase().includes(q) ? 2 : 3
+        const bExact = bName === q ? 0 : bName.startsWith(q) ? 1 : b.path.toLowerCase().includes(q) ? 2 : 3
+        if (aExact !== bExact) return aExact - bExact
+        return (b.inDegree + b.outDegree) - (a.inDegree + a.outDegree)
+      })
+      .slice(0, 30)
+  }, [nodes, omniQuery])
+
+  const selectOmniResult = useCallback(
+    (path: string) => {
+      selectImportGraphNode(path)
+      setShowOmni(false)
+      setOmniQuery('')
+    },
+    [selectImportGraphNode],
+  )
+
+  // ── Selected node details ─────────────────────────────────────────
+  const selectedNode = useMemo(
+    () => (selectedPath ? nodes.find((n) => n.path === selectedPath) : null),
+    [nodes, selectedPath],
+  )
+  const directDeps = useMemo(() => {
+    if (!selectedPath) return []
+    return edges.filter((e) => e.from === selectedPath).map((e) => e.to)
+  }, [edges, selectedPath])
+  const directDependents = useMemo(() => {
+    if (!selectedPath) return []
+    return edges.filter((e) => e.to === selectedPath).map((e) => e.from)
+  }, [edges, selectedPath])
+
+  // ── Node click ────────────────────────────────────────────────────
+  const onNodeClick = useCallback(
     (path: string) => {
       selectImportGraphNode(path)
     },
     [selectImportGraphNode],
   )
 
-  // ── Selected file detail ────────────────────────────────────────────────
-  const selectedNode = useMemo(
-    () => (selectedPath ? nodes.find((n) => n.path === selectedPath) : null),
-    [nodes, selectedPath],
-  )
-
-  const directDeps = useMemo(() => {
-    if (!selectedPath) return []
-    return edges.filter((e) => e.from === selectedPath).map((e) => e.to)
-  }, [edges, selectedPath])
-
-  const directDependents = useMemo(() => {
-    if (!selectedPath) return []
-    return edges.filter((e) => e.to === selectedPath).map((e) => e.from)
-  }, [edges, selectedPath])
-
   return (
     <div className="flex h-full w-full min-w-0 flex-col">
       {/* ── Header bar ─────────────────────────────────────────────── */}
       <div className="flex flex-none items-center gap-2 border-b border-koma-border px-3 py-1.5 text-[12px] text-koma-dim">
         <Network size={13} className="flex-none opacity-70" />
+
+        {/* Search trigger (opens Cmd+K omnisearch) */}
+        <button
+          type="button"
+          onClick={() => {
+            setShowOmni(true)
+            setOmniQuery('')
+            setOmniIdx(0)
+          }}
+          className="flex items-center gap-1.5 rounded border border-koma-border bg-koma-bg px-2 py-0.5 text-[11px] text-koma-dim hover:border-koma-accent/40 hover:text-koma-fg"
+        >
+          <Search size={11} />
+          <span>Search files…</span>
+          <kbd className="ml-1 rounded bg-koma-panel2 px-1 py-px text-[9px] opacity-60">⌘K</kbd>
+        </button>
 
         {/* Depth selector */}
         <span className="text-[10px] text-koma-dim opacity-60">Depth:</span>
@@ -350,6 +325,15 @@ export default function ImportGraphTab() {
 
         <button
           type="button"
+          onClick={() => fitToContent()}
+          title="Fit to content"
+          aria-label="Fit to content"
+          className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
+        >
+          <Maximize2 size={12} />
+        </button>
+        <button
+          type="button"
           onClick={() => refreshImportGraph()}
           title="Refresh graph"
           aria-label="Refresh graph"
@@ -362,8 +346,16 @@ export default function ImportGraphTab() {
 
       {/* ── Main content ──────────────────────────────────────────── */}
       <div className="flex min-h-0 min-w-0 flex-1">
-        {/* File Tree */}
-        <div className="flex-1 min-h-0 overflow-y-auto">
+        {/* SVG Canvas */}
+        <div
+          ref={canvasRef}
+          onWheel={handleWheel}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          className="min-h-0 min-w-0 flex-1 overflow-hidden"
+        >
           {error ? (
             <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-center text-[12px] text-koma-dim">
               <AlertTriangle size={24} className="text-koma-warn opacity-70" />
@@ -393,129 +385,282 @@ export default function ImportGraphTab() {
               )}
             </div>
           ) : (
-            tree.children.map((child) => (
-              <TreeView
-                key={child.fullPath}
-                node={child}
-                depth={0}
-                expanded={expanded}
-                onToggleDir={onToggleDir}
-                onSelectFile={onSelectFile}
-                selectedPath={selectedPath}
-                edgeFrom={edgeFrom}
-                edgeTo={edgeTo}
-              />
-            ))
+            <svg
+              width="100%"
+              height="100%"
+              style={{
+                transform: `translate(${offsetX}px, ${offsetY}px) scale(${scale})`,
+                transformOrigin: '0 0',
+              }}
+            >
+              <ArrowDefs />
+
+              {/* Edges */}
+              {layout.edges.map((e, i) => {
+                const pts = e.points
+                if (pts.length < 2) return null
+                const d = pts.map((p, j) => `${j === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')
+                return (
+                  <path
+                    key={`${e.from}->${e.to}-${i}`}
+                    d={d}
+                    fill="none"
+                    stroke="#94a3b8"
+                    strokeWidth={1}
+                    strokeOpacity={0.5}
+                    markerEnd="url(#arrowhead)"
+                  />
+                )
+              })}
+
+              {/* Nodes */}
+              {layout.nodes.map((n) => {
+                const colors = ROLE_COLORS[n.role] ?? ROLE_COLORS.Overview
+                const isSelected = n.id === selectedPath
+                return (
+                  <g
+                    key={n.id}
+                    data-graph-node
+                    onClick={() => onNodeClick(n.id)}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <rect
+                      x={n.x}
+                      y={n.y}
+                      width={n.width}
+                      height={n.height}
+                      rx={4}
+                      fill={colors.fill}
+                      fillOpacity={isSelected ? 1 : 0.85}
+                      stroke={isSelected ? '#ffffff' : colors.stroke}
+                      strokeWidth={isSelected ? 2 : 1}
+                    />
+                    <text
+                      x={n.x + 8}
+                      y={n.y + NODE_H_CENTER}
+                      fill={colors.text}
+                      fontSize={10}
+                      dominantBaseline="central"
+                      fontFamily="monospace"
+                    >
+                      {n.label.length > 20 ? n.label.slice(0, 19) + '…' : n.label}
+                    </text>
+                    {/* Language badge */}
+                    <text
+                      x={n.x + n.width - 6}
+                      y={n.y + NODE_H_CENTER}
+                      fill={colors.text}
+                      fontSize={8}
+                      textAnchor="end"
+                      dominantBaseline="central"
+                      opacity={0.6}
+                    >
+                      {n.language}
+                    </text>
+                  </g>
+                )
+              })}
+            </svg>
           )}
         </div>
 
         {/* ── Detail pane (right) ──────────────────────────────────── */}
         {selectedNode && (
-          <div
-            className="flex min-h-0 min-w-0 flex-none flex-col overflow-y-auto border-l border-koma-border bg-koma-panel2"
-            style={{ width: 300 }}
-          >
-            <div className="flex flex-none items-center justify-between border-b border-koma-border px-3 py-1.5">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-koma-dim">
-                File Detail
-              </span>
-              <button
-                type="button"
-                onClick={clearImportGraphSelection}
-                title="Close detail"
-                aria-label="Close detail"
-                className="flex h-5 w-5 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
-              >
-                <X size={13} />
-              </button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-[11px]">
-              {/* Full path */}
-              <div className="mb-2 break-all font-mono text-[10px] text-koma-dim">
-                {selectedNode.path}
-              </div>
-
-              {/* Meta badges */}
-              <div className="mb-3 flex flex-wrap gap-2">
-                <span className="rounded bg-koma-bg px-1.5 py-0.5 text-[10px] text-koma-fg">
-                  {selectedNode.language}
+          <>
+            <div
+              onMouseDown={startDetailResize}
+              className="w-[5px] flex-none cursor-ew-resize border-l border-koma-border hover:bg-koma-grip"
+            />
+            <div
+              style={{ width: detailW }}
+              className="flex min-h-0 min-w-0 flex-none flex-col overflow-y-auto border-l border-koma-border bg-koma-panel2"
+            >
+              <div className="flex flex-none items-center justify-between border-b border-koma-border px-3 py-1.5">
+                <span className="text-[11px] font-medium uppercase tracking-wide text-koma-dim">
+                  File Detail
                 </span>
-                <span
-                  className="rounded px-1.5 py-0.5 text-[10px]"
-                  style={{
-                    backgroundColor: (ROLE_COLORS[selectedNode.role] ?? '#6b7280') + '30',
-                    color: ROLE_COLORS[selectedNode.role] ?? '#6b7280',
-                  }}
+                <button
+                  type="button"
+                  onClick={clearImportGraphSelection}
+                  title="Close detail"
+                  aria-label="Close detail"
+                  className="flex h-5 w-5 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
                 >
-                  {selectedNode.role}
-                </span>
-                <span className="text-[10px] text-koma-dim">
-                  in: {selectedNode.inDegree} · out: {selectedNode.outDegree}
-                </span>
+                  <X size={13} />
+                </button>
               </div>
-
-              {/* Dependencies (outgoing) */}
-              {directDeps.length > 0 && (
-                <div className="mb-3">
-                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-koma-dim">
-                    Dependencies ({directDeps.length})
-                  </div>
-                  <ul className="flex flex-col gap-0.5">
-                    {directDeps.map((p) => (
-                      <li key={p}>
-                        <button
-                          type="button"
-                          onClick={() => selectImportGraphNode(p)}
-                          className="flex w-full items-center gap-1 truncate text-left text-[10px] text-koma-fg opacity-80 hover:text-koma-accent hover:opacity-100"
-                        >
-                          <FileText size={10} className="flex-none opacity-50" />
-                          <span className="truncate">{p.split('/').slice(-2).join('/')}</span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+              <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-[11px]">
+                {/* Full path */}
+                <div className="mb-2 break-all font-mono text-[10px] text-koma-dim">
+                  {selectedNode.path}
                 </div>
-              )}
 
-              {/* Dependents (incoming) */}
-              {directDependents.length > 0 && (
-                <div className="mb-3">
-                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-koma-dim">
-                    Dependents ({directDependents.length})
-                  </div>
-                  <ul className="flex flex-col gap-0.5">
-                    {directDependents.map((p) => (
-                      <li key={p}>
-                        <button
-                          type="button"
-                          onClick={() => selectImportGraphNode(p)}
-                          className="flex w-full items-center gap-1 truncate text-left text-[10px] text-koma-fg opacity-80 hover:text-koma-accent hover:opacity-100"
-                        >
-                          <FileText size={10} className="flex-none opacity-50" />
-                          <span className="truncate">{p.split('/').slice(-2).join('/')}</span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+                {/* Meta */}
+                <div className="mb-3 flex flex-wrap gap-2">
+                  <span className="rounded bg-koma-bg px-1.5 py-0.5 text-[10px] text-koma-fg">
+                    {selectedNode.language}
+                  </span>
+                  <span
+                    className="rounded px-1.5 py-0.5 text-[10px]"
+                    style={{
+                      backgroundColor: ROLE_COLORS[selectedNode.role]?.fill + '30',
+                      color: ROLE_COLORS[selectedNode.role]?.fill,
+                    }}
+                  >
+                    {selectedNode.role}
+                  </span>
+                  <span className="text-[10px] text-koma-dim">
+                    in: {selectedNode.inDegree} · out: {selectedNode.outDegree}
+                  </span>
                 </div>
-              )}
 
-              {/* Impact button */}
-              <button
-                type="button"
-                onClick={() => {
-                  setImportGraphDepth(3)
-                  setImportGraphDirection('both')
-                  refreshImportGraph(selectedNode.path)
-                }}
-                className="mt-2 w-full rounded bg-koma-accent/15 px-2 py-1.5 text-[11px] font-medium text-koma-accent hover:bg-koma-accent/25"
-              >
-                Impact Analysis (depth 3, both)
-              </button>
+                {/* Dependencies (outgoing) */}
+                {directDeps.length > 0 && (
+                  <div className="mb-3">
+                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-koma-dim">
+                      Dependencies ({directDeps.length})
+                    </div>
+                    <ul className="flex flex-col gap-0.5">
+                      {directDeps.map((p) => (
+                        <li key={p}>
+                          <button
+                            type="button"
+                            onClick={() => selectImportGraphNode(p)}
+                            className="w-full truncate text-left text-[10px] text-koma-fg opacity-80 hover:text-koma-accent hover:opacity-100"
+                          >
+                            {p.split('/').slice(-2).join('/')}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Dependents (incoming) */}
+                {directDependents.length > 0 && (
+                  <div className="mb-3">
+                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-koma-dim">
+                      Dependents ({directDependents.length})
+                    </div>
+                    <ul className="flex flex-col gap-0.5">
+                      {directDependents.map((p) => (
+                        <li key={p}>
+                          <button
+                            type="button"
+                            onClick={() => selectImportGraphNode(p)}
+                            className="w-full truncate text-left text-[10px] text-koma-fg opacity-80 hover:text-koma-accent hover:opacity-100"
+                          >
+                            {p.split('/').slice(-2).join('/')}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Impact button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImportGraphDepth(3)
+                    setImportGraphDirection('both')
+                    refreshImportGraph(selectedNode.path)
+                  }}
+                  className="mt-2 w-full rounded bg-koma-accent/15 px-2 py-1.5 text-[11px] font-medium text-koma-accent hover:bg-koma-accent/25"
+                >
+                  Impact Analysis (depth 3, both)
+                </button>
+              </div>
             </div>
-          </div>
+          </>
         )}
       </div>
+
+      {/* ── Omnisearch overlay (Cmd+K) ──────────────────────────────── */}
+      {showOmni && (
+        <div
+          className="absolute inset-0 z-50 flex items-start justify-center bg-black/40 pt-[15vh]"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setShowOmni(false)
+          }}
+        >
+          <div className="w-[520px] max-h-[60vh] flex flex-col overflow-hidden rounded-lg border border-koma-border bg-koma-panel shadow-2xl">
+            {/* Search input */}
+            <div className="flex items-center gap-2 border-b border-koma-border px-3 py-2">
+              <Search size={14} className="flex-none text-koma-dim" />
+              <input
+                ref={omniInputRef}
+                type="text"
+                value={omniQuery}
+                onChange={(e) => {
+                  setOmniQuery(e.target.value)
+                  setOmniIdx(0)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault()
+                    setOmniIdx((i) => Math.min(i + 1, omniResults.length - 1))
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault()
+                    setOmniIdx((i) => Math.max(i - 1, 0))
+                  } else if (e.key === 'Enter' && omniResults[omniIdx]) {
+                    selectOmniResult(omniResults[omniIdx].path)
+                  } else if (e.key === 'Escape') {
+                    setShowOmni(false)
+                  }
+                }}
+                placeholder="Search files by name or language…"
+                className="flex-1 bg-transparent text-[13px] text-koma-fg placeholder:text-koma-dim/50 focus:outline-none"
+              />
+              <kbd className="flex-none rounded bg-koma-bg px-1 py-px text-[9px] text-koma-dim">ESC</kbd>
+            </div>
+            {/* Results */}
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {omniResults.length === 0 ? (
+                <div className="px-3 py-4 text-center text-[12px] text-koma-dim opacity-60">
+                  No matching files
+                </div>
+              ) : (
+                <ul>
+                  {omniResults.map((n, i) => {
+                    const isGraphSelected = n.path === selectedPath
+                    const isHighlighted = i === omniIdx
+                    return (
+                      <li key={n.path}>
+                        <button
+                          type="button"
+                          onClick={() => selectOmniResult(n.path)}
+                          onMouseEnter={() => setOmniIdx(i)}
+                          className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] ${
+                            isHighlighted
+                              ? 'bg-koma-accent/15 text-koma-accent'
+                              : isGraphSelected
+                                ? 'bg-koma-accent/5 text-koma-accent'
+                                : 'text-koma-fg hover:bg-koma-hover'
+                          }`}
+                        >
+                          <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{n.path}</span>
+                          <span className="flex-none text-[9px] text-koma-dim opacity-60">{n.language}</span>
+                          <span className="flex-none text-[9px] text-koma-dim opacity-40" title="dependents / dependencies">
+                            {n.inDegree}↑ {n.outDegree}↓
+                          </span>
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </div>
+            {/* Footer hint */}
+            <div className="flex-none border-t border-koma-border px-3 py-1.5 text-[10px] text-koma-dim opacity-50">
+              ↑↓ navigate · Enter select · Esc close
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
+
+// Center y for 32px-high nodes (must match NODE_H in importGraphLayout.ts).
+const NODE_H_CENTER = 16
