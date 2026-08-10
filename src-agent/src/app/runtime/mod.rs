@@ -29,6 +29,7 @@ pub(crate) mod commands;
 mod shortsend;
 
 mod lifecycle;
+#[cfg(feature = "linker")]
 mod linker_daemon;
 mod mcp_daemon;
 mod oauth_daemon;
@@ -59,6 +60,7 @@ pub use client::client_run;
 // guard uses to REFUSE running a second writer while ANY session-daemon is live;
 // `ensure_daemon_running(session_id, …)` is the default path's "connect if up, else spawn
 // a detached daemon and wait until it accepts" primitive (the thin client then attaches).
+#[cfg(feature = "linker")]
 pub use manage::ensure_linker_daemon_running;
 pub use manage::{
     any_daemon_alive, ensure_daemon_running, migrate_legacy_daemon, print_daemon_usage,
@@ -79,6 +81,7 @@ pub use lifecycle::{run, run_daemon, run_daemon_selftest};
 // Re-export the GLOBAL MCP daemon entry so `main` can dispatch `koma --mcp-daemon`
 // (built in the `mcp_daemon` submodule). Additive: no session-daemon path uses it yet
 // — the session-daemon MCP proxy in the next commit will.
+#[cfg(feature = "linker")]
 pub use linker_daemon::run_linker_daemon;
 pub use mcp_daemon::run_mcp_daemon;
 pub use oauth_daemon::run_oauth_daemon;

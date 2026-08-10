@@ -39,12 +39,14 @@ pub mod version;
 
 pub use ext::{print_ext_usage, run_ext_install_dev};
 pub use runtime::client_run;
+#[cfg(feature = "linker")]
 pub use runtime::ensure_linker_daemon_running;
 #[cfg(feature = "gui")]
 pub use runtime::gui::run_gui;
 pub use runtime::run;
 pub use runtime::run_daemon;
 pub use runtime::run_daemon_selftest;
+#[cfg(feature = "linker")]
 pub use runtime::run_linker_daemon;
 pub use runtime::run_mcp_daemon;
 pub use runtime::run_oauth_daemon;

@@ -212,18 +212,18 @@ mod tests {
 
     #[test]
     fn web_search_full_query_uses_default_engine() {
-        let mut ctx = make_ctx(InternetMode::Full);
+        // Use Simple mode so the mode gate fires BEFORE any network call,
+        // making this test deterministic regardless of scrapion install state.
+        // The URL is built from the query using the default engine template
+        // (search_engine = None) before the gate check — if the URL building
+        // failed, we'd get a different error.
+        let mut ctx = make_ctx(InternetMode::Simple);
         ctx.search_engine = None;
         let args = json!({"query": "rust async"});
-        // Gate will reject (no install), but the URL was built — verify it
-        // contains the percent-encoded query from the default DuckDuckGo engine.
         let result = WebSearchFull.run(&ctx, &args).unwrap();
-        // Full-mode gate fires first (no install), so we won't reach URL building.
-        // Just verify the error is the install gate, not a missing-arg error.
         assert!(
-            result.contains("requires the internet research environment")
-                || result.contains("rust+async"),
-            "{result}"
+            result.contains("requires internet mode `full`"),
+            "expected mode gate error, got: {result}"
         );
     }
 

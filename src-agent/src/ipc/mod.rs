@@ -63,6 +63,7 @@ pub fn split_stream(stream: IpcStream) -> (IpcReadHalf, IpcWriteHalf) {
 pub mod client;
 pub mod conn;
 pub mod frame;
+#[cfg(feature = "linker")]
 pub mod linker_proto;
 pub mod mcp_proto;
 pub mod oauth_proto;

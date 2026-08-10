@@ -84,13 +84,48 @@ fn handle_koma_request(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>
         return handle_extension_request(uri.path());
     }
 
-    let path = uri.path().trim_start_matches('/');
-    let path = if path.is_empty() { "index.html" } else { path };
+    let url_path = uri.path().trim_start_matches('/');
+    let url_path = if url_path.is_empty() { "index.html" } else { url_path };
 
-    match WEBUI.get_file(path) {
+    // `koma://localhost/image/<encoded_path>`: serve a local image file for
+    // inline rendering in the React transcript. The path is URL-encoded to
+    // handle spaces/special chars. Only image extensions are served; the
+    // path must be absolute and exist on disk.
+    if url_path.starts_with("image/") {
+        use percent_encoding::percent_decode_str;
+        let encoded = &url_path["image/".len()..];
+        if let Ok(decoded) = percent_decode_str(encoded).decode_utf8() {
+            let p = std::path::Path::new(decoded.as_ref());
+            if p.is_absolute() && p.exists() {
+                let mime = match p
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                {
+                    "png" => "image/png",
+                    "jpg" | "jpeg" => "image/jpeg",
+                    "gif" => "image/gif",
+                    "webp" => "image/webp",
+                    "svg" => "image/svg+xml",
+                    _ => "application/octet-stream",
+                };
+                if let Ok(bytes) = std::fs::read(p) {
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", mime)
+                        .header("Cache-Control", "private, max-age=3600")
+                        .body(Cow::Owned(bytes))
+                        .unwrap_or_else(|_| internal_error_response());
+                }
+            }
+        }
+        return not_found_response();
+    }
+
+    match WEBUI.get_file(url_path) {
         Some(file) => Response::builder()
             .status(StatusCode::OK)
-            .header("Content-Type", mime_for(path))
+            .header("Content-Type", mime_for(url_path))
             .body(Cow::Borrowed(file.contents()))
             .unwrap_or_else(|_| internal_error_response()),
         None => not_found_response(),
