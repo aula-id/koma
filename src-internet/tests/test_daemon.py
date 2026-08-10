@@ -1111,8 +1111,7 @@ class TestDaemonServerTCP:
         )
         actual_port = server._server.sockets[0].getsockname()[1]
 
-        task = asyncio.create_task(server.run())
-        await asyncio.sleep(0.05)
+        # Start server manually -- do NOT call server.run() which launches real browser
 
         try:
             reader, writer = await asyncio.open_connection("127.0.0.1", actual_port)
@@ -1149,8 +1148,6 @@ class TestDaemonServerTCP:
 
             writer.close()
             await writer.wait_closed()
-            await task
         finally:
-            if server._server and server._server.is_serving():
-                server._server.close()
-                await server._server.wait_closed()
+            server._server.close()
+            await server._server.wait_closed()
