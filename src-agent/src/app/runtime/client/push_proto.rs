@@ -647,6 +647,11 @@ pub(super) enum PushEnvelope {
         request_id: String,
         error: Option<String>,
     },
+    /// One-shot import-graph visualization result answering a `GuiReq::ImportGraph`
+    /// request from the GUI. Computed by the linker daemon (off-thread), pushed the
+    /// same way regardless of attach state, ALWAYS a reply so the panel never hangs.
+    #[cfg(feature = "linker")]
+    ImportGraph(super::import_graph::ImportGraphResult),
 }
 
 /// Push a swap-START [`PushEnvelope::Switching`] for target session `to`. Called at every

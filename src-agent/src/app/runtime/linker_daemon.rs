@@ -642,6 +642,10 @@ fn handle_query(
                 .ok();
             LinkerResponse::Ack
         }
+        LinkerQuery::Visualization(req) => {
+            let result = graph.visualization_view(&req);
+            LinkerResponse::GraphView(result)
+        }
     }
 }
 

@@ -8,12 +8,13 @@ import { McpPanel } from './panels/McpPanel'
 import { ConnectorPanel } from './panels/ConnectorPanel'
 import { AgentsPanel } from './panels/AgentsPanel'
 import { UsagePanel } from './panels/UsagePanel'
+import { ImportGraphPanel } from './panels/ImportGraphPanel'
 import { StorePanel } from './panels/StorePanel'
 import { Segmented } from './panels/form'
 import { useKoma } from '../store/koma'
 import { ErrorBoundary } from './ErrorBoundary'
 
-export type SidebarView = 'explore' | 'git' | 'coding' | 'mcp' | 'connector' | 'agents' | 'usage' | 'store'
+export type SidebarView = 'explore' | 'git' | 'coding' | 'mcp' | 'connector' | 'importGraph' | 'agents' | 'usage' | 'store'
 
 type SidebarProps = {
   width: number
@@ -26,6 +27,7 @@ const TITLES: Record<SidebarView, string> = {
   coding: 'Coding',
   mcp: 'MCP Servers',
   connector: 'Connector',
+  importGraph: 'Import Graph',
   agents: 'Agents',
   usage: 'Usage',
   store: 'Extensions',
@@ -44,6 +46,7 @@ export function Sidebar({ width, view }: SidebarProps) {
   const refreshGraph = useKoma((s) => s.refreshGraph)
   const refreshUsagePreview = useKoma((s) => s.refreshUsagePreview)
   const refreshMcpStatus = useKoma((s) => s.refreshMcpStatus)
+  const refreshImportGraph = useKoma((s) => s.refreshImportGraph)
   // Set true the instant a UsagePreview req fires (mount, scope/session
   // change, or this button) and cleared when the matching reply is applied
   // (see the 'UsagePreview' push case in the store) — drives the button's
@@ -115,6 +118,17 @@ export function Sidebar({ width, view }: SidebarProps) {
             {mcpStatusBusy ? <BrailleSpinner size={12} /> : <RefreshCw size={12} />}
           </button>
         )}
+        {view === 'importGraph' && (
+          <button
+            type="button"
+            onClick={() => refreshImportGraph()}
+            title="Refresh"
+            aria-label="Refresh import graph"
+            className="flex h-5 w-5 flex-none items-center justify-center rounded normal-case text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100"
+          >
+            <RefreshCw size={12} />
+          </button>
+        )}
       </div>
       <div className="relative min-h-0 flex-1">
         {view === 'explore' && <ExplorePanel />}
@@ -126,6 +140,7 @@ export function Sidebar({ width, view }: SidebarProps) {
         )}
         {view === 'mcp' && <McpPanel />}
         {view === 'connector' && <ConnectorPanel />}
+        {view === 'importGraph' && <ImportGraphPanel />}
         {view === 'agents' && <AgentsPanel />}
         {view === 'usage' && <UsagePanel />}
         {view === 'store' && <StorePanel />}

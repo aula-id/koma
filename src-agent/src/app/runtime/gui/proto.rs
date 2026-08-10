@@ -937,4 +937,15 @@ pub(super) enum GuiReq {
     WriteErrorLog {
         message: String,
     },
+    /// Import-graph visualization request. `path` is the focal file (None = overview);
+    /// `depth` is traversal depth (1–3, clamped); `direction` is
+    /// `"dependencies"`/`"dependents"`/`"both"`.
+    #[cfg(feature = "linker")]
+    ImportGraph {
+        path: Option<String>,
+        #[serde(default)]
+        depth: Option<u32>,
+        #[serde(default)]
+        direction: Option<String>,
+    },
 }

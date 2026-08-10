@@ -257,6 +257,12 @@ pub(super) fn push_loop(
     let (key_reveal_tx, key_reveal_rx) = std::sync::mpsc::channel::<super::keys::KeyRevealResult>();
     let (key_op_tx, key_op_rx) = std::sync::mpsc::channel::<super::keys::KeyOpResult>();
 
+    // --- IMPORT GRAPH (ImportGraph) --- off-thread linker daemon IPC, same reasoning
+    // as the GIT channels above (blocking IPC to the linker daemon).
+    #[cfg(feature = "linker")]
+    let (import_graph_tx, import_graph_rx) =
+        std::sync::mpsc::channel::<super::import_graph::ImportGraphResult>();
+
     // --- Extension STORE (StoreBrowse/StoreDetail/ListInstalledExtensions) ---
     // Browse/detail are a blocking `reqwest` GET (koma.run, PUBLIC/no-auth) and the
     // installed-list is a blocking `~/.koma/config.json` read, so — same reasoning as
@@ -806,6 +812,19 @@ pub(super) fn push_loop(
                         current_owned.as_deref(),
                     );
                 }
+                #[cfg(feature = "linker")]
+                Ok(super::HostCtl::ImportGraph {
+                    path,
+                    depth,
+                    direction,
+                }) => {
+                    super::import_graph::spawn_import_graph_attached(
+                        import_graph_tx.clone(),
+                        path,
+                        depth,
+                        direction,
+                    );
+                }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.
                 Err(TryRecvError::Disconnected) => return HostTransition::Exit,
@@ -951,6 +970,15 @@ pub(super) fn push_loop(
         }
         while let Ok((id, detail, error)) = installed_detail_rx.try_recv() {
             super::push_proto::push_installed_ext_detail(push, id, detail, error);
+        }
+
+        // --- IMPORT GRAPH: push any completed off-thread linker daemon visualization ---
+        #[cfg(feature = "linker")]
+        while let Ok(result) = import_graph_rx.try_recv() {
+            super::render::emit(
+                push,
+                &super::push_proto::PushEnvelope::ImportGraph(result),
+            );
         }
 
         // --- (b-ter) mirror the staged-attachment markers for the ipc Submit append ---

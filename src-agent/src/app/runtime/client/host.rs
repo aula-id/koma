@@ -367,6 +367,19 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     super::file_ops::handle_file_ctl(&ctl, &push2, &workdirs, session.as_deref());
                 });
             }
+            #[cfg(feature = "linker")]
+            Ok(HostCtl::ImportGraph {
+                path,
+                depth,
+                direction,
+            }) => {
+                super::import_graph::spawn_import_graph(
+                    P::clone(push),
+                    path,
+                    depth,
+                    direction,
+                );
+            }
             // Explore GIT panel + Settings SSH-key vault, all opened/mutated while
             // detached (StartScreen / swapper): git/fs/`ssh-keygen` are blocking, so
             // each runs on a plain OS thread rather than the async runtime, and NEVER
