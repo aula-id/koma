@@ -48,6 +48,10 @@ tree-sitter-java = { version = "0.23", optional = true }
 tree-sitter-typescript = { version = "0.23", optional = true }
 tree-sitter-javascript = { version = "0.23", optional = true }
 tree-sitter-php = { version = "0.23", optional = true }
+tree-sitter-c = { version = "0.23", optional = true }
+tree-sitter-cpp = { version = "0.23", optional = true }
+tree-sitter-dart = { version = "0.0.4", optional = true }
+tree-sitter-swift = { version = "0.6", optional = true }
 notify = { version = "8", optional = true }
 notify-debouncer-mini = { version = "0.7", optional = true }
 
@@ -92,6 +96,10 @@ linker = [
     "dep:tree-sitter-typescript",
     "dep:tree-sitter-javascript",
     "dep:tree-sitter-php",
+    "dep:tree-sitter-c",
+    "dep:tree-sitter-cpp",
+    "dep:tree-sitter-dart",
+    "dep:tree-sitter-swift",
     "dep:notify",
     "dep:notify-debouncer-mini",
 ]

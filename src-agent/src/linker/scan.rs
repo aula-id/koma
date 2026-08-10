@@ -209,6 +209,9 @@ fn resolve_import(
         Lang::Java => resolve_java_import(raw, root, known_files),
         Lang::TypeScript | Lang::JavaScript => resolve_ts_import(raw, file_dir, root, known_files),
         Lang::Php => resolve_php_import(raw, root, known_files),
+        Lang::C | Lang::Cpp => resolve_c_import(raw, root, known_files),
+        Lang::Dart => resolve_dart_import(raw, file_path, root, known_files),
+        Lang::Swift => resolve_swift_import(raw, root, known_files),
         Lang::Unknown => None,
     }
 }
@@ -499,6 +502,82 @@ fn resolve_php_import(raw: &str, root: &Path, known_files: &HashSet<String>) -> 
     if known_files.contains(&full) {
         return Some(full);
     }
+    None
+}
+
+/// Resolve a C/C++ `#include` to a file.
+///
+/// - `#include "relative/path.h"` → resolve relative to the file's directory.
+/// - `#include <system/header.h>` → None (system header, can't resolve).
+fn resolve_c_import(
+    raw: &str,
+    root: &Path,
+    known_files: &HashSet<String>,
+) -> Option<String> {
+    let raw = raw.trim();
+    // System headers (from angle brackets) → can't resolve.
+    if raw.starts_with('<') {
+        return None;
+    }
+    let path = raw.trim_matches(|c| c == '"' || c == '<' || c == '>');
+    if path.is_empty() {
+        return None;
+    }
+    // Only try resolution for quoted includes.
+    if !raw.contains('"') {
+        return None;
+    }
+    let candidate = root.join(path);
+    let canonical = candidate.to_string_lossy().replace('\\', "/");
+    if known_files.contains(&canonical) {
+        return Some(canonical);
+    }
+    None
+}
+
+/// Resolve a Dart import to a file.
+///
+/// - `dart:io` → None (system SDK).
+/// - `package:foo/bar.dart` → try `foo/lib/bar.dart` relative to workspace root.
+/// - `../relative.dart` → resolve relative to the file's directory.
+fn resolve_dart_import(
+    raw: &str,
+    file_path: &str,
+    root: &Path,
+    known_files: &HashSet<String>,
+) -> Option<String> {
+    let raw = raw.trim();
+    if raw.starts_with("dart:") {
+        return None;
+    }
+    if let Some(rest) = raw.strip_prefix("package:") {
+        // package:foo/bar.dart → try foo/lib/bar.dart relative to root.
+        let candidate = root.join(rest);
+        let canonical = candidate.to_string_lossy().replace('\\', "/");
+        if known_files.contains(&canonical) {
+            return Some(canonical);
+        }
+        return None;
+    }
+    // Relative import.
+    let file_dir = Path::new(file_path).parent()?;
+    let candidate = file_dir.join(raw);
+    let canonical = candidate.to_string_lossy().replace('\\', "/");
+    if known_files.contains(&canonical) {
+        return Some(canonical);
+    }
+    None
+}
+
+/// Resolve a Swift import to a file.
+///
+/// Swift imports are module-level declarations; without a package manifest
+/// or Xcode project, we can't reliably map module names to source files.
+fn resolve_swift_import(
+    _raw: &str,
+    _root: &Path,
+    _known_files: &HashSet<String>,
+) -> Option<String> {
     None
 }
 

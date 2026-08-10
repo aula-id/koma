@@ -16,6 +16,10 @@ pub enum Lang {
     TypeScript,
     JavaScript,
     Php,
+    C,
+    Cpp,
+    Dart,
+    Swift,
     Unknown,
 }
 
