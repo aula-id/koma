@@ -1325,6 +1325,17 @@ export type PushEnvelope =
       requestId: string
       error: string | null
     }
+  // Reply to GuiReq ImportGraphImpact — transitive impact paths.
+  | {
+      k: 'ImportGraphImpact'
+      requestId: string
+      path: string
+      depth: number
+      paths: string[]
+      total: number
+      error: string | null
+    }
+
   // Reply to GuiReq ImportGraph — the linker daemon's code-dependency graph.
   // ALWAYS a reply (status ok/empty/error). Carries the full node+edge
   // projection plus metadata for the tab's header.
@@ -1657,6 +1668,14 @@ type ImportGraphSlice = {
   // The sidebar panel and Cmd+K search read from this, so focusing one
   // neighborhood never removes other files from the tree.
   treeNodes: ImportGraphNode[]
+  // Impact analysis state.
+  impactRequestId: string | null
+  impactPath: string | null
+  impactDepth: number
+  impactStatus: 'idle' | 'loading' | 'loaded' | 'error'
+  impactPaths: string[]
+  impactTotal: number
+  impactError: string | null
 }
 
 // The Analytics dashboard tab's slice — host-authoritative projection + local
@@ -1964,6 +1983,8 @@ type KomaState = {
   navigateBreadcrumb: (idx: number) => void
   // Go back one step in the breadcrumb chain.
   popBreadcrumb: () => void
+  // Request impact analysis for a file.
+  requestImportGraphImpact: (path: string) => void
   // Clear the breadcrumb trail (fresh start).
   clearBreadcrumb: () => void
   // Set workspace root filters and re-fetch. Empty = all roots.
@@ -2397,7 +2418,7 @@ const initialImportGraph: ImportGraphSlice = {
   loading: false,
   error: null,
   selectedPath: null,
-  depth: 2,
+  depth: 1,
   direction: 'both',
   breadcrumb: [],
   availableRoots: [],
@@ -2405,6 +2426,13 @@ const initialImportGraph: ImportGraphSlice = {
   filterLanguages: [],
   queuedRefresh: false,
   treeNodes: [],
+  impactRequestId: null,
+  impactPath: null,
+  impactDepth: 3,
+  impactStatus: 'idle' as const,
+  impactPaths: [],
+  impactTotal: 0,
+  impactError: null,
 }
 
 const initialActivity: ActivitySlice = {
@@ -3333,6 +3361,23 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         break
       }
+      case 'ImportGraphImpact': {
+        // Reject stale: requestId must match AND path must match current impact target.
+        set((s) => {
+          if (env.requestId !== s.importGraph.impactRequestId) return s
+          if (env.path !== s.importGraph.impactPath) return s
+          return {
+            importGraph: {
+              ...s.importGraph,
+              impactStatus: env.error ? 'error' as const : 'loaded' as const,
+              impactPaths: env.paths,
+              impactTotal: env.total,
+              impactError: env.error,
+            },
+          }
+        })
+        break
+      }
       case 'GitGraph':
         set((s) => {
           // Append (load-more) concatenates onto the existing page and dedupes;
@@ -4108,15 +4153,26 @@ export const useKoma = create<KomaState>((set, get) => ({
         error: null,
         focus,
         queuedRefresh: false,
-        // Clear accumulated nodes/edges on full refresh (not chain navigation)
-        ...(isFullRefresh ? { nodes: [], edges: [], breadcrumb: [] } : {}),
+        // Strict: every focused request sends literal depth:1, direction:'both'.
+        depth: 1,
+        direction: 'both' as const,
+        // Clear stale graph data and impact state on every request.
+        nodes: [],
+        edges: [],
+        impactRequestId: null,
+        impactPath: null,
+        impactStatus: 'idle' as const,
+        impactPaths: [],
+        impactTotal: 0,
+        impactError: null,
+        ...(isFullRefresh ? { breadcrumb: [] } : {}),
       },
     }))
     get().req({
       r: 'ImportGraph',
       path: focus ?? null,
-      depth: g.depth,
-      direction: g.direction,
+      depth: 1,
+      direction: 'both',
       filterRoots: g.filterRoots.length > 0 ? g.filterRoots : null,
       filterLanguages: g.filterLanguages.length > 0 ? g.filterLanguages : null,
     })
@@ -4153,6 +4209,13 @@ export const useKoma = create<KomaState>((set, get) => ({
         selectedPath: path,
         focus: path,
         breadcrumb: newBreadcrumb,
+        // Clear impact state atomically before new request.
+        impactRequestId: null,
+        impactPath: null,
+        impactStatus: 'idle' as const,
+        impactPaths: [],
+        impactTotal: 0,
+        impactError: null,
       },
     }))
     // Fetch the new neighborhood (merged in push reducer)
@@ -4295,6 +4358,21 @@ export const useKoma = create<KomaState>((set, get) => ({
     } else {
       get().refreshImportGraph(focus)
     }
+  },
+  requestImportGraphImpact: (path: string) => {
+    const id = `impact-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    set((s) => ({
+      importGraph: {
+        ...s.importGraph,
+        impactRequestId: id,
+        impactPath: path,
+        impactStatus: 'loading' as const,
+        impactPaths: [],
+        impactTotal: 0,
+        impactError: null,
+      },
+    }))
+    get().req({ r: 'ImportGraphImpact', path, depth: 3, requestId: id })
   },
   refreshActivity: (path) => {
     const p = path ?? null

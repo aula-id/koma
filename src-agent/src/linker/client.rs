@@ -305,6 +305,21 @@ pub fn fetch_graph_view(req: &VisualizationRequest) -> Option<GraphViewResult> {
     }
 }
 
+/// Fetch transitive impact analysis for a file.
+/// Returns `(paths, total)` on success, or `Err(message)` on any failure.
+pub fn fetch_impact(path: &str, depth: u32) -> Result<(Vec<String>, usize), String> {
+    let resp = connect_and_send(&LinkerRequest::Query(LinkerQuery::Impact {
+        path: path.to_string(),
+        depth: Some(depth),
+    }))
+    .ok_or_else(|| "linker daemon unreachable".to_string())?;
+    match resp {
+        LinkerResponse::PathList { paths, total } => Ok((paths, total)),
+        LinkerResponse::Error(e) => Err(e),
+        _ => Err("unexpected linker daemon response".to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

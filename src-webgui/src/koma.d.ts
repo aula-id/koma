@@ -518,6 +518,13 @@ declare global {
       filterRoots?: string[] | null
       filterLanguages?: string[] | null
     }
+  // Impact analysis: transitive reverse deps for a file.
+  | {
+      r: 'ImportGraphImpact'
+      path: string
+      depth?: number | null
+      requestId: string
+    }
 
   // ─── Coding push envelope shapes (Rust → JS) ────────────────────────────
   // Every reply echoes the relevant root/path/requestId for stale-reply rejection.

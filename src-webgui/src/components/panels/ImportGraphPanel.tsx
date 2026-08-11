@@ -13,46 +13,12 @@ import { BrailleSpinner } from '../BrailleSpinner'
 import { Select } from './form'
 import { Empty, IconBtn } from './helpers'
 
+import { sourceLanguage, SOURCE_LANGUAGES, type SourceLanguage } from '../../lib/importGraphLanguages'
+
 const ALL_LANGUAGES = '__all_languages__'
 const MULTIPLE = '__multiple_filters__'
 const EMPTY_ROOTS: string[] = []
-
-const SOURCE_LANGUAGES = [
-  'Rust',
-  'Python',
-  'Go',
-  'Java',
-  'TypeScript',
-  'JavaScript',
-  'Php',
-  'C',
-  'Cpp',
-  'Dart',
-  'Swift',
-] as const
-
-type SourceLanguage = (typeof SOURCE_LANGUAGES)[number]
 type Dirs = Record<string, DirState>
-
-function sourceLanguage(path: string): SourceLanguage | null {
-  if (path.endsWith('.rs')) return 'Rust'
-  if (path.endsWith('.py')) return 'Python'
-  if (path.endsWith('.go')) return 'Go'
-  if (path.endsWith('.java')) return 'Java'
-  if (path.endsWith('.ts') || path.endsWith('.tsx')) return 'TypeScript'
-  if (path.endsWith('.js') || path.endsWith('.jsx') || path.endsWith('.mjs') || path.endsWith('.cjs')) {
-    return 'JavaScript'
-  }
-  if (path.endsWith('.php')) return 'Php'
-  if (path.endsWith('.c') || path.endsWith('.h')) return 'C'
-  if (
-    path.endsWith('.cpp') || path.endsWith('.cc') || path.endsWith('.cxx')
-    || path.endsWith('.hpp') || path.endsWith('.hxx')
-  ) return 'Cpp'
-  if (path.endsWith('.dart')) return 'Dart'
-  if (path.endsWith('.swift')) return 'Swift'
-  return null
-}
 
 function normalizePath(path: string): string {
   const slashed = path.replace(/\\/g, '/')
