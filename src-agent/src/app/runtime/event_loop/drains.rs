@@ -100,12 +100,11 @@ pub(super) fn apply_compaction_result(
     // FIRST post-compaction user turn — the model then executes from a clean
     // context that leads with the plan. Cleared unconditionally (a missing plan.md
     // is silently skipped) so it can never re-fire on a later plain `/compact`.
-    let plan_seed: Option<String> = if state
-        .rest
-        .sessions
-        .get(idx)
-        .is_some_and(|rt| rt.pending_plan_seed)
-    {
+    // Gated on !SDLC — plan seeds must not fire during SDLC mode, which uses
+    // its own pending_mission_seed path for mission capsule injection.
+    let plan_seed: Option<String> = if state.rest.sessions.get(idx).is_some_and(|rt| {
+        rt.pending_plan_seed && rt.agent_mode != crate::app::state::AgentMode::Sdlc
+    }) {
         if let Some(rt) = state.rest.sessions.get_mut(idx) {
             rt.pending_plan_seed = false;
         }
@@ -121,63 +120,106 @@ pub(super) fn apply_compaction_result(
         None
     };
     // Mission-approval seed: full OPEN+SEALED capsule (force continuity).
-    let mission_seed: Option<String> = if state
-        .rest
-        .sessions
-        .get(idx)
-        .is_some_and(|rt| rt.pending_mission_seed)
-    {
+    // Gated on SDLC mode AND a valid MissionSeedArm — stale seeds from a mode
+    // transition out of SDLC, a different session, a different mission, or a
+    // different generation must never inject a mission capsule.
+    //
+    // Pre-flight: snapshot the arm fields + session path into locals so we can
+    // drop the immutable borrow before the `get_mut` clear.
+    let mission_seed: Option<String> = {
+        let preflight = state.rest.sessions.get(idx).and_then(|rt| {
+            let arm = rt.pending_mission_seed.as_ref()?;
+            if rt.agent_mode != crate::app::state::AgentMode::Sdlc {
+                return None;
+            }
+            if arm.session_id != rt.id {
+                return None;
+            }
+            if arm.generation != rt.sdlc_mission_generation {
+                return None;
+            }
+            if !matches!(arm.phase.as_str(), "prepare" | "execute" | "integrate")
+                || rt.sdlc_phase.as_deref() != Some(arm.phase.as_str())
+            {
+                return None;
+            }
+            let path = rt.session.as_ref().map(|s| s.path.clone())?;
+            Some((
+                arm.mission_id.clone(),
+                arm.mission_hash.clone(),
+                arm.phase.clone(),
+                path,
+            ))
+        });
+        // Clear the one-shot arm unconditionally (valid or stale).
         if let Some(rt) = state.rest.sessions.get_mut(idx) {
-            rt.pending_mission_seed = false;
+            rt.pending_mission_seed = None;
         }
-        state
-            .rest
-            .sessions
-            .get(idx)
-            .and_then(|rt| rt.session.as_ref())
-            .and_then(|s| {
-                let mission = crate::model::sdlc::Mission::load(&s.path)?;
-                if !mission.approved {
-                    return None;
-                }
-                let (open, sealed, all, sealed_commit_shas) = crate::model::msglog::open(&s.path)
-                    .ok()
-                    .map(|conn| {
-                        if crate::model::sdlc::graph::ensure_tables(&conn).is_err() {
-                            return (
-                                Vec::new(),
-                                Vec::new(),
-                                Vec::new(),
-                                std::collections::HashMap::new(),
-                            );
-                        }
-                        let open = crate::model::sdlc::graph::list_open(&conn).unwrap_or_default();
-                        let sealed =
-                            crate::model::sdlc::graph::list_sealed(&conn).unwrap_or_default();
-                        let all = crate::model::sdlc::graph::list_all(&conn).unwrap_or_default();
-                        let sealed_ids: Vec<String> = sealed.iter().map(|n| n.id.clone()).collect();
-                        let sealed_commit_shas =
-                            crate::model::sdlc::graph::latest_verified_commit_shas(
-                                &conn,
-                                &sealed_ids,
-                            )
+        if let Some((arm_mission_id, arm_mission_hash, arm_phase, _sess_path)) = preflight {
+            state
+                .rest
+                .sessions
+                .get(idx)
+                .and_then(|rt| rt.session.as_ref())
+                .and_then(|s| {
+                    let mission = crate::model::sdlc::Mission::load(&s.path)?;
+                    if mission.id != arm_mission_id
+                        || mission.hash != arm_mission_hash
+                        || mission.phase != arm_phase
+                    {
+                        return None;
+                    }
+                    let valid_for_phase = match arm_phase.as_str() {
+                        "prepare" => mission.validate_prepare_ready(),
+                        "execute" | "integrate" => mission.validate_active(),
+                        _ => return None,
+                    };
+                    if valid_for_phase.is_err() {
+                        return None;
+                    }
+                    let (open, sealed, all, sealed_commit_shas) =
+                        crate::model::msglog::open(&s.path)
+                            .ok()
+                            .map(|conn| {
+                                if crate::model::sdlc::graph::ensure_tables(&conn).is_err() {
+                                    return (
+                                        Vec::new(),
+                                        Vec::new(),
+                                        Vec::new(),
+                                        std::collections::HashMap::new(),
+                                    );
+                                }
+                                let open =
+                                    crate::model::sdlc::graph::list_open(&conn).unwrap_or_default();
+                                let sealed = crate::model::sdlc::graph::list_sealed(&conn)
+                                    .unwrap_or_default();
+                                let all =
+                                    crate::model::sdlc::graph::list_all(&conn).unwrap_or_default();
+                                let sealed_ids: Vec<String> =
+                                    sealed.iter().map(|n| n.id.clone()).collect();
+                                let sealed_commit_shas =
+                                    crate::model::sdlc::graph::latest_verified_commit_shas(
+                                        &conn,
+                                        &sealed_ids,
+                                    )
+                                    .unwrap_or_default();
+                                (open, sealed, all, sealed_commit_shas)
+                            })
                             .unwrap_or_default();
-                        (open, sealed, all, sealed_commit_shas)
-                    })
-                    .unwrap_or_default();
-                Some(format!(
-                    "Approved mission (execute now):\n\n{}",
-                    crate::model::sdlc::mission::build_seed_capsule_with_all(
-                        &mission,
-                        &open,
-                        &sealed,
-                        &all,
-                        &sealed_commit_shas
-                    )
-                ))
-            })
-    } else {
-        None
+                    Some(format!(
+                        "Approved mission (execute now):\n\n{}",
+                        crate::model::sdlc::mission::build_seed_capsule_with_all(
+                            &mission,
+                            &open,
+                            &sealed,
+                            &all,
+                            &sealed_commit_shas
+                        )
+                    ))
+                })
+        } else {
+            None
+        }
     };
     let seeded = plan_seed.is_some() || mission_seed.is_some();
 
@@ -322,5 +364,140 @@ pub(super) fn cap_summary(s: &str, max: usize) -> String {
         let mut out: String = s.chars().take(max).collect();
         out.push('…');
         out
+    }
+}
+
+#[cfg(test)]
+mod mission_seed_tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use crate::app::mode::Mode;
+    use crate::app::state::{AgentMode, MissionSeedArm};
+    use crate::model::conversation::Conversation;
+    use crate::model::sdlc::Mission;
+    use crate::model::session::Session;
+    use crate::model::settings::Settings;
+
+    struct Scratch(std::path::PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn bound_prepare_mission() -> Mission {
+        let mut mission = Mission {
+            contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
+            id: "mission-seed".into(),
+            goal: "ship seed validation".into(),
+            non_goals: vec![],
+            acceptance: vec!["seed is injected once".into()],
+            lane: "standard".into(),
+            verify_plan: vec![],
+            human_gates: vec![],
+            human_gates_approved: vec![],
+            risks: vec![],
+            worktree_name: Some("wt-seed".into()),
+            branch: Some("sdlc/seed".into()),
+            worktree_path: Some("/tmp/wt-seed".into()),
+            target_worktree_path: Some("/tmp/target-seed".into()),
+            target_branch: Some("main".into()),
+            target_head: Some("0123456789012345678901234567890123456789".into()),
+            rationale: "test".into(),
+            phase: "prepare".into(),
+            approved: true,
+            hash: String::new(),
+            graph_hash: Some("graph-seed".into()),
+            needs_reapproval: false,
+            amendment_note: None,
+        };
+        mission.hash = mission.recompute_hash();
+        mission
+    }
+
+    fn armed_state(path: &std::path::Path, mission: &Mission) -> AppState {
+        let mut state = AppState::new(Mode::Chat);
+        let session = Session::new(
+            "seed-session".into(),
+            path.to_path_buf(),
+            "pwd".into(),
+            Settings::default(),
+            Conversation::from_messages(vec![]),
+        );
+        let rt = state.rest.fg_mut();
+        rt.id = "seed-session".into();
+        rt.session = Some(session);
+        rt.agent_mode = AgentMode::Sdlc;
+        rt.sdlc_phase = Some("prepare".into());
+        rt.pending_mission_seed = Some(MissionSeedArm {
+            session_id: rt.id.clone(),
+            mission_id: mission.id.clone(),
+            mission_hash: mission.hash.clone(),
+            generation: rt.sdlc_mission_generation,
+            phase: "prepare".into(),
+        });
+        state
+    }
+
+    #[test]
+    fn prepare_seed_injects_when_bound_and_stale_loaded_phase_is_cleared() {
+        let path = std::env::temp_dir().join(format!(
+            "koma-drains-seed-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        let _scratch = Scratch(path.clone());
+        let mut mission = bound_prepare_mission();
+        mission.save(&path).unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+
+        let mut valid = armed_state(&path, &mission);
+        apply_compaction_result(
+            &mut valid,
+            0,
+            &None,
+            runtime.handle(),
+            "summary".into(),
+            vec![],
+        );
+        assert!(valid
+            .rest
+            .fg()
+            .session
+            .as_ref()
+            .unwrap()
+            .conversation
+            .messages()
+            .iter()
+            .any(|message| message.content.contains("Approved mission (execute now)")));
+        assert!(valid.rest.fg().pending_mission_seed.is_none());
+
+        mission.phase = "execute".into();
+        mission.save(&path).unwrap();
+        let mut stale = armed_state(&path, &mission);
+        apply_compaction_result(
+            &mut stale,
+            0,
+            &None,
+            runtime.handle(),
+            "summary".into(),
+            vec![],
+        );
+        assert!(!stale
+            .rest
+            .fg()
+            .session
+            .as_ref()
+            .unwrap()
+            .conversation
+            .messages()
+            .iter()
+            .any(|message| message.content.contains("Approved mission (execute now)")));
+        assert!(stale.rest.fg().pending_mission_seed.is_none());
     }
 }

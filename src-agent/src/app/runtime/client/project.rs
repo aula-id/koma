@@ -338,6 +338,22 @@ pub(super) fn serialize_and_push(
         None
     };
 
+    // --- SDLC projection (mode=sdlc only; None otherwise) ---
+    // Reads from the shadow runtime's cached fields (populated from the snapshot's
+    // wire projection in `shadow_session_runtime`), avoiding any blocking DB reads
+    // in the push path. The session path is empty on the shadow, so the old
+    // `Mission::load` / `msglog::open` calls were always no-ops there anyway.
+    let is_sdlc = shadow.rest.agent_mode() == crate::app::state::AgentMode::Sdlc;
+    let sdlc_phase = if is_sdlc { fg.sdlc_phase.clone() } else { None };
+    let sdlc_goal = if is_sdlc { fg.sdlc_goal.clone() } else { None };
+    let sdlc_branch = if is_sdlc {
+        fg.sdlc_branch.clone()
+    } else {
+        None
+    };
+    let sdlc_open = if is_sdlc { fg.sdlc_open } else { None };
+    let sdlc_sealed = if is_sdlc { fg.sdlc_sealed } else { None };
+
     // --- Snapshot (structural): fingerprint session + transcript + title + palette ---
     let fp = {
         use std::hash::{Hash, Hasher};
@@ -445,6 +461,13 @@ pub(super) fn serialize_and_push(
             pc.name.hash(&mut h);
             pc.args.hash(&mut h);
         }
+        // Fold SDLC fields in so a phase/goal/branch/graph-count change re-emits the
+        // Snapshot — the Explore panel's SDLC rail rows update live.
+        sdlc_phase.hash(&mut h);
+        sdlc_goal.hash(&mut h);
+        sdlc_branch.hash(&mut h);
+        sdlc_open.hash(&mut h);
+        sdlc_sealed.hash(&mut h);
         h.finish()
     };
     if last.snapshot_fp != Some(fp) {
@@ -468,6 +491,11 @@ pub(super) fn serialize_and_push(
             awaiting_approval,
             approval_reason,
             pending_call,
+            sdlc_phase,
+            sdlc_goal,
+            sdlc_branch,
+            sdlc_open,
+            sdlc_sealed,
         };
         if let Ok(json) = serde_json::to_string(&env) {
             push(json);

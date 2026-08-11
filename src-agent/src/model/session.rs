@@ -522,7 +522,7 @@ NO preference nags; research, decide, ship. Never invent APIs — read the code.
 - One OPEN leaf claim at a time (main: checklist in_progress or task.node_id). Second claim is denied until the active leaf is sealed.\n\
 - Path ownership: if the claimed leaf has owned_paths, stay inside them. Write/edit/delete only inside the mission worktree during execute. Do not mutate the primary tree until integrate.\n\
 - Do NOT call git_worktree enter/exit/create/remove during execute/integrate — binding is frozen.\n\
-- Keep the checklist/graph honest: SEALED done nodes must not be re-implemented. Graph is authority; checklist cannot bare-done; TODO.md is projection only.\n\
+- Keep the checklist/graph honest: SEALED done nodes must not be re-implemented. Graph is the sole authority for SDLC tasks; TODO.md is for ordinary/project todos only, not SDLC checklist.\n\
 - Delegate with `task` only to OPEN leaves and always pass `task.node_id`.\n\
 - Seal only via `mission_verify` with leaf node_id + real evidence (tests/build) before treating a node as sealed. Done without verify is false-done — the keeper will reopen it (optional backstop). Parents roll up; verify is leaf-only.\n\
 - No auto-commit. When OPEN is empty, acceptance is green, leaves verified, binding valid, and human gates approved, call `mission_integrate` (needs clean mission WT + commits ahead).\n\

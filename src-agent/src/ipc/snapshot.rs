@@ -21,7 +21,7 @@
 //! builder, so the wire projection can never drift from a second hand-rolled copy.
 
 mod diff;
-mod projection;
+pub(crate) mod projection;
 
 #[allow(unused_imports)]
 pub use diff::{diff, DiffResult};

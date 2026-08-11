@@ -43,6 +43,7 @@ pub use runtime::SessionRuntime;
 // The extension-injection turn budget (cost-DoS guard): shared by the deferred-drain
 // injection gate and the `chat.prompt` broker so both consult the SAME ceiling.
 pub use runtime::HistorianBatch;
+pub use runtime::MissionSeedArm;
 pub use runtime::EXT_TURN_BUDGET;
 
 pub struct AppState {

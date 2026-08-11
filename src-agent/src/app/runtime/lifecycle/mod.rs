@@ -446,23 +446,18 @@ fn install_daemon_session(
     // daemon, so a record that was still "running" at close comes back settled-stale,
     // never running. All best-effort (empty when the session has no such records).
     runtime.file_changes = crate::model::msglog::read_file_changes(&sess_path);
-    // Rehydrate the session's CURRENT todo checklist — mirrors `file_changes`'s
-    // load-time refresh so a reattached/resumed session's GUI Explore "PLAN"
-    // section is correct from the very first snapshot, not just after the next
-    // checklist/plan_ready. Mode-aware: `plan_todos.md` while in Plan mode, else
-    // the per-directory `memory/TODO.md` (the regular working list `checklist`
-    // writes to outside Plan mode) — same selection `/todo` itself uses, so the
-    // GUI shows execution-phase todos too, not just mid-plan ones.
-    runtime.plan_todos = runtime
-        .session
-        .as_ref()
-        .map(|s| {
-            crate::app::mode::todo::load_current_todos(
-                s,
-                state.rest.agent_mode() == crate::app::state::AgentMode::Plan,
-            )
-        })
-        .unwrap_or_default();
+    // Rehydrate the session’s CURRENT todo checklist for the GUI Explore “PLAN”
+    // section. Only plan_todos (from `plan_todos.md`) while in Plan mode;
+    // outside Plan, plan_todos stays empty to avoid leaking cross-mode data.
+    runtime.plan_todos = if state.rest.agent_mode() == crate::app::state::AgentMode::Plan {
+        runtime
+            .session
+            .as_ref()
+            .map(|s| crate::app::mode::todo::load_current_todos(s, true))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     super::bg_persist::restore_bg_records(&mut runtime, &sess_path, handle);
 
     // Install as the SINGLE foreground session (replace the slot; never append).
@@ -496,24 +491,28 @@ fn install_daemon_session(
         }
     }
 
-    // SDLC daemon restart: if this session has an existing mission (approved or
-    // mid-assess), restore Sdlc mode so the keeper + phase-aware tooling resume
-    // where they left off. Also snapshot the worktree cwd so tools bind to the
-    // right root immediately.
-    if crate::model::sdlc::Mission::load(&sess_path).is_some() {
-        if let Some(sess) = state.rest.fg().session.as_ref() {
-            if sess.settings.workdir_saved.is_some() {
-                if let Some(wt) = sess.settings.workdir.first().cloned() {
-                    let p = std::path::PathBuf::from(&wt);
-                    if p.is_dir() {
-                        state.rest.fg_mut().active_cwd = Some(p);
+    // SDLC daemon restart: if this session has an existing mission that passes
+    // the canonical should_auto_resume gate, restore Sdlc mode so the keeper +
+    // phase-aware tooling resume where they left off. Missions that don't
+    // pass the gate (draft/assess/paused/done/stale/invalid/etc.) are left as
+    // plain Auto — the user must explicitly re-enter SDLC.
+    // Also snapshot the worktree cwd so tools bind to the right root immediately.
+    if let Some(mission) = crate::model::sdlc::Mission::load(&sess_path) {
+        if crate::model::sdlc::mission::should_auto_resume(&mission) {
+            if let Some(sess) = state.rest.fg().session.as_ref() {
+                if sess.settings.workdir_saved.is_some() {
+                    if let Some(wt) = sess.settings.workdir.first().cloned() {
+                        let p = std::path::PathBuf::from(&wt);
+                        if p.is_dir() {
+                            state.rest.fg_mut().active_cwd = Some(p);
+                        }
                     }
                 }
             }
+            state
+                .rest
+                .set_agent_mode(crate::app::state::AgentMode::Sdlc);
         }
-        state
-            .rest
-            .set_agent_mode(crate::app::state::AgentMode::Sdlc);
     }
 
     if unconfigured {
