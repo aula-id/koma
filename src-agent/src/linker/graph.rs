@@ -10,6 +10,7 @@ use crate::ipc::linker_proto::{
     EditContextResult, GraphDirection, GraphNodeRole, GraphViewEdge, GraphViewNode,
     GraphViewResult, LanguageCount, VisualizationRequest, WorkspaceRootInfo,
 };
+use crate::linker::reference::{ImportKind, SourceRefs};
 
 /// Supported source languages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -29,12 +30,18 @@ pub enum Lang {
 }
 
 /// A directed edge from a source file to a target.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Edge {
     pub target: EdgeTarget,
     /// Reserved for future mod-edge discrimination; always `Import` today.
     #[allow(dead_code)]
     pub kind: EdgeKind,
+}
+
+impl Edge {
+    fn is_resolved(&self) -> bool {
+        matches!(self.target, EdgeTarget::File(_))
+    }
 }
 
 /// Where an import points — either a resolved file or an external (unresolved) specifier.
@@ -47,13 +54,22 @@ pub enum EdgeTarget {
 }
 
 /// The kind of import relationship.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EdgeKind {
     /// `use`, `import`, `require`, etc.
     Import,
-    /// `mod` declaration (Rust-specific). Reserved for future use.
+    /// `mod` declaration (Rust-specific).
     #[allow(dead_code)]
     Mod,
+    /// Structured import carrying semantic kind and optional condition.
+    /// Added in phase 1 (Full-Fidelity Multi-Language Import Graph).
+    #[allow(dead_code)]
+    Structured {
+        /// Semantic import kind.
+        import_kind: ImportKind,
+        /// Optional compilation condition (e.g. `cfg(test)`).
+        condition: Option<String>,
+    },
 }
 
 /// A node in the graph — a source file.
@@ -76,12 +92,17 @@ pub struct ImportGraph {
     pub reverse: HashMap<String, Vec<String>>,
     /// Total files tracked.
     pub file_count: usize,
-    /// Total edges tracked.
+    /// Total resolved edges tracked.
     pub edge_count: usize,
     /// Monotonically increasing scan generation counter.
     pub generation: u64,
     /// Registered workspace roots (sorted, canonical absolute paths).
     pub workspace_roots: Vec<String>,
+    /// Per-source-file structured import references (phase 1 foundation).
+    /// Stores ImportRef + Resolution pairs separately from graph edges so
+    /// that traversal remains resolved-file-only while full import info is
+    /// preserved for later phases.
+    pub source_refs: HashMap<String, SourceRefs>,
 }
 
 impl ImportGraph {
@@ -98,6 +119,7 @@ impl ImportGraph {
         self.file_count = 0;
         self.edge_count = 0;
         self.workspace_roots.clear();
+        self.source_refs.clear();
         self.generation += 1;
     }
 
@@ -109,64 +131,97 @@ impl ImportGraph {
         });
     }
 
-    /// Replace all edges for a source file, updating the reverse index.
+    /// Replace all edges for a source file. Edges are stably deduplicated by
+    /// `(target, kind)`. Only resolved file edges contribute to `edge_count`
+    /// and the reverse traversal index.
     pub fn set_edges(&mut self, source: &str, lang: Lang, new_edges: Vec<Edge>) {
-        // Ensure the source node exists.
         self.ensure_node(source, lang);
 
-        // Remove old reverse entries for this source.
         if let Some(old_edges) = self.edges.remove(source) {
-            for old in &old_edges {
-                let key = edge_target_key(&old.target);
-                if let Some(list) = self.reverse.get_mut(key) {
-                    list.retain(|s| s != source);
-                    if list.is_empty() {
-                        self.reverse.remove(key);
+            let old_targets: HashSet<&str> = old_edges
+                .iter()
+                .filter_map(|edge| match &edge.target {
+                    EdgeTarget::File(target) => Some(target.as_str()),
+                    EdgeTarget::External(_) => None,
+                })
+                .collect();
+            for target in old_targets {
+                if let Some(sources) = self.reverse.get_mut(target) {
+                    sources.retain(|existing| existing != source);
+                    if sources.is_empty() {
+                        self.reverse.remove(target);
                     }
                 }
-                self.edge_count -= 1;
+            }
+            self.edge_count = self
+                .edge_count
+                .saturating_sub(old_edges.iter().filter(|edge| edge.is_resolved()).count());
+        }
+
+        let mut seen = HashSet::new();
+        let mut edges = Vec::with_capacity(new_edges.len());
+        for edge in new_edges {
+            if seen.insert((edge.target.clone(), edge.kind.clone())) {
+                edges.push(edge);
             }
         }
 
-        // Add new edges.
-        let count = new_edges.len();
-        for edge in &new_edges {
-            let key = edge_target_key(&edge.target);
-            self.reverse
-                .entry(key.to_string())
-                .or_default()
-                .push(source.to_string());
+        let mut targets = HashSet::new();
+        for edge in &edges {
+            if let EdgeTarget::File(target) = &edge.target {
+                self.edge_count += 1;
+                if targets.insert(target.as_str()) {
+                    let sources = self.reverse.entry(target.clone()).or_default();
+                    if !sources.iter().any(|existing| existing == source) {
+                        sources.push(source.to_string());
+                    }
+                }
+            }
         }
-        self.edge_count += count;
-        self.edges.insert(source.to_string(), new_edges);
+        self.edges.insert(source.to_string(), edges);
         self.file_count = self.nodes.len();
     }
 
-    /// Remove a node and all its edges (both incoming and outgoing).
+    /// Remove a node, its structured refs, and all incoming/outgoing resolved
+    /// edges while preserving external diagnostics on other sources.
     pub fn remove_node(&mut self, path: &str) {
-        // Remove outgoing edges and their reverse entries.
         if let Some(outgoing) = self.edges.remove(path) {
-            for edge in &outgoing {
-                let key = edge_target_key(&edge.target);
-                if let Some(list) = self.reverse.get_mut(key) {
-                    list.retain(|s| s != path);
-                    if list.is_empty() {
-                        self.reverse.remove(key);
+            let targets: HashSet<&str> = outgoing
+                .iter()
+                .filter_map(|edge| match &edge.target {
+                    EdgeTarget::File(target) => Some(target.as_str()),
+                    EdgeTarget::External(_) => None,
+                })
+                .collect();
+            for target in targets {
+                if let Some(sources) = self.reverse.get_mut(target) {
+                    sources.retain(|source| source != path);
+                    if sources.is_empty() {
+                        self.reverse.remove(target);
                     }
                 }
-                self.edge_count -= 1;
             }
+            self.edge_count = self
+                .edge_count
+                .saturating_sub(outgoing.iter().filter(|edge| edge.is_resolved()).count());
         }
 
-        // Remove incoming edges (files that import this one).
         if let Some(incoming) = self.reverse.remove(path) {
-            for source in &incoming {
-                if let Some(edges) = self.edges.get_mut(source) {
-                    edges.retain(|e| edge_target_key(&e.target) != path);
+            for source in incoming {
+                if let Some(edges) = self.edges.get_mut(&source) {
+                    let removed = edges
+                        .iter()
+                        .filter(|edge| matches!(&edge.target, EdgeTarget::File(target) if target == path))
+                        .count();
+                    edges.retain(
+                        |edge| !matches!(&edge.target, EdgeTarget::File(target) if target == path),
+                    );
+                    self.edge_count = self.edge_count.saturating_sub(removed);
                 }
             }
         }
 
+        self.source_refs.remove(path);
         self.nodes.remove(path);
         self.file_count = self.nodes.len();
     }
@@ -209,16 +264,18 @@ impl ImportGraph {
         }
     }
 
-    /// Direct dependencies of a file (outgoing edges resolved to file paths).
+    /// Direct dependencies of a file (unique resolved target paths in edge order).
     pub fn dependencies(&self, path: &str) -> Vec<&str> {
         self.edges
             .get(path)
             .map(|es| {
+                let mut seen = HashSet::new();
                 es.iter()
                     .filter_map(|e| match &e.target {
                         EdgeTarget::File(f) => Some(f.as_str()),
                         EdgeTarget::External(_) => None,
                     })
+                    .filter(|target| seen.insert(*target))
                     .collect()
             })
             .unwrap_or_default()
@@ -1152,13 +1209,117 @@ impl ImportGraph {
             ..base
         }
     }
-}
 
-/// Extract the string key used in the reverse index for a given target.
-fn edge_target_key(target: &EdgeTarget) -> &str {
-    match target {
-        EdgeTarget::File(f) => f,
-        EdgeTarget::External(e) => e,
+    // ─── Phase 1: structured reference support ───────────────────────────
+
+    /// Compute aggregate counts from per-source structured references.
+    /// Returns (external, unresolved, ambiguous, dynamic).
+    #[allow(dead_code)] // Used by daemon summary; retained for future IPC queries.
+    pub fn aggregate_ref_counts(&self) -> (usize, usize, usize, usize) {
+        let mut ext = 0usize;
+        let mut unres = 0usize;
+        let mut amb = 0usize;
+        let mut dyn_count = 0usize;
+        for sr in self.source_refs.values() {
+            ext += sr.external_count();
+            unres += sr.unresolved_count();
+            amb += sr.ambiguous_count();
+            dyn_count += sr.dynamic_count();
+        }
+        (ext, unres, amb, dyn_count)
+    }
+
+    /// Verify graph counts, semantic uniqueness, exact reverse membership, and
+    /// structured-reference source ownership.
+    #[allow(dead_code)] // Called via debug_assert! in watcher; retained for future tooling.
+    pub fn check_invariants(&self) -> Result<(), String> {
+        if self.file_count != self.nodes.len() {
+            return Err(format!(
+                "file_count {} != nodes.len() {}",
+                self.file_count,
+                self.nodes.len()
+            ));
+        }
+
+        let actual_resolved = self
+            .edges
+            .values()
+            .flatten()
+            .filter(|edge| edge.is_resolved())
+            .count();
+        if self.edge_count != actual_resolved {
+            return Err(format!(
+                "edge_count {} != resolved edge count {}",
+                self.edge_count, actual_resolved
+            ));
+        }
+
+        for (source, edges) in &self.edges {
+            if !self.nodes.contains_key(source) {
+                return Err(format!("edge source is not a node: {source}"));
+            }
+            let mut semantic = HashSet::new();
+            for edge in edges {
+                if !semantic.insert((&edge.target, &edge.kind)) {
+                    return Err(format!("duplicate semantic edge from {source}: {edge:?}"));
+                }
+                if let EdgeTarget::File(target) = &edge.target {
+                    let occurrences = self
+                        .reverse
+                        .get(target)
+                        .map_or(0, |sources| sources.iter().filter(|s| *s == source).count());
+                    if occurrences != 1 {
+                        return Err(format!(
+                            "reverse[{target}] contains source {source} {occurrences} times"
+                        ));
+                    }
+                }
+            }
+        }
+
+        for (target, sources) in &self.reverse {
+            let mut unique = HashSet::new();
+            for source in sources {
+                if !unique.insert(source) {
+                    return Err(format!("duplicate reverse source {source} for {target}"));
+                }
+                let corresponds = self.edges.get(source).is_some_and(|edges| {
+                    edges.iter().any(
+                        |edge| matches!(&edge.target, EdgeTarget::File(path) if path == target),
+                    )
+                });
+                if !corresponds {
+                    return Err(format!("stale reverse edge {source} -> {target}"));
+                }
+            }
+        }
+
+        for source in self.source_refs.keys() {
+            if !self.nodes.contains_key(source) {
+                return Err(format!("source refs belong to unknown node: {source}"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Set structured import references for a source file.
+    pub fn set_source_refs(&mut self, source: &str, refs: SourceRefs) {
+        self.source_refs.insert(source.to_string(), refs);
+    }
+
+    /// Atomically set both edges and structured refs for a source file.
+    ///
+    /// This ensures graph edges and SourceRefs are always consistent — callers
+    /// never see a state where one is updated but not the other.
+    pub fn set_edges_and_refs(
+        &mut self,
+        source: &str,
+        lang: Lang,
+        new_edges: Vec<Edge>,
+        refs: SourceRefs,
+    ) {
+        self.set_edges(source, lang, new_edges);
+        self.set_source_refs(source, refs);
     }
 }
 
@@ -2894,5 +3055,284 @@ mod tests {
         assert!(super::is_config_file("/config.yaml"));
         assert!(super::is_config_file("/.env"));
         assert!(!super::is_config_file("/src/main.rs"));
+    }
+
+    // ─── Phase 1: remove_node edge_count fix tests ────────────────────────
+
+    #[test]
+    fn remove_node_edge_count_after_incoming_removal() {
+        // A → B, B → C. Remove B: both edges should be gone.
+        let mut g = ImportGraph::new();
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges(
+            "/b.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/c.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges("/c.rs", Lang::Rust, vec![]);
+
+        assert_eq!(g.edge_count, 2);
+        g.remove_node("/b.rs");
+        assert_eq!(g.edge_count, 0, "both edges should be removed");
+        assert!(
+            g.check_invariants().is_ok(),
+            "invariants violated after remove_node"
+        );
+    }
+
+    #[test]
+    fn remove_node_preserves_unrelated_edges() {
+        // A → B, C → D. Remove B: A has no edges, C→D intact.
+        let mut g = ImportGraph::new();
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges(
+            "/c.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/d.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+
+        assert_eq!(g.edge_count, 2);
+        g.remove_node("/b.rs");
+        assert_eq!(g.edge_count, 1, "C→D should survive");
+        assert_eq!(g.dependents("/d.rs"), vec!["/c.rs"]);
+        assert!(g.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn remove_node_shared_target() {
+        // A → C, B → C. Remove A: B→C intact, edge_count = 1.
+        let mut g = ImportGraph::new();
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/c.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges(
+            "/b.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/c.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+
+        assert_eq!(g.edge_count, 2);
+        g.remove_node("/a.rs");
+        assert_eq!(g.edge_count, 1, "B→C should survive");
+        assert_eq!(g.dependents("/c.rs"), vec!["/b.rs"]);
+        assert!(g.check_invariants().is_ok());
+    }
+
+    // ─── Phase 1: check_invariants tests ──────────────────────────────────
+
+    #[test]
+    fn check_invariants_clean_graph() {
+        let mut g = ImportGraph::new();
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges("/b.rs", Lang::Rust, vec![]);
+        assert!(g.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn check_invariants_after_multiple_mutations() {
+        let mut g = ImportGraph::new();
+        // Build a chain.
+        for i in 0..10 {
+            let path = format!("/f{i}.rs");
+            let target = format!("/f{}.rs", i + 1);
+            if i < 9 {
+                g.set_edges(
+                    &path,
+                    Lang::Rust,
+                    vec![Edge {
+                        target: EdgeTarget::File(target),
+                        kind: EdgeKind::Import,
+                    }],
+                );
+            } else {
+                g.set_edges(&path, Lang::Rust, vec![]);
+            }
+        }
+        assert!(g.check_invariants().is_ok());
+        assert_eq!(g.edge_count, 9);
+
+        // Remove a middle node.
+        g.remove_node("/f5.rs");
+        assert!(g.check_invariants().is_ok());
+        // f4→f5 removed + f5→f6 removed = 2 fewer edges.
+        assert_eq!(g.edge_count, 7);
+    }
+
+    // ─── Phase 1: EdgeKind::Structured variant ────────────────────────────
+
+    #[test]
+    fn edge_kind_structured_variant() {
+        let k1 = EdgeKind::Structured {
+            import_kind: crate::linker::reference::ImportKind::TypeOnly,
+            condition: Some("cfg(test)".into()),
+        };
+        let k2 = EdgeKind::Structured {
+            import_kind: crate::linker::reference::ImportKind::TypeOnly,
+            condition: Some("cfg(test)".into()),
+        };
+        assert_eq!(k1, k2);
+        assert_eq!(format!("{:?}", k1), format!("{:?}", k2));
+
+        // Different condition → not equal.
+        let k3 = EdgeKind::Structured {
+            import_kind: crate::linker::reference::ImportKind::TypeOnly,
+            condition: None,
+        };
+        assert_ne!(k1, k3);
+    }
+
+    #[test]
+    fn edge_kind_structured_with_graph() {
+        let mut g = ImportGraph::new();
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/b.rs".into()),
+                kind: EdgeKind::Structured {
+                    import_kind: crate::linker::reference::ImportKind::ReExport,
+                    condition: None,
+                },
+            }],
+        );
+        g.set_edges("/b.rs", Lang::Rust, vec![]);
+
+        assert_eq!(g.edge_count, 1);
+        assert_eq!(g.dependencies("/a.rs"), vec!["/b.rs"]);
+        assert_eq!(g.dependents("/b.rs"), vec!["/a.rs"]);
+        assert!(g.check_invariants().is_ok());
+    }
+
+    // ─── Phase 1: source_refs and aggregate counts ────────────────────────
+
+    #[test]
+    fn source_refs_store_and_retrieve() {
+        use crate::linker::reference::{ImportRef, Resolution, SourceRefs};
+        let mut g = ImportGraph::new();
+
+        g.ensure_node("/a.rs", Lang::Rust);
+        let mut sr = SourceRefs::default();
+        sr.push(
+            ImportRef {
+                specifier: "serde".into(),
+                kind: crate::linker::reference::ImportKind::Static,
+                span: None,
+                condition: None,
+            },
+            Resolution::External {
+                package: "serde".into(),
+            },
+        );
+        g.set_source_refs("/a.rs", sr);
+
+        assert_eq!(g.source_refs.len(), 1);
+        assert_eq!(g.source_refs["/a.rs"].external_count(), 1);
+    }
+
+    #[test]
+    fn aggregate_ref_counts() {
+        use crate::linker::reference::{ImportRef, Resolution, SourceRefs};
+        let mut g = ImportGraph::new();
+
+        let mut sr1 = SourceRefs::default();
+        sr1.push(
+            ImportRef {
+                specifier: "a".into(),
+                kind: crate::linker::reference::ImportKind::Static,
+                span: None,
+                condition: None,
+            },
+            Resolution::External {
+                package: "a".into(),
+            },
+        );
+        sr1.push(
+            ImportRef {
+                specifier: "b".into(),
+                kind: crate::linker::reference::ImportKind::Dynamic,
+                span: None,
+                condition: None,
+            },
+            Resolution::Dynamic {
+                expression: "b".into(),
+            },
+        );
+        g.set_source_refs("/a.rs", sr1);
+
+        let mut sr2 = SourceRefs::default();
+        sr2.push(
+            ImportRef {
+                specifier: "c".into(),
+                kind: crate::linker::reference::ImportKind::Static,
+                span: None,
+                condition: None,
+            },
+            Resolution::Unresolved {
+                reason: crate::linker::reference::UnresolvedReason::NotFound,
+            },
+        );
+        sr2.push(
+            ImportRef {
+                specifier: "d".into(),
+                kind: crate::linker::reference::ImportKind::Static,
+                span: None,
+                condition: None,
+            },
+            Resolution::Ambiguous {
+                candidates: vec!["/x.rs".into(), "/y.rs".into()],
+            },
+        );
+        g.set_source_refs("/b.rs", sr2);
+
+        let (ext, unres, amb, dyn_c) = g.aggregate_ref_counts();
+        assert_eq!(ext, 1);
+        assert_eq!(unres, 1);
+        assert_eq!(amb, 1);
+        assert_eq!(dyn_c, 1);
+    }
+
+    #[test]
+    fn clear_resets_source_refs() {
+        use crate::linker::reference::SourceRefs;
+        let mut g = ImportGraph::new();
+        g.set_source_refs("/a.rs", SourceRefs::default());
+        assert_eq!(g.source_refs.len(), 1);
+        g.clear();
+        assert!(g.source_refs.is_empty());
     }
 }

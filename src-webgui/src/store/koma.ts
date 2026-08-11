@@ -1337,10 +1337,10 @@ export type PushEnvelope =
     }
 
   // Reply to GuiReq ImportGraph — the linker daemon's code-dependency graph.
-  // ALWAYS a reply (status ok/empty/error). Carries the full node+edge
-  // projection plus metadata for the tab's header.
+  // `scanning`/`unavailable` are transient states, not valid empty graphs.
   | {
       k: 'ImportGraph'
+      status: 'ok' | 'scanning' | 'unavailable'
       nodes: ImportGraphNode[]
       edges: ImportGraphEdge[]
       focus: string | null
@@ -1637,6 +1637,7 @@ type ActivitySlice = {
 // (tabs reset to chat), and reopening remounts ImportGraphTab → a fresh
 // refreshImportGraph.
 type ImportGraphSlice = {
+  status: 'idle' | 'ok' | 'scanning' | 'unavailable'
   nodes: ImportGraphNode[]
   edges: ImportGraphEdge[]
   focus: string | null
@@ -2404,6 +2405,7 @@ const initialGraph: GraphSlice = {
 }
 
 const initialImportGraph: ImportGraphSlice = {
+  status: 'idle',
   nodes: [],
   edges: [],
   focus: null,
@@ -2533,6 +2535,16 @@ let branchListRequestSeq = 0
 function mintAgentTabId(): string {
   agentTabSeq += 1
   return `agent-${agentTabSeq}`
+}
+
+const IMPORT_GRAPH_RETRY_DELAYS_MS = [500, 1_000, 2_000, 3_000, 5_000] as const
+let importGraphRetryTimer: ReturnType<typeof setTimeout> | null = null
+let importGraphRetryAttempt = 0
+
+function clearImportGraphRetry() {
+  if (importGraphRetryTimer) clearTimeout(importGraphRetryTimer)
+  importGraphRetryTimer = null
+  importGraphRetryAttempt = 0
 }
 
 export const useKoma = create<KomaState>((set, get) => ({
@@ -3305,6 +3317,37 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         break
       case 'ImportGraph': {
+        if (env.status !== 'ok') {
+          const status = env.status === 'scanning' ? 'scanning' as const : 'unavailable' as const
+          set((s) => ({
+            importGraph: {
+              ...s.importGraph,
+              status,
+              loading: false,
+              queuedRefresh: false,
+              error: status === 'unavailable' ? 'Linker daemon is not reachable.' : null,
+            },
+          }))
+
+          // Registration and the initial full scan run asynchronously. Retry a
+          // bounded number of times without replacing the last valid graph.
+          if (!importGraphRetryTimer && importGraphRetryAttempt < IMPORT_GRAPH_RETRY_DELAYS_MS.length) {
+            const sessionId = get().session.id
+            const delay = IMPORT_GRAPH_RETRY_DELAYS_MS[importGraphRetryAttempt]
+            importGraphRetryAttempt += 1
+            importGraphRetryTimer = setTimeout(() => {
+              importGraphRetryTimer = null
+              const state = get()
+              if (state.session.id === sessionId
+                && (state.importGraph.status === 'scanning' || state.importGraph.status === 'unavailable')) {
+                state.refreshImportGraph(state.importGraph.focus)
+              }
+            }, delay)
+          }
+          break
+        }
+
+        clearImportGraphRetry()
         const queued = get().importGraph.queuedRefresh
         if (queued) {
           // Stale/coalesced reply: discard view data but keep workspace metadata.
@@ -3313,6 +3356,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             importGraph: {
               ...s.importGraph,
               availableRoots: env.availableRoots ?? [],
+              status: 'ok',
               loading: false,
               queuedRefresh: false,
               error: null,
@@ -3353,6 +3397,7 @@ export const useKoma = create<KomaState>((set, get) => ({
               totalNodesAvailable: env.totalNodesAvailable,
               totalEdgesAvailable: env.totalEdgesAvailable,
               availableRoots: env.availableRoots ?? [],
+              status: 'ok',
               loading: false,
               error: null,
               treeNodes,
@@ -4146,6 +4191,12 @@ export const useKoma = create<KomaState>((set, get) => ({
     }
     const focus = path !== undefined ? path : g.focus
     const isFullRefresh = path === undefined
+    // Daemon graph keys use canonical registered roots. Never send a raw or
+    // stale settings path as a server-side filter; an unmatched filter makes a
+    // healthy graph look empty.
+    const canonicalFilterRoots = g.filterRoots.filter((root) =>
+      g.availableRoots.some((available) => available.root === root),
+    )
     set((s) => ({
       importGraph: {
         ...s.importGraph,
@@ -4156,9 +4207,8 @@ export const useKoma = create<KomaState>((set, get) => ({
         // Strict: every focused request sends literal depth:1, direction:'both'.
         depth: 1,
         direction: 'both' as const,
-        // Clear stale graph data and impact state on every request.
-        nodes: [],
-        edges: [],
+        // Keep the last valid graph visible while the replacement is in flight.
+        // Impact data is request-specific and must still be cleared.
         impactRequestId: null,
         impactPath: null,
         impactStatus: 'idle' as const,
@@ -4173,7 +4223,7 @@ export const useKoma = create<KomaState>((set, get) => ({
       path: focus ?? null,
       depth: 1,
       direction: 'both',
-      filterRoots: g.filterRoots.length > 0 ? g.filterRoots : null,
+      filterRoots: canonicalFilterRoots.length > 0 ? canonicalFilterRoots : null,
       filterLanguages: g.filterLanguages.length > 0 ? g.filterLanguages : null,
     })
   },
@@ -4271,8 +4321,11 @@ export const useKoma = create<KomaState>((set, get) => ({
       importGraph: { ...s.importGraph, breadcrumb: [] },
     }))
   },
-  setImportGraphRootFilter: (roots) => {
+  setImportGraphRootFilter: (requestedRoots) => {
     const s = get().importGraph
+    const roots = requestedRoots.filter((root) =>
+      s.availableRoots.some((available) => available.root === root),
+    )
     // Determine if the current focus is excluded by the new root filter.
     let focusCleared = false
     let focus = s.focus

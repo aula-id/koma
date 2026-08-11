@@ -108,9 +108,9 @@ pub(super) fn handle_quit_kill_all(state: &mut AppState) {
         s.compact_apply_at = None;
         s.compact_pending = None;
     }
-    // Transition to Exiting phase for immediate visual feedback. The event loop
-    // will set `should_quit` after drawing the exit state.
+    // Keep the dialog visible and put the spinner inside the quit chip.
     if let crate::app::mode::Mode::QuitConfirm(s) = state.mode_mut() {
+        s.selected = 0;
         s.phase = crate::app::mode::QuitConfirmPhase::Exiting;
     }
 }
@@ -124,9 +124,9 @@ pub(super) fn handle_quit_kill_all(state: &mut AppState) {
 /// the process exits — "detach" here means "leave it resumable", not "keep it
 /// cooking headless". The overlay copy says so explicitly.
 pub(super) fn handle_quit_detach(state: &mut AppState) {
-    // Transition to Exiting phase for immediate visual feedback. The event loop
-    // will set `should_quit` after drawing the exit state.
+    // Keep the dialog visible and put the spinner inside the detach chip.
     if let crate::app::mode::Mode::QuitConfirm(s) = state.mode_mut() {
+        s.selected = 1;
         s.phase = crate::app::mode::QuitConfirmPhase::Exiting;
     }
 }

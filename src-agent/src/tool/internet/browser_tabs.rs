@@ -70,8 +70,8 @@ impl super::Tool for BrowserTabs {
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("no active session directory"))?;
 
-        let daemon = browser_daemon::get_or_start(session_dir)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let daemon =
+            browser_daemon::get_or_start(session_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         match action {
             "open" => {
@@ -85,7 +85,11 @@ impl super::Tool for BrowserTabs {
             }
             "list" => {
                 let data = daemon.request("list", json!({}))?;
-                let tabs = data.get("tabs").and_then(Value::as_array).cloned().unwrap_or_default();
+                let tabs = data
+                    .get("tabs")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
                 if tabs.is_empty() {
                     return Ok("no open tabs".to_string());
                 }
@@ -96,7 +100,14 @@ impl super::Tool for BrowserTabs {
                     let title = tab.get("title").and_then(Value::as_str).unwrap_or("");
                     let active = tab.get("active").and_then(Value::as_bool).unwrap_or(false);
                     let marker = if active { " *" } else { "" };
-                    out.push_str(&format!("{}. [{}]{} {}\n{}", i + 1, tid, marker, title, url));
+                    out.push_str(&format!(
+                        "{}. [{}]{} {}\n{}",
+                        i + 1,
+                        tid,
+                        marker,
+                        title,
+                        url
+                    ));
                     if i < tabs.len() - 1 {
                         out.push('\n');
                     }

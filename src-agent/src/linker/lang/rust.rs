@@ -2,12 +2,29 @@
 //!
 //! Extracts `use` paths and `mod` names from Rust source code using tree-sitter.
 //! Grouped imports (`use foo::{bar, baz}`) are expanded into individual paths.
+//! Module declarations retain their `#[path = "..."]` attribute when present.
 
-/// Extract raw import strings from Rust source code.
-///
-/// Returns a list of import paths like `"std::collections::HashMap"`, `"crate::foo::bar"`,
-/// or module names like `"foo"`.
-pub fn extract_imports(content: &str) -> Vec<String> {
+/// Kind of Rust import extracted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RustImportKind {
+    /// A `use` declaration.
+    Use,
+    /// A `mod` declaration.
+    Mod,
+}
+
+/// A structured Rust import with kind and optional `#[path]` attribute.
+#[derive(Debug, Clone)]
+pub struct RustImport {
+    pub kind: RustImportKind,
+    /// The `#[path = "..."]` attribute value, if present (only for `Mod` kind).
+    pub path_attr: Option<String>,
+    /// The raw import string (use path or module name).
+    pub raw: String,
+}
+
+/// Extract structured Rust imports with kind and path attribute.
+pub fn extract_imports_structured(content: &str) -> Vec<RustImport> {
     let lang = tree_sitter::Language::from(tree_sitter_rust::LANGUAGE);
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&lang).is_err() {
@@ -28,29 +45,95 @@ pub fn extract_imports(content: &str) -> Vec<String> {
             for cap in m.captures {
                 if let Ok(text) = cap.node.utf8_text(content.as_bytes()) {
                     if let Some(path) = parse_use_path(text) {
-                        imports.extend(expand_grouped_use(&path));
+                        for expanded in expand_grouped_use(&path) {
+                            imports.push(RustImport {
+                                kind: RustImportKind::Use,
+                                path_attr: None,
+                                raw: expanded,
+                            });
+                        }
                     }
                 }
             }
         }
     }
 
-    // Extract mod declarations: `mod foo;`
-    if let Ok(query) = tree_sitter::Query::new(&lang, "(mod_item name: (identifier) @mod_name)") {
+    // Extract mod declarations: `mod foo;` with optional `#[path = "..."]`.
+    // We capture the entire `mod_item` node text to scan for preceding `#[path]`.
+    if let Ok(query) = tree_sitter::Query::new(&lang, "(mod_item) @mod_item") {
         let mut cursor = tree_sitter::QueryCursor::new();
         for m in cursor.matches(&query, tree.root_node(), content.as_bytes()) {
             for cap in m.captures {
-                if let Ok(name) = cap.node.utf8_text(content.as_bytes()) {
-                    let name = name.trim();
-                    if !name.is_empty() {
-                        imports.push(name.to_string());
-                    }
+                let node = cap.node;
+                // Get the module name from the `name` child.
+                let name_child = node.child_by_field_name("name");
+                let name = match name_child {
+                    Some(nc) => match nc.utf8_text(content.as_bytes()) {
+                        Ok(n) => n.trim().to_string(),
+                        Err(_) => continue,
+                    },
+                    None => continue,
+                };
+                if name.is_empty() {
+                    continue;
                 }
+                // Look for `#[path = "..."]` in the node's leading attributes.
+                let path_attr = extract_path_attr(node, content);
+                imports.push(RustImport {
+                    kind: RustImportKind::Mod,
+                    path_attr,
+                    raw: name,
+                });
             }
         }
     }
 
     imports
+}
+
+/// Extract raw import strings from Rust source code (backward compatible).
+///
+/// Returns a list of import paths like `"std::collections::HashMap"`, `"crate::foo::bar"`,
+/// or module names like `"foo"`.
+pub fn extract_imports(content: &str) -> Vec<String> {
+    extract_imports_structured(content)
+        .into_iter()
+        .map(|ri| ri.raw)
+        .collect()
+}
+
+/// Look for `#[path = "some/path.rs"]` on a mod_item node's leading attributes.
+fn extract_path_attr(node: tree_sitter::Node, content: &str) -> Option<String> {
+    // Walk preceding siblings (attributes appear before the mod keyword).
+    let mut sibling_idx = node.prev_named_sibling();
+    while let Some(sib) = sibling_idx {
+        if sib.kind() == "attribute_item" {
+            if let Ok(text) = sib.utf8_text(content.as_bytes()) {
+                // Parse `#[path = "foo.rs"]` or `#[path = "foo.rs"]`.
+                if let Some(idx) = text.find("path") {
+                    let after = &text[idx + 4..];
+                    // Match `path = "..."` or `path="..."`.
+                    if let Some(eq_pos) = after.find('=') {
+                        let val = after[eq_pos + 1..].trim();
+                        // Strip surrounding brackets/quotes in any order.
+                        let val = val.trim_end_matches(']');
+                        let val = val.trim_matches('"');
+                        let val = val.trim_matches('\'');
+                        let val = val.trim();
+                        if !val.is_empty() {
+                            return Some(val.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        // Stop at non-attribute siblings (we've gone past the attribute list).
+        if sib.kind() != "attribute_item" {
+            break;
+        }
+        sibling_idx = sib.prev_named_sibling();
+    }
+    None
 }
 
 /// Parse the import path from a full `use` declaration text.
@@ -104,6 +187,10 @@ fn expand_grouped_use(path: &str) -> Vec<String> {
                 } else {
                     item
                 };
+                // Skip terminal `self` and globs — they don't resolve to files.
+                if item == "self" || item == "*" {
+                    continue;
+                }
                 // Recurse for nested braces.
                 if item.contains('{') {
                     let combined = if prefix.is_empty() {
@@ -240,5 +327,86 @@ pub use self::state::AppState;
     #[test]
     fn no_panic_on_invalid_input() {
         let _imports = extract_imports("use {{{ invalid");
+    }
+
+    // --- Structured extraction tests ---
+
+    #[test]
+    fn structured_use_has_correct_kind() {
+        let structured = extract_imports_structured("use std::collections::HashMap;");
+        assert_eq!(structured.len(), 1);
+        assert_eq!(structured[0].kind, RustImportKind::Use);
+        assert_eq!(structured[0].path_attr, None);
+        assert_eq!(structured[0].raw, "std::collections::HashMap");
+    }
+
+    #[test]
+    fn structured_mod_has_correct_kind() {
+        let structured = extract_imports_structured("mod foo;");
+        assert_eq!(structured.len(), 1);
+        assert_eq!(structured[0].kind, RustImportKind::Mod);
+        assert_eq!(structured[0].raw, "foo");
+        assert_eq!(structured[0].path_attr, None);
+    }
+
+    #[test]
+    fn structured_mod_with_path_attr() {
+        let structured = extract_imports_structured("#[path = \"model_cmd_test.rs\"] mod tests;");
+        assert_eq!(structured.len(), 1);
+        assert_eq!(structured[0].kind, RustImportKind::Mod);
+        assert_eq!(structured[0].raw, "tests");
+        assert_eq!(
+            structured[0].path_attr.as_deref(),
+            Some("model_cmd_test.rs")
+        );
+    }
+
+    #[test]
+    fn structured_mod_with_cfg_and_path() {
+        let structured =
+            extract_imports_structured("#[cfg(test)] #[path = \"model_cmd_test.rs\"] mod tests;");
+        assert_eq!(structured.len(), 1);
+        assert_eq!(structured[0].kind, RustImportKind::Mod);
+        assert_eq!(structured[0].raw, "tests");
+        assert_eq!(
+            structured[0].path_attr.as_deref(),
+            Some("model_cmd_test.rs")
+        );
+    }
+
+    #[test]
+    fn structured_mixed_use_and_mod() {
+        let code = r#"
+mod model_cmd;
+pub use model_cmd::{ModelCmdState, ModelCmdSub};
+use crate::model::app_config::ModelRole;
+"#;
+        let structured = extract_imports_structured(code);
+        let mods: Vec<_> = structured
+            .iter()
+            .filter(|r| r.kind == RustImportKind::Mod)
+            .collect();
+        let uses: Vec<_> = structured
+            .iter()
+            .filter(|r| r.kind == RustImportKind::Use)
+            .collect();
+        assert_eq!(mods.len(), 1);
+        assert_eq!(mods[0].raw, "model_cmd");
+        // pub use model_cmd::{ModelCmdState, ModelCmdSub} → 2 expanded uses
+        assert!(uses.iter().any(|u| u.raw == "model_cmd::ModelCmdState"));
+        assert!(uses.iter().any(|u| u.raw == "model_cmd::ModelCmdSub"));
+        assert!(uses
+            .iter()
+            .any(|u| u.raw == "crate::model::app_config::ModelRole"));
+    }
+
+    #[test]
+    fn grouped_self_and_glob_filtered() {
+        let structured = extract_imports_structured("use crate::foo::{self, Bar, *};");
+        let uses: Vec<&str> = structured.iter().map(|r| r.raw.as_str()).collect();
+        // `self` and `*` should be filtered out by expand_grouped_use
+        assert!(uses.contains(&"crate::foo::Bar"));
+        assert!(!uses.iter().any(|u| *u == "crate::foo::self"));
+        assert!(!uses.iter().any(|u| *u == "crate::foo::*"));
     }
 }

@@ -35,8 +35,8 @@ const REAPER_POLL: std::time::Duration = std::time::Duration::from_secs(15);
 /// Number of consecutive empty scans before exit.
 const REAPER_EMPTY_STREAK_TO_EXIT: u32 = 2;
 
-/// Shared daemon state: the import graph plus per-client root tracking and
-/// the file watcher.
+/// Shared daemon state: the import graph plus per-client root tracking, the
+/// file watcher, and the project index.
 struct DaemonState {
     graph: RwLock<ImportGraph>,
     /// client_id → set of registered workspace root paths.
@@ -54,6 +54,8 @@ struct DaemonState {
     watcher_rx: Mutex<Option<std::sync::mpsc::Receiver<Vec<PathBuf>>>>,
     /// The set of roots currently being watched (so we can detect changes).
     watched_roots: RwLock<Vec<PathBuf>>,
+    /// Phase 2: the project index tracking known files and workspace ownership.
+    project_index: RwLock<crate::linker::project::ProjectIndex>,
 }
 
 impl DaemonState {
@@ -66,6 +68,7 @@ impl DaemonState {
             watcher: Mutex::new(None),
             watcher_rx: Mutex::new(None),
             watched_roots: RwLock::new(Vec::new()),
+            project_index: RwLock::new(crate::linker::project::ProjectIndex::new()),
         }
     }
 }
@@ -256,9 +259,12 @@ fn handle_request(
                     std::thread::Builder::new()
                         .name("linker-scan".to_string())
                         .spawn(move || {
-                            let graph = crate::linker::scan::scan_roots(&scan_roots);
+                            let (graph, pi) = crate::linker::scan::scan_roots(&scan_roots);
                             if let Ok(mut g) = state_clone.graph.write() {
                                 *g = graph;
+                            }
+                            if let Ok(mut idx) = state_clone.project_index.write() {
+                                *idx = pi;
                             }
                             state_clone
                                 .scanning
@@ -328,9 +334,12 @@ fn handle_request(
                     std::thread::Builder::new()
                         .name("linker-scan".to_string())
                         .spawn(move || {
-                            let graph = crate::linker::scan::scan_roots(&all_roots);
+                            let (graph, pi) = crate::linker::scan::scan_roots(&all_roots);
                             if let Ok(mut g) = state_clone.graph.write() {
                                 *g = graph;
+                            }
+                            if let Ok(mut idx) = state_clone.project_index.write() {
+                                *idx = pi;
                             }
                             state_clone
                                 .scanning
@@ -349,13 +358,19 @@ fn handle_request(
             let edge_count = graph.edge_count;
             let generation = graph.generation;
 
+            let (ext_refs, unres_refs, amb_refs, dyn_refs) = graph.aggregate_ref_counts();
+
             let top_fan_in = graph.top_fan_in(5);
             let entry_points = graph.entry_points(10);
 
             let mut text = format!(
                 "Import graph: {file_count} files, {edge_count} edges (gen {generation})\n\
-                 Languages: {}\n",
-                languages.join(", ")
+                 Languages: {}\nRefs: {} external, {} unresolved, {} ambiguous, {} dynamic\n",
+                languages.join(", "),
+                ext_refs,
+                unres_refs,
+                amb_refs,
+                dyn_refs,
             );
 
             if !top_fan_in.is_empty() {
@@ -461,10 +476,9 @@ fn maybe_update_watcher(state: &Arc<DaemonState>, new_roots: &[PathBuf]) {
 
             // Spawn the watcher event-processing thread.
             let state_clone = Arc::clone(state);
-            let watched = new_roots.to_vec();
             std::thread::Builder::new()
                 .name("linker-watcher".to_string())
-                .spawn(move || watcher_loop(state_clone, watched))
+                .spawn(move || watcher_loop(state_clone))
                 .ok(); // Thread spawn failure is non-fatal.
         }
         Err(e) => {
@@ -478,7 +492,9 @@ fn maybe_update_watcher(state: &Arc<DaemonState>, new_roots: &[PathBuf]) {
 /// Background thread: read debounced file-change events and update the graph.
 ///
 /// Runs until the receiver is disconnected (watcher dropped).
-fn watcher_loop(state: Arc<DaemonState>, workspace_roots: Vec<PathBuf>) {
+///
+/// **Phase 2:** Uses `ProjectIndex` for owner-based resolution.
+fn watcher_loop(state: Arc<DaemonState>) {
     // Take the receiver out of the Mutex — this thread owns it exclusively.
     let rx = {
         let mut slot = state.watcher_rx.lock().unwrap_or_else(|e| e.into_inner());
@@ -494,8 +510,8 @@ fn watcher_loop(state: Arc<DaemonState>, workspace_roots: Vec<PathBuf>) {
             continue;
         }
 
-        if let Ok(mut graph) = state.graph.write() {
-            crate::linker::watch::handle_events(&paths, &mut graph, &workspace_roots);
+        if let (Ok(mut graph), Ok(mut pi)) = (state.graph.write(), state.project_index.write()) {
+            crate::linker::watch::handle_events(&paths, &mut graph, &mut pi);
         }
     }
 }
@@ -631,9 +647,12 @@ fn handle_query(
             std::thread::Builder::new()
                 .name("linker-rescan".to_string())
                 .spawn(move || {
-                    let graph = crate::linker::scan::scan_roots(&all_roots);
+                    let (graph, pi) = crate::linker::scan::scan_roots(&all_roots);
                     if let Ok(mut g) = state_clone.graph.write() {
                         *g = graph;
+                    }
+                    if let Ok(mut idx) = state_clone.project_index.write() {
+                        *idx = pi;
                     }
                     state_clone
                         .scanning

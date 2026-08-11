@@ -14,12 +14,11 @@
 //!   [`crate::controller::input::handle_quit_confirm`] (local TUI) /
 //!   `client::input::handle_quit_confirm_key` (attached client).
 //!
-//! - **`Exiting`** — the user activated quit or detach. Shows a braille spinner
-//!   with "Exiting…" and a description. All key/click input is suppressed to
-//!   prevent duplicate quit/kill requests. The spinner is time-based (wall
-//!   clock) so even a single frame of the exit state shows a meaningful glyph.
-//!   The event loop breaks (standalone) or waits for socket disconnect (client)
-//!   while this phase is visible.
+//! - **`Exiting`** — the user activated quit or detach. The dialog remains
+//!   unchanged except for a braille spinner inside the activated button. All
+//!   key/click input is suppressed to prevent duplicate requests. The event loop
+//!   breaks (standalone) or waits for socket disconnect (client) while this phase
+//!   is visible.
 //!
 //! The same three choices are also CLICKABLE: the draw fn records each button's
 //! on-screen [`Rect`] into [`QuitConfirmState::button_rects`] (interior
@@ -35,9 +34,8 @@ use ratatui::layout::Rect;
 pub enum QuitConfirmPhase {
     /// Awaiting the user's choice — the normal overlay with question + buttons.
     Choice,
-    /// Exit in progress — the user activated quit or detach. Show a braille
-    /// spinner and suppress all input until the process exits or the daemon
-    /// socket disconnects (client mode).
+    /// Exit in progress — preserve the dialog, add a spinner to the activated
+    /// chip, and suppress input until process exit or socket disconnect.
     Exiting,
 }
 
@@ -95,18 +93,13 @@ impl QuitConfirmState {
         }
     }
 
-    /// Build an EXITING-phase overlay for immediate exit feedback.
-    ///
-    /// Used by the client's render loop to show a braille spinner while waiting
-    /// for the daemon to disconnect, and by the standalone event loop after
-    /// the user activates quit/detach. `working`/`total` are display-only
-    /// (carried for header text if needed); `selected` is unused (buttons are
-    /// hidden).
-    pub fn exiting() -> Self {
+    /// Build an exiting-phase overlay for immediate inline feedback.
+    /// `selected` identifies the chip that receives the spinner (0=quit, 1=detach).
+    pub fn exiting(selected: usize) -> Self {
         Self {
             working: 0,
             total: 0,
-            selected: 2,
+            selected: selected.min(1),
             button_rects: Cell::new([Rect::ZERO; 3]),
             phase: QuitConfirmPhase::Exiting,
         }
@@ -134,8 +127,9 @@ mod tests {
 
     #[test]
     fn exiting_state_has_exiting_phase() {
-        let s = QuitConfirmState::exiting();
+        let s = QuitConfirmState::exiting(0);
         assert_eq!(s.phase, QuitConfirmPhase::Exiting);
+        assert_eq!(s.selected, 0);
         assert!(s.is_exiting());
     }
 

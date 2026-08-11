@@ -17,9 +17,9 @@
 //! Navigation (Left/Right, Tab/Shift+Tab, Enter) plus the direct k / d / Esc
 //! shortcuts are handled in [`crate::controller::input::handle_quit_confirm`].
 //!
-//! When in the **Exiting** phase (the user activated quit or detach), the entire
-//! overlay is replaced with a centered braille spinner and "Exiting…" text. No
-//! buttons are rendered and no hit-boxes are recorded.
+//! In the **Exiting** phase, the dialog stays in place and only the activated
+//! chip gains a braille spinner (`[ quit ]` → `[ ⠋quit ]`). Input is suppressed
+//! and click hit-boxes are cleared while shutdown completes.
 
 use crate::app::mode::QuitConfirmState;
 use crate::view::theme::Palette;
@@ -88,74 +88,12 @@ fn centered_rect(area: Rect, w: u16, h: u16) -> Rect {
 }
 
 /// Render the quit-confirm overlay for `s` using the given colour `palette`.
-///
-/// In the `Exiting` phase, renders a centered braille spinner with "Exiting…"
-/// instead of the question/button layout.
+/// The Exiting phase preserves this layout and adds a spinner to the activated chip.
 pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
-    if s.is_exiting() {
-        return draw_exiting(frame, s, palette);
-    }
     draw_choice(frame, s, palette);
 }
 
-/// Render the Exiting phase: centered braille spinner + "Exiting…" text.
-fn draw_exiting(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
-    let area = frame.area();
-    crate::view::clear_and_fill(frame, area, palette.bg);
-
-    // Zero out button hit-boxes so stale rects from the Choice phase can't
-    // be hit-tested against the new layout.
-    s.button_rects.set([Rect::ZERO; 3]);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(35), // top spacer
-            Constraint::Length(1),      // title bar
-            Constraint::Length(2),      // gap
-            Constraint::Length(1),      // spinner + "Exiting…"
-            Constraint::Length(1),      // description
-            Constraint::Min(0),         // rest
-        ])
-        .split(area);
-
-    // --- Title bar: " exiting " (mirrors the " quit " title style) ---
-    let title_block = Block::new()
-        .borders(Borders::TOP | Borders::BOTTOM)
-        .border_style(Style::default().fg(palette.dim))
-        .title(Span::styled(" exiting ", Style::default().fg(palette.dim)))
-        .padding(Padding::horizontal(1));
-    frame.render_widget(title_block, chunks[1]);
-
-    // --- Spinner + "Exiting…" ---
-    let glyph = spinner_glyph();
-    let spinner_line = Line::from(vec![
-        Span::styled(format!("{glyph}  "), Style::default().fg(palette.accent)),
-        Span::styled(
-            "Exiting…",
-            Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
-        ),
-    ]);
-    frame.render_widget(
-        Paragraph::new(spinner_line).alignment(ratatui::layout::Alignment::Center),
-        chunks[3],
-    );
-
-    // --- Description ---
-    let subtitle = if s.working > 0 {
-        "Stopping session and cleaning up…"
-    } else {
-        "Cleaning up…"
-    };
-    let desc = Paragraph::new(Line::from(Span::styled(
-        subtitle,
-        Style::default().fg(palette.dim),
-    )))
-    .alignment(ratatui::layout::Alignment::Center);
-    frame.render_widget(desc, chunks[4]);
-}
-
-/// Render the Choice phase: question + button row + description (original layout).
+/// Render the question, button row, and description.
 fn draw_choice(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -197,7 +135,11 @@ fn draw_choice(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
     // (true-black/white), legible under BOLD — matching the footer + selection
     // inverse treatment.
     let chip = |idx: usize| {
-        let label = format!("[ {} ]", LABELS[idx]);
+        let label = if s.is_exiting() && idx == sel {
+            format!("[ {}{} ]", spinner_glyph(), LABELS[idx])
+        } else {
+            format!("[ {} ]", LABELS[idx])
+        };
         let style = if idx == sel {
             Style::default()
                 .bg(palette.accent)
@@ -261,7 +203,8 @@ fn draw_choice(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
 
     // On-screen width of a button chip: label plus the `[` and `]` bracket chars
     // and two inner spaces (` label `), matching the `[ label ]` chip rendered above.
-    let chip_w = |idx: usize| LABELS[idx].len() as u16 + 4;
+    let chip_w =
+        |idx: usize| LABELS[idx].len() as u16 + 4 + u16::from(s.is_exiting() && idx == sel);
 
     // Record each button's on-screen Rect as a chip-width horizontal segment on
     // the button row, in index order (0 = close window (quit), 1 = detach, 2 = cancel)
@@ -271,7 +214,7 @@ fn draw_choice(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
     // full row width can't fit, leave the rects empty (Rect::ZERO) so nothing is
     // clickable rather than pointing clicks at the wrong place.
     let total_w: u16 = chip_w(0) + chip_w(1) + chip_w(2) + GAP * 2;
-    let rects = if inner.width >= total_w && inner.height > button_row {
+    let rects = if !s.is_exiting() && inner.width >= total_w && inner.height > button_row {
         let mut rects = [Rect::ZERO; 3];
         let mut x = inner.x;
         for (idx, rect) in rects.iter_mut().enumerate() {

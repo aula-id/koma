@@ -53,8 +53,15 @@ pub use dircache::DirCache;
 pub(crate) fn tool_is_risky(name: &str) -> bool {
     matches!(
         name,
-        "write" | "delete" | "edit" | "bash" | "git_operator" | "web_download"
-            | "browser_tabs" | "browser_interact" | "browser_evaluate"
+        "write"
+            | "delete"
+            | "edit"
+            | "bash"
+            | "git_operator"
+            | "web_download"
+            | "browser_tabs"
+            | "browser_interact"
+            | "browser_evaluate"
     )
 }
 

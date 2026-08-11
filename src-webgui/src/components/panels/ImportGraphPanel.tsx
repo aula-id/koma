@@ -220,6 +220,7 @@ export function ImportGraphPanel() {
   const availableRoots = useKoma((s) => s.importGraph.availableRoots)
   const filterRoots = useKoma((s) => s.importGraph.filterRoots)
   const filterLanguages = useKoma((s) => s.importGraph.filterLanguages)
+  const graphStatus = useKoma((s) => s.importGraph.status)
   const graphLoading = useKoma((s) => s.importGraph.loading)
   const graphError = useKoma((s) => s.importGraph.error)
   const edgeCount = useKoma((s) => s.importGraph.edgeCount)
@@ -242,8 +243,11 @@ export function ImportGraphPanel() {
   }, [req, refreshImportGraph])
 
   const roots = useMemo(() => {
+    // Graph filters must use the daemon's canonical registered roots. Fall back
+    // to configured roots only until the first graph response supplies them.
+    const daemonRoots = availableRoots.map((item) => item.root)
     const configured = settingsValues?.workdir ?? EMPTY_ROOTS
-    return uniqueRoots(configured.length > 0 ? configured : availableRoots.map((item) => item.root))
+    return uniqueRoots(daemonRoots.length > 0 ? daemonRoots : configured)
   }, [settingsValues, availableRoots])
   const validFilters = filterRoots.filter((root) => roots.includes(root))
   const chosenRoot = validFilters.length === 1
@@ -352,7 +356,12 @@ export function ImportGraphPanel() {
         />
       </div>
 
-      {graphError ? (
+      {graphStatus === 'scanning' ? (
+        <div className="flex flex-none items-center gap-2 border-y border-koma-accent/15 px-3 py-1.5 text-[10px] text-koma-dim">
+          <BrailleSpinner size={10} />
+          <span>Indexing import graph…</span>
+        </div>
+      ) : graphError ? (
         <div className="flex flex-none items-center gap-2 border-y border-koma-error/15 px-3 py-1.5 text-[10px]">
           <span className="min-w-0 flex-1 truncate text-koma-error" title={graphError}>Graph unavailable: {graphError}</span>
           <button type="button" onClick={() => refreshImportGraph(null)} className="flex-none text-koma-fg hover:text-koma-accent">

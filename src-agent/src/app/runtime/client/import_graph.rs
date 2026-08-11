@@ -15,6 +15,10 @@ use std::sync::mpsc::Sender;
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportGraphResult {
+    /// Status of the graph response: "ok" (successful graph data),
+    /// "unavailable" (linker daemon unreachable/error),
+    /// "scanning" (generation 0 with no files — scan in progress).
+    pub status: String,
     pub nodes: Vec<ImportGraphNode>,
     pub edges: Vec<ImportGraphEdge>,
     pub focus: Option<String>,
@@ -66,7 +70,14 @@ pub struct ImportGraphLangCount {
 
 /// Convert a daemon `GraphViewResult` into the workspace-relative GUI DTO.
 pub fn from_daemon_result(result: crate::ipc::linker_proto::GraphViewResult) -> ImportGraphResult {
+    // Determine status: generation 0 with no files = scanning; otherwise ok.
+    let status = if result.generation == 0 && result.file_count == 0 {
+        "scanning".to_string()
+    } else {
+        "ok".to_string()
+    };
     ImportGraphResult {
+        status,
         nodes: result
             .nodes
             .into_iter()
@@ -138,7 +149,7 @@ pub fn spawn_import_graph_attached(
         };
         let result = match crate::linker::client::fetch_graph_view(&req) {
             Some(r) => from_daemon_result(r),
-            None => empty_result(),
+            None => unavailable_result(),
         };
         let _ = tx.send(result);
     });
@@ -166,16 +177,17 @@ pub fn spawn_import_graph(
         };
         let result = match crate::linker::client::fetch_graph_view(&req) {
             Some(r) => from_daemon_result(r),
-            None => empty_result(),
+            None => unavailable_result(),
         };
         let env = super::push_proto::PushEnvelope::ImportGraph(result);
         super::render::emit(&push, &env);
     });
 }
 
-/// An empty result for when the linker daemon is unreachable.
-fn empty_result() -> ImportGraphResult {
+/// An unavailable result for when the linker daemon is unreachable.
+fn unavailable_result() -> ImportGraphResult {
     ImportGraphResult {
+        status: "unavailable".to_string(),
         nodes: Vec::new(),
         edges: Vec::new(),
         focus: None,
