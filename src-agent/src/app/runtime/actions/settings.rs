@@ -288,6 +288,16 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         // Main model actually swapped (never on a re-save of the same model,
         // and never for the many OTHER fields this same save also touches).
         let before_main = state.rest.main_identity_now();
+        // Snapshot old workdirs BEFORE the session write so we can detect an
+        // actual change and trigger linker registration only when needed.
+        #[cfg(feature = "linker")]
+        let old_workdirs: Vec<std::path::PathBuf> = state
+            .rest
+            .fg()
+            .session
+            .as_ref()
+            .map(|s| s.workdirs())
+            .unwrap_or_default();
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
             sess.settings.api_key = api_key;
             sess.settings.model = model;
@@ -357,9 +367,15 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             }
         }
         // c) Persist the session's settings.json.
+        #[cfg(feature = "linker")]
+        let mut session_save_ok = true;
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
             if let Err(e) = sess.save() {
                 state.rest.fg_mut().status = format!("error: {e}");
+                #[cfg(feature = "linker")]
+                {
+                    session_save_ok = false;
+                }
             }
         }
         // c1) BUG FIX: both Main-affecting writes (a + b above) have landed and
@@ -380,6 +396,37 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         let dir_cache = state.rest.fg().dir_cache.clone();
         if let Some(r) = roots {
             crate::tool::dircache::reindex(r, dir_cache);
+        }
+        // c3) Linker: register changed workdirs on a background thread so
+        //     blocking IPC never stalls the event loop. Only fires when the
+        //     persisted workdirs actually differ from the snapshot taken
+        //     before the session write AND the session save succeeded.
+        //     Revision is allocated synchronously here (after the authoritative
+        //     save) so the background worker carries a deterministic revision
+        //     that the daemon uses to reject stale out-of-order registrations.
+        #[cfg(feature = "linker")]
+        if session_save_ok {
+            let new_workdirs = state
+                .rest
+                .fg()
+                .session
+                .as_ref()
+                .map(|s| s.workdirs())
+                .unwrap_or_default();
+            if new_workdirs != old_workdirs {
+                let session_id = state.rest.fg().id.clone();
+                let revision = crate::linker::client::next_registration_revision(&session_id);
+                std::thread::Builder::new()
+                    .name("linker-register".to_string())
+                    .spawn(move || {
+                        let _ = crate::linker::client::ensure_and_register_with_revision(
+                            &new_workdirs,
+                            &session_id,
+                            revision,
+                        );
+                    })
+                    .ok();
+            }
         }
         // d) Rename LAST, and only when the name actually changed and is
         //    non-empty. Doing it last means a rename failure can't lose the

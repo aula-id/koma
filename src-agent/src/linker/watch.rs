@@ -441,7 +441,8 @@ mod tests {
 
         let (graph, mut pi) = crate::linker::scan::scan_roots(&[root.clone()]);
         let mut graph = graph;
-        assert_eq!(graph.generation, 1);
+        // scan_roots no longer sets generation (daemon owns it); default is 0.
+        assert_eq!(graph.generation, 0);
 
         // Modify a.rs.
         std::fs::write(src.join("a.rs"), "// a modified\n").unwrap();
@@ -449,7 +450,7 @@ mod tests {
         handle_events(&paths, &mut graph, &mut pi);
 
         assert_eq!(
-            graph.generation, 2,
+            graph.generation, 1,
             "exactly one generation increment for batch"
         );
         assert!(graph.check_invariants().is_ok());
@@ -496,7 +497,9 @@ mod tests {
         std::fs::write(&later, "// later again\n").unwrap();
         handle_events(std::slice::from_ref(&later), &mut graph, &mut index);
         assert_eq!(graph.dependencies(&lib_path), vec![later_path.as_str()]);
-        assert_eq!(graph.generation, 4);
+        // scan_roots no longer sets generation (daemon owns it); default is 0,
+        // +3 for three handle_events batches = 3.
+        assert_eq!(graph.generation, 3);
         assert!(graph.check_invariants().is_ok());
     }
 

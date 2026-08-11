@@ -637,14 +637,29 @@ pub(super) enum HostCtl {
         direction: crate::ipc::linker_proto::GraphDirection,
         filter_roots: Option<Vec<String>>,
         filter_languages: Option<Vec<String>>,
+        /// Session id for wire correlation — the result carries this so the
+        /// frontend can reject stale replies after a session switch.
+        session_id: Option<String>,
+        /// Request id for correlation — the result echoes this so the GUI can
+        /// match replies to originating requests and reject stale ones.
+        request_id: Option<String>,
     },
     /// Impact analysis for a file (off-thread linker IPC).
+    /// `configured_roots` resolved by host handler from session workdirs.
     #[cfg(feature = "linker")]
     ImportGraphImpact {
         path: String,
         depth: u32,
         request_id: String,
+        /// Session id for wire correlation.
+        session_id: Option<String>,
     },
+    /// Manual reindex: reconcile/register the foreground session's current
+    /// workdirs with the linker daemon, issue Rescan, poll until the scan
+    /// completes, then refresh the scoped visualization. Handled entirely
+    /// off-thread; `request_id` is echoed back so the GUI can correlate.
+    #[cfg(feature = "linker")]
+    ImportGraphReindex { request_id: Option<String> },
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.

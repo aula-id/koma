@@ -1335,6 +1335,7 @@ export type PushEnvelope =
   | {
       k: 'ImportGraphImpact'
       requestId: string
+      sessionId?: string | null
       path: string
       depth: number
       paths: string[]
@@ -1343,10 +1344,13 @@ export type PushEnvelope =
     }
 
   // Reply to GuiReq ImportGraph — the linker daemon's code-dependency graph.
-  // `scanning`/`unavailable` are transient states, not valid empty graphs.
+  // `not-indexed` = all configured roots not yet scanned; `scanning` =
+  // at least one root being scanned; `unavailable` = linker daemon unreachable;
+  // `ok` = graph data present. `requestId`/`sessionId` let the store
+  // drop stale replies.
   | {
       k: 'ImportGraph'
-      status: 'ok' | 'scanning' | 'unavailable'
+      status: 'ok' | 'scanning' | 'not-indexed' | 'unavailable'
       nodes: ImportGraphNode[]
       edges: ImportGraphEdge[]
       focus: string | null
@@ -1359,6 +1363,8 @@ export type PushEnvelope =
       totalNodesAvailable: number
       totalEdgesAvailable: number
       availableRoots: ImportGraphRootInfo[]
+      requestId?: string | null
+      sessionId?: string | null
     }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
@@ -1599,9 +1605,19 @@ export type ImportGraphEdge = {
 
 // Per-root workspace metadata for filter pickers.
 export type ImportGraphRootInfo = {
+  /** Canonical identity path used for requests, security, and matching. */
   root: string
+  /** The configured (user-input) path — may be a symlink or relative spelling.
+   *  Identical to `root` when the configured path already canonicalises to `root`.
+   *  Omitted (undefined) from JSON when it equals `root`. */
+  configuredPath?: string
+  /** Human-friendly display label for the UI (typically basename). Kept
+   *  distinct from `root` so the frontend can show a short name while keeping
+   *  the canonical path in the title/sublabel. */
+  displayPath?: string
   fileCount: number
   languages: { name: string; count: number }[]
+  indexedState: 'indexed' | 'scanning' | 'not-indexed' | 'unavailable'
 }
 
 // The commit-graph tab's slice (G2) — the loaded commit page(s) + selection +
@@ -1649,7 +1665,7 @@ type ActivitySlice = {
 // (tabs reset to chat), and reopening remounts ImportGraphTab → a fresh
 // refreshImportGraph.
 type ImportGraphSlice = {
-  status: 'idle' | 'ok' | 'scanning' | 'unavailable'
+  status: 'idle' | 'ok' | 'scanning' | 'not-indexed' | 'unavailable'
   nodes: ImportGraphNode[]
   edges: ImportGraphEdge[]
   focus: string | null
@@ -1689,6 +1705,18 @@ type ImportGraphSlice = {
   impactPaths: string[]
   impactTotal: number
   impactError: string | null
+  // Reindex lifecycle: set true when an ImportGraphReindex req fires; cleared
+  // by the next ImportGraph push (success or error). Drives the refresh
+  // button spinner + 'Indexing workspace' banner.
+  reindexBusy: boolean
+  reindexError: string | null
+  // Request correlation: the latest request id and session id for stale-reply
+  // rejection.  `activeRequestId` is set by refreshImportGraph /
+  // reindexImportGraph and compared against the push envelope's `requestId`.
+  // `activeSessionId` is set the same way and compared against `sessionId` so
+  // a reindex started before a session switch is silently dropped.
+  activeRequestId: string | null
+  activeSessionId: string | null
 }
 
 // The Analytics dashboard tab's slice — host-authoritative projection + local
@@ -1998,6 +2026,9 @@ type KomaState = {
   popBreadcrumb: () => void
   // Request impact analysis for a file.
   requestImportGraphImpact: (path: string) => void
+  // Send ImportGraphReindex to the linker daemon; sets reindexBusy.
+  // Coalesces (no-op) while already in flight.
+  reindexImportGraph: () => void
   // Clear the breadcrumb trail (fresh start).
   clearBreadcrumb: () => void
   // Set workspace root filters and re-fetch. Empty = all roots.
@@ -2452,6 +2483,10 @@ const initialImportGraph: ImportGraphSlice = {
   impactPaths: [],
   impactTotal: 0,
   impactError: null,
+  reindexBusy: false,
+  reindexError: null,
+  activeRequestId: null,
+  activeSessionId: null,
 }
 
 const initialActivity: ActivitySlice = {
@@ -2928,7 +2963,8 @@ export const useKoma = create<KomaState>((set, get) => ({
           }
         })
         break
-      case 'SettingsValues':
+      case 'SettingsValues': {
+        const prevWorkdir = get().settingsValues?.workdir
         set(() => ({
           settingsValues: {
             name: env.name,
@@ -2942,7 +2978,62 @@ export const useKoma = create<KomaState>((set, get) => ({
             effort: env.effort ?? '',
           },
         }))
+        // Prune importGraph state when the workdir list changes (same session).
+        // Use canonical availableRoots (backend-provided) as ground truth —
+        // raw settings strings may differ from canonical roots (symlinks,
+        // relative paths).  Also union with new settings entries so not-yet-
+        // indexed roots aren't immediately pruned.
+        if (prevWorkdir && JSON.stringify(prevWorkdir) !== JSON.stringify(env.workdir)) {
+          set((s) => {
+            const ig = s.importGraph
+            // Best-effort prune against new workdir (availableRoots is stale).
+            // refreshImportGraph below brings authoritative backend roots.
+            const validRoots = new Set(env.workdir.filter((r: string) => r.length > 0))
+            const prunedFilters = ig.filterRoots.filter((r) => validRoots.has(r))
+            // Prune treeNodes to only those under valid roots
+            const prunedTreeNodes = ig.treeNodes.filter((n) =>
+              !n.workspaceRoot || validRoots.has(n.workspaceRoot)
+            )
+            // Prune languages to those still present in availableRoots.
+            const scopedRoots = ig.availableRoots.filter((r) => validRoots.has(r.root))
+            let prunedLangs = ig.filterLanguages
+            if (scopedRoots.length > 0) {
+              const validLangs = new Set<string>()
+              for (const r of scopedRoots) {
+                for (const lc of r.languages) validLangs.add(lc.name)
+              }
+              prunedLangs = ig.filterLanguages.filter((l) => validLangs.has(l))
+            }
+            // Prune focus: if the focused node's root is no longer valid, clear it
+            let focus = ig.focus
+            let selectedPath = ig.selectedPath
+            let breadcrumb = ig.breadcrumb
+            if (focus) {
+              const focusNode = ig.nodes.find((n) => n.path === focus)
+              if (focusNode?.workspaceRoot && !validRoots.has(focusNode.workspaceRoot)) {
+                focus = null
+                selectedPath = null
+                breadcrumb = []
+              }
+            }
+            return {
+              importGraph: {
+                ...ig,
+                filterRoots: prunedFilters,
+                filterLanguages: prunedLangs,
+                treeNodes: prunedTreeNodes,
+                focus,
+                selectedPath,
+                breadcrumb,
+              },
+            }
+          })
+          // Trigger a fresh graph fetch so the backend re-scopes with the
+          // new settings and the authoritative availableRoots arrive.
+          get().refreshImportGraph()
+        }
         break
+      }
       case 'EffortOptions':
         set(() => ({
           effortOptions: {
@@ -3363,21 +3454,43 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         break
       case 'ImportGraph': {
+        // Stale-reply guard: sessionId must always match the foreground
+        // session. When a request is active, requestId must also match exactly;
+        // null/uncorrelated replies are rejected.
+        {
+          const s = get().importGraph
+          if (env.sessionId !== get().session.id) break
+          if (s.activeRequestId != null && env.requestId !== s.activeRequestId) break
+          if (s.activeSessionId != null && env.sessionId !== s.activeSessionId) break
+        }
+
         if (env.status !== 'ok') {
-          const status = env.status === 'scanning' ? 'scanning' as const : 'unavailable' as const
+          const status = (env.status === 'scanning' ? 'scanning'
+            : env.status === 'not-indexed' ? 'not-indexed'
+            : 'unavailable') as 'scanning' | 'not-indexed' | 'unavailable'
+          // reindexBusy transitions: scanning retains it (still working);
+          // not-indexed / unavailable are terminal — clear it.
+          const reindexTerminal = status !== 'scanning'
           set((s) => ({
             importGraph: {
               ...s.importGraph,
               status,
               loading: false,
               queuedRefresh: false,
-              error: status === 'unavailable' ? 'Linker daemon is not reachable.' : null,
+              error: status === 'unavailable' ? 'Linker daemon is not reachable.'
+                : status === 'not-indexed' ? 'Workspace not indexed — use reindex to scan.'
+                : null,
+              availableRoots: env.availableRoots ?? [],
+              ...(reindexTerminal
+                ? { reindexBusy: false, reindexError: status === 'unavailable' ? 'Linker daemon is not reachable.' : null }
+                : {}),
             },
           }))
 
           // Registration and the initial full scan run asynchronously. Retry a
           // bounded number of times without replacing the last valid graph.
-          if (!importGraphRetryTimer && importGraphRetryAttempt < IMPORT_GRAPH_RETRY_DELAYS_MS.length) {
+          // Only retry for scanning / unavailable; not-indexed is terminal.
+          if (status !== 'not-indexed' && !importGraphRetryTimer && importGraphRetryAttempt < IMPORT_GRAPH_RETRY_DELAYS_MS.length) {
             const sessionId = get().session.id
             const delay = IMPORT_GRAPH_RETRY_DELAYS_MS[importGraphRetryAttempt]
             importGraphRetryAttempt += 1
@@ -3406,6 +3519,8 @@ export const useKoma = create<KomaState>((set, get) => ({
               loading: false,
               queuedRefresh: false,
               error: null,
+              reindexBusy: false,
+              reindexError: null,
             },
           }))
           get().refreshImportGraph(get().importGraph.focus)
@@ -3446,6 +3561,8 @@ export const useKoma = create<KomaState>((set, get) => ({
               status: 'ok',
               loading: false,
               error: null,
+              reindexBusy: false,
+              reindexError: null,
               treeNodes,
             },
           }
@@ -3453,10 +3570,12 @@ export const useKoma = create<KomaState>((set, get) => ({
         break
       }
       case 'ImportGraphImpact': {
-        // Reject stale: requestId must match AND path must match current impact target.
+        // Reject stale: requestId must match, path must match current impact
+        // target, and sessionId must match (prevents cross-session bleed).
         set((s) => {
           if (env.requestId !== s.importGraph.impactRequestId) return s
           if (env.path !== s.importGraph.impactPath) return s
+          if (env.sessionId != null && env.sessionId !== s.session.id) return s
           return {
             importGraph: {
               ...s.importGraph,
@@ -4237,6 +4356,8 @@ export const useKoma = create<KomaState>((set, get) => ({
     }
     const focus = path !== undefined ? path : g.focus
     const isFullRefresh = path === undefined
+    const requestId = `graph-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const sessionId = get().session.id
     // Daemon graph keys use canonical registered roots. Never send a raw or
     // stale settings path as a server-side filter; an unmatched filter makes a
     // healthy graph look empty.
@@ -4250,6 +4371,8 @@ export const useKoma = create<KomaState>((set, get) => ({
         error: null,
         focus,
         queuedRefresh: false,
+        activeRequestId: requestId,
+        activeSessionId: sessionId,
         // Strict: every focused request sends literal depth:1, direction:'both'.
         depth: 1,
         direction: 'both' as const,
@@ -4271,6 +4394,7 @@ export const useKoma = create<KomaState>((set, get) => ({
       direction: 'both',
       filterRoots: canonicalFilterRoots.length > 0 ? canonicalFilterRoots : null,
       filterLanguages: g.filterLanguages.length > 0 ? g.filterLanguages : null,
+      requestId,
     })
   },
   setImportGraphDepth: (depth) => {
@@ -4458,6 +4582,29 @@ export const useKoma = create<KomaState>((set, get) => ({
       get().refreshImportGraph(focus)
     }
   },
+  reindexImportGraph: () => {
+    if (get().importGraph.reindexBusy) return
+    const requestId = `reindex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const sessionId = get().session.id
+    set((s) => ({
+      importGraph: { ...s.importGraph, reindexBusy: true, reindexError: null, activeRequestId: requestId, activeSessionId: sessionId },
+    }))
+    get().req({ r: 'ImportGraphReindex', requestId })
+    // Safety-net timeout: if no ImportGraph reply arrives within 15s
+    // (e.g. daemon lost mid-reindex), clear reindexBusy with an actionable
+    // error so the UI never stays in a permanent spinner.
+    setTimeout(() => {
+      if (get().importGraph.reindexBusy && get().importGraph.activeRequestId === requestId) {
+        set((s) => ({
+          importGraph: {
+            ...s.importGraph,
+            reindexBusy: false,
+            reindexError: 'Reindex timed out — linker daemon may be unresponsive. Try again.',
+          },
+        }))
+      }
+    }, 15_000)
+  },
   requestImportGraphImpact: (path: string) => {
     const id = `impact-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     set((s) => ({
@@ -4471,7 +4618,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         impactError: null,
       },
     }))
-    get().req({ r: 'ImportGraphImpact', path, depth: 3, requestId: id })
+    get().req({ r: 'ImportGraphImpact', path, depth: 3, requestId: id, sessionId: get().session.id })
   },
   refreshActivity: (path) => {
     const p = path ?? null

@@ -517,6 +517,9 @@ declare global {
       direction?: 'dependencies' | 'dependents' | 'both' | null
       filterRoots?: string[] | null
       filterLanguages?: string[] | null
+      // Mandatory correlation id — echoed in the ImportGraphResult so the
+      // store can reject stale / out-of-order replies.
+      requestId: string
     }
   // Impact analysis: transitive reverse deps for a file.
   | {
@@ -524,7 +527,16 @@ declare global {
       path: string
       depth?: number | null
       requestId: string
+      // Session id for wire correlation — echoed in the result so the
+      // store can reject stale replies from a prior session.
+      sessionId?: string | null
     }
+
+  // Tell the linker daemon to re-index all configured workspaces. Triggers a
+  // fresh scan; the result arrives as a normal ImportGraph push envelope
+  // (status 'scanning' -> 'ok'/'not-indexed'/'unavailable'). `requestId` is
+  // echoed back so the store can correlate and reject stale replies.
+  | { r: 'ImportGraphReindex'; requestId?: string | null }
 
   // ─── Coding push envelope shapes (Rust → JS) ────────────────────────────
   // Every reply echoes the relevant root/path/requestId for stale-reply rejection.

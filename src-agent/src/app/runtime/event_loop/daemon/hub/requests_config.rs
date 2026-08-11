@@ -363,6 +363,18 @@ impl DaemonHub {
         // Only a workdir change needs a dir-cache reindex (a full workspace
         // re-walk) — so gate it below rather than firing it on every toggle.
         let did_workdir = workdir_vec.is_some();
+        // Snapshot the old workdirs BEFORE the set so we can detect an actual
+        // change and trigger linker registration only when the roots differ.
+        #[cfg(feature = "linker")]
+        let old_workdirs: Vec<std::path::PathBuf> = state
+            .rest
+            .fg()
+            .session
+            .as_ref()
+            .map(|s| s.workdirs())
+            .unwrap_or_default();
+        #[cfg(feature = "linker")]
+        let mut session_save_ok = true;
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
             if let Some(v) = short_send {
                 sess.settings.short_send_enabled = v;
@@ -388,7 +400,12 @@ impl DaemonHub {
             // reflects the in-memory state, and this GUI path has no Ack/Error channel
             // to surface it to (the store ignores those frames).
             sess.rebuild_system();
-            let _ = sess.save();
+            if sess.save().is_err() {
+                #[cfg(feature = "linker")]
+                {
+                    session_save_ok = false;
+                }
+            }
         }
         // internet feedback (status + optional install toast) only on an actual
         // change — the SAME shared helper the TUI settings save uses.
@@ -415,6 +432,37 @@ impl DaemonHub {
             let dir_cache = state.rest.fg().dir_cache.clone();
             if let Some(r) = roots {
                 crate::tool::dircache::reindex(r, dir_cache);
+            }
+            // Linker: register changed workdirs on a background thread so
+            // blocking IPC never stalls the event loop. Only fires when the
+            // persisted workdirs actually differ from the snapshot taken
+            // above AND the session save succeeded.  Revision is allocated
+            // synchronously here so the background worker carries a
+            // deterministic revision that the daemon uses to reject stale
+            // out-of-order registrations.
+            #[cfg(feature = "linker")]
+            if session_save_ok {
+                let new_workdirs = state
+                    .rest
+                    .fg()
+                    .session
+                    .as_ref()
+                    .map(|s| s.workdirs())
+                    .unwrap_or_default();
+                if new_workdirs != old_workdirs {
+                    let session_id = state.rest.fg().id.clone();
+                    let revision = crate::linker::client::next_registration_revision(&session_id);
+                    std::thread::Builder::new()
+                        .name("linker-register".to_string())
+                        .spawn(move || {
+                            let _ = crate::linker::client::ensure_and_register_with_revision(
+                                &new_workdirs,
+                                &session_id,
+                                revision,
+                            );
+                        })
+                        .ok();
+                }
             }
         }
         // The `SettingsValues` re-push IS the reply (one-shot framing, like
