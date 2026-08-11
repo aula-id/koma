@@ -951,6 +951,8 @@ pub(super) enum GuiReq {
         filter_roots: Option<Vec<String>>,
         #[serde(default, rename = "filterLanguages")]
         filter_languages: Option<Vec<String>>,
+        #[serde(default, rename = "requestId")]
+        request_id: Option<String>,
     },
     /// Impact analysis: transitive reverse deps for a file (depth-capped).
     #[cfg(feature = "linker")]
@@ -960,5 +962,15 @@ pub(super) enum GuiReq {
         depth: Option<u32>,
         #[serde(rename = "requestId")]
         request_id: String,
+    },
+    /// Reindex configured workspaces: reconcile/register, rescan, poll
+    /// until the scan completes, then refresh the scoped visualization.
+    /// The host handles this entirely off-thread so the event loop is never
+    /// blocked.  `request_id` is echoed back in the `ImportGraphResult`
+    /// so the GUI can correlate and reject stale replies.
+    #[cfg(feature = "linker")]
+    ImportGraphReindex {
+        #[serde(default, rename = "requestId")]
+        request_id: Option<String>,
     },
 }

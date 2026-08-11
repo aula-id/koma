@@ -26,6 +26,8 @@ pub(super) use super::push_rows::{
 #[serde(rename_all = "camelCase")]
 pub struct ImportGraphImpactResult {
     pub request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     pub path: String,
     pub depth: u32,
     pub paths: Vec<String>,

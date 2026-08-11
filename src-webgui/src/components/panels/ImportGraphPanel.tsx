@@ -216,13 +216,13 @@ function TreeNode({
 }
 
 export function ImportGraphPanel() {
-  const settingsValues = useKoma((s) => s.settingsValues)
   const availableRoots = useKoma((s) => s.importGraph.availableRoots)
   const filterRoots = useKoma((s) => s.importGraph.filterRoots)
   const filterLanguages = useKoma((s) => s.importGraph.filterLanguages)
   const graphStatus = useKoma((s) => s.importGraph.status)
   const graphLoading = useKoma((s) => s.importGraph.loading)
   const graphError = useKoma((s) => s.importGraph.error)
+  const reindexBusy = useKoma((s) => s.importGraph.reindexBusy)
   const edgeCount = useKoma((s) => s.importGraph.edgeCount)
   const selectedPath = useKoma((s) => s.importGraph.selectedPath)
   const dirs = useKoma((s) => s.coding.dirs)
@@ -231,6 +231,7 @@ export function ImportGraphPanel() {
   const openImportGraphTab = useKoma((s) => s.openImportGraphTab)
   const selectImportGraphNode = useKoma((s) => s.selectImportGraphNode)
   const refreshImportGraph = useKoma((s) => s.refreshImportGraph)
+  const reindexImportGraph = useKoma((s) => s.reindexImportGraph)
   const setImportGraphRootFilter = useKoma((s) => s.setImportGraphRootFilter)
   const setImportGraphLanguageFilter = useKoma((s) => s.setImportGraphLanguageFilter)
   const [browsingRoot, setBrowsingRoot] = useState<string | null>(null)
@@ -243,17 +244,20 @@ export function ImportGraphPanel() {
   }, [req, refreshImportGraph])
 
   const roots = useMemo(() => {
-    // Graph filters must use the daemon's canonical registered roots. Fall back
-    // to configured roots only until the first graph response supplies them.
-    const daemonRoots = availableRoots.map((item) => item.root)
-    const configured = settingsValues?.workdir ?? EMPTY_ROOTS
-    return uniqueRoots(daemonRoots.length > 0 ? daemonRoots : configured)
-  }, [settingsValues, availableRoots])
+    // Workspace picker order comes EXCLUSIVELY from backend scoped
+    // availableRoots — the Rust linker daemon already scopes to configured
+    // workdirs and orders them canonically. Use canonical root for IDs/
+    // filters/requests; configuredPath for labels; displayPath for compact.
+    return availableRoots.map((r) => r.root)
+  }, [availableRoots])
   const validFilters = filterRoots.filter((root) => roots.includes(root))
   const chosenRoot = validFilters.length === 1
     ? validFilters[0]
     : browsingRoot && roots.includes(browsingRoot) ? browsingRoot : roots[0] ?? null
 
+  // Prune stale browsingRoot when settings/session changes reset the roots list.
+  // Reset to first configured valid root so the sidebar never shows a
+  // root that's no longer in the user's workdir.
   useEffect(() => {
     if (!chosenRoot) {
       setBrowsingRoot(null)
@@ -269,7 +273,17 @@ export function ImportGraphPanel() {
   const entries = chosenRoot && rootDir
     ? visibleEntries(chosenRoot, rootDir.entries, dirs, normalizedQuery, filterLanguages)
     : []
-  const validLanguageFilters = filterLanguages.filter((language) => SOURCE_LANGUAGES.some((item) => item === language))
+  // Language selector scoped to roots that are both in settings workdirs AND have backend metadata.
+  const scopedRootsForLangs = useMemo(() => {
+    const backendMap = new Map(availableRoots.map((item) => [item.root, item]))
+    return roots.map((r) => backendMap.get(r)).filter((r): r is import('../../store/koma').ImportGraphRootInfo => !!r)
+  }, [roots, availableRoots])
+  const validLanguageFilters = filterLanguages.filter((language) => {
+    const inSourceLangs = SOURCE_LANGUAGES.some((item) => item === language)
+    if (!inSourceLangs) return false
+    // Only keep languages present in at least one scoped root.
+    return scopedRootsForLangs.some((r) => r.languages.some((lc) => lc.name === language))
+  })
   const languageValue = validLanguageFilters.length === 0
     ? ALL_LANGUAGES
     : validLanguageFilters.length === 1 ? validLanguageFilters[0] : MULTIPLE
@@ -297,7 +311,7 @@ export function ImportGraphPanel() {
 
   const onRefresh = () => {
     if (chosenRoot) refreshCodingDir(chosenRoot, '')
-    refreshImportGraph(null)
+    reindexImportGraph()
   }
 
   if (roots.length === 0) {
@@ -311,7 +325,11 @@ export function ImportGraphPanel() {
           <div className="min-w-0 flex-1" title={chosenRoot ?? ''}>
             <Select
               value={chosenRoot ?? ''}
-              options={roots.map((root) => ({ value: root, label: rootLabel(root) }))}
+              options={roots.map((root) => {
+                const backend = availableRoots.find((r) => r.root === root)
+                const label = backend?.displayPath ?? rootLabel(root)
+                return { value: root, label }
+              })}
               onChange={(root) => {
                 setBrowsingRoot(root)
                 setImportGraphRootFilter([root])
@@ -323,12 +341,19 @@ export function ImportGraphPanel() {
             className="flex h-7 min-w-0 flex-1 items-center rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg opacity-60"
             title={roots[0]}
           >
-            <span className="truncate">{rootLabel(roots[0])}</span>
+            <span className="truncate">{availableRoots.find((r) => r.root === roots[0])?.displayPath ?? rootLabel(roots[0])}</span>
           </div>
         )}
-        <IconBtn label="Refresh filesystem and graph" onClick={onRefresh}>
-          <RefreshCw size={12} />
-        </IconBtn>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={reindexBusy}
+          title="Reindex configured workspaces"
+          aria-label="Reindex configured workspaces"
+          className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100 disabled:cursor-default disabled:opacity-40"
+        >
+          <RefreshCw size={12} className={reindexBusy ? 'animate-spin' : ''} />
+        </button>
       </div>
 
       <div className="flex-none px-2 pb-1.5">
@@ -337,7 +362,7 @@ export function ImportGraphPanel() {
           options={[
             { value: ALL_LANGUAGES, label: 'All languages' },
             ...(languageValue === MULTIPLE ? [{ value: MULTIPLE, label: `${validLanguageFilters.length} languages` }] : []),
-            ...SOURCE_LANGUAGES.map((language) => ({ value: language, label: language })),
+            ...Array.from(new Set(scopedRootsForLangs.flatMap((r) => r.languages.map((lc) => lc.name)))).sort().map((language) => ({ value: language, label: language })),
           ]}
           onChange={(language) => {
             if (language === MULTIPLE) return
@@ -364,8 +389,8 @@ export function ImportGraphPanel() {
       ) : graphError ? (
         <div className="flex flex-none items-center gap-2 border-y border-koma-error/15 px-3 py-1.5 text-[10px]">
           <span className="min-w-0 flex-1 truncate text-koma-error" title={graphError}>Graph unavailable: {graphError}</span>
-          <button type="button" onClick={() => refreshImportGraph(null)} className="flex-none text-koma-fg hover:text-koma-accent">
-            Retry graph
+          <button type="button" onClick={() => reindexImportGraph()} className="flex-none text-koma-fg hover:text-koma-accent">
+            Retry
           </button>
         </div>
       ) : null}
