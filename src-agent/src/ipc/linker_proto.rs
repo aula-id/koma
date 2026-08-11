@@ -28,6 +28,31 @@ pub enum LinkerRequest {
     Shutdown,
 }
 
+/// Rich edit-context result for L3 footer enrichment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditContextResult {
+    /// Direct file imports (resolved paths only).
+    pub imports: Vec<String>,
+    /// Files that directly import this file.
+    pub imported_by: Vec<String>,
+    /// Transitive dependent count at depth 2 (excludes self).
+    pub transitive_dependents_count: usize,
+    /// How many of the transitive dependents are entry points (zero dependents themselves).
+    pub entry_point_count: usize,
+    /// Deps that cross workspace root boundaries: (other_root, dep_path).
+    pub cross_boundary_deps: Vec<(String, String)>,
+    /// True if nothing imports this file (zero dependents).
+    pub is_entry_point: bool,
+    /// True if file has no outgoing imports (leaf node).
+    pub is_leaf: bool,
+    /// Unresolved/external import names (e.g. crate names, npm packages).
+    pub unresolved_imports: Vec<String>,
+    /// Related test files among direct deps + dependents.
+    pub related_tests: Vec<String>,
+    /// Related config files among direct deps + dependents.
+    pub related_configs: Vec<String>,
+}
+
 /// A graph query action.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LinkerQuery {
@@ -47,6 +72,8 @@ pub enum LinkerQuery {
     Visualization(VisualizationRequest),
     /// Workspace info: per-root file/language counts (for filter pickers).
     WorkspaceInfo,
+    /// Rich edit-context query: single-round-trip structured edit intelligence.
+    EditContext { path: String },
 }
 
 /// Direction filter for the visualization query.
@@ -118,6 +145,8 @@ pub enum LinkerResponse {
     GraphView(GraphViewResult),
     /// Workspace info: per-root file/language counts.
     WorkspaceInfo(Vec<WorkspaceRootInfo>),
+    /// Rich edit-context result.
+    EditContext(EditContextResult),
     /// Error.
     Error(String),
 }
