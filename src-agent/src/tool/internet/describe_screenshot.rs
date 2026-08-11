@@ -49,10 +49,7 @@ impl super::Tool for DescribeScreenshot {
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("missing required string argument 'description'"))?;
 
-        let tags = args
-            .get("tags")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let tags = args.get("tags").and_then(Value::as_str).unwrap_or("");
 
         // Resolve the screenshot path for validation.
         let resolved = screenshot_catalog::resolve_screenshot_path(&ctx.workspace, name)

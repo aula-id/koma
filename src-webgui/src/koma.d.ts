@@ -504,6 +504,28 @@ declare global {
     // app (not in dev mode). No reply, no session needed.
     | { r: 'WriteErrorLog'; message: string }
 
+  // ─── Linker daemon import graph ─────────────────────────────────────
+  // Fetch the linker daemon's code-dependency graph. `path` focuses on
+  // one file (null = overview mode). `depth` limits traversal depth.
+  // `direction` picks which edges to include. `filterRoots` and
+  // `filterLanguages` narrow the view server-side. Reply lands as the
+  // ImportGraph push envelope.
+  | {
+      r: 'ImportGraph'
+      path?: string | null
+      depth?: number | null
+      direction?: 'dependencies' | 'dependents' | 'both' | null
+      filterRoots?: string[] | null
+      filterLanguages?: string[] | null
+    }
+  // Impact analysis: transitive reverse deps for a file.
+  | {
+      r: 'ImportGraphImpact'
+      path: string
+      depth?: number | null
+      requestId: string
+    }
+
   // ─── Coding push envelope shapes (Rust → JS) ────────────────────────────
   // Every reply echoes the relevant root/path/requestId for stale-reply rejection.
   type FileTreeEntry = {

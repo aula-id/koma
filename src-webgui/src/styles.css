@@ -6,6 +6,7 @@
    tree). Without the @source lines below the markdown renders unstyled — the
    classic "why is my markdown flat" trap. */
 @import "streamdown/styles.css";
+@import "@xyflow/react/dist/style.css";
 @source "../node_modules/streamdown/dist/*.js";
 
 @theme {

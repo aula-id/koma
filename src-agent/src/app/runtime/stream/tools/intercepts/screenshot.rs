@@ -35,20 +35,20 @@ pub(in crate::app::runtime::stream::tools) fn intercept_load_screenshot(
     let workspace = state.rest.sessions[sess_idx].effective_cwd();
 
     // 3. Resolve screenshot path using the catalog.
-    let resolved =
-        match crate::model::screenshot_catalog::resolve_screenshot_path(&workspace, name) {
-            Some(p) => p,
-            None => {
-                state.rest.sessions[sess_idx].tool_results.push((
-                    call.id.clone(),
-                    format!(
-                        "error: screenshot '{name}' not found or not a valid PNG under .screenshoot/"
-                    ),
-                ));
-                state.rest.sessions[sess_idx].tool_idx += 1;
-                return InterceptFlow::Continue;
-            }
-        };
+    let resolved = match crate::model::screenshot_catalog::resolve_screenshot_path(&workspace, name)
+    {
+        Some(p) => p,
+        None => {
+            state.rest.sessions[sess_idx].tool_results.push((
+                call.id.clone(),
+                format!(
+                    "error: screenshot '{name}' not found or not a valid PNG under .screenshoot/"
+                ),
+            ));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            return InterceptFlow::Continue;
+        }
+    };
 
     let stem = resolved
         .file_stem()

@@ -28,6 +28,31 @@ pub enum LinkerRequest {
     Shutdown,
 }
 
+/// Rich edit-context result for L3 footer enrichment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditContextResult {
+    /// Direct file imports (resolved paths only).
+    pub imports: Vec<String>,
+    /// Files that directly import this file.
+    pub imported_by: Vec<String>,
+    /// Transitive dependent count at depth 2 (excludes self).
+    pub transitive_dependents_count: usize,
+    /// How many of the transitive dependents are entry points (zero dependents themselves).
+    pub entry_point_count: usize,
+    /// Deps that cross workspace root boundaries: (other_root, dep_path).
+    pub cross_boundary_deps: Vec<(String, String)>,
+    /// True if nothing imports this file (zero dependents).
+    pub is_entry_point: bool,
+    /// True if file has no outgoing imports (leaf node).
+    pub is_leaf: bool,
+    /// Unresolved/external import names (e.g. crate names, npm packages).
+    pub unresolved_imports: Vec<String>,
+    /// Related test files among direct deps + dependents.
+    pub related_tests: Vec<String>,
+    /// Related config files among direct deps + dependents.
+    pub related_configs: Vec<String>,
+}
+
 /// A graph query action.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LinkerQuery {
@@ -43,6 +68,50 @@ pub enum LinkerQuery {
     Status,
     /// Force a full rescan.
     Rescan,
+    /// Structured bounded subgraph for GUI visualization.
+    Visualization(VisualizationRequest),
+    /// Workspace info: per-root file/language counts (for filter pickers).
+    WorkspaceInfo,
+    /// Rich edit-context query: single-round-trip structured edit intelligence.
+    EditContext { path: String },
+}
+
+/// Direction filter for the visualization query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GraphDirection {
+    /// Show only outgoing imports (dependencies).
+    #[serde(rename = "dependencies")]
+    Dependencies,
+    /// Show only incoming imports (dependents).
+    #[serde(rename = "dependents")]
+    Dependents,
+    /// Show both directions.
+    #[serde(rename = "both")]
+    Both,
+}
+
+/// Parameters for a bounded visualization query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VisualizationRequest {
+    /// Optional focal file path. If `None`, returns an overview (top fan-in + entry points).
+    pub path: Option<String>,
+    /// Traversal depth (1–3, clamped by daemon).
+    pub depth: u32,
+    /// Which directions to traverse from the focus.
+    pub direction: GraphDirection,
+    /// Maximum nodes in the result (daemon-enforced).
+    pub max_nodes: usize,
+    /// Maximum edges in the result (daemon-enforced).
+    pub max_edges: usize,
+    /// Optional workspace root filter — only include nodes under these roots.
+    /// `None` or empty means "all roots".
+    #[serde(default)]
+    pub filter_roots: Option<Vec<String>>,
+    /// Optional language filter — only include nodes with these language names.
+    /// `None` or empty means "all languages". Uses daemon `Lang` names
+    /// (e.g. "Rust", "TypeScript") and must be exact/case-consistent.
+    #[serde(default)]
+    pub filter_languages: Option<Vec<String>>,
 }
 
 /// The linker daemon's reply.
@@ -72,8 +141,87 @@ pub enum LinkerResponse {
     Ack,
     /// Current graph generation (lightweight probe, no summary text).
     Generation(u64),
+    /// Bounded subgraph view for GUI visualization.
+    GraphView(GraphViewResult),
+    /// Workspace info: per-root file/language counts.
+    WorkspaceInfo(Vec<WorkspaceRootInfo>),
+    /// Rich edit-context result.
+    EditContext(EditContextResult),
     /// Error.
     Error(String),
+}
+
+/// Role of a node relative to the focal file in a visualization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GraphNodeRole {
+    /// The focal file itself.
+    Focus,
+    /// A file imported by the focus (directly or transitively).
+    Dependency,
+    /// A file that imports the focus (directly or transitively).
+    Dependent,
+    /// Overview-only node (top fan-in or entry point, no focus set).
+    Overview,
+}
+
+/// A node in the bounded visualization graph.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphViewNode {
+    /// Canonical absolute path (stable identifier).
+    pub path: String,
+    /// Language name (e.g. "Rust", "Python").
+    pub language: String,
+    /// Number of outgoing imports within this view.
+    pub out_degree: usize,
+    /// Number of incoming imports within this view.
+    pub in_degree: usize,
+    /// Role relative to the focal file.
+    pub role: GraphNodeRole,
+    /// BFS depth from the focal file (0 = focus, None = overview).
+    pub depth_from_focus: Option<u32>,
+    /// The workspace root this node belongs to (longest matching registered root).
+    #[serde(default)]
+    pub workspace_root: Option<String>,
+}
+
+/// A directed edge in the bounded visualization graph.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphViewEdge {
+    /// Source node path (the importer).
+    pub from: String,
+    /// Target node path (the imported file).
+    pub to: String,
+}
+
+/// The result of a bounded visualization query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphViewResult {
+    /// Nodes in the view (capped by max_nodes).
+    pub nodes: Vec<GraphViewNode>,
+    /// Edges in the view (capped by max_edges).
+    pub edges: Vec<GraphViewEdge>,
+    /// Canonical path of the focal file (if any).
+    pub focus: Option<String>,
+    /// Current graph generation.
+    pub generation: u64,
+    /// Total files in the full graph.
+    pub file_count: usize,
+    /// Total edges in the full graph.
+    pub edge_count: usize,
+    /// Languages present in the full graph.
+    pub languages: Vec<String>,
+    /// Number of nodes omitted by the cap.
+    pub nodes_truncated: bool,
+    /// Number of edges omitted by the cap.
+    pub edges_truncated: bool,
+    /// Total available nodes matching the query (may exceed returned count).
+    pub total_nodes_available: usize,
+    /// Total available edges matching the query (may exceed returned count).
+    pub total_edges_available: usize,
+    /// Available workspace roots with per-root metadata (sorted deterministically).
+    /// Included regardless of active filters so the UI can populate filter pickers.
+    #[serde(default)]
+    pub available_roots: Vec<WorkspaceRootInfo>,
 }
 
 /// Status of the graph scan returned with registration.
@@ -83,4 +231,75 @@ pub enum ScanStatus {
     Scanning,
     /// Scan complete; graph is ready.
     Ready,
+}
+
+/// Per-root workspace metadata for filter pickers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceRootInfo {
+    /// Canonical absolute path of the workspace root.
+    pub root: String,
+    /// Number of files in this root.
+    pub file_count: usize,
+    /// Language name → file count for this root.
+    pub languages: Vec<LanguageCount>,
+}
+
+/// A language name with its file count (for per-root breakdown).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LanguageCount {
+    /// Language name (e.g. "Rust", "TypeScript").
+    pub name: String,
+    /// Number of files in this language.
+    pub count: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify that old protocol JSON (without newer optional fields) still
+    /// deserializes correctly — backward compatibility.
+    #[test]
+    fn visualization_request_backward_compat() {
+        let json = r#"{"path":null,"depth":2,"direction":"both","max_nodes":100,"max_edges":100}"#;
+        let req: VisualizationRequest = serde_json::from_str(json).unwrap();
+        assert!(req.filter_roots.is_none());
+        assert!(req.filter_languages.is_none());
+    }
+
+    #[test]
+    fn graph_view_node_backward_compat() {
+        // Old node without workspace_root.
+        let json = r#"{"path":"/a.rs","language":"Rust","out_degree":1,"in_degree":0,"role":"Focus","depth_from_focus":0}"#;
+        let node: GraphViewNode = serde_json::from_str(json).unwrap();
+        assert!(node.workspace_root.is_none());
+    }
+
+    #[test]
+    fn graph_view_result_backward_compat() {
+        // Old result without available_roots.
+        let json = r#"{"nodes":[],"edges":[],"focus":null,"generation":1,"file_count":0,"edge_count":0,"languages":[],"nodes_truncated":false,"edges_truncated":false,"total_nodes_available":0,"total_edges_available":0}"#;
+        let result: GraphViewResult = serde_json::from_str(json).unwrap();
+        assert!(result.available_roots.is_empty());
+    }
+
+    #[test]
+    fn edit_context_result_roundtrip() {
+        let ctx = EditContextResult {
+            imports: vec!["/a.rs".into()],
+            imported_by: vec!["/b.rs".into()],
+            transitive_dependents_count: 1,
+            entry_point_count: 0,
+            cross_boundary_deps: vec![],
+            is_entry_point: false,
+            is_leaf: false,
+            unresolved_imports: vec!["serde".into()],
+            related_tests: vec![],
+            related_configs: vec![],
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        let back: EditContextResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(ctx.imports, back.imports);
+        assert_eq!(ctx.unresolved_imports, back.unresolved_imports);
+    }
 }

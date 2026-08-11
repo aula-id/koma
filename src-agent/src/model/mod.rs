@@ -22,8 +22,8 @@ pub mod msglog;
 /// `session_lock` and `app::runtime::manage`. Absent on unix (which uses `kill(2)`).
 #[cfg(windows)]
 pub mod proc_win;
-pub mod sdlc;
 pub mod screenshot_catalog;
+pub mod sdlc;
 pub mod session;
 pub mod session_lock;
 pub mod session_registry;

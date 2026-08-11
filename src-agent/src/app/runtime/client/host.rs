@@ -367,6 +367,38 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     super::file_ops::handle_file_ctl(&ctl, &push2, &workdirs, session.as_deref());
                 });
             }
+            #[cfg(feature = "linker")]
+            Ok(HostCtl::ImportGraph {
+                path,
+                depth,
+                direction,
+                filter_roots,
+                filter_languages,
+            }) => {
+                super::import_graph::spawn_import_graph(
+                    P::clone(push),
+                    path,
+                    depth,
+                    direction,
+                    filter_roots,
+                    filter_languages,
+                );
+            }
+            #[cfg(feature = "linker")]
+            Ok(HostCtl::ImportGraphImpact {
+                path,
+                depth,
+                request_id,
+            }) => {
+                // Blocking linker IPC — spawn off-thread via the shared worker
+                // (also used by the attached push_loop twin).
+                super::import_graph::spawn_import_graph_impact(
+                    P::clone(push),
+                    path,
+                    depth,
+                    request_id,
+                );
+            }
             // Explore GIT panel + Settings SSH-key vault, all opened/mutated while
             // detached (StartScreen / swapper): git/fs/`ssh-keygen` are blocking, so
             // each runs on a plain OS thread rather than the async runtime, and NEVER

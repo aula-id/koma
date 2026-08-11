@@ -22,10 +22,7 @@ impl ImageRenderer {
     /// Uses Unicode half-block characters (`▀`) with 24-bit true-color.
     /// Each cell represents 2 vertical pixels: the top pixel as foreground
     /// and the bottom pixel as background of `▀`.
-    pub fn render_to_lines(
-        path: &Path,
-        max_width_cells: u16,
-    ) -> Result<Vec<Line<'static>>> {
+    pub fn render_to_lines(path: &Path, max_width_cells: u16) -> Result<Vec<Line<'static>>> {
         let img = image::open(path)?;
         let rgb_orig = img.to_rgb8();
         let (orig_w, orig_h) = rgb_orig.dimensions();

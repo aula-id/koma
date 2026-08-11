@@ -729,10 +729,7 @@ fn check_internet_fullmode() -> CheckResult {
                 details.push("install python3 first, then:".to_string());
             }
             details.push("optional — install with: koma --internet-fullmode-install".to_string());
-            return CheckResult::warn(
-                "Internet full-mode (optional, not installed)",
-                details,
-            );
+            return CheckResult::warn("Internet full-mode (optional, not installed)", details);
         }
 
         // 2. scrapion_agent package importable?
@@ -790,7 +787,8 @@ fn check_internet_fullmode() -> CheckResult {
         ));
         if !firefox_installed && playwright_ok {
             any_issue = true;
-            details.push("install firefox: playwright install firefox (inside the venv)".to_string());
+            details
+                .push("install firefox: playwright install firefox (inside the venv)".to_string());
         }
 
         if any_issue {

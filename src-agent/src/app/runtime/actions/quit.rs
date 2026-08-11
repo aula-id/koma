@@ -81,12 +81,19 @@ pub(in crate::app::runtime) fn request_quit(state: &mut AppState) {
 }
 
 /// Handle `Action::QuitKillAll`: abort EVERY session's in-flight stream, then
-/// quit. Mirrors [`crate::app::runtime::stream::abort_current`] but across ALL
-/// sessions (that helper only touches the foreground): for each session it
-/// aborts the task handle, drops the active receiver (so late events vanish),
-/// and clears the `waiting` flag. Also tears down any in-flight compaction
-/// animation (those fields are global, not per-session). Locks are released by
-/// the natural exit path.
+/// transition to the exit-feedback phase. Mirrors
+/// [`crate::app::runtime::stream::abort_current`] but across ALL sessions (that
+/// helper only touches the foreground): for each session it aborts the task
+/// handle, drops the active receiver (so late events vanish), and clears the
+/// `waiting` flag. Also tears down any in-flight compaction animation (those
+/// fields are global, not per-session). Locks are released by the natural exit
+/// path.
+///
+/// Instead of setting `should_quit` directly, this transitions the
+/// `QuitConfirmState` to the `Exiting` phase so the view can render a braille
+/// spinner exit screen. The event loop sees the Exiting phase and sets
+/// `should_quit` after drawing, ensuring the user gets visible feedback before
+/// synchronous shutdown begins.
 pub(super) fn handle_quit_kill_all(state: &mut AppState) {
     for s in &mut state.rest.sessions {
         if let Some(h) = s.current_task.take() {
@@ -101,18 +108,27 @@ pub(super) fn handle_quit_kill_all(state: &mut AppState) {
         s.compact_apply_at = None;
         s.compact_pending = None;
     }
-    state.rest.should_quit = true;
+    // Keep the dialog visible and put the spinner inside the quit chip.
+    if let crate::app::mode::Mode::QuitConfirm(s) = state.mode_mut() {
+        s.selected = 0;
+        s.phase = crate::app::mode::QuitConfirmPhase::Exiting;
+    }
 }
 
-/// Handle `Action::QuitDetach`: detach & quit. Set `should_quit` WITHOUT
-/// aborting anything, so each session's conversation stays persisted on disk and
-/// is resumable later. Locks are released by the natural exit path.
+/// Handle `Action::QuitDetach`: detach & quit. Transition to the exit-feedback
+/// phase so the view renders a braille spinner while the process exits. The
+/// session's conversation stays persisted on disk and is resumable later.
+/// Locks are released by the natural exit path.
 ///
 /// Phase 1 caveat: there is no daemon yet, so the in-flight work still dies when
 /// the process exits — "detach" here means "leave it resumable", not "keep it
 /// cooking headless". The overlay copy says so explicitly.
 pub(super) fn handle_quit_detach(state: &mut AppState) {
-    state.rest.should_quit = true;
+    // Keep the dialog visible and put the spinner inside the detach chip.
+    if let crate::app::mode::Mode::QuitConfirm(s) = state.mode_mut() {
+        s.selected = 1;
+        s.phase = crate::app::mode::QuitConfirmPhase::Exiting;
+    }
 }
 
 /// Handle `Action::QuitCancel`: dismiss the overlay and return to Chat
