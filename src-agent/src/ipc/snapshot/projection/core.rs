@@ -2,7 +2,7 @@ use super::modes::mode_snapshot;
 use super::tokens::theme_token;
 
 use crate::app::resolve::resolve_role;
-use crate::app::state::AppState;
+use crate::app::state::{AgentMode, AppState};
 use crate::app::subagent::SubAgentStatus;
 use crate::model::app_config::{AppConfig, ModelRole};
 
@@ -34,7 +34,15 @@ pub fn build_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> StateSn
         .rest
         .sessions
         .iter()
-        .map(|rt| session_snapshot(rt, config))
+        .enumerate()
+        .map(|(idx, rt)| {
+            let projection_mode = if idx == state.rest.foreground {
+                rt.agent_mode
+            } else {
+                AgentMode::Auto
+            };
+            session_snapshot(rt, config, projection_mode)
+        })
         .collect();
 
     let foreground_id = state
@@ -53,6 +61,7 @@ pub fn build_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> StateSn
 pub fn session_snapshot(
     rt: &crate::app::state::SessionRuntime,
     config: &AppConfig,
+    agent_mode: AgentMode,
 ) -> SessionSnapshot {
     let messages = rt
         .session
@@ -150,21 +159,67 @@ pub fn session_snapshot(
                 status: c.status.clone(),
             })
             .collect(),
-        // Plan-mode todo checklist so the GUI Explore "PLAN" section renders it.
-        // The two locked workflow rails ride the wire too (flagged, not dropped)
-        // so the GUI shows TUI-parity rails right after `plan_enter`, before the
-        // model's first `checklist` lands; the GUI dims them + excludes them from
-        // its done/total count. NOTE: this is independent of the `plan_ready`
-        // digest's own `!it.locked` filter elsewhere — that one stays untouched.
-        plan_todos: rt
-            .plan_todos
-            .iter()
-            .map(|it| crate::ipc::proto::PlanTodoSnapshot {
-                content: it.content.clone(),
-                status: it.status.clone(),
-                locked: it.locked,
+        // Plan-mode todo checklist: only projected for foreground mode=plan.
+        // Outside Plan mode the array is empty — no stale rows bleed across modes.
+        plan_todos: if matches!(agent_mode, AgentMode::Plan) {
+            rt.plan_todos
+                .iter()
+                .map(|it| crate::ipc::proto::PlanTodoSnapshot {
+                    content: it.content.clone(),
+                    status: it.status.clone(),
+                    locked: it.locked,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
+        // SDLC fields: only projected when mode is Sdlc, cleared immediately otherwise.
+        sdlc_phase: if matches!(agent_mode, AgentMode::Sdlc) {
+            rt.sdlc_phase.clone()
+        } else {
+            None
+        },
+        sdlc_goal: if matches!(agent_mode, AgentMode::Sdlc) {
+            rt.session
+                .as_ref()
+                .and_then(|s| crate::model::sdlc::Mission::load(&s.path))
+                .map(|m| m.goal)
+        } else {
+            None
+        },
+        sdlc_branch: if matches!(agent_mode, AgentMode::Sdlc) {
+            rt.sdlc_branch.clone()
+        } else {
+            None
+        },
+        sdlc_open: if matches!(agent_mode, AgentMode::Sdlc) {
+            rt.session.as_ref().and_then(|s| {
+                crate::model::msglog::open(&s.path).ok().map(|conn| {
+                    if crate::model::sdlc::graph::ensure_tables(&conn).is_err() {
+                        return 0;
+                    }
+                    crate::model::sdlc::graph::list_open_leaves(&conn)
+                        .map(|v| v.len())
+                        .unwrap_or(0)
+                })
             })
-            .collect(),
+        } else {
+            None
+        },
+        sdlc_sealed: if matches!(agent_mode, AgentMode::Sdlc) {
+            rt.session.as_ref().and_then(|s| {
+                crate::model::msglog::open(&s.path).ok().map(|conn| {
+                    if crate::model::sdlc::graph::ensure_tables(&conn).is_err() {
+                        return 0;
+                    }
+                    crate::model::sdlc::graph::list_sealed(&conn)
+                        .map(|v| v.len())
+                        .unwrap_or(0)
+                })
+            })
+        } else {
+            None
+        },
     }
 }
 

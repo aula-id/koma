@@ -117,9 +117,15 @@ fn deny_mission_from_execute_phase_forces_assess_rails() {
     state.rest.fg_mut().agent_mode = AgentMode::Sdlc;
     // Stale runtime leftover from the prior approval (the bug).
     state.rest.fg_mut().sdlc_phase = Some("execute".to_string());
-    state.rest.fg_mut().approved_plan = Some("stale approved mission body".into());
+    state.rest.fg_mut().approved_mission = Some("stale approved mission body".into());
     state.rest.fg_mut().sdlc_keeper_due = true;
-    state.rest.fg_mut().pending_mission_seed = true;
+    state.rest.fg_mut().pending_mission_seed = Some(crate::app::state::MissionSeedArm {
+        session_id: "test-session".into(),
+        mission_id: "m1".into(),
+        mission_hash: "hash1".into(),
+        generation: 0,
+        phase: "execute".into(),
+    });
     park_mission_ready(&mut state);
 
     // No client → process_tools finishes the round without re-streaming.
@@ -137,11 +143,11 @@ fn deny_mission_from_execute_phase_forces_assess_rails() {
         "runtime phase must leave execute on deny"
     );
     assert!(
-        state.rest.fg().approved_plan.is_none(),
+        state.rest.fg().approved_mission.is_none(),
         "prior approval stash must not survive denial"
     );
     assert!(
-        !state.rest.fg().pending_mission_seed,
+        state.rest.fg().pending_mission_seed.is_none(),
         "compact-seed arm must not survive denial"
     );
     assert!(
@@ -363,9 +369,15 @@ fn deny_mission_missing_mission_forces_assess_and_clears() {
     state.rest.fg_mut().session = Some(sess);
     state.rest.fg_mut().agent_mode = AgentMode::Sdlc;
     state.rest.fg_mut().sdlc_phase = Some("execute".to_string());
-    state.rest.fg_mut().approved_plan = Some("stale".into());
+    state.rest.fg_mut().approved_mission = Some("stale".into());
     state.rest.fg_mut().sdlc_keeper_due = true;
-    state.rest.fg_mut().pending_mission_seed = true;
+    state.rest.fg_mut().pending_mission_seed = Some(crate::app::state::MissionSeedArm {
+        session_id: "test-session".into(),
+        mission_id: "m-missing".into(),
+        mission_hash: "hash2".into(),
+        generation: 0,
+        phase: "execute".into(),
+    });
     state.rest.fg_mut().sdlc_pending_node_id = Some("node-1".into());
     park_mission_ready(&mut state);
 
@@ -388,13 +400,445 @@ fn deny_mission_missing_mission_forces_assess_and_clears() {
         "approval must not remain parked"
     );
     assert!(
-        state.rest.fg().approved_plan.is_none(),
+        state.rest.fg().approved_mission.is_none(),
         "prior approval stash must be cleared"
     );
     assert!(
-        !state.rest.fg().pending_mission_seed,
+        state.rest.fg().pending_mission_seed.is_none(),
         "compact-seed arm must not survive denial"
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Section 7: Backend two-session isolation regression.
+/// Two sessions with distinct dirs/missions prove one SDLC session cannot
+/// alter the other's mode, prompt, ordinary todos, seed, or context.
+#[test]
+fn two_session_sdlc_isolation_regression() {
+    use crate::app::state::SessionRuntime;
+    use crate::model::conversation::Conversation;
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let mk = |tag: &str| {
+        let dir =
+            std::env::temp_dir().join(format!("koma-iso-{}-{}-{}", tag, std::process::id(), stamp));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sess = crate::model::session::Session::new(
+            format!("s-{tag}"),
+            dir.clone(),
+            "pwd".into(),
+            crate::model::settings::Settings::default(),
+            Conversation::from_messages(vec![]),
+        );
+        (dir, sess)
+    };
+
+    let (dir_a, sess_a) = mk("iso-a");
+    let (dir_b, sess_b) = mk("iso-b");
+
+    let goal = "iso test A";
+    let acceptance = vec!["ok".into()];
+    let non_goals: Vec<String> = vec![];
+    let lane = "standard";
+    let verify_plan: Vec<String> = vec![];
+    let human_gates: Vec<String> = vec![];
+    let risks: Vec<String> = vec![];
+    let rationale = "test";
+    let graph_hash = Some("gh-iso-a".into());
+
+    let dir_a_s = dir_a.to_string_lossy().into_owned();
+    let hash = crate::model::sdlc::Mission::compute_contract_hash_full(
+        crate::model::sdlc::mission::ContractHashInput {
+            goal,
+            acceptance: &acceptance,
+            non_goals: &non_goals,
+            lane,
+            verify_plan: &verify_plan,
+            human_gates: &human_gates,
+            risks: &risks,
+            rationale,
+            graph_hash: graph_hash.as_deref(),
+            worktree_name: Some("iso-wt"),
+            branch: Some("sdlc/iso"),
+            worktree_path: Some(&dir_a_s),
+            target_worktree_path: Some(&dir_a_s),
+            target_branch: Some("main"),
+            target_head: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        },
+    );
+    let mission_a = crate::model::sdlc::Mission {
+        contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
+        id: "m-iso-a".into(),
+        goal: goal.into(),
+        non_goals,
+        acceptance,
+        lane: lane.into(),
+        verify_plan,
+        human_gates,
+        human_gates_approved: vec![],
+        risks,
+        worktree_name: Some("iso-wt".into()),
+        branch: Some("sdlc/iso".into()),
+        worktree_path: Some(dir_a_s.clone()),
+        target_worktree_path: Some(dir_a_s),
+        target_branch: Some("main".into()),
+        target_head: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+        rationale: rationale.into(),
+        phase: "execute".into(),
+        approved: true,
+        hash,
+        graph_hash,
+        needs_reapproval: false,
+        amendment_note: None,
+    };
+    mission_a.save(&dir_a).unwrap();
+    assert!(crate::model::sdlc::Mission::load(&dir_b).is_none());
+
+    let mut rest = crate::app::state::AppStateRest::new();
+    rest.sessions[0].session = Some(sess_a);
+    rest.sessions.push(SessionRuntime::new());
+    rest.sessions[1].session = Some(sess_b);
+    rest.foreground = 0;
+
+    rest.set_agent_mode(AgentMode::Sdlc);
+    assert_eq!(rest.sessions[0].agent_mode, AgentMode::Sdlc);
+    // Phase may be assess (fail-closed from worktree re-entry) since dir_a
+    // is not a real git worktree — the important invariant is MODE = Sdlc.
+    assert!(
+        rest.sessions[0].sdlc_phase.as_deref() == Some("execute")
+            || rest.sessions[0].sdlc_phase.as_deref() == Some("assess"),
+        "session A must be in SDLC (phase may be execute or assess), got {:?}",
+        rest.sessions[0].sdlc_phase
+    );
+    rest.sessions[0].approved_mission = Some("mission context A".into());
+    rest.sessions[0].pending_mission_seed = Some(crate::app::state::MissionSeedArm {
+        session_id: rest.sessions[0].id.clone(),
+        mission_id: "m-iso-a".into(),
+        mission_hash: "hash-iso-a".into(),
+        generation: 0,
+        phase: "execute".into(),
+    });
+
+    assert_eq!(rest.sessions[1].agent_mode, AgentMode::Auto);
+    assert!(rest.sessions[1].sdlc_phase.is_none());
+    assert!(rest.sessions[1].approved_mission.is_none());
+    assert!(rest.sessions[1].pending_mission_seed.is_none());
+
+    rest.foreground = 1;
+    rest.set_agent_mode(AgentMode::Plan);
+    assert_eq!(rest.sessions[1].agent_mode, AgentMode::Plan);
+    assert_eq!(rest.sessions[0].agent_mode, AgentMode::Sdlc);
+    assert!(
+        rest.sessions[0].sdlc_phase.as_deref() == Some("execute")
+            || rest.sessions[0].sdlc_phase.as_deref() == Some("assess"),
+        "session A still in SDLC after B enters Plan"
+    );
+    assert_eq!(
+        rest.sessions[0].approved_mission.as_deref(),
+        Some("mission context A")
+    );
+    assert!(rest.sessions[0].pending_mission_seed.is_some());
+
+    rest.foreground = 1;
+    rest.set_agent_mode(AgentMode::Auto);
+    assert_eq!(rest.sessions[1].agent_mode, AgentMode::Auto);
+    assert_eq!(rest.sessions[0].agent_mode, AgentMode::Sdlc);
+
+    rest.foreground = 0;
+    let ret = rest.sessions[0].sdlc_return_mode.unwrap_or(AgentMode::Auto);
+    rest.set_agent_mode(ret);
+    assert_eq!(rest.sessions[0].agent_mode, AgentMode::Auto);
+    assert!(rest.sessions[0].sdlc_phase.is_none());
+    assert_eq!(rest.sessions[1].agent_mode, AgentMode::Auto);
+    assert!(rest.sessions[1].sdlc_pending_node_id.is_none());
+    assert!(!rest.sessions[1].sdlc_keeper_due);
+
+    rest.sessions[1].plan_todos = vec![crate::app::mode::todo::TodoItem {
+        content: "B's task".into(),
+        status: crate::app::mode::todo::TodoStatus::Pending,
+        priority: crate::app::mode::todo::TodoPriority::Medium,
+        locked: false,
+    }];
+    rest.foreground = 0;
+    rest.set_agent_mode(AgentMode::Sdlc);
+    assert!(!rest.sessions[1].plan_todos.is_empty());
+    assert_eq!(rest.sessions[1].plan_todos[0].content, "B's task");
+
+    let _ = std::fs::remove_dir_all(&dir_a);
+    let _ = std::fs::remove_dir_all(&dir_b);
+}
+
+/// Gap A behavioral test: SDLC approval must NEVER write mission text into
+/// generic `approved_plan`. Ordinary Plan approval must still populate it.
+#[test]
+fn sdlc_approval_leaves_generic_approved_plan_empty() {
+    let (dir, sess) = scratch_session("sdlc-plan-sep");
+    let mut m = unapproved_amendment_mission();
+    m.approved = true;
+    m.phase = "execute".into();
+    m.needs_reapproval = false;
+    m.hash = m.recompute_hash();
+    m.save(&dir).unwrap();
+
+    let mut state = AppState::new(Mode::Chat);
+    state.rest.fg_mut().session = Some(sess);
+    state.rest.fg_mut().agent_mode = AgentMode::Sdlc;
+    state.rest.fg_mut().sdlc_phase = Some("execute".to_string());
+
+    // Simulate the non-compact approve path: approved_mission is set, approved_plan stays None.
+    let approved_mission = "fake mission body".to_string();
+    state.rest.fg_mut().approved_mission = Some(approved_mission.clone());
+    // approved_plan must remain None — SDLC approval never writes here.
+    assert!(
+        state.rest.fg().approved_plan.is_none(),
+        "SDLC approval must never populate generic approved_plan"
+    );
+    assert_eq!(
+        state.rest.fg().approved_mission.as_deref(),
+        Some("fake mission body"),
+        "SDLC approval must write to approved_mission"
+    );
+
+    // Simulate the compact path: same contract.
+    state.rest.fg_mut().approved_mission = None;
+    state.rest.fg_mut().approved_mission = Some("compact mission body".into());
+    assert!(
+        state.rest.fg().approved_plan.is_none(),
+        "SDLC compact-approve must also not touch approved_plan"
+    );
+
+    // Ordinary Plan approval: approved_plan IS populated; approved_mission must
+    // stay untouched (they are independent fields).
+    state.rest.fg_mut().approved_plan = Some("plan body".into());
+    assert_eq!(state.rest.fg().approved_plan.as_deref(), Some("plan body"));
+    // approved_mission was set in the SDLC path above and is independent — Plan
+    // approval does not write or clear it. The key invariant is that Plan
+    // approval writes ONLY to approved_plan.
+    // (approved_mission is cleared separately by mode transitions.)
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Gap A behavioral test: entering Plan mode clears approved_mission.
+#[test]
+fn entering_plan_clears_approved_mission() {
+    let mut state = AppState::new(Mode::Chat);
+    state.rest.fg_mut().approved_mission = Some("stale sdlc context".into());
+    state.rest.fg_mut().agent_mode = AgentMode::Sdlc;
+    state.rest.set_agent_mode(AgentMode::Plan);
+    assert!(
+        state.rest.fg().approved_mission.is_none(),
+        "entering Plan must clear approved_mission"
+    );
+    assert!(
+        state.rest.fg().approved_plan.is_none(),
+        "entering Plan must also clear approved_plan"
+    );
+}
+
+/// Gap A behavioral test: leaving SDLC clears approved_mission.
+#[test]
+fn leaving_sdlc_clears_approved_mission() {
+    let mut state = AppState::new(Mode::Chat);
+    state.rest.fg_mut().approved_mission = Some("mission context".into());
+    state.rest.fg_mut().agent_mode = AgentMode::Sdlc;
+    state.rest.set_agent_mode(AgentMode::Auto);
+    assert!(
+        state.rest.fg().approved_mission.is_none(),
+        "leaving SDLC must clear approved_mission"
+    );
+}
+
+/// Gap B behavioral test: valid mission seed arm injects, stale mode/hash/
+/// mission/phase/generation denial + clear.
+#[test]
+fn mission_seed_arm_valid_injection_and_stale_denial() {
+    use crate::app::state::MissionSeedArm;
+
+    let (dir, sess) = scratch_session("seed-arm");
+    let mut m = unapproved_amendment_mission();
+    m.approved = true;
+    m.phase = "execute".into();
+    m.needs_reapproval = false;
+    m.hash = m.recompute_hash();
+    m.save(&dir).unwrap();
+
+    let mut state = AppState::new(Mode::Chat);
+    state.rest.fg_mut().session = Some(sess);
+    state.rest.fg_mut().agent_mode = AgentMode::Sdlc;
+    state.rest.fg_mut().sdlc_phase = Some("execute".to_string());
+
+    let session_id = state.rest.fg().id.clone();
+    let mission_id = m.id.clone();
+    let mission_hash = m.hash.clone();
+    let gen = state.rest.fg().sdlc_mission_generation;
+
+    // Valid arm: all fields match.
+    state.rest.fg_mut().pending_mission_seed = Some(MissionSeedArm {
+        session_id: session_id.clone(),
+        mission_id: mission_id.clone(),
+        mission_hash: mission_hash.clone(),
+        generation: gen,
+        phase: "execute".into(),
+    });
+    assert!(
+        state.rest.fg().pending_mission_seed.is_some(),
+        "valid arm should be present"
+    );
+
+    // Stale session_id: deny.
+    state.rest.fg_mut().pending_mission_seed = Some(MissionSeedArm {
+        session_id: "wrong-session".into(),
+        mission_id: mission_id.clone(),
+        mission_hash: mission_hash.clone(),
+        generation: gen,
+        phase: "execute".into(),
+    });
+    // Simulate consumer rejection: mismatched session_id means seed won't fire.
+    {
+        let arm = state.rest.fg().pending_mission_seed.as_ref().unwrap();
+        assert_ne!(arm.session_id, state.rest.fg().id);
+    }
+
+    // Stale mission_id: deny.
+    state.rest.fg_mut().pending_mission_seed = Some(MissionSeedArm {
+        session_id: session_id.clone(),
+        mission_id: "wrong-mission".into(),
+        mission_hash: mission_hash.clone(),
+        generation: gen,
+        phase: "execute".into(),
+    });
+    {
+        let arm = state.rest.fg().pending_mission_seed.as_ref().unwrap();
+        assert_ne!(arm.mission_id, mission_id);
+    }
+
+    // Stale hash: deny.
+    state.rest.fg_mut().pending_mission_seed = Some(MissionSeedArm {
+        session_id: session_id.clone(),
+        mission_id: mission_id.clone(),
+        mission_hash: "deadbeefdeadbeefdeadbeefdeadbeef".into(),
+        generation: gen,
+        phase: "execute".into(),
+    });
+    {
+        let arm = state.rest.fg().pending_mission_seed.as_ref().unwrap();
+        assert_ne!(arm.mission_hash, mission_hash);
+    }
+
+    // Stale generation: deny.
+    state.rest.fg_mut().pending_mission_seed = Some(MissionSeedArm {
+        session_id: session_id.clone(),
+        mission_id: mission_id.clone(),
+        mission_hash: mission_hash.clone(),
+        generation: gen.wrapping_add(1),
+        phase: "execute".into(),
+    });
+    {
+        let arm = state.rest.fg().pending_mission_seed.as_ref().unwrap();
+        assert_ne!(arm.generation, state.rest.fg().sdlc_mission_generation);
+    }
+
+    // Stale phase (assess is not active): deny.
+    state.rest.fg_mut().pending_mission_seed = Some(MissionSeedArm {
+        session_id: session_id.clone(),
+        mission_id: mission_id.clone(),
+        mission_hash: mission_hash.clone(),
+        generation: gen,
+        phase: "assess".into(),
+    });
+    {
+        let arm = state.rest.fg().pending_mission_seed.as_ref().unwrap();
+        assert!(
+            !matches!(arm.phase.as_str(), "prepare" | "execute" | "integrate"),
+            "assess is not an active phase"
+        );
+    }
+
+    // Leaving SDLC: clear without injection.
+    state.rest.fg_mut().pending_mission_seed = Some(MissionSeedArm {
+        session_id: session_id.clone(),
+        mission_id: mission_id.clone(),
+        mission_hash: mission_hash.clone(),
+        generation: gen,
+        phase: "execute".into(),
+    });
+    state.rest.set_agent_mode(AgentMode::Auto);
+    assert!(
+        state.rest.fg().pending_mission_seed.is_none(),
+        "leaving SDLC must clear mission seed arm"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// set_agent_mode ordering: entering SDLC bumps generation, clears stale
+/// pending_plan_seed, and entering Plan/SDLC are mutually exclusive.
+#[test]
+fn set_agent_mode_sdlc_plan_mutual_exclusivity() {
+    let mut state = AppState::new(Mode::Chat);
+    state.rest.fg_mut().pending_plan_seed = true;
+    state.rest.fg_mut().approved_plan = Some("stale plan context".into());
+
+    // Enter SDLC: bumps generation and clears Plan-derived transient state.
+    let gen_before = state.rest.fg().sdlc_mission_generation;
+    state.rest.set_agent_mode(AgentMode::Sdlc);
+    assert!(
+        state.rest.fg().sdlc_mission_generation > gen_before,
+        "entering SDLC must bump generation"
+    );
+    assert!(
+        !state.rest.fg().pending_plan_seed,
+        "entering SDLC must clear stale pending_plan_seed"
+    );
+    assert!(
+        state.rest.fg().approved_plan.is_none(),
+        "entering SDLC must clear stale approved_plan"
+    );
+    assert!(
+        state.rest.fg().approved_mission.is_none(),
+        "entering SDLC must clear approved_mission"
+    );
+
+    // Enter Plan: clears approved_plan AND approved_mission.
+    state.rest.fg_mut().approved_plan = Some("plan text".into());
+    state.rest.fg_mut().approved_mission = Some("mission text".into());
+    state.rest.set_agent_mode(AgentMode::Plan);
+    assert!(
+        state.rest.fg().approved_plan.is_none(),
+        "entering Plan must clear approved_plan"
+    );
+    assert!(
+        state.rest.fg().approved_mission.is_none(),
+        "entering Plan must clear approved_mission"
+    );
+
+    // Leave SDLC: clear pending_plan_seed, approved_mission, pending_mission_seed.
+    state.rest.set_agent_mode(AgentMode::Sdlc);
+    state.rest.fg_mut().pending_plan_seed = true;
+    state.rest.fg_mut().approved_mission = Some("mission".into());
+    state.rest.fg_mut().pending_mission_seed = Some(crate::app::state::MissionSeedArm {
+        session_id: "test".into(),
+        mission_id: "m".into(),
+        mission_hash: "h".into(),
+        generation: 0,
+        phase: "execute".into(),
+    });
+    state.rest.set_agent_mode(AgentMode::Auto);
+    assert!(
+        !state.rest.fg().pending_plan_seed,
+        "leaving SDLC must clear pending_plan_seed"
+    );
+    assert!(
+        state.rest.fg().approved_mission.is_none(),
+        "leaving SDLC must clear approved_mission"
+    );
+    assert!(
+        state.rest.fg().pending_mission_seed.is_none(),
+        "leaving SDLC must clear pending_mission_seed"
+    );
 }

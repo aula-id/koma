@@ -46,7 +46,7 @@ impl Tool for Checklist {
                             },
                             "parent": {
                                 "type": "string",
-                                "description": "Optional parent task title (SDLC hierarchy)."
+                                "description": "Optional parent task title."
                             }
                         },
                         "required": ["content", "status", "priority"]

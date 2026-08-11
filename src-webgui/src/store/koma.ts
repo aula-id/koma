@@ -844,6 +844,12 @@ export type PushEnvelope =
       awaitingApproval?: boolean
       approvalReason?: string | null
       pendingCall?: PendingCall | null
+      // SDLC projection fields (mode=sdlc only; absent/undefined otherwise).
+      sdlcPhase?: string | null
+      sdlcGoal?: string | null
+      sdlcBranch?: string | null
+      sdlcOpen?: number | null
+      sdlcSealed?: number | null
     }
   // Swap-START signal pushed the instant a Select/New is acted on host-side,
   // BEFORE teardown, so the loader rises deterministically across the
@@ -870,7 +876,7 @@ export type PushEnvelope =
       tokensCached?: number
       tokensOut?: number
       cost?: number
-      mode?: 'auto' | 'normal' | 'plan' | 'yolo'
+      mode?: 'auto' | 'normal' | 'plan' | 'yolo' | 'sdlc'
     }
   | {
       k: 'Hub'
@@ -1396,6 +1402,12 @@ type SessionSlice = {
   // pending_tool_calls[tool_idx]); null when not awaiting. Distinguishes a plan
   // decision (`name === 'plan_ready'`) from a tool approval.
   pendingCall: PendingCall | null
+  // SDLC projection fields (mode=sdlc only; cleared on mode switch / session change).
+  sdlcPhase: string | null
+  sdlcGoal: string | null
+  sdlcBranch: string | null
+  sdlcOpen: number | null
+  sdlcSealed: number | null
   // Usage counters + running cost projected on every Status push (host
   // token-accounting). Drive the UsageFooter statusline. Default to 0 when the
   // host hasn't projected them yet.
@@ -2287,6 +2299,11 @@ const initialSession: SessionSlice = {
   awaitingApproval: false,
   approvalReason: null,
   pendingCall: null,
+  sdlcPhase: null,
+  sdlcGoal: null,
+  sdlcBranch: null,
+  sdlcOpen: null,
+  sdlcSealed: null,
   tokensIn: 0,
   tokensCached: 0,
   tokensOut: 0,
@@ -2609,10 +2626,8 @@ export const useKoma = create<KomaState>((set, get) => ({
               // Defensive fallback: tolerates a host build that hasn't started
               // projecting fileChanges[] on the Snapshot envelope yet.
               fileChanges: env.fileChanges ?? [],
-              // Defensive fallback: tolerates a host build that hasn't started
-              // projecting planTodos[] on the Snapshot envelope yet, and a host
-              // build that projects rows without the newer `locked` flag.
-              planTodos: (env.planTodos ?? []).map((t) => ({ ...t, locked: t.locked ?? false })),
+              // planTodos is adopted below (mode-gated to prevent stale Plan
+              // rows from bleeding into non-plan modes).
               // Defensive fallback: tolerates a host build that hasn't started
               // projecting attachments[] on the Snapshot envelope yet.
               attachments: env.attachments ?? [],
@@ -2627,6 +2642,19 @@ export const useKoma = create<KomaState>((set, get) => ({
               awaitingApproval: env.awaitingApproval ?? false,
               approvalReason: env.approvalReason ?? null,
               pendingCall: env.pendingCall ?? null,
+              // Adopt SDLC fields from the snapshot, mode-gated defensively:
+              // the host SHOULD only send these when mode=sdlc (and clears them
+              // otherwise), but a malformed/old host might not — so the store
+              // enforces the invariant client-side too.
+              sdlcPhase: env.mode === 'sdlc' ? (env.sdlcPhase ?? null) : null,
+              sdlcGoal: env.mode === 'sdlc' ? (env.sdlcGoal ?? null) : null,
+              sdlcBranch: env.mode === 'sdlc' ? (env.sdlcBranch ?? null) : null,
+              sdlcOpen: env.mode === 'sdlc' ? (env.sdlcOpen ?? null) : null,
+              sdlcSealed: env.mode === 'sdlc' ? (env.sdlcSealed ?? null) : null,
+              // Plan todos only valid in plan mode; clear stale rows otherwise.
+              planTodos: env.mode === 'plan'
+                ? (env.planTodos ?? []).map((t) => ({ ...t, locked: t.locked ?? false }))
+                : [],
               ...(switched ? { stream: '', reasoning: '' } : {}),
             },
             palette: env.palette,
@@ -2730,6 +2758,8 @@ export const useKoma = create<KomaState>((set, get) => ({
           // that so a working=false status can't cut a toast short.
           const raise = !!env.toast && env.toast !== s.ui.toast?.text
           const seq = raise ? s.ui.toastSeq + 1 : s.ui.toastSeq
+          const newMode = env.mode ?? s.session.mode
+          const modeChanged = newMode !== s.session.mode
           return {
             session: {
               ...s.session,
@@ -2742,7 +2772,23 @@ export const useKoma = create<KomaState>((set, get) => ({
               tokensCached: env.tokensCached ?? s.session.tokensCached,
               tokensOut: env.tokensOut ?? s.session.tokensOut,
               cost: env.cost ?? s.session.cost,
-              mode: env.mode ?? s.session.mode,
+              mode: newMode,
+              // Explicitly clear stale SDLC rows on mode change: SDLC fields
+              // are only valid when mode=sdlc; a mode switch must not leave
+              // stale phase/goal/branch/counts from a previous SDLC session.
+              // Also clear Plan rows when leaving Plan mode (same invariant).
+              // When mode didn't change, preserve current values (the next
+              // Snapshot will overwrite them authoritatively anyway).
+              ...(modeChanged
+                ? {
+                    sdlcPhase: newMode === 'sdlc' ? s.session.sdlcPhase : null,
+                    sdlcGoal: newMode === 'sdlc' ? s.session.sdlcGoal : null,
+                    sdlcBranch: newMode === 'sdlc' ? s.session.sdlcBranch : null,
+                    sdlcOpen: newMode === 'sdlc' ? s.session.sdlcOpen : null,
+                    sdlcSealed: newMode === 'sdlc' ? s.session.sdlcSealed : null,
+                    planTodos: newMode === 'plan' ? s.session.planTodos : [],
+                  }
+                : {}),
             },
             ui: raise
               ? {

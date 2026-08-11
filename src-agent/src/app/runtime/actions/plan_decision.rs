@@ -308,7 +308,7 @@ pub(super) fn handle_approve_mission(
                     restore_unbound_draft_mission(&path);
                 }
                 state.rest.force_sdlc_assess_safe(fgi);
-                state.rest.sessions[fgi].approved_plan = None;
+                state.rest.sessions[fgi].approved_mission = None;
                 state.rest.sessions[fgi].sdlc_pending_node_id = None;
                 let detail = format!("phase persistence failed: {e}");
                 answer_plan_ready(
@@ -342,7 +342,7 @@ pub(super) fn handle_approve_mission(
                 .chars()
                 .take(2000)
                 .collect::<String>();
-            state.rest.fg_mut().approved_plan = Some(approved_mission);
+            state.rest.fg_mut().approved_mission = Some(approved_mission);
             state.rest.fg_mut().sdlc_keeper_due = true;
 
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
@@ -357,7 +357,7 @@ pub(super) fn handle_approve_mission(
                 // claim + keeper state, and surface a durable failure.
                 state.rest.force_sdlc_assess_safe(fgi);
                 state.rest.sessions[fgi].sdlc_pending_node_id = None;
-                state.rest.sessions[fgi].approved_plan = None;
+                state.rest.sessions[fgi].approved_mission = None;
                 answer_plan_ready(
                     state,
                     crate::tool::sdlc::mission_binding_failed_text(&format!(
@@ -405,7 +405,7 @@ pub(super) fn handle_approve_mission_compact(
                     restore_unbound_draft_mission(&path);
                 }
                 state.rest.force_sdlc_assess_safe(fgi);
-                state.rest.sessions[fgi].approved_plan = None;
+                state.rest.sessions[fgi].approved_mission = None;
                 state.rest.sessions[fgi].sdlc_pending_node_id = None;
                 let detail = format!("phase persistence failed: {e}");
                 answer_plan_ready(
@@ -438,9 +438,34 @@ pub(super) fn handle_approve_mission_compact(
                 .chars()
                 .take(2000)
                 .collect::<String>();
-            state.rest.fg_mut().approved_plan = Some(approved_mission);
+            state.rest.fg_mut().approved_mission = Some(approved_mission);
 
-            state.rest.fg_mut().pending_mission_seed = true;
+            // Arm the typed mission seed so apply_compaction_result injects the
+            // mission capsule as the first post-compaction user turn.
+            {
+                let rt = state.rest.fg();
+                let mission_id = rt
+                    .session
+                    .as_ref()
+                    .and_then(|s| crate::model::sdlc::Mission::load(&s.path))
+                    .map(|m| m.id.clone())
+                    .unwrap_or_default();
+                let mission_hash = rt
+                    .session
+                    .as_ref()
+                    .and_then(|s| crate::model::sdlc::Mission::load(&s.path))
+                    .map(|m| m.hash.clone())
+                    .unwrap_or_default();
+                let phase = rt.sdlc_phase.clone().unwrap_or_default();
+                state.rest.fg_mut().pending_mission_seed =
+                    Some(crate::app::state::MissionSeedArm {
+                        session_id: rt.id.clone(),
+                        mission_id,
+                        mission_hash,
+                        generation: rt.sdlc_mission_generation,
+                        phase,
+                    });
+            }
             state.rest.fg_mut().sdlc_keeper_due = true;
 
             let trailing_ids: Vec<String> = state.rest.sessions[fgi]
@@ -491,7 +516,7 @@ pub(super) fn handle_approve_mission_compact(
             if let Err(pe) = state.rest.apply_sdlc_phase(fgi, "assess") {
                 state.rest.force_sdlc_assess_safe(fgi);
                 state.rest.sessions[fgi].sdlc_pending_node_id = None;
-                state.rest.sessions[fgi].approved_plan = None;
+                state.rest.sessions[fgi].approved_mission = None;
                 answer_plan_ready(
                     state,
                     crate::tool::sdlc::mission_binding_failed_text(&format!(
@@ -544,9 +569,10 @@ fn apply_mission_denial_rails(state: &mut AppState, sess_idx: usize) {
     let prior_phase = state.rest.sessions[sess_idx].sdlc_phase.clone();
     // Execution stashes from a prior approval must not leak past denial.
     state.rest.sessions[sess_idx].approved_plan = None;
+    state.rest.sessions[sess_idx].approved_mission = None;
     // Drop keeper rails (including any in-flight LLM oneshot).
     state.rest.sessions[sess_idx].invalidate_sdlc_keeper_llm();
-    state.rest.sessions[sess_idx].pending_mission_seed = false;
+    state.rest.sessions[sess_idx].pending_mission_seed = None;
     state.rest.sessions[sess_idx].sdlc_pending_node_id = None;
     state.rest.sessions[sess_idx].sdlc_branch = None;
 

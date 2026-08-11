@@ -141,6 +141,15 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
     // Mirror the projected steer previews so the pending panel (and the Ctrl+X gate
     // in `handle_chat`) can read them from the shadow without a daemon round-trip.
     rt.pending_steer = s.pending_steer.clone();
+    // Mirror SDLC fields from the snapshot so the TUI thin-client shadow can
+    // reconstruct the foreground state for mode-isolation rendering.
+    // Carries ALL projected SDLC fields — including goal/open/sealed that were
+    // previously reconstructed from blocking DB reads in project.rs.
+    rt.sdlc_phase = s.sdlc_phase.clone();
+    rt.sdlc_branch = s.sdlc_branch.clone();
+    rt.sdlc_goal = s.sdlc_goal.clone();
+    rt.sdlc_open = s.sdlc_open;
+    rt.sdlc_sealed = s.sdlc_sealed;
     rt
 }
 

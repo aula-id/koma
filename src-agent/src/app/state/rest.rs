@@ -898,6 +898,7 @@ impl AppStateRest {
         if entering_plan {
             self.sessions[sess_idx].plan_return_mode = Some(old_mode);
             self.sessions[sess_idx].approved_plan = None;
+            self.sessions[sess_idx].approved_mission = None;
         } else if leaving_plan {
             self.sessions[sess_idx].plan_return_mode = None;
         }
@@ -908,6 +909,16 @@ impl AppStateRest {
         // into assess (mission left unapproved / blocked from auto-resume).
         if entering_sdlc {
             self.sessions[sess_idx].sdlc_return_mode = Some(old_mode);
+            // Clear stale seeds from a prior Plan session so they can never fire
+            // inside SDLC (Plan and SDLC are mutually exclusive).
+            self.sessions[sess_idx].pending_plan_seed = false;
+            self.sessions[sess_idx].approved_plan = None;
+            self.sessions[sess_idx].approved_mission = None;
+            // Bump generation so any armed mission seed from a PRIOR SDLC session
+            // can never inject after re-enter.
+            self.sessions[sess_idx].sdlc_mission_generation = self.sessions[sess_idx]
+                .sdlc_mission_generation
+                .wrapping_add(1);
             let sess_path = self.sessions[sess_idx]
                 .session
                 .as_ref()
@@ -1050,8 +1061,14 @@ impl AppStateRest {
             self.sessions[sess_idx].sdlc_return_mode = None;
             self.sessions[sess_idx].sdlc_phase = None;
             self.sessions[sess_idx].sdlc_branch = None;
+            self.sessions[sess_idx].sdlc_goal = None;
+            self.sessions[sess_idx].sdlc_open = None;
+            self.sessions[sess_idx].sdlc_sealed = None;
             self.sessions[sess_idx].sdlc_pending_node_id = None;
-            self.sessions[sess_idx].pending_mission_seed = false;
+            self.sessions[sess_idx].pending_mission_seed = None;
+            self.sessions[sess_idx].approved_mission = None;
+            // Clear any stale plan seed so it can't fire in a post-SDLC context.
+            self.sessions[sess_idx].pending_plan_seed = false;
             // Drop any in-flight LLM keeper so a late result cannot start a turn
             // after SDLC has been left.
             self.sessions[sess_idx].invalidate_sdlc_keeper_llm();
@@ -1096,8 +1113,7 @@ impl AppStateRest {
                     plan_todos_after = Some(rails);
                 } else if leaving_plan {
                     let _ = std::fs::remove_file(sess.plan_todos_path());
-                    plan_todos_after =
-                        Some(crate::app::mode::todo::load_current_todos(sess, false));
+                    plan_todos_after = Some(Vec::new());
                 }
                 sess.rebuild_system();
                 let _ = sess.save();
@@ -1231,10 +1247,16 @@ mod agent_mode_session_isolation_tests {
     fn pending_mission_seed_is_per_session() {
         let mut rest = AppStateRest::new();
         rest.sessions.push(SessionRuntime::new());
-        rest.sessions[0].pending_mission_seed = true;
-        assert!(!rest.sessions[1].pending_mission_seed);
+        rest.sessions[0].pending_mission_seed = Some(crate::app::state::runtime::MissionSeedArm {
+            session_id: "s0".into(),
+            mission_id: "m0".into(),
+            mission_hash: "h0".into(),
+            generation: 0,
+            phase: "execute".into(),
+        });
+        assert!(rest.sessions[1].pending_mission_seed.is_none());
         rest.sessions[1].pending_plan_seed = true;
-        assert!(rest.sessions[0].pending_mission_seed);
+        assert!(rest.sessions[0].pending_mission_seed.is_some());
         assert!(!rest.sessions[0].pending_plan_seed);
     }
 
