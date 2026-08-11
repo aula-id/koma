@@ -368,7 +368,7 @@ export default function ImportGraphTab() {
       {/* ── Header bar (grouped + responsive) ────────────────────── */}
       <div className="flex flex-wrap items-center gap-2 border-b border-koma-border px-3 py-1.5 text-[12px] text-koma-dim">
         {/* Navigation group */}
-        <div className="flex min-w-0 flex-none items-center gap-1">
+        <div className="flex min-w-0 items-center gap-1">
           <Network size={13} className="flex-none opacity-70" />
 
           {/* Back button */}
@@ -489,7 +489,7 @@ export default function ImportGraphTab() {
       {/* ── Main content ──────────────────────────────────────────── */}
       <div className="flex min-h-0 min-w-0 flex-1">
         {/* Graph Canvas */}
-        <div className="flex min-h-0 min-w-[280px] flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1">
           {error ? (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-center text-[12px] text-koma-dim">
               <AlertTriangle size={24} className="text-koma-warn opacity-70" />
