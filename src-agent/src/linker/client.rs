@@ -11,7 +11,8 @@
 
 use crate::ipc::frame::FrameReader;
 use crate::ipc::linker_proto::{
-    GraphViewResult, LinkerQuery, LinkerRequest, LinkerResponse, VisualizationRequest,
+    EditContextResult, GraphViewResult, LinkerQuery, LinkerRequest, LinkerResponse,
+    VisualizationRequest,
 };
 use crate::ipc::SyncIpcStream;
 use std::io::{Read, Write};
@@ -161,6 +162,7 @@ pub fn fetch_summary() -> Option<SummaryResult> {
 /// `(imports, imported_by)` — two separate lists of paths. Uses the
 /// `Neighborhood` query and parses the `(dependency)` / `(dependent)` suffixes
 /// the daemon appends, avoiding two round-trips.
+#[allow(dead_code)] // public API: superseded by fetch_edit_context for footer, but useful for callers
 pub fn fetch_neighborhood(path: &str) -> Option<(Vec<String>, Vec<String>)> {
     let resp = connect_and_send(&LinkerRequest::Query(LinkerQuery::Neighborhood {
         path: path.to_string(),
@@ -317,6 +319,42 @@ pub fn fetch_impact(path: &str, depth: u32) -> Result<(Vec<String>, usize), Stri
         LinkerResponse::PathList { paths, total } => Ok((paths, total)),
         LinkerResponse::Error(e) => Err(e),
         _ => Err("unexpected linker daemon response".to_string()),
+    }
+}
+
+/// Fetch rich edit context for a file. Single IPC round-trip.
+pub fn fetch_edit_context(path: &str) -> Option<EditContextResult> {
+    let resp = connect_and_send(&LinkerRequest::Query(LinkerQuery::EditContext {
+        path: path.to_string(),
+    }))?;
+    match resp {
+        LinkerResponse::EditContext(ctx) => Some(ctx),
+        _ => None,
+    }
+}
+
+/// Result of a blast-radius query.
+#[allow(dead_code)] // public API: not yet consumed by tools (blast_radius uses connect_and_send directly)
+pub struct BlastRadiusResult {
+    pub affected_count: usize,
+    pub entry_point_count: usize,
+    pub paths: Vec<String>,
+}
+
+/// Fetch blast radius (impact) for a file at a given depth.
+#[allow(dead_code)] // public API: not yet consumed by tools (blast_radius uses connect_and_send directly)
+pub fn fetch_blast_radius(path: &str, depth: u32) -> Option<BlastRadiusResult> {
+    let resp = connect_and_send(&LinkerRequest::Query(LinkerQuery::Impact {
+        path: path.to_string(),
+        depth: Some(depth.min(3)),
+    }))?;
+    match resp {
+        LinkerResponse::PathList { paths, total } => Some(BlastRadiusResult {
+            affected_count: total,
+            entry_point_count: 0,
+            paths,
+        }),
+        _ => None,
     }
 }
 

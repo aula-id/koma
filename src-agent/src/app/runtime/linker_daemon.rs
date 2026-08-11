@@ -650,6 +650,11 @@ fn handle_query(
             let info = graph.workspace_info();
             LinkerResponse::WorkspaceInfo(info)
         }
+        LinkerQuery::EditContext { path } => {
+            let key = graph.resolve_key(&path).unwrap_or(&path);
+            let ctx = graph.edit_context(key);
+            LinkerResponse::EditContext(ctx)
+        }
     }
 }
 

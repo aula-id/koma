@@ -7,8 +7,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ipc::linker_proto::{
-    GraphDirection, GraphNodeRole, GraphViewEdge, GraphViewNode, GraphViewResult, LanguageCount,
-    VisualizationRequest, WorkspaceRootInfo,
+    EditContextResult, GraphDirection, GraphNodeRole, GraphViewEdge, GraphViewNode,
+    GraphViewResult, LanguageCount, VisualizationRequest, WorkspaceRootInfo,
 };
 
 /// Supported source languages.
@@ -351,7 +351,120 @@ impl ImportGraph {
         result
     }
 
-    /// Check if a node path passes the active filters.
+    /// Compute rich edit-context intelligence for a file in a single pass.
+    ///
+    /// Returns structured data for L3 footer enrichment: direct imports,
+    /// dependents, transitive impact, cross-boundary deps, unresolved
+    /// imports, entry-point/leaf status, and related test/config files.
+    pub fn edit_context(&self, path: &str) -> EditContextResult {
+        let imports: Vec<String> = self
+            .dependencies(path)
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let imported_by: Vec<String> = self
+            .dependents(path)
+            .into_iter()
+            .map(String::from)
+            .collect();
+
+        let is_entry_point = imported_by.is_empty();
+
+        // is_leaf: no outgoing file edges AND no external edges.
+        let is_leaf = {
+            let has_file_out = self
+                .edges
+                .get(path)
+                .is_some_and(|es| es.iter().any(|e| matches!(&e.target, EdgeTarget::File(_))));
+            let has_ext_out = self.edges.get(path).is_some_and(|es| {
+                es.iter()
+                    .any(|e| matches!(&e.target, EdgeTarget::External(_)))
+            });
+            !has_file_out && !has_ext_out
+        };
+
+        // Transitive dependents at depth 2 (excludes self).
+        let transitive = self.impact(path, 2);
+        let transitive_dependents_count = transitive.len().saturating_sub(1);
+
+        // Entry-point count among transitive dependents (cap at 100 to avoid O(n²)).
+        let entry_point_count = {
+            let mut count = 0usize;
+            for p in transitive.iter().take(101) {
+                if *p == path {
+                    continue;
+                }
+                if count >= 100 {
+                    break;
+                }
+                if self.reverse.get(*p).is_none_or(|v| v.is_empty()) {
+                    count += 1;
+                }
+            }
+            count
+        };
+
+        // Cross-boundary deps: direct deps whose workspace root differs.
+        let my_root = self.resolve_root(path);
+        let cross_boundary_deps: Vec<(String, String)> = imports
+            .iter()
+            .filter_map(|dep| {
+                let dep_root = self.resolve_root(dep);
+                match (my_root, dep_root) {
+                    (Some(mr), Some(dr)) if mr != dr => Some((dr.to_string(), dep.clone())),
+                    _ => None,
+                }
+            })
+            .collect();
+
+        // External / unresolved imports.
+        let unresolved_imports: Vec<String> = self
+            .edges
+            .get(path)
+            .map(|es| {
+                es.iter()
+                    .filter_map(|e| match &e.target {
+                        EdgeTarget::External(name) => Some(name.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Collect all dep + dependent paths for test/config detection.
+        let mut all_neighbors: Vec<&str> = Vec::new();
+        all_neighbors.extend(imports.iter().map(|s| s.as_str()));
+        all_neighbors.extend(imported_by.iter().map(|s| s.as_str()));
+
+        let related_tests: Vec<String> = all_neighbors
+            .iter()
+            .filter(|p| is_test_file(p))
+            .take(3)
+            .map(|s| s.to_string())
+            .collect();
+
+        let related_configs: Vec<String> = all_neighbors
+            .iter()
+            .filter(|p| is_config_file(p))
+            .take(3)
+            .map(|s| s.to_string())
+            .collect();
+
+        EditContextResult {
+            imports,
+            imported_by,
+            transitive_dependents_count,
+            entry_point_count,
+            cross_boundary_deps,
+            is_entry_point,
+            is_leaf,
+            unresolved_imports,
+            related_tests,
+            related_configs,
+        }
+    }
+
+    /// Check if a file path looks like a test file (multi-language heuristic).
     fn passes_filters(
         &self,
         path: &str,
@@ -1047,6 +1160,65 @@ fn edge_target_key(target: &EdgeTarget) -> &str {
         EdgeTarget::File(f) => f,
         EdgeTarget::External(e) => e,
     }
+}
+
+/// Check if a file path looks like a test file (multi-language heuristic).
+fn is_test_file(path: &str) -> bool {
+    let p = path.replace('\\', "/");
+    let name = p.rsplit('/').next().unwrap_or(&p);
+
+    // Rust: test_*.rs, *_test.rs, paths under /tests/ or /test/
+    if name.starts_with("test_") && name.ends_with(".rs") {
+        return true;
+    }
+    if name.ends_with("_test.rs") {
+        return true;
+    }
+    // Python: test_*.py, *_test.py
+    if name.starts_with("test_") && name.ends_with(".py") {
+        return true;
+    }
+    if name.ends_with("_test.py") {
+        return true;
+    }
+    // TypeScript/JS: *.test.ts, *.spec.ts, *.test.tsx, *.spec.tsx, *.test.js, *.spec.js
+    if name.contains(".test.") || name.contains(".spec.") {
+        return true;
+    }
+    // Go: *_test.go
+    if name.ends_with("_test.go") {
+        return true;
+    }
+    // Java: *Test.java, *Tests.java
+    if (name.ends_with("Test.java") || name.ends_with("Tests.java")) && name.len() > 9 {
+        return true;
+    }
+    // PHP: *Test.php
+    if name.ends_with("Test.php") && name.len() > 8 {
+        return true;
+    }
+    // Path segment check for /tests/ or /test/
+    if p.contains("/tests/") || p.contains("/test/") {
+        return true;
+    }
+    false
+}
+
+/// Check if a file path looks like a config file.
+fn is_config_file(path: &str) -> bool {
+    let p = path.replace('\\', "/");
+    let name = p.rsplit('/').next().unwrap_or(&p);
+    matches!(
+        name,
+        "Cargo.toml"
+            | "pyproject.toml"
+            | "package.json"
+            | "tsconfig.json"
+            | "go.mod"
+            | "build.gradle"
+            | "composer.json"
+    ) || name.starts_with("config.")
+        || name.starts_with(".env")
 }
 
 #[cfg(test)]
@@ -2490,5 +2662,237 @@ mod tests {
         assert_eq!(result.edges.len(), 2, "edges capped to 2");
         assert!(result.nodes_truncated);
         assert!(result.edges_truncated);
+    }
+
+    // ─── edit_context tests ──────────────────────────────────────────────
+
+    #[test]
+    fn edit_context_basic_chain() {
+        // a → b → c, all in same root.
+        let g = chain_graph();
+        let ctx = g.edit_context("/a.rs");
+        assert_eq!(ctx.imports, vec!["/b.rs"]);
+        assert!(ctx.imported_by.is_empty());
+        assert!(ctx.is_entry_point);
+        assert!(!ctx.is_leaf);
+        assert_eq!(ctx.transitive_dependents_count, 0);
+        assert!(ctx.cross_boundary_deps.is_empty());
+    }
+
+    #[test]
+    fn edit_context_leaf_node() {
+        let g = chain_graph();
+        let ctx = g.edit_context("/c.rs");
+        assert!(ctx.imports.is_empty());
+        assert_eq!(ctx.imported_by, vec!["/b.rs"]);
+        assert!(!ctx.is_entry_point);
+        assert!(ctx.is_leaf);
+    }
+
+    #[test]
+    fn edit_context_entry_point_count() {
+        // a → b, c → b. b is depended on by a and c.
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/".to_string()];
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges(
+            "/c.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges("/b.rs", Lang::Rust, vec![]);
+
+        let ctx = g.edit_context("/b.rs");
+        assert_eq!(ctx.imports, Vec::<String>::new());
+        assert_eq!(ctx.imported_by.len(), 2);
+        assert!(!ctx.is_entry_point);
+        assert!(ctx.is_leaf);
+        // Transitive: b itself excluded → 2 dependents (a, c), both entry points.
+        assert_eq!(ctx.transitive_dependents_count, 2);
+        assert_eq!(ctx.entry_point_count, 2);
+    }
+
+    #[test]
+    fn edit_context_cross_boundary() {
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/ws_a".to_string(), "/ws_b".to_string()];
+        g.set_edges(
+            "/ws_a/a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/ws_b/b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges("/ws_b/b.rs", Lang::Rust, vec![]);
+
+        let ctx = g.edit_context("/ws_a/a.rs");
+        assert_eq!(ctx.cross_boundary_deps.len(), 1);
+        assert_eq!(ctx.cross_boundary_deps[0].0, "/ws_b");
+        assert_eq!(ctx.cross_boundary_deps[0].1, "/ws_b/b.rs");
+    }
+
+    #[test]
+    fn edit_context_unresolved_imports() {
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/".to_string()];
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![
+                Edge {
+                    target: EdgeTarget::File("/b.rs".into()),
+                    kind: EdgeKind::Import,
+                },
+                Edge {
+                    target: EdgeTarget::External("serde".into()),
+                    kind: EdgeKind::Import,
+                },
+                Edge {
+                    target: EdgeTarget::External("tokio".into()),
+                    kind: EdgeKind::Import,
+                },
+            ],
+        );
+        g.set_edges("/b.rs", Lang::Rust, vec![]);
+
+        let ctx = g.edit_context("/a.rs");
+        assert_eq!(ctx.unresolved_imports, vec!["serde", "tokio"]);
+        assert!(!ctx.is_leaf, "has unresolved edges so not a leaf");
+    }
+
+    #[test]
+    fn edit_context_test_and_config_detection() {
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/".to_string()];
+        // main.rs → lib.rs → Cargo.toml; main_test.rs → main.rs.
+        g.set_edges(
+            "/src/main.rs",
+            Lang::Rust,
+            vec![
+                Edge {
+                    target: EdgeTarget::File("/src/lib.rs".into()),
+                    kind: EdgeKind::Import,
+                },
+                Edge {
+                    target: EdgeTarget::File("/tests/main_test.rs".into()),
+                    kind: EdgeKind::Import,
+                },
+            ],
+        );
+        g.set_edges(
+            "/tests/main_test.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/src/main.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges(
+            "/src/lib.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/Cargo.toml".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges("/Cargo.toml", Lang::Unknown, vec![]);
+
+        // main.rs: test file is a direct dep + dependent.
+        let ctx = g.edit_context("/src/main.rs");
+        assert!(
+            ctx.related_tests
+                .contains(&"/tests/main_test.rs".to_string()),
+            "should detect test file: {:?}",
+            ctx.related_tests
+        );
+        // Cargo.toml is NOT a direct dep/dependent of main.rs (it's lib.rs's dep).
+        assert!(
+            ctx.related_configs.is_empty(),
+            "Cargo.toml should not appear as config for main.rs: {:?}",
+            ctx.related_configs
+        );
+
+        // lib.rs: Cargo.toml is a direct dep → config detection.
+        let ctx_lib = g.edit_context("/src/lib.rs");
+        assert!(
+            ctx_lib.related_configs.contains(&"/Cargo.toml".to_string()),
+            "should detect config file for lib.rs: {:?}",
+            ctx_lib.related_configs
+        );
+    }
+
+    #[test]
+    fn edit_context_not_found_returns_empty() {
+        let g = ImportGraph::new();
+        let ctx = g.edit_context("/nonexistent.rs");
+        assert!(ctx.imports.is_empty());
+        assert!(ctx.imported_by.is_empty());
+        assert!(ctx.is_entry_point);
+        assert!(ctx.is_leaf);
+        assert_eq!(ctx.transitive_dependents_count, 0);
+    }
+
+    #[test]
+    fn edit_context_is_leaf_false_when_only_external() {
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/".to_string()];
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::External("serde".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+
+        let ctx = g.edit_context("/a.rs");
+        assert!(ctx.imports.is_empty()); // no resolved file imports
+        assert!(!ctx.is_leaf); // but has external edge
+        assert_eq!(ctx.unresolved_imports, vec!["serde"]);
+    }
+
+    // ─── is_test_file / is_config_file heuristic tests ───────────────────
+
+    #[test]
+    fn test_file_heuristics() {
+        assert!(super::is_test_file("/src/test_foo.rs"));
+        assert!(super::is_test_file("/src/foo_test.rs"));
+        assert!(super::is_test_file("/src/tests/bar.rs"));
+        assert!(super::is_test_file("/src/test/bar.rs"));
+        assert!(super::is_test_file("/test_foo.py"));
+        assert!(super::is_test_file("/foo_test.py"));
+        assert!(super::is_test_file("/foo.test.ts"));
+        assert!(super::is_test_file("/foo.spec.tsx"));
+        assert!(super::is_test_file("/foo_test.go"));
+        assert!(super::is_test_file("/FooTest.java"));
+        assert!(super::is_test_file("/FooTests.java"));
+        assert!(super::is_test_file("/FooTest.php"));
+        assert!(!super::is_test_file("/src/main.rs"));
+        assert!(!super::is_test_file("/src/lib.rs"));
+    }
+
+    #[test]
+    fn config_file_heuristics() {
+        assert!(super::is_config_file("/Cargo.toml"));
+        assert!(super::is_config_file("/pyproject.toml"));
+        assert!(super::is_config_file("/package.json"));
+        assert!(super::is_config_file("/tsconfig.json"));
+        assert!(super::is_config_file("/go.mod"));
+        assert!(super::is_config_file("/build.gradle"));
+        assert!(super::is_config_file("/composer.json"));
+        assert!(super::is_config_file("/config.yaml"));
+        assert!(super::is_config_file("/.env"));
+        assert!(!super::is_config_file("/src/main.rs"));
     }
 }

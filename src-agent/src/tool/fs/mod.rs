@@ -104,10 +104,9 @@ pub(crate) fn capture_baseline(ctx: &ToolCtx, path: &Path) {
 #[cfg(feature = "linker")]
 const NEIGHBORHOOD_FOOTER_CAP: usize = 8;
 
-/// Best-effort neighborhood footer for L3: queries the linker daemon for the
-/// 1-hop import graph of `path` (resolved absolute path) and appends a
-/// `# Related (graph)` section to `out`. If the daemon is not running, the
-/// file has no graph edges, or the fetch fails, this is a silent no-op.
+/// Best-effort edit-context footer for L3: queries the linker daemon for rich
+/// edit intelligence of `path` and appends a `# Related (graph)` section to `out`.
+/// If the daemon is not running or the fetch fails, this is a silent no-op.
 #[cfg(feature = "linker")]
 pub(crate) fn append_neighborhood_footer(out: &mut String, path: &Path) {
     // Graph nodes are keyed by canonicalized absolute paths (with forward slashes).
@@ -117,41 +116,139 @@ pub(crate) fn append_neighborhood_footer(out: &mut String, path: &Path) {
         .unwrap_or_else(|_| path.to_path_buf())
         .to_string_lossy()
         .replace('\\', "/");
-    let Some((imports, imported_by)) = crate::linker::client::fetch_neighborhood(&key) else {
+    let Some(ctx) = crate::linker::client::fetch_edit_context(&key) else {
         return;
     };
-    if imports.is_empty() && imported_by.is_empty() {
+
+    // Build footer only if there's something meaningful to show.
+    if ctx.imports.is_empty()
+        && ctx.imported_by.is_empty()
+        && ctx.transitive_dependents_count == 0
+        && ctx.unresolved_imports.is_empty()
+        && ctx.cross_boundary_deps.is_empty()
+        && ctx.related_tests.is_empty()
+        && ctx.related_configs.is_empty()
+        && !ctx.is_entry_point
+    {
         return;
     }
+
     out.push_str("\n---\n# Related (graph)\n");
-    if !imports.is_empty() {
-        let display: Vec<_> = imports
+
+    // Imports (capped).
+    if !ctx.imports.is_empty() {
+        let display: Vec<_> = ctx
+            .imports
             .iter()
             .take(NEIGHBORHOOD_FOOTER_CAP)
             .cloned()
             .collect();
-        let suffix = if imports.len() > NEIGHBORHOOD_FOOTER_CAP {
-            format!(" (and {} more)", imports.len() - NEIGHBORHOOD_FOOTER_CAP)
+        let suffix = if ctx.imports.len() > NEIGHBORHOOD_FOOTER_CAP {
+            format!(
+                " (and {} more)",
+                ctx.imports.len() - NEIGHBORHOOD_FOOTER_CAP
+            )
         } else {
             String::new()
         };
         out.push_str(&format!("imports: {}{}\n", display.join(", "), suffix));
     }
-    if !imported_by.is_empty() {
-        let display: Vec<_> = imported_by
+
+    // Imported-by (capped).
+    if !ctx.imported_by.is_empty() {
+        let display: Vec<_> = ctx
+            .imported_by
             .iter()
             .take(NEIGHBORHOOD_FOOTER_CAP)
             .cloned()
             .collect();
-        let suffix = if imported_by.len() > NEIGHBORHOOD_FOOTER_CAP {
+        let suffix = if ctx.imported_by.len() > NEIGHBORHOOD_FOOTER_CAP {
             format!(
                 " (and {} more)",
-                imported_by.len() - NEIGHBORHOOD_FOOTER_CAP
+                ctx.imported_by.len() - NEIGHBORHOOD_FOOTER_CAP
             )
         } else {
             String::new()
         };
         out.push_str(&format!("imported-by: {}{}\n", display.join(", "), suffix));
+    }
+
+    // Blast radius summary.
+    if ctx.transitive_dependents_count > 0 {
+        let ep_suffix = if ctx.entry_point_count > 0 {
+            format!(" ({} are entry points)", ctx.entry_point_count)
+        } else {
+            String::new()
+        };
+        out.push_str(&format!(
+            "blast radius: {} files within depth 2{}\n",
+            ctx.transitive_dependents_count, ep_suffix
+        ));
+    }
+
+    // Cross-boundary deps.
+    for (other_root, dep_path) in &ctx.cross_boundary_deps {
+        let root_name = other_root.rsplit('/').next().unwrap_or(other_root);
+        out.push_str(&format!(
+            "⚠ cross-boundary: depends on {dep_path} (workspace: {root_name})\n"
+        ));
+    }
+
+    // Entry-point warning.
+    if ctx.is_entry_point {
+        out.push_str("⚠ This file is an entry point (nothing imports it)\n");
+    }
+
+    // Leaf warning (no outgoing imports at all).
+    if ctx.is_leaf && !ctx.is_entry_point {
+        out.push_str("⚠ This file has no imports (leaf node)\n");
+    }
+
+    // Unresolved imports (capped at 3).
+    if !ctx.unresolved_imports.is_empty() {
+        let shown: Vec<_> = ctx.unresolved_imports.iter().take(3).cloned().collect();
+        let suffix = if ctx.unresolved_imports.len() > 3 {
+            format!(" (and {} more)", ctx.unresolved_imports.len() - 3)
+        } else {
+            String::new()
+        };
+        out.push_str(&format!(
+            "⚠ {} unresolved import{}: {}{}\n",
+            ctx.unresolved_imports.len(),
+            if ctx.unresolved_imports.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
+            shown.join(", "),
+            suffix
+        ));
+    }
+
+    // Related tests (capped at 3).
+    if !ctx.related_tests.is_empty() {
+        let display: Vec<_> = ctx.related_tests.iter().take(3).cloned().collect();
+        let suffix = if ctx.related_tests.len() > 3 {
+            format!(" (and {} more)", ctx.related_tests.len() - 3)
+        } else {
+            String::new()
+        };
+        out.push_str(&format!(
+            "Related tests: {}{}\n",
+            display.join(", "),
+            suffix
+        ));
+    }
+
+    // Related configs (capped at 3).
+    if !ctx.related_configs.is_empty() {
+        let display: Vec<_> = ctx.related_configs.iter().take(3).cloned().collect();
+        let suffix = if ctx.related_configs.len() > 3 {
+            format!(" (and {} more)", ctx.related_configs.len() - 3)
+        } else {
+            String::new()
+        };
+        out.push_str(&format!("Config: {}{}\n", display.join(", "), suffix));
     }
 }
 
