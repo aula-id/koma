@@ -17,6 +17,7 @@ import { UsageFooter } from '../components/UsageFooter'
 import { useKoma } from '../store/koma'
 import { BrailleSpinner } from '../components/BrailleSpinner'
 import { ExtensionPanelFrame } from '../components/ExtensionPanelFrame'
+import { GlobalContextMenu } from '../components/GlobalContextMenu'
 import { installPanelBridgeListener } from '../lib/panelBridge'
 
 const SIDEBAR_MIN = 150
@@ -265,6 +266,7 @@ function RootLayout() {
       />
       <ToastContainer />
       <ResizeHandles />
+      <GlobalContextMenu onResume={() => setOverlay('resume')} />
     </div>
   )
 }
