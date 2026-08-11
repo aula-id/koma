@@ -889,6 +889,45 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::WriteErrorLog { message } => {
             crate::model::store::append_global_error_log("frontend", &message);
         }
+        // Import graph visualization: always routed to the host-relay thread via
+        // HostCtl::ImportGraph (linker daemon call, like FileDiff — never the session daemon).
+        #[cfg(feature = "linker")]
+        GuiReq::ImportGraph {
+            path,
+            depth,
+            direction,
+            filter_roots,
+            filter_languages,
+        } => {
+            let depth = depth.unwrap_or(1).clamp(1, 3);
+            let direction = direction.as_deref().unwrap_or("both");
+            let direction = match direction {
+                "dependencies" => crate::ipc::linker_proto::GraphDirection::Dependencies,
+                "dependents" => crate::ipc::linker_proto::GraphDirection::Dependents,
+                _ => crate::ipc::linker_proto::GraphDirection::Both,
+            };
+            let _ = ctx.ctl.send(HostCtl::ImportGraph {
+                path,
+                depth,
+                direction,
+                filter_roots,
+                filter_languages,
+            });
+        }
+        // Impact analysis: off-thread linker IPC, same pattern as ImportGraph.
+        #[cfg(feature = "linker")]
+        GuiReq::ImportGraphImpact {
+            path,
+            depth,
+            request_id,
+        } => {
+            let depth = depth.unwrap_or(3).min(3);
+            let _ = ctx.ctl.send(HostCtl::ImportGraphImpact {
+                path,
+                depth,
+                request_id,
+            });
+        }
     }
 }
 

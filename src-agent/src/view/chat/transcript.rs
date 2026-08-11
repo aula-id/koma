@@ -107,11 +107,7 @@ pub(super) fn render_transcript(
         // the tool-call lines are appended fresh here (glued to the same block, no
         // separator) with a live ⚙/✓ glyph from `completed_tool_ids`.
         // Pre-extract the session path so we can resolve attachment image files.
-        let session_path = rest
-            .fg()
-            .session
-            .as_ref()
-            .map(|s| s.path.clone());
+        let session_path = rest.fg().session.as_ref().map(|s| s.path.clone());
 
         let mut lines: Vec<Line<'static>> = Vec::new();
         let mut first = true;
@@ -152,7 +148,9 @@ pub(super) fn render_transcript(
                             if img_path.exists() {
                                 let max_w = body.width.min(80);
                                 if let Ok(img_lines) =
-                                    crate::view::image_render::ImageRenderer::render_to_lines(&img_path, max_w)
+                                    crate::view::image_render::ImageRenderer::render_to_lines(
+                                        &img_path, max_w,
+                                    )
                                 {
                                     for line in &img_lines {
                                         lines.push(line.clone());

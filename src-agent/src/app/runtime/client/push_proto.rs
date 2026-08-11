@@ -21,6 +21,18 @@ pub(super) use super::push_rows::{
     PushSubAgent, PushToolCall, PushUsageDay, PushUsageModel,
 };
 
+/// Impact analysis result: paths that transitively depend on a file.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportGraphImpactResult {
+    pub request_id: String,
+    pub path: String,
+    pub depth: u32,
+    pub paths: Vec<String>,
+    pub total: usize,
+    pub error: Option<String>,
+}
+
 /// The daemon->JS envelope, tagged on `k`. One variant per bridge message; every
 /// field name matches the contract verbatim (camelCase where the contract uses it).
 #[derive(serde::Serialize)]
@@ -647,6 +659,14 @@ pub(super) enum PushEnvelope {
         request_id: String,
         error: Option<String>,
     },
+    /// One-shot import-graph visualization result answering a `GuiReq::ImportGraph`
+    /// request from the GUI. Computed by the linker daemon (off-thread), pushed the
+    /// same way regardless of attach state, ALWAYS a reply so the panel never hangs.
+    #[cfg(feature = "linker")]
+    ImportGraph(super::import_graph::ImportGraphResult),
+    /// One-shot impact analysis result answering a `GuiReq::ImportGraphImpact`.
+    #[cfg(feature = "linker")]
+    ImportGraphImpact(ImportGraphImpactResult),
 }
 
 /// Push a swap-START [`PushEnvelope::Switching`] for target session `to`. Called at every

@@ -16,6 +16,10 @@
 //!
 //! Navigation (Left/Right, Tab/Shift+Tab, Enter) plus the direct k / d / Esc
 //! shortcuts are handled in [`crate::controller::input::handle_quit_confirm`].
+//!
+//! In the **Exiting** phase, the dialog stays in place and only the activated
+//! chip gains a braille spinner (`[ quit ]` → `[ ⠋quit ]`). Input is suppressed
+//! and click hit-boxes are cleared while shutdown completes.
 
 use crate::app::mode::QuitConfirmState;
 use crate::view::theme::Palette;
@@ -52,6 +56,21 @@ const GAP: u16 = 3;
 /// common terminal widths (80–120 cols).
 const CONTENT_WIDTH: u16 = 54;
 
+/// Braille spinner cycle (10 frames), indexed by wall-clock milliseconds / 80.
+/// Uses the same 10-glyph cycle as [`crate::view::loading`] and
+/// [`crate::view::todo`].
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Time-based braille spinner glyph. Uses wall-clock time so even a single frame
+/// shows a meaningful glyph (unlike frame-counter spinners that would be frozen).
+fn spinner_glyph() -> &'static str {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    SPINNER[((now_ms / 80) as usize) % SPINNER.len()]
+}
+
 /// Compute a centered `Rect` of the given `w` × `h` inside `area`,
 /// clamped so it never exceeds the available space. Used exclusively by
 /// the quit-confirm body to float the question + buttons dead-center.
@@ -69,7 +88,13 @@ fn centered_rect(area: Rect, w: u16, h: u16) -> Rect {
 }
 
 /// Render the quit-confirm overlay for `s` using the given colour `palette`.
+/// The Exiting phase preserves this layout and adds a spinner to the activated chip.
 pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
+    draw_choice(frame, s, palette);
+}
+
+/// Render the question, button row, and description.
+fn draw_choice(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -110,7 +135,11 @@ pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
     // (true-black/white), legible under BOLD — matching the footer + selection
     // inverse treatment.
     let chip = |idx: usize| {
-        let label = format!("[ {} ]", LABELS[idx]);
+        let label = if s.is_exiting() && idx == sel {
+            format!("[ {}{} ]", spinner_glyph(), LABELS[idx])
+        } else {
+            format!("[ {} ]", LABELS[idx])
+        };
         let style = if idx == sel {
             Style::default()
                 .bg(palette.accent)
@@ -174,7 +203,8 @@ pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
 
     // On-screen width of a button chip: label plus the `[` and `]` bracket chars
     // and two inner spaces (` label `), matching the `[ label ]` chip rendered above.
-    let chip_w = |idx: usize| LABELS[idx].len() as u16 + 4;
+    let chip_w =
+        |idx: usize| LABELS[idx].len() as u16 + 4 + u16::from(s.is_exiting() && idx == sel);
 
     // Record each button's on-screen Rect as a chip-width horizontal segment on
     // the button row, in index order (0 = close window (quit), 1 = detach, 2 = cancel)
@@ -184,7 +214,7 @@ pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
     // full row width can't fit, leave the rects empty (Rect::ZERO) so nothing is
     // clickable rather than pointing clicks at the wrong place.
     let total_w: u16 = chip_w(0) + chip_w(1) + chip_w(2) + GAP * 2;
-    let rects = if inner.width >= total_w && inner.height > button_row {
+    let rects = if !s.is_exiting() && inner.width >= total_w && inner.height > button_row {
         let mut rects = [Rect::ZERO; 3];
         let mut x = inner.x;
         for (idx, rect) in rects.iter_mut().enumerate() {

@@ -17,6 +17,7 @@ import { UsageFooter } from '../components/UsageFooter'
 import { useKoma } from '../store/koma'
 import { BrailleSpinner } from '../components/BrailleSpinner'
 import { ExtensionPanelFrame } from '../components/ExtensionPanelFrame'
+import { GlobalContextMenu } from '../components/GlobalContextMenu'
 import { installPanelBridgeListener } from '../lib/panelBridge'
 
 const SIDEBAR_MIN = 150
@@ -265,6 +266,7 @@ function RootLayout() {
       />
       <ToastContainer />
       <ResizeHandles />
+      <GlobalContextMenu onResume={() => setOverlay('resume')} />
     </div>
   )
 }
@@ -290,6 +292,10 @@ const StreamTab = lazy(() => import('../components/StreamTab'))
 // GitKraken-style commit-graph tab — lazy so its chunk (layout engine + the
 // virtualized SVG gutter) only loads when the graph is first opened.
 const GraphTab = lazy(() => import('../components/GraphTab'))
+
+// Import-graph tab — lazy so its chunk (layout engine + SVG canvas) only loads
+// when the import graph is first opened.
+const ImportGraphTab = lazy(() => import('../components/ImportGraphTab'))
 
 // Analytics dashboard tab — lazy so its chunk only loads when first opened.
 const AnalyticsTab = lazy(() => import('../components/AnalyticsTab'))
@@ -365,6 +371,12 @@ function TabbedMain() {
             <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
               <Suspense fallback={<DiffFallback />}>
                 <GraphTab />
+              </Suspense>
+            </div>
+          ) : t.kind === 'importGraph' ? (
+            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
+              <Suspense fallback={<DiffFallback />}>
+                <ImportGraphTab />
               </Suspense>
             </div>
           ) : t.kind === 'analytics' ? (

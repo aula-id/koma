@@ -45,6 +45,7 @@ pub fn detect_lang(path: &str) -> Lang {
         || path.ends_with(".cxx")
         || path.ends_with(".hpp")
         || path.ends_with(".hxx")
+        || path.ends_with(".hh")
     {
         Lang::Cpp
     } else if path.ends_with(".dart") {
@@ -58,27 +59,14 @@ pub fn detect_lang(path: &str) -> Lang {
 
 /// File extensions the scanner cares about.
 pub const SOURCE_EXTENSIONS: &[&str] = &[
-    ".rs",
-    ".py",
-    ".go",
-    ".java",
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".mjs",
-    ".cjs",
-    ".php",
-    ".c",
-    ".h",
-    ".cpp",
-    ".cc",
-    ".cxx",
-    ".hpp",
-    ".hxx",
-    ".dart",
-    ".swift",
+    ".rs", ".py", ".go", ".java", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".php", ".c", ".h",
+    ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh", ".dart", ".swift",
 ];
+
+/// Re-export structured Rust import types for use by scan.rs.
+pub use rust::{RustImport, RustImportKind};
+
+use crate::linker::reference::{ImportMeta, ImportRef};
 
 /// Dispatch to the correct language extractor.
 pub fn extract_imports(lang: Lang, content: &str) -> Vec<String> {
@@ -87,13 +75,73 @@ pub fn extract_imports(lang: Lang, content: &str) -> Vec<String> {
         Lang::Python => python::extract_imports(content),
         Lang::Go => go_lang::extract_imports(content),
         Lang::Java => java::extract_imports(content),
-        Lang::TypeScript | Lang::JavaScript => typescript::extract_imports(content),
+        Lang::TypeScript => typescript::extract_typescript_imports(content),
+        Lang::JavaScript => typescript::extract_imports(content),
         Lang::Php => php::extract_imports(content),
         Lang::C => c_lang::extract_imports(content),
         Lang::Cpp => cpp_lang::extract_imports(content),
         Lang::Dart => dart::extract_imports(content),
         Lang::Swift => swift::extract_imports(content),
         Lang::Unknown => Vec::new(),
+    }
+}
+
+/// Dispatch using both language and path where the grammar depends on extension.
+pub fn extract_imports_for_file(lang: Lang, path: &str, content: &str) -> Vec<String> {
+    if lang == Lang::TypeScript && path.ends_with(".tsx") {
+        typescript::extract_tsx_imports(content)
+    } else {
+        extract_imports(lang, content)
+    }
+}
+
+/// Dispatch to the structured Rust extractor.
+pub fn extract_rust_imports(content: &str) -> Vec<RustImport> {
+    rust::extract_imports_structured(content)
+}
+
+/// Dispatch to structured extractors for all languages.
+///
+/// Returns structured `ImportRef`s with kind, span, and condition metadata.
+/// For languages without structured extractors, falls back to generic
+/// extraction (wrapping raw strings).
+pub fn extract_structured_imports(lang: Lang, path: &str, content: &str) -> Vec<ImportRef> {
+    match lang {
+        Lang::C => c_lang::extract_imports_structured(content),
+        Lang::Cpp => cpp_lang::extract_imports_structured(content),
+        Lang::TypeScript => {
+            if path.ends_with(".tsx") {
+                typescript::extract_tsx_imports_structured(content)
+            } else {
+                typescript::extract_typescript_imports_structured(content)
+            }
+        }
+        Lang::JavaScript => typescript::extract_imports_structured(content),
+        _ => extract_imports(lang, content)
+            .into_iter()
+            .map(|spec| ImportRef {
+                specifier: spec,
+                kind: crate::linker::reference::ImportKind::Static,
+                span: None,
+                condition: None,
+            })
+            .collect(),
+    }
+}
+
+/// Dispatch to structured extractors for Python and Go.
+///
+/// Returns `(ImportRef, Option<ImportMeta>)` pairs that preserve
+/// language-specific metadata (Python level/names, Go alias/conditions).
+pub fn extract_structured_imports_with_meta(
+    lang: Lang,
+    _path: &str,
+    content: &str,
+) -> Vec<(ImportRef, Option<ImportMeta>)> {
+    match lang {
+        Lang::Python => python::extract_imports_structured(content),
+        Lang::Go => go_lang::extract_imports_structured(content),
+        _ => Vec::new(),
     }
 }
 
@@ -121,6 +169,7 @@ mod tests {
         assert_eq!(detect_lang("app.cxx"), Lang::Cpp);
         assert_eq!(detect_lang("app.hpp"), Lang::Cpp);
         assert_eq!(detect_lang("app.hxx"), Lang::Cpp);
+        assert_eq!(detect_lang("app.hh"), Lang::Cpp);
         assert_eq!(detect_lang("main.dart"), Lang::Dart);
         assert_eq!(detect_lang("App.swift"), Lang::Swift);
         assert_eq!(detect_lang("foo.txt"), Lang::Unknown);

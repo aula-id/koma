@@ -63,6 +63,8 @@ mod git_stash;
 mod host;
 mod host_catalogue;
 mod host_config;
+#[cfg(feature = "linker")]
+mod import_graph;
 mod input;
 mod keys;
 mod project;
@@ -624,6 +626,23 @@ pub(super) enum HostCtl {
     FileDelete {
         root: String,
         path: String,
+        request_id: String,
+    },
+    /// Import-graph visualization: call the linker daemon's
+    /// `Visualization` query and push the result back as an `ImportGraph` envelope.
+    #[cfg(feature = "linker")]
+    ImportGraph {
+        path: Option<String>,
+        depth: u32,
+        direction: crate::ipc::linker_proto::GraphDirection,
+        filter_roots: Option<Vec<String>>,
+        filter_languages: Option<Vec<String>>,
+    },
+    /// Impact analysis for a file (off-thread linker IPC).
+    #[cfg(feature = "linker")]
+    ImportGraphImpact {
+        path: String,
+        depth: u32,
         request_id: String,
     },
 }

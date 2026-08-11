@@ -40,10 +40,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_show_image(
     let image_path = match resolve_image_path(&workspace, &path_str) {
         Ok(p) => p,
         Err(e) => {
-            state.rest.sessions[sess_idx].tool_results.push((
-                call.id.clone(),
-                format!("error: {e}"),
-            ));
+            state.rest.sessions[sess_idx]
+                .tool_results
+                .push((call.id.clone(), format!("error: {e}")));
             state.rest.sessions[sess_idx].tool_idx += 1;
             return InterceptFlow::Continue;
         }
@@ -79,7 +78,9 @@ fn resolve_image_path(
         return Ok(ws_path);
     }
 
-    let catalog_path = workspace.join(".screenshoot").join(format!("{path_str}.png"));
+    let catalog_path = workspace
+        .join(".screenshoot")
+        .join(format!("{path_str}.png"));
     if catalog_path.exists() {
         return Ok(catalog_path);
     }

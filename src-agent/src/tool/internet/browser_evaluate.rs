@@ -72,13 +72,10 @@ impl super::Tool for BrowserEvaluate {
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("no active session directory"))?;
 
-        let daemon = browser_daemon::get_or_start(session_dir)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let daemon =
+            browser_daemon::get_or_start(session_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        let script_args = args
-            .get("args")
-            .cloned()
-            .unwrap_or_else(|| json!([]));
+        let script_args = args.get("args").cloned().unwrap_or_else(|| json!([]));
 
         let mut params = json!({
             "script": script,
@@ -91,12 +88,13 @@ impl super::Tool for BrowserEvaluate {
         let data = daemon.request("evaluate", params)?;
 
         // Cap the result at MAX_TOOL_OUTPUT_CHARS.
-        let result_str = serde_json::to_string_pretty(&data)
-            .unwrap_or_else(|_| format!("{data}"));
+        let result_str = serde_json::to_string_pretty(&data).unwrap_or_else(|_| format!("{data}"));
         const MAX_CHARS: usize = crate::config::MAX_TOOL_OUTPUT_CHARS;
         if result_str.chars().count() > MAX_CHARS {
             let truncated: String = result_str.chars().take(MAX_CHARS).collect();
-            Ok(format!("{truncated}\n\n... (result truncated at {MAX_CHARS} chars)"))
+            Ok(format!(
+                "{truncated}\n\n... (result truncated at {MAX_CHARS} chars)"
+            ))
         } else {
             Ok(result_str)
         }

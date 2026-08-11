@@ -937,4 +937,28 @@ pub(super) enum GuiReq {
     WriteErrorLog {
         message: String,
     },
+    /// Import-graph visualization request. `path` is the focal file (None = overview);
+    /// `depth` is traversal depth (1–3, clamped); `direction` is
+    /// `"dependencies"`/`"dependents"`/`"both"`.
+    #[cfg(feature = "linker")]
+    ImportGraph {
+        path: Option<String>,
+        #[serde(default)]
+        depth: Option<u32>,
+        #[serde(default)]
+        direction: Option<String>,
+        #[serde(default, rename = "filterRoots")]
+        filter_roots: Option<Vec<String>>,
+        #[serde(default, rename = "filterLanguages")]
+        filter_languages: Option<Vec<String>>,
+    },
+    /// Impact analysis: transitive reverse deps for a file (depth-capped).
+    #[cfg(feature = "linker")]
+    ImportGraphImpact {
+        path: String,
+        #[serde(default)]
+        depth: Option<u32>,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
 }
