@@ -1653,6 +1653,10 @@ type ImportGraphSlice = {
   // Request coalescing: when a refresh is requested while loading, set true.
   // The ImportGraph reducer replays exactly one request when the in-flight reply lands.
   queuedRefresh: boolean
+  // Persistent browser tree: all files seen across overview + focused replies.
+  // The sidebar panel and Cmd+K search read from this, so focusing one
+  // neighborhood never removes other files from the tree.
+  treeNodes: ImportGraphNode[]
 }
 
 // The Analytics dashboard tab's slice — host-authoritative projection + local
@@ -2400,6 +2404,7 @@ const initialImportGraph: ImportGraphSlice = {
   filterRoots: [],
   filterLanguages: [],
   queuedRefresh: false,
+  treeNodes: [],
 }
 
 const initialActivity: ActivitySlice = {
@@ -3274,8 +3279,8 @@ export const useKoma = create<KomaState>((set, get) => ({
       case 'ImportGraph': {
         const queued = get().importGraph.queuedRefresh
         if (queued) {
-          // Keep the latest local controls/focus and discard this stale view.
-          // Workspace metadata is independent of the active filters and remains useful.
+          // Stale/coalesced reply: discard view data but keep workspace metadata.
+          // treeNodes must NOT be mutated — the queued refresh will produce fresh data.
           set((s) => ({
             importGraph: {
               ...s.importGraph,
@@ -3288,25 +3293,44 @@ export const useKoma = create<KomaState>((set, get) => ({
           get().refreshImportGraph(get().importGraph.focus)
           break
         }
-        set((s) => ({
-          importGraph: {
-            ...s.importGraph,
-            nodes: env.nodes,
-            edges: env.edges,
-            focus: env.focus,
-            generation: env.generation,
-            fileCount: env.fileCount,
-            edgeCount: env.edgeCount,
-            languages: env.languages,
-            nodesTruncated: env.nodesTruncated,
-            edgesTruncated: env.edgesTruncated,
-            totalNodesAvailable: env.totalNodesAvailable,
-            totalEdgesAvailable: env.totalEdgesAvailable,
-            availableRoots: env.availableRoots ?? [],
-            loading: false,
-            error: null,
-          },
-        }))
+        // Replace the browser catalogue only when the overview represents every
+        // active root/language. Filtered overviews are partial and must be merged.
+        const replaceTree =
+          env.focus === null &&
+          get().importGraph.filterRoots.length === 0 &&
+          get().importGraph.filterLanguages.length === 0
+        set((s) => {
+          let treeNodes: ImportGraphNode[]
+          if (replaceTree) {
+            treeNodes = env.nodes
+          } else {
+            const existing = new Map(s.importGraph.treeNodes.map((n) => [n.path, n]))
+            for (const node of env.nodes) {
+              existing.set(node.path, node)
+            }
+            treeNodes = Array.from(existing.values())
+          }
+          return {
+            importGraph: {
+              ...s.importGraph,
+              nodes: env.nodes,
+              edges: env.edges,
+              focus: env.focus,
+              generation: env.generation,
+              fileCount: env.fileCount,
+              edgeCount: env.edgeCount,
+              languages: env.languages,
+              nodesTruncated: env.nodesTruncated,
+              edgesTruncated: env.edgesTruncated,
+              totalNodesAvailable: env.totalNodesAvailable,
+              totalEdgesAvailable: env.totalEdgesAvailable,
+              availableRoots: env.availableRoots ?? [],
+              loading: false,
+              error: null,
+              treeNodes,
+            },
+          }
+        })
         break
       }
       case 'GitGraph':
@@ -4160,10 +4184,11 @@ export const useKoma = create<KomaState>((set, get) => ({
   popBreadcrumb: () => {
     const bc = get().importGraph.breadcrumb
     if (bc.length < 2) {
-      // Can't pop below 1; just clear breadcrumb
+      // Back to overview: clear focus/selection/breadcrumb and fetch overview.
       set((s) => ({
         importGraph: { ...s.importGraph, breadcrumb: [], selectedPath: null, focus: null },
       }))
+      get().refreshImportGraph(null)
       return
     }
     const newBc = bc.slice(0, -1)

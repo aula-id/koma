@@ -141,6 +141,7 @@ function FilterDropdown<T extends string>({
 // ─── Main ImportGraphTab ────────────────────────────────────────────────
 export default function ImportGraphTab() {
   // Store selectors
+  const treeNodes = useKoma((s) => s.importGraph.treeNodes)
   const nodes = useKoma((s) => s.importGraph.nodes)
   const edges = useKoma((s) => s.importGraph.edges)
   const focus = useKoma((s) => s.importGraph.focus)
@@ -174,6 +175,16 @@ export default function ImportGraphTab() {
 
   const isActiveTab = useKoma((s) => s.ui.activeTabId === 'import-graph')
   const sessionId = useKoma((s) => s.session.id)
+
+  const navigationNodes = useMemo(
+    () => treeNodes.filter((node) => {
+      if (filterRoots.length > 0 && (!node.workspaceRoot || !filterRoots.includes(node.workspaceRoot))) {
+        return false
+      }
+      return filterLanguages.length === 0 || filterLanguages.includes(node.language)
+    }),
+    [treeNodes, filterRoots, filterLanguages],
+  )
 
   // Compute available languages with counts from availableRoots,
   // scoped to selected root filter when active.
@@ -263,14 +274,16 @@ export default function ImportGraphTab() {
   }, [showOmni])
 
   const omniResults = useMemo(() => {
+    // Use the persistent browser catalogue so focusing one neighborhood doesn't
+    // eliminate global navigation options within the active filters.
     if (!omniQuery.trim()) {
       // Show nodes with highest connectivity first, then alphabetical.
-      return [...nodes]
+      return [...navigationNodes]
         .sort((a, b) => (b.inDegree + b.outDegree) - (a.inDegree + a.outDegree))
         .slice(0, 50)
     }
     const q = omniQuery.toLowerCase()
-    return nodes
+    return navigationNodes
       .filter((n) => n.path.toLowerCase().includes(q) || n.language.toLowerCase().includes(q))
       .sort((a, b) => {
         // Prioritize exact filename match, then path match.
@@ -282,7 +295,7 @@ export default function ImportGraphTab() {
         return (b.inDegree + b.outDegree) - (a.inDegree + a.outDegree)
       })
       .slice(0, 30)
-  }, [nodes, omniQuery])
+  }, [navigationNodes, omniQuery])
 
   const selectOmniResult = useCallback(
     (path: string) => {
@@ -313,12 +326,13 @@ export default function ImportGraphTab() {
       <div className="flex flex-none items-center gap-2 border-b border-koma-border px-3 py-1.5 text-[12px] text-koma-dim">
         <Network size={13} className="flex-none opacity-70" />
 
-        {/* Back button */}
-        {breadcrumb.length > 1 && (
+        {/* Back button — always show when breadcrumb has entries */}
+        {breadcrumb.length > 0 && (
           <button
             type="button"
             onClick={popBreadcrumb}
-            title="Go back"
+            title={breadcrumb.length === 1 ? 'Back to overview' : 'Go back'}
+            aria-label={breadcrumb.length === 1 ? 'Back to overview' : 'Go back'}
             className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
           >
             ←
@@ -462,26 +476,36 @@ export default function ImportGraphTab() {
         {/* 3D Graph Canvas */}
         <div className="min-h-0 min-w-0 flex-1">
           {error ? (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-center text-[12px] text-koma-dim">
+            <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-center text-[12px] text-koma-dim">
               <AlertTriangle size={24} className="text-koma-warn opacity-70" />
               <span className="max-w-xs">{error}</span>
-              <span className="text-[10px] opacity-50">
-                Start with koma --linker-daemon
-              </span>
+              <button
+                type="button"
+                onClick={() => refreshImportGraph(null)}
+                className="flex items-center gap-1.5 rounded border border-koma-border bg-koma-panel px-2.5 py-1.5 text-[11px] text-koma-fg hover:border-koma-accent/40 hover:bg-koma-hover"
+              >
+                <RefreshCw size={12} />
+                Retry graph
+              </button>
             </div>
           ) : nodes.length === 0 ? (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-center text-[12px] text-koma-dim">
+            <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-center text-[12px] text-koma-dim">
               {loading ? (
                 <BrailleSpinner size={18} className="opacity-70" />
               ) : (
                 <>
                   <Network size={28} className="opacity-40" />
-                  <span>
-                    {fileCount === 0
-                      ? 'No import graph data. Start the linker daemon.'
-                      : 'Select a file to visualize.'}
-                  </span>
-                  {fileCount > 0 && (
+                  <span>{fileCount === 0 ? 'No import graph data yet.' : 'Select a file to visualize.'}</span>
+                  {fileCount === 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => refreshImportGraph(null)}
+                      className="flex items-center gap-1.5 rounded border border-koma-border bg-koma-panel px-2.5 py-1.5 text-[11px] text-koma-fg hover:border-koma-accent/40 hover:bg-koma-hover"
+                    >
+                      <RefreshCw size={12} />
+                      Retry graph
+                    </button>
+                  ) : (
                     <span className="text-[10px] opacity-50">
                       {fileCount} files, {edgeCount} edges · {languages.join(', ')}
                     </span>
