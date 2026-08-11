@@ -1,267 +1,447 @@
-import { useState, useMemo, useEffect } from 'react'
-import { Network, ChevronRight, FolderOpen, FileCode, RefreshCw } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  ChevronDown,
+  ChevronRight,
+  File,
+  Folder,
+  FolderOpen,
+  RefreshCw,
+} from 'lucide-react'
 import { useKoma } from '../../store/koma'
+import { fileKey, type DirState, type FileTreeEntry } from '../../store/coding'
 import { BrailleSpinner } from '../BrailleSpinner'
-import type { ImportGraphNode } from '../../store/koma'
+import { Select } from './form'
+import { Empty, IconBtn } from './helpers'
 
-// ── Folder-tree types ────────────────────────────────────────────────────────
+const ALL_LANGUAGES = '__all_languages__'
+const MULTIPLE = '__multiple_filters__'
+const EMPTY_ROOTS: string[] = []
 
-type FolderGroup = {
-  path: string // directory path
-  name: string // short folder name
-  files: ImportGraphNode[]
-  children: FolderGroup[]
-}
+const SOURCE_LANGUAGES = [
+  'Rust',
+  'Python',
+  'Go',
+  'Java',
+  'TypeScript',
+  'JavaScript',
+  'Php',
+  'C',
+  'Cpp',
+  'Dart',
+  'Swift',
+] as const
 
-// ── Tree helpers ─────────────────────────────────────────────────────────────
+type SourceLanguage = (typeof SOURCE_LANGUAGES)[number]
+type Dirs = Record<string, DirState>
 
-function findFolder(groups: FolderGroup[], path: string): FolderGroup | null {
-  for (const g of groups) {
-    if (g.path === path) return g
-    const found = findFolder(g.children, path)
-    if (found) return found
+function sourceLanguage(path: string): SourceLanguage | null {
+  if (path.endsWith('.rs')) return 'Rust'
+  if (path.endsWith('.py')) return 'Python'
+  if (path.endsWith('.go')) return 'Go'
+  if (path.endsWith('.java')) return 'Java'
+  if (path.endsWith('.ts') || path.endsWith('.tsx')) return 'TypeScript'
+  if (path.endsWith('.js') || path.endsWith('.jsx') || path.endsWith('.mjs') || path.endsWith('.cjs')) {
+    return 'JavaScript'
   }
+  if (path.endsWith('.php')) return 'Php'
+  if (path.endsWith('.c') || path.endsWith('.h')) return 'C'
+  if (
+    path.endsWith('.cpp') || path.endsWith('.cc') || path.endsWith('.cxx')
+    || path.endsWith('.hpp') || path.endsWith('.hxx')
+  ) return 'Cpp'
+  if (path.endsWith('.dart')) return 'Dart'
+  if (path.endsWith('.swift')) return 'Swift'
   return null
 }
 
-function countFiles(group: FolderGroup): number {
-  return (
-    group.files.length +
-    group.children.reduce((sum, c) => sum + countFiles(c), 0)
-  )
+function normalizePath(path: string): string {
+  const slashed = path.replace(/\\/g, '/')
+  const unc = slashed.startsWith('//')
+  const normalized = slashed.replace(/^\/+/, '').replace(/\/{2,}/g, '/')
+  const prefixed = unc ? `//${normalized}` : slashed.startsWith('/') ? `/${normalized}` : normalized
+  if (prefixed === '/' || prefixed === '//' || /^[A-Za-z]:\/$/.test(prefixed)) return prefixed
+  return prefixed.replace(/\/+$/, '')
 }
 
-function buildFolderTree(nodes: ImportGraphNode[]): FolderGroup[] {
-  const sorted = [...nodes].sort((a, b) => a.path.localeCompare(b.path))
-  const root: FolderGroup[] = []
+function absolutePath(root: string, relative: string): string {
+  const canonicalRoot = normalizePath(root)
+  const canonicalRelative = normalizePath(relative).replace(/^\/+/, '')
+  if (!canonicalRelative) return canonicalRoot
+  return normalizePath(`${canonicalRoot}/${canonicalRelative}`)
+}
 
-  for (const node of sorted) {
-    const parts = node.path.split('/')
-    const fileParentPath = parts.slice(0, -1).join('/')
+function pathsEqual(left: string | null, right: string): boolean {
+  if (!left) return false
+  const a = normalizePath(left)
+  const b = normalizePath(right)
+  const windows = /^[A-Za-z]:\//.test(a) || /^[A-Za-z]:\//.test(b)
+  return windows ? a.toLowerCase() === b.toLowerCase() : a === b
+}
 
-    // Walk folder parts, creating intermediates as needed
-    for (let i = 0; i < parts.length - 1; i++) {
-      const folderName = parts[i]
-      const parentGroups = i === 0 ? root : findFolder(root, parts.slice(0, i).join('/'))?.children
-      if (!parentGroups) continue
+function rootLabel(root: string): string {
+  const parts = normalizePath(root).split('/').filter(Boolean)
+  return parts[parts.length - 1] || root
+}
 
-      let folder = parentGroups.find((f) => f.name === folderName)
-      if (!folder) {
-        folder = {
-          path: parts.slice(0, i + 1).join('/'),
-          name: folderName,
-          files: [],
-          children: [],
-        }
-        parentGroups.push(folder)
-      }
-    }
+function uniqueRoots(roots: string[]): string[] {
+  return roots.filter((root, index) => root.length > 0 && roots.indexOf(root) === index)
+}
 
-    // Add file to its parent folder (or an implicit root group)
-    const fileParent = findFolder(root, fileParentPath)
-    if (fileParent) {
-      fileParent.files.push(node)
-    } else {
-      let rootGroup = root.find((f) => f.path === '')
-      if (!rootGroup) {
-        rootGroup = { path: '', name: '.', files: [], children: [] }
-        root.push(rootGroup)
-      }
-      rootGroup.files.push(node)
-    }
+function entryMatches(
+  root: string,
+  entry: FileTreeEntry,
+  dirs: Dirs,
+  query: string,
+  languages: string[],
+): boolean {
+  if (!entry.isDir) {
+    const language = sourceLanguage(entry.path)
+    if (languages.length > 0 && (!language || !languages.includes(language))) return false
+    return !query || entry.path.toLowerCase().includes(query) || entry.name.toLowerCase().includes(query)
   }
 
-  return root
+  const state = dirs[fileKey(root, entry.path)]
+  const descendantsMatch = state?.entries.some((child) => entryMatches(root, child, dirs, query, languages)) ?? false
+  const queryMatches = !query
+    || entry.path.toLowerCase().includes(query)
+    || entry.name.toLowerCase().includes(query)
+    || descendantsMatch
+  if (!queryMatches) return false
+  if (languages.length === 0) return true
+  // A lazy folder cannot be ruled out until its contents have been loaded.
+  return !state || descendantsMatch
 }
 
-// ── Recursive folder node ────────────────────────────────────────────────────
+function visibleEntries(
+  root: string,
+  entries: FileTreeEntry[],
+  dirs: Dirs,
+  query: string,
+  languages: string[],
+): FileTreeEntry[] {
+  return entries.filter((entry) => entryMatches(root, entry, dirs, query, languages))
+}
 
-function FolderNode({
-  group,
+function TreeNode({
+  root,
+  entry,
   depth,
-  onFileClick,
+  dirs,
+  expanded,
+  query,
+  languages,
   selectedPath,
+  onToggle,
+  onOpenFile,
+  onRefresh,
 }: {
-  group: FolderGroup
+  root: string
+  entry: FileTreeEntry
   depth: number
-  onFileClick: (path: string) => void
+  dirs: Dirs
+  expanded: Set<string>
+  query: string
+  languages: string[]
   selectedPath: string | null
+  onToggle: (path: string) => void
+  onOpenFile: (path: string) => void
+  onRefresh: (path: string) => void
 }) {
-  const [expanded, setExpanded] = useState(depth < 1)
+  const key = fileKey(root, entry.path)
+  const dirState = entry.isDir ? dirs[key] : null
+  const isOpen = entry.isDir && expanded.has(key)
+  const language = entry.isDir ? null : sourceLanguage(entry.path)
+  const absolute = absolutePath(root, entry.path)
+  const selected = !!language && pathsEqual(selectedPath, absolute)
+  const pad = 8 + depth * 12
 
   return (
     <div>
-      {group.path !== '' && (
+      <div
+        className={`flex h-7 min-w-0 items-center gap-1 pr-2 text-[12px] hover:bg-koma-hover ${
+          selected ? 'bg-koma-accent/10 text-koma-accent' : language || entry.isDir ? 'text-koma-fg' : 'text-koma-dim opacity-60'
+        }`}
+        style={{ paddingLeft: pad }}
+      >
+        {entry.isDir ? (
+          <button
+            type="button"
+            onClick={() => onToggle(entry.path)}
+            className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-dim hover:text-koma-fg"
+            aria-label={isOpen ? 'Collapse' : 'Expand'}
+          >
+            {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          </button>
+        ) : (
+          <span className="w-5 flex-none" />
+        )}
+
         <button
-          onClick={() => setExpanded(!expanded)}
-          className="flex w-full items-center gap-1 py-0.5 text-[11px] text-koma-dim hover:bg-koma-hover"
-          style={{ paddingLeft: 8 + depth * 12 }}
+          type="button"
+          disabled={!entry.isDir && !language}
+          onClick={() => (entry.isDir ? onToggle(entry.path) : onOpenFile(entry.path))}
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left disabled:cursor-not-allowed"
+          title={!entry.isDir && !language ? 'No import graph parser for this file type' : absolute}
         >
-          <ChevronRight
-            size={10}
-            className={`flex-none transition-transform ${expanded ? 'rotate-90' : ''}`}
-          />
-          <FolderOpen size={12} className="flex-none opacity-50" />
-          <span className="truncate">{group.name}</span>
-          <span className="ml-auto text-[9px] opacity-40">{countFiles(group)}</span>
+          {entry.isDir ? (
+            isOpen ? (
+              <FolderOpen size={13} className="flex-none text-koma-accent opacity-80" />
+            ) : (
+              <Folder size={13} className="flex-none text-koma-accent opacity-80" />
+            )
+          ) : (
+            <File size={13} className="flex-none opacity-70" />
+          )}
+          <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+          {language ? (
+            <span className="flex-none rounded bg-koma-fg/5 px-1 text-[9px] text-koma-dim opacity-70">
+              {language}
+            </span>
+          ) : null}
         </button>
-      )}
-      {expanded && (
-        <>
-          {group.children.map((child) => (
-            <FolderNode
-              key={child.path}
-              group={child}
-              depth={depth + 1}
-              onFileClick={onFileClick}
-              selectedPath={selectedPath}
-            />
-          ))}
-          {group.files.map((f) => (
-            <button
-              key={f.path}
-              onClick={() => onFileClick(f.path)}
-              className={`flex w-full items-center gap-1.5 py-0.5 text-[11px] hover:bg-koma-hover ${
-                f.path === selectedPath
-                  ? 'bg-koma-accent/10 text-koma-accent'
-                  : 'text-koma-fg'
-              }`}
-              style={{ paddingLeft: group.path === '' ? 20 + depth * 12 : 20 + (depth + 1) * 12 }}
-              title={f.path}
-            >
-              <FileCode size={12} className="flex-none opacity-50" />
-              <span className="min-w-0 flex-1 truncate">{f.path.split('/').pop()}</span>
-              <span className="flex-none text-[9px] text-koma-dim opacity-50">{f.language}</span>
-            </button>
-          ))}
-        </>
-      )}
+      </div>
+
+      {entry.isDir && isOpen ? (
+        <div>
+          {dirState?.loading && !dirState.entries.length ? (
+            <div className="flex h-7 items-center gap-2 text-[11px] text-koma-dim" style={{ paddingLeft: pad + 20 }}>
+              <BrailleSpinner size={12} />
+              <span>Loading…</span>
+            </div>
+          ) : dirState?.error ? (
+            <div className="flex items-center gap-2 px-2 py-1 text-[11px]" style={{ paddingLeft: pad + 20 }}>
+              <span className="min-w-0 flex-1 text-koma-error">{dirState.error}</span>
+              <button
+                type="button"
+                onClick={() => onRefresh(entry.path)}
+                className="flex-none rounded border border-koma-border bg-koma-bg px-2 py-1 text-koma-fg hover:bg-koma-hover"
+              >
+                Retry directory
+              </button>
+            </div>
+          ) : dirState ? (
+            visibleEntries(root, dirState.entries, dirs, query, languages).map((child) => (
+              <TreeNode
+                key={fileKey(root, child.path)}
+                root={root}
+                entry={child}
+                depth={depth + 1}
+                dirs={dirs}
+                expanded={expanded}
+                query={query}
+                languages={languages}
+                selectedPath={selectedPath}
+                onToggle={onToggle}
+                onOpenFile={onOpenFile}
+                onRefresh={onRefresh}
+              />
+            ))
+          ) : null}
+          {dirState && !dirState.loading && !dirState.error
+            && visibleEntries(root, dirState.entries, dirs, query, languages).length === 0 ? (
+              <div className="px-2 py-1 text-[11px] text-koma-dim opacity-60" style={{ paddingLeft: pad + 20 }}>
+                Empty
+              </div>
+            ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }
 
-// ── Panel ────────────────────────────────────────────────────────────────────
-
 export function ImportGraphPanel() {
-  const treeNodes = useKoma((s) => s.importGraph.treeNodes)
-  const loading = useKoma((s) => s.importGraph.loading)
-  const error = useKoma((s) => s.importGraph.error)
-  const fileCount = useKoma((s) => s.importGraph.fileCount)
-  const edgeCount = useKoma((s) => s.importGraph.edgeCount)
-  const languages = useKoma((s) => s.importGraph.languages)
-  const selectedPath = useKoma((s) => s.importGraph.selectedPath)
+  const settingsValues = useKoma((s) => s.settingsValues)
+  const availableRoots = useKoma((s) => s.importGraph.availableRoots)
   const filterRoots = useKoma((s) => s.importGraph.filterRoots)
   const filterLanguages = useKoma((s) => s.importGraph.filterLanguages)
+  const graphLoading = useKoma((s) => s.importGraph.loading)
+  const graphError = useKoma((s) => s.importGraph.error)
+  const edgeCount = useKoma((s) => s.importGraph.edgeCount)
+  const selectedPath = useKoma((s) => s.importGraph.selectedPath)
+  const dirs = useKoma((s) => s.coding.dirs)
+  const req = useKoma((s) => s.req)
+  const refreshCodingDir = useKoma((s) => s.refreshCodingDir)
   const openImportGraphTab = useKoma((s) => s.openImportGraphTab)
   const selectImportGraphNode = useKoma((s) => s.selectImportGraphNode)
   const refreshImportGraph = useKoma((s) => s.refreshImportGraph)
+  const setImportGraphRootFilter = useKoma((s) => s.setImportGraphRootFilter)
+  const setImportGraphLanguageFilter = useKoma((s) => s.setImportGraphLanguageFilter)
+  const [browsingRoot, setBrowsingRoot] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
 
   useEffect(() => {
+    req({ r: 'GetSettings' })
     refreshImportGraph()
-  }, [refreshImportGraph])
+  }, [req, refreshImportGraph])
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    return treeNodes.filter((node) => {
-      if (filterRoots.length > 0 && (!node.workspaceRoot || !filterRoots.includes(node.workspaceRoot))) {
-        return false
+  const roots = useMemo(() => {
+    const configured = settingsValues?.workdir ?? EMPTY_ROOTS
+    return uniqueRoots(configured.length > 0 ? configured : availableRoots.map((item) => item.root))
+  }, [settingsValues, availableRoots])
+  const validFilters = filterRoots.filter((root) => roots.includes(root))
+  const chosenRoot = validFilters.length === 1
+    ? validFilters[0]
+    : browsingRoot && roots.includes(browsingRoot) ? browsingRoot : roots[0] ?? null
+
+  useEffect(() => {
+    if (!chosenRoot) {
+      setBrowsingRoot(null)
+      return
+    }
+    if (!browsingRoot || !roots.includes(browsingRoot)) setBrowsingRoot(chosenRoot)
+    const key = fileKey(chosenRoot, '')
+    if (!useKoma.getState().coding.dirs[key]) refreshCodingDir(chosenRoot, '')
+  }, [chosenRoot, browsingRoot, roots, refreshCodingDir])
+
+  const rootDir = chosenRoot ? dirs[fileKey(chosenRoot, '')] : null
+  const normalizedQuery = query.trim().toLowerCase()
+  const entries = chosenRoot && rootDir
+    ? visibleEntries(chosenRoot, rootDir.entries, dirs, normalizedQuery, filterLanguages)
+    : []
+  const validLanguageFilters = filterLanguages.filter((language) => SOURCE_LANGUAGES.some((item) => item === language))
+  const languageValue = validLanguageFilters.length === 0
+    ? ALL_LANGUAGES
+    : validLanguageFilters.length === 1 ? validLanguageFilters[0] : MULTIPLE
+
+  const onToggle = (path: string) => {
+    if (!chosenRoot) return
+    const key = fileKey(chosenRoot, path)
+    setExpanded((previous) => {
+      const next = new Set(previous)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+        if (!useKoma.getState().coding.dirs[key]) refreshCodingDir(chosenRoot, path)
       }
-      if (filterLanguages.length > 0 && !filterLanguages.includes(node.language)) return false
-      return !q || node.path.toLowerCase().includes(q)
+      return next
     })
-  }, [treeNodes, query, filterRoots, filterLanguages])
+  }
 
-  const folderTree = useMemo(() => buildFolderTree(filtered), [filtered])
-
-  const handleFileClick = (path: string) => {
+  const onOpenFile = (path: string) => {
+    if (!chosenRoot || !sourceLanguage(path)) return
     openImportGraphTab()
-    selectImportGraphNode(path)
+    selectImportGraphNode(absolutePath(chosenRoot, path))
+  }
+
+  const onRefresh = () => {
+    if (chosenRoot) refreshCodingDir(chosenRoot, '')
+    refreshImportGraph(null)
+  }
+
+  if (roots.length === 0) {
+    return <Empty>No workspaces configured. Add paths under Settings → Session → workdir.</Empty>
   }
 
   return (
-    <div className="absolute inset-0 flex min-h-0 flex-col overflow-hidden bg-koma-panel">
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {/* Open Graph button */}
-        <button
-          onClick={() => openImportGraphTab()}
-          className="flex items-center gap-2 px-3 py-2 text-left text-[12px] text-koma-fg hover:bg-koma-hover"
-        >
-          <Network size={14} className="flex-none opacity-80" />
-          <span>Open Import Graph</span>
-        </button>
-
-        {/* Summary */}
-        {fileCount > 0 && (
-          <div className="px-3 py-1.5 text-[11px] text-koma-dim">
-            <span className="font-mono">{fileCount}</span> files,{' '}
-            <span className="font-mono">{edgeCount}</span> edges
-            {languages.length > 0 && (
-              <span className="ml-1 opacity-60">({languages.join(', ')})</span>
-            )}
-          </div>
-        )}
-
-        {/* Search */}
-        {treeNodes.length > 0 && (
-          <div className="px-3 pb-1">
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Filter files…"
-              className="w-full rounded border border-koma-border bg-koma-bg px-2 py-1 text-[11px] text-koma-fg placeholder:text-koma-dim/50 focus:border-koma-accent focus:outline-none"
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-koma-panel">
+      <div className="flex flex-none items-center gap-1 px-2 py-1.5">
+        {roots.length > 1 ? (
+          <div className="min-w-0 flex-1" title={chosenRoot ?? ''}>
+            <Select
+              value={chosenRoot ?? ''}
+              options={roots.map((root) => ({ value: root, label: rootLabel(root) }))}
+              onChange={(root) => {
+                setBrowsingRoot(root)
+                setImportGraphRootFilter([root])
+              }}
             />
           </div>
+        ) : (
+          <div
+            className="flex h-7 min-w-0 flex-1 items-center rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg opacity-60"
+            title={roots[0]}
+          >
+            <span className="truncate">{rootLabel(roots[0])}</span>
+          </div>
         )}
+        <IconBtn label="Refresh filesystem and graph" onClick={onRefresh}>
+          <RefreshCw size={12} />
+        </IconBtn>
+      </div>
 
-        {/* Files heading */}
-        <div className="px-3 pb-1 pt-1 text-[10px] uppercase tracking-wider text-koma-dim opacity-60">
-          Files{fileCount > 0 ? ` (${filtered.length})` : ''}
+      <div className="flex-none px-2 pb-1.5">
+        <Select
+          value={languageValue}
+          options={[
+            { value: ALL_LANGUAGES, label: 'All languages' },
+            ...(languageValue === MULTIPLE ? [{ value: MULTIPLE, label: `${validLanguageFilters.length} languages` }] : []),
+            ...SOURCE_LANGUAGES.map((language) => ({ value: language, label: language })),
+          ]}
+          onChange={(language) => {
+            if (language === MULTIPLE) return
+            setImportGraphLanguageFilter(language === ALL_LANGUAGES ? [] : [language])
+          }}
+        />
+      </div>
+
+      <div className="flex-none px-2 pb-1.5">
+        <input
+          type="text"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Filter files…"
+          className="h-7 w-full rounded border border-koma-border bg-koma-bg px-2 text-[11px] text-koma-fg outline-none placeholder:text-koma-dim/50 focus:border-koma-accent"
+        />
+      </div>
+
+      {graphError ? (
+        <div className="flex flex-none items-center gap-2 border-y border-koma-error/15 px-3 py-1.5 text-[10px]">
+          <span className="min-w-0 flex-1 truncate text-koma-error" title={graphError}>Graph unavailable: {graphError}</span>
+          <button type="button" onClick={() => refreshImportGraph(null)} className="flex-none text-koma-fg hover:text-koma-accent">
+            Retry graph
+          </button>
+        </div>
+      ) : null}
+
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto py-1">
+        <div className="flex h-6 flex-none items-center px-3 text-[10px] uppercase tracking-wider text-koma-dim opacity-60">
+          <span>Files</span>
+          {edgeCount > 0 ? <span className="ml-auto normal-case tracking-normal">{edgeCount} edges</span> : null}
+          {graphLoading ? (
+            <span className="ml-2 flex items-center gap-1 normal-case tracking-normal">
+              <BrailleSpinner size={10} /> Updating graph…
+            </span>
+          ) : null}
         </div>
 
-        {/* Content */}
-        {loading && treeNodes.length === 0 ? (
-          <div className="flex items-center justify-center px-3 py-4">
-            <BrailleSpinner size={14} className="opacity-70" />
+        {rootDir?.loading && !rootDir.entries.length ? (
+          <div className="flex items-center gap-2 px-3 py-3 text-[12px] text-koma-dim">
+            <BrailleSpinner size={13} />
+            <span>Loading filesystem…</span>
           </div>
-        ) : error ? (
-          <div className="flex flex-col items-start gap-2 px-3 py-2 text-[11px]">
-            <span className="text-koma-error">{error}</span>
+        ) : rootDir?.error ? (
+          <div className="flex items-center gap-2 px-3 py-3 text-[11px]">
+            <span className="min-w-0 flex-1 text-koma-error">{rootDir.error}</span>
             <button
               type="button"
-              onClick={() => refreshImportGraph(null)}
-              className="flex items-center gap-1.5 rounded border border-koma-border bg-koma-bg px-2 py-1 text-koma-fg hover:border-koma-accent/40 hover:bg-koma-hover"
+              onClick={() => chosenRoot && refreshCodingDir(chosenRoot, '')}
+              className="flex-none rounded border border-koma-border bg-koma-bg px-2 py-1 text-koma-fg hover:bg-koma-hover"
             >
-              <RefreshCw size={11} />
-              Retry graph
+              Retry directory
             </button>
           </div>
-        ) : treeNodes.length === 0 ? (
-          <div className="flex flex-col items-start gap-2 px-3 py-2 text-[11px] text-koma-dim">
-            <span>No import graph data yet.</span>
-            <button
-              type="button"
-              onClick={() => refreshImportGraph(null)}
-              className="flex items-center gap-1.5 rounded border border-koma-border bg-koma-bg px-2 py-1 text-koma-fg hover:border-koma-accent/40 hover:bg-koma-hover"
-            >
-              <RefreshCw size={11} />
-              Retry graph
-            </button>
-          </div>
-        ) : (
-          <div className="flex flex-col">
-            {folderTree.map((group) => (
-              <FolderNode
-                key={group.path}
-                group={group}
-                depth={0}
-                onFileClick={handleFileClick}
-                selectedPath={selectedPath}
-              />
-            ))}
-          </div>
-        )}
+        ) : entries.length > 0 && chosenRoot ? (
+          entries.map((entry) => (
+            <TreeNode
+              key={fileKey(chosenRoot, entry.path)}
+              root={chosenRoot}
+              entry={entry}
+              depth={0}
+              dirs={dirs}
+              expanded={expanded}
+              query={normalizedQuery}
+              languages={filterLanguages}
+              selectedPath={selectedPath}
+              onToggle={onToggle}
+              onOpenFile={onOpenFile}
+              onRefresh={(path) => refreshCodingDir(chosenRoot, path)}
+            />
+          ))
+        ) : rootDir ? (
+          <Empty>{rootDir.entries.length > 0 ? 'No files match the current filters.' : 'Empty workspace'}</Empty>
+        ) : null}
       </div>
     </div>
   )
