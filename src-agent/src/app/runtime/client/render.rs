@@ -123,6 +123,18 @@ pub(super) fn render_loop(
     let gui_mode = std::env::var("KOMA_GUI").is_ok();
     let mut last_gui_theme: Option<(ratatui::style::Color, ratatui::style::Color)> = None;
 
+    // Local exit feedback: when the user activates quit/detach in the overlay,
+    // the client renders its OWN braille-spinner exit screen (the daemon may
+    // still be shutting down, but the user sees immediate feedback). `true`
+    // means `kill` (the daemon was asked to shut down vs just detach). The
+    // render loop continues draining frames until the socket disconnects or a
+    // timeout fires, showing the exit state each frame.
+    let mut pending_exit: Option<bool> = None;
+    let mut exit_started: std::time::Instant = std::time::Instant::now();
+    /// Safety timeout: if the daemon doesn't disconnect within this duration,
+    /// the client forces exit to prevent hanging forever.
+    const EXIT_TIMEOUT: Duration = Duration::from_secs(5);
+
     // Apply any frames the pre-render handshake pulled off the wire while hunting for
     // `Hello` (task #142) BEFORE the live drain, through the SAME `apply_frame` path so
     // seq seeding + snapshot/delta handling are identical. Normally empty (the daemon
@@ -192,9 +204,22 @@ pub(super) fn render_loop(
                 // The reader task dropped its sender: the daemon's socket closed.
                 // Nothing more will ever arrive — leave the client.
                 Err(TryRecvError::Disconnected) => {
-                    return Ok(ClientTransition::Exit { kill: false })
+                    return Ok(ClientTransition::Exit {
+                        kill: pending_exit.unwrap_or(false),
+                    })
                 }
             }
+        }
+
+        // --- Exit-feedback timeout safety ---
+        // If a quit/detach was initiated locally, check whether the daemon
+        // disconnected during the drain above (already returned) or whether the
+        // safety timeout has elapsed. This prevents the client from hanging
+        // forever if the daemon is unresponsive.
+        if pending_exit.is_some() && exit_started.elapsed() > EXIT_TIMEOUT {
+            return Ok(ClientTransition::Exit {
+                kill: pending_exit.unwrap_or(false),
+            });
         }
 
         // One-shot: after the first Snapshot populates the shadow, re-apply the
@@ -267,6 +292,14 @@ pub(super) fn render_loop(
         // ratatui computes the cell-level diff against the previous buffer, so an
         // unchanged frame flushes ~nothing; painting every frame is what lets the
         // local animations advance smoothly without any dirty-tracking.
+        //
+        // If the client initiated a local exit (pending_exit), override the shadow
+        // mode to the exit-feedback QuitConfirm(Exiting) before every draw. This
+        // suppresses any daemon snapshot that would flip the mode back to Chat or
+        // another overlay while the exit screen should be visible.
+        if pending_exit.is_some() {
+            shadow.set_mode(Mode::QuitConfirm(Box::new(QuitConfirmState::exiting())));
+        }
         terminal.draw(|f| view::draw(f, &shadow))?;
 
         // --- (c-ter) GUI-live palette sync: emit OSC 5380 on bg change ---
@@ -321,6 +354,15 @@ pub(super) fn render_loop(
         }
 
         // --- (d) poll + handle terminal input (ZERO timeout, never blocks) ---
+        // Skip input handling entirely while an exit is in progress — all keys
+        // are suppressed, and we're just draining frames until disconnect/timeout.
+        if pending_exit.is_some() {
+            // Pace to ~60fps: sleep the remainder of the budget.
+            if let Some(rem) = FRAME_BUDGET.checked_sub(frame_start.elapsed()) {
+                std::thread::sleep(rem);
+            }
+            continue;
+        }
         // Drain EVERY buffered event this frame so fast typing / paste never lag.
         while event::poll(Duration::ZERO)? {
             match event::read()? {
@@ -339,7 +381,9 @@ pub(super) fn render_loop(
                     // when the shadow is in QuitConfirm (mirrored from the daemon's
                     // mode) the client intercepts its keys locally instead of
                     // forwarding them (daemon stage 12). `[k]` kills this window's
-                    // daemon, `[d]` detaches it; both ask the loop to exit the client.
+                    // daemon, `[d]` detaches it; both show an exit-feedback screen
+                    // instead of returning immediately, so the user sees the braille
+                    // spinner while the daemon shuts down / disconnects.
                     if matches!(shadow.mode(), Mode::QuitConfirm(_)) {
                         // The daemon owns the focus index; read the shadow's mirrored
                         // `selected` so Enter activates the focused button (and nav keys
@@ -351,7 +395,16 @@ pub(super) fn render_loop(
                         };
                         match handle_quit_confirm_key(&key, req_tx, sel) {
                             QuitConfirmKey::ExitClient { kill } => {
-                                return Ok(ClientTransition::Exit { kill })
+                                // Show exit feedback instead of returning immediately.
+                                // The render loop continues draining frames until the
+                                // daemon socket disconnects or a timeout fires.
+                                pending_exit = Some(kill);
+                                exit_started = Instant::now();
+                                // Transition the shadow to the exit-feedback phase so
+                                // the next draw shows the braille spinner.
+                                if let Mode::QuitConfirm(s) = shadow.mode_mut() {
+                                    s.phase = crate::app::mode::QuitConfirmPhase::Exiting;
+                                }
                             }
                             QuitConfirmKey::Stay => {}
                         }

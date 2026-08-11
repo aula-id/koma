@@ -60,7 +60,7 @@ pub use model_cmd::{ModelCmdState, ModelCmdSub};
 pub use onboard::OnboardState;
 pub use onboard_provider::{OnboardProviderState, OnboardProviderStep};
 pub use picker::PickerState;
-pub use quit_confirm::QuitConfirmState;
+pub use quit_confirm::{QuitConfirmPhase, QuitConfirmState};
 pub use rewind::{RewindEntry, RewindState};
 pub use session_hub::{CookingEntry, HistoryEntry, HubPane, SessionHub, SessionKind};
 pub use settings::{filter_models, SettingField, SettingsState, GENERAL_FIELDS, PICKER_MAX};

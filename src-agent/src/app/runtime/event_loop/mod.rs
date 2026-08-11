@@ -107,6 +107,20 @@ pub(super) fn run_loop(
             dirty = false;
         }
 
+        // After drawing, if the quit-confirm overlay is in the Exiting phase,
+        // the user has committed to quit/detach and we showed the braille
+        // spinner exit state. Schedule should_quit and break so the synchronous
+        // shutdown (extension teardown, lock release, runtime drop) begins
+        // immediately — the user has seen the feedback.
+        if matches!(state.mode(), Mode::QuitConfirm(s) if s.is_exiting()) {
+            state.rest.should_quit = true;
+            crate::model::store::append_global_error_log(
+                "daemon-exit",
+                "door: standalone run_loop exiting (quit-confirm spinner drawn)",
+            );
+            break;
+        }
+
         // 1. Service EVERY session: drain each session's stream events, deferred
         //    tool-task results, and sub-agent channels, and advance its turn state.
         //    Render-agnostic + foreground-independent so a background session keeps

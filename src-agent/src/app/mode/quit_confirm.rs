@@ -5,25 +5,21 @@
 //! want to KEEP idle sessions on disk (detach) so they reappear in the session
 //! hub's history pane on the next launch — so we always ask.
 //!
-//! It is a fixed snapshot built when the confirm opens: `working` is the count
-//! of busy sessions and `total` is the total session count at that moment
-//! (purely for the header text — sessions changing state while the overlay is up
-//! just mean a slightly stale count, which is harmless). The overlay offers
-//! three choices, rendered as a navigable horizontal button row and handled in
-//! [`crate::controller::input::handle_quit_confirm`] (local TUI) /
-//! `client::input::handle_quit_confirm_key` (attached client):
-//!   [close window (quit)] — close THIS window's session, then exit this window. Local
-//!                    single-window: aborts every session + quits koma. Under the
-//!                    daemon: tombstones only this window's foreground session and
-//!                    detaches this client; other windows keep running (C4);
-//!   [minimize]     — leave conversations persisted on disk (resumable later),
-//!                    then exit — in-flight work still stops when the process exits;
-//!   [cancel]       — back to Chat, no quit.
+//! The overlay has two phases:
 //!
-//! Focus moves across the row with Left/Right (and Tab/Shift+Tab); Enter
-//! activates the focused button. The legacy `k` / `d` / `Esc` shortcuts still
-//! fire their action directly. The focused button index lives in
-//! [`QuitConfirmState::selected`].
+//! - **`Choice`** — awaiting the user's decision. Shows the question, three
+//!   navigable buttons (`[quit]`, `[detach]`, `[cancel]`), and a focused-button
+//!   description. Navigation (Left/Right, Tab/Shift+Tab), activation (Enter),
+//!   and direct shortcuts (k/d/Esc) are handled in
+//!   [`crate::controller::input::handle_quit_confirm`] (local TUI) /
+//!   `client::input::handle_quit_confirm_key` (attached client).
+//!
+//! - **`Exiting`** — the user activated quit or detach. Shows a braille spinner
+//!   with "Exiting…" and a description. All key/click input is suppressed to
+//!   prevent duplicate quit/kill requests. The spinner is time-based (wall
+//!   clock) so even a single frame of the exit state shows a meaningful glyph.
+//!   The event loop breaks (standalone) or waits for socket disconnect (client)
+//!   while this phase is visible.
 //!
 //! The same three choices are also CLICKABLE: the draw fn records each button's
 //! on-screen [`Rect`] into [`QuitConfirmState::button_rects`] (interior
@@ -34,6 +30,17 @@ use std::cell::Cell;
 
 use ratatui::layout::Rect;
 
+/// Phase of the quit-confirm overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuitConfirmPhase {
+    /// Awaiting the user's choice — the normal overlay with question + buttons.
+    Choice,
+    /// Exit in progress — the user activated quit or detach. Show a braille
+    /// spinner and suppress all input until the process exits or the daemon
+    /// socket disconnects (client mode).
+    Exiting,
+}
+
 /// State for the quit-confirm overlay.
 ///
 /// `working` is the number of sessions with work in flight at open time.
@@ -42,6 +49,10 @@ use ratatui::layout::Rect;
 /// navigable horizontal button row: `selected` is the focused button (also
 /// driven by clicks), and each choice is still bound to a direct key shortcut
 /// (k / d / Esc).
+///
+/// `phase` tracks the overlay lifecycle: `Choice` (awaiting input) or
+/// `Exiting` (spinner feedback, input suppressed). Not projected via IPC — the
+/// client constructs its own `Exiting` state locally.
 pub struct QuitConfirmState {
     /// Count of live sessions with work in flight at open time. Display only.
     pub working: usize,
@@ -62,19 +73,77 @@ pub struct QuitConfirmState {
     /// rendered simply hits nothing. NOT part of the IPC snapshot (the projection
     /// copies only `working`/`total`), so no serde.
     pub button_rects: Cell<[Rect; 3]>,
+    /// Current phase: `Choice` (awaiting user decision) or `Exiting` (braille
+    /// spinner feedback, input suppressed). Starts as `Choice`; transitions to
+    /// `Exiting` when the user activates quit or detach.
+    pub phase: QuitConfirmPhase,
 }
 
 impl QuitConfirmState {
     /// Build the overlay state from the busy and total session counts.
     ///
     /// Focus starts on `2` (cancel) — the safe default — and the click hit-boxes
-    /// start empty (`Rect::ZERO`); the first paint fills them.
+    /// start empty (`Rect::ZERO`); the first paint fills them. Phase starts as
+    /// `Choice` (the normal navigable overlay).
     pub fn new(working: usize, total: usize) -> Self {
         Self {
             working,
             total,
             selected: 2,
             button_rects: Cell::new([Rect::ZERO; 3]),
+            phase: QuitConfirmPhase::Choice,
         }
+    }
+
+    /// Build an EXITING-phase overlay for immediate exit feedback.
+    ///
+    /// Used by the client's render loop to show a braille spinner while waiting
+    /// for the daemon to disconnect, and by the standalone event loop after
+    /// the user activates quit/detach. `working`/`total` are display-only
+    /// (carried for header text if needed); `selected` is unused (buttons are
+    /// hidden).
+    pub fn exiting() -> Self {
+        Self {
+            working: 0,
+            total: 0,
+            selected: 2,
+            button_rects: Cell::new([Rect::ZERO; 3]),
+            phase: QuitConfirmPhase::Exiting,
+        }
+    }
+
+    /// Whether the overlay is in the exiting phase (input suppressed).
+    pub fn is_exiting(&self) -> bool {
+        self.phase == QuitConfirmPhase::Exiting
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_state_starts_in_choice_phase() {
+        let s = QuitConfirmState::new(2, 5);
+        assert_eq!(s.phase, QuitConfirmPhase::Choice);
+        assert!(!s.is_exiting());
+        assert_eq!(s.working, 2);
+        assert_eq!(s.total, 5);
+        assert_eq!(s.selected, 2); // cancel is safe default
+    }
+
+    #[test]
+    fn exiting_state_has_exiting_phase() {
+        let s = QuitConfirmState::exiting();
+        assert_eq!(s.phase, QuitConfirmPhase::Exiting);
+        assert!(s.is_exiting());
+    }
+
+    #[test]
+    fn phase_transition_to_exiting() {
+        let mut s = QuitConfirmState::new(1, 3);
+        assert_eq!(s.phase, QuitConfirmPhase::Choice);
+        s.phase = QuitConfirmPhase::Exiting;
+        assert!(s.is_exiting());
     }
 }
