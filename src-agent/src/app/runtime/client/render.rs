@@ -293,12 +293,19 @@ pub(super) fn render_loop(
         // unchanged frame flushes ~nothing; painting every frame is what lets the
         // local animations advance smoothly without any dirty-tracking.
         //
-        // If the client initiated a local exit (pending_exit), override the shadow
-        // mode to the exit-feedback QuitConfirm(Exiting) before every draw. This
-        // suppresses any daemon snapshot that would flip the mode back to Chat or
-        // another overlay while the exit screen should be visible.
-        if pending_exit.is_some() {
-            shadow.set_mode(Mode::QuitConfirm(Box::new(QuitConfirmState::exiting())));
+        // Keep the quit dialog stable while waiting; only the activated chip
+        // changes to its inline spinner state. If a daemon snapshot already
+        // replaced the overlay, recreate it as a fallback.
+        if let Some(kill) = pending_exit {
+            let selected = if kill { 0 } else { 1 };
+            if let Mode::QuitConfirm(s) = shadow.mode_mut() {
+                s.selected = selected;
+                s.phase = crate::app::mode::QuitConfirmPhase::Exiting;
+            } else {
+                shadow.set_mode(Mode::QuitConfirm(Box::new(QuitConfirmState::exiting(
+                    selected,
+                ))));
+            }
         }
         terminal.draw(|f| view::draw(f, &shadow))?;
 

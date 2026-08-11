@@ -153,6 +153,7 @@ export default function ImportGraphTab() {
   const nodes = useKoma((s) => s.importGraph.nodes)
   const edges = useKoma((s) => s.importGraph.edges)
   const focus = useKoma((s) => s.importGraph.focus)
+  const status = useKoma((s) => s.importGraph.status)
   const loading = useKoma((s) => s.importGraph.loading)
   const error = useKoma((s) => s.importGraph.error)
   const fileCount = useKoma((s) => s.importGraph.fileCount)
@@ -358,10 +359,12 @@ export default function ImportGraphTab() {
 
   // ── Format stats badge ────────────────────────────────────────────
   const statsText = useMemo(() => {
+    if (status === 'scanning') return 'indexing…'
+    if (status === 'unavailable') return 'unavailable'
     const fc = fileCount.toLocaleString()
     const ec = edgeCount.toLocaleString()
     return `${fc} files · ${ec} edges`
-  }, [fileCount, edgeCount])
+  }, [status, fileCount, edgeCount])
 
   return (
     <div className="flex h-full w-full min-w-0 flex-col">
@@ -490,7 +493,29 @@ export default function ImportGraphTab() {
       <div className="flex min-h-0 min-w-0 flex-1">
         {/* Graph Canvas */}
         <div className="flex min-h-0 min-w-0 flex-1">
-          {error ? (
+          {status === 'scanning' || status === 'unavailable' ? (
+            <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-center text-[12px] text-koma-dim">
+              <BrailleSpinner size={20} className="text-koma-accent opacity-80" />
+              <span className="font-medium text-koma-fg">
+                {status === 'scanning' ? 'Indexing import graph…' : 'Connecting to import graph…'}
+              </span>
+              <span className="max-w-xs text-[10px] opacity-60">
+                {status === 'scanning'
+                  ? 'The first workspace scan is still running. This view will retry automatically.'
+                  : 'The linker daemon is not responding yet. This view will retry automatically.'}
+              </span>
+              {status === 'unavailable' ? (
+                <button
+                  type="button"
+                  onClick={() => refreshImportGraph(focus)}
+                  className="flex items-center gap-1.5 rounded border border-koma-border bg-koma-panel px-2.5 py-1.5 text-[11px] text-koma-fg hover:border-koma-accent/40 hover:bg-koma-hover"
+                >
+                  <RefreshCw size={12} />
+                  Retry now
+                </button>
+              ) : null}
+            </div>
+          ) : error ? (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-center text-[12px] text-koma-dim">
               <AlertTriangle size={24} className="text-koma-warn opacity-70" />
               <span className="max-w-xs">{error}</span>
@@ -575,9 +600,21 @@ export default function ImportGraphTab() {
 
               {/* Content — scrollable */}
               <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-[11px]">
-                {/* Filename dominant, full path selectable, Windows-safe */}
-                <div className="mb-1 truncate font-medium text-[13px]" style={{ color: ROLE_COLORS[selectedNode.role] ?? '#8896a4' }}>
-                  {baseName(selectedNode.path)}
+                {/* Filename and persistent graph-focus action */}
+                <div className="mb-1 flex min-w-0 items-center gap-2">
+                  <div className="min-w-0 flex-1 truncate font-medium text-[13px]" style={{ color: ROLE_COLORS[selectedNode.role] ?? '#8896a4' }}>
+                    {baseName(selectedNode.path)}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => selectImportGraphNode(selectedNode.path)}
+                    disabled={focus === selectedNode.path || loading}
+                    title={focus === selectedNode.path ? 'This file is the current graph focus' : 'Center the graph on this file'}
+                    className="flex h-6 flex-none items-center gap-1 rounded border border-koma-border bg-koma-bg px-2 text-[10px] font-medium text-koma-fg hover:border-koma-accent/40 hover:bg-koma-hover hover:text-koma-accent disabled:cursor-default disabled:opacity-40"
+                  >
+                    <Network size={11} />
+                    {focus === selectedNode.path ? 'Focused' : 'Focus graph'}
+                  </button>
                 </div>
                 <div className="mb-2 min-w-0 break-all font-mono text-[10px] text-koma-dim select-all" title="Click to select full path">
                   {selectedNode.path}

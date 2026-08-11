@@ -56,7 +56,9 @@ impl super::Tool for WebPage {
 
         if let Some(u) = url {
             if !u.starts_with("http://") && !u.starts_with("https://") {
-                return Ok(format!("error: url must start with http:// or https://, got: {u}"));
+                return Ok(format!(
+                    "error: url must start with http:// or https://, got: {u}"
+                ));
             }
         }
 
@@ -80,8 +82,8 @@ impl super::Tool for WebPage {
                 .session_dir
                 .as_deref()
                 .ok_or_else(|| anyhow::anyhow!("no active session directory"))?;
-            let daemon = browser_daemon::get_or_start(session_dir)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let daemon =
+                browser_daemon::get_or_start(session_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
 
             // If URL also given, navigate the tab first.
             if let Some(u) = url {

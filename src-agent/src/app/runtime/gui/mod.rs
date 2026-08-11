@@ -85,7 +85,11 @@ fn handle_koma_request(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>
     }
 
     let url_path = uri.path().trim_start_matches('/');
-    let url_path = if url_path.is_empty() { "index.html" } else { url_path };
+    let url_path = if url_path.is_empty() {
+        "index.html"
+    } else {
+        url_path
+    };
 
     // `koma://localhost/image/<encoded_path>`: serve a local image file for
     // inline rendering in the React transcript. The path is URL-encoded to
@@ -97,11 +101,7 @@ fn handle_koma_request(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>
         if let Ok(decoded) = percent_decode_str(encoded).decode_utf8() {
             let p = std::path::Path::new(decoded.as_ref());
             if p.is_absolute() && p.exists() {
-                let mime = match p
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("")
-                {
+                let mime = match p.extension().and_then(|e| e.to_str()).unwrap_or("") {
                     "png" => "image/png",
                     "jpg" | "jpeg" => "image/jpeg",
                     "gif" => "image/gif",

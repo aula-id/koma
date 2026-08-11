@@ -72,8 +72,8 @@ impl super::Tool for BrowserInspect {
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("no active session directory"))?;
 
-        let daemon = browser_daemon::get_or_start(session_dir)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let daemon =
+            browser_daemon::get_or_start(session_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         let mut params = json!({"what": what});
         if let Some(tid) = args.get("tab_id").and_then(Value::as_str) {
@@ -103,7 +103,11 @@ impl super::Tool for BrowserInspect {
                 Ok(out)
             }
             "console" => {
-                let entries = data.get("entries").and_then(Value::as_array).cloned().unwrap_or_default();
+                let entries = data
+                    .get("entries")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
                 let count = entries.len();
                 let mut out = format!("console ({count} entries):\n");
                 for entry in entries.iter().take(max_chars / 100 + 1) {
@@ -115,7 +119,11 @@ impl super::Tool for BrowserInspect {
                 Ok(rendered)
             }
             "network" => {
-                let entries = data.get("entries").and_then(Value::as_array).cloned().unwrap_or_default();
+                let entries = data
+                    .get("entries")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
                 let count = entries.len();
                 let mut out = format!("network ({count} entries):\n");
                 for entry in entries.iter().take(max_chars / 120 + 1) {

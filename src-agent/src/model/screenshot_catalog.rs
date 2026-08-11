@@ -97,9 +97,7 @@ fn now_iso8601() -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let yr = if m <= 2 { y + 1 } else { y };
 
-    format!(
-        "{yr:04}-{m:02}-{d:02}T{hours:02}:{minutes:02}:{seconds:02}Z"
-    )
+    format!("{yr:04}-{m:02}-{d:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
 }
 
 /// Create or update a record for a newly captured screenshot.
@@ -231,9 +229,7 @@ fn parse_record(stem: &str, text: &str) -> Option<ScreenshotRecord> {
                 }
             }
             // Body is everything after closing `---`.
-            let body = after[end.1..]
-                .trim_start_matches(['\n', '\r'])
-                .trim();
+            let body = after[end.1..].trim_start_matches(['\n', '\r']).trim();
             if description.is_empty() && !body.is_empty() {
                 description = body.to_string();
             }
@@ -300,7 +296,11 @@ pub fn list_records(workspace: &Path) -> Vec<ScreenshotRecord> {
     }
 
     // Sort by captured time (newest first). Fall back to stem for stability.
-    records.sort_by(|a, b| b.captured.cmp(&a.captured).then_with(|| b.stem.cmp(&a.stem)));
+    records.sort_by(|a, b| {
+        b.captured
+            .cmp(&a.captured)
+            .then_with(|| b.stem.cmp(&a.stem))
+    });
     records
 }
 
@@ -454,10 +454,7 @@ pub fn search_records(workspace: &Path, query: &str, max_results: usize) -> Vec<
         .collect();
 
     // Sort by score descending, then by captured time descending.
-    scored.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then_with(|| b.1.captured.cmp(&a.1.captured))
-    });
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.captured.cmp(&a.1.captured)));
 
     scored
         .into_iter()
@@ -505,8 +502,12 @@ mod tests {
     #[test]
     fn register_and_read_record() {
         let ws = temp_workspace();
-        let stem = register_screenshot(&ws, "example_com_landing_123", "https://example.com/landing")
-            .unwrap();
+        let stem = register_screenshot(
+            &ws,
+            "example_com_landing_123",
+            "https://example.com/landing",
+        )
+        .unwrap();
         assert_eq!(stem, "example_com_landing_123");
 
         let rec = read_record(&ws, "example_com_landing_123").unwrap();

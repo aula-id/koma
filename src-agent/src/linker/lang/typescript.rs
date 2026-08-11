@@ -1,140 +1,216 @@
 //! TypeScript and JavaScript import extractor.
 //!
-//! Extracts ES module imports, CommonJS requires, and re-exports using
-//! tree-sitter-javascript (which handles both JS and TS import syntax).
+//! Extracts ES modules, CommonJS dependencies, dynamic expressions, re-exports,
+//! and TypeScript import forms directly from tree-sitter nodes and fields.
 
-/// Extract raw import strings from TypeScript/JavaScript source code.
-///
-/// Returns module specifiers like `"./foo"`, `"lodash"`, `"../bar/baz"`.
+use crate::linker::reference::{ByteSpan, ImportKind, ImportRef};
+
 pub fn extract_imports(content: &str) -> Vec<String> {
-    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    extract_imports_structured(content)
+        .into_iter()
+        .map(|reference| reference.specifier)
+        .collect()
+}
+
+pub fn extract_typescript_imports(content: &str) -> Vec<String> {
+    extract_typescript_imports_structured(content)
+        .into_iter()
+        .map(|reference| reference.specifier)
+        .collect()
+}
+
+pub fn extract_tsx_imports(content: &str) -> Vec<String> {
+    extract_tsx_imports_structured(content)
+        .into_iter()
+        .map(|reference| reference.specifier)
+        .collect()
+}
+
+pub fn extract_imports_structured(content: &str) -> Vec<ImportRef> {
+    extract_with_language(
+        content,
+        tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE),
+    )
+}
+
+pub fn extract_typescript_imports_structured(content: &str) -> Vec<ImportRef> {
+    extract_with_language(
+        content,
+        tree_sitter::Language::from(tree_sitter_typescript::LANGUAGE_TYPESCRIPT),
+    )
+}
+
+pub fn extract_tsx_imports_structured(content: &str) -> Vec<ImportRef> {
+    extract_with_language(
+        content,
+        tree_sitter::Language::from(tree_sitter_typescript::LANGUAGE_TSX),
+    )
+}
+
+fn extract_with_language(content: &str, language: tree_sitter::Language) -> Vec<ImportRef> {
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&lang).is_err() {
+    if parser.set_language(&language).is_err() {
         return Vec::new();
     }
-
-    let tree = match parser.parse(content, None) {
-        Some(t) => t,
-        None => return Vec::new(),
+    let Some(tree) = parser.parse(content, None) else {
+        return Vec::new();
     };
 
     let mut imports = Vec::new();
-
-    // ES module imports
-    if let Ok(query) = tree_sitter::Query::new(&lang, "(import_statement) @import_stmt") {
-        let mut cursor = tree_sitter::QueryCursor::new();
-        for m in cursor.matches(&query, tree.root_node(), content.as_bytes()) {
-            for cap in m.captures {
-                if let Ok(text) = cap.node.utf8_text(content.as_bytes()) {
-                    imports.extend(parse_js_import(text));
-                }
-            }
-        }
-    }
-
-    // Export from: `export { X } from 'path'`
-    if let Ok(query) = tree_sitter::Query::new(&lang, "(export_statement) @export_stmt") {
-        let mut cursor = tree_sitter::QueryCursor::new();
-        for m in cursor.matches(&query, tree.root_node(), content.as_bytes()) {
-            for cap in m.captures {
-                if let Ok(text) = cap.node.utf8_text(content.as_bytes()) {
-                    imports.extend(parse_js_export_from(text));
-                }
-            }
-        }
-    }
-
-    // CommonJS require
-    if let Ok(query) = tree_sitter::Query::new(
-        &lang,
-        "(call_expression function: (identifier) @func arguments: (arguments (string) @arg))",
-    ) {
-        let mut cursor = tree_sitter::QueryCursor::new();
-        for m in cursor.matches(&query, tree.root_node(), content.as_bytes()) {
-            let mut func_name = None;
-            let mut arg_str = None;
-            for cap in m.captures {
-                match cap.index {
-                    0 => {
-                        func_name = cap.node.utf8_text(content.as_bytes()).ok();
-                    }
-                    1 => {
-                        arg_str = cap.node.utf8_text(content.as_bytes()).ok();
-                    }
-                    _ => {}
-                }
-            }
-            if func_name == Some("require") {
-                if let Some(s) = arg_str {
-                    if let Some(path) = strip_js_string_literal(s) {
-                        imports.push(path);
-                    }
-                }
-            }
-        }
-    }
-
+    visit(tree.root_node(), content.as_bytes(), &mut imports);
     imports
 }
 
-/// Parse an ES module import statement, extracting the string specifier.
-fn parse_js_import(text: &str) -> Vec<String> {
-    if let Some(path) = extract_from_clause(text) {
-        return vec![path];
+fn visit(node: tree_sitter::Node<'_>, source: &[u8], imports: &mut Vec<ImportRef>) {
+    match node.kind() {
+        "import_statement" => {
+            if let Some(string) = node.child_by_field_name("source") {
+                let kind = if has_named_child(node, "import_require_clause") {
+                    ImportKind::ModuleRequires
+                } else if has_direct_token(node, "type") {
+                    ImportKind::TypeOnly
+                } else if has_named_child(node, "import_clause") {
+                    ImportKind::Static
+                } else {
+                    ImportKind::SideEffect
+                };
+                push_literal(imports, string, node, source, kind);
+            }
+            // An import-equals clause is represented as a child with its own source field.
+            if let Some(clause) = direct_named_child(node, "import_require_clause") {
+                if node.child_by_field_name("source").is_none() {
+                    if let Some(string) = clause.child_by_field_name("source") {
+                        push_literal(imports, string, node, source, ImportKind::ModuleRequires);
+                    }
+                }
+            }
+            return;
+        }
+        "export_statement" => {
+            if let Some(string) = node.child_by_field_name("source") {
+                let kind = if has_direct_token(node, "type") {
+                    ImportKind::TypeOnly
+                } else {
+                    ImportKind::ReExport
+                };
+                push_literal(imports, string, node, source, kind);
+            }
+            return;
+        }
+        "call_expression" => {
+            if let Some(function) = node.child_by_field_name("function") {
+                let is_import = function.kind() == "import";
+                let is_require = function.kind() == "identifier"
+                    && function.utf8_text(source).ok() == Some("require");
+                if is_import || is_require {
+                    if let Some(argument) = first_argument(node) {
+                        if argument.kind() == "string" {
+                            push_literal(
+                                imports,
+                                argument,
+                                node,
+                                source,
+                                if is_import {
+                                    // Literal import() is a normal statically-resolvable candidate.
+                                    ImportKind::Static
+                                } else {
+                                    ImportKind::ModuleRequires
+                                },
+                            );
+                        } else {
+                            imports.push(ImportRef {
+                                specifier: argument
+                                    .utf8_text(source)
+                                    .unwrap_or("<invalid expression>")
+                                    .to_string(),
+                                kind: ImportKind::Dynamic,
+                                span: Some(span(node)),
+                                condition: None,
+                            });
+                        }
+                    } else {
+                        imports.push(ImportRef {
+                            specifier: "<missing argument>".into(),
+                            kind: ImportKind::Dynamic,
+                            span: Some(span(node)),
+                            condition: None,
+                        });
+                    }
+                    return;
+                }
+            }
+        }
+        _ => {}
     }
-    if let Some(path) = extract_trailing_string_literal(text) {
-        return vec![path];
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        visit(child, source, imports);
     }
-    Vec::new()
 }
 
-/// Parse an export-from statement: `export { X } from 'path'`.
-fn parse_js_export_from(text: &str) -> Vec<String> {
-    if let Some(path) = extract_from_clause(text) {
-        return vec![path];
+fn first_argument(call: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
+    let arguments = call.child_by_field_name("arguments")?;
+    if arguments.kind() == "template_string" {
+        return Some(arguments);
     }
-    Vec::new()
+    let mut cursor = arguments.walk();
+    let first = arguments.named_children(&mut cursor).next();
+    first
 }
 
-/// Extract the module path from `from 'path'` or `from "path"`.
-///
-/// Handles both the normal `import { x } from 'y'` form (with a leading space
-/// before `from`) and the bare side-effect form `"from './utils'"` where `from`
-/// appears at the start of the text.
-fn extract_from_clause(text: &str) -> Option<String> {
-    let text = text.trim();
-    if let Some(idx) = text.find(" from ") {
-        let rest = &text[idx + 6..];
-        extract_trailing_string_literal(rest)
-    } else if let Some(rest) = text.strip_prefix("from ") {
-        extract_trailing_string_literal(rest)
-    } else {
-        None
+fn direct_named_child<'a>(
+    node: tree_sitter::Node<'a>,
+    kind: &str,
+) -> Option<tree_sitter::Node<'a>> {
+    let mut cursor = node.walk();
+    let found = node
+        .named_children(&mut cursor)
+        .find(|child| child.kind() == kind);
+    found
+}
+
+fn has_named_child(node: tree_sitter::Node<'_>, kind: &str) -> bool {
+    direct_named_child(node, kind).is_some()
+}
+
+fn has_direct_token(node: tree_sitter::Node<'_>, kind: &str) -> bool {
+    let mut cursor = node.walk();
+    let found = node.children(&mut cursor).any(|child| child.kind() == kind);
+    found
+}
+
+fn push_literal(
+    imports: &mut Vec<ImportRef>,
+    string: tree_sitter::Node<'_>,
+    enclosing: tree_sitter::Node<'_>,
+    source: &[u8],
+    kind: ImportKind,
+) {
+    if let Some(specifier) = string_literal_value(string, source) {
+        imports.push(ImportRef {
+            specifier,
+            kind,
+            span: Some(span(enclosing)),
+            condition: None,
+        });
     }
 }
 
-/// Extract the first string literal from the beginning of a text slice.
-fn extract_trailing_string_literal(text: &str) -> Option<String> {
-    let text = text.trim();
-    let quote_char = text.chars().next()?;
-    if quote_char != '\'' && quote_char != '"' && quote_char != '`' {
+fn string_literal_value(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    let text = node.utf8_text(source).ok()?;
+    let quote = text.as_bytes().first().copied()?;
+    if !matches!(quote, b'\'' | b'"') || text.as_bytes().last().copied() != Some(quote) {
         return None;
     }
-    let rest = &text[1..];
-    let end = rest.find(quote_char)?;
-    Some(rest[..end].to_string())
+    Some(text[1..text.len() - 1].to_string())
 }
 
-/// Strip quotes from a string literal like `'path'` → `path`.
-fn strip_js_string_literal(text: &str) -> Option<String> {
-    let text = text.trim();
-    let quote_char = text.chars().next()?;
-    if quote_char != '\'' && quote_char != '"' {
-        return None;
+fn span(node: tree_sitter::Node<'_>) -> ByteSpan {
+    ByteSpan {
+        start: node.start_byte(),
+        end: node.end_byte(),
     }
-    let rest = text.get(1..)?;
-    let end = rest.find(quote_char)?;
-    Some(rest[..end].to_string())
 }
 
 #[cfg(test)]
@@ -142,49 +218,69 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extract_default_import() {
-        let imports = extract_imports("import React from 'react';");
-        assert!(imports.contains(&"react".to_string()));
+    fn extracts_static_side_effect_reexports_and_types_with_spans() {
+        let source = "import React, {useState as use} from 'react';\nimport './polyfill';\nexport {x} from './x';\nexport type {T} from './types';\nimport type {U} from './u';";
+        let refs = extract_typescript_imports_structured(source);
+        assert_eq!(refs.len(), 5);
+        assert_eq!(refs[0].specifier, "react");
+        assert_eq!(refs[0].kind, ImportKind::Static);
+        assert_eq!(refs[1].kind, ImportKind::SideEffect);
+        assert_eq!(refs[2].kind, ImportKind::ReExport);
+        assert_eq!(refs[3].kind, ImportKind::TypeOnly);
+        assert_eq!(refs[4].kind, ImportKind::TypeOnly);
+        assert_eq!(
+            &source[refs[0].span.unwrap().start..refs[0].span.unwrap().end],
+            "import React, {useState as use} from 'react';"
+        );
     }
 
     #[test]
-    fn extract_named_import() {
-        let imports = extract_imports("import { useState } from 'react';");
-        assert!(imports.contains(&"react".to_string()));
+    fn extracts_dynamic_import_forms_without_dropping_computed_syntax() {
+        let refs = extract_typescript_imports_structured(
+            "const a = import('./literal'); const b = import(`./${name}`);",
+        );
+        assert_eq!(refs.len(), 2);
+        assert_eq!(
+            (refs[0].specifier.as_str(), refs[0].kind),
+            ("./literal", ImportKind::Static)
+        );
+        assert_eq!(refs[1].kind, ImportKind::Dynamic);
+        assert_eq!(refs[1].specifier, "`./${name}`");
     }
 
     #[test]
-    fn extract_side_effect_from() {
-        let result = extract_from_clause("from './utils'");
-        assert_eq!(result, Some("./utils".to_string()));
+    fn extracts_import_equals_and_import_type_expression() {
+        let refs = extract_typescript_imports_structured(
+            "import fs = require('fs'); type Mod = import('./model').Model;",
+        );
+        assert_eq!(refs.len(), 2);
+        assert_eq!(
+            (refs[0].specifier.as_str(), refs[0].kind),
+            ("fs", ImportKind::ModuleRequires)
+        );
+        assert_eq!(
+            (refs[1].specifier.as_str(), refs[1].kind),
+            ("./model", ImportKind::Static)
+        );
     }
 
     #[test]
-    fn extract_require() {
-        let imports = extract_imports("const fs = require('fs');");
-        assert!(imports.contains(&"fs".to_string()));
+    fn extracts_literal_and_computed_require_explicitly() {
+        let refs = extract_imports_structured(
+            "const a = require('./literal'); const b = require(prefix + name);",
+        );
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].kind, ImportKind::ModuleRequires);
+        assert_eq!(refs[1].kind, ImportKind::Dynamic);
+        assert_eq!(refs[1].specifier, "prefix + name");
     }
 
     #[test]
-    fn extract_relative_import() {
-        let imports = extract_imports("import { foo } from './bar/baz';");
-        assert!(imports.contains(&"./bar/baz".to_string()));
-    }
-
-    #[test]
-    fn extract_export_from() {
-        let imports = extract_imports("export { default } from './module';");
-        assert!(imports.contains(&"./module".to_string()));
-    }
-
-    #[test]
-    fn extract_double_quote_import() {
-        let imports = extract_imports("import { foo } from \"bar\";");
-        assert!(imports.contains(&"bar".to_string()));
-    }
-
-    #[test]
-    fn no_panic_on_invalid() {
+    fn extracts_tsx_and_survives_invalid_input() {
+        assert_eq!(
+            extract_tsx_imports("import {Button} from './Button'; const a = <Button/>;"),
+            vec!["./Button"]
+        );
         let _ = extract_imports("import {{{ broken 'unclosed");
     }
 }
