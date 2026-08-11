@@ -12,6 +12,7 @@
     "@react-three/fiber": "^9.7.0",
     "@streamdown/code": "^1.1.1",
     "@tanstack/react-router": "^1.87.0",
+    "@xyflow/react": "^12.11.2",
     "framer-motion": "^12.42.2",
     "lottie-react": "^2.4.1",
     "lucide-react": "^1.23.0",

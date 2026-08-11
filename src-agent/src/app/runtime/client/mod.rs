@@ -638,6 +638,13 @@ pub(super) enum HostCtl {
         filter_roots: Option<Vec<String>>,
         filter_languages: Option<Vec<String>>,
     },
+    /// Impact analysis for a file (off-thread linker IPC).
+    #[cfg(feature = "linker")]
+    ImportGraphImpact {
+        path: String,
+        depth: u32,
+        request_id: String,
+    },
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.

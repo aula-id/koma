@@ -952,4 +952,13 @@ pub(super) enum GuiReq {
         #[serde(default, rename = "filterLanguages")]
         filter_languages: Option<Vec<String>>,
     },
+    /// Impact analysis: transitive reverse deps for a file (depth-capped).
+    #[cfg(feature = "linker")]
+    ImportGraphImpact {
+        path: String,
+        #[serde(default)]
+        depth: Option<u32>,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
 }

@@ -263,6 +263,13 @@ pub(super) fn push_loop(
     let (import_graph_tx, import_graph_rx) =
         std::sync::mpsc::channel::<super::import_graph::ImportGraphResult>();
 
+    // --- IMPORT GRAPH IMPACT (ImportGraphImpact) --- off-thread linker daemon
+    // IPC for transitive impact analysis. Blocking IPC must never run on the
+    // 16ms fold loop; a dedicated channel drains non-blocking like ImportGraph.
+    #[cfg(feature = "linker")]
+    let (impact_tx, impact_rx) =
+        std::sync::mpsc::channel::<super::push_proto::ImportGraphImpactResult>();
+
     // --- Extension STORE (StoreBrowse/StoreDetail/ListInstalledExtensions) ---
     // Browse/detail are a blocking `reqwest` GET (koma.run, PUBLIC/no-auth) and the
     // installed-list is a blocking `~/.koma/config.json` read, so — same reasoning as
@@ -829,6 +836,21 @@ pub(super) fn push_loop(
                         filter_languages,
                     );
                 }
+                #[cfg(feature = "linker")]
+                Ok(super::HostCtl::ImportGraphImpact {
+                    path,
+                    depth,
+                    request_id,
+                }) => {
+                    // Blocking linker IPC — spawn off-thread so the 16ms fold
+                    // cadence is never stalled; drain + emit below.
+                    super::import_graph::spawn_import_graph_impact_attached(
+                        impact_tx.clone(),
+                        path,
+                        depth,
+                        request_id,
+                    );
+                }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.
                 Err(TryRecvError::Disconnected) => return HostTransition::Exit,
@@ -980,6 +1002,15 @@ pub(super) fn push_loop(
         #[cfg(feature = "linker")]
         while let Ok(result) = import_graph_rx.try_recv() {
             super::render::emit(push, &super::push_proto::PushEnvelope::ImportGraph(result));
+        }
+
+        // --- IMPORT GRAPH IMPACT: push any completed off-thread impact analysis ---
+        #[cfg(feature = "linker")]
+        while let Ok(result) = impact_rx.try_recv() {
+            super::render::emit(
+                push,
+                &super::push_proto::PushEnvelope::ImportGraphImpact(result),
+            );
         }
 
         // --- (b-ter) mirror the staged-attachment markers for the ipc Submit append ---

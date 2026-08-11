@@ -451,11 +451,7 @@ impl ImportGraph {
             langs.dedup();
             (file_count, edge_count, langs)
         } else {
-            (
-                self.file_count,
-                self.edge_count,
-                self.languages(),
-            )
+            (self.file_count, self.edge_count, self.languages())
         };
 
         let base = GraphViewResult {
@@ -474,7 +470,21 @@ impl ImportGraph {
         };
 
         match &req.path {
-            None => self.overview_view(base, max_nodes, &filter_roots, &filter_languages),
+            None => {
+                // No-focus: return metadata/availableRoots only — no graph nodes/edges.
+                // The GUI always focuses a file; overview grid is not used.
+                // Contract: totals are ZERO (not filtered file count).
+                GraphViewResult {
+                    nodes: Vec::new(),
+                    edges: Vec::new(),
+                    focus: None,
+                    total_nodes_available: 0,
+                    total_edges_available: 0,
+                    nodes_truncated: false,
+                    edges_truncated: false,
+                    ..base
+                }
+            }
             Some(path) => match self.resolve_key(path) {
                 None => GraphViewResult {
                     nodes_truncated: true,
@@ -489,16 +499,30 @@ impl ImportGraph {
                         return GraphViewResult { ..base };
                     }
                     let key = key.to_string();
-                    self.focus_view(
-                        base,
-                        &key,
-                        &req.direction,
-                        depth,
-                        max_nodes,
-                        max_edges,
-                        &filter_roots,
-                        &filter_languages,
-                    )
+                    // For depth==1, use the dedicated direct-star builder
+                    // (strict immediate neighborhood, no neighbor-neighbor leakage).
+                    if depth == 1 {
+                        self.direct_star_view(
+                            base,
+                            &key,
+                            &req.direction,
+                            max_nodes,
+                            max_edges,
+                            &filter_roots,
+                            &filter_languages,
+                        )
+                    } else {
+                        self.focus_view(
+                            base,
+                            &key,
+                            &req.direction,
+                            depth,
+                            max_nodes,
+                            max_edges,
+                            &filter_roots,
+                            &filter_languages,
+                        )
+                    }
                 }
             },
         }
@@ -508,6 +532,10 @@ impl ImportGraph {
     /// Only includes nodes passing the active filters.
     /// Ranks candidates after filtering across the full graph so that nodes with
     /// high filtered fan-in are not lost behind unfiltered global top-N truncation.
+    ///
+    /// Note: the current GUI always focuses a file; this is retained for
+    /// test coverage and potential future use.
+    #[allow(dead_code)]
     fn overview_view(
         &self,
         base: GraphViewResult,
@@ -536,9 +564,9 @@ impl ImportGraph {
                             .filter(|src| {
                                 self.passes_filters(src, filter_roots, filter_languages)
                                     && self.edges.get(src.as_str()).is_some_and(|edges| {
-                                        edges.iter().any(|e| {
-                                            matches!(&e.target, EdgeTarget::File(f) if f == *p)
-                                        })
+                                        edges.iter().any(
+                                            |e| matches!(&e.target, EdgeTarget::File(f) if f == *p),
+                                        )
                                     })
                             })
                             .count()
@@ -559,9 +587,9 @@ impl ImportGraph {
                         !sources.iter().any(|src| {
                             self.passes_filters(src, filter_roots, filter_languages)
                                 && self.edges.get(src.as_str()).is_some_and(|edges| {
-                                    edges.iter().any(|e| {
-                                        matches!(&e.target, EdgeTarget::File(f) if f == **p)
-                                    })
+                                    edges.iter().any(
+                                        |e| matches!(&e.target, EdgeTarget::File(f) if f == **p),
+                                    )
                                 })
                         })
                     })
@@ -643,6 +671,200 @@ impl ImportGraph {
             nodes_truncated,
             total_nodes_available,
             total_edges_available: 0,
+            ..base
+        }
+    }
+
+    /// Build a strict one-hop direct-star view for GUI visualization.
+    ///
+    /// Node set: focus + filter-passing direct outgoing targets + filter-passing
+    /// direct incoming sources. Dedup canonical paths; focus first under cap.
+    ///
+    /// Edge set: every actual directed edge touching focus among retained nodes.
+    /// Preserve reciprocal pairs (focus->X and X->focus). Exclude
+    /// neighbor-neighbor edges. Sort+dedup pairs.
+    ///
+    /// `total_nodes_available` and `total_edges_available` are pre-cap
+    /// direct-star totals; truncation flags are accurate; returned edges have
+    /// retained endpoints only; in/out degree from final returned edge set.
+    fn direct_star_view(
+        &self,
+        base: GraphViewResult,
+        key: &str,
+        direction: &GraphDirection,
+        max_nodes: usize,
+        max_edges: usize,
+        filter_roots: &Option<Vec<String>>,
+        filter_languages: &Option<Vec<String>>,
+    ) -> GraphViewResult {
+        // Collect direct outgoing targets (dependencies) that pass filters.
+        let mut outgoing: Vec<String> = Vec::new();
+        if matches!(
+            direction,
+            GraphDirection::Dependencies | GraphDirection::Both
+        ) {
+            if let Some(edges) = self.edges.get(key) {
+                for edge in edges {
+                    if let EdgeTarget::File(target) = &edge.target {
+                        if self.passes_filters(target, filter_roots, filter_languages) {
+                            outgoing.push(target.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Collect direct incoming sources (dependents) that pass filters.
+        let mut incoming: Vec<String> = Vec::new();
+        if matches!(direction, GraphDirection::Dependents | GraphDirection::Both) {
+            if let Some(sources) = self.reverse.get(key) {
+                for source in sources {
+                    if self.passes_filters(source, filter_roots, filter_languages) {
+                        incoming.push(source.clone());
+                    }
+                }
+            }
+        }
+
+        // Dedup the combined neighbor set (a neighbor may appear in both).
+        let mut all_neighbors: Vec<String> =
+            outgoing.iter().chain(incoming.iter()).cloned().collect();
+        all_neighbors.sort();
+        all_neighbors.dedup();
+
+        // Determine role: if a neighbor appears in BOTH outgoing and incoming,
+        // pick deterministic existing-compatible role (Dependency survives).
+        let outgoing_set: HashSet<&str> = outgoing.iter().map(|s| s.as_str()).collect();
+        let incoming_set: HashSet<&str> = incoming.iter().map(|s| s.as_str()).collect();
+
+        // ── Build direction-allowed, sorted+deduped edge pairs BEFORE any caps ──
+        let mut raw_edges: Vec<(String, String)> = Vec::new();
+
+        // Outgoing edges (focus→dependency) only when Dependencies or Both.
+        if matches!(
+            direction,
+            GraphDirection::Dependencies | GraphDirection::Both
+        ) {
+            if let Some(edges) = self.edges.get(key) {
+                for edge in edges {
+                    if let EdgeTarget::File(target) = &edge.target {
+                        if all_neighbors.contains(target) {
+                            raw_edges.push((key.to_string(), target.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        // Incoming edges (dependent→focus) only when Dependents or Both.
+        if matches!(direction, GraphDirection::Dependents | GraphDirection::Both) {
+            if let Some(sources) = self.reverse.get(key) {
+                for source in sources {
+                    if all_neighbors.contains(source) {
+                        raw_edges.push((source.to_string(), key.to_string()));
+                    }
+                }
+            }
+        }
+
+        raw_edges.sort();
+        raw_edges.dedup();
+
+        // Total BEFORE caps — accurate deduped pair count.
+        let total_nodes_available = 1 + all_neighbors.len();
+        let total_edges_available = raw_edges.len();
+
+        // Build sortable node list: focus first, then sort neighbors by
+        // relevant degree (out_degree for outgoing, in_degree for incoming)
+        // then lex path.
+        let mut sortable: Vec<(usize, usize, String)> = Vec::new();
+        sortable.push((0, 0, key.to_string()));
+
+        for n in &all_neighbors {
+            let rank = if outgoing_set.contains(n.as_str()) {
+                1
+            } else {
+                2
+            };
+            let degree = if outgoing_set.contains(n.as_str()) && !incoming_set.contains(n.as_str())
+            {
+                self.edges.get(n).map_or(0, |es| es.len())
+            } else if incoming_set.contains(n.as_str()) {
+                self.reverse.get(n).map_or(0, |v| v.len())
+            } else {
+                0
+            };
+            sortable.push((rank, usize::MAX - degree, n.clone()));
+        }
+        sortable.sort();
+
+        // Apply node cap.
+        let nodes_truncated = sortable.len() > max_nodes;
+        sortable.truncate(max_nodes);
+
+        let node_set: HashSet<&str> = sortable.iter().map(|(_, _, p)| p.as_str()).collect();
+
+        // Filter pre-computed edges to only those within the capped node set, then apply edge cap.
+        let mut filtered_edges: Vec<(String, String)> = raw_edges
+            .into_iter()
+            .filter(|(from, to)| node_set.contains(from.as_str()) && node_set.contains(to.as_str()))
+            .collect();
+        // edges_truncated = edges were omitted by either node cap (endpoint removed) or edge cap.
+        let edges_truncated =
+            filtered_edges.len() < total_edges_available || filtered_edges.len() > max_edges;
+        if filtered_edges.len() > max_edges {
+            filtered_edges.truncate(max_edges);
+        }
+
+        // Count in/out degree within the view for each node from the final edge set.
+        let mut in_deg: HashMap<&str, usize> = HashMap::new();
+        let mut out_deg: HashMap<&str, usize> = HashMap::new();
+        for (from, to) in &filtered_edges {
+            *out_deg.entry(from.as_str()).or_insert(0) += 1;
+            *in_deg.entry(to.as_str()).or_insert(0) += 1;
+        }
+
+        let nodes: Vec<GraphViewNode> = sortable
+            .into_iter()
+            .map(|(_, _, p)| {
+                let lang = self
+                    .nodes
+                    .get(&p)
+                    .map(|n| format!("{:?}", n.lang))
+                    .unwrap_or_default();
+                let role = if p == key {
+                    GraphNodeRole::Focus
+                } else if outgoing_set.contains(p.as_str()) {
+                    GraphNodeRole::Dependency
+                } else if incoming_set.contains(p.as_str()) {
+                    GraphNodeRole::Dependent
+                } else {
+                    GraphNodeRole::Overview
+                };
+                GraphViewNode {
+                    path: p.clone(),
+                    language: lang,
+                    out_degree: *out_deg.get(p.as_str()).unwrap_or(&0),
+                    in_degree: *in_deg.get(p.as_str()).unwrap_or(&0),
+                    role,
+                    depth_from_focus: Some(if p == key { 0 } else { 1 }),
+                    workspace_root: self.resolve_root(&p).map(String::from),
+                }
+            })
+            .collect();
+
+        let edges: Vec<GraphViewEdge> = filtered_edges
+            .into_iter()
+            .map(|(from, to)| GraphViewEdge { from, to })
+            .collect();
+
+        GraphViewResult {
+            nodes,
+            edges,
+            focus: Some(key.to_string()),
+            nodes_truncated,
+            edges_truncated,
+            total_nodes_available,
+            total_edges_available,
             ..base
         }
     }
@@ -1018,12 +1240,12 @@ mod tests {
         let req = make_req(None, 1, GraphDirection::Both);
         let result = g.visualization_view(&req);
         assert!(result.focus.is_none());
-        assert!(!result.nodes.is_empty());
-        for node in &result.nodes {
-            assert_eq!(node.role, GraphNodeRole::Overview);
-            assert!(node.depth_from_focus.is_none());
-        }
+        // No-focus returns metadata-only: empty nodes/edges, no graph.
+        assert!(result.nodes.is_empty());
         assert!(result.edges.is_empty());
+        // No-focus contract: totals are ZERO.
+        assert_eq!(result.total_nodes_available, 0);
+        assert_eq!(result.total_edges_available, 0);
         assert_eq!(result.file_count, 3);
         assert!(!result.available_roots.is_empty());
     }
@@ -1490,8 +1712,12 @@ mod tests {
             filter_languages: None,
         };
         let result = g.visualization_view(&req);
-        assert_eq!(result.nodes.len(), 1);
-        assert_eq!(result.nodes[0].path, "/ws_a/a.rs");
+        // No-focus returns metadata only — empty graph nodes/edges.
+        assert!(result.nodes.is_empty());
+        assert!(result.edges.is_empty());
+        // No-focus contract: totals ZERO.
+        assert_eq!(result.total_nodes_available, 0);
+        assert_eq!(result.total_edges_available, 0);
     }
 
     #[test]
@@ -1599,8 +1825,14 @@ mod tests {
             filter_languages: None,
         };
         let result = g.visualization_view(&req);
-        assert_eq!(result.file_count, 2, "file_count should be 2 (a.rs + b.rs under ws_a)");
-        assert_eq!(result.edge_count, 1, "edge_count should be 1 (only a→b, both endpoints in ws_a)");
+        assert_eq!(
+            result.file_count, 2,
+            "file_count should be 2 (a.rs + b.rs under ws_a)"
+        );
+        assert_eq!(
+            result.edge_count, 1,
+            "edge_count should be 1 (only a→b, both endpoints in ws_a)"
+        );
     }
 
     #[test]
@@ -1654,8 +1886,8 @@ mod tests {
 
     #[test]
     fn overview_filtered_total_before_truncation() {
-        // Build 5 nodes in ws_a, filter to ws_a, use max_nodes=2.
-        // total_nodes_available should be 5 (before truncation), nodes.len() <= 2.
+        // Build 5 nodes in ws_a, filter to ws_a, no-focus.
+        // No-focus returns metadata only; total_nodes_available reflects filtered count.
         let mut g = ImportGraph::new();
         g.workspace_roots = vec!["/ws_a".to_string()];
         for i in 0..5 {
@@ -1679,19 +1911,21 @@ mod tests {
             filter_languages: None,
         };
         let result = g.visualization_view(&req);
-        assert!(
-            result.total_nodes_available >= 5,
-            "total_nodes_available should be 5 before truncation, got {}",
-            result.total_nodes_available
+        // No-focus: empty graph, metadata only. Contract: totals ZERO.
+        assert!(result.nodes.is_empty());
+        assert!(result.edges.is_empty());
+        assert_eq!(
+            result.total_nodes_available, 0,
+            "no-focus contract: total_nodes_available = 0"
         );
-        assert!(result.nodes.len() <= 2);
-        assert!(result.nodes_truncated);
+        assert_eq!(result.total_edges_available, 0);
+        assert!(!result.nodes_truncated);
     }
 
     #[test]
     fn overview_filtered_degrees_only_allowed_edges() {
-        // a→b (both in ws_a), c→b (in ws_b). Filter to ws_a.
-        // b's in_degree in overview should be 1 (from a), not 2 (global).
+        // a→b (both in ws_a), c→b (in ws_b). Filter to ws_a, no-focus.
+        // No-focus returns metadata only; verify filtered file_count.
         let mut g = ImportGraph::new();
         g.workspace_roots = vec!["/ws_a".to_string(), "/ws_b".to_string()];
         g.set_edges(
@@ -1722,12 +1956,10 @@ mod tests {
             filter_languages: None,
         };
         let result = g.visualization_view(&req);
-        let b = result.nodes.iter().find(|n| n.path == "/ws_a/b.rs");
-        assert!(b.is_some(), "b.rs should be in filtered overview");
-        assert_eq!(b.unwrap().in_degree, 1, "b's in_degree should count only ws_a edges");
-        let a = result.nodes.iter().find(|n| n.path == "/ws_a/a.rs");
-        assert!(a.is_some());
-        assert_eq!(a.unwrap().out_degree, 1);
+        // No-focus returns empty graph, but filtered metadata is correct.
+        assert!(result.nodes.is_empty());
+        assert_eq!(result.file_count, 2, "filtered file_count = a.rs + b.rs");
+        assert_eq!(result.edge_count, 1, "filtered edge_count = a→b only");
     }
 
     #[test]
@@ -1753,5 +1985,510 @@ mod tests {
             assert_eq!(a.in_degree, b.in_degree);
             assert_eq!(a.out_degree, b.out_degree);
         }
+    }
+
+    // ─── NEW: strict one-hop depth=1 focus tests ──────────────────────────
+
+    #[test]
+    fn direct_star_depth1_neighbor_depth_is_one() {
+        // Focus at depth 0, neighbors at depth 1.
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/".to_string()];
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![
+                Edge {
+                    target: EdgeTarget::File("/b.rs".into()),
+                    kind: EdgeKind::Import,
+                },
+                Edge {
+                    target: EdgeTarget::File("/c.rs".into()),
+                    kind: EdgeKind::Import,
+                },
+            ],
+        );
+        g.set_edges(
+            "/d.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/a.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges("/b.rs", Lang::Rust, vec![]);
+        g.set_edges("/c.rs", Lang::Rust, vec![]);
+
+        let req = make_req(Some("/a.rs"), 1, GraphDirection::Both);
+        let result = g.visualization_view(&req);
+        assert_eq!(result.focus.as_deref(), Some("/a.rs"));
+        // Focus node: depth 0
+        let focus = result
+            .nodes
+            .iter()
+            .find(|n| n.role == GraphNodeRole::Focus)
+            .unwrap();
+        assert_eq!(focus.depth_from_focus, Some(0));
+        // Neighbors: depth 1
+        for n in &result.nodes {
+            if n.role != GraphNodeRole::Focus {
+                assert_eq!(
+                    n.depth_from_focus,
+                    Some(1),
+                    "neighbor {} should have depth 1",
+                    n.path
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn direct_star_outgoing_only() {
+        // Dependencies direction: only outgoing edges and targets.
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/".to_string()];
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![
+                Edge {
+                    target: EdgeTarget::File("/b.rs".into()),
+                    kind: EdgeKind::Import,
+                },
+                Edge {
+                    target: EdgeTarget::File("/c.rs".into()),
+                    kind: EdgeKind::Import,
+                },
+            ],
+        );
+        g.set_edges(
+            "/d.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/a.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges("/b.rs", Lang::Rust, vec![]);
+        g.set_edges("/c.rs", Lang::Rust, vec![]);
+
+        let req = make_req(Some("/a.rs"), 1, GraphDirection::Dependencies);
+        let result = g.visualization_view(&req);
+        let paths: Vec<&str> = result.nodes.iter().map(|n| n.path.as_str()).collect();
+        assert!(paths.contains(&"/a.rs"));
+        assert!(paths.contains(&"/b.rs"));
+        assert!(paths.contains(&"/c.rs"));
+        assert!(
+            !paths.contains(&"/d.rs"),
+            "dependents should not appear in Dependencies mode"
+        );
+        assert_eq!(result.edges.len(), 2);
+    }
+
+    #[test]
+    fn direct_star_incoming_only() {
+        // Dependents direction: only incoming edges and sources.
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/".to_string()];
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges(
+            "/c.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/a.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges("/b.rs", Lang::Rust, vec![]);
+
+        let req = make_req(Some("/a.rs"), 1, GraphDirection::Dependents);
+        let result = g.visualization_view(&req);
+        let paths: Vec<&str> = result.nodes.iter().map(|n| n.path.as_str()).collect();
+        assert!(paths.contains(&"/a.rs"));
+        assert!(
+            !paths.contains(&"/b.rs"),
+            "dependencies should not appear in Dependents mode"
+        );
+        assert!(paths.contains(&"/c.rs"));
+        assert_eq!(result.edges.len(), 1);
+        assert_eq!(result.edges[0].from, "/c.rs");
+        assert_eq!(result.edges[0].to, "/a.rs");
+    }
+
+    #[test]
+    fn direct_star_reciprocal_both_arrows() {
+        // A→B and B→A. Under Both, both edges survive with distinct from/to.
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/".to_string()];
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges(
+            "/b.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/a.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+
+        let req = make_req(Some("/a.rs"), 1, GraphDirection::Both);
+        let result = g.visualization_view(&req);
+        // Both nodes present.
+        let paths: Vec<&str> = result.nodes.iter().map(|n| n.path.as_str()).collect();
+        assert!(paths.contains(&"/a.rs"));
+        assert!(paths.contains(&"/b.rs"));
+        // Two distinct edges: a→b and b→a.
+        assert_eq!(result.edges.len(), 2);
+        assert_eq!(
+            result.total_edges_available, 2,
+            "total edges = 2 deduped pairs"
+        );
+        assert_eq!(
+            result.total_nodes_available, 2,
+            "total nodes = focus + 1 neighbor"
+        );
+        let has_ab = result
+            .edges
+            .iter()
+            .any(|e| e.from == "/a.rs" && e.to == "/b.rs");
+        let has_ba = result
+            .edges
+            .iter()
+            .any(|e| e.from == "/b.rs" && e.to == "/a.rs");
+        assert!(has_ab, "missing a→b edge");
+        assert!(has_ba, "missing b→a edge");
+        // b is both incoming (Dependent) and outgoing (Dependency).
+        // Per spec: Dependency survives for reciprocal under Both.
+        let b = result.nodes.iter().find(|n| n.path == "/b.rs").unwrap();
+        assert_eq!(
+            b.role,
+            GraphNodeRole::Dependency,
+            "reciprocal neighbor should be Dependency under Both"
+        );
+    }
+
+    #[test]
+    fn direct_star_reciprocal_deps_only() {
+        // A→B and B→A. Under Dependencies, only A→B survives.
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/".to_string()];
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges(
+            "/b.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/a.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+
+        let req = make_req(Some("/a.rs"), 1, GraphDirection::Dependencies);
+        let result = g.visualization_view(&req);
+        let b = result.nodes.iter().find(|n| n.path == "/b.rs").unwrap();
+        assert_eq!(b.role, GraphNodeRole::Dependency);
+        assert_eq!(result.edges.len(), 1);
+        assert_eq!(result.edges[0].from, "/a.rs");
+        assert_eq!(result.edges[0].to, "/b.rs");
+    }
+
+    #[test]
+    fn direct_star_reciprocal_dependents_only() {
+        // A→B and B→A. Under Dependents, only B→A survives.
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/".to_string()];
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges(
+            "/b.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/a.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+
+        let req = make_req(Some("/a.rs"), 1, GraphDirection::Dependents);
+        let result = g.visualization_view(&req);
+        let b = result.nodes.iter().find(|n| n.path == "/b.rs").unwrap();
+        assert_eq!(b.role, GraphNodeRole::Dependent);
+        assert_eq!(result.edges.len(), 1);
+        assert_eq!(result.edges[0].from, "/b.rs");
+        assert_eq!(result.edges[0].to, "/a.rs");
+    }
+
+    #[test]
+    fn direct_star_no_neighbor_neighbor_edges() {
+        // A→B, A→C, B→C. Focus A depth=1: edges A→B, A→C, but NOT B→C.
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/".to_string()];
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![
+                Edge {
+                    target: EdgeTarget::File("/b.rs".into()),
+                    kind: EdgeKind::Import,
+                },
+                Edge {
+                    target: EdgeTarget::File("/c.rs".into()),
+                    kind: EdgeKind::Import,
+                },
+            ],
+        );
+        g.set_edges(
+            "/b.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/c.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges("/c.rs", Lang::Rust, vec![]);
+
+        let req = make_req(Some("/a.rs"), 1, GraphDirection::Dependencies);
+        let result = g.visualization_view(&req);
+        // All 3 nodes present.
+        assert_eq!(result.nodes.len(), 3);
+        // Only edges touching focus: a→b, a→c. NOT b→c.
+        let has_bc = result
+            .edges
+            .iter()
+            .any(|e| e.from == "/b.rs" && e.to == "/c.rs");
+        assert!(
+            !has_bc,
+            "neighbor-neighbor edge b→c should NOT appear at depth=1"
+        );
+        assert_eq!(result.edges.len(), 2);
+    }
+
+    #[test]
+    fn direct_star_caps_and_deterministic() {
+        // Build focus with many neighbors, verify caps and stable ordering.
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/".to_string()];
+        let mut out_edges = Vec::new();
+        for i in 0..10 {
+            let path = format!("/n{i}.rs");
+            g.set_edges(&path, Lang::Rust, vec![]);
+            out_edges.push(Edge {
+                target: EdgeTarget::File(path),
+                kind: EdgeKind::Import,
+            });
+        }
+        g.set_edges("/focus.rs", Lang::Rust, out_edges);
+
+        let req = VisualizationRequest {
+            path: Some("/focus.rs".to_string()),
+            depth: 1,
+            direction: GraphDirection::Dependencies,
+            max_nodes: 5,
+            max_edges: 3,
+            filter_roots: None,
+            filter_languages: None,
+        };
+        let r1 = g.visualization_view(&req);
+        let r2 = g.visualization_view(&req);
+        assert_eq!(r1.nodes.len(), 5, "node cap applied");
+        assert_eq!(r1.edges.len(), 3, "edge cap applied");
+        assert!(r1.nodes_truncated);
+        assert!(r1.edges_truncated);
+        // Focus is first.
+        assert_eq!(r1.nodes[0].role, GraphNodeRole::Focus);
+        // Deterministic.
+        assert_eq!(r1.nodes.len(), r2.nodes.len());
+        for (a, b) in r1.nodes.iter().zip(r2.nodes.iter()) {
+            assert_eq!(a.path, b.path);
+        }
+    }
+
+    #[test]
+    fn direct_star_metadata_only_no_focus() {
+        // No-focus returns metadata only with empty graph.
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/".to_string()];
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges("/b.rs", Lang::Rust, vec![]);
+
+        let req = make_req(None, 1, GraphDirection::Both);
+        let result = g.visualization_view(&req);
+        assert!(result.nodes.is_empty());
+        assert!(result.edges.is_empty());
+        assert_eq!(result.file_count, 2);
+        // No-focus contract: totals are ZERO.
+        assert_eq!(result.total_nodes_available, 0);
+        assert_eq!(result.total_edges_available, 0);
+        assert!(!result.nodes_truncated);
+        assert!(!result.edges_truncated);
+    }
+
+    #[test]
+    fn direct_star_filter_neighbor_passes_filters() {
+        // Focus passes filter, some neighbors do not.
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/ws_a".to_string(), "/ws_b".to_string()];
+        g.set_edges(
+            "/ws_a/a.rs",
+            Lang::Rust,
+            vec![
+                Edge {
+                    target: EdgeTarget::File("/ws_a/b.rs".into()),
+                    kind: EdgeKind::Import,
+                },
+                Edge {
+                    target: EdgeTarget::File("/ws_b/c.rs".into()),
+                    kind: EdgeKind::Import,
+                },
+            ],
+        );
+        g.set_edges("/ws_a/b.rs", Lang::Rust, vec![]);
+        g.set_edges("/ws_b/c.rs", Lang::Rust, vec![]);
+
+        let req = VisualizationRequest {
+            path: Some("/ws_a/a.rs".to_string()),
+            depth: 1,
+            direction: GraphDirection::Dependencies,
+            max_nodes: 100,
+            max_edges: 100,
+            filter_roots: Some(vec!["/ws_a".to_string()]),
+            filter_languages: None,
+        };
+        let result = g.visualization_view(&req);
+        let paths: Vec<&str> = result.nodes.iter().map(|n| n.path.as_str()).collect();
+        assert!(paths.contains(&"/ws_a/a.rs"));
+        assert!(paths.contains(&"/ws_a/b.rs"));
+        assert!(!paths.contains(&"/ws_b/c.rs"));
+        assert_eq!(result.edges.len(), 1);
+    }
+
+    // ─── Duplicate edge storage does not inflate totals ────────────────────
+
+    #[test]
+    fn direct_star_duplicate_storage_edges_dedup() {
+        // Simulate duplicate storage entries by calling set_edges twice
+        // with the same target — the second call replaces the first in
+        // ImportGraph::set_edges, so the edge_count stays correct.
+        // But verify the visualisation totals are clean.
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/".to_string()];
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        // Re-set same edges (simulates a re-scan).
+        g.set_edges(
+            "/a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("/b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges("/b.rs", Lang::Rust, vec![]);
+
+        let req = make_req(Some("/a.rs"), 1, GraphDirection::Both);
+        let result = g.visualization_view(&req);
+        assert_eq!(
+            result.edges.len(),
+            1,
+            "only one a→b edge despite duplicate storage"
+        );
+        assert_eq!(result.total_edges_available, 1);
+        assert_eq!(result.total_nodes_available, 2);
+    }
+
+    #[test]
+    fn direct_star_totals_pre_cap() {
+        // Verify total_nodes/total_edges are pre-cap values.
+        let mut g = ImportGraph::new();
+        g.workspace_roots = vec!["/".to_string()];
+        g.set_edges(
+            "/focus.rs",
+            Lang::Rust,
+            vec![
+                Edge {
+                    target: EdgeTarget::File("/n1.rs".into()),
+                    kind: EdgeKind::Import,
+                },
+                Edge {
+                    target: EdgeTarget::File("/n2.rs".into()),
+                    kind: EdgeKind::Import,
+                },
+                Edge {
+                    target: EdgeTarget::File("/n3.rs".into()),
+                    kind: EdgeKind::Import,
+                },
+                Edge {
+                    target: EdgeTarget::File("/n4.rs".into()),
+                    kind: EdgeKind::Import,
+                },
+                Edge {
+                    target: EdgeTarget::File("/n5.rs".into()),
+                    kind: EdgeKind::Import,
+                },
+            ],
+        );
+        for i in 1..=5 {
+            g.set_edges(&format!("/n{i}.rs"), Lang::Rust, vec![]);
+        }
+
+        let req = VisualizationRequest {
+            path: Some("/focus.rs".to_string()),
+            depth: 1,
+            direction: GraphDirection::Dependencies,
+            max_nodes: 3,
+            max_edges: 2,
+            filter_roots: None,
+            filter_languages: None,
+        };
+        let result = g.visualization_view(&req);
+        assert_eq!(
+            result.total_nodes_available, 6,
+            "total includes focus + 5 neighbors"
+        );
+        assert_eq!(
+            result.total_edges_available, 5,
+            "total includes all 5 edges before cap"
+        );
+        assert_eq!(result.nodes.len(), 3, "nodes capped to 3");
+        assert_eq!(result.edges.len(), 2, "edges capped to 2");
+        assert!(result.nodes_truncated);
+        assert!(result.edges_truncated);
     }
 }

@@ -2,6 +2,10 @@
 //!
 //! Calls `linker::client::fetch_graph_view()` on a std::thread (blocking IPC),
 //! sends the result back over an `mpsc` channel to be drained by `push_loop`.
+//!
+//! Also provides off-thread impact analysis workers (`spawn_import_graph_impact`
+//! / `spawn_import_graph_impact_attached`) that call `fetch_impact()` on a
+//! std::thread — blocking linker IPC must never run on the 16ms fold loop.
 
 use std::sync::mpsc::Sender;
 
@@ -185,4 +189,64 @@ fn empty_result() -> ImportGraphResult {
         total_edges_available: 0,
         available_roots: Vec::new(),
     }
+}
+
+// ─── Impact analysis workers ───────────────────────────────────────────────
+
+/// Build an [`ImportGraphImpactResult`] from the linker client helper.
+fn build_impact_result(
+    request_id: String,
+    path: String,
+    depth: u32,
+) -> super::push_proto::ImportGraphImpactResult {
+    match crate::linker::client::fetch_impact(&path, depth) {
+        Ok((paths, total)) => super::push_proto::ImportGraphImpactResult {
+            request_id,
+            path,
+            depth,
+            paths,
+            total,
+            error: None,
+        },
+        Err(e) => super::push_proto::ImportGraphImpactResult {
+            request_id,
+            path,
+            depth,
+            paths: vec![],
+            total: 0,
+            error: Some(e),
+        },
+    }
+}
+
+/// Spawn an off-thread `HostCtl::ImportGraphImpact` worker (attached mode).
+/// Calls `fetch_impact` on a std::thread (blocking IPC), sends the result
+/// over the channel so `push_loop` can drain + emit without blocking its
+/// 16ms fold cadence.
+pub fn spawn_import_graph_impact_attached(
+    tx: Sender<super::push_proto::ImportGraphImpactResult>,
+    path: String,
+    depth: u32,
+    request_id: String,
+) {
+    std::thread::spawn(move || {
+        let result = build_impact_result(request_id, path, depth);
+        let _ = tx.send(result);
+    });
+}
+
+/// Spawn an off-thread `HostCtl::ImportGraphImpact` worker (detached mode).
+/// Calls `fetch_impact` on a std::thread (blocking IPC), pushes the result
+/// directly — no channel needed since there is no fold loop to drain.
+pub fn spawn_import_graph_impact(
+    push: impl Fn(String) + Send + 'static,
+    path: String,
+    depth: u32,
+    request_id: String,
+) {
+    std::thread::spawn(move || {
+        let result = build_impact_result(request_id, path, depth);
+        let env = super::push_proto::PushEnvelope::ImportGraphImpact(result);
+        super::render::emit(&push, &env);
+    });
 }

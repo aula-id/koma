@@ -899,7 +899,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             filter_roots,
             filter_languages,
         } => {
-            let depth = depth.unwrap_or(2).clamp(1, 3);
+            let depth = depth.unwrap_or(1).clamp(1, 3);
             let direction = direction.as_deref().unwrap_or("both");
             let direction = match direction {
                 "dependencies" => crate::ipc::linker_proto::GraphDirection::Dependencies,
@@ -912,6 +912,20 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 direction,
                 filter_roots,
                 filter_languages,
+            });
+        }
+        // Impact analysis: off-thread linker IPC, same pattern as ImportGraph.
+        #[cfg(feature = "linker")]
+        GuiReq::ImportGraphImpact {
+            path,
+            depth,
+            request_id,
+        } => {
+            let depth = depth.unwrap_or(3).min(3);
+            let _ = ctx.ctl.send(HostCtl::ImportGraphImpact {
+                path,
+                depth,
+                request_id,
             });
         }
     }
