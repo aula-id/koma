@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { Network, ChevronRight, FolderOpen, FileCode } from 'lucide-react'
+import { Network, ChevronRight, FolderOpen, FileCode, RefreshCw } from 'lucide-react'
 import { useKoma } from '../../store/koma'
 import { BrailleSpinner } from '../BrailleSpinner'
 import type { ImportGraphNode } from '../../store/koma'
@@ -143,13 +143,15 @@ function FolderNode({
 // ── Panel ────────────────────────────────────────────────────────────────────
 
 export function ImportGraphPanel() {
-  const nodes = useKoma((s) => s.importGraph.nodes)
+  const treeNodes = useKoma((s) => s.importGraph.treeNodes)
   const loading = useKoma((s) => s.importGraph.loading)
   const error = useKoma((s) => s.importGraph.error)
   const fileCount = useKoma((s) => s.importGraph.fileCount)
   const edgeCount = useKoma((s) => s.importGraph.edgeCount)
   const languages = useKoma((s) => s.importGraph.languages)
   const selectedPath = useKoma((s) => s.importGraph.selectedPath)
+  const filterRoots = useKoma((s) => s.importGraph.filterRoots)
+  const filterLanguages = useKoma((s) => s.importGraph.filterLanguages)
   const openImportGraphTab = useKoma((s) => s.openImportGraphTab)
   const selectImportGraphNode = useKoma((s) => s.selectImportGraphNode)
   const refreshImportGraph = useKoma((s) => s.refreshImportGraph)
@@ -160,10 +162,15 @@ export function ImportGraphPanel() {
   }, [refreshImportGraph])
 
   const filtered = useMemo(() => {
-    if (!query.trim()) return nodes
-    const q = query.toLowerCase()
-    return nodes.filter((n) => n.path.toLowerCase().includes(q))
-  }, [nodes, query])
+    const q = query.trim().toLowerCase()
+    return treeNodes.filter((node) => {
+      if (filterRoots.length > 0 && (!node.workspaceRoot || !filterRoots.includes(node.workspaceRoot))) {
+        return false
+      }
+      if (filterLanguages.length > 0 && !filterLanguages.includes(node.language)) return false
+      return !q || node.path.toLowerCase().includes(q)
+    })
+  }, [treeNodes, query, filterRoots, filterLanguages])
 
   const folderTree = useMemo(() => buildFolderTree(filtered), [filtered])
 
@@ -196,7 +203,7 @@ export function ImportGraphPanel() {
         )}
 
         {/* Search */}
-        {nodes.length > 0 && (
+        {treeNodes.length > 0 && (
           <div className="px-3 pb-1">
             <input
               type="text"
@@ -214,15 +221,33 @@ export function ImportGraphPanel() {
         </div>
 
         {/* Content */}
-        {loading && nodes.length === 0 ? (
+        {loading && treeNodes.length === 0 ? (
           <div className="flex items-center justify-center px-3 py-4">
             <BrailleSpinner size={14} className="opacity-70" />
           </div>
         ) : error ? (
-          <div className="px-3 py-2 text-[11px] text-koma-error">{error}</div>
-        ) : nodes.length === 0 ? (
-          <div className="px-3 py-2 text-[11px] text-koma-dim opacity-70">
-            No import graph data. Start the linker daemon.
+          <div className="flex flex-col items-start gap-2 px-3 py-2 text-[11px]">
+            <span className="text-koma-error">{error}</span>
+            <button
+              type="button"
+              onClick={() => refreshImportGraph(null)}
+              className="flex items-center gap-1.5 rounded border border-koma-border bg-koma-bg px-2 py-1 text-koma-fg hover:border-koma-accent/40 hover:bg-koma-hover"
+            >
+              <RefreshCw size={11} />
+              Retry graph
+            </button>
+          </div>
+        ) : treeNodes.length === 0 ? (
+          <div className="flex flex-col items-start gap-2 px-3 py-2 text-[11px] text-koma-dim">
+            <span>No import graph data yet.</span>
+            <button
+              type="button"
+              onClick={() => refreshImportGraph(null)}
+              className="flex items-center gap-1.5 rounded border border-koma-border bg-koma-bg px-2 py-1 text-koma-fg hover:border-koma-accent/40 hover:bg-koma-hover"
+            >
+              <RefreshCw size={11} />
+              Retry graph
+            </button>
           </div>
         ) : (
           <div className="flex flex-col">
