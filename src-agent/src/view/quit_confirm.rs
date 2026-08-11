@@ -16,6 +16,10 @@
 //!
 //! Navigation (Left/Right, Tab/Shift+Tab, Enter) plus the direct k / d / Esc
 //! shortcuts are handled in [`crate::controller::input::handle_quit_confirm`].
+//!
+//! When in the **Exiting** phase (the user activated quit or detach), the entire
+//! overlay is replaced with a centered braille spinner and "Exiting…" text. No
+//! buttons are rendered and no hit-boxes are recorded.
 
 use crate::app::mode::QuitConfirmState;
 use crate::view::theme::Palette;
@@ -52,6 +56,21 @@ const GAP: u16 = 3;
 /// common terminal widths (80–120 cols).
 const CONTENT_WIDTH: u16 = 54;
 
+/// Braille spinner cycle (10 frames), indexed by wall-clock milliseconds / 80.
+/// Uses the same 10-glyph cycle as [`crate::view::loading`] and
+/// [`crate::view::todo`].
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Time-based braille spinner glyph. Uses wall-clock time so even a single frame
+/// shows a meaningful glyph (unlike frame-counter spinners that would be frozen).
+fn spinner_glyph() -> &'static str {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    SPINNER[((now_ms / 80) as usize) % SPINNER.len()]
+}
+
 /// Compute a centered `Rect` of the given `w` × `h` inside `area`,
 /// clamped so it never exceeds the available space. Used exclusively by
 /// the quit-confirm body to float the question + buttons dead-center.
@@ -69,7 +88,75 @@ fn centered_rect(area: Rect, w: u16, h: u16) -> Rect {
 }
 
 /// Render the quit-confirm overlay for `s` using the given colour `palette`.
+///
+/// In the `Exiting` phase, renders a centered braille spinner with "Exiting…"
+/// instead of the question/button layout.
 pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
+    if s.is_exiting() {
+        return draw_exiting(frame, s, palette);
+    }
+    draw_choice(frame, s, palette);
+}
+
+/// Render the Exiting phase: centered braille spinner + "Exiting…" text.
+fn draw_exiting(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
+    let area = frame.area();
+    crate::view::clear_and_fill(frame, area, palette.bg);
+
+    // Zero out button hit-boxes so stale rects from the Choice phase can't
+    // be hit-tested against the new layout.
+    s.button_rects.set([Rect::ZERO; 3]);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(35), // top spacer
+            Constraint::Length(1),      // title bar
+            Constraint::Length(2),      // gap
+            Constraint::Length(1),      // spinner + "Exiting…"
+            Constraint::Length(1),      // description
+            Constraint::Min(0),         // rest
+        ])
+        .split(area);
+
+    // --- Title bar: " exiting " (mirrors the " quit " title style) ---
+    let title_block = Block::new()
+        .borders(Borders::TOP | Borders::BOTTOM)
+        .border_style(Style::default().fg(palette.dim))
+        .title(Span::styled(" exiting ", Style::default().fg(palette.dim)))
+        .padding(Padding::horizontal(1));
+    frame.render_widget(title_block, chunks[1]);
+
+    // --- Spinner + "Exiting…" ---
+    let glyph = spinner_glyph();
+    let spinner_line = Line::from(vec![
+        Span::styled(format!("{glyph}  "), Style::default().fg(palette.accent)),
+        Span::styled(
+            "Exiting…",
+            Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    frame.render_widget(
+        Paragraph::new(spinner_line).alignment(ratatui::layout::Alignment::Center),
+        chunks[3],
+    );
+
+    // --- Description ---
+    let subtitle = if s.working > 0 {
+        "Stopping session and cleaning up…"
+    } else {
+        "Cleaning up…"
+    };
+    let desc = Paragraph::new(Line::from(Span::styled(
+        subtitle,
+        Style::default().fg(palette.dim),
+    )))
+    .alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(desc, chunks[4]);
+}
+
+/// Render the Choice phase: question + button row + description (original layout).
+fn draw_choice(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
