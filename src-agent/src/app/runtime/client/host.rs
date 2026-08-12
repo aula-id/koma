@@ -683,6 +683,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     d.internet_mode.as_str().to_string(),
                     cfg.palette,
                     String::new(),
+                    d.subagent_max_turns,
                 );
             }
             // GUI /agents dashboard opened while detached (StartScreen / swapper): there is

@@ -35,6 +35,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             s.coding_autosave,
             s.internet_mode,
             s.mouse_capture,
+            s.subagent_max_turns.clone(),
             s.providers.clone(),
             s.oauth_drafts.clone(),
             s.models.clone(),
@@ -59,6 +60,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         coding_autosave,
         internet_mode,
         mouse_capture,
+        subagent_max_turns,
         provider_drafts,
         oauth_drafts,
         model_drafts,
@@ -327,6 +329,10 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             // Mouse-capture toggle: apply immediately so touch/desktop
             // mode switches live. No client rebuild needed.
             sess.settings.mouse_capture = mouse_capture;
+            // Subagent max turns: parse as u32, clamp ≥ 1, default to 500 on
+            // empty/invalid input so the user can never disable the safety cap.
+            let parsed_turns: u32 = subagent_max_turns.parse().unwrap_or(0);
+            sess.settings.subagent_max_turns = parsed_turns.max(1);
             // But DO refresh the system-prompt roster so any mode-gated agents
             // stay in sync on a mid-session mode change (rebuild reads in-memory
             // settings; nothing else here rebuilds).

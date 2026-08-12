@@ -335,6 +335,7 @@ impl DaemonHub {
         coding_autosave: Option<bool>,
         internet_mode: Option<String>,
         workdir: Option<Vec<String>>,
+        subagent_max_turns: Option<u32>,
     ) {
         use crate::model::settings::InternetMode;
         // Capture the old internet mode BEFORE the set, for the shared change-gated
@@ -393,6 +394,9 @@ impl DaemonHub {
             }
             if let Some(v) = workdir_vec {
                 sess.settings.workdir = v;
+            }
+            if let Some(v) = subagent_max_turns {
+                sess.settings.subagent_max_turns = v.max(1);
             }
             // Refresh the mode-gated system-prompt roster, then persist — mirrors
             // handle_save_settings (:198 rebuild + :216 save). A save error just

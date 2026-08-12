@@ -421,6 +421,7 @@ function SessionSettings() {
   const [bashSaving, setBashSaving] = useState(true)
   const [codingAutosave, setCodingAutosave] = useState(false)
   const [internet, setInternet] = useState<'simple' | 'full'>('simple')
+  const [maxTurns, setMaxTurns] = useState('500')
 
   useEffect(() => {
     if (!values) return
@@ -431,6 +432,7 @@ function SessionSettings() {
     setBashSaving(values.bashSaving)
     setCodingAutosave(values.codingAutosave)
     setInternet(values.internetMode === 'full' ? 'full' : 'simple')
+    setMaxTurns(String(values.subagentMaxTurns ?? 500))
   }, [values])
 
   if (!values) {
@@ -478,6 +480,15 @@ function SessionSettings() {
   const setNet = (v: 'simple' | 'full') => {
     setInternet(v)
     req({ r: 'SetPrefs', internetMode: v })
+  }
+  // Max turns: commit on blur; clamp ≥ 1, fall back to 500 on invalid input.
+  const commitMaxTurns = () => {
+    const n = parseInt(maxTurns, 10)
+    const safe = isNaN(n) || n < 1 ? 500 : n
+    setMaxTurns(String(safe))
+    if (safe !== (values.subagentMaxTurns ?? 500)) {
+      req({ r: 'SetPrefs', subagentMaxTurns: safe })
+    }
   }
 
   return (
@@ -541,6 +552,20 @@ function SessionSettings() {
             onChange={setNet}
           />
         </div>
+      </SettingRow>
+
+      <SettingRow label="Max turns" desc="Max agentic turns per sub-agent (when agent has no step cap). Default: 500.">
+        <input
+          type="number"
+          min={1}
+          value={maxTurns}
+          onChange={(e) => setMaxTurns(e.target.value.replace(/[^0-9]/g, ''))}
+          onBlur={commitMaxTurns}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
+          className="w-24 rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[12px] text-koma-fg outline-none focus:border-koma-grip"
+        />
       </SettingRow>
     </div>
   )

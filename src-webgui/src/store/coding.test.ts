@@ -208,6 +208,7 @@ assert.equal(useKoma.getState().ui.activeTabId, 'chat')
     internetMode: 'simple',
     palette: 'dark',
     effort: '',
+    subagentMaxTurns: 500,
   })
   assert.equal(useKoma.getState().settingsValues?.codingAutosave, true)
   useKoma.getState().push({
@@ -221,6 +222,7 @@ assert.equal(useKoma.getState().ui.activeTabId, 'chat')
     internetMode: 'simple',
     palette: 'dark',
     effort: '',
+    subagentMaxTurns: 500,
   })
   assert.equal(useKoma.getState().settingsValues?.codingAutosave, false)
 }

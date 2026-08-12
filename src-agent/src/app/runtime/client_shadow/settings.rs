@@ -46,6 +46,7 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
         coding_autosave: s.coding_autosave,
         internet_mode: shadow_internet_mode(&s.internet_mode),
         mouse_capture: shadow_mouse_capture(&s.mouse_capture),
+        subagent_max_turns: s.subagent_max_turns.to_string(),
         cwd: std::path::PathBuf::from(s.cwd),
         list_editing: s.list_editing,
         list_sel: s.list_sel,
