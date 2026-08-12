@@ -213,6 +213,7 @@ declare global {
         codingAutosave?: boolean
         internetMode?: string
         workdir?: string[]
+        subagentMaxTurns?: number
       }
     // Composer EFFORT pill opened: fetch the derived `/effort` menu (TUI
     // parity) for the foreground session's current model. Attached-only (like

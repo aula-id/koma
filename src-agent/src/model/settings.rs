@@ -335,6 +335,11 @@ pub struct Settings {
     /// (Firefox subprocess, higher token usage); `web_search` is unchanged.
     #[serde(default = "default_internet_mode")]
     pub internet_mode: InternetMode,
+    /// Maximum agentic turns (iterations) per sub-agent when the agent def
+    /// doesn't specify its own `steps` cap. User-editable (≥ 1). A value of
+    /// `0` is treated as `1` at runtime to prevent unbounded loops.
+    #[serde(default = "default_subagent_max_turns")]
+    pub subagent_max_turns: u32,
     /// Preferred search-engine URL template for browser-backed searches.
     /// Must contain `{query}` as a placeholder. The model builds a search URL
     /// from this template and passes it to `web_search_full` via `--url`.
@@ -435,6 +440,12 @@ fn default_internet_mode() -> InternetMode {
     InternetMode::Simple
 }
 
+const DEFAULT_SUBAGENT_MAX_TURNS: u32 = 500;
+
+fn default_subagent_max_turns() -> u32 {
+    DEFAULT_SUBAGENT_MAX_TURNS
+}
+
 /// Default preferred search-engine URL template.
 pub const DEFAULT_SEARCH_ENGINE: &str = "https://html.duckduckgo.com/html/?q={query}";
 
@@ -493,6 +504,7 @@ impl Default for Settings {
             coding_autosave: default_coding_autosave(),
             internet_mode: InternetMode::Simple,
             search_engine: default_search_engine(),
+            subagent_max_turns: default_subagent_max_turns(),
             session_models: Vec::new(),
             git_ssh_key: None,
             mouse_capture: MouseCapture::default(),

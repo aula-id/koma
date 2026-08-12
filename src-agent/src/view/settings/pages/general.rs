@@ -140,6 +140,7 @@ pub(crate) fn draw_general(
                         }
                     }
                     SettingField::Name => st.name.as_str(),
+                    SettingField::SubagentMaxTurns => st.subagent_max_turns.as_str(),
                     _ => "",
                 };
                 let editing_here = st.editing && is_selected;

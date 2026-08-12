@@ -31,6 +31,8 @@ pub enum SettingField {
     InternetMode,
     /// Toggle: mouse-capture mode — `auto` (touch detection) / `on` / `off`.
     MouseCapture,
+    /// Numeric: max agentic turns per sub-agent (when agent def has no `steps`).
+    SubagentMaxTurns,
 }
 
 impl SettingField {
@@ -52,6 +54,7 @@ impl SettingField {
             SettingField::CodingAutosave => "Coding autosave",
             SettingField::InternetMode => "Internet mode",
             SettingField::MouseCapture => "Mouse capture",
+            SettingField::SubagentMaxTurns => "Max turns",
         }
     }
 }
@@ -69,4 +72,5 @@ pub const GENERAL_FIELDS: &[SettingField] = &[
     SettingField::CodingAutosave,
     SettingField::InternetMode,
     SettingField::MouseCapture,
+    SettingField::SubagentMaxTurns,
 ];

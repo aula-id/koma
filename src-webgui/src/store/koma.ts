@@ -107,6 +107,8 @@ export type SettingsValues = {
   // The foreground session's stored `/effort` value ("" = model default), for
   // the composer EffortPicker's trigger-pill label.
   effort: string
+  // Max agentic turns per sub-agent (≥ 1, default 500).
+  subagentMaxTurns: number
 }
 
 // The composer EffortPicker's latest GetEffortOptions reply (host
@@ -1002,6 +1004,7 @@ export type PushEnvelope =
       internetMode: string
       palette: string
       effort: string
+      subagentMaxTurns: number
     }
   // Reply to GuiReq GetEffortOptions — the composer EffortPicker's derived
   // `/effort` menu for the foreground session's current model. ALWAYS a reply
@@ -2976,6 +2979,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             internetMode: env.internetMode,
             palette: env.palette,
             effort: env.effort ?? '',
+            subagentMaxTurns: env.subagentMaxTurns ?? 500,
           },
         }))
         // Prune importGraph state when the workdir list changes (same session).

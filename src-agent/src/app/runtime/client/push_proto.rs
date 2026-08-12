@@ -402,6 +402,8 @@ pub(super) enum PushEnvelope {
         /// The foreground session's stored `/effort` value (`""` = model
         /// default), for the composer's effort-picker trigger-pill label.
         effort: String,
+        /// Max agentic turns per sub-agent (user-editable, ≥ 1).
+        subagent_max_turns: u32,
     },
     /// One-shot reply to a `GetAgents` (and the re-push after a `SetAgent` / `DeleteAgent`):
     /// the merged sub-agent registry + model / provider catalogue for the GUI /agents
@@ -854,6 +856,7 @@ pub(super) fn push_settings_values(
     internet_mode: String,
     palette: String,
     effort: String,
+    subagent_max_turns: u32,
 ) {
     super::render::emit(
         push,
@@ -867,6 +870,7 @@ pub(super) fn push_settings_values(
             internet_mode,
             palette,
             effort,
+            subagent_max_turns,
         },
     );
 }

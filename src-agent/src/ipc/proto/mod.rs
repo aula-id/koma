@@ -390,6 +390,7 @@ pub enum ClientRequest {
         coding_autosave: Option<bool>,
         internet_mode: Option<String>,
         workdir: Option<Vec<String>>,
+        subagent_max_turns: Option<u32>,
     },
 
     /// GUI composer EFFORT picker opened: derive the `/effort` menu for the
@@ -701,6 +702,8 @@ pub enum DaemonEvent {
         /// default), for the GUI composer's effort-picker label. Mirrors the
         /// TUI's `sess.settings.effort` field verbatim.
         effort: String,
+        /// Max agentic turns per sub-agent (user-editable, ≥ 1).
+        subagent_max_turns: u32,
     },
     /// One-shot reply to a [`ClientRequest::GetEffortOptions`]: the derived
     /// `/effort` menu for the foreground session's current model, from
