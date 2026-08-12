@@ -554,6 +554,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             coding_autosave,
             internet_mode,
             workdir,
+            subagent_max_turns,
         } => {
             if let Ok(g) = ctx.req.lock() {
                 if let Some(tx) = g.as_ref() {
@@ -564,6 +565,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                         coding_autosave,
                         internet_mode,
                         workdir,
+                        subagent_max_turns,
                     });
                 }
             }

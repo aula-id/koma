@@ -88,6 +88,14 @@ pub struct SettingsSnapshot {
     /// `#[serde(default)]` for older-client compatibility.
     #[serde(default)]
     pub menu_sel: usize,
+    /// Max agentic turns per sub-agent. `#[serde(default)]` for older-client
+    /// snapshot compatibility.
+    #[serde(default = "default_u32_500")]
+    pub subagent_max_turns: u32,
+}
+
+fn default_u32_500() -> u32 {
+    500
 }
 
 // -- mode payload projections (stage 3: secondary full-screen views) -----------

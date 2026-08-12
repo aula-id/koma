@@ -86,6 +86,8 @@ pub struct SettingsState {
     pub internet_mode: InternetMode,
     /// Draft: mouse-capture mode toggle.
     pub mouse_capture: MouseCapture,
+    /// Draft: max agentic turns per sub-agent (numeric, string for editing).
+    pub subagent_max_turns: String,
     /// The session's effective working directory, captured at construction. Used
     /// as the base for resolving workspace-relative paths in the FS picker.
     pub cwd: PathBuf,
@@ -264,6 +266,7 @@ impl SettingsState {
             coding_autosave: session.settings.coding_autosave,
             internet_mode: session.settings.internet_mode,
             mouse_capture: session.settings.mouse_capture,
+            subagent_max_turns: session.settings.subagent_max_turns.to_string(),
             cwd: effective_cwd,
             list_editing: false,
             list_sel: 0,
@@ -344,6 +347,9 @@ impl SettingsState {
                 self.list_editing = true;
                 self.list_sel = 0;
             }
+            SettingField::SubagentMaxTurns => {
+                self.editing = true;
+            }
             _ => {
                 self.editing = true;
             }
@@ -351,8 +357,12 @@ impl SettingsState {
     }
 
     /// Append `c` to the draft of the current text field.
+    /// For numeric fields, only digits are accepted.
     pub fn push_char(&mut self, c: char) {
         let f = self.current_field();
+        if f == SettingField::SubagentMaxTurns && !c.is_ascii_digit() {
+            return;
+        }
         if let Some(s) = self.text_draft_mut(f) {
             s.push(c);
         }
