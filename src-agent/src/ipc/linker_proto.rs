@@ -12,6 +12,13 @@ pub enum LinkerRequest {
     RegisterWorkspaces {
         roots: Vec<String>, // canonical abs paths as strings
         session_id: String,
+        /// Monotonically-increasing per-session revision. The daemon rejects
+        /// registrations whose revision is older than the last accepted one,
+        /// preventing quick-successive saves from registering stale roots
+        /// out of order. `None` for callers that don't track revisions
+        /// (backward-compatible default).
+        #[serde(default)]
+        registration_revision: Option<u64>,
     },
     /// Unregister a session (all its roots released).
     Unregister { session_id: String },
@@ -74,6 +81,8 @@ pub enum LinkerQuery {
     WorkspaceInfo,
     /// Rich edit-context query: single-round-trip structured edit intelligence.
     EditContext { path: String },
+    /// Query the scan coordinator state (desired/applied/in-flight revisions).
+    ScanStatus,
 }
 
 /// Direction filter for the visualization query.
@@ -141,6 +150,23 @@ pub enum LinkerResponse {
     Ack,
     /// Current graph generation (lightweight probe, no summary text).
     Generation(u64),
+    /// Accepted scan revision from a Rescan query. The caller can poll
+    /// `ScanStatus` to wait for completion of this exact revision.
+    ScanRevision {
+        /// The scan revision accepted by the daemon (monotonically increasing).
+        revision: u64,
+    },
+    /// Current scan coordinator state: desired / applied / in-flight revisions.
+    ScanStatusResponse {
+        /// The latest revision that was requested.
+        desired_revision: u64,
+        /// The latest revision whose results are published in the graph.
+        applied_revision: u64,
+        /// `Some(rev)` if a scan thread for `rev` is currently running.
+        in_flight: Option<u64>,
+        /// The current graph generation (set monotonically at publication).
+        generation: u64,
+    },
     /// Bounded subgraph view for GUI visualization.
     GraphView(GraphViewResult),
     /// Workspace info: per-root file/language counts.

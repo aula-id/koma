@@ -941,12 +941,28 @@ pub fn structural_graph_hash(conn: &rusqlite::Connection) -> Result<String> {
 /// explicit re-entry into a still-valid ACTIVE prepare/execute/integrate contract
 /// (paused missions stay paused until the user re-approves / rebinds).
 pub fn should_auto_resume(mission: &Mission) -> bool {
-    mission.contract_version >= CURRENT_CONTRACT_VERSION
-        && mission.has_frozen_target()
-        && mission.approved
-        && !mission.needs_reapproval
-        && mission.hash_valid()
-        && matches!(mission.phase.as_str(), "prepare" | "execute" | "integrate")
+    if mission.contract_version < CURRENT_CONTRACT_VERSION {
+        return false;
+    }
+    if !mission.has_frozen_target() {
+        return false;
+    }
+    if !mission.approved || mission.needs_reapproval || !mission.hash_valid() {
+        return false;
+    }
+    match mission.phase.as_str() {
+        // prepare doesn't need binding yet - it's established during prepare.
+        "prepare" => true,
+        // execute/integrate require a live binding (worktree_path + branch).
+        "execute" | "integrate" => {
+            mission
+                .worktree_path
+                .as_deref()
+                .is_some_and(|s| !s.is_empty())
+                && mission.branch.as_deref().is_some_and(|s| !s.is_empty())
+        }
+        _ => false,
+    }
 }
 
 /// Phase to restore on SDLC re-entry for a still-active execute/integrate mission.
@@ -1409,6 +1425,180 @@ mod tests {
         m.phase = "integrate".into();
         assert!(should_auto_resume(&m));
         assert_eq!(resume_phase(&m).as_deref(), Some("integrate"));
+    }
+
+    /// Auto-resume must deny: unapproved mission (even with valid phase).
+    #[test]
+    fn auto_resume_denies_unapproved() {
+        let mut m = sample_mission();
+        m.approved = false;
+        m.phase = "execute".into();
+        assert!(!should_auto_resume(&m));
+        assert!(resume_phase(&m).is_none());
+    }
+
+    /// Auto-resume must deny: needs_reapproval (amended contract).
+    #[test]
+    fn auto_resume_denies_needs_reapproval() {
+        let mut m = sample_mission();
+        m.needs_reapproval = true;
+        m.phase = "execute".into();
+        assert!(!should_auto_resume(&m));
+        assert!(resume_phase(&m).is_none());
+    }
+
+    /// Auto-resume must deny: invalid hash (tampered contract).
+    #[test]
+    fn auto_resume_denies_invalid_hash() {
+        let mut m = sample_mission();
+        m.hash = "deadbeef".repeat(4);
+        m.phase = "execute".into();
+        assert!(!should_auto_resume(&m));
+        assert!(resume_phase(&m).is_none());
+    }
+
+    /// Auto-resume must deny: missing worktree binding (execute/integrate only).
+    /// should_auto_resume now enforces binding directly so that the gate is
+    /// fail-closed at the predicate level, not deferred to validate_active.
+    /// prepare-phase missions don't need binding yet — it's established during
+    /// prepare, not before.
+    #[test]
+    fn auto_resume_denies_missing_binding_execute_integrate() {
+        let mut m = sample_mission();
+        m.worktree_path = None;
+        for phase in ["execute", "integrate"] {
+            m.phase = phase.to_string();
+            m.hash = m.recompute_hash();
+            assert!(
+                !should_auto_resume(&m),
+                "phase={phase} must reject when worktree_path is None"
+            );
+            assert!(resume_phase(&m).is_none());
+        }
+        // Also deny when branch is missing.
+        let mut m2 = sample_mission();
+        m2.branch = None;
+        for phase in ["execute", "integrate"] {
+            m2.phase = phase.to_string();
+            m2.hash = m2.recompute_hash();
+            assert!(
+                !should_auto_resume(&m2),
+                "phase={phase} must reject when branch is None"
+            );
+        }
+        // prepare-phase without binding should still auto-resume (binding
+        // is established during prepare, not before).
+        let mut m3 = sample_mission();
+        m3.worktree_path = None;
+        m3.phase = "prepare".into();
+        m3.hash = m3.recompute_hash();
+        assert!(
+            should_auto_resume(&m3),
+            "prepare phase should allow auto-resume even without binding"
+        );
+    }
+
+    /// Auto-resume: complete lifecycle coverage for draft/denied/paused/done/stale.
+    #[test]
+    fn auto_resume_comprehensive_lifecycle_coverage() {
+        // draft: unapproved, should not resume
+        let mut m = sample_mission();
+        m.phase = "draft".into();
+        m.approved = false;
+        m.hash = m.recompute_hash();
+        assert!(!should_auto_resume(&m), "draft must not resume");
+
+        // denied (unapproved + needs_reapproval)
+        let mut m = sample_mission();
+        m.phase = "assess".into();
+        m.approved = false;
+        m.needs_reapproval = true;
+        m.hash = m.recompute_hash();
+        assert!(!should_auto_resume(&m), "denied assess must not resume");
+
+        // paused: explicit exit, should not resume
+        let mut m = sample_mission();
+        m.phase = "paused".into();
+        m.hash = m.recompute_hash();
+        assert!(!should_auto_resume(&m), "paused must not resume");
+
+        // done: terminal state, should not resume
+        let mut m = sample_mission();
+        m.phase = "done".into();
+        m.hash = m.recompute_hash();
+        assert!(!should_auto_resume(&m), "done must not resume");
+
+        // stale: old contract version
+        let mut m = sample_mission();
+        m.contract_version = 1;
+        m.phase = "execute".into();
+        m.hash = m.recompute_hash();
+        assert!(!should_auto_resume(&m), "stale contract must not resume");
+
+        // invalid: tampered hash
+        let mut m = sample_mission();
+        m.hash = "dead".repeat(8);
+        m.phase = "execute".into();
+        assert!(!should_auto_resume(&m), "invalid hash must not resume");
+
+        // missing frozen target
+        let mut m = sample_mission();
+        m.target_worktree_path = None;
+        m.target_branch = None;
+        m.target_head = None;
+        m.phase = "execute".into();
+        m.hash = m.recompute_hash();
+        assert!(
+            !should_auto_resume(&m),
+            "missing frozen target must not resume"
+        );
+
+        // valid prepare/execute/integrate should resume
+        let m = sample_mission();
+        assert!(should_auto_resume(&m), "valid execute must resume");
+    }
+
+    /// Auto-resume must deny: legacy contract version.
+    #[test]
+    fn auto_resume_denies_legacy_contract() {
+        let mut m = sample_mission();
+        m.contract_version = 1; // legacy
+        m.phase = "execute".into();
+        m.hash = m.recompute_hash();
+        assert!(!should_auto_resume(&m));
+        assert!(resume_phase(&m).is_none());
+    }
+
+    /// Auto-resume must deny: missing frozen target.
+    #[test]
+    fn auto_resume_denies_missing_frozen_target() {
+        let mut m = sample_mission();
+        m.target_worktree_path = None;
+        m.target_branch = None;
+        m.target_head = None;
+        m.phase = "execute".into();
+        m.hash = m.recompute_hash();
+        assert!(!should_auto_resume(&m));
+        assert!(resume_phase(&m).is_none());
+    }
+
+    /// Auto-resume: all conditions met for prepare/execute/integrate.
+    #[test]
+    fn auto_resume_allows_valid_active_phases() {
+        let m = sample_mission();
+        for phase in ["prepare", "execute", "integrate"] {
+            let mut test_m = m.clone();
+            test_m.phase = phase.to_string();
+            assert!(
+                should_auto_resume(&test_m),
+                "should auto-resume phase={phase}"
+            );
+            assert_eq!(
+                resume_phase(&test_m).as_deref(),
+                Some(phase),
+                "resume_phase mismatch for phase={phase}"
+            );
+        }
     }
 
     #[test]

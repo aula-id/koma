@@ -898,6 +898,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             direction,
             filter_roots,
             filter_languages,
+            request_id,
         } => {
             let depth = depth.unwrap_or(1).clamp(1, 3);
             let direction = direction.as_deref().unwrap_or("both");
@@ -912,9 +913,13 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 direction,
                 filter_roots,
                 filter_languages,
+                session_id: None, // resolved by host handler from attached session
+                request_id,
             });
         }
         // Impact analysis: off-thread linker IPC, same pattern as ImportGraph.
+        // Scoped to the foreground session's configured workdirs — foreign
+        // paths are never disclosed.
         #[cfg(feature = "linker")]
         GuiReq::ImportGraphImpact {
             path,
@@ -926,7 +931,14 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 path,
                 depth,
                 request_id,
+                session_id: None, // resolved by host handler from attached session
             });
+        }
+        // Manual reindex: reconcile/register + rescan + poll + refresh, entirely
+        // off-thread via the host-relay control channel.
+        #[cfg(feature = "linker")]
+        GuiReq::ImportGraphReindex { request_id } => {
+            let _ = ctx.ctl.send(HostCtl::ImportGraphReindex { request_id });
         }
     }
 }

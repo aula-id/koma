@@ -40,6 +40,28 @@ use crate::tool::DirCache;
 
 use super::types::ToastKind;
 
+/// Typed one-shot arm for the mission-approval compact seed. Carries enough
+/// identity + integrity guards so that a stale seed from a prior session,
+/// mission, contract, or generation can never inject a capsule into the wrong
+/// context. Created at mission-approval time; validated atomically at
+/// `apply_compaction_result` drain time.
+#[derive(Debug, Clone)]
+pub struct MissionSeedArm {
+    /// Session identity — must match `rt.id` at drain time.
+    pub session_id: String,
+    /// Mission id from `mission.json` — must match the loaded mission's id.
+    pub mission_id: String,
+    /// Mission contract hash at arm time — must match loaded mission's hash
+    /// (covers goal, acceptance, binding, target, graph_hash, …).
+    pub mission_hash: String,
+    /// Monotonic generation at arm time — must match `rt.sdlc_mission_generation`
+    /// so a seed from a prior SDLC session cannot fire after re-enter/re-approve.
+    pub generation: u64,
+    /// Mission phase at arm time — must be a compatible active phase (prepare,
+    /// execute, integrate) when checked against the loaded mission.
+    pub phase: String,
+}
+
 /// An SDLC edit batch awaiting historian summary.
 #[derive(Debug, Clone)]
 pub struct HistorianBatch {
@@ -250,6 +272,13 @@ pub struct SessionRuntime {
     /// off-plan / destructive actions. Cleared on the next genuine user submit and on
     /// (re)entering Plan mode, so it never leaks past the plan's execution window.
     pub approved_plan: Option<String>,
+    /// SDLC-specific TAC authorization context. Set by mission-approval handlers
+    /// instead of `approved_plan`, so the TAC classifier sees an SDLC-appropriate
+    /// authorization header ("APPROVED MISSION") rather than the generic plan
+    /// header. Cleared on mode transitions that leave SDLC or enter Plan, and on
+    /// denial/error paths — exactly mirroring `approved_plan`'s lifecycle but
+    /// scoped exclusively to SDLC.
+    pub approved_mission: Option<String>,
     // --- deferred tool-task lane (parallel to the sub-agent lane below) ---
     /// Tool-call ids of DEFERRED tools (see [`crate::tool::DEFERRED_TOOLS`] — the
     /// heavy/blocking ones: read / write / edit / delete / bash / grep / glob /
@@ -393,13 +422,29 @@ pub struct SessionRuntime {
     pub sdlc_phase: Option<String>,
     /// Mission branch (intent or bound) for header/projection. Transient — not serialised.
     pub sdlc_branch: Option<String>,
+    /// Approved mission goal projected from disk at snapshot time. Cached on the
+    /// runtime so the thin-client shadow and the GUI push path never do blocking
+    /// DB reads in render/push. `None` when mode is not SDLC or no mission on disk.
+    pub sdlc_goal: Option<String>,
+    /// Count of open graph nodes (not done/cancelled). Cached for the same reason
+    /// as `sdlc_goal` — avoids blocking `msglog::open` + graph queries in push.
+    pub sdlc_open: Option<usize>,
+    /// Count of sealed (done) graph nodes. Cached for the same reason.
+    pub sdlc_sealed: Option<usize>,
     /// Primary branch captured once on SDLC enter; restored on leave/deny if clean.
     /// Transient — never serialised.
     pub sdlc_assess_entry_branch: Option<String>,
     /// One-shot: after mission-approval compact, seed the mission capsule on THIS session.
-    pub pending_mission_seed: bool,
+    /// Carries identity + integrity guards so a stale seed from a prior session, mission,
+    /// contract, or generation can never inject.
+    pub pending_mission_seed: Option<MissionSeedArm>,
     /// One-shot: after plan-approval compact, seed plan.md on THIS session.
     pub pending_plan_seed: bool,
+    /// Monotonic counter bumped whenever the SDLC session leaves or a new mission is
+    /// approved. The `pending_mission_seed` arm stores the generation at arm time;
+    /// the consumer checks it matches so a seed from a prior SDLC session/mission
+    /// can never fire after re-enter or re-approve.
+    pub sdlc_mission_generation: u64,
     /// SDLC keeper due-flag: set after mission approve and after each finished
     /// tool round while in SDLC. Deferred idle rail evaluates once then clears.
     /// Transient — never serialised.
@@ -670,6 +715,7 @@ impl SessionRuntime {
             approval_reason: None,
             approved_worktree_call: None,
             approved_plan: None,
+            approved_mission: None,
             pending_tool_tasks: Vec::new(),
             awaiting_tool_tasks: false,
             tool_task_rx: None,
@@ -694,9 +740,13 @@ impl SessionRuntime {
             sdlc_prev_short_send: None,
             sdlc_phase: None,
             sdlc_branch: None,
+            sdlc_goal: None,
+            sdlc_open: None,
+            sdlc_sealed: None,
             sdlc_assess_entry_branch: None,
-            pending_mission_seed: false,
+            pending_mission_seed: None,
             pending_plan_seed: false,
+            sdlc_mission_generation: 0,
             sdlc_keeper_due: false,
             pending_sdlc_keeper_llm: None,
             sdlc_keeper_llm_inflight: false,

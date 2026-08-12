@@ -241,9 +241,15 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
         "sdlc" => AgentMode::Sdlc,
         _ => AgentMode::Auto,
     };
-    // SDLC phase is per-session on the wire projection; keep shadow header in sync.
+    // SDLC fields are per-session on the wire projection; keep shadow header in sync.
+    // The global carries the fg session's SDLC values; apply the full set so the
+    // shadow runtime stays consistent (the per-session rebuild in `shadow_session_runtime`
+    // sets them too, but this covers the case where the global has been mode-gated).
     shadow.rest.fg_mut().sdlc_phase = global.sdlc_phase.clone();
     shadow.rest.fg_mut().sdlc_branch = global.sdlc_branch.clone();
+    shadow.rest.fg_mut().sdlc_goal = global.sdlc_goal.clone();
+    shadow.rest.fg_mut().sdlc_open = global.sdlc_open;
+    shadow.rest.fg_mut().sdlc_sealed = global.sdlc_sealed;
     shadow.rest.latest_version =
         global
             .latest_version

@@ -374,3 +374,65 @@ fn resolve_in_allows_path_inside_bound_worktree_without_scratch() {
     );
     let _ = std::fs::remove_dir_all(&bound);
 }
+
+// --- Tool-advertisement contract regressions ---
+
+#[test]
+fn mission_lifecycle_tools_are_internal_only_and_not_main_advertised() {
+    let main = main_tool_names();
+    for name in [
+        "mission_ready",
+        "mission_verify",
+        "mission_prepare",
+        "mission_integrate",
+    ] {
+        assert!(
+            INTERNAL_ONLY.contains(&name),
+            "{name} must be internal-only"
+        );
+        assert!(
+            !main.iter().any(|advertised| advertised == name),
+            "{name} must not be advertised in the main tool list"
+        );
+    }
+}
+
+#[test]
+fn mission_prepare_schema_is_sdlc_only_and_not_ordinary_plan() {
+    let tool = sdlc::MissionPrepare;
+    let description = tool.description();
+    assert!(description.contains("SDLC-only prepare→execute phase transition"));
+    assert!(description.contains("Available only in SDLC prepare phase"));
+    assert!(description.contains("Unrelated to ordinary Plan mode"));
+}
+
+#[test]
+fn checklist_schema_has_no_sdlc_hierarchy_wording() {
+    let tool = todo::Checklist;
+    let schema = format!("{} {}", tool.description(), tool.parameters()).to_lowercase();
+    for forbidden in ["sdlc", "epic", "story", "hierarchy", "graph node"] {
+        assert!(
+            !schema.contains(forbidden),
+            "checklist schema must not contain SDLC hierarchy wording: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn built_in_and_main_advertised_tool_names_are_unique() {
+    let built_in: Vec<_> = all_tools().into_iter().map(|tool| tool.name()).collect();
+    let built_in_unique: std::collections::HashSet<_> = built_in.iter().copied().collect();
+    assert_eq!(
+        built_in.len(),
+        built_in_unique.len(),
+        "built-in tool names must be unique"
+    );
+
+    let advertised = main_tool_names();
+    let advertised_unique: std::collections::HashSet<_> = advertised.iter().collect();
+    assert_eq!(
+        advertised.len(),
+        advertised_unique.len(),
+        "main advertised tool names must be unique"
+    );
+}

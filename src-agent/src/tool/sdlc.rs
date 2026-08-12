@@ -181,10 +181,9 @@ impl Tool for MissionPrepare {
     }
 
     fn description(&self) -> &'static str {
-        "Transition from prepare to execute phase after source branch and worktrees are set up. \
-         This confirms the mission is ready for code execution — the source worktree exists, \
-         the branch is checked out, and the frozen graph is in place. Called by the model \
-         at the end of the prepare phase."
+        "SDLC-only prepare→execute phase transition. Available only in SDLC prepare phase \
+         after mission approval. Confirms source branch and worktree setup is complete. \
+         Unrelated to ordinary Plan mode."
     }
 
     fn parameters(&self) -> Value {

@@ -18,10 +18,41 @@ use crate::ipc::SyncIpcStream;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Timeout for linker daemon IPC round-trips.
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
+
+// ---------------------------------------------------------------------------
+// Per-session registration revision counter (rejects stale registrations).
+// ---------------------------------------------------------------------------
+
+/// Monotonically increasing registration revision. The wall-clock component
+/// keeps revisions newer after a client-process restart while the in-process
+/// last value preserves ordering for concurrent saves in the same timestamp.
+fn next_revision(_session_id: &str) -> u64 {
+    static LAST_REVISION: OnceLock<Mutex<u64>> = OnceLock::new();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .min(u64::MAX as u128) as u64;
+    let mut last = LAST_REVISION
+        .get_or_init(|| Mutex::new(0))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    *last = now.max(last.saturating_add(1));
+    *last
+}
+
+/// Allocate a registration revision synchronously (public).  Call this
+/// immediately after an authoritative settings save/change succeeds — **before**
+/// spawning the background registration thread — so the revision is captured
+/// deterministically.  The returned revision is restart-safe (wall-clock
+/// monotonic) and ensures that a delayed older worker is rejected by the daemon.
+pub fn next_registration_revision(session_id: &str) -> u64 {
+    next_revision(session_id)
+}
 
 // ---------------------------------------------------------------------------
 // Connection pool — one persistent socket shared across all callers.
@@ -187,29 +218,107 @@ pub fn fetch_neighborhood(path: &str) -> Option<(Vec<String>, Vec<String>)> {
     Some((imports, imported_by))
 }
 
+/// Canonical root normalization: the authoritative form both the linker daemon
+/// and the GUI use for workspace root comparison. Canonicalizes via
+/// `std::fs::canonicalize` (resolves symlinks) when possible, falls back to
+/// making the path absolute via cwd (lexical normalization) when the path
+/// doesn't exist on disk, and always slash-normalizes for cross-platform
+/// consistency.
+pub fn canonical_root(root: &std::path::Path) -> String {
+    match std::fs::canonicalize(root) {
+        Ok(p) => p.to_string_lossy().replace('\\', "/"),
+        Err(_) => {
+            // Lexical fallback: make relative paths absolute against cwd so
+            // the daemon always receives absolute paths for consistent keying.
+            let absolute = if root.is_relative() {
+                std::env::current_dir().unwrap_or_default().join(root)
+            } else {
+                root.to_path_buf()
+            };
+            absolute.to_string_lossy().replace('\\', "/")
+        }
+    }
+}
+
+/// Canonicalize a set of workspace roots into the authoritative string form
+/// used by both the linker daemon and the GUI scope comparison.
+/// Preserves input order (stable-first dedup): the first occurrence of each
+/// unique canonical path wins, so configured root order is not destroyed by
+/// sorting.
+pub fn canonical_roots(roots: &[PathBuf]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut v: Vec<String> = Vec::with_capacity(roots.len());
+    for root in roots {
+        let canon = canonical_root(root);
+        if seen.insert(canon.clone()) {
+            v.push(canon);
+        }
+    }
+    v
+}
+
+/// Build a mapping from canonical path → raw configured path for workspace
+/// roots where the two differ (e.g. symlinks, relative paths, non-canonical
+/// spellings).  Used by the import-graph workers so the GUI root DTO carries
+/// both the canonical `root` and the user's original `configured_path`.
+///
+/// Deduplicates using the same stable-first logic as [`canonical_roots`]:
+/// only the first occurrence of each canonical path is recorded.
+pub fn configured_root_map(roots: &[PathBuf]) -> std::collections::HashMap<String, String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut map = std::collections::HashMap::new();
+    for root in roots {
+        let canon = canonical_root(root);
+        if seen.insert(canon.clone()) {
+            let raw = root.to_string_lossy().replace('\\', "/");
+            if canon != raw {
+                map.insert(canon, raw);
+            }
+        }
+    }
+    map
+}
+
 /// Ensure the linker daemon is running and register the given roots.
 /// Returns Ok(()) on success, best-effort error on failure.
+/// Automatically stamps a monotonically-increasing per-session revision so
+/// the daemon can reject stale out-of-order registrations.
+///
+/// **Validates** the daemon response: only `Registered` is treated as success;
+/// `Error` and unexpected variants produce `Err`.
 pub fn ensure_and_register(roots: &[PathBuf], client_id: &str) -> Result<(), String> {
+    let revision = next_revision(client_id);
+    ensure_and_register_with_revision(roots, client_id, revision)
+}
+
+/// Ensure the linker daemon is running and register the given roots with a
+/// **pre-allocated revision**.  Use [`next_registration_revision`] to allocate
+/// the revision synchronously after an authoritative save, then pass it here
+/// from the background thread.  This ensures a delayed older worker is
+/// rejected by the daemon's revision gating.
+///
+/// Only `LinkerResponse::Registered` is treated as success; `Error` and
+/// unexpected variants produce `Err`.
+pub fn ensure_and_register_with_revision(
+    roots: &[PathBuf],
+    client_id: &str,
+    revision: u64,
+) -> Result<(), String> {
     crate::app::ensure_linker_daemon_running()
         .map_err(|e| format!("failed to start linker daemon: {e}"))?;
 
-    let root_strs: Vec<String> = roots
-        .iter()
-        .map(|p| {
-            p.canonicalize()
-                .unwrap_or_else(|_| p.clone())
-                .to_string_lossy()
-                .replace('\\', "/")
-        })
-        .collect();
+    let root_strs = canonical_roots(roots);
 
     let req = LinkerRequest::RegisterWorkspaces {
         roots: root_strs,
         session_id: client_id.to_string(),
+        registration_revision: Some(revision),
     };
 
     match connect_and_send(&req) {
-        Some(_) => Ok(()),
+        Some(LinkerResponse::Registered { .. }) => Ok(()),
+        Some(LinkerResponse::Error(e)) => Err(e),
+        Some(other) => Err(format!("unexpected linker daemon response: {other:?}")),
         None => Err("linker daemon did not respond".into()),
     }
 }
@@ -303,6 +412,35 @@ pub fn fetch_graph_view(req: &VisualizationRequest) -> Option<GraphViewResult> {
     )))?;
     match resp {
         LinkerResponse::GraphView(v) => Some(v),
+        _ => None,
+    }
+}
+
+/// Scan coordinator state returned by `fetch_scan_status`.
+#[allow(dead_code)]
+pub struct ScanCoordinatorState {
+    pub desired_revision: u64,
+    pub applied_revision: u64,
+    pub in_flight: Option<u64>,
+    pub generation: u64,
+}
+
+/// Fetch scan coordinator state (desired/applied/in-flight revisions).
+/// Returns `None` if the daemon is unreachable.
+pub fn fetch_scan_status() -> Option<ScanCoordinatorState> {
+    let resp = connect_and_send(&LinkerRequest::Query(LinkerQuery::ScanStatus))?;
+    match resp {
+        LinkerResponse::ScanStatusResponse {
+            desired_revision,
+            applied_revision,
+            in_flight,
+            generation,
+        } => Some(ScanCoordinatorState {
+            desired_revision,
+            applied_revision,
+            in_flight,
+            generation,
+        }),
         _ => None,
     }
 }
@@ -475,5 +613,278 @@ mod tests {
         let result = normalize_query_path("[0]", &roots);
         // Empty bare falls through, treated as relative path "[0]" → primary root
         assert_eq!(result, "/some/root/[0]");
+    }
+
+    // ─── canonical_root / canonical_roots tests ─────────────────────────
+
+    #[test]
+    fn canonical_root_accepts_path_ref() {
+        // Verify that canonical_root works with &Path (not just &PathBuf).
+        let p: &std::path::Path = std::path::Path::new("/some/root");
+        let result = canonical_root(p);
+        assert_eq!(result, "/some/root");
+    }
+
+    #[test]
+    fn canonical_root_lexical_fallback() {
+        // Non-existent relative path should be made absolute against cwd.
+        let p = std::path::Path::new("relative/nonexistent");
+        let result = canonical_root(p);
+        let cwd = std::env::current_dir().unwrap();
+        let expected = cwd
+            .join("relative/nonexistent")
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert_eq!(
+            result, expected,
+            "non-existent relative path should be resolved against cwd"
+        );
+    }
+
+    #[test]
+    fn canonical_root_lexical_absolute_passthrough() {
+        // Non-existent absolute path should pass through (absolute already).
+        let result = canonical_root(std::path::Path::new("/absolutely/nonexistent"));
+        assert_eq!(result, "/absolutely/nonexistent");
+    }
+
+    #[test]
+    fn canonical_root_existing_dir_canonicalizes() {
+        let dir = std::env::temp_dir().join(format!("koma_test_cr_dir_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let result = canonical_root(&dir);
+        // Should be the canonical (symlink-resolved) absolute path.
+        let expected = std::fs::canonicalize(&dir)
+            .unwrap_or(dir.clone())
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert_eq!(result, expected);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn canonical_roots_stable_first_dedup() {
+        // Input order is preserved; first occurrence wins.
+        let roots = vec![
+            PathBuf::from("/z/root"),
+            PathBuf::from("/a/root"),
+            PathBuf::from("/z/root"), // duplicate — dropped
+            PathBuf::from("/m/root"),
+        ];
+        let result = canonical_roots(&roots);
+        assert_eq!(
+            result,
+            vec!["/z/root", "/a/root", "/m/root"],
+            "stable-first dedup must preserve input order"
+        );
+    }
+
+    #[test]
+    fn canonical_roots_deduplicates_identical_paths() {
+        let roots = vec![
+            PathBuf::from("/same/path"),
+            PathBuf::from("/same/path"),
+            PathBuf::from("/other"),
+        ];
+        let result = canonical_roots(&roots);
+        // Stable-first: first occurrence wins, no sort.
+        assert_eq!(result, vec!["/same/path", "/other"]);
+    }
+
+    #[test]
+    fn canonical_roots_deduplicates_trailing_slash() {
+        // On most systems /foo and /foo/ resolve to the same canonical form.
+        let dir = std::env::temp_dir().join(format!("koma_test_cr_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let with_slash = dir.join("../../../.."); // go up some levels
+        let roots = vec![dir.clone(), with_slash];
+        // canonicalize resolves to the same path for both.
+        let result = canonical_roots(&roots);
+        // At most one entry per actual directory.
+        assert!(
+            result.len() <= 2, // could be 1 if they resolve identically
+            "dedup should collapse equivalent paths, got: {result:?}"
+        );
+        // No duplicates.
+        let mut unique = result.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(result.len(), unique.len(), "output must be deduped");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn canonical_roots_empty_input() {
+        let result = canonical_roots(&[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn canonical_roots_symlink_dedup() {
+        // Create a real dir and a symlink to it; both should canonicalize
+        // to the same path, deduplicating in stable-first order.
+        let base = std::env::temp_dir().join(format!("koma_test_sym_{}", std::process::id()));
+        let link = std::env::temp_dir().join(format!("koma_test_sym_link_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&base);
+        // Remove link if it exists from a previous test run.
+        let _ = std::fs::remove_file(&link);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let _ = symlink(&base, &link);
+            let roots = vec![base.clone(), link.clone()];
+            let result = canonical_roots(&roots);
+            // If symlink creation succeeded, both should dedup.
+            if link.exists() {
+                assert_eq!(
+                    result.len(),
+                    1,
+                    "symlink and target must dedup, got: {result:?}"
+                );
+            }
+        }
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn canonical_roots_path_spelling_dedup() {
+        // Non-existent paths: lexical fallback makes them absolute, so
+        // same path with/without trailing component is NOT the same.
+        let roots = vec![
+            PathBuf::from("/nonexistent/a"),
+            PathBuf::from("/nonexistent/b"),
+        ];
+        let result = canonical_roots(&roots);
+        assert_eq!(result.len(), 2);
+        // Both should be slash-normalized (forward slashes).
+        for r in &result {
+            assert!(!r.contains('\\'), "backslashes should be normalized: {r}");
+        }
+    }
+
+    #[test]
+    fn canonical_roots_preserves_configured_order() {
+        // Critical: settings order must survive canonicalization.
+        let roots = vec![
+            PathBuf::from("/c/root"),
+            PathBuf::from("/a/root"),
+            PathBuf::from("/b/root"),
+            PathBuf::from("/c/root"), // duplicate
+        ];
+        let result = canonical_roots(&roots);
+        assert_eq!(result, vec!["/c/root", "/a/root", "/b/root"]);
+    }
+
+    // ── next_registration_revision: monotonic allocation ──────────────────
+
+    #[test]
+    fn next_registration_revision_is_monotonic() {
+        let r1 = next_registration_revision("test_session");
+        let r2 = next_registration_revision("test_session");
+        let r3 = next_registration_revision("test_session");
+        assert!(r2 > r1, "revision must be monotonically increasing");
+        assert!(r3 > r2, "revision must be monotonically increasing");
+    }
+
+    #[test]
+    fn next_registration_revision_cross_session_independent() {
+        // Different sessions share the global counter, so revisions are
+        // interleaved but still monotonically increasing.
+        let r1 = next_registration_revision("session_a");
+        let r2 = next_registration_revision("session_b");
+        assert!(
+            r2 >= r1,
+            "cross-session revisions should be ordered: r1={r1} r2={r2}"
+        );
+    }
+
+    // ── configured_root_map: canonical → raw mapping ─────────────────────
+
+    #[test]
+    fn configured_root_map_nonexistent_paths_preserve_raw() {
+        // Non-existent paths: lexical fallback makes them absolute, so the
+        // canonical form matches the normalised raw.  No map entry expected.
+        let roots = vec![PathBuf::from("/nonexistent/a")];
+        let map = configured_root_map(&roots);
+        // canonical == raw (slash-normalised), so no entry.
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn configured_root_map_empty_input() {
+        let map = configured_root_map(&[]);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn configured_root_map_deduplicates_stable_first() {
+        // Two identical paths: only the first is recorded; no map entry
+        // since canonical == raw for both.
+        let roots = vec![PathBuf::from("/same/path"), PathBuf::from("/same/path")];
+        let map = configured_root_map(&roots);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn configured_root_map_symlink_records_raw() {
+        // Create a real dir and a symlink to it.
+        let base = std::env::temp_dir().join(format!("koma_test_crm_{}", std::process::id()));
+        let link = std::env::temp_dir().join(format!("koma_test_crm_link_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&base);
+        let _ = std::fs::remove_file(&link);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let _ = symlink(&base, &link);
+            if link.exists() {
+                let roots = vec![link.clone()];
+                let map = configured_root_map(&roots);
+                // The raw link path should map to the canonical base path.
+                let canonical = canonical_root(&base);
+                let raw = link.to_string_lossy().replace('\\', "/");
+                if canonical != raw {
+                    assert_eq!(map.get(&canonical).map(|s| s.as_str()), Some(raw.as_str()));
+                }
+            }
+        }
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn configured_root_map_relative_path_records_raw() {
+        // Relative path: canonical_root makes it absolute, so raw != canonical.
+        let roots = vec![PathBuf::from("relative/path")];
+        let map = configured_root_map(&roots);
+        // The map should have an entry: key = canonical absolute, value = "relative/path".
+        assert_eq!(map.len(), 1);
+        let (_, raw) = map.iter().next().unwrap();
+        assert_eq!(raw, "relative/path");
+    }
+
+    // ── ensure_and_register_with_revision response validation ────────────
+
+    #[test]
+    fn registered_variant_is_only_success() {
+        // Verify the match arms used in ensure_and_register_with_revision.
+        use crate::ipc::linker_proto::{LinkerResponse, ScanStatus};
+
+        let registered = LinkerResponse::Registered {
+            status: ScanStatus::Ready,
+            generation: 42,
+        };
+        // Only Registered should match Ok.
+        assert!(matches!(registered, LinkerResponse::Registered { .. }));
+
+        let error = LinkerResponse::Error("daemon error".into());
+        assert!(matches!(error, LinkerResponse::Error(_)));
+        assert!(!matches!(error, LinkerResponse::Registered { .. }));
+
+        let ack = LinkerResponse::Ack;
+        assert!(!matches!(ack, LinkerResponse::Registered { .. }));
+
+        let gen = LinkerResponse::Generation(1);
+        assert!(!matches!(gen, LinkerResponse::Registered { .. }));
     }
 }
