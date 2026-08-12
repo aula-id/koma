@@ -161,6 +161,13 @@ mod roundtrip_tests {
                     locked: true,
                 },
             ],
+            // SDLC fields: exercise non-default values so the round-trip proves
+            // all five survive serialize -> deserialize (None would alias default).
+            sdlc_phase: Some("execute".to_string()),
+            sdlc_goal: Some("ship the SDLC isolation feature".to_string()),
+            sdlc_branch: Some("sdlc/isolation".to_string()),
+            sdlc_open: Some(5),
+            sdlc_sealed: Some(3),
         }
     }
 
@@ -643,5 +650,258 @@ mod roundtrip_tests {
             key: "sk-fake".to_string(),
             status: "renews in 3d".to_string(),
         });
+    }
+
+    // ─── SDLC mode isolation projection tests ──────────────────────────────────
+    //
+    // These prove the snapshot projection mode-gates SDLC and Plan fields:
+    //   • SDLC fields only appear when agent_mode == Sdlc
+    //   • Plan todos only appear when agent_mode == Plan
+    //   • Cross-session rails never leak (session B's projection is independent)
+
+    use crate::app::state::AgentMode;
+    use crate::model::conversation::Conversation;
+    use crate::model::session::Session;
+    use crate::model::settings::Settings;
+
+    struct ProjectionFixture {
+        state: crate::app::state::AppState,
+        roots: Vec<std::path::PathBuf>,
+    }
+
+    impl std::ops::Deref for ProjectionFixture {
+        type Target = crate::app::state::AppState;
+
+        fn deref(&self) -> &Self::Target {
+            &self.state
+        }
+    }
+
+    impl std::ops::DerefMut for ProjectionFixture {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.state
+        }
+    }
+
+    impl Drop for ProjectionFixture {
+        fn drop(&mut self) {
+            for root in &self.roots {
+                let _ = std::fs::remove_dir_all(root);
+            }
+        }
+    }
+
+    fn projection_session(
+        tag: &str,
+        goal: &str,
+        open: usize,
+        sealed: usize,
+    ) -> (Session, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "koma-ipc-projection-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mission = serde_json::json!({
+            "contract_version": 2,
+            "id": format!("mission-{tag}"),
+            "goal": goal,
+            "non_goals": [],
+            "acceptance": ["projection is authoritative"],
+            "lane": "standard",
+            "verify_plan": [],
+            "human_gates": [],
+            "human_gates_approved": [],
+            "risks": [],
+            "worktree_name": null,
+            "branch": null,
+            "worktree_path": null,
+            "target_worktree_path": null,
+            "target_branch": null,
+            "target_head": null,
+            "rationale": "test fixture",
+            "phase": "execute",
+            "approved": false,
+            "hash": "fixture",
+            "graph_hash": null,
+            "needs_reapproval": false,
+            "amendment_note": null
+        });
+        std::fs::write(
+            root.join("mission.json"),
+            serde_json::to_vec_pretty(&mission).unwrap(),
+        )
+        .unwrap();
+        let conn = crate::model::msglog::open(&root).unwrap();
+        crate::model::sdlc::graph::ensure_tables(&conn).unwrap();
+        for i in 0..open {
+            conn.execute(
+                "INSERT INTO sdlc_nodes (id, title, status, notes, verify_bit, updated_at, owned_paths) VALUES (?1, ?2, 'pending', '', 0, 1, '[]')",
+                rusqlite::params![format!("{tag}-open-{i}"), format!("{tag} open {i}")],
+            )
+            .unwrap();
+        }
+        for i in 0..sealed {
+            conn.execute(
+                "INSERT INTO sdlc_nodes (id, title, status, notes, verify_bit, updated_at, owned_paths) VALUES (?1, ?2, 'done', '', 1, 1, '[]')",
+                rusqlite::params![format!("{tag}-sealed-{i}"), format!("{tag} sealed {i}")],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        let session = Session::new(
+            format!("session-{tag}"),
+            root.clone(),
+            "pwd".into(),
+            Settings::default(),
+            Conversation::from_messages(vec![]),
+        );
+        (session, root)
+    }
+
+    /// Build two genuinely persisted sessions. Mission goal and L2 graph counts
+    /// are read by projection from each session's artifacts, never runtime caches.
+    fn build_two_session_state(
+        mode_a: AgentMode,
+        sdlc_phase_a: Option<&str>,
+        mode_b: AgentMode,
+    ) -> ProjectionFixture {
+        let (session_a, root_a) = projection_session("a", "goal-a", 5, 3);
+        let (session_b, root_b) = projection_session("b", "goal-b", 1, 1);
+        let mut rest = crate::app::state::AppStateRest::default();
+        rest.sessions[0].id = "session-a".to_string();
+        rest.sessions[0].session = Some(session_a);
+        rest.sessions[0].agent_mode = mode_a;
+        rest.sessions[0].sdlc_phase = sdlc_phase_a.map(str::to_string);
+        rest.sessions[0].sdlc_branch = Some("sdlc/feat-a".to_string());
+        rest.sessions[0].plan_todos = vec![crate::app::mode::todo::TodoItem {
+            content: "step 1".to_string(),
+            status: crate::app::mode::todo::TodoStatus::Completed,
+            priority: crate::app::mode::todo::TodoPriority::Medium,
+            locked: false,
+        }];
+        let mut rt_b = crate::app::state::SessionRuntime::new();
+        rt_b.id = "session-b".to_string();
+        rt_b.session = Some(session_b);
+        rt_b.agent_mode = mode_b;
+        rt_b.sdlc_phase = Some("prepare".into());
+        rt_b.sdlc_branch = Some("sdlc/feat-b".into());
+        rest.sessions.push(rt_b);
+        rest.foreground = 0;
+        ProjectionFixture {
+            state: crate::app::state::AppState { rest },
+            roots: vec![root_a, root_b],
+        }
+    }
+
+    #[test]
+    fn sdlc_to_auto_clears_sdlc_in_projection() {
+        let state = build_two_session_state(AgentMode::Sdlc, Some("execute"), AgentMode::Auto);
+        // Project session A (SDLC mode): SDLC fields should be present.
+        let snap = crate::ipc::snapshot::projection::build_snapshot(&state);
+        let session_a = &snap.sessions[0];
+        assert_eq!(session_a.sdlc_phase.as_deref(), Some("execute"));
+        assert_eq!(session_a.sdlc_branch.as_deref(), Some("sdlc/feat-a"));
+        assert_eq!(session_a.sdlc_goal.as_deref(), Some("goal-a"));
+        assert_eq!(session_a.sdlc_open, Some(5));
+        assert_eq!(session_a.sdlc_sealed, Some(3));
+
+        // Now change session A to Auto mode — SDLC fields must clear.
+        let mut state2 = state;
+        state2.rest.sessions[0].agent_mode = AgentMode::Auto;
+        let snap2 = crate::ipc::snapshot::projection::build_snapshot(&state2);
+        let session_a2 = &snap2.sessions[0];
+        assert!(
+            session_a2.sdlc_phase.is_none(),
+            "SDLC phase cleared when mode=auto"
+        );
+        assert!(
+            session_a2.sdlc_goal.is_none(),
+            "SDLC goal cleared when mode=auto"
+        );
+        assert!(
+            session_a2.sdlc_branch.is_none(),
+            "SDLC branch cleared when mode=auto"
+        );
+        assert!(
+            session_a2.sdlc_open.is_none(),
+            "SDLC open cleared when mode=auto"
+        );
+        assert!(
+            session_a2.sdlc_sealed.is_none(),
+            "SDLC sealed cleared when mode=auto"
+        );
+    }
+
+    #[test]
+    fn sdlc_to_plan_clears_sdlc_and_preserves_plan() {
+        let mut state = build_two_session_state(AgentMode::Sdlc, Some("assess"), AgentMode::Auto);
+        // Session A starts in SDLC
+        let snap = crate::ipc::snapshot::projection::build_snapshot(&state);
+        assert!(snap.sessions[0].sdlc_phase.is_some());
+        assert!(
+            snap.sessions[0].plan_todos.is_empty(),
+            "Plan todos empty in SDLC mode"
+        );
+
+        // Switch session A to Plan mode
+        state.rest.sessions[0].agent_mode = AgentMode::Plan;
+        let snap2 = crate::ipc::snapshot::projection::build_snapshot(&state);
+        let sa = &snap2.sessions[0];
+        assert!(sa.sdlc_phase.is_none(), "SDLC phase cleared when mode=plan");
+        assert!(sa.sdlc_goal.is_none(), "SDLC goal cleared when mode=plan");
+        assert_eq!(sa.plan_todos.len(), 1, "Plan todos projected in plan mode");
+        assert_eq!(sa.plan_todos[0].content, "step 1");
+    }
+
+    #[test]
+    fn plan_to_auto_clears_plan_and_no_sdlc_leak() {
+        let mut state = build_two_session_state(AgentMode::Plan, None, AgentMode::Auto);
+        // Session A in Plan mode — plan todos present, SDLC clear
+        let snap = crate::ipc::snapshot::projection::build_snapshot(&state);
+        assert_eq!(snap.sessions[0].plan_todos.len(), 1);
+        assert!(snap.sessions[0].sdlc_phase.is_none());
+
+        // Switch session A to Auto — plan todos must clear too
+        state.rest.sessions[0].agent_mode = AgentMode::Auto;
+        let snap2 = crate::ipc::snapshot::projection::build_snapshot(&state);
+        assert!(
+            snap2.sessions[0].plan_todos.is_empty(),
+            "Plan todos cleared when mode=auto"
+        );
+        assert!(snap2.sessions[0].sdlc_phase.is_none());
+    }
+
+    #[test]
+    fn cross_session_no_rail_leakage() {
+        let mut state = build_two_session_state(AgentMode::Sdlc, Some("execute"), AgentMode::Sdlc);
+        let snap = crate::ipc::snapshot::projection::build_snapshot(&state);
+        let sa = &snap.sessions[0];
+        let sb = &snap.sessions[1];
+        assert_eq!(sa.sdlc_goal.as_deref(), Some("goal-a"));
+        assert_eq!(sa.sdlc_open, Some(5));
+        assert_eq!(sa.sdlc_sealed, Some(3));
+        assert!(sb.sdlc_phase.is_none());
+        assert!(sb.sdlc_goal.is_none());
+        assert!(sb.sdlc_branch.is_none());
+        assert!(sb.sdlc_open.is_none());
+        assert!(sb.sdlc_sealed.is_none());
+        assert!(sb.plan_todos.is_empty());
+
+        state.rest.foreground = 1;
+        let snap = crate::ipc::snapshot::projection::build_snapshot(&state);
+        let sa = &snap.sessions[0];
+        let sb = &snap.sessions[1];
+        assert!(sa.sdlc_phase.is_none());
+        assert!(sa.sdlc_goal.is_none());
+        assert_eq!(sb.sdlc_phase.as_deref(), Some("prepare"));
+        assert_eq!(sb.sdlc_goal.as_deref(), Some("goal-b"));
+        assert_eq!(sb.sdlc_branch.as_deref(), Some("sdlc/feat-b"));
+        assert_eq!(sb.sdlc_open, Some(1));
+        assert_eq!(sb.sdlc_sealed, Some(1));
     }
 }

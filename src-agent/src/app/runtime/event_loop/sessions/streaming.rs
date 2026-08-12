@@ -104,7 +104,7 @@ pub(super) fn drain_stream(
                     // one-shot seeds so they can't fire on a later `/compact`.
                     // No-op when no plan/mission flow is armed.
                     state.rest.sessions[idx].pending_plan_seed = false;
-                    state.rest.sessions[idx].pending_mission_seed = false;
+                    state.rest.sessions[idx].pending_mission_seed = None;
                     still_streaming = false;
                     break;
                 }

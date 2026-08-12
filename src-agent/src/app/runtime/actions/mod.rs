@@ -487,3 +487,7 @@ pub(in crate::app::runtime) fn apply_action(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "prompt_contract_test.rs"]
+mod prompt_contract_tests;

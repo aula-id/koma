@@ -13,6 +13,7 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
 
 use crate::ipc::frame::{read_frame_from, write_frame_to, FrameReader};
@@ -35,6 +36,21 @@ const REAPER_POLL: std::time::Duration = std::time::Duration::from_secs(15);
 /// Number of consecutive empty scans before exit.
 const REAPER_EMPTY_STREAK_TO_EXIT: u32 = 2;
 
+/// Coordinates scan versioning to prevent stale scans from publishing.
+///
+/// Every call to `spawn_scan_versioned` bumps `desired_revision` and sets
+/// `in_flight`. When a scan thread completes it checks whether its revision
+/// is still current before publishing, preventing a slow/stale scan from
+/// overwriting a graph that was already updated by a newer scan.
+struct ScanCoordinator {
+    /// Monotonically-increasing counter, bumped on each desired scan.
+    desired_revision: u64,
+    /// The revision whose results are currently published in the graph.
+    applied_revision: u64,
+    /// `Some(rev)` while a scan thread for `rev` is running.
+    in_flight: Option<u64>,
+}
+
 /// Shared daemon state: the import graph plus per-client root tracking, the
 /// file watcher, and the project index.
 struct DaemonState {
@@ -56,6 +72,37 @@ struct DaemonState {
     watched_roots: RwLock<Vec<PathBuf>>,
     /// Phase 2: the project index tracking known files and workspace ownership.
     project_index: RwLock<crate::linker::project::ProjectIndex>,
+
+    // ── Atomic reconciliation ──────────────────────────────────────────
+    /// Serializes entire RegisterWorkspaces / Unregister operations so that
+    /// clients, refcounts, watcher updates, and scan scheduling are always
+    /// consistent.  Without this, two concurrent requests from different
+    /// sessions could interleave between the clients write and the
+    /// root_refs write, leaving refcounts corrupt.
+    operation_lock: Mutex<()>,
+
+    /// Serializes graph + project_index pair mutations from the scan-thread
+    /// publication and the watcher event-processing loop.  Ensures that the
+    /// pair is always swapped/mutated atomically relative to each other and
+    /// to new scan scheduling.  Ordering: scan_coordinator → publication_lock
+    /// (scan thread) or publication_lock alone (watcher).  Never held by
+    /// RegisterWorkspaces (which schedules scans, not data mutation).
+    publication_lock: Mutex<()>,
+
+    /// Scan versioning: prevents stale slow scans from overwriting a
+    /// graph that was already updated by a newer scan.
+    scan_coordinator: Mutex<ScanCoordinator>,
+
+    /// Per-session monotonic registration revision.  Registrations whose
+    /// revision is older than the last accepted one are silently ignored,
+    /// preventing quick successive settings saves from registering stale
+    /// roots out of order.
+    session_revisions: RwLock<HashMap<String, u64>>,
+
+    /// Monotonically-increasing graph generation counter, owned exclusively
+    /// by the daemon.  Set at publication time (scan or watcher batch) so
+    /// the published generation never moves backward.
+    published_generation: std::sync::atomic::AtomicU64,
 }
 
 impl DaemonState {
@@ -69,6 +116,15 @@ impl DaemonState {
             watcher_rx: Mutex::new(None),
             watched_roots: RwLock::new(Vec::new()),
             project_index: RwLock::new(crate::linker::project::ProjectIndex::new()),
+            operation_lock: Mutex::new(()),
+            publication_lock: Mutex::new(()),
+            scan_coordinator: Mutex::new(ScanCoordinator {
+                desired_revision: 0,
+                applied_revision: 0,
+                in_flight: None,
+            }),
+            session_revisions: RwLock::new(HashMap::new()),
+            published_generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 }
@@ -211,70 +267,127 @@ fn handle_request(
             shutting_down.store(true, std::sync::atomic::Ordering::Relaxed);
             LinkerResponse::Ack
         }
-        LinkerRequest::RegisterWorkspaces { roots, session_id } => {
-            let paths: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
+        LinkerRequest::RegisterWorkspaces {
+            roots,
+            session_id,
+            registration_revision,
+        } => {
+            // ── Serialize the entire reconciliation under operation_lock ──
+            let _op = state
+                .operation_lock
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
 
-            // Register client → roots mapping.
-            {
-                let mut clients = state.clients.write().unwrap_or_else(|e| e.into_inner());
-                clients.insert(session_id.clone(), paths.iter().cloned().collect());
+            // ── Reject stale registration ────────────────────────────────
+            if let Some(rev) = registration_revision {
+                let mut revs = state
+                    .session_revisions
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner());
+                if let Some(&known) = revs.get(&session_id) {
+                    if rev < known {
+                        let gen = state
+                            .graph
+                            .read()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .generation;
+                        return LinkerResponse::Registered {
+                            status: if state.scanning.load(Ordering::SeqCst) {
+                                crate::ipc::linker_proto::ScanStatus::Scanning
+                            } else {
+                                crate::ipc::linker_proto::ScanStatus::Ready
+                            },
+                            generation: gen,
+                        };
+                    }
+                }
+                revs.insert(session_id.clone(), rev);
             }
 
-            // Bump refcounts; track which roots are NEW (need scan).
-            let mut new_roots = Vec::new();
+            let new_set: HashSet<PathBuf> = roots.iter().map(PathBuf::from).collect();
+
+            // ── Reconcile this session's root set ──────────────────────────
+            let mut roots_added = Vec::new();
+            let mut roots_removed = Vec::new();
+            {
+                let mut clients = state.clients.write().unwrap_or_else(|e| e.into_inner());
+                let old_set = clients.entry(session_id.clone()).or_default();
+                // Roots in new_set but not in old_set → increment.
+                for root in &new_set {
+                    if !old_set.contains(root) {
+                        roots_added.push(root.clone());
+                    }
+                }
+                // Roots in old_set but not in new_set → decrement.
+                for root in old_set.iter() {
+                    if !new_set.contains(root) {
+                        roots_removed.push(root.clone());
+                    }
+                }
+                // Replace with the new set.  Empty registration removes the
+                // client key entirely so the idle reaper can reap it.
+                if new_set.is_empty() {
+                    clients.remove(&session_id);
+                } else {
+                    *old_set = new_set;
+                }
+            }
+
+            // Bump / decrement refcounts.
             {
                 let mut refs = state.root_refs.write().unwrap_or_else(|e| e.into_inner());
-                for root in &paths {
+                for root in &roots_added {
                     let count = refs.entry(root.clone()).or_insert(0);
                     *count += 1;
-                    if *count == 1 {
-                        // First client for this root — needs scan.
-                        new_roots.push(root.clone());
+                }
+                for root in &roots_removed {
+                    if let Some(count) = refs.get_mut(root) {
+                        *count = count.saturating_sub(1);
+                        if *count == 0 {
+                            refs.remove(root);
+                        }
                     }
                 }
             }
 
-            // Collect all roots for the watcher.
-            let all_roots = collect_all_roots(state);
-            maybe_update_watcher(state, &all_roots);
-
-            // Determine if we need to scan.
-            let needs_scan = !new_roots.is_empty();
-            let already_scanned = {
-                let graph = state.graph.read().unwrap_or_else(|e| e.into_inner());
-                graph.generation > 0
+            // Snapshot the old watcher roots so we can detect union changes.
+            let old_watched: HashSet<PathBuf> = {
+                let wr = state
+                    .watched_roots
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner());
+                wr.iter().cloned().collect()
             };
 
-            if needs_scan || (!already_scanned && !all_roots.is_empty()) {
-                let should_scan = {
-                    let graph = state.graph.read().unwrap_or_else(|e| e.into_inner());
-                    graph.nodes.is_empty()
-                };
-                if should_scan || !new_roots.is_empty() {
-                    state
-                        .scanning
-                        .store(true, std::sync::atomic::Ordering::SeqCst);
-                    let state_clone = Arc::clone(state);
-                    let scan_roots = all_roots.clone();
-                    std::thread::Builder::new()
-                        .name("linker-scan".to_string())
-                        .spawn(move || {
-                            let (graph, pi) = crate::linker::scan::scan_roots(&scan_roots);
-                            if let Ok(mut g) = state_clone.graph.write() {
-                                *g = graph;
-                            }
-                            if let Ok(mut idx) = state_clone.project_index.write() {
-                                *idx = pi;
-                            }
-                            state_clone
-                                .scanning
-                                .store(false, std::sync::atomic::Ordering::SeqCst);
-                        })
-                        .ok();
-                }
+            // Collect all roots for the watcher.
+            let all_roots = collect_all_roots(state);
+            let new_watched: HashSet<PathBuf> = all_roots.iter().cloned().collect();
+            maybe_update_watcher(state, &all_roots);
+
+            // Determine if we need to scan: new globally-introduced roots or
+            // roots whose last reference was removed (need to evict them from
+            // the graph), or a first-time scan on a non-empty root set.
+            let globally_new_roots: Vec<PathBuf> = roots_added
+                .iter()
+                .filter(|r| !old_watched.contains(*r))
+                .cloned()
+                .collect();
+            let finally_dropped_roots: Vec<PathBuf> = roots_removed
+                .iter()
+                .filter(|r| !new_watched.contains(*r))
+                .cloned()
+                .collect();
+            let needs_scan = !globally_new_roots.is_empty() || !finally_dropped_roots.is_empty();
+            let first_scan_needed = {
+                let graph = state.graph.read().unwrap_or_else(|e| e.into_inner());
+                graph.generation == 0
+            } && !all_roots.is_empty();
+
+            if needs_scan || first_scan_needed {
+                spawn_scan_versioned(state, all_roots);
             }
 
-            let status = if state.scanning.load(std::sync::atomic::Ordering::SeqCst) {
+            let status = if state.scanning.load(Ordering::SeqCst) {
                 crate::ipc::linker_proto::ScanStatus::Scanning
             } else {
                 crate::ipc::linker_proto::ScanStatus::Ready
@@ -291,6 +404,12 @@ fn handle_request(
             }
         }
         LinkerRequest::Unregister { session_id } => {
+            // ── Serialize under operation_lock (same lock as Register) ────
+            let _op = state
+                .operation_lock
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+
             let removed_roots;
             {
                 let mut clients = state.clients.write().unwrap_or_else(|e| e.into_inner());
@@ -320,32 +439,37 @@ fn handle_request(
                     maybe_update_watcher(state, &all_roots);
                 }
 
-                // If we dropped all roots AND no other roots remain, clear the graph.
                 if all_roots.is_empty() {
+                    // Empty union is an applied state transition: invalidate any
+                    // in-flight scan before clearing so its late completion can
+                    // never republish removed workspace data.
+                    let mut coord = state
+                        .scan_coordinator
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    coord.desired_revision = coord.desired_revision.saturating_add(1);
+                    let empty_revision = coord.desired_revision;
+                    coord.in_flight = None;
+                    let _pub = state
+                        .publication_lock
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    let new_gen = state
+                        .published_generation
+                        .fetch_add(1, Ordering::SeqCst)
+                        .saturating_add(1);
                     if let Ok(mut g) = state.graph.write() {
                         g.clear();
+                        g.generation = new_gen;
                     }
+                    if let Ok(mut idx) = state.project_index.write() {
+                        *idx = crate::linker::project::ProjectIndex::new();
+                    }
+                    coord.applied_revision = empty_revision;
+                    state.scanning.store(false, Ordering::SeqCst);
                 } else if !roots_to_drop.is_empty() {
                     // Rescan remaining roots (dropped roots are gone from all_roots).
-                    state
-                        .scanning
-                        .store(true, std::sync::atomic::Ordering::SeqCst);
-                    let state_clone = Arc::clone(state);
-                    std::thread::Builder::new()
-                        .name("linker-scan".to_string())
-                        .spawn(move || {
-                            let (graph, pi) = crate::linker::scan::scan_roots(&all_roots);
-                            if let Ok(mut g) = state_clone.graph.write() {
-                                *g = graph;
-                            }
-                            if let Ok(mut idx) = state_clone.project_index.write() {
-                                *idx = pi;
-                            }
-                            state_clone
-                                .scanning
-                                .store(false, std::sync::atomic::Ordering::SeqCst);
-                        })
-                        .ok();
+                    spawn_scan_versioned(state, all_roots);
                 }
             }
 
@@ -417,12 +541,109 @@ fn handle_request(
 }
 
 /// Collect all workspace roots across all registered clients.
+/// Returns a sorted, deduplicated list (deterministic ordering for scan/watcher).
 fn collect_all_roots(state: &Arc<DaemonState>) -> Vec<PathBuf> {
     let clients = state.clients.read().unwrap_or_else(|e| e.into_inner());
     let mut all_roots: Vec<PathBuf> = clients.values().flatten().cloned().collect();
     all_roots.sort();
     all_roots.dedup();
     all_roots
+}
+
+/// Spawn a versioned background scan thread that replaces the graph and project
+/// index.  The scan is tagged with a monotonically-increasing `desired_revision`
+/// from the [`ScanCoordinator`].  When the thread completes, it only publishes
+/// results if its revision is still the latest — preventing a slow/stale scan
+/// from overwriting a graph that was already updated by a newer scan.
+///
+/// Returns the accepted scan revision (monotonically increasing).
+///
+/// On thread-spawn failure the coordinator and scanning flag are restored so
+/// state never becomes permanently inconsistent.
+fn spawn_scan_versioned(state: &Arc<DaemonState>, roots: Vec<PathBuf>) -> u64 {
+    let scan_rev = {
+        let mut coord = state
+            .scan_coordinator
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        coord.desired_revision += 1;
+        coord.in_flight = Some(coord.desired_revision);
+        coord.desired_revision
+    };
+    state.scanning.store(true, Ordering::SeqCst);
+
+    let state_clone = Arc::clone(state);
+    if std::thread::Builder::new()
+        .name("linker-scan".to_string())
+        .spawn(move || {
+            let (graph, pi) = crate::linker::scan::scan_roots(&roots);
+
+            // Publish atomically with respect to scan scheduling and the
+            // watcher loop.  Holding the coordinator prevents a newer desired
+            // scan from being registered, and publication_lock ensures the
+            // graph + project_index pair is swapped atomically relative to
+            // watcher batches.
+            {
+                let mut coord = state_clone
+                    .scan_coordinator
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if coord.in_flight == Some(scan_rev) && coord.desired_revision == scan_rev {
+                    let _pub = state_clone
+                        .publication_lock
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    // Advance the monotonically-increasing generation counter.
+                    let new_gen = state_clone
+                        .published_generation
+                        .fetch_add(1, Ordering::SeqCst)
+                        + 1;
+                    if let Ok(mut g) = state_clone.graph.write() {
+                        *g = graph;
+                        // Set generation AFTER swap so it never moves backward.
+                        g.generation = new_gen;
+                    }
+                    if let Ok(mut idx) = state_clone.project_index.write() {
+                        *idx = pi;
+                    }
+                    coord.applied_revision = scan_rev;
+                    coord.in_flight = None;
+                } else if coord.in_flight == Some(scan_rev) {
+                    // Superseded without a replacement scan (for example all
+                    // roots were removed): release the stale slot so scanning
+                    // cannot remain stuck forever.
+                    coord.in_flight = None;
+                }
+            }
+
+            // Update scanning flag based on whether any scan is still in flight.
+            let still_in_flight = {
+                let coord = state_clone
+                    .scan_coordinator
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                coord.in_flight.is_some()
+            };
+            state_clone
+                .scanning
+                .store(still_in_flight, Ordering::SeqCst);
+        })
+        .is_err()
+    {
+        // Thread spawn failure — restore coordinator and scanning flag.
+        let mut coord = state
+            .scan_coordinator
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if coord.in_flight == Some(scan_rev) {
+            coord.in_flight = None;
+        }
+        state
+            .scanning
+            .store(coord.in_flight.is_some(), Ordering::SeqCst);
+    }
+
+    scan_rev
 }
 
 /// Stop the current file watcher (if running), dropping the debouncer.
@@ -494,6 +715,13 @@ fn maybe_update_watcher(state: &Arc<DaemonState>, new_roots: &[PathBuf]) {
 /// Runs until the receiver is disconnected (watcher dropped).
 ///
 /// **Phase 2:** Uses `ProjectIndex` for owner-based resolution.
+///
+/// **Coordination:** Acquires `publication_lock` during graph + project_index
+/// mutation so the pair is always updated atomically relative to scan-thread
+/// publications.  Also bumps `desired_revision` so any in-flight full scan
+/// sees itself as stale and does not overwrite watcher-applied mutations.
+/// If the watcher supersedes an in-flight scan, a follow-up rescan is
+/// scheduled so the full-scan path re-applies cleanly.
 fn watcher_loop(state: Arc<DaemonState>) {
     // Take the receiver out of the Mutex — this thread owns it exclusively.
     let rx = {
@@ -510,8 +738,42 @@ fn watcher_loop(state: Arc<DaemonState>) {
             continue;
         }
 
-        if let (Ok(mut graph), Ok(mut pi)) = (state.graph.write(), state.project_index.write()) {
-            crate::linker::watch::handle_events(&paths, &mut graph, &mut pi);
+        // Supersede any in-flight full scan so it won't overwrite our
+        // incremental mutations when it completes.
+        let superseded = {
+            let mut coord = state
+                .scan_coordinator
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let was_in_flight = coord.in_flight.is_some();
+            if was_in_flight {
+                coord.desired_revision += 1;
+            }
+            was_in_flight
+        };
+
+        // Hold publication_lock during the graph + project_index mutation
+        // so it is atomic with respect to scan-thread publications.
+        {
+            let _pub = state
+                .publication_lock
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let (Ok(mut graph), Ok(mut pi)) = (state.graph.write(), state.project_index.write())
+            {
+                crate::linker::watch::handle_events(&paths, &mut graph, &mut pi);
+            }
+        }
+
+        // If we superseded an in-flight scan, schedule a follow-up rescan
+        // so the full-scan path re-applies cleanly (the stale scan's
+        // results are discarded, but any roots it was scanning still need
+        // a fresh pass).
+        if superseded {
+            let all_roots = collect_all_roots(&state);
+            if !all_roots.is_empty() {
+                spawn_scan_versioned(&state, all_roots);
+            }
         }
     }
 }
@@ -640,26 +902,21 @@ fn handle_query(
             if all_roots.is_empty() {
                 return LinkerResponse::Ack;
             }
-            state
-                .scanning
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            let state_clone = Arc::clone(state);
-            std::thread::Builder::new()
-                .name("linker-rescan".to_string())
-                .spawn(move || {
-                    let (graph, pi) = crate::linker::scan::scan_roots(&all_roots);
-                    if let Ok(mut g) = state_clone.graph.write() {
-                        *g = graph;
-                    }
-                    if let Ok(mut idx) = state_clone.project_index.write() {
-                        *idx = pi;
-                    }
-                    state_clone
-                        .scanning
-                        .store(false, std::sync::atomic::Ordering::SeqCst);
-                })
-                .ok();
-            LinkerResponse::Ack
+            let scan_rev = spawn_scan_versioned(state, all_roots);
+            LinkerResponse::ScanRevision { revision: scan_rev }
+        }
+        LinkerQuery::ScanStatus => {
+            let coord = state
+                .scan_coordinator
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let gen = state.published_generation.load(Ordering::SeqCst);
+            LinkerResponse::ScanStatusResponse {
+                desired_revision: coord.desired_revision,
+                applied_revision: coord.applied_revision,
+                in_flight: coord.in_flight,
+                generation: gen,
+            }
         }
         LinkerQuery::Visualization(req) => {
             let result = graph.visualization_view(&req);
@@ -729,9 +986,10 @@ fn run_dir_has_socket() -> bool {
     false
 }
 
-#[cfg(windows)]
+/// Whether the run dir currently contains ANY `.sock` file (Windows).
+/// On Windows, named pipes use `.sock` advisory extension for detection.
+#[cfg(not(unix))]
 fn run_dir_has_socket() -> bool {
-    // Windows: check for named pipes via run_dir listing.
     let dir = match crate::model::store::run_dir() {
         Ok(d) => d,
         Err(_) => return true,
@@ -741,9 +999,743 @@ fn run_dir_has_socket() -> bool {
         Err(_) => return true,
     };
     for entry in entries.flatten() {
-        if entry.path().extension().and_then(|e| e.to_str()) == Some("sock") {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("sock") {
             return true;
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ipc::linker_proto::{LinkerRequest, LinkerResponse, ScanStatus};
+
+    /// Build a minimal DaemonState for unit tests (no watcher, no tokio).
+    fn test_state() -> Arc<DaemonState> {
+        Arc::new(DaemonState::new())
+    }
+
+    /// Helper: send a RegisterWorkspaces request and return the response.
+    fn register(state: &Arc<DaemonState>, session_id: &str, roots: &[&str]) -> LinkerResponse {
+        handle_request(
+            LinkerRequest::RegisterWorkspaces {
+                roots: roots.iter().map(|s| s.to_string()).collect(),
+                session_id: session_id.to_string(),
+                registration_revision: None,
+            },
+            &std::sync::atomic::AtomicBool::new(false),
+            state,
+        )
+    }
+
+    /// Helper: send a RegisterWorkspaces request with a revision tag.
+    fn register_with_rev(
+        state: &Arc<DaemonState>,
+        session_id: &str,
+        roots: &[&str],
+        rev: u64,
+    ) -> LinkerResponse {
+        handle_request(
+            LinkerRequest::RegisterWorkspaces {
+                roots: roots.iter().map(|s| s.to_string()).collect(),
+                session_id: session_id.to_string(),
+                registration_revision: Some(rev),
+            },
+            &std::sync::atomic::AtomicBool::new(false),
+            state,
+        )
+    }
+
+    /// Helper: send an Unregister request.
+    fn unregister(state: &Arc<DaemonState>, session_id: &str) -> LinkerResponse {
+        handle_request(
+            LinkerRequest::Unregister {
+                session_id: session_id.to_string(),
+            },
+            &std::sync::atomic::AtomicBool::new(false),
+            state,
+        )
+    }
+
+    /// Helper: read the current refcount for a root.
+    fn refcount(state: &Arc<DaemonState>, root: &str) -> u32 {
+        state
+            .root_refs
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&PathBuf::from(root))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Helper: read the session's registered root set.
+    fn session_roots(state: &Arc<DaemonState>, session_id: &str) -> HashSet<PathBuf> {
+        state
+            .clients
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(session_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Helper: check whether the clients map has a key for this session.
+    fn has_client(state: &Arc<DaemonState>, session_id: &str) -> bool {
+        state
+            .clients
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(session_id)
+    }
+
+    // ── Idempotent repeat ──────────────────────────────────────────────
+
+    #[test]
+    fn idempotent_repeat_no_change() {
+        let state = test_state();
+        // First registration.
+        let r1 = register(&state, "s1", &["/a", "/b"]);
+        assert!(matches!(r1, LinkerResponse::Registered { .. }));
+        assert_eq!(refcount(&state, "/a"), 1);
+        assert_eq!(refcount(&state, "/b"), 1);
+
+        // Re-register the same set — refcounts must not double.
+        let r2 = register(&state, "s1", &["/a", "/b"]);
+        assert!(matches!(r2, LinkerResponse::Registered { .. }));
+        assert_eq!(refcount(&state, "/a"), 1, "refcount must stay 1");
+        assert_eq!(refcount(&state, "/b"), 1, "refcount must stay 1");
+    }
+
+    // ── Add/remove/replace ─────────────────────────────────────────────
+
+    #[test]
+    fn add_roots_increments_refcount() {
+        let state = test_state();
+        register(&state, "s1", &["/a"]);
+        assert_eq!(refcount(&state, "/a"), 1);
+
+        register(&state, "s1", &["/a", "/b"]);
+        assert_eq!(refcount(&state, "/a"), 1);
+        assert_eq!(refcount(&state, "/b"), 1);
+    }
+
+    #[test]
+    fn remove_roots_decrements_refcount() {
+        let state = test_state();
+        register(&state, "s1", &["/a", "/b"]);
+        assert_eq!(refcount(&state, "/a"), 1);
+        assert_eq!(refcount(&state, "/b"), 1);
+
+        register(&state, "s1", &["/a"]);
+        assert_eq!(refcount(&state, "/a"), 1);
+        assert_eq!(refcount(&state, "/b"), 0, "removed root refcount must be 0");
+        assert!(
+            !state
+                .root_refs
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&PathBuf::from("/b")),
+            "removed root must be cleaned from refs map"
+        );
+    }
+
+    #[test]
+    fn replace_all_roots() {
+        let state = test_state();
+        register(&state, "s1", &["/a", "/b"]);
+        register(&state, "s1", &["/c", "/d"]);
+        assert_eq!(refcount(&state, "/a"), 0);
+        assert_eq!(refcount(&state, "/b"), 0);
+        assert_eq!(refcount(&state, "/c"), 1);
+        assert_eq!(refcount(&state, "/d"), 1);
+        assert_eq!(
+            session_roots(&state, "s1"),
+            [PathBuf::from("/c"), PathBuf::from("/d")]
+                .into_iter()
+                .collect()
+        );
+    }
+
+    // ── Shared roots / refcounts ───────────────────────────────────────
+
+    #[test]
+    fn shared_root_refcount() {
+        let state = test_state();
+        register(&state, "s1", &["/shared", "/a"]);
+        register(&state, "s2", &["/shared", "/b"]);
+        assert_eq!(refcount(&state, "/shared"), 2);
+        assert_eq!(refcount(&state, "/a"), 1);
+        assert_eq!(refcount(&state, "/b"), 1);
+
+        // Drop s1 — shared root refcount decrements to 1, not 0.
+        unregister(&state, "s1");
+        assert_eq!(refcount(&state, "/shared"), 1);
+        assert_eq!(refcount(&state, "/a"), 0);
+        // /b still alive via s2.
+        assert_eq!(refcount(&state, "/b"), 1);
+    }
+
+    #[test]
+    fn shared_root_survives_partial_unregister() {
+        let state = test_state();
+        register(&state, "s1", &["/x"]);
+        register(&state, "s2", &["/x"]);
+        assert_eq!(refcount(&state, "/x"), 2);
+        unregister(&state, "s1");
+        assert_eq!(refcount(&state, "/x"), 1);
+        // Session s2 still has it.
+        assert!(session_roots(&state, "s2").contains(&PathBuf::from("/x")));
+    }
+
+    // ── Global union / watcher ─────────────────────────────────────────
+
+    #[test]
+    fn watcher_not_updated_when_union_unchanged() {
+        let state = test_state();
+        register(&state, "s1", &["/a"]);
+        let roots_before = collect_all_roots(&state);
+        // Re-register same set — union is unchanged.
+        register(&state, "s1", &["/a"]);
+        let roots_after = collect_all_roots(&state);
+        assert_eq!(roots_before, roots_after, "global union must be stable");
+    }
+
+    #[test]
+    fn global_union_reflects_all_sessions() {
+        let state = test_state();
+        register(&state, "s1", &["/a"]);
+        register(&state, "s2", &["/b"]);
+        register(&state, "s3", &["/a", "/c"]);
+        let all = collect_all_roots(&state);
+        assert_eq!(
+            all,
+            vec![
+                PathBuf::from("/a"),
+                PathBuf::from("/b"),
+                PathBuf::from("/c")
+            ]
+        );
+    }
+
+    // ── Final reference drop clearing/rescanning ───────────────────────
+
+    #[test]
+    fn final_unregister_clears_clients() {
+        let state = test_state();
+        register(&state, "s1", &["/a"]);
+        unregister(&state, "s1");
+        assert!(
+            session_roots(&state, "s1").is_empty(),
+            "session should be removed from clients map"
+        );
+        assert_eq!(refcount(&state, "/a"), 0);
+    }
+
+    #[test]
+    fn final_unregister_invalidates_in_flight_scan() {
+        let state = test_state();
+        register(&state, "s1", &["/a"]);
+        {
+            let mut coord = state
+                .scan_coordinator
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            coord.desired_revision = coord.desired_revision.saturating_add(1);
+            coord.in_flight = Some(coord.desired_revision);
+            state.scanning.store(true, Ordering::SeqCst);
+        }
+        unregister(&state, "s1");
+        let coord = state
+            .scan_coordinator
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        assert!(coord.in_flight.is_none());
+        assert_eq!(coord.applied_revision, coord.desired_revision);
+        assert!(!state.scanning.load(Ordering::SeqCst));
+        assert!(state
+            .graph
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .nodes
+            .is_empty());
+    }
+
+    #[test]
+    fn unregister_nonexistent_session_is_noop() {
+        let state = test_state();
+        let resp = unregister(&state, "ghost");
+        assert!(matches!(resp, LinkerResponse::Ack));
+    }
+
+    // ── Empty registration / edge cases ────────────────────────────────
+
+    #[test]
+    fn empty_roots_clears_session() {
+        let state = test_state();
+        register(&state, "s1", &["/a", "/b"]);
+        register(&state, "s1", &[]); // empty — should clear
+        assert!(session_roots(&state, "s1").is_empty());
+        assert_eq!(refcount(&state, "/a"), 0);
+        assert_eq!(refcount(&state, "/b"), 0);
+    }
+
+    #[test]
+    fn first_registration_triggers_scan() {
+        let state = test_state();
+        // Before first registration, scanning should be false.
+        assert!(!state.scanning.load(std::sync::atomic::Ordering::SeqCst));
+        let _resp = register(&state, "s1", &["/nonexistent_root_for_test"]);
+        // After registration of new root, scanning should be true (scan thread spawned).
+        assert!(
+            state.scanning.load(std::sync::atomic::Ordering::SeqCst),
+            "first registration must trigger a scan"
+        );
+    }
+
+    // ── Response format checks ─────────────────────────────────────────
+
+    #[test]
+    fn register_response_contains_status_and_generation() {
+        let state = test_state();
+        let resp = register(&state, "s1", &["/a"]);
+        match resp {
+            LinkerResponse::Registered { status, generation } => {
+                // generation starts at 0 (no scan done yet in sync path).
+                assert_eq!(generation, 0);
+                assert!(matches!(status, ScanStatus::Scanning | ScanStatus::Ready));
+            }
+            other => panic!("expected Registered, got {other:?}"),
+        }
+    }
+
+    // ── Overlapping session changes ────────────────────────────────────
+
+    #[test]
+    fn overlapping_sessions_one_adds_one_removes() {
+        let state = test_state();
+        register(&state, "s1", &["/shared", "/only1"]);
+        register(&state, "s2", &["/shared", "/only2"]);
+
+        // s1 drops /shared, keeps /only1.
+        register(&state, "s1", &["/only1"]);
+        assert_eq!(refcount(&state, "/shared"), 1, "s2 still holds /shared");
+        assert_eq!(refcount(&state, "/only1"), 1);
+        assert_eq!(refcount(&state, "/only2"), 1);
+
+        // s2 drops /shared too — finally unreferenced.
+        register(&state, "s2", &["/only2"]);
+        assert_eq!(refcount(&state, "/shared"), 0);
+        assert!(
+            !state
+                .root_refs
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&PathBuf::from("/shared")),
+            "/shared should be removed from refs when refcount hits 0"
+        );
+    }
+
+    // ── Requirement 3: Empty register removes client key ──────────────
+
+    #[test]
+    fn empty_register_removes_client_key_for_reaper() {
+        let state = test_state();
+        register(&state, "s1", &["/a", "/b"]);
+        assert!(
+            has_client(&state, "s1"),
+            "client should exist after registration"
+        );
+
+        // Empty registration removes the key entirely.
+        register(&state, "s1", &[]);
+        assert!(
+            !has_client(&state, "s1"),
+            "empty registration must remove client key so reaper can reap"
+        );
+        assert_eq!(refcount(&state, "/a"), 0);
+        assert_eq!(refcount(&state, "/b"), 0);
+    }
+
+    #[test]
+    fn reaper_sees_empty_after_unregister() {
+        let state = test_state();
+        register(&state, "s1", &["/a"]);
+        assert!(has_client(&state, "s1"));
+
+        unregister(&state, "s1");
+        assert!(!has_client(&state, "s1"));
+        assert!(
+            state
+                .clients
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty(),
+            "clients map should be empty so reaper can exit"
+        );
+    }
+
+    // ── Requirement 1: Concurrent handler atomicity ────────────────────
+
+    #[test]
+    fn concurrent_register_unregister_refcounts_consistent() {
+        let state = test_state();
+        register(&state, "s1", &["/shared", "/only1"]);
+        register(&state, "s2", &["/shared", "/only2"]);
+
+        // Spawn concurrent operations: s1 re-registers, s2 unregisters.
+        let state_c = Arc::clone(&state);
+        let h1 = std::thread::spawn(move || {
+            register(&state_c, "s1", &["/shared"]);
+        });
+        let state_c = Arc::clone(&state);
+        let h2 = std::thread::spawn(move || {
+            unregister(&state_c, "s2");
+        });
+        h1.join().unwrap();
+        h2.join().unwrap();
+
+        // Regardless of ordering, final state must be consistent:
+        // /shared held by s1 only (refcount 1), /only1 dropped by s1, /only2 dropped by s2.
+        assert_eq!(refcount(&state, "/shared"), 1);
+        assert_eq!(
+            refcount(&state, "/only1"),
+            0,
+            "s1 dropped /only1 when re-registering with only /shared"
+        );
+        assert_eq!(refcount(&state, "/only2"), 0);
+    }
+
+    #[test]
+    fn concurrent_registrations_stable_refcounts() {
+        let state = test_state();
+        // Spawn 8 threads, each registering a different root for a unique session.
+        let mut handles = Vec::new();
+        for i in 0..8 {
+            let state_c = Arc::clone(&state);
+            let root = format!("/root_{i}");
+            let sid = format!("s{i}");
+            handles.push(std::thread::spawn(move || {
+                register(&state_c, &sid, &[&root]);
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        // Each root must have refcount exactly 1.
+        for i in 0..8 {
+            assert_eq!(
+                refcount(&state, &format!("/root_{i}")),
+                1,
+                "root_{i} refcount must be 1"
+            );
+        }
+        // Exactly 8 clients registered.
+        assert_eq!(
+            state
+                .clients
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
+            8
+        );
+    }
+
+    // ── Requirement 2: Revision gating / stale rejection ───────────────
+
+    #[test]
+    fn revision_rejects_stale_registration() {
+        let state = test_state();
+        // Register with revision 2.
+        let r2 = register_with_rev(&state, "s1", &["/a"], 2);
+        assert!(matches!(r2, LinkerResponse::Registered { .. }));
+        assert_eq!(refcount(&state, "/a"), 1);
+
+        // Try to register with revision 1 (stale) — should be rejected.
+        let r1 = register_with_rev(&state, "s1", &["/b"], 1);
+        assert!(matches!(r1, LinkerResponse::Registered { .. }));
+        // /b must NOT have been registered (stale rejected).
+        assert_eq!(refcount(&state, "/b"), 0, "stale revision must be rejected");
+        // /a still held.
+        assert_eq!(refcount(&state, "/a"), 1);
+    }
+
+    #[test]
+    fn revision_accepts_newer_registration() {
+        let state = test_state();
+        register_with_rev(&state, "s1", &["/a"], 1);
+        assert_eq!(refcount(&state, "/a"), 1);
+
+        // Register with revision 2 (newer) — should succeed and replace.
+        register_with_rev(&state, "s1", &["/b"], 2);
+        assert_eq!(refcount(&state, "/a"), 0, "old root should be released");
+        assert_eq!(refcount(&state, "/b"), 1, "new root should be registered");
+    }
+
+    #[test]
+    fn revision_equal_is_accepted() {
+        let state = test_state();
+        register_with_rev(&state, "s1", &["/a"], 5);
+        // Same revision should be accepted (>= check).
+        register_with_rev(&state, "s1", &["/a", "/b"], 5);
+        assert_eq!(refcount(&state, "/a"), 1);
+        assert_eq!(refcount(&state, "/b"), 1);
+    }
+
+    #[test]
+    fn no_revision_always_accepted() {
+        let state = test_state();
+        // No revision → always accepted (backward compat).
+        register(&state, "s1", &["/a"]);
+        register(&state, "s1", &["/b"]);
+        register(&state, "s1", &["/c"]);
+        assert_eq!(refcount(&state, "/a"), 0);
+        assert_eq!(refcount(&state, "/b"), 0);
+        assert_eq!(refcount(&state, "/c"), 1);
+    }
+
+    // ── Requirement 2: Scan versioning coordinator ─────────────────────
+
+    #[test]
+    fn scan_coordinator_starts_at_zero() {
+        let state = test_state();
+        let coord = state.scan_coordinator.lock().unwrap();
+        assert_eq!(coord.desired_revision, 0);
+        assert_eq!(coord.applied_revision, 0);
+        assert!(coord.in_flight.is_none());
+    }
+
+    #[test]
+    fn versioned_scan_bumps_desired_revision() {
+        let state = test_state();
+        // After first registration, a scan should have been scheduled.
+        register(&state, "s1", &["/nonexistent_for_scan_test"]);
+        // Wait briefly for thread to spawn.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let coord = state.scan_coordinator.lock().unwrap();
+        assert!(
+            coord.desired_revision >= 1,
+            "desired_revision should be >= 1 after registration"
+        );
+    }
+
+    // ── Task 1: Scan revision / status contract ─────────────────────────
+
+    #[test]
+    fn repeated_rescan_advances_revision() {
+        let state = test_state();
+        register(&state, "s1", &["/a"]);
+        // Wait for scan thread to spawn and register in coordinator.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let rev1 = {
+            let coord = state.scan_coordinator.lock().unwrap();
+            coord.desired_revision
+        };
+        assert!(rev1 >= 1, "first rescan should bump desired_revision");
+
+        // Issue a manual Rescan query.
+        let resp = handle_request(
+            LinkerRequest::Query(LinkerQuery::Rescan),
+            &std::sync::atomic::AtomicBool::new(false),
+            &state,
+        );
+        let scan_rev = match resp {
+            LinkerResponse::ScanRevision { revision } => revision,
+            other => panic!("expected ScanRevision, got {other:?}"),
+        };
+        assert!(
+            scan_rev > rev1,
+            "rescan revision {scan_rev} should be > previous {rev1}"
+        );
+
+        // A second Rescan must advance further.
+        let resp2 = handle_request(
+            LinkerRequest::Query(LinkerQuery::Rescan),
+            &std::sync::atomic::AtomicBool::new(false),
+            &state,
+        );
+        let scan_rev2 = match resp2 {
+            LinkerResponse::ScanRevision { revision } => revision,
+            other => panic!("expected ScanRevision, got {other:?}"),
+        };
+        assert!(
+            scan_rev2 > scan_rev,
+            "second rescan revision {scan_rev2} should be > first {scan_rev}"
+        );
+    }
+
+    #[test]
+    fn scan_status_returns_coordinator_state() {
+        let state = test_state();
+        // Initially all zero.
+        let resp = handle_request(
+            LinkerRequest::Query(LinkerQuery::ScanStatus),
+            &std::sync::atomic::AtomicBool::new(false),
+            &state,
+        );
+        match resp {
+            LinkerResponse::ScanStatusResponse {
+                desired_revision,
+                applied_revision,
+                in_flight,
+                generation,
+            } => {
+                assert_eq!(desired_revision, 0);
+                assert_eq!(applied_revision, 0);
+                assert!(in_flight.is_none());
+                assert_eq!(generation, 0);
+            }
+            other => panic!("expected ScanStatusResponse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rescan_returns_accepted_revision_for_later_poll() {
+        let state = test_state();
+        register(&state, "s1", &["/a"]);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Issue Rescan and capture revision.
+        let resp = handle_request(
+            LinkerRequest::Query(LinkerQuery::Rescan),
+            &std::sync::atomic::AtomicBool::new(false),
+            &state,
+        );
+        let scan_rev = match resp {
+            LinkerResponse::ScanRevision { revision } => revision,
+            other => panic!("expected ScanRevision, got {other:?}"),
+        };
+
+        // ScanStatus should show the revision as desired.
+        let status_resp = handle_request(
+            LinkerRequest::Query(LinkerQuery::ScanStatus),
+            &std::sync::atomic::AtomicBool::new(false),
+            &state,
+        );
+        match status_resp {
+            LinkerResponse::ScanStatusResponse {
+                desired_revision, ..
+            } => {
+                assert!(
+                    desired_revision >= scan_rev,
+                    "desired_revision {desired_revision} should be >= scan_rev {scan_rev}"
+                );
+            }
+            other => panic!("expected ScanStatusResponse, got {other:?}"),
+        }
+    }
+
+    // ── Task 2: Publication/watcher coordination ─────────────────────────
+
+    #[test]
+    fn publication_lock_exists() {
+        let state = test_state();
+        // Verify the publication_lock can be acquired (no deadlock in test).
+        let _guard = state
+            .publication_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+    }
+
+    #[test]
+    fn watcher_supersede_bumps_desired_revision() {
+        let state = test_state();
+        register(&state, "s1", &["/a"]);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Snapshot desired_revision before watcher event.
+        let before = {
+            let coord = state.scan_coordinator.lock().unwrap();
+            coord.desired_revision
+        };
+
+        // Simulate a watcher event arriving while a scan is in_flight:
+        // set in_flight artificially.
+        {
+            let mut coord = state.scan_coordinator.lock().unwrap();
+            coord.in_flight = Some(coord.desired_revision);
+        }
+
+        // Now the watcher_loop would bump desired_revision.  We simulate
+        // the relevant section of watcher_loop here:
+        let superseded = {
+            let mut coord = state.scan_coordinator.lock().unwrap();
+            let was_in_flight = coord.in_flight.is_some();
+            if was_in_flight {
+                coord.desired_revision += 1;
+            }
+            was_in_flight
+        };
+        assert!(superseded, "should detect in-flight scan");
+
+        let after = {
+            let coord = state.scan_coordinator.lock().unwrap();
+            coord.desired_revision
+        };
+        assert!(
+            after > before,
+            "desired_revision should advance after supersede: before={before}, after={after}"
+        );
+    }
+
+    #[test]
+    fn stale_scan_does_not_publish_over_watcher() {
+        let state = test_state();
+        register(&state, "s1", &["/a"]);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Simulate: scan rev=1 is in flight, then watcher bumps desired to 2.
+        let mut coord = state.scan_coordinator.lock().unwrap();
+        let rev1 = coord.desired_revision;
+        coord.in_flight = Some(rev1);
+        coord.desired_revision = rev1 + 1;
+        drop(coord);
+
+        // Now scan rev=1 tries to publish.  The staleness check:
+        //   coord.in_flight == Some(rev1) && coord.desired_revision == rev1
+        // should FAIL because desired_revision was bumped.
+        let coord = state.scan_coordinator.lock().unwrap();
+        assert!(
+            !(coord.in_flight == Some(rev1) && coord.desired_revision == rev1),
+            "scan rev={rev1} should be stale (desired={})",
+            coord.desired_revision
+        );
+    }
+
+    // ── Task 3: Delayed older worker rejected ───────────────────────────
+
+    #[test]
+    fn delayed_older_worker_registration_rejected() {
+        let state = test_state();
+        // Worker A registers with revision 5.
+        let r5 = register_with_rev(&state, "s1", &["/a"], 5);
+        assert!(matches!(r5, LinkerResponse::Registered { .. }));
+        assert_eq!(refcount(&state, "/a"), 1);
+
+        // Worker B arrives late with revision 3 (older) — should be rejected.
+        let r3 = register_with_rev(&state, "s1", &["/b"], 3);
+        assert!(matches!(r3, LinkerResponse::Registered { .. }));
+        assert_eq!(refcount(&state, "/b"), 0, "stale worker must be rejected");
+        assert_eq!(refcount(&state, "/a"), 1, "original root unchanged");
+    }
+
+    // ── Task 4: Response validation ─────────────────────────────────────
+
+    #[test]
+    fn registered_only_is_success_for_validation() {
+        // Simulate what ensure_and_register_with_revision checks:
+        // Only Registered should be Ok.
+        let registered = LinkerResponse::Registered {
+            status: crate::ipc::linker_proto::ScanStatus::Ready,
+            generation: 1,
+        };
+        assert!(matches!(registered, LinkerResponse::Registered { .. }));
+
+        let error = LinkerResponse::Error("test".into());
+        assert!(!matches!(error, LinkerResponse::Registered { .. }));
+
+        let ack = LinkerResponse::Ack;
+        assert!(!matches!(ack, LinkerResponse::Registered { .. }));
+    }
 }

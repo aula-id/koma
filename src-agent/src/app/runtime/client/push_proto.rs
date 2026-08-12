@@ -26,6 +26,8 @@ pub(super) use super::push_rows::{
 #[serde(rename_all = "camelCase")]
 pub struct ImportGraphImpactResult {
     pub request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     pub path: String,
     pub depth: u32,
     pub paths: Vec<String>,
@@ -91,6 +93,22 @@ pub(super) enum PushEnvelope {
         /// (tool approve/deny card).
         #[serde(rename = "pendingCall")]
         pending_call: Option<PushPendingCall>,
+        // ─── SDLC projection (mode=sdlc only; None/omitted otherwise) ───
+        /// SDLC phase when mode is sdlc. Cleared on mode switch.
+        #[serde(rename = "sdlcPhase", skip_serializing_if = "Option::is_none")]
+        sdlc_phase: Option<String>,
+        /// Approved mission goal. Cleared on mode switch.
+        #[serde(rename = "sdlcGoal", skip_serializing_if = "Option::is_none")]
+        sdlc_goal: Option<String>,
+        /// Mission branch. Cleared on mode switch.
+        #[serde(rename = "sdlcBranch", skip_serializing_if = "Option::is_none")]
+        sdlc_branch: Option<String>,
+        /// Open graph node count. Cleared on mode switch.
+        #[serde(rename = "sdlcOpen", skip_serializing_if = "Option::is_none")]
+        sdlc_open: Option<usize>,
+        /// Sealed graph node count. Cleared on mode switch.
+        #[serde(rename = "sdlcSealed", skip_serializing_if = "Option::is_none")]
+        sdlc_sealed: Option<usize>,
     },
     /// Swap-START signal: the host is about to tear down the current attach and connect
     /// a different (or freshly minted) session. `to` is the target session id/uuid — the

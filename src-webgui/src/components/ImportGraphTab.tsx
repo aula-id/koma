@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Network, RefreshCw, X, AlertTriangle, Search, ChevronRight } from 'lucide-react'
-import { useKoma, type ImportGraphNode } from '../store/koma'
+import { useKoma, type ImportGraphNode, type ImportGraphRootInfo } from '../store/koma'
 import { BrailleSpinner } from './BrailleSpinner'
 import { ImportGraphFlow } from './ImportGraphFlow'
 import { sourceLanguage } from '../lib/importGraphLanguages'
@@ -166,7 +166,10 @@ export default function ImportGraphTab() {
   const selectedPath = useKoma((s) => s.importGraph.selectedPath)
   const generation = useKoma((s) => s.importGraph.generation)
   const breadcrumb = useKoma((s) => s.importGraph.breadcrumb)
-  const availableRoots = useKoma((s) => s.importGraph.availableRoots)
+  const availableRootsRaw = useKoma((s) => s.importGraph.availableRoots)
+  // settingsWorkdirs no longer used — root picker is exclusively backend-driven
+  const reindexBusy = useKoma((s) => s.importGraph.reindexBusy)
+  const reindexError = useKoma((s) => s.importGraph.reindexError)
   const filterRoots = useKoma((s) => s.importGraph.filterRoots)
   const filterLanguages = useKoma((s) => s.importGraph.filterLanguages)
 
@@ -182,6 +185,7 @@ export default function ImportGraphTab() {
   const req = useKoma((s) => s.req)
 
   const refreshImportGraph = useKoma((s) => s.refreshImportGraph)
+  const reindexImportGraph = useKoma((s) => s.reindexImportGraph)
   const selectImportGraphNode = useKoma((s) => s.selectImportGraphNode)
   const clearImportGraphSelection = useKoma((s) => s.clearImportGraphSelection)
   const navigateBreadcrumb = useKoma((s) => s.navigateBreadcrumb)
@@ -192,6 +196,12 @@ export default function ImportGraphTab() {
 
   const isActiveTab = useKoma((s) => s.ui.activeTabId === 'import-graph')
   const sessionId = useKoma((s) => s.session.id)
+
+  // Use backend-scoped availableRoots directly — the Rust linker daemon
+  // already scopes to configured workdirs and orders them canonically.
+  // Never compare raw settings workdir strings; use canonical root for
+  // IDs/filters/requests, configuredPath for labels, displayPath for compact.
+  const availableRoots = availableRootsRaw
 
   const availableLanguages = useMemo(() => {
     const langCounts = new Map<string, number>()
@@ -210,8 +220,14 @@ export default function ImportGraphTab() {
 
   const rootItems = useMemo(
     () => availableRoots.map((r) => {
-      const base = r.root.split('/').pop() ?? r.root
-      return { key: r.root, label: base, count: r.fileCount, sublabel: r.root }
+      // Compact label: displayPath basename (backend-computed from configured_path).
+      // Falls back to canonical root basename when displayPath is absent.
+      const label = r.displayPath ?? (r.configuredPath ?? r.root).split('/').pop() ?? r.root
+      // Full sublabel for title/tooltip: configuredPath if it differs from root.
+      const sublabel = r.configuredPath && r.configuredPath !== r.root
+        ? r.configuredPath
+        : r.root
+      return { key: r.root, label, count: r.fileCount, sublabel }
     }),
     [availableRoots],
   )
@@ -360,6 +376,7 @@ export default function ImportGraphTab() {
   // ── Format stats badge ────────────────────────────────────────────
   const statsText = useMemo(() => {
     if (status === 'scanning') return 'indexing…'
+    if (status === 'not-indexed') return 'not indexed'
     if (status === 'unavailable') return 'unavailable'
     const fc = fileCount.toLocaleString()
     const ec = edgeCount.toLocaleString()
@@ -475,16 +492,17 @@ export default function ImportGraphTab() {
             {statsText}
           </span>
 
-          {loading && <BrailleSpinner size={12} className="opacity-70" />}
+          {(loading || reindexBusy) && <BrailleSpinner size={12} className="opacity-70" />}
 
           <button
             type="button"
-            onClick={() => refreshImportGraph()}
-            title={`Refresh graph (gen ${generation})`}
-            aria-label={`Refresh graph (gen ${generation})`}
-            className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
+            onClick={() => reindexImportGraph()}
+            disabled={reindexBusy}
+            title="Reindex configured workspaces"
+            aria-label="Reindex configured workspaces"
+            className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100 disabled:cursor-default disabled:opacity-40"
           >
-            <RefreshCw size={13} />
+            <RefreshCw size={13} className={reindexBusy ? 'animate-spin' : ''} />
           </button>
         </div>
       </div>
@@ -493,25 +511,33 @@ export default function ImportGraphTab() {
       <div className="flex min-h-0 min-w-0 flex-1">
         {/* Graph Canvas */}
         <div className="flex min-h-0 min-w-0 flex-1">
-          {status === 'scanning' || status === 'unavailable' ? (
+          {status === 'scanning' || status === 'not-indexed' || status === 'unavailable' ? (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-center text-[12px] text-koma-dim">
-              <BrailleSpinner size={20} className="text-koma-accent opacity-80" />
+              {status === 'scanning' ? (
+                <BrailleSpinner size={20} className="text-koma-accent opacity-80" />
+              ) : (
+                <Network size={28} className="opacity-40" />
+              )}
               <span className="font-medium text-koma-fg">
-                {status === 'scanning' ? 'Indexing import graph…' : 'Connecting to import graph…'}
+                {status === 'scanning' ? 'Indexing import graph…'
+                  : status === 'not-indexed' ? 'Workspace not indexed'
+                  : 'Connecting to import graph…'}
               </span>
               <span className="max-w-xs text-[10px] opacity-60">
                 {status === 'scanning'
                   ? 'The first workspace scan is still running. This view will retry automatically.'
-                  : 'The linker daemon is not responding yet. This view will retry automatically.'}
+                  : status === 'not-indexed'
+                    ? 'This workspace has not been scanned yet. Click Reindex to start indexing.'
+                    : 'The linker daemon is not responding yet. This view will retry automatically.'}
               </span>
-              {status === 'unavailable' ? (
+              {status === 'not-indexed' || status === 'unavailable' ? (
                 <button
                   type="button"
-                  onClick={() => refreshImportGraph(focus)}
+                  onClick={() => status === 'not-indexed' ? reindexImportGraph() : refreshImportGraph(focus)}
                   className="flex items-center gap-1.5 rounded border border-koma-border bg-koma-panel px-2.5 py-1.5 text-[11px] text-koma-fg hover:border-koma-accent/40 hover:bg-koma-hover"
                 >
                   <RefreshCw size={12} />
-                  Retry now
+                  {status === 'not-indexed' ? 'Reindex workspace' : 'Retry now'}
                 </button>
               ) : null}
             </div>
@@ -521,11 +547,11 @@ export default function ImportGraphTab() {
               <span className="max-w-xs">{error}</span>
               <button
                 type="button"
-                onClick={() => refreshImportGraph(null)}
+                onClick={() => reindexImportGraph()}
                 className="flex items-center gap-1.5 rounded border border-koma-border bg-koma-panel px-2.5 py-1.5 text-[11px] text-koma-fg hover:border-koma-accent/40 hover:bg-koma-hover"
               >
                 <RefreshCw size={12} />
-                Retry graph
+                Reindex workspace
               </button>
             </div>
           ) : nodes.length === 0 ? (

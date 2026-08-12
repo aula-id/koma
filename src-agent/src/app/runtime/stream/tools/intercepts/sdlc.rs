@@ -1197,7 +1197,6 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
         return InterceptFlow::Continue;
     };
     let sess_path = sess.path.clone();
-    let pwd_hash = sess.pwd_hash.clone();
 
     // If mission is frozen/approved, checklist may update status but cannot
     // rewrite structural membership away from frozen graph without amendment.
@@ -1349,17 +1348,10 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
         return InterceptFlow::Continue;
     }
 
-    // Dual-write projection only after graph accept.
-    let todos_only: Vec<TodoItem> = model_items.iter().map(|(t, _)| t.clone()).collect();
-    let result = if let Ok(memory_dir) = crate::model::store::memory_dir(&pwd_hash) {
-        let path = memory_dir.join("TODO.md");
-        match crate::app::mode::todo::save_todos_to(&path, &todos_only) {
-            Ok(()) => format!("Updated SDLC checklist: {n} task(s) (graph authoritative)"),
-            Err(e) => format!("Updated graph; TODO.md write failed: {e}"),
-        }
-    } else {
-        format!("Updated SDLC checklist: {n} task(s) (graph only)")
-    };
+    // SDLC graph is the sole authority — no dual-write to TODO.md.
+    // Plan mode snapshots to plan_todos.md; ordinary todos use project TODO.md;
+    // SDLC checklist lives exclusively in the L2 graph (sdlc_nodes table).
+    let result = format!("Updated SDLC checklist: {n} task(s) (graph authoritative)");
 
     // Rebuild capsule after graph mutation.
     if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
@@ -2240,6 +2232,174 @@ mod assess_gate_tests {
         assert!(
             msg.contains("mission_integrate"),
             "must direct model to mission_integrate: {msg}"
+        );
+    }
+
+    /// SDLC checklist intercept must NOT dual-write to TODO.md.
+    /// Regression: SDLC graph is the sole authority; TODO.md is for ordinary
+    /// project todos only, not SDLC checklist. This is a behavioral test that
+    /// exercises the actual intercept path with a real filesystem, not a string
+    /// check.
+    #[test]
+    fn sdlc_checklist_does_not_dual_write_to_todo_md() {
+        use super::intercept_checklist_sdlc;
+        use crate::app::mode::Mode;
+        use crate::app::state::{AgentMode, AppState};
+        use crate::dto::chat::{FunctionCall, ToolCall};
+
+        // Create a temp session dir with an existing memory/TODO.md.
+        let sess_path =
+            std::env::temp_dir().join(format!("koma-sdlc-dual-write-test-{}", std::process::id()));
+        let memory_dir = sess_path.join("memory");
+        std::fs::create_dir_all(&memory_dir).unwrap();
+        let todo_path = memory_dir.join("TODO.md");
+        let original_content = "- [ ] original item (high)\n- [x] done item (low)\n";
+        std::fs::write(&todo_path, original_content).unwrap();
+
+        // Clean up on drop.
+        struct RmGuard(std::path::PathBuf);
+        impl Drop for RmGuard {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _guard = RmGuard(sess_path.clone());
+
+        // Set up state with an SDLC session pointing at our temp dir.
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.sessions[0].agent_mode = AgentMode::Sdlc;
+        state.rest.sessions[0].sdlc_phase = Some("execute".into());
+        state.rest.sessions[0].session = Some(crate::model::session::Session::new(
+            "test-session".into(),
+            sess_path.clone(),
+            "test-hash".into(),
+            crate::model::settings::Settings::default(),
+            crate::model::conversation::Conversation::new(""),
+        ));
+
+        let c = ToolCall {
+            id: "t-dw".into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: "checklist".into(),
+                arguments: r#"{"todos":[{"content":"new SDLC task","status":"in_progress","priority":"high"},{"content":"another SDLC task","status":"pending","priority":"medium"}]}"#.into(),
+            },
+        };
+
+        // Run the intercept.
+        let _flow = intercept_checklist_sdlc(&mut state, 0, &c);
+
+        // Assert: memory/TODO.md must be UNCHANGED (no dual-write).
+        let after_content = std::fs::read_to_string(&todo_path).unwrap();
+        assert_eq!(
+            after_content, original_content,
+            "TODO.md must not be modified by SDLC checklist intercept - the L2 graph is the sole authority"
+        );
+
+        // Assert: the intercept returned a tool result (graph authoritative).
+        let results = &state.rest.sessions[0].tool_results;
+        assert!(
+            results
+                .iter()
+                .any(|(_, msg)| msg.contains("graph authoritative")),
+            "intercept must report graph authoritative: {results:?}"
+        );
+        // Assert: no result mentions TODO.md (no dual-write intent).
+        for (_, msg) in results {
+            assert!(
+                !msg.contains("TODO.md"),
+                "result must NOT mention TODO.md: {msg}"
+            );
+        }
+
+        // Assert: the L2 graph was actually updated (not a no-op).
+        let conn = crate::model::msglog::open(&sess_path).unwrap();
+        crate::model::sdlc::graph::ensure_tables(&conn).unwrap();
+        let nodes = crate::model::sdlc::graph::list_all(&conn).unwrap();
+        assert_eq!(nodes.len(), 2, "graph must have 2 nodes after intercept");
+        assert!(nodes.iter().any(|n| n.title == "new SDLC task"));
+        assert!(nodes.iter().any(|n| n.title == "another SDLC task"));
+    }
+
+    #[test]
+    fn mission_prepare_outside_sdlc_rejects_without_state_or_artifact_mutation() {
+        use super::intercept_mission_prepare;
+        use crate::model::conversation::Conversation;
+        use crate::model::session::Session;
+        use crate::model::settings::Settings;
+
+        let root = std::env::temp_dir().join(format!(
+            "koma-mission-prepare-mode-gate-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let marker = root.join("repo-marker");
+        std::fs::write(&marker, "unchanged").unwrap();
+
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.sessions[0].session = Some(Session::new(
+            "prepare-mode-gate".into(),
+            root.clone(),
+            "pwd".into(),
+            Settings::default(),
+            Conversation::from_messages(vec![]),
+        ));
+        state.rest.sessions[0].agent_mode = AgentMode::Auto;
+        state.rest.sessions[0].sdlc_phase = None;
+        state.rest.sessions[0].sdlc_branch = Some("unchanged-branch".into());
+        state.rest.sessions[0].active_cwd = Some(root.clone());
+
+        let flow = intercept_mission_prepare(
+            &mut state,
+            0,
+            &call("mission_prepare", "{}"),
+            AgentMode::Auto,
+        );
+
+        assert!(matches!(flow, InterceptFlow::Continue));
+        assert_eq!(state.rest.sessions[0].agent_mode, AgentMode::Auto);
+        assert!(state.rest.sessions[0].sdlc_phase.is_none());
+        assert_eq!(
+            state.rest.sessions[0].sdlc_branch.as_deref(),
+            Some("unchanged-branch")
+        );
+        assert_eq!(
+            state.rest.sessions[0].active_cwd.as_deref(),
+            Some(root.as_path())
+        );
+        assert!(!root.join("mission.json").exists());
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "unchanged");
+        assert!(state.rest.sessions[0].tool_results[0]
+            .1
+            .contains("only available in SDLC mode"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// plan_todos must be empty outside Plan mode - SDLC checklist does not
+    /// populate it (graph is authority for SDLC; plan_todos is Plan-only).
+    #[test]
+    fn plan_todos_empty_outside_plan_mode() {
+        use crate::app::mode::Mode;
+        use crate::app::state::{AgentMode, AppState};
+
+        let mut state = AppState::new(Mode::Chat);
+        // In Auto mode, plan_todos should be empty.
+        state.rest.sessions[0].agent_mode = AgentMode::Auto;
+        assert!(
+            state.rest.sessions[0].plan_todos.is_empty(),
+            "plan_todos must be empty in Auto mode"
+        );
+        // In SDLC mode, plan_todos should also be empty (SDLC uses L2 graph).
+        state.rest.sessions[0].agent_mode = AgentMode::Sdlc;
+        state.rest.sessions[0].sdlc_phase = Some("execute".into());
+        assert!(
+            state.rest.sessions[0].plan_todos.is_empty(),
+            "plan_todos must be empty in SDLC mode"
         );
     }
 }

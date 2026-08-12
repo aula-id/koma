@@ -241,24 +241,24 @@ pub(super) fn finish_tool_round(
         state.rest.sessions[sess_idx].file_changes = crate::model::msglog::read_file_changes(&dir);
     }
 
-    // Refresh the session's todo mirror (#PLAN section) from whichever backing
-    // file is CURRENTLY the source of truth: `plan_todos.md` while in Plan mode
-    // (already kept live by the `checklist`/`plan_ready` interceptions in
-    // `approval.rs`, so this is a cheap no-op re-read there), else the
-    // per-directory `memory/TODO.md` the generic (non-intercepted) `checklist`
-    // tool writes to in every OTHER mode. Read every round (cheap, mirrors the
-    // `file_changes` refresh just above) so an execution-phase `checklist` —
-    // which isn't intercepted and never touches `rt.plan_todos` at its call
-    // site — is reflected the instant this round finishes, in Auto/Normal/Yolo
-    // just as much as Plan.
+    // Refresh the session’s Plan-mode todo mirror (#PLAN section) from
+    // `plan_todos.md` ONLY while in Plan mode. Outside Plan, plan_todos is
+    // kept empty so the GUI Explore "PLAN" section does not project stale
+    // or cross-mode todo data. The TUI `/todo` overlay reads its backing
+    // file directly regardless of mode. SDLC checklist lives in the L2
+    // graph (sdlc_nodes table) and is projected separately if the GUI
+    // needs it - never through plan_todos.
     let in_plan = state.rest.sessions[sess_idx].agent_mode == crate::app::state::AgentMode::Plan;
-    if let Some(todos) = state.rest.sessions[sess_idx]
-        .session
-        .as_ref()
-        .map(|sess| crate::app::mode::todo::load_current_todos(sess, in_plan))
-    {
-        state.rest.sessions[sess_idx].plan_todos = todos;
-    }
+    state.rest.sessions[sess_idx].plan_todos = if in_plan {
+        state.rest.sessions[sess_idx]
+            .session
+            .as_ref()
+            .map(|sess| crate::app::mode::todo::load_current_todos(sess, true))
+            .unwrap_or_default()
+    } else {
+        // Clear any stale plan_todos when not in Plan mode.
+        Vec::new()
+    };
 
     // Inject any queued mid-turn steers as ONE coalesced user message before the
     // next hop, so the model sees the tool results + the user's steer together and

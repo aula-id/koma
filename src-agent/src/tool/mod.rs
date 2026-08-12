@@ -643,6 +643,7 @@ const INTERNAL_ONLY: &[&str] = &[
     "plan_ready",
     "mission_ready",
     "mission_verify",
+    "mission_prepare",
     "mission_integrate",
 ];
 
@@ -674,13 +675,19 @@ pub const DEFERRED_TOOLS: &[&str] = &[
     "browser_evaluate",
 ];
 
-/// Tool names advertised to the MAIN chat model.
+/// Tool names advertised to the MAIN chat model. Explicitly deduped by name
+/// (last-wins if duplicates exist — a future guard) so the schema generation
+/// never sees duplicate tool definitions.
 pub fn main_tool_names() -> Vec<String> {
-    all_tools()
-        .iter()
-        .map(|t| t.name().to_string())
-        .filter(|n| !INTERNAL_ONLY.contains(&n.as_str()))
-        .collect()
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for t in all_tools() {
+        let n = t.name().to_string();
+        if !INTERNAL_ONLY.contains(&n.as_str()) && seen.insert(n.clone()) {
+            out.push(n);
+        }
+    }
+    out
 }
 
 /// Resolve a path and enforce containment.

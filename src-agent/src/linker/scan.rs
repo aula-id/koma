@@ -138,7 +138,9 @@ struct ModuleContext {
 /// Returns the graph and the `ProjectIndex` built during the scan.
 pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
     let mut graph = ImportGraph::new();
-    graph.generation = 1;
+    // NOTE: graph.generation is NOT set here. The daemon owns the monotonic
+    // generation counter and assigns it at publication time so the published
+    // generation never moves backward.
 
     // Build ProjectIndex from normalized roots.
     let mut index = ProjectIndex::new();
@@ -2157,13 +2159,14 @@ mod tests {
         git_init(tmp.path());
 
         let (mut graph, mut pi) = scan_roots(&[root.clone()]);
-        assert_eq!(graph.generation, 1);
+        // scan_roots no longer sets generation (daemon owns it); default is 0.
+        assert_eq!(graph.generation, 0);
 
         std::fs::write(src.join("a.rs"), "// a v2\n").unwrap();
         std::fs::write(src.join("b.rs"), "// b v2\n").unwrap();
         let paths = vec![src.join("a.rs"), src.join("b.rs")];
         crate::linker::watch::handle_events(&paths, &mut graph, &mut pi);
-        assert_eq!(graph.generation, 2, "batch increments generation once");
+        assert_eq!(graph.generation, 1, "batch increments generation once");
         graph.check_invariants().unwrap();
     }
 

@@ -63,16 +63,29 @@ pub struct SessionSnapshot {
     /// keeps the no-changes case + version-skewed peers wire-free. The TUI ignores it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub file_changes: Vec<FileChangeSnapshot>,
-    /// The session's user-facing Plan-mode todo checklist (Plan mode only; empty
-    /// outside it or when no plan is in progress). The two locked workflow rails
-    /// now ride the wire too (flagged via `PlanTodoSnapshot::locked`) so the GUI
-    /// shows the TUI-parity rails right after `plan_enter`, before the model's
-    /// first `checklist` lands. Projected so the native-React GUI's Explore
-    /// "PLAN" section renders live; the TUI ignores it (its `/todo` overlay
-    /// reads `plan_todos.md` directly). `#[serde(default, skip_serializing_if)]`
-    /// keeps the no-plan case + version-skewed peers wire-free.
+    /// The session's user-facing Plan-mode todo checklist. Serialized only for
+    /// foreground mode=plan; cleared on session switch or mode change.
+    /// `#[serde(default, skip_serializing_if)]` keeps the no-plan case +
+    /// version-skewed peers wire-free.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plan_todos: Vec<PlanTodoSnapshot>,
+    // ─── SDLC projection (mode=sdlc only) ───────────────────────────────
+    /// SDLC phase when mode is sdlc: assess|execute|verify|integrate|done.
+    /// `None` when mode is not sdlc (cleared on mode switch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdlc_phase: Option<String>,
+    /// Approved mission goal when in SDLC with a mission on disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdlc_goal: Option<String>,
+    /// Mission branch (intent or bound) for header/clients when in SDLC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdlc_branch: Option<String>,
+    /// Count of open graph nodes (not done/cancelled). SDLC rail display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdlc_open: Option<usize>,
+    /// Count of sealed (done) graph nodes. SDLC rail display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdlc_sealed: Option<usize>,
 }
 
 /// A serde-safe projection of ONE Plan-mode todo entry for the GUI Explore "PLAN"

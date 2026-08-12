@@ -135,18 +135,26 @@ export function ExplorePanel() {
   const files = useKoma((s) => s.session.fileChanges)
   const planTodos = useKoma((s) => s.session.planTodos)
   const mode = useKoma((s) => s.session.mode)
+  const sdlcPhase = useKoma((s) => s.session.sdlcPhase)
+  const sdlcGoal = useKoma((s) => s.session.sdlcGoal)
+  const sdlcBranch = useKoma((s) => s.session.sdlcBranch)
+  const sdlcOpen = useKoma((s) => s.session.sdlcOpen)
+  const sdlcSealed = useKoma((s) => s.session.sdlcSealed)
   const focusPlanTick = useKoma((s) => s.ui.focusPlanTick)
   const req = useKoma((s) => s.req)
   const openDiffTab = useKoma((s) => s.openDiffTab)
   const openStreamTab = useKoma((s) => s.openStreamTab)
+
+  const isPlan = mode === 'plan'
+  const isSdlc = mode === 'sdlc'
 
   // Auto-expand PLAN the instant the session mode flips to 'plan' (also fires
   // on mount if the GUI (re)loads mid-plan). Never auto-collapses on leaving
   // Plan — the section's open/closed state otherwise persists exactly like
   // the other sections (user-driven only).
   useEffect(() => {
-    if (mode === 'plan') setOpen((s) => ({ ...s, plan: true }))
-  }, [mode])
+    if (isPlan || isSdlc) setOpen((s) => ({ ...s, plan: true }))
+  }, [isPlan, isSdlc])
 
   // Cross-tree signal from the UsageFooter PLAN badge click: expand PLAN
   // (RootLayout's own effect on the same tick opens the sidebar/Explore view).
@@ -158,30 +166,70 @@ export function ExplorePanel() {
   const visiblePlan = visiblePlanTodos(planTodos)
   const planDone = visiblePlan.filter((t) => t.status === 'completed').length
 
+  // SDLC rail data: only shown when mode=sdlc with SDLC fields present.
+  const showSdlcRail = isSdlc && sdlcPhase != null
+  const sdlcPhaseLabel = sdlcPhase ?? 'assess'
+  const sdlcGoalLabel = sdlcGoal ?? ''
+  const sdlcOpenCount = sdlcOpen ?? 0
+  const sdlcSealedCount = sdlcSealed ?? 0
+  const sdlcTotal = sdlcOpenCount + sdlcSealedCount
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <AccordionSection
-        title={visiblePlan.length === 0 ? 'Plan' : `Plan · ${planDone}/${visiblePlan.length}`}
+        title={isSdlc && showSdlcRail
+          ? (sdlcGoalLabel ? `SDLC · ${sdlcPhaseLabel} · ${sdlcSealedCount}/${sdlcTotal}` : `SDLC · ${sdlcPhaseLabel}`)
+          : visiblePlan.length === 0 ? 'Plan' : `Plan · ${planDone}/${visiblePlan.length}`
+        }
         open={open.plan}
         onToggle={() => setOpen((s) => ({ ...s, plan: !s.plan }))}
       >
-        {planTodos.length === 0 ? (
-          <Empty>No todos yet</Empty>
-        ) : (
-          planTodos.map((t, i) => {
-            // Locked workflow rails render dim with a lock glyph instead of the
-            // status circle, and never strike through regardless of status —
-            // they're internal bookkeeping, not a completed user-facing step.
-            const Icon = t.locked ? Lock : (PLAN_ICON[t.status] ?? Circle)
-            const tone = t.locked ? 'text-koma-dim opacity-45' : (PLAN_ICON_TONE[t.status] ?? 'text-koma-fg opacity-45')
-            const textTone = t.locked ? 'text-koma-dim opacity-45' : (PLAN_TEXT_TONE[t.status] ?? 'text-koma-fg')
-            return (
-              <div key={i} className="flex min-h-[30px] items-center gap-2.5 px-3 py-1">
-                <Icon size={12} className={`flex-none ${tone}`} />
-                <span className={`min-w-0 flex-1 truncate font-mono text-[12px] font-normal ${textTone}`}>{t.content}</span>
+        {isSdlc && showSdlcRail ? (
+          // SDLC rail: phase, goal, and graph node progress — only when mode=sdlc.
+          <div className="flex flex-col gap-1">
+            <div className="flex min-h-[30px] items-center gap-2.5 px-3 py-1">
+              <CircleDot size={12} className="flex-none text-koma-accent" />
+              <span className="min-w-0 flex-1 truncate font-mono text-[12px] font-normal text-koma-accent">{sdlcPhaseLabel}</span>
+            </div>
+            {sdlcGoalLabel && (
+              <div className="flex min-h-[30px] items-center gap-2.5 px-3 py-1">
+                <FileText size={12} className="flex-none text-koma-fg opacity-45" />
+                <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-koma-fg">{sdlcGoalLabel}</span>
               </div>
-            )
-          })
+            )}
+            {sdlcBranch && (
+              <div className="flex min-h-[30px] items-center gap-2.5 px-3 py-1">
+                <Lock size={12} className="flex-none text-koma-dim opacity-45" />
+                <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-koma-dim opacity-60">{sdlcBranch}</span>
+              </div>
+            )}
+            {sdlcTotal > 0 && (
+              <div className="flex min-h-[30px] items-center gap-2.5 px-3 py-1">
+                <Check size={12} className="flex-none text-koma-success" />
+                <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-koma-fg">{sdlcSealedCount}/{sdlcTotal} sealed</span>
+              </div>
+            )}
+          </div>
+        ) : isPlan ? (
+          // Plan checklist: only when mode=plan. Never leaks from other modes.
+          planTodos.length === 0 ? (
+            <Empty>No todos yet</Empty>
+          ) : (
+            planTodos.map((t, i) => {
+              const Icon = t.locked ? Lock : (PLAN_ICON[t.status] ?? Circle)
+              const tone = t.locked ? 'text-koma-dim opacity-45' : (PLAN_ICON_TONE[t.status] ?? 'text-koma-fg opacity-45')
+              const textTone = t.locked ? 'text-koma-dim opacity-45' : (PLAN_TEXT_TONE[t.status] ?? 'text-koma-fg')
+              return (
+                <div key={i} className="flex min-h-[30px] items-center gap-2.5 px-3 py-1">
+                  <Icon size={12} className={`flex-none ${tone}`} />
+                  <span className={`min-w-0 flex-1 truncate font-mono text-[12px] font-normal ${textTone}`}>{t.content}</span>
+                </div>
+              )
+            })
+          )
+        ) : (
+          // Not in Plan or SDLC mode: show empty state (no stale rows leak).
+          <Empty>No plan active</Empty>
         )}
       </AccordionSection>
       <AccordionSection

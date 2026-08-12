@@ -826,7 +826,18 @@ pub(super) fn push_loop(
                     direction,
                     filter_roots,
                     filter_languages,
+                    session_id,
+                    request_id,
                 }) => {
+                    // Resolve the foreground session's configured workdirs for
+                    // session-scoped visualisation (never daemon-global).
+                    let wds = current_owned
+                        .as_deref()
+                        .and_then(super::diff::session_workdirs_for)
+                        .unwrap_or_default();
+                    let configured_roots = crate::linker::client::canonical_roots(&wds);
+                    let configured_root_map = crate::linker::client::configured_root_map(&wds);
+                    let resolved_session = session_id.or_else(|| current_owned.clone());
                     super::import_graph::spawn_import_graph_attached(
                         import_graph_tx.clone(),
                         path,
@@ -834,6 +845,10 @@ pub(super) fn push_loop(
                         direction,
                         filter_roots,
                         filter_languages,
+                        configured_roots,
+                        configured_root_map,
+                        resolved_session,
+                        request_id,
                     );
                 }
                 #[cfg(feature = "linker")]
@@ -841,13 +856,45 @@ pub(super) fn push_loop(
                     path,
                     depth,
                     request_id,
+                    session_id,
                 }) => {
-                    // Blocking linker IPC — spawn off-thread so the 16ms fold
-                    // cadence is never stalled; drain + emit below.
+                    // Resolve the foreground session's configured workdirs for
+                    // session-scoped impact analysis (never daemon-global).
+                    let configured_roots = current_owned
+                        .as_deref()
+                        .and_then(super::diff::session_workdirs_for)
+                        .map(|wds| crate::linker::client::canonical_roots(&wds))
+                        .unwrap_or_default();
+                    let resolved_session = session_id.or_else(|| current_owned.clone());
                     super::import_graph::spawn_import_graph_impact_attached(
                         impact_tx.clone(),
                         path,
                         depth,
+                        request_id,
+                        configured_roots,
+                        resolved_session,
+                    );
+                }
+                #[cfg(feature = "linker")]
+                Ok(super::HostCtl::ImportGraphReindex { request_id }) => {
+                    // Manual reindex: reconcile/register the foreground session's
+                    // current workdirs, issue Rescan, poll until the scan
+                    // completes, then refresh the scoped visualization.
+                    // Entirely off-thread.
+                    let session_id = current_owned.as_deref().unwrap_or_default().to_string();
+                    let wds = current_owned
+                        .as_deref()
+                        .and_then(super::diff::session_workdirs_for)
+                        .unwrap_or_default();
+                    let configured_roots = crate::linker::client::canonical_roots(&wds);
+                    let configured_root_map = crate::linker::client::configured_root_map(&wds);
+                    super::import_graph::spawn_import_graph_reindex_attached(
+                        import_graph_tx.clone(),
+                        session_id,
+                        configured_roots,
+                        configured_root_map,
+                        None, // All roots after reindex
+                        None,
                         request_id,
                     );
                 }
