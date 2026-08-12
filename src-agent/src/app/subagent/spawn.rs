@@ -165,8 +165,12 @@ pub fn spawn_subagent(
         task,
     );
     // None = unbounded (natural termination when model returns no tool calls).
-    // Some(n) = explicit per-agent cap from the agent-def `steps` field.
-    let max_steps: Option<usize> = agent.steps.map(|s| s as usize);
+    // Some(n) = per-agent cap from agent-def `steps`, falling back to the
+    // session-level `subagent_max_turns` (default 500).
+    let max_steps: Option<usize> = agent
+        .steps
+        .map(|s| s as usize)
+        .or(Some(settings.subagent_max_turns.max(1) as usize));
 
     // Owned clones moved into the task so it borrows nothing from the caller.
     let client_arc = Arc::clone(client);

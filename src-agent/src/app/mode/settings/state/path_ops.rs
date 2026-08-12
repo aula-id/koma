@@ -15,6 +15,7 @@ impl SettingsState {
             SettingField::ApiKey => Some(&mut self.api_key),
             SettingField::Provider => Some(&mut self.provider),
             SettingField::Name => Some(&mut self.name),
+            SettingField::SubagentMaxTurns => Some(&mut self.subagent_max_turns),
             SettingField::Workdir
             | SettingField::AllowedFolders
             | SettingField::Accent

@@ -491,6 +491,7 @@ impl DaemonHub {
                 coding_autosave,
                 internet_mode,
                 workdir,
+                subagent_max_turns,
             } => {
                 self.set_session_prefs(
                     idx,
@@ -501,6 +502,7 @@ impl DaemonHub {
                     coding_autosave,
                     internet_mode,
                     workdir,
+                    subagent_max_turns,
                 );
             }
 
@@ -768,6 +770,7 @@ impl DaemonHub {
             internet_mode: s.internet_mode.as_str().to_string(),
             palette: state.rest.config.palette.clone(),
             effort: s.effort.clone(),
+            subagent_max_turns: s.subagent_max_turns,
         };
         self.send_to(idx, event);
     }

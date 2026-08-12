@@ -637,6 +637,8 @@ pub(super) enum GuiReq {
         internet_mode: Option<String>,
         #[serde(default)]
         workdir: Option<Vec<String>>,
+        #[serde(default, rename = "subagentMaxTurns")]
+        subagent_max_turns: Option<u32>,
     },
 
     // ─── GUI composer EFFORT picker (TUI `/effort` parity) ───────────────────────

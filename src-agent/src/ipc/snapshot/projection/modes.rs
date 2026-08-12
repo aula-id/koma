@@ -262,6 +262,7 @@ pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
         .to_string(),
         palette_sel: st.palette_sel,
         menu_sel: st.menu_sel,
+        subagent_max_turns: st.subagent_max_turns.parse().unwrap_or(500),
     }
 }
 
