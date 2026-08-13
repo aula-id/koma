@@ -158,12 +158,10 @@ pub(crate) fn prompt_password(user: &str, host: &str) -> Result<String> {
                         eprint!("*");
                         io::stderr().flush()?;
                     }
-                    KeyCode::Backspace => {
-                        if password.pop().is_some() {
-                            // Erase the last `*` on screen.
-                            eprint!("\x08 \x08");
-                            io::stderr().flush()?;
-                        }
+                    KeyCode::Backspace if password.pop().is_some() => {
+                        // Erase the last `*` on screen.
+                        eprint!("\x08 \x08");
+                        io::stderr().flush()?;
                     }
                     _ => {}
                 }

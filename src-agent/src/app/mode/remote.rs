@@ -66,6 +66,7 @@ pub struct RemoteState {
     /// Password input buffer (masked in rendering).
     pub password_buf: String,
     /// Host being connected to (for password prompt).
+    #[expect(dead_code)]
     pub connecting_host: Option<String>,
 }
 
@@ -145,6 +146,7 @@ impl RemoteState {
     }
 
     /// Get the currently selected host mutably.
+    #[expect(dead_code)]
     pub fn selected_host_mut(&mut self) -> Option<&mut crate::remote::hosts::RemoteHost> {
         let idx = *self.filtered.get(self.selected)?;
         Some(&mut self.hosts[idx])

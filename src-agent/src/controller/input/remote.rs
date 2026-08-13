@@ -33,8 +33,7 @@ fn handle_compact(m: &mut RemoteState, _rest: &mut AppStateRest, key: KeyEvent) 
         }
         KeyCode::Backspace => {
             // Arm delete (second Backspace confirms).
-            if m.pending_delete.is_some() {
-                let id = m.pending_delete.take().unwrap();
+            if let Some(id) = m.pending_delete.take() {
                 Action::RemoteDeleteHost(id)
             } else if let Some(host) = m.selected_host() {
                 m.pending_delete = Some(host.id.clone());
@@ -84,8 +83,7 @@ fn handle_fullscreen(m: &mut RemoteState, _rest: &mut AppStateRest, key: KeyEven
             }
         }
         KeyCode::Backspace => {
-            if m.pending_delete.is_some() {
-                let id = m.pending_delete.take().unwrap();
+            if let Some(id) = m.pending_delete.take() {
                 Action::RemoteDeleteHost(id)
             } else if let Some(host) = m.selected_host() {
                 m.pending_delete = Some(host.id.clone());

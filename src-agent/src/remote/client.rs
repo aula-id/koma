@@ -30,10 +30,9 @@ pub(crate) fn run_remote_client(
     // Touch last_connected for the matching host (best-effort).
     {
         let mut hosts = crate::remote::hosts::load_hosts();
-        let target_str = if target.port == Some(22) || target.port.is_none() {
-            format!("{}@{}", target.user, target.host)
-        } else {
-            format!("{}@{}:{}", target.user, target.host, target.port.unwrap())
+        let target_str = match target.port {
+            Some(22) | None => format!("{}@{}", target.user, target.host),
+            Some(port) => format!("{}@{}:{}", target.user, target.host, port),
         };
         if let Some(host) = hosts.hosts.iter_mut().find(|h| h.address() == target_str) {
             host.touch_last_connected();
