@@ -46,6 +46,8 @@ fn handle_compact(m: &mut RemoteState, _rest: &mut AppStateRest, key: KeyEvent) 
         KeyCode::Char(c) => {
             if is_ctrl(&key, 'a') {
                 Action::RemoteAddHost
+            } else if c == 'i' {
+                Action::RemoteImportSshConfig
             } else {
                 // Type to filter.
                 m.query.push(c);

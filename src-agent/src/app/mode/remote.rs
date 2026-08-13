@@ -2,7 +2,6 @@
 
 /// Which sub-view within the remote manager.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum RemoteSub {
     /// Compact overlay above composer (host list).
     Compact,
@@ -16,7 +15,6 @@ pub enum RemoteSub {
 
 /// Connection stage during SSH connect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum ConnectStage {
     Resolving,
     Authenticating,
@@ -44,7 +42,6 @@ pub struct ConnectionStatus {
 
 /// State for the remote host manager mode.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct RemoteState {
     /// Current sub-view.
     pub sub: RemoteSub,

@@ -362,18 +362,15 @@ pub enum Action {
     /// Esc from the remote host manager — close it and return to Chat.
     CloseRemote,
     /// Ctrl+A in the remote compact overlay — open the add-host form.
-    #[allow(dead_code)]
     RemoteAddHost,
     /// Enter on a host in the fullscreen detail — connect to it. Inner is host ID.
-    #[allow(dead_code)]
     RemoteConnect(String),
     /// `e` in the fullscreen detail — edit the host. Inner is host ID.
-    #[allow(dead_code)]
     RemoteEditHost(String),
     /// Backspace confirming delete of a host. Inner is host ID.
-    #[allow(dead_code)]
     RemoteDeleteHost(String),
     /// Enter in the password input — submit the password. Inner is the password.
-    #[allow(dead_code)]
     RemotePasswordSubmit(String),
+    /// `i` in the remote compact overlay — import hosts from `~/.ssh/config`.
+    RemoteImportSshConfig,
 }

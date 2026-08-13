@@ -469,6 +469,9 @@ pub struct AppStateRest {
     /// nothing to the tail (byte-identical to before this feature). Purely
     /// in-memory / transient — `AppStateRest` is never serialised.
     pub ext_context: std::collections::BTreeMap<String, String>,
+    /// Signal to the event loop to break out and connect to a remote host.
+    /// Set by action handlers; consumed by the lifecycle loop.
+    pub connect_remote_target: Option<String>,
 }
 
 impl Default for AppStateRest {
@@ -598,6 +601,7 @@ impl AppStateRest {
             ext_panel_pushes: Vec::new(),
             ext_agents: HashMap::new(),
             ext_context: std::collections::BTreeMap::new(),
+            connect_remote_target: None,
         }
     }
 

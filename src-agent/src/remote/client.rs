@@ -27,6 +27,20 @@ pub(crate) fn run_remote_client(
     // Connect the client bridge over SSH stdin/stdout.
     let connection = connect_remote(&handle, session.stdout, session.stdin)?;
 
+    // Touch last_connected for the matching host (best-effort).
+    {
+        let mut hosts = crate::remote::hosts::load_hosts();
+        let target_str = if target.port == Some(22) || target.port.is_none() {
+            format!("{}@{}", target.user, target.host)
+        } else {
+            format!("{}@{}:{}", target.user, target.host, target.port.unwrap())
+        };
+        if let Some(host) = hosts.hosts.iter_mut().find(|h| h.address() == target_str) {
+            host.touch_last_connected();
+            let _ = crate::remote::hosts::save_hosts(&hosts);
+        }
+    }
+
     // Set up terminal for TUI rendering.
     let _guard = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(std::io::stdout());
@@ -40,8 +54,10 @@ pub(crate) fn run_remote_client(
         &handle,
     );
 
-    // Keep the SSH process alive if render loop exited cleanly.
-    if result.is_ok() {
+    // Clean up the SSH child process on ALL paths.
+    if result.is_err() {
+        let _ = rt.block_on(async { session.child.kill().await });
+    } else {
         let status = rt.block_on(async { session.child.wait().await })?;
         if !status.success() {
             eprintln!("Remote koma server exited with status: {status}");

@@ -70,17 +70,6 @@ impl SshAuth {
         }
     }
 
-    /// Get the password (for diagnostic messages — not logged).
-    #[allow(dead_code)]
-    pub fn password_masked(&self) -> &str {
-        // Return a masked representation, not the actual password.
-        let len = self.password.len();
-        if len == 0 {
-            ""
-        } else {
-            "****"
-        }
-    }
 }
 
 impl Drop for SshAuth {

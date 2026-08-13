@@ -703,7 +703,7 @@ pub fn run(opts: crate::cli::Opts) -> Result<()> {
 
     // Terminal setup. Guard created BEFORE the Terminal so its Drop covers a
     // failing Terminal::new, any later `?`-error, and panic-unwind.
-    let _guard = TerminalGuard::enter()?;
+    let mut _guard = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
     // Clear the alternate screen so no shell scrollback bleeds through the
@@ -721,13 +721,53 @@ pub fn run(opts: crate::cli::Opts) -> Result<()> {
         .unwrap_or_default();
     crate::app::runtime::actions::apply_mouse_capture(mc);
 
-    let result = run_loop(&mut terminal, &mut state, &handle, &mut client);
+    loop {
+        let result = run_loop(&mut terminal, &mut state, &handle, &mut client);
 
-    // Terminal teardown is handled by `_guard`'s Drop at function scope.
-    // Release all session locks, then drop the runtime LAST (runs on Ok and Err).
+        // Check for remote connect break-out.
+        if let Some(target) = state.rest.connect_remote_target.take() {
+            // Drop the terminal + guard to restore the normal terminal.
+            drop(terminal);
+            drop(_guard);
+
+            // Connect to the remote server (creates its own terminal).
+            let connect_result = crate::remote::client::run_remote_client_target(
+                &target, None, None,
+            );
+
+            if let Err(e) = &connect_result {
+                crate::model::store::append_global_error_log(
+                    "remote",
+                    &format!("remote connect to {target} failed: {e:#}"),
+                );
+            }
+
+            // Re-enter the terminal and loop.
+            _guard = TerminalGuard::enter()?;
+            let backend = CrosstermBackend::new(stdout());
+            terminal = Terminal::new(backend)?;
+            terminal.clear()?;
+            let mc = state
+                .rest
+                .fg()
+                .session
+                .as_ref()
+                .map(|s| s.settings.mouse_capture)
+                .unwrap_or_default();
+            crate::app::runtime::actions::apply_mouse_capture(mc);
+            continue;
+        }
+
+        // Normal exit path.
+        if let Err(e) = result {
+            shutdown_runtime(&mut state, rt);
+            return Err(e);
+        }
+        break;
+    }
+
     shutdown_runtime(&mut state, rt);
-
-    result
+    Ok(())
 }
 
 /// Headless entry point: run the koma-daemon event loop with NO terminal.

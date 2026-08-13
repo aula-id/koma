@@ -80,12 +80,8 @@ pub(super) fn apply_slash(
                     crate::app::mode::RemoteState::new(hosts.hosts),
                 )));
             } else {
-                // Ad-hoc: /remote user@host — create temp host and connect.
-                let hosts = crate::remote::hosts::load_hosts();
-                state.set_mode(crate::app::mode::Mode::Remote(Box::new(
-                    crate::app::mode::RemoteState::new(hosts.hosts),
-                )));
-                // TODO: start connection to the specified target.
+                // Ad-hoc: /remote user@host — set the break-out signal directly.
+                state.rest.connect_remote_target = Some(args.to_string());
             }
         }
         Command::Resume => new_session::handle_resume(state)?,
