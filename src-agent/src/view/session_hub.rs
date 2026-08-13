@@ -232,6 +232,8 @@ fn draw_cooking(
             } else {
                 "○ ready  ".to_string()
             };
+            // When the session is remote, show the host tag in `palette.info` instead
+            // of the directory label.
             let dir = truncate(&entry.dir_label, 14);
             let right = if dir.is_empty() {
                 marker.clone()
@@ -246,12 +248,24 @@ fn draw_cooking(
                 style
             };
             let pad = name_w.saturating_sub(name.chars().count());
-            let line = Line::from(vec![
+
+            // Build the right-side spans. When remote_host is set, replace the dir
+            // label with a colored host tag.
+            let mut right_spans: Vec<Span> = if let Some(ref host) = entry.remote_host {
+                vec![
+                    Span::styled(format!("● {host}  "), Style::default().fg(palette.info)),
+                    Span::styled(marker, style),
+                ]
+            } else {
+                vec![Span::styled(right, style)]
+            };
+
+            let mut spans = vec![
                 Span::styled(name, name_style),
                 Span::styled(" ".repeat(pad + 2), style),
-                Span::styled(right, style),
-            ]);
-            lines.push(line);
+            ];
+            spans.append(&mut right_spans);
+            lines.push(Line::from(spans));
         }
     }
 
