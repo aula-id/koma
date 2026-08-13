@@ -10,10 +10,7 @@ use crate::app::runtime::client::remote::connect_remote;
 use crate::app::runtime::terminal::TerminalGuard;
 
 /// Run a remote koma session: SSH connect, exec server, bridge to local TUI.
-pub(crate) fn run_remote_client(
-    target: &RemoteTarget,
-    auth: Option<&SshAuth>,
-) -> Result<()> {
+pub(crate) fn run_remote_client(target: &RemoteTarget, auth: Option<&SshAuth>) -> Result<()> {
     // Generate session id.
     let session_id = uuid::Uuid::new_v4().to_string();
 
@@ -53,11 +50,8 @@ pub(crate) fn run_remote_client(
     terminal.clear()?;
 
     // Run the same render loop a local thin-client uses.
-    let result = crate::app::runtime::client::run_remote_render_loop(
-        &mut terminal,
-        connection,
-        &handle,
-    );
+    let result =
+        crate::app::runtime::client::run_remote_render_loop(&mut terminal, connection, &handle);
 
     // Clean up the SSH child process on ALL paths.
     if result.is_err() {

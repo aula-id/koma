@@ -29,11 +29,11 @@ pub(crate) mod commands;
 mod shortsend;
 
 mod lifecycle;
-mod server;
 #[cfg(feature = "linker")]
 mod linker_daemon;
 mod mcp_daemon;
 mod oauth_daemon;
+mod server;
 mod session_mgmt;
 mod signals;
 // Wave-5: persist + restore the per-session bg-bash / sub-agent records (#25).

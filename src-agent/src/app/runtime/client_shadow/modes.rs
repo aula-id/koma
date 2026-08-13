@@ -714,15 +714,23 @@ pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState 
             let host_id = parts.next()?.to_string();
             let user = parts.next()?.to_string();
             let host = parts.next()?.to_string();
-            Some(ConnectionState::AuthRequired { host_id, user, host })
+            Some(ConnectionState::AuthRequired {
+                host_id,
+                user,
+                host,
+            })
         } else if cs_str == "bootstrapping" {
             Some(ConnectionState::Bootstrapping)
         } else if cs_str == "connecting" {
             Some(ConnectionState::Connecting)
         } else if let Some(session_id) = cs_str.strip_prefix("connected:") {
-            Some(ConnectionState::Connected { session_id: session_id.to_string() })
+            Some(ConnectionState::Connected {
+                session_id: session_id.to_string(),
+            })
         } else if let Some(message) = cs_str.strip_prefix("error:") {
-            Some(ConnectionState::Error { message: message.to_string() })
+            Some(ConnectionState::Error {
+                message: message.to_string(),
+            })
         } else {
             None
         }

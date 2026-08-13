@@ -104,7 +104,14 @@ fn remote_connect_worker(
     let host_data = match crate::remote::hosts::host_by_id(&hosts, &host_id) {
         Some(h) => h.clone(),
         None => {
-            push_state("error", None, None, None, Some("host not found"), Vec::new());
+            push_state(
+                "error",
+                None,
+                None,
+                None,
+                Some("host not found"),
+                Vec::new(),
+            );
             return;
         }
     };
@@ -124,7 +131,14 @@ fn remote_connect_worker(
         key: host_data.key_path.clone(),
     };
 
-    push_state("resolving", Some(&user_str), Some(&host_str), None, None, Vec::new());
+    push_state(
+        "resolving",
+        Some(&user_str),
+        Some(&host_str),
+        None,
+        None,
+        Vec::new(),
+    );
 
     // 2. Probe key-based auth.
     let auth = match auth::probe_key_auth(&target) {
@@ -181,7 +195,14 @@ fn remote_connect_worker(
     };
 
     // 4. Bootstrap: check if koma is installed, install if not.
-    push_state("bootstrapping", Some(&user_str), Some(&host_str), None, None, Vec::new());
+    push_state(
+        "bootstrapping",
+        Some(&user_str),
+        Some(&host_str),
+        None,
+        None,
+        Vec::new(),
+    );
 
     let auth_ref = auth.as_ref();
     let installed = match bootstrap::is_koma_installed(&target, auth_ref) {
@@ -215,7 +236,14 @@ fn remote_connect_worker(
 
     // 5. SSH connect and exec `koma server --session <id>`.
     let session_id = uuid::Uuid::new_v4().to_string();
-    push_state("connecting", Some(&user_str), Some(&host_str), None, None, Vec::new());
+    push_state(
+        "connecting",
+        Some(&user_str),
+        Some(&host_str),
+        None,
+        None,
+        Vec::new(),
+    );
 
     let mut ssh_session = match ssh::connect(&target, &session_id, auth_ref) {
         Ok(s) => s,

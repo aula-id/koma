@@ -5,7 +5,7 @@
 //! atomically written and loaded on demand.
 
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -43,19 +43,6 @@ impl RemoteHost {
         } else {
             format!("{}@{}:{}", self.user, self.host, self.port)
         }
-    }
-
-    /// Whether this host was connected to recently (within `threshold`).
-    #[allow(dead_code)]
-    pub fn is_recently_connected(&self, threshold: Duration) -> bool {
-        let Some(ts) = self.last_connected else {
-            return false;
-        };
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        now.saturating_sub(ts) <= threshold.as_secs()
     }
 
     /// Record the current time as the last-connected timestamp.
@@ -108,16 +95,6 @@ pub fn host_by_id<'a>(hosts: &'a RemoteHosts, id: &str) -> Option<&'a RemoteHost
     hosts.hosts.iter().find(|h| h.id == id)
 }
 
-/// Find a host by its label (case-insensitive).
-#[allow(dead_code)]
-pub fn host_by_name<'a>(hosts: &'a RemoteHosts, name: &str) -> Option<&'a RemoteHost> {
-    let name_lc = name.to_lowercase();
-    hosts
-        .hosts
-        .iter()
-        .find(|h| h.name.to_lowercase() == name_lc)
-}
-
 /// Insert a new host or update an existing one (matched by `id`).
 ///
 /// Returns the index of the host in the list after upsert.
@@ -139,16 +116,40 @@ pub fn delete_host(hosts: &mut RemoteHosts, id: &str) -> bool {
 }
 
 /// Flush a parsed SSH config block into an imported host entry.
-fn flush_host(
+/// Pending host data being parsed from SSH config.
+struct PendingHost {
     alias: Option<String>,
     user: Option<String>,
     hostname: Option<String>,
     port: u16,
     key_path: Option<String>,
+}
+
+impl PendingHost {
+    fn new() -> Self {
+        Self {
+            alias: None,
+            user: None,
+            hostname: None,
+            port: 22,
+            key_path: None,
+        }
+    }
+}
+
+fn flush_host(
+    pending: &mut PendingHost,
     existing_hosts: &std::collections::HashSet<&str>,
     existing_names: &std::collections::HashSet<String>,
     imported: &mut Vec<RemoteHost>,
 ) {
+    let alias = pending.alias.take();
+    let user = pending.user.take();
+    let hostname = pending.hostname.take();
+    let port = pending.port;
+    let key_path = pending.key_path.take();
+    pending.port = 22;
+
     if let (Some(alias), Some(user), Some(hostname)) = (alias, user, hostname) {
         if !existing_hosts.contains(hostname.as_str())
             && !existing_names.contains(&alias.to_lowercase())
@@ -194,11 +195,7 @@ fn parse_ssh_config_text(text: &str, hosts: &RemoteHosts) -> Vec<RemoteHost> {
         hosts.hosts.iter().map(|h| h.name.to_lowercase()).collect();
 
     let mut imported = Vec::new();
-    let mut current_host: Option<String> = None;
-    let mut current_user: Option<String> = None;
-    let mut current_hostname: Option<String> = None;
-    let mut current_port: u16 = 22;
-    let mut current_key_path: Option<String> = None;
+    let mut pending = PendingHost::new();
 
     for line in text.lines() {
         let trimmed = line.trim();
@@ -206,16 +203,11 @@ fn parse_ssh_config_text(text: &str, hosts: &RemoteHosts) -> Vec<RemoteHost> {
         // Blank line or comment → flush the current block.
         if trimmed.is_empty() || trimmed.starts_with('#') {
             flush_host(
-                current_host.take(),
-                current_user.take(),
-                current_hostname.take(),
-                current_port,
-                current_key_path.take(),
+                &mut pending,
                 &existing_hosts,
                 &existing_names,
                 &mut imported,
             );
-            current_port = 22;
             continue;
         }
 
@@ -229,32 +221,27 @@ fn parse_ssh_config_text(text: &str, hosts: &RemoteHosts) -> Vec<RemoteHost> {
             "host" => {
                 // Flush previous block.
                 flush_host(
-                    current_host.take(),
-                    current_user.take(),
-                    current_hostname.take(),
-                    current_port,
-                    current_key_path.take(),
+                    &mut pending,
                     &existing_hosts,
                     &existing_names,
                     &mut imported,
                 );
-                current_port = 22;
 
                 // Skip wildcard/negated patterns.
                 if value.starts_with('*') || value.starts_with('!') {
-                    current_host = None;
+                    pending.alias = None;
                 } else {
-                    current_host = Some(value);
+                    pending.alias = Some(value);
                 }
             }
-            "user" => current_user = Some(value),
-            "hostname" => current_hostname = Some(value),
+            "user" => pending.user = Some(value),
+            "hostname" => pending.hostname = Some(value),
             "port" => {
                 if let Ok(p) = value.parse::<u16>() {
-                    current_port = p;
+                    pending.port = p;
                 }
             }
-            "identityfile" if current_host.is_some() && current_key_path.is_none() => {
+            "identityfile" if pending.alias.is_some() && pending.key_path.is_none() => {
                 let path = value.trim_matches(|c| c == '"' || c == '\'');
                 // Expand leading ~/ with home_dir
                 let expanded = if let Some(rest) = path.strip_prefix("~/") {
@@ -266,7 +253,7 @@ fn parse_ssh_config_text(text: &str, hosts: &RemoteHosts) -> Vec<RemoteHost> {
                 } else {
                     path.to_string()
                 };
-                current_key_path = Some(expanded);
+                pending.key_path = Some(expanded);
             }
             _ => {}
         }
@@ -274,11 +261,7 @@ fn parse_ssh_config_text(text: &str, hosts: &RemoteHosts) -> Vec<RemoteHost> {
 
     // Flush the final block.
     flush_host(
-        current_host,
-        current_user,
-        current_hostname,
-        current_port,
-        current_key_path,
+        &mut pending,
         &existing_hosts,
         &existing_names,
         &mut imported,
@@ -396,10 +379,7 @@ mod tests {
         };
         assert_eq!(host.address(), "ubuntu@example.com");
 
-        let host2 = RemoteHost {
-            port: 2222,
-            ..host
-        };
+        let host2 = RemoteHost { port: 2222, ..host };
         assert_eq!(host2.address(), "ubuntu@example.com:2222");
     }
 
@@ -421,7 +401,10 @@ mod tests {
         let back: RemoteHosts = serde_json::from_slice(&json).unwrap();
         assert_eq!(back.hosts.len(), 1);
         assert_eq!(back.hosts[0].id, "rt");
-        assert_eq!(back.hosts[0].key_path, Some("/home/user/.ssh/id_ed25519".into()));
+        assert_eq!(
+            back.hosts[0].key_path,
+            Some("/home/user/.ssh/id_ed25519".into())
+        );
     }
 
     #[test]
@@ -470,7 +453,8 @@ mod tests {
 
     #[test]
     fn ssh_config_first_identityfile_wins() {
-        let text = "Host srv\n  User u\n  HostName h\n  IdentityFile /first\n  IdentityFile /second\n";
+        let text =
+            "Host srv\n  User u\n  HostName h\n  IdentityFile /first\n  IdentityFile /second\n";
         let imported = import_ssh_config_text(text);
         assert_eq!(imported.len(), 1);
         assert_eq!(imported[0].key_path, Some("/first".to_string()));

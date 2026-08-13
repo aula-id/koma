@@ -10,8 +10,8 @@ use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use crate::ipc::frame::{self, FrameReader};
 use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame};
 
-use super::connect::{Connection, TransportKind, HELLO_HANDSHAKE_TIMEOUT};
 use super::bridge::REQ_POLL;
+use super::connect::{Connection, TransportKind, HELLO_HANDSHAKE_TIMEOUT};
 
 /// Connect to a remote koma server over generic async streams (stdin/stdout),
 /// send Attach, and run the Hello handshake.
@@ -131,6 +131,9 @@ where
         writer_handle,
         prebuffered,
         daemon_version,
-        transport: TransportKind::Remote { host_id, session_id },
+        transport: TransportKind::Remote {
+            host_id,
+            session_id,
+        },
     })
 }

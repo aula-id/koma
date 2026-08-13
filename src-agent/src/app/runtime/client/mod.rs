@@ -74,9 +74,9 @@ mod push_loop;
 mod push_proto;
 mod push_proto_git;
 mod push_rows;
+pub(crate) mod remote;
 mod remote_ctl;
 mod render;
-pub(crate) mod remote;
 mod shadow;
 mod store_host;
 mod swapper;
@@ -874,9 +874,8 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                         drop(terminal);
                         drop(_guard);
 
-                        let result = crate::remote::client::run_remote_client_target(
-                            &target, None, None,
-                        );
+                        let result =
+                            crate::remote::client::run_remote_client_target(&target, None, None);
 
                         if let Err(e) = &result {
                             crate::model::store::append_global_error_log(
