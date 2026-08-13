@@ -15,24 +15,33 @@ use super::bridge::{reader_task, writer_task};
 /// a mere absence — only on a CONFIRMED mismatch).
 pub(super) const HELLO_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// What transport backs this connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TransportKind {
+    Local { session_id: String },
+    Remote { host_id: String, session_id: String },
+}
+
 /// One live daemon connection: the bridge channels + writer join handle the render
 /// loop and teardown drive, plus the frames the pre-render handshake already pulled
 /// off the wire and the daemon version it observed.
-pub(super) struct Connection {
+pub(crate) struct Connection {
     /// Incoming daemon frames (reader task -> render loop).
-    pub(super) frame_rx: std::sync::mpsc::Receiver<DaemonFrame>,
-    /// Outgoing client requests (render loop -> writer task).
-    pub(super) req_tx: Sender<ClientRequest>,
+    pub(crate) frame_rx: std::sync::mpsc::Receiver<DaemonFrame>,
+    /// Outgoing client requests (render loop -> daemon).
+    pub(crate) req_tx: Sender<ClientRequest>,
     /// Writer task handle, joined at teardown so the final `Detach`/`QuitDaemon`
     /// flushes before the runtime is dropped.
-    pub(super) writer_handle: tokio::task::JoinHandle<()>,
+    pub(crate) writer_handle: tokio::task::JoinHandle<()>,
     /// Frames the handshake read off `frame_rx` while hunting for `Hello` (normally
     /// none — `Hello` is the first frame — but any that arrived first are carried here
     /// so the render loop applies them BEFORE its own drain and no frame/seq is lost).
-    pub(super) prebuffered: Vec<DaemonFrame>,
+    pub(crate) prebuffered: Vec<DaemonFrame>,
     /// The daemon's reported build fingerprint, or `None` if no `Hello` arrived within
     /// the handshake window (a daemon predating the handshake, or a slow one).
-    pub(super) daemon_version: Option<String>,
+    pub(crate) daemon_version: Option<String>,
+    /// What transport backs this connection (for teardown routing).
+    pub(crate) transport: TransportKind,
 }
 
 /// Connect to the daemon, spawn the I/O bridge, send `Attach`, and run the pre-render
@@ -48,6 +57,7 @@ pub(super) struct Connection {
 pub(super) fn connect_attach_and_handshake(
     handle: &tokio::runtime::Handle,
     sock_path: &std::path::Path,
+    session_id: &str,
 ) -> Result<Connection> {
     // Connect first so a missing daemon fails BEFORE we touch the terminal (no
     // alt-screen flash on "no daemon"). The connected stream is split into the two
@@ -123,5 +133,8 @@ pub(super) fn connect_attach_and_handshake(
         writer_handle,
         prebuffered,
         daemon_version,
+        transport: TransportKind::Local {
+            session_id: session_id.to_string(),
+        },
     })
 }

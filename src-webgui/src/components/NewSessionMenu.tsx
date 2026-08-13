@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, FolderOpen, Link2, LoaderCircle } from 'lucide-react'
 import { useKoma } from '../store/koma'
 
 // Track the trigger button's viewport rect while the menu is open, so the
@@ -28,20 +28,22 @@ function useAnchorRect<T extends HTMLElement>(open: boolean, ref: RefObject<T | 
 }
 
 type NewSessionMenuProps = {
-  // Called right after a menu pick fires its req — lets the caller close its
-  // own overlay (ResumePalette's onClose), mirroring the primary button.
   afterPick?: () => void
   className?: string
 }
 
-// The chevron segment of the split "+ New session" button. Opens a small
-// portaled drop menu (reuses the panels/form.tsx Select/Combobox portal
-// pattern) with "New session" (keep current cooking, unchanged) and — only
-// when a session is currently attached — "New session + close current"
-// (NewSession{kill:true}). Returns null when nothing is attached (StartScreen):
-// the "close current" option doesn't apply there, so no split renders at all.
+const menuWidth = 240
+
+// The chevron segment of the split "+ New session" button. Shows different
+// content depending on whether a session is attached:
+//
+//   Attached (hub):  New session  |  New session + close current
+//   Detached (start): Open folder  ────────  Remote host A / B
 export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProps) {
   const req = useKoma((s) => s.req)
+  const remoteHosts = useKoma((s) => s.remoteHosts)
+  const remoteState = useKoma((s) => s.remoteState)
+  const startSwitching = useKoma((s) => s.startSwitching)
   const attachedId = useKoma((s) => s.session.id)
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLButtonElement>(null)
@@ -66,7 +68,7 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
     }
   }, [open])
 
-  if (!attachedId) return null
+  // Always render the chevron button so the dropdown is always available.
 
   const pick = (kill: boolean) => {
     req(kill ? { r: 'NewSession', kill: true } : { r: 'NewSession' })
@@ -74,7 +76,29 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
     afterPick?.()
   }
 
-  const menuWidth = 208
+  const openFolder = () => {
+    req({ r: 'NewSession', folder: true })
+    setOpen(false)
+    afterPick?.()
+  }
+
+  const connectRemote = (hostId: string, name: string) => {
+    if (remoteState.state !== 'disconnected' && remoteState.state !== 'error') return
+    startSwitching(`remote ${name}`)
+    req({ r: 'ConnectRemoteHost', hostId })
+    setOpen(false)
+    afterPick?.()
+  }
+
+  const menuStyle = rect
+    ? {
+        position: 'fixed' as const,
+        top: rect.bottom + 4,
+        left: Math.max(8, rect.right - menuWidth),
+        width: menuWidth,
+        zIndex: 80,
+      }
+    : { display: 'none' }
 
   return (
     <span className={`flex flex-none items-center ${className}`}>
@@ -96,36 +120,77 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
         createPortal(
           <div
             ref={menuRef}
-            style={{
-              position: 'fixed',
-              top: rect.bottom + 4,
-              left: Math.max(8, rect.right - menuWidth),
-              width: menuWidth,
-              zIndex: 80,
-            }}
+            style={menuStyle}
             className="overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm"
           >
-            <button
-              onMouseDown={(e) => {
-                e.preventDefault()
-                pick(false)
-              }}
-              className="flex w-full items-center px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-80 transition-colors hover:bg-koma-hover hover:opacity-100"
-            >
-              New session
-            </button>
-            <button
-              onMouseDown={(e) => {
-                e.preventDefault()
-                pick(true)
-              }}
-              className="flex w-full items-center px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-80 transition-colors hover:bg-koma-hover hover:opacity-100"
-            >
-              New session + close current
-            </button>
+            {attachedId ? (
+              // In-session: "New session" / "New session + close current"
+              <>
+                <MenuItem onClick={() => pick(false)}>New session</MenuItem>
+                <MenuItem onClick={() => pick(true)}>New session + close current</MenuItem>
+              </>
+            ) : (
+              // Start screen: Open folder, separator, remote hosts
+              <>
+                <MenuItem onClick={openFolder} icon={<FolderOpen size={13} />}>
+                  Open folder
+                </MenuItem>
+                {remoteHosts.length > 0 && (
+                  <>
+                    <div className="my-1 mx-2 h-px bg-koma-border" />
+                    <div className="px-2.5 py-1 text-[10px] font-medium text-koma-dim uppercase tracking-wider">
+                      Remote
+                    </div>
+                    {remoteHosts.map((host) => (
+                      <MenuItem
+                        key={host.id}
+                        onClick={() => connectRemote(host.id, host.name)}
+                        disabled={remoteState.state !== 'disconnected' && remoteState.state !== 'error'}
+                        icon={
+                          remoteState.hostId === host.id && remoteState.state !== 'error' && remoteState.state !== 'disconnected'
+                            ? <LoaderCircle size={13} className="animate-spin" />
+                            : <Link2 size={13} />
+                        }
+                      >
+                        <span className="font-medium">{host.name}</span>
+                        <span className="ml-1 text-koma-dim">
+                          {host.user}@{host.host}
+                        </span>
+                      </MenuItem>
+                    ))}
+                  </>
+                )}
+              </>
+            )}
           </div>,
           document.body,
         )}
     </span>
+  )
+}
+
+function MenuItem({
+  onClick,
+  icon,
+  disabled = false,
+  children,
+}: {
+  onClick: () => void
+  icon?: React.ReactNode
+  disabled?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      disabled={disabled}
+      onMouseDown={(e) => {
+        e.preventDefault()
+        if (!disabled) onClick()
+      }}
+      className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-80 transition-colors hover:bg-koma-hover hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+    >
+      {icon && <span className="flex-none text-koma-dim">{icon}</span>}
+      {children}
+    </button>
   )
 }

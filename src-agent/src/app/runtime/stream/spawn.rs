@@ -82,6 +82,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
             .ok()
             .map(|m| m.join("downloads"))
     });
+    let scratch_dir = session_ref.map(|s| crate::model::store::scratch_dir(&s.id));
 
     // Ensure the downloads dir exists so web_download can write into it.
     if let Some(ref dir) = download_dir {
@@ -139,6 +140,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         memory_dir,
         worktrees_dir,
         download_dir,
+        scratch_dir,
         internet_mode,
         ssh_key,
         skill_registry,
@@ -720,6 +722,7 @@ mod tests {
             memory_dir: None,
             worktrees_dir: None,
             download_dir: None,
+            scratch_dir: None,
             internet_mode: crate::model::settings::InternetMode::default(),
             ssh_key: None,
             skill_registry: None,

@@ -88,6 +88,9 @@ pub(super) enum GuiReq {
     NewSession {
         #[serde(default)]
         kill: bool,
+        /// When true, open a native folder picker before creating the session.
+        #[serde(default)]
+        folder: bool,
     },
     /// A hub session row's KILL button (a live COOKING row, or the attached session itself).
     /// Forwarded as [`HostCtl::KillSession`]; the host escalates the kill off its control
@@ -939,6 +942,50 @@ pub(super) enum GuiReq {
     WriteErrorLog {
         message: String,
     },
+
+    // ─── Remote host management ──────────────────────────────────────────────
+    /// Fetch the saved remote hosts list. Always a reply.
+    GetRemoteHosts,
+    /// Add a new remote host. Reply: fresh RemoteHosts push.
+    AddRemoteHost {
+        name: String,
+        user: String,
+        host: String,
+        port: u16,
+        #[serde(default, rename = "keyPath")]
+        key_path: Option<String>,
+    },
+    /// Edit an existing remote host by id. Reply: fresh RemoteHosts push.
+    EditRemoteHost {
+        id: String,
+        name: String,
+        user: String,
+        host: String,
+        port: u16,
+        #[serde(default, rename = "keyPath")]
+        key_path: Option<String>,
+    },
+    /// Delete a remote host by id. Reply: fresh RemoteHosts push.
+    DeleteRemoteHost {
+        id: String,
+    },
+    /// Connect to a remote host (placeholder — starts SSH session).
+    ConnectRemoteHost {
+        #[serde(rename = "hostId")]
+        host_id: String,
+    },
+    /// Disconnect from a remote host (placeholder).
+    DisconnectRemoteHost {
+        #[serde(rename = "hostId")]
+        host_id: String,
+    },
+    /// Submit a password for remote host authentication.
+    SubmitRemotePassword {
+        password: String,
+    },
+    /// Cancel an in-progress remote connection.
+    CancelRemoteConnect,
+
     /// Import-graph visualization request. `path` is the focal file (None = overview);
     /// `depth` is traversal depth (1–3, clamped); `direction` is
     /// `"dependencies"`/`"dependents"`/`"both"`.

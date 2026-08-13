@@ -24,7 +24,7 @@ use super::project_config::{push_config, ConfigProjection};
 use super::push_intercept;
 use super::push_proto::{
     push_analytics, push_ext_op_result, push_file_diff, push_installed_extensions,
-    push_store_catalogue, push_store_detail, push_switching, push_usage_preview,
+    push_remote_state, push_store_catalogue, push_store_detail, push_switching, push_usage_preview,
 };
 use super::render::{advance_local_animations, FRAME_BUDGET};
 use super::shadow::apply_frame;
@@ -106,7 +106,11 @@ pub(super) enum HostTransition {
     /// Detach and show the local session swapper (the daemon's socket closed, or it
     /// signalled `OpenSwapper`). `run_host_relay` rebuilds the hub from discovery.
     ToSwapper,
-    /// Attach to this session UUID (a hub `SelectSession`/`NewSession`, or a daemon
+    Remote {
+        connection: Box<super::remote_ctl::ActiveRemote>,
+        session_id: String,
+    },
+    /// Attach to this local session UUID (a hub `SelectSession`/`NewSession`, or a daemon
     /// `NewSession` hand-off). A minted uuid for a new session; an existing id otherwise.
     /// `workdir` is the folder a GUI `[+ new session]` native picker chose (the new
     /// session's working dir); `None` for every other attach inherits the host's cwd.
@@ -289,6 +293,17 @@ pub(super) fn push_loop(
         Option<String>,
     )>();
 
+    // --- REMOTE HOST CONNECT/DISCONNECT ---
+    // Worker thread pushes state transitions (resolving → auth_required →
+    // connecting → connected, etc.) over this channel; the loop drains and
+    // pushes them as `RemoteState` envelopes. Shared state holds the password
+    // and disconnect senders for in-flight operations.
+    let (remote_state_tx, remote_state_rx) =
+        std::sync::mpsc::channel::<super::remote_ctl::RemoteStateUpdate>();
+    let (remote_connected_tx, remote_connected_rx) =
+        std::sync::mpsc::channel::<super::remote_ctl::ActiveRemote>();
+    let remote_shared = std::sync::Arc::new(super::remote_ctl::RemoteSessionShared::new());
+
     // Fold the handshake's prebuffered frames first, through the SAME `apply_frame`
     // path (seq seeding stays gap-free). The select/swapper/new latches can't fire
     // this early, so the throwaways here are never acted on.
@@ -296,6 +311,7 @@ pub(super) fn push_loop(
         let mut select_requested = false;
         let mut open_swapper_requested = false;
         let mut new_session_requested: Option<bool> = None;
+        let mut connect_remote_requested: Option<String> = None;
         for frame in prebuffered {
             // Cache the config off any prebuffered full snapshot (normally none — Hello
             // is first, so the attach Snapshot lands in the live drain — but stay safe).
@@ -312,6 +328,7 @@ pub(super) fn push_loop(
                 &mut select_requested,
                 &mut open_swapper_requested,
                 &mut new_session_requested,
+                &mut connect_remote_requested,
                 req_tx,
             );
         }
@@ -898,6 +915,138 @@ pub(super) fn push_loop(
                         request_id,
                     );
                 }
+                // ─── Remote host management (host-local, fast file I/O) ────
+                Ok(ctl @ super::HostCtl::GetRemoteHosts)
+                | Ok(ctl @ super::HostCtl::AddRemoteHost { .. })
+                | Ok(ctl @ super::HostCtl::EditRemoteHost { .. })
+                | Ok(ctl @ super::HostCtl::DeleteRemoteHost { .. }) => {
+                    let mut hosts = crate::remote::hosts::load_hosts();
+                    let mutated = match ctl {
+                        super::HostCtl::AddRemoteHost {
+                            name,
+                            user,
+                            host,
+                            port,
+                            key_path,
+                        } => {
+                            let new_id = crate::model::app_config::new_uuid();
+                            crate::remote::hosts::upsert_host(
+                                &mut hosts,
+                                crate::remote::hosts::RemoteHost {
+                                    id: new_id,
+                                    name,
+                                    user,
+                                    host,
+                                    port,
+                                    key_path,
+                                    last_connected: None,
+                                    tags: vec![],
+                                },
+                            );
+                            true
+                        }
+                        super::HostCtl::EditRemoteHost {
+                            id,
+                            name,
+                            user,
+                            host,
+                            port,
+                            key_path,
+                        } => {
+                            if let Some(h) = crate::remote::hosts::host_by_id(&hosts, &id) {
+                                let updated = crate::remote::hosts::RemoteHost {
+                                    id: h.id.clone(),
+                                    name,
+                                    user,
+                                    host,
+                                    port,
+                                    key_path,
+                                    last_connected: h.last_connected,
+                                    tags: h.tags.clone(),
+                                };
+                                crate::remote::hosts::upsert_host(&mut hosts, updated);
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        super::HostCtl::DeleteRemoteHost { id } => {
+                            crate::remote::hosts::delete_host(&mut hosts, &id)
+                        }
+                        _ => false, // GetRemoteHosts — read-only
+                    };
+                    if mutated {
+                        let _ = crate::remote::hosts::save_hosts(&hosts);
+                    }
+                    let wire_hosts: Vec<serde_json::Value> = hosts
+                        .hosts
+                        .iter()
+                        .map(|h| {
+                            serde_json::json!({
+                                "id": h.id, "name": h.name, "user": h.user, "host": h.host,
+                                "port": h.port, "keyPath": h.key_path,
+                                "connected": h.last_connected.is_some(),
+                                "lastConnected": h.last_connected,
+                                "tags": h.tags,
+                            })
+                        })
+                        .collect();
+                    let envelope = serde_json::json!({ "k": "RemoteHosts", "hosts": wire_hosts });
+                    if let Ok(json) = serde_json::to_string(&envelope) {
+                        push(json);
+                    }
+                }
+                // ─── Remote host connect/disconnect ────────────────────────
+                Ok(super::HostCtl::ConnectRemote { host_id }) => {
+                    // Create a password exchange channel. The worker returns the
+                    // established remote transport through `remote_connected_tx`.
+                    let (pw_tx, pw_rx) = std::sync::mpsc::channel::<String>();
+                    if let Ok(mut tx) = remote_shared.password_tx.lock() {
+                        *tx = Some(pw_tx);
+                    }
+                    remote_shared
+                        .cancelled
+                        .store(false, std::sync::atomic::Ordering::Release);
+                    push_remote_state(
+                        push,
+                        "resolving",
+                        Some(&host_id),
+                        None,
+                        None,
+                        None,
+                        None,
+                        &[],
+                    );
+                    super::remote_ctl::spawn_connect_worker(
+                        host_id,
+                        remote_state_tx.clone(),
+                        remote_connected_tx.clone(),
+                        pw_rx,
+                        std::sync::Arc::clone(&remote_shared.cancelled),
+                        tokio::runtime::Handle::current(),
+                    );
+                }
+                Ok(super::HostCtl::DisconnectRemote) | Ok(super::HostCtl::CancelRemoteConnect) => {
+                    // During connect/auth, dropping the password sender releases the
+                    // worker. Once connected, push_loop has already transitioned to
+                    // the remote transport; its normal detach path handles cleanup.
+                    remote_shared
+                        .cancelled
+                        .store(true, std::sync::atomic::Ordering::Release);
+                    if let Ok(mut tx) = remote_shared.password_tx.lock() {
+                        *tx = None;
+                    }
+                    push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
+                }
+                Ok(super::HostCtl::SubmitRemotePassword { password }) => {
+                    // Forward the password to the waiting connect worker.
+                    if let Ok(mut tx) = remote_shared.password_tx.lock() {
+                        if let Some(tx) = tx.take() {
+                            let _ = tx.send(password);
+                        }
+                    }
+                    push_remote_state(push, "connecting", None, None, None, None, None, &[]);
+                }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.
                 Err(TryRecvError::Disconnected) => return HostTransition::Exit,
@@ -908,6 +1057,7 @@ pub(super) fn push_loop(
         let mut select_requested = false;
         let mut open_swapper_requested = false;
         let mut new_session_requested: Option<bool> = None;
+        let mut connect_remote_requested: Option<String> = None;
         loop {
             match frame_rx.try_recv() {
                 Ok(frame) => {
@@ -933,6 +1083,7 @@ pub(super) fn push_loop(
                         &mut select_requested,
                         &mut open_swapper_requested,
                         &mut new_session_requested,
+                        &mut connect_remote_requested,
                         req_tx,
                     );
                 }
@@ -1043,6 +1194,30 @@ pub(super) fn push_loop(
         }
         while let Ok((id, detail, error)) = installed_detail_rx.try_recv() {
             super::push_proto::push_installed_ext_detail(push, id, detail, error);
+        }
+
+        // --- REMOTE HOST CONNECT: push state transitions, then open the transport ---
+        while let Ok(update) = remote_state_rx.try_recv() {
+            push_remote_state(
+                push,
+                &update.state,
+                update.host_id.as_deref(),
+                update.user.as_deref(),
+                update.host.as_deref(),
+                update.session_id.as_deref(),
+                update.error.as_deref(),
+                &update.sessions,
+            );
+        }
+        if let Ok(active) = remote_connected_rx.try_recv() {
+            let session_id = match &active.connection.transport {
+                super::connect::TransportKind::Remote { session_id, .. } => session_id.clone(),
+                super::connect::TransportKind::Local { session_id } => session_id.clone(),
+            };
+            return HostTransition::Remote {
+                connection: Box::new(active),
+                session_id,
+            };
         }
 
         // --- IMPORT GRAPH: push any completed off-thread linker daemon visualization ---

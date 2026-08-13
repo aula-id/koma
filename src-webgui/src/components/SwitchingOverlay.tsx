@@ -135,6 +135,8 @@ function LoadingSplash({ workspace, awareness }: { workspace: LoadPhase; awarene
 // alongside the classic switch-spinner condition.
 export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
   const to = useKoma((s) => s.ui.switchingTo)
+  const remoteState = useKoma((s) => s.remoteState)
+  const remoteConnecting = !!to?.startsWith('remote ') && !['connected', 'error', 'disconnected'].includes(remoteState.state)
   const loading = useKoma((s) => s.ui.loading)
   const loadingDismissed = useKoma((s) => s.ui.loadingDismissed)
   const dismissLoading = useKoma((s) => s.dismissLoading)
@@ -202,7 +204,11 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
         ) : (
           <>
             <BrailleSpinner size={28} className="text-koma-accent" />
-            <div className="text-[13px] text-koma-fg opacity-70">switching to {to}…</div>
+            <div className="text-[13px] text-koma-fg opacity-70">
+              {remoteConnecting
+                ? `${remoteState.state.replace('_', ' ')} ${to?.replace(/^remote /, '')}…`
+                : `switching to ${to}…`}
+            </div>
             {stuck && (
               <motion.div
                 initial={{ opacity: 0 }}
@@ -214,7 +220,14 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
               </motion.div>
             )}
             <button
-              onClick={onCancel}
+              onClick={() => {
+                if (remoteConnecting) {
+                  useKoma.getState().req({ r: 'CancelRemoteConnect' })
+                  useKoma.getState().cancelSwitching()
+                  return
+                }
+                onCancel()
+              }}
               className={`rounded-md border px-3 py-1.5 text-[12px] transition-colors ${
                 stuck
                   ? 'border-koma-accent bg-koma-accent/10 text-koma-accent opacity-100 hover:bg-koma-accent/20'

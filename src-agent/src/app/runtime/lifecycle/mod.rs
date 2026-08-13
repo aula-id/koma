@@ -68,7 +68,7 @@ pub(super) fn prefill_creds() -> (Option<String>, Option<String>, Option<String>
 /// SAFE FOR HEADLESS USE: nothing here touches stdout / the terminal. `warm_session`
 /// only spawns background tasks + mutates state + does best-effort lock IO, so the
 /// daemon path can call this identically to the TUI path.
-fn build_startup(
+pub(crate) fn build_startup(
     opts: &crate::cli::Opts,
 ) -> Result<(
     tokio::runtime::Runtime,
@@ -91,7 +91,7 @@ fn build_startup(
     let config = AppConfig::load();
 
     // Decide initial state.
-    let mut state = if opts.daemon {
+    let mut state = if opts.daemon || opts.server {
         // Daemon-per-session: `install_daemon_session` (called right after build_startup
         // in run_daemon) owns create/load for this daemon's keyed session id. Do NOT
         // create a throwaway returning-user session here (install would orphan it every
@@ -193,7 +193,7 @@ fn build_startup(
     // returns immediately and connects each enabled server in a background task; tools
     // appear once a server is ready. With no `mcp_servers` configured this spawns
     // nothing and advertises no tools — identical to a build without MCP.
-    if opts.daemon {
+    if opts.daemon || opts.server {
         state.rest.mcp_manager = None;
     } else {
         state.rest.mcp_manager = Some(crate::app::mcp::McpManager::connect_all(
@@ -354,7 +354,7 @@ fn build_startup(
 /// Best-effort and infallible at the type level: a create/load error degrades to a
 /// status line + KeyInput rather than aborting daemon startup, so a bad session can
 /// never wedge the daemon before it can even report the problem to a client.
-fn install_daemon_session(
+pub(crate) fn install_daemon_session(
     state: &mut AppState,
     client: &mut Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
@@ -628,7 +628,7 @@ fn notify_ext_owned_subagents_on_shutdown(state: &mut AppState) -> usize {
 /// owns the sender of its own per-request channel, and `let _ =` on each send
 /// makes a post-drop send a safe no-op (no panic, no deadlock). A crash that skips
 /// this is covered by PID-liveness staleness in `store::is_locked`.
-fn shutdown_runtime(state: &mut AppState, rt: tokio::runtime::Runtime) {
+pub(crate) fn shutdown_runtime(state: &mut AppState, rt: tokio::runtime::Runtime) {
     crate::model::store::append_global_error_log("daemon-exit", "shutdown_runtime: entering");
     // Death-notice pass FIRST — while the duplex ext wire AND the runtime are still live,
     // and BEFORE `stop_all` kills the extension children: tell every ext-owned in-flight
@@ -703,7 +703,7 @@ pub fn run(opts: crate::cli::Opts) -> Result<()> {
 
     // Terminal setup. Guard created BEFORE the Terminal so its Drop covers a
     // failing Terminal::new, any later `?`-error, and panic-unwind.
-    let _guard = TerminalGuard::enter()?;
+    let mut _guard = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
     // Clear the alternate screen so no shell scrollback bleeds through the
@@ -721,13 +721,52 @@ pub fn run(opts: crate::cli::Opts) -> Result<()> {
         .unwrap_or_default();
     crate::app::runtime::actions::apply_mouse_capture(mc);
 
-    let result = run_loop(&mut terminal, &mut state, &handle, &mut client);
+    loop {
+        let result = run_loop(&mut terminal, &mut state, &handle, &mut client);
 
-    // Terminal teardown is handled by `_guard`'s Drop at function scope.
-    // Release all session locks, then drop the runtime LAST (runs on Ok and Err).
+        // Check for remote connect break-out.
+        if let Some(target) = state.rest.connect_remote_target.take() {
+            // Drop the terminal + guard to restore the normal terminal.
+            drop(terminal);
+            drop(_guard);
+
+            // Connect to the remote server (creates its own terminal).
+            let connect_result =
+                crate::remote::client::run_remote_client_target(&target, None, None);
+
+            if let Err(e) = &connect_result {
+                crate::model::store::append_global_error_log(
+                    "remote",
+                    &format!("remote connect to {target} failed: {e:#}"),
+                );
+            }
+
+            // Re-enter the terminal and loop.
+            _guard = TerminalGuard::enter()?;
+            let backend = CrosstermBackend::new(stdout());
+            terminal = Terminal::new(backend)?;
+            terminal.clear()?;
+            let mc = state
+                .rest
+                .fg()
+                .session
+                .as_ref()
+                .map(|s| s.settings.mouse_capture)
+                .unwrap_or_default();
+            crate::app::runtime::actions::apply_mouse_capture(mc);
+            continue;
+        }
+
+        // Normal exit path.
+        if let Err(e) = result {
+            shutdown_runtime(&mut state, rt);
+            return Err(e);
+        }
+        break;
+    }
+
     shutdown_runtime(&mut state, rt);
-
-    result
+    Ok(())
 }
 
 /// Headless entry point: run the koma-daemon event loop with NO terminal.

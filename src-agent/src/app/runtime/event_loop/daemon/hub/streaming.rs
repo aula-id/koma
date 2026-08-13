@@ -125,6 +125,19 @@ impl DaemonHub {
         }
     }
 
+    /// Drain a pending remote connect request by signalling the controller client.
+    /// `Action::RemoteConnect` sets `connect_remote_pending`; this emits a
+    /// one-shot `DaemonEvent::ConnectRemote` to the controller. Mirrors
+    /// `drain_resume_pending` / `drain_new_pending`.
+    pub(in crate::app::runtime::event_loop::daemon) fn drain_connect_remote_pending(
+        &mut self,
+        state: &mut AppState,
+    ) {
+        if let Some(target) = state.rest.connect_remote_pending.take() {
+            self.send_to_controller(DaemonEvent::ConnectRemote { target });
+        }
+    }
+
     /// Stream this tick's render-state changes to every ATTACHED client.
     ///
     /// Builds ONE fresh snapshot from live `state`, then for EACH attached client

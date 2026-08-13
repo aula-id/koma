@@ -24,6 +24,7 @@ pub(super) fn apply_frame(
     select_requested: &mut bool,
     open_swapper_requested: &mut bool,
     new_session_requested: &mut Option<bool>,
+    connect_remote_requested: &mut Option<String>,
     req_tx: &std::sync::mpsc::Sender<ClientRequest>,
 ) -> bool {
     // --- seq-gap detection (critique #1) ---
@@ -99,6 +100,14 @@ pub(super) fn apply_frame(
         // the redraw flag stays false. Mirrors `OpenSwapper`.
         DaemonEvent::NewSession { kill } => {
             *new_session_requested = Some(kill);
+            false
+        }
+        // The `/remote` hand-off: the daemon signalled the controller to connect to a
+        // remote host via SSH. Latch the target address so `render_loop` returns
+        // `ClientTransition::ConnectRemote { target }` AFTER this drain pass. Mirrors
+        // `OpenSwapper` / `NewSession`. Non-visual to the shadow.
+        DaemonEvent::ConnectRemote { target } => {
+            *connect_remote_requested = Some(target.clone());
             false
         }
         // Non-visual control replies. (A future refinement could toast an Error.)
@@ -382,6 +391,7 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
         ModeSnapshot::Todo(t) => Mode::Todo(Box::new(shadow_todo(*t))),
         ModeSnapshot::Help(h) => Mode::Help(Box::new(shadow_help(*h))),
         ModeSnapshot::Skill(s) => Mode::Skill(Box::new(shadow_skill_cmd(*s))),
+        ModeSnapshot::Remote(s) => Mode::Remote(Box::new(shadow_remote(*s))),
         ModeSnapshot::Effort(e) => Mode::Effort(Box::new(shadow_effort(e))),
         ModeSnapshot::Model(m) => Mode::Model(Box::new(shadow_model_cmd(*m))),
         ModeSnapshot::Usage(u) => {

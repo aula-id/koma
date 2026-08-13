@@ -74,6 +74,8 @@ mod push_loop;
 mod push_proto;
 mod push_proto_git;
 mod push_rows;
+pub(crate) mod remote;
+mod remote_ctl;
 mod render;
 mod shadow;
 mod store_host;
@@ -183,7 +185,7 @@ fn attach_session(
     let sock_path = store::daemon_sock_path(session_id)?;
     let my_fingerprint = store::build_fingerprint();
 
-    let mut conn = connect_attach_and_handshake(handle, &sock_path)?;
+    let mut conn = connect_attach_and_handshake(handle, &sock_path, session_id)?;
     let mut already_restarted = false;
     while conn
         .daemon_version
@@ -207,7 +209,7 @@ fn attach_session(
 
         restart_daemon_animated(terminal, session_id)?;
 
-        conn = connect_attach_and_handshake(handle, &sock_path)?;
+        conn = connect_attach_and_handshake(handle, &sock_path, session_id)?;
     }
     Ok(conn)
 }
@@ -227,6 +229,7 @@ fn teardown_connection(handle: &tokio::runtime::Handle, conn: Connection) {
         writer_handle,
         prebuffered: _,
         daemon_version: _,
+        transport: _,
     } = conn;
 
     let _ = req_tx.send(ClientRequest::Detach);
@@ -660,6 +663,39 @@ pub(super) enum HostCtl {
     /// off-thread; `request_id` is echoed back so the GUI can correlate.
     #[cfg(feature = "linker")]
     ImportGraphReindex { request_id: Option<String> },
+
+    // ─── Remote host management (host-local CRUD, fast file I/O) ──────────────
+    /// Fetch the saved remote hosts list and push a RemoteHosts envelope.
+    GetRemoteHosts,
+    /// Add a new remote host and push the updated list.
+    AddRemoteHost {
+        name: String,
+        user: String,
+        host: String,
+        port: u16,
+        key_path: Option<String>,
+    },
+    /// Edit an existing remote host by id and push the updated list.
+    EditRemoteHost {
+        id: String,
+        name: String,
+        user: String,
+        host: String,
+        port: u16,
+        key_path: Option<String>,
+    },
+    /// Delete a remote host by id and push the updated list.
+    DeleteRemoteHost { id: String },
+
+    // ─── Remote host connect/disconnect ──────────────────────────────────────
+    /// Connect to a remote host via SSH (off-thread, blocking).
+    ConnectRemote { host_id: String },
+    /// Disconnect from the current remote host.
+    DisconnectRemote,
+    /// Submit a password for in-progress remote host authentication.
+    SubmitRemotePassword { password: String },
+    /// Cancel an in-progress remote connect attempt.
+    CancelRemoteConnect,
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.
@@ -699,7 +735,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
     // Terminal setup — identical to the local TUI (`run`). Guard first so a failure
     // anywhere after still restores the terminal. The guard persists ACROSS the loop so a
     // detach-then-swap re-attaches without re-entering the alt-screen.
-    let _guard = TerminalGuard::enter()?;
+    let mut _guard = TerminalGuard::enter()?;
     // Enable mouse capture so scroll events arrive as Event::Mouse. Auto resolves
     // to ON (the default). If the session's mouse_capture is Off, the first
     // Snapshot in render_loop will re-apply it via a one-shot sync.
@@ -826,6 +862,42 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                             }
                         }
                     }
+                    // `/remote`: DETACH from this daemon (leaving it cooking) and connect to
+                    // a remote host via SSH. The remote client owns its own full terminal
+                    // lifecycle (enter alt-screen, render, exit alt-screen), so we drop OUR
+                    // terminal guard before the call and re-enter after. On return, go back
+                    // to the local swapper so the user can pick another session or reconnect.
+                    Ok(render::ClientTransition::ConnectRemote { target }) => {
+                        teardown_connection(&handle, conn);
+
+                        // Drop the terminal + guard to restore the normal terminal.
+                        drop(terminal);
+                        drop(_guard);
+
+                        let result =
+                            crate::remote::client::run_remote_client_target(&target, None, None);
+
+                        if let Err(e) = &result {
+                            crate::model::store::append_global_error_log(
+                                "client",
+                                &format!("remote connection failed: {e:#}"),
+                            );
+                        }
+
+                        // Re-enter the terminal for the local swapper/attach loop.
+                        _guard = TerminalGuard::enter()?;
+                        crate::app::runtime::actions::apply_mouse_capture(
+                            crate::model::settings::MouseCapture::Auto,
+                        );
+                        let backend = CrosstermBackend::new(stdout());
+                        terminal = Terminal::new(backend)?;
+                        terminal.clear()?;
+
+                        // Return to the swapper so the user can pick another session
+                        // or reconnect locally.
+                        prev_session = current_session_id.take();
+                        ClientState::Swapper(build_local_hub(prev_session.as_deref()))
+                    }
                     // A render error ends the loop like an exit, but the error is carried
                     // out and returned AFTER this connection's teardown so the daemon is
                     // never orphaned by an early return.
@@ -891,6 +963,43 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
     drop(rt);
 
     render_result
+}
+
+/// Run the TUI render loop for a remote connection.
+///
+/// Used by `koma remote` to display the remote koma server's UI over SSH.
+/// Takes a pre-built [`Connection`] (from [`remote::connect_remote`]) and drives
+/// the same render loop a local thin-client uses — so the remote UI is
+/// byte-for-byte identical.
+pub(crate) fn run_remote_render_loop(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    mut conn: Connection,
+    handle: &tokio::runtime::Handle,
+) -> Result<()> {
+    let prebuffered = std::mem::take(&mut conn.prebuffered);
+    let frame_rx = &conn.frame_rx;
+    let req_tx = &conn.req_tx;
+
+    let transition = {
+        let _rt_ctx = handle.enter();
+        render::render_loop(terminal, frame_rx, req_tx, prebuffered)
+    };
+
+    // Only Exit or error are expected transitions for remote.
+    // OpenSwapper/NewSession don't make sense over SSH — treat as exit.
+    match transition {
+        Ok(render::ClientTransition::Exit { .. })
+        | Ok(render::ClientTransition::OpenSwapper)
+        | Ok(render::ClientTransition::NewSession { .. })
+        | Ok(render::ClientTransition::ConnectRemote { .. }) => {
+            teardown_connection(handle, conn);
+        }
+        Err(e) => {
+            teardown_connection(handle, conn);
+            return Err(e);
+        }
+    }
+    Ok(())
 }
 
 /// Run the `/select` transcript dump on the CLIENT's terminal.

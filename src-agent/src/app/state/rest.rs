@@ -469,6 +469,20 @@ pub struct AppStateRest {
     /// nothing to the tail (byte-identical to before this feature). Purely
     /// in-memory / transient — `AppStateRest` is never serialised.
     pub ext_context: std::collections::BTreeMap<String, String>,
+    /// Signal to the event loop to break out and connect to a remote host.
+    /// Set by action handlers; consumed by the lifecycle loop.
+    pub connect_remote_target: Option<String>,
+    /// Transient signal for the daemon hub to drain into a one-shot
+    /// [`crate::ipc::proto::DaemonEvent::ConnectRemote`] to the controller client.
+    /// Mirrors `resume_pending` → `OpenSwapper` / `new_pending` → `NewSession`:
+    /// `Action::RemoteConnect` sets this INSTEAD of (or in addition to)
+    /// `connect_remote_target` so the THIN-CLIENT handles the SSH break-out,
+    /// not the daemon. The hub clears it after emitting the event.
+    pub connect_remote_pending: Option<String>,
+    /// Optional session UUID carried from `Action::RemoteConnectSession` through the
+    /// connection flow so the remote client resumes the exact UUID without minting a
+    /// new one. Consumed by the remote client after connection.
+    pub connect_remote_session_id: Option<String>,
 }
 
 impl Default for AppStateRest {
@@ -598,6 +612,9 @@ impl AppStateRest {
             ext_panel_pushes: Vec::new(),
             ext_agents: HashMap::new(),
             ext_context: std::collections::BTreeMap::new(),
+            connect_remote_target: None,
+            connect_remote_pending: None,
+            connect_remote_session_id: None,
         }
     }
 

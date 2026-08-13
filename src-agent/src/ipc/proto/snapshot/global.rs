@@ -164,6 +164,9 @@ pub struct CookingEntrySnapshot {
     /// handler's identity-based `pending_kill`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// If this session is on a remote host, its display name. `None` for local sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_host: Option<String>,
 }
 
 /// A serde-safe projection of one HISTORY row in the session hub.

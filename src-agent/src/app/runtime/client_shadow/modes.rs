@@ -29,8 +29,8 @@ use crate::ipc::proto::{
     AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, BashSnapshot, EffortSnapshot, ExtRowWire,
     ExtScreenSnapshot, ExtStoreRowWire, ExtStoreSnapshot, ExtensionsSnapshot, HelpSnapshot,
     KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModelCmdSnapshot, OnboardProviderSnapshot,
-    OnboardSnapshot, PickerSnapshot, RewindSnapshot, SecuritySnapshot, SessionHubSnapshot,
-    SkillCmdSnapshot, TextEditorSnapshot, ToolPickerSnapshot, WarmStatusWire,
+    OnboardSnapshot, PickerSnapshot, RemoteSnapshot, RewindSnapshot, SecuritySnapshot,
+    SessionHubSnapshot, SkillCmdSnapshot, TextEditorSnapshot, ToolPickerSnapshot, WarmStatusWire,
 };
 use crate::model::app_config::McpTransport;
 use crate::model::store::SessionMeta;
@@ -151,6 +151,7 @@ pub(crate) fn shadow_session_hub(h: SessionHubSnapshot) -> SessionHub {
                 session_id: c.session_id,
                 dir_label: String::new(), // not projected over the wire
                 is_current_dir: false,
+                remote_host: c.remote_host,
             })
             .collect(),
         history,
@@ -693,5 +694,114 @@ pub(crate) fn shadow_todo(s: crate::ipc::proto::TodoSnapshot) -> crate::app::mod
         // intentionally NOT part of `TodoSnapshot` and defaults to `None` here.
         plan_path: None,
         last_refresh: std::time::Instant::now(),
+    }
+}
+
+/// Rebuild the `/remote` host manager ([`RemoteState`]) from its projection.
+pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState {
+    use crate::app::mode::remote::{
+        ConnectionState, RemoteIntent, RemoteSession, RemoteState, RemoteView,
+    };
+
+    let connection_state = s.connection_state.and_then(|cs_str| {
+        if cs_str == "disconnected" {
+            Some(ConnectionState::Disconnected)
+        } else if cs_str == "resolving" {
+            Some(ConnectionState::Resolving)
+        } else if cs_str == "authenticating" {
+            Some(ConnectionState::Authenticating)
+        } else if let Some(rest) = cs_str.strip_prefix("auth_required:") {
+            // Format: "auth_required:<host_id>:<user>:<host>"
+            let mut parts = rest.splitn(3, ':');
+            let host_id = parts.next()?.to_string();
+            let user = parts.next()?.to_string();
+            let host = parts.next()?.to_string();
+            Some(ConnectionState::AuthRequired {
+                host_id,
+                user,
+                host,
+            })
+        } else if cs_str == "bootstrapping" {
+            Some(ConnectionState::Bootstrapping)
+        } else if cs_str == "connecting" {
+            Some(ConnectionState::Connecting)
+        } else if let Some(session_id) = cs_str.strip_prefix("connected:") {
+            Some(ConnectionState::Connected {
+                session_id: session_id.to_string(),
+            })
+        } else {
+            cs_str
+                .strip_prefix("error:")
+                .map(|message| ConnectionState::Error {
+                    message: message.to_string(),
+                })
+        }
+    });
+
+    // Parse "intent:view" format from the wire.
+    let (intent, view) = {
+        let mut parts = s.sub.splitn(2, ':');
+        let intent = match parts.next() {
+            Some("resume") => RemoteIntent::Resume,
+            Some("new") => RemoteIntent::New,
+            _ => RemoteIntent::Manage,
+        };
+        let view = match parts.next() {
+            Some("host_picker") => RemoteView::HostPicker,
+            Some("host_detail") => RemoteView::HostDetail,
+            Some("session_hub") => RemoteView::SessionHub,
+            Some("create_host") => RemoteView::CreateHost,
+            Some("edit_host") => RemoteView::EditHost,
+            // Legacy single-token values from old clients.
+            Some("fullscreen") | Some("host_manager") | None => {
+                if intent == RemoteIntent::Manage {
+                    RemoteView::HostManager
+                } else {
+                    RemoteView::HostPicker
+                }
+            }
+            _ => RemoteView::HostManager,
+        };
+        (intent, view)
+    };
+
+    RemoteState {
+        intent,
+        view,
+        hosts: s
+            .hosts
+            .into_iter()
+            .map(|h| crate::remote::hosts::RemoteHost {
+                id: h.id,
+                name: h.name,
+                user: h.user,
+                host: h.host,
+                port: h.port,
+                key_path: h.key_path,
+                last_connected: h.last_connected,
+                tags: h.tags,
+            })
+            .collect(),
+        selected: s.selected,
+        query: s.query,
+        filtered: s.filtered,
+        detail_host: s.detail_host,
+        selected_host_id: s.selected_host_id,
+        connection_state,
+        sessions: s
+            .sessions
+            .into_iter()
+            .map(|ss| RemoteSession {
+                session_id: ss.session_id,
+                name: ss.name,
+                working: ss.working,
+                is_foreground: ss.is_foreground,
+            })
+            .collect(),
+        session_selected: s.session_selected,
+        pending_delete: s.pending_delete,
+        password_buf: String::new(),
+        editor: None,
+        editing_field: false,
     }
 }

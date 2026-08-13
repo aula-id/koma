@@ -289,6 +289,12 @@ pub(super) fn run_loop(
         // `service_global` (above), so it is NOT repeated here — ticking it twice
         // per iteration would expire toasts at double rate.
 
+        // Remote connect break-out signal: exit the loop so the caller can
+        // hand off to the SSH remote render loop.
+        if state.rest.connect_remote_target.is_some() {
+            break;
+        }
+
         if state.rest.should_quit {
             crate::model::store::append_global_error_log(
                 "daemon-exit",

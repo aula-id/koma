@@ -32,6 +32,7 @@ mod onboard;
 pub mod onboard_provider;
 mod picker;
 mod quit_confirm;
+pub mod remote;
 mod rewind;
 pub mod security;
 mod session_hub;
@@ -45,6 +46,7 @@ pub use bash::BashState;
 pub use ext_screen::ExtScreenState;
 pub use extensions::{ExtRow, ExtSubMode, ExtTuiScreen, ExtensionsState};
 pub use mcp::{McpEditField, McpState, McpSubMode};
+pub use remote::RemoteState;
 pub use security::{SecSel, SecurityState};
 pub use store::{ExtStoreState, StoreDetailData, StoreRow, StoreSubMode};
 pub use todo::{parse_todo_file, TodoState};
@@ -305,4 +307,8 @@ pub enum Mode {
     /// inner [`SkillCmdState`] holds the query, chip filter, entry list, and
     /// cursor. Boxed to keep `Mode` small, consistent with the other list variants.
     Skill(Box<SkillCmdState>),
+    /// Remote host manager (`/remote`): manage saved SSH hosts, connect to
+    /// remote koma sessions. Boxed to keep `Mode` small, consistent with
+    /// other overlay variants.
+    Remote(Box<RemoteState>),
 }

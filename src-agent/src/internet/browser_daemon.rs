@@ -682,13 +682,6 @@ impl BrowserDaemon {
         }
     }
 
-    /// Get the path to the daemon socket (Unix only).
-    #[cfg(unix)]
-    #[cfg(test)]
-    fn socket_path(&self) -> &Path {
-        &self.socket_path
-    }
-
     /// Get the daemon TCP port (Windows only, test only).
     #[cfg(windows)]
     #[cfg(test)]

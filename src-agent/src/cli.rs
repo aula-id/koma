@@ -183,6 +183,19 @@ pub struct Opts {
     /// Modifier for `doctor`: `-v`/`--verbose` — always show every category's
     /// sub-detail lines, not just the ones for [!]/[✗] categories.
     pub doctor_verbose: bool,
+    /// When `true`, run as a headless daemon over stdio (`koma server` positional
+    /// verb). Speaks the IPC protocol over stdin/stdout instead of a unix socket —
+    /// designed for SSH remote development.
+    pub server: bool,
+    /// A `koma remote <user@host>` invocation: the target string for SSH connection.
+    pub remote_target: Option<String>,
+    /// SSH key path for remote connections (`--key <path>`).
+    pub remote_key: Option<String>,
+    /// SSH port for remote connections (`--port <n>`).
+    pub remote_port: Option<u16>,
+    /// When `true`, list remote koma sessions as JSON and exit
+    /// (`koma sessions` positional verb, hidden internal subcommand).
+    pub sessions: bool,
 }
 
 /// Print `koma <version>` to STDOUT and return the process exit code (`0`).
@@ -216,6 +229,8 @@ pub fn print_help() -> i32 {
          \x20 daemon <status|kill|restart|clean>  daemon management CLI\n\
          \x20 ext install --dev <zip|dir>    sideload an unsigned local extension (dev-only)\n\
          \x20 doctor [-v|--verbose]          readiness report (config/daemons/models/gui/…)\n\
+         \x20 server                         headless daemon over stdio (for remote dev via SSH)\n\
+         \x20 remote <user@host>              SSH-connect to a remote machine and run koma\n\
          \n\
          flags:\n\
          \x20 --resume                       open the session hub\n\
@@ -302,6 +317,25 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
         Some("alone") => opts.local = true,
         Some("update") => opts.update = true,
         Some("gui") => opts.gui = true,
+        Some("server") => opts.server = true,
+        Some("sessions") => opts.sessions = true,
+        Some("remote") => {
+            // `remote <user@host>` — the next positional is the target.
+            if let Some(target) = positional.next() {
+                opts.remote_target = Some(target.clone());
+                // Scan for `--key <path>` and `--port <n>` in the remaining args.
+                for pair in all.windows(2) {
+                    if pair[0] == "--key" {
+                        opts.remote_key = Some(pair[1].clone());
+                    }
+                    if pair[0] == "--port" {
+                        if let Ok(p) = pair[1].parse::<u16>() {
+                            opts.remote_port = Some(p);
+                        }
+                    }
+                }
+            }
+        }
         Some("doctor") => {
             opts.doctor = true;
             opts.doctor_verbose = all.iter().any(|a| a == "-v" || a == "--verbose");

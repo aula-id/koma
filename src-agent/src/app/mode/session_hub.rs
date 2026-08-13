@@ -74,6 +74,9 @@ pub struct CookingEntry {
     /// Populated for future use; cooking pane currently uses `is_foreground` for emphasis.
     #[allow(dead_code)]
     pub is_current_dir: bool,
+    /// If this session is on a remote host, its display name. `None` for local sessions.
+    #[allow(dead_code)]
+    pub remote_host: Option<String>,
 }
 
 /// One row in the HISTORY pane: an on-disk session not currently live.

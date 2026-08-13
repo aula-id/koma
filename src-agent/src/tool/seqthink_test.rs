@@ -11,6 +11,7 @@ fn test_ctx() -> ToolCtx {
         memory_dir: None,
         worktrees_dir: None,
         download_dir: None,
+        scratch_dir: None,
         internet_mode: crate::model::settings::InternetMode::default(),
         ssh_key: None,
         skill_registry: None,

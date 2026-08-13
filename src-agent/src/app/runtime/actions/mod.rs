@@ -484,6 +484,97 @@ pub(in crate::app::runtime) fn apply_action(
         Action::RewindToMessage(idx) => {
             rewind::handle_rewind_to_message(idx, state)?;
         }
+
+        Action::CloseRemote => {
+            *state.mode_mut() = crate::app::mode::Mode::Chat;
+        }
+
+        Action::RemoteDeleteHost(id) => {
+            let mut hosts = crate::remote::hosts::load_hosts();
+            crate::remote::hosts::delete_host(&mut hosts, &id);
+            let _ = crate::remote::hosts::save_hosts(&hosts);
+            *state.mode_mut() = crate::app::mode::Mode::Remote(Box::new(
+                crate::app::mode::RemoteState::new(hosts.hosts),
+            ));
+        }
+
+        Action::RemoteConnect(host_id) => {
+            let hosts = crate::remote::hosts::load_hosts();
+            if let Some(host) = crate::remote::hosts::host_by_id(&hosts, &host_id) {
+                let target = host.address();
+                *state.mode_mut() = crate::app::mode::Mode::Chat;
+                // Set both signals:
+                // - `connect_remote_pending` for the daemon hub to drain into a
+                //   `DaemonEvent::ConnectRemote` to the controller thin-client.
+                // - `connect_remote_target` for the standalone lifecycle which reads it
+                //   directly (unchanged).
+                state.rest.connect_remote_pending = Some(target.clone());
+                state.rest.connect_remote_target = Some(target);
+            }
+        }
+
+        Action::RemoteAddHost => {
+            if let crate::app::mode::Mode::Remote(ref mut remote) = state.mode_mut() {
+                remote.enter_create();
+            }
+        }
+
+        Action::RemoteEditHost(id) => {
+            if let crate::app::mode::Mode::Remote(ref mut remote) = state.mode_mut() {
+                remote.detail_host = Some(id);
+                remote.enter_edit();
+            }
+        }
+
+        Action::RemoteSaveHost => {
+            if let crate::app::mode::Mode::Remote(ref mut remote) = state.mode_mut() {
+                if remote.validate_editor() {
+                    if let Some(host) = remote.build_host() {
+                        let mut hosts = crate::remote::hosts::load_hosts();
+                        crate::remote::hosts::upsert_host(&mut hosts, host);
+                        let _ = crate::remote::hosts::save_hosts(&hosts);
+                        *state.mode_mut() = crate::app::mode::Mode::Remote(Box::new(
+                            crate::app::mode::RemoteState::new(hosts.hosts),
+                        ));
+                    }
+                }
+            }
+        }
+
+        Action::RemoteConnectSession {
+            host_id,
+            session_id,
+        } => {
+            // Connect to a remote host to resume the selected session UUID.
+            // Close the remote overlay and set the connect signal with the host's address.
+            // The session_id is carried through for the remote client to resume the exact UUID.
+            let hosts = crate::remote::hosts::load_hosts();
+            if let Some(host) = crate::remote::hosts::host_by_id(&hosts, &host_id) {
+                let target = host.address();
+                *state.mode_mut() = crate::app::mode::Mode::Chat;
+                state.rest.connect_remote_pending = Some(target.clone());
+                state.rest.connect_remote_target = Some(target);
+                state.rest.connect_remote_session_id = Some(session_id);
+            } else {
+                *state.mode_mut() = crate::app::mode::Mode::Chat;
+                state.rest.fg_mut().status = "host not found".into();
+            }
+        }
+
+        Action::RemoteImportSshConfig => {
+            let hosts = crate::remote::hosts::load_hosts();
+            let imported = crate::remote::hosts::import_ssh_config(&hosts);
+            let count = imported.len();
+            let mut hosts = hosts;
+            for h in imported {
+                crate::remote::hosts::upsert_host(&mut hosts, h);
+            }
+            let _ = crate::remote::hosts::save_hosts(&hosts);
+            *state.mode_mut() = crate::app::mode::Mode::Remote(Box::new(
+                crate::app::mode::RemoteState::new(hosts.hosts),
+            ));
+            state.rest.fg_mut().status = format!("imported {count} hosts from ~/.ssh/config");
+        }
     }
     Ok(())
 }

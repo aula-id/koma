@@ -52,6 +52,7 @@ mod ipc;
 mod linker;
 mod model;
 mod re_util;
+mod remote;
 mod resources;
 mod security;
 mod service;
@@ -164,13 +165,19 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(app::run_doctor(opts.doctor_verbose));
     }
 
+    // --- short-circuit: `koma sessions --json` — list live sessions (no TUI) ---
+    if opts.sessions {
+        let code = run_sessions_json();
+        std::process::exit(code);
+    }
+
     // --- upgrade migration: reap any pre-0.2.0 global daemon on first 0.2.0 launch ---
     // The old 0.1.x daemon bound a bare `<base_dir>/daemon.sock`. 0.2.0 never creates
     // that path; its presence means a pre-0.2.0 orphan is still running. We SIGTERM it
     // here (best-effort) so it releases any session write-locks it holds and vacates disk.
     // Skip in the daemon/mcp-daemon children — they are spawned AFTER this migration runs
     // in the parent, and a child re-running migrate would be a no-op race anyway.
-    if !opts.daemon && !opts.mcp_daemon && !opts.oauth_daemon {
+    if !opts.daemon && !opts.mcp_daemon && !opts.oauth_daemon && !opts.server {
         #[cfg(feature = "linker")]
         if !opts.linker_daemon {
             app::migrate_legacy_daemon();
@@ -259,6 +266,18 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "linker")]
     if opts.linker_daemon {
         return app::run_linker_daemon(opts);
+    }
+
+    // --- remote development: SSH-connect to a remote machine ---
+    if let Some(ref target) = opts.remote_target.clone() {
+        let key = opts.remote_key.clone();
+        let port = opts.remote_port;
+        return remote::client::run_remote_client_target(target, key.as_deref(), port);
+    }
+    // Speaks the IPC protocol over stdin/stdout instead of a unix socket.
+    // Checked BEFORE `--daemon` since `server` is a distinct mode.
+    if opts.server {
+        return app::run_server(opts);
     }
 
     // --- headless path: run the koma-daemon event loop (no TUI) ---
@@ -355,4 +374,36 @@ fn main() -> anyhow::Result<()> {
     // Hand the minted id to the client so it connects to THIS session's keyed socket.
     opts.session = Some(session_id);
     app::client_run(opts)
+}
+
+/// List live remote koma sessions as JSON (machine-readable, for SSH discovery).
+///
+/// Scans the local session registry for live daemon sockets, probes each for
+/// status, and outputs a JSON array to stdout. Diagnostics go to stderr.
+fn run_sessions_json() -> i32 {
+    use app::runtime::list_live_sessions;
+
+    let statuses = list_live_sessions();
+    let sessions: Vec<serde_json::Value> = statuses
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "session_id": s.session_id,
+                "name": s.name,
+                "working": s.working,
+                "is_foreground": false
+            })
+        })
+        .collect();
+
+    match serde_json::to_string(&sessions) {
+        Ok(json) => {
+            println!("{json}");
+            0
+        }
+        Err(e) => {
+            eprintln!("error: failed to serialize sessions: {e}");
+            1
+        }
+    }
 }

@@ -17,12 +17,12 @@
 //! bookkeeping.
 
 mod actions;
-mod client;
+pub(crate) mod client;
 mod client_shadow;
 mod event_loop;
 mod manage;
 mod stream;
-mod terminal;
+pub(crate) mod terminal;
 // `pub(crate)` so the shared `commands::internet::internet_feedback` helper is
 // reachable from the controller's Ctrl+E handler (outside this module tree).
 pub(crate) mod commands;
@@ -33,6 +33,7 @@ mod lifecycle;
 mod linker_daemon;
 mod mcp_daemon;
 mod oauth_daemon;
+mod server;
 mod session_mgmt;
 mod signals;
 // Wave-5: persist + restore the per-session bg-bash / sub-agent records (#25).
@@ -77,6 +78,7 @@ pub(crate) use manage::{list_live_sessions, spawn_into_session, SpawnIntoReply};
 
 // Re-export lifecycle entry points (previously free fns in this file).
 pub use lifecycle::{run, run_daemon, run_daemon_selftest};
+pub use server::run_server;
 
 // Re-export the GLOBAL MCP daemon entry so `main` can dispatch `koma --mcp-daemon`
 // (built in the `mcp_daemon` submodule). Additive: no session-daemon path uses it yet

@@ -32,10 +32,10 @@ use crate::ipc::proto::{
     McpSnapshot, ModeSnapshot, ModelCmdSnapshot, ModelDraftSnapshot, ModelEndpointWire,
     ModelModalSnapshot, OAuthDraftSnapshot, OnboardProviderSnapshot, OnboardSnapshot,
     PathPickerSnapshot, PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot,
-    RewindEntrySnapshot, RewindSnapshot, RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot,
-    SessionMetaSnapshot, SettingsSnapshot, SkillCmdSnapshot, SkillEntrySnapshot,
-    TextEditorSnapshot, TodoItemSnapshot, TodoSnapshot, ToolPickerSnapshot, UsageSnapshot,
-    WarmStatusWire,
+    RemoteHostSnapshot, RemoteSessionSnapshot, RemoteSnapshot, RewindEntrySnapshot, RewindSnapshot,
+    RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot, SessionMetaSnapshot,
+    SettingsSnapshot, SkillCmdSnapshot, SkillEntrySnapshot, TextEditorSnapshot, TodoItemSnapshot,
+    TodoSnapshot, ToolPickerSnapshot, UsageSnapshot, WarmStatusWire,
 };
 
 pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
@@ -88,6 +88,7 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
         // instead of a blank Chat screen.
         Mode::Help(h) => ModeSnapshot::Help(Box::new(help_snapshot(h))),
         Mode::Skill(s) => ModeSnapshot::Skill(Box::new(skill_cmd_snapshot(s))),
+        Mode::Remote(m) => ModeSnapshot::Remote(Box::new(remote_snapshot(m))),
         Mode::Effort(e) => ModeSnapshot::Effort(effort_snapshot(e)),
         Mode::Model(m) => ModeSnapshot::Model(Box::new(model_cmd_snapshot(m))),
         Mode::Usage(nav) => ModeSnapshot::Usage(Box::new(usage_snapshot(nav, state))),
@@ -194,6 +195,7 @@ pub fn cooking_entry_snapshot(e: &CookingEntry) -> CookingEntrySnapshot {
         working: e.working,
         is_foreground: e.is_foreground,
         session_id: e.session_id.clone(),
+        remote_host: e.remote_host.clone(),
     }
 }
 
@@ -884,6 +886,93 @@ pub fn text_editor_snapshot(ed: &TextEditorState) -> TextEditorSnapshot {
         row: ed.row,
         col: ed.col,
         scroll: ed.scroll,
+    }
+}
+
+/// Project the `/remote` host manager.
+pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
+    use crate::app::mode::remote::{ConnectionState, RemoteIntent, RemoteView};
+
+    let connection_state_str: Option<String> = m.connection_state.as_ref().map(|cs| match cs {
+        ConnectionState::Disconnected => "disconnected".into(),
+        ConnectionState::Resolving => "resolving".into(),
+        ConnectionState::Authenticating => "authenticating".into(),
+        ConnectionState::AuthRequired {
+            host_id,
+            user,
+            host,
+        } => {
+            format!("auth_required:{host_id}:{user}:{host}")
+        }
+        ConnectionState::Bootstrapping => "bootstrapping".into(),
+        ConnectionState::Connecting => "connecting".into(),
+        ConnectionState::Connected { session_id } => format!("connected:{session_id}"),
+        ConnectionState::Error { message } => format!("error:{message}"),
+    });
+
+    // Legacy stage/error fields (populated from connection_state for backward compat).
+    let (stage, error) = match &m.connection_state {
+        Some(ConnectionState::Resolving) => (Some("resolving".into()), None),
+        Some(ConnectionState::Authenticating) => (Some("authenticating".into()), None),
+        Some(ConnectionState::Bootstrapping) => (Some("bootstrapping".into()), None),
+        Some(ConnectionState::Connecting) => (Some("connecting".into()), None),
+        Some(ConnectionState::Connected { .. }) => (Some("connected".into()), None),
+        Some(ConnectionState::Error { message }) => (None, Some(message.clone())),
+        _ => (None, None),
+    };
+
+    // Encode intent + view as "intent:view" for the wire.
+    let intent_token = match m.intent {
+        RemoteIntent::Manage => "manage",
+        RemoteIntent::Resume => "resume",
+        RemoteIntent::New => "new",
+    };
+    let view_token = match m.view {
+        RemoteView::HostManager => "host_manager",
+        RemoteView::HostPicker => "host_picker",
+        RemoteView::HostDetail => "host_detail",
+        RemoteView::SessionHub => "session_hub",
+        RemoteView::CreateHost => "create_host",
+        RemoteView::EditHost => "edit_host",
+    };
+
+    RemoteSnapshot {
+        sub: format!("{intent_token}:{view_token}"),
+        hosts: m
+            .hosts
+            .iter()
+            .map(|h| RemoteHostSnapshot {
+                id: h.id.clone(),
+                name: h.name.clone(),
+                user: h.user.clone(),
+                host: h.host.clone(),
+                port: h.port,
+                key_path: h.key_path.clone(),
+                connected: h.last_connected.is_some(),
+                last_connected: h.last_connected,
+                tags: h.tags.clone(),
+            })
+            .collect(),
+        selected: m.selected,
+        query: m.query.clone(),
+        filtered: m.filtered.clone(),
+        detail_host: m.detail_host.clone(),
+        selected_host_id: m.selected_host_id.clone(),
+        connection_state: connection_state_str,
+        stage,
+        error,
+        sessions: m
+            .sessions
+            .iter()
+            .map(|s| RemoteSessionSnapshot {
+                session_id: s.session_id.clone(),
+                name: s.name.clone(),
+                working: s.working,
+                is_foreground: s.is_foreground,
+            })
+            .collect(),
+        session_selected: m.session_selected,
+        pending_delete: m.pending_delete.clone(),
     }
 }
 

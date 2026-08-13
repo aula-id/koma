@@ -76,19 +76,26 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // folder is confirmed. React raises its switch loader optimistically on
         // click, so on CANCEL create nothing but kick a hub RE-PUSH so the
         // loader (`switchingTo`) clears instead of stranding.
-        GuiReq::NewSession { kill } => {
-            let ctl = ctx.ctl.clone();
-            std::thread::spawn(move || match rfd::FileDialog::new().pick_folder() {
-                Some(folder) => {
-                    let _ = ctl.send(HostCtl::New {
-                        workdir: Some(folder),
-                        kill,
-                    });
-                }
-                None => {
-                    let _ = ctl.send(HostCtl::RefreshHub);
-                }
-            });
+        GuiReq::NewSession { kill, folder } => {
+            if folder {
+                let ctl = ctx.ctl.clone();
+                std::thread::spawn(move || match rfd::FileDialog::new().pick_folder() {
+                    Some(folder) => {
+                        let _ = ctl.send(HostCtl::New {
+                            workdir: Some(folder),
+                            kill,
+                        });
+                    }
+                    None => {
+                        let _ = ctl.send(HostCtl::RefreshHub);
+                    }
+                });
+            } else {
+                let _ = ctx.ctl.send(HostCtl::New {
+                    workdir: None,
+                    kill,
+                });
+            }
         }
         // A hub row's KILL button (a live session, or the attached one): the
         // client-thread escalates the kill off its control loop + refreshes the
@@ -890,6 +897,58 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // Write error log: host-local, unconditional, fire-and-forget.
         GuiReq::WriteErrorLog { message } => {
             crate::model::store::append_global_error_log("frontend", &message);
+        }
+        // ─── Remote host management (host-local CRUD, no daemon round-trip) ──
+        GuiReq::GetRemoteHosts => {
+            let _ = ctx.ctl.send(HostCtl::GetRemoteHosts);
+        }
+        GuiReq::AddRemoteHost {
+            name,
+            user,
+            host,
+            port,
+            key_path,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::AddRemoteHost {
+                name,
+                user,
+                host,
+                port,
+                key_path,
+            });
+        }
+        GuiReq::EditRemoteHost {
+            id,
+            name,
+            user,
+            host,
+            port,
+            key_path,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::EditRemoteHost {
+                id,
+                name,
+                user,
+                host,
+                port,
+                key_path,
+            });
+        }
+        GuiReq::DeleteRemoteHost { id } => {
+            let _ = ctx.ctl.send(HostCtl::DeleteRemoteHost { id });
+        }
+        GuiReq::ConnectRemoteHost { host_id } => {
+            let _ = ctx.ctl.send(HostCtl::ConnectRemote { host_id });
+        }
+        GuiReq::DisconnectRemoteHost { host_id } => {
+            let _ = host_id; // single remote session — id is informational
+            let _ = ctx.ctl.send(HostCtl::DisconnectRemote);
+        }
+        GuiReq::SubmitRemotePassword { password } => {
+            let _ = ctx.ctl.send(HostCtl::SubmitRemotePassword { password });
+        }
+        GuiReq::CancelRemoteConnect => {
+            let _ = ctx.ctl.send(HostCtl::CancelRemoteConnect);
         }
         // Import graph visualization: always routed to the host-relay thread via
         // HostCtl::ImportGraph (linker daemon call, like FileDiff — never the session daemon).
