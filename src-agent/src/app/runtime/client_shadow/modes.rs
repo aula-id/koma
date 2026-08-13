@@ -699,7 +699,9 @@ pub(crate) fn shadow_todo(s: crate::ipc::proto::TodoSnapshot) -> crate::app::mod
 
 /// Rebuild the `/remote` host manager ([`RemoteState`]) from its projection.
 pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState {
-    use crate::app::mode::remote::{ConnectionState, RemoteSession, RemoteState, RemoteSub};
+    use crate::app::mode::remote::{
+        ConnectionState, RemoteIntent, RemoteSession, RemoteState, RemoteView,
+    };
 
     let connection_state = s.connection_state.and_then(|cs_str| {
         if cs_str == "disconnected" {
@@ -736,13 +738,36 @@ pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState 
         }
     });
 
+    // Parse "intent:view" format from the wire.
+    let (intent, view) = {
+        let mut parts = s.sub.splitn(2, ':');
+        let intent = match parts.next() {
+            Some("resume") => RemoteIntent::Resume,
+            Some("new") => RemoteIntent::New,
+            _ => RemoteIntent::Manage,
+        };
+        let view = match parts.next() {
+            Some("host_picker") => RemoteView::HostPicker,
+            Some("host_detail") => RemoteView::HostDetail,
+            Some("session_hub") => RemoteView::SessionHub,
+            Some("create_host") => RemoteView::CreateHost,
+            Some("edit_host") => RemoteView::EditHost,
+            // Legacy single-token values from old clients.
+            Some("fullscreen") | Some("host_manager") | None => {
+                if intent == RemoteIntent::Manage {
+                    RemoteView::HostManager
+                } else {
+                    RemoteView::HostPicker
+                }
+            }
+            _ => RemoteView::HostManager,
+        };
+        (intent, view)
+    };
+
     RemoteState {
-        sub: match s.sub.as_str() {
-            "fullscreen" => RemoteSub::Fullscreen,
-            "create_host" => RemoteSub::CreateHost,
-            "edit_host" => RemoteSub::EditHost,
-            _ => RemoteSub::Compact,
-        },
+        intent,
+        view,
         hosts: s
             .hosts
             .into_iter()
@@ -761,6 +786,7 @@ pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState 
         query: s.query,
         filtered: s.filtered,
         detail_host: s.detail_host,
+        selected_host_id: s.selected_host_id,
         connection_state,
         sessions: s
             .sessions

@@ -363,14 +363,14 @@ pub enum Action {
     CloseRemote,
     /// Ctrl+A in the remote compact overlay — open the add-host form.
     RemoteAddHost,
-    /// Enter on a host in the fullscreen detail — connect to it. Inner is host ID.
+    /// Select a prepared host. Runtime behavior depends on `RemoteIntent`.
     RemoteConnect(String),
+    /// Resume the exact selected remote session UUID on the prepared host.
+    RemoteConnectSession { host_id: String, session_id: String },
     /// `e` in the fullscreen detail — edit the host. Inner is host ID.
     RemoteEditHost(String),
     /// Backspace confirming delete of a host. Inner is host ID.
     RemoteDeleteHost(String),
-    /// Enter in the password input — submit the password. Inner is the password.
-    RemotePasswordSubmit(String),
     /// `i` in the remote compact overlay — import hosts from `~/.ssh/config`.
     RemoteImportSshConfig,
     /// Save the host editor draft (validate + commit).

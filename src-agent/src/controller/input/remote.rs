@@ -2,20 +2,34 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::mode::remote::{ConnectionState, HostEditField, RemoteState, RemoteSub};
-use crate::app::state::AppStateRest;
+use crate::app::mode::remote::{HostEditField, RemoteIntent, RemoteState, RemoteView};
 use crate::controller::input::is_ctrl;
 use crate::controller::input::Action;
 
-pub fn handle_remote(m: &mut RemoteState, rest: &mut AppStateRest, key: KeyEvent) -> Action {
-    match m.sub {
-        RemoteSub::Compact => handle_compact(m, rest, key),
-        RemoteSub::Fullscreen => handle_fullscreen(m, rest, key),
-        RemoteSub::CreateHost | RemoteSub::EditHost => handle_editor(m, key),
+pub fn handle_remote(m: &mut RemoteState, key: KeyEvent) -> Action {
+    match m.view {
+        RemoteView::HostManager | RemoteView::HostPicker => handle_host_list(m, key),
+        RemoteView::HostDetail => handle_host_detail(m, key),
+        RemoteView::SessionHub => handle_session_hub(m, key),
+        RemoteView::CreateHost | RemoteView::EditHost => handle_editor(m, key),
     }
 }
 
-fn handle_compact(m: &mut RemoteState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
+fn handle_host_list(m: &mut RemoteState, key: KeyEvent) -> Action {
+    if let Some(id) = m.pending_delete.clone() {
+        return match key.code {
+            KeyCode::Enter | KeyCode::Char('y' | 'Y') => {
+                m.pending_delete = None;
+                Action::RemoteDeleteHost(id)
+            }
+            KeyCode::Esc | KeyCode::Char('n' | 'N') => {
+                m.pending_delete = None;
+                Action::None
+            }
+            _ => Action::None,
+        };
+    }
+
     match key.code {
         KeyCode::Esc => Action::CloseRemote,
         KeyCode::Up | KeyCode::Char('k') => {
@@ -27,24 +41,25 @@ fn handle_compact(m: &mut RemoteState, _rest: &mut AppStateRest, key: KeyEvent) 
             Action::None
         }
         KeyCode::Enter => {
-            m.enter_fullscreen();
-            Action::None
-        }
-        KeyCode::Backspace => {
-            // Arm delete (second Backspace confirms).
-            if let Some(id) = m.pending_delete.take() {
-                Action::RemoteDeleteHost(id)
-            } else if let Some(host) = m.selected_host() {
-                m.pending_delete = Some(host.id.clone());
+            if m.intent == RemoteIntent::Manage {
+                m.enter_detail();
                 Action::None
+            } else if let Some(host_id) = m.select_current_host() {
+                Action::RemoteConnect(host_id)
             } else {
                 Action::None
             }
         }
+        KeyCode::Backspace if m.intent == RemoteIntent::Manage => {
+            if let Some(host) = m.selected_host() {
+                m.pending_delete = Some(host.id.clone());
+            }
+            Action::None
+        }
         KeyCode::Char(c) => {
-            if is_ctrl(&key, 'a') {
+            if m.intent == RemoteIntent::Manage && is_ctrl(&key, 'a') {
                 Action::RemoteAddHost
-            } else if c == 'i' {
+            } else if m.intent == RemoteIntent::Manage && c == 'i' {
                 Action::RemoteImportSshConfig
             } else {
                 // Type to filter.
@@ -57,42 +72,27 @@ fn handle_compact(m: &mut RemoteState, _rest: &mut AppStateRest, key: KeyEvent) 
     }
 }
 
-fn handle_fullscreen(m: &mut RemoteState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
-    // If we're in a transient connection state, route keys there instead.
-    match &m.connection_state {
-        Some(ConnectionState::AuthRequired { .. }) => {
-            return handle_password_state(m, key);
-        }
-        Some(
-            ConnectionState::Resolving
-            | ConnectionState::Authenticating
-            | ConnectionState::Bootstrapping
-            | ConnectionState::Connecting,
-        ) => {
-            return handle_connecting_state(m, key);
-        }
-        Some(ConnectionState::Error { .. }) => {
-            return handle_error_state(m, key);
-        }
-        Some(ConnectionState::Connected { .. }) | Some(ConnectionState::Disconnected) | None => {
-            // Fall through to normal fullscreen handling.
-        }
+fn handle_host_detail(m: &mut RemoteState, key: KeyEvent) -> Action {
+    if let Some(id) = m.pending_delete.clone() {
+        return match key.code {
+            KeyCode::Enter | KeyCode::Char('y' | 'Y') => {
+                m.pending_delete = None;
+                Action::RemoteDeleteHost(id)
+            }
+            KeyCode::Esc | KeyCode::Char('n' | 'N') => {
+                m.pending_delete = None;
+                Action::None
+            }
+            _ => Action::None,
+        };
     }
 
     match key.code {
         KeyCode::Esc => {
-            // Back to compact.
-            m.sub = RemoteSub::Compact;
+            // Back to fullscreen manager.
+            m.view = RemoteView::HostManager;
             m.detail_host = None;
             Action::None
-        }
-        KeyCode::Char('c') | KeyCode::Char('C') => {
-            // Connect to the selected host.
-            if let Some(host) = m.selected_host() {
-                Action::RemoteConnect(host.id.clone())
-            } else {
-                Action::None
-            }
         }
         KeyCode::Char('e') | KeyCode::Char('E') => {
             // Edit host.
@@ -103,14 +103,24 @@ fn handle_fullscreen(m: &mut RemoteState, _rest: &mut AppStateRest, key: KeyEven
             }
         }
         KeyCode::Backspace => {
-            if let Some(id) = m.pending_delete.take() {
-                Action::RemoteDeleteHost(id)
-            } else if let Some(host) = m.selected_host() {
+            if let Some(host) = m.selected_host() {
                 m.pending_delete = Some(host.id.clone());
-                Action::None
-            } else {
-                Action::None
             }
+            Action::None
+        }
+        _ => Action::None,
+    }
+}
+
+fn handle_session_hub(m: &mut RemoteState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => {
+            m.sessions.clear();
+            m.session_selected = 0;
+            m.connection_state = None;
+            m.password_buf.clear();
+            m.view = RemoteView::HostPicker;
+            Action::None
         }
         KeyCode::Up | KeyCode::Char('k') => {
             m.session_selected = m.session_selected.saturating_sub(1);
@@ -122,57 +132,16 @@ fn handle_fullscreen(m: &mut RemoteState, _rest: &mut AppStateRest, key: KeyEven
             }
             Action::None
         }
-        _ => Action::None,
-    }
-}
-
-/// Handle keys while the connection is in a transient connecting/resolving state.
-fn handle_connecting_state(m: &mut RemoteState, key: KeyEvent) -> Action {
-    match key.code {
-        KeyCode::Esc => {
-            // Cancel connection.
-            m.connection_state = None;
-            Action::None
-        }
-        _ => Action::None,
-    }
-}
-
-/// Handle keys while waiting for a password.
-fn handle_password_state(m: &mut RemoteState, key: KeyEvent) -> Action {
-    match key.code {
-        KeyCode::Esc => {
-            // Cancel password entry.
-            m.password_buf.clear();
-            m.connection_state = None;
-            Action::None
-        }
-        KeyCode::Enter => {
-            let pw = std::mem::take(&mut m.password_buf);
-            Action::RemotePasswordSubmit(pw)
-        }
-        KeyCode::Backspace => {
-            m.password_buf.pop();
-            Action::None
-        }
-        KeyCode::Char(c) => {
-            if !is_ctrl(&key, 'c') && !is_ctrl(&key, 'd') {
-                m.password_buf.push(c);
-            }
-            Action::None
-        }
-        _ => Action::None,
-    }
-}
-
-/// Handle keys while showing an error state.
-fn handle_error_state(m: &mut RemoteState, key: KeyEvent) -> Action {
-    match key.code {
-        KeyCode::Esc => {
-            // Dismiss error.
-            m.connection_state = None;
-            Action::None
-        }
+        KeyCode::Enter => match (
+            m.selected_host_id.as_ref(),
+            m.sessions.get(m.session_selected),
+        ) {
+            (Some(host_id), Some(session)) => Action::RemoteConnectSession {
+                host_id: host_id.clone(),
+                session_id: session.session_id.clone(),
+            },
+            _ => Action::None,
+        },
         _ => Action::None,
     }
 }

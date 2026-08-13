@@ -15,6 +15,9 @@ pub struct RemoteSnapshot {
     pub filtered: Vec<usize>,
     /// Host ID when viewing detail (fullscreen sub).
     pub detail_host: Option<String>,
+    /// Selected/prepared host identity.
+    #[serde(default)]
+    pub selected_host_id: Option<String>,
     /// Transient connection state serialized as a string.
     /// "disconnected" | "resolving" | "authenticating" | "auth_required:<host_id>:<user>:<host>"
     /// | "bootstrapping" | "connecting" | "connected:<session_id>" | "error:<message>" | None

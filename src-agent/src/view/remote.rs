@@ -1,61 +1,39 @@
-//! Remote host manager view — compact overlay, fullscreen detail, and editor forms.
+//! Fullscreen remote host management and intent-specific host/session pickers.
 
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-use crate::app::mode::remote::{ConnectionState, HostEditField, RemoteState, RemoteSub};
+use crate::app::mode::remote::{HostEditField, RemoteIntent, RemoteState, RemoteView};
 use crate::view::theme::Palette;
 
-/// Draw the remote host manager mode.
-///
-/// `input_rect` is the composer area; `transcript_rect` is the scrollable
-/// transcript above it. Compact mode renders as a popup overlay anchored
-/// above the composer (same pattern as `/skill`, `/bash`, `/todo`).
-/// Fullscreen modes take the full frame area.
-pub fn draw(
-    frame: &mut ratatui::Frame,
-    m: &RemoteState,
-    input_rect: Rect,
-    transcript_rect: Rect,
-    palette: &Palette,
-) {
-    match m.sub {
-        RemoteSub::Compact => render_compact(frame, m, input_rect, transcript_rect, palette),
-        RemoteSub::Fullscreen => render_fullscreen(frame, m, frame.area(), palette),
-        RemoteSub::CreateHost | RemoteSub::EditHost => {
+/// Draw the fullscreen remote workflow.
+pub fn draw(frame: &mut ratatui::Frame, m: &RemoteState, palette: &Palette) {
+    match m.view {
+        RemoteView::HostManager | RemoteView::HostPicker => {
+            render_host_list(frame, m, frame.area(), palette)
+        }
+        RemoteView::HostDetail => render_host_detail_screen(frame, m, frame.area(), palette),
+        RemoteView::SessionHub => render_session_hub(frame, m, frame.area(), palette),
+        RemoteView::CreateHost | RemoteView::EditHost => {
             render_editor(frame, m, frame.area(), palette)
         }
     }
 }
 
-/// Compact overlay above the composer (popup style).
-fn render_compact(
-    frame: &mut ratatui::Frame,
-    m: &RemoteState,
-    input_rect: Rect,
-    transcript_rect: Rect,
-    palette: &Palette,
-) {
-    let row_count = m.filtered.len().min(10) as u16;
-    let height = row_count + 4; // search + borders + hint
-
-    // Anchor above the composer, extending upward into the transcript area.
-    let h = height.min(transcript_rect.height);
-    let y = input_rect.y.saturating_sub(h);
-    let popup = Rect {
-        x: input_rect.x,
-        y,
-        width: input_rect.width,
-        height: h,
-    };
-
-    crate::view::clear_and_fill(frame, popup, palette.bg);
+/// Fullscreen searchable saved-host list.
+fn render_host_list(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, palette: &Palette) {
+    crate::view::clear_and_fill(frame, area, palette.bg);
+    let popup = area;
 
     let block = Block::bordered()
         .title(Span::styled(
-            " remote hosts ",
+            match m.intent {
+                RemoteIntent::Manage => " remote hosts ",
+                RemoteIntent::Resume => " resume remote · choose host ",
+                RemoteIntent::New => " new remote · choose host ",
+            },
             Style::default().fg(palette.dim),
         ))
         .border_style(Style::default().fg(palette.dim))
@@ -138,10 +116,12 @@ fn render_compact(
 
     // Empty state.
     if m.filtered.is_empty() && list_area.height > 0 {
-        let empty = Line::from(Span::styled(
-            "no hosts. Ctrl+A to add.",
-            Style::default().fg(palette.dim),
-        ));
+        let empty_text = if m.intent == RemoteIntent::Manage {
+            "no hosts. Ctrl+A to add."
+        } else {
+            "no saved hosts. Use /remote to add one."
+        };
+        let empty = Line::from(Span::styled(empty_text, Style::default().fg(palette.dim)));
         frame.render_widget(
             Paragraph::new(empty),
             Rect {
@@ -156,7 +136,13 @@ fn render_compact(
     // Hint bar — full-width inverse bar matching other overlays.
     if inner.height > 0 {
         let hint_y = inner.y + inner.height - 1;
-        let hint = "enter detail · ctrl+a add · esc close";
+        let hint = match m.intent {
+            RemoteIntent::Manage => {
+                "enter detail · ctrl+a add · i import · backspace delete (enter/y confirm) · esc close"
+            }
+            RemoteIntent::Resume => "enter prepare host · esc close",
+            RemoteIntent::New => "enter prepare host and create session · esc close",
+        };
         let bar_style = Style::default()
             .fg(palette.sel_fg)
             .bg(palette.sel_bg)
@@ -178,8 +164,13 @@ fn render_compact(
     }
 }
 
-/// Fullscreen view: host detail + sessions pane.
-fn render_fullscreen(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, palette: &Palette) {
+/// Fullscreen management diagnostics for one saved host.
+fn render_host_detail_screen(
+    frame: &mut ratatui::Frame,
+    m: &RemoteState,
+    area: Rect,
+    palette: &Palette,
+) {
     // Header (2 rows).
     let header_area = Rect {
         x: area.x,
@@ -200,20 +191,7 @@ fn render_fullscreen(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, pa
         height: 1,
     };
 
-    // Header title depends on connection_state.
-    let title = match m.connection_state {
-        Some(ConnectionState::AuthRequired { .. }) => "remote > password required",
-        Some(
-            ConnectionState::Resolving
-            | ConnectionState::Authenticating
-            | ConnectionState::Bootstrapping
-            | ConnectionState::Connecting,
-        ) => "remote > connecting...",
-        Some(ConnectionState::Error { .. }) => "remote > error",
-        Some(ConnectionState::Connected { .. }) => "remote > connected",
-        Some(ConnectionState::Disconnected) => "remote > disconnected",
-        None => "remote",
-    };
+    let title = "remote > host diagnostics";
     let header = Paragraph::new(Line::from(Span::styled(
         format!(" {title} "),
         Style::default()
@@ -237,32 +215,13 @@ fn render_fullscreen(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, pa
         },
     );
 
-    // Body: two panes (left = host detail, right = sessions).
-    let halves = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(body_area);
+    // Body: management detail and diagnostics.
+    render_host_detail(frame, m, body_area, palette);
 
-    render_host_detail(frame, m, halves[0], palette);
-    render_sessions_pane(frame, m, halves[1], palette);
-
-    // Footer hint depends on connection_state.
-    let hint = match &m.connection_state {
-        Some(ConnectionState::AuthRequired { .. }) => {
-            " Type password, Enter to submit, Esc to cancel ".into()
-        }
-        Some(ConnectionState::Resolving) => " resolving... (Esc to cancel) ".into(),
-        Some(ConnectionState::Authenticating) => " authenticating... (Esc to cancel) ".into(),
-        Some(ConnectionState::Bootstrapping) => " bootstrapping... (Esc to cancel) ".into(),
-        Some(ConnectionState::Connecting) => " connecting... (Esc to cancel) ".into(),
-        Some(ConnectionState::Error { message }) => {
-            format!(" error: {} — Esc to dismiss ", message)
-        }
-        Some(ConnectionState::Connected { .. }) => {
-            " Connected — Disconnect (d) or Esc back ".into()
-        }
-        Some(ConnectionState::Disconnected) => " c connect  e edit  Del delete  Esc back ".into(),
-        None => " c connect  e edit  Del delete  Esc back ".into(),
+    let hint = if m.pending_delete.is_some() {
+        " delete host? Enter/y confirm · Esc/n cancel ".to_string()
+    } else {
+        " e edit · Backspace delete · Esc back ".to_string()
     };
     let hint_line = Line::from(Span::styled(
         hint,
@@ -388,6 +347,36 @@ fn render_sessions_pane(
     }
 }
 
+/// Render the dedicated remote session hub.
+fn render_session_hub(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, palette: &Palette) {
+    crate::view::clear_and_fill(frame, area, palette.bg);
+    let host_name = m
+        .selected_host_id
+        .as_deref()
+        .and_then(|id| m.hosts.iter().find(|host| host.id == id))
+        .map(|host| host.name.as_str())
+        .unwrap_or("remote host");
+    let rows = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Length(2),
+        ratatui::layout::Constraint::Min(1),
+        ratatui::layout::Constraint::Length(1),
+    ])
+    .split(area);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!(" resume remote · {host_name} "),
+            Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
+        ))),
+        rows[0],
+    );
+    render_sessions_pane(frame, m, rows[1], palette);
+    frame.render_widget(
+        Paragraph::new(" enter resume selected UUID · esc choose another host ")
+            .style(Style::default().fg(palette.sel_fg).bg(palette.accent)),
+        rows[2],
+    );
+}
+
 /// Render the host editor form (create or edit).
 ///
 /// Full-screen layout:
@@ -412,8 +401,8 @@ fn render_editor(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, palett
     };
 
     // Header.
-    let title = match m.sub {
-        RemoteSub::EditHost => "remote > edit host",
+    let title = match m.view {
+        RemoteView::EditHost => "remote > edit host",
         _ => "remote > add host",
     };
     let header = Paragraph::new(Line::from(Span::styled(

@@ -63,7 +63,10 @@ impl DaemonHub {
         handle: &tokio::runtime::Handle,
     ) {
         let result = apply_action(
-            Action::Slash(Command::New(crate::controller::command::NewMode::Swap)),
+            Action::Slash(Command::New(crate::controller::command::NewRequest {
+                destination: crate::controller::command::SessionDestination::Local,
+                mode: crate::controller::command::NewMode::Swap,
+            })),
             state,
             client,
             handle,

@@ -541,14 +541,23 @@ pub(in crate::app::runtime) fn apply_action(
             }
         }
 
-        Action::RemotePasswordSubmit(pw) => {
-            if let crate::app::mode::Mode::Remote(ref mut remote) = state.mode_mut() {
-                remote.password_buf.clear();
-                // Wire up password auth in a later phase; for now acknowledge.
-                state.rest.fg_mut().status = format!(
-                    "password submitted ({} chars) — auth will be wired in a later phase",
-                    pw.len()
-                );
+        Action::RemoteConnectSession {
+            host_id,
+            session_id,
+        } => {
+            // Connect to a remote host to resume the selected session UUID.
+            // Close the remote overlay and set the connect signal with the host's address.
+            // The session_id is carried through for the remote client to resume the exact UUID.
+            let hosts = crate::remote::hosts::load_hosts();
+            if let Some(host) = crate::remote::hosts::host_by_id(&hosts, &host_id) {
+                let target = host.address();
+                *state.mode_mut() = crate::app::mode::Mode::Chat;
+                state.rest.connect_remote_pending = Some(target.clone());
+                state.rest.connect_remote_target = Some(target);
+                state.rest.connect_remote_session_id = Some(session_id);
+            } else {
+                *state.mode_mut() = crate::app::mode::Mode::Chat;
+                state.rest.fg_mut().status = "host not found".into();
             }
         }
 
