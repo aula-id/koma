@@ -4052,7 +4052,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             error: env.error ?? null,
             sessions: env.sessions ?? [],
           }
-          if (env.state === 'connected') {
+          if (env.state === 'connected' || env.state === 'disconnected') {
             return { remoteState, ui: { ...s.ui, switchingTo: null } }
           }
           if (env.state === 'error') {

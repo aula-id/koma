@@ -1,36 +1,99 @@
 //! Remote host connect/disconnect worker for the GUI host-relay bridge.
 //!
-//! Handles the off-thread SSH connect sequence and password exchange
-//! for the GUI's remote-host panel. The worker runs on a dedicated
-//! `std::thread::spawn` so the blocking SSH/auth operations never stall
-//! the 16ms push loop.
+//! Blocking SSH/auth work runs on a dedicated thread. Every attempt has a fresh
+//! cancellation token and monotonically increasing id so late worker results
+//! cannot replace a newer transport.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-/// Shared state for an active or in-progress remote SSH session.
-/// The push_loop owns this; the worker thread reads/writes it through
-/// `Arc` clones.
 pub(super) struct RemoteSessionShared {
-    /// The worker waits here when password authentication is required. The
-    /// relay sends the entered password, or drops the sender to cancel.
-    pub password_tx: Mutex<Option<Sender<String>>>,
-    pub cancelled: Arc<AtomicBool>,
+    password_tx: Mutex<Option<(u64, Sender<String>)>>,
+    cancellation: Mutex<Option<(u64, Arc<AtomicBool>)>>,
+    next_attempt: AtomicU64,
+    current_attempt: AtomicU64,
 }
 
 impl RemoteSessionShared {
     pub fn new() -> Self {
         Self {
             password_tx: Mutex::new(None),
-            cancelled: Arc::new(AtomicBool::new(false)),
+            cancellation: Mutex::new(None),
+            next_attempt: AtomicU64::new(1),
+            current_attempt: AtomicU64::new(0),
         }
+    }
+
+    pub fn begin(&self, password_tx: Sender<String>) -> (u64, Arc<AtomicBool>) {
+        self.cancel();
+        let attempt_id = self.next_attempt.fetch_add(1, Ordering::Relaxed);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.current_attempt.store(attempt_id, Ordering::Release);
+        if let Ok(mut slot) = self.password_tx.lock() {
+            *slot = Some((attempt_id, password_tx));
+        }
+        if let Ok(mut slot) = self.cancellation.lock() {
+            *slot = Some((attempt_id, Arc::clone(&cancelled)));
+        }
+        (attempt_id, cancelled)
+    }
+
+    pub fn is_current(&self, attempt_id: u64) -> bool {
+        self.current_attempt.load(Ordering::Acquire) == attempt_id
+    }
+
+    pub fn submit_password(&self, password: String) {
+        let sender = self
+            .password_tx
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take());
+        if let Some((attempt_id, tx)) = sender {
+            if self.is_current(attempt_id) {
+                let _ = tx.send(password);
+            }
+        }
+    }
+
+    pub fn clear_password(&self, attempt_id: u64) {
+        if let Ok(mut slot) = self.password_tx.lock() {
+            if slot.as_ref().is_some_and(|(id, _)| *id == attempt_id) {
+                *slot = None;
+            }
+        }
+    }
+
+    pub fn finish(&self, attempt_id: u64) {
+        self.clear_password(attempt_id);
+        if let Ok(mut slot) = self.cancellation.lock() {
+            if slot.as_ref().is_some_and(|(id, _)| *id == attempt_id) {
+                *slot = None;
+            }
+        }
+    }
+
+    pub fn cancel(&self) {
+        if let Ok(mut slot) = self.cancellation.lock() {
+            if let Some((_, token)) = slot.take() {
+                token.store(true, Ordering::Release);
+            }
+        }
+        if let Ok(mut slot) = self.password_tx.lock() {
+            *slot = None;
+        }
+        self.current_attempt.store(0, Ordering::Release);
     }
 }
 
-/// Event the remote connect worker sends back to the push_loop for
-/// re-pushing as a `RemoteState` envelope.
+impl Drop for RemoteSessionShared {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
 pub(super) struct RemoteStateUpdate {
+    pub attempt_id: u64,
     pub state: String,
     pub host_id: Option<String>,
     pub user: Option<String>,
@@ -40,76 +103,78 @@ pub(super) struct RemoteStateUpdate {
     pub sessions: Vec<serde_json::Value>,
 }
 
-/// A successfully established remote transport, handed back to the host relay
-/// so it can fold the remote daemon's frames into the GUI like a local session.
 pub(super) struct ActiveRemote {
+    pub attempt_id: u64,
     pub connection: super::connect::Connection,
     pub ssh_child: tokio::process::Child,
 }
 
-/// Spawn the remote connect worker thread. The blocking SSH/bootstrap work stays
-/// off the host relay; the resulting transport is returned over `connected_tx`.
 pub(super) fn spawn_connect_worker(
+    attempt_id: u64,
     host_id: String,
     state_tx: Sender<RemoteStateUpdate>,
     connected_tx: Sender<ActiveRemote>,
     pw_rx: Receiver<String>,
     cancelled: Arc<AtomicBool>,
+    shared: Arc<RemoteSessionShared>,
     handle: tokio::runtime::Handle,
 ) {
     std::thread::spawn(move || {
-        remote_connect_worker(host_id, state_tx, connected_tx, pw_rx, cancelled, handle);
+        remote_connect_worker(
+            attempt_id,
+            host_id,
+            state_tx,
+            connected_tx,
+            pw_rx,
+            cancelled,
+            shared,
+            handle,
+        );
     });
 }
 
-/// The full remote SSH connect sequence, run on a dedicated thread.
-///
-/// 1. Load host by id from `~/.koma/remote-hosts.json`
-/// 2. Probe key-based auth (blocking)
-/// 3. If password required: push `auth_required`, wait for password via channel
-/// 4. Bootstrap koma on the remote (check/install, blocking)
-/// 5. SSH connect and exec `koma server` (blocking)
-/// 6. Bridge the SSH channel to a Connection via `connect_remote`
-/// 7. Push `connected` with the session id
-/// 8. Touch `last_connected` on the host record
-/// 9. Hand the live transport back to the host relay
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn remote_connect_worker(
+    attempt_id: u64,
     host_id: String,
     state_tx: Sender<RemoteStateUpdate>,
     connected_tx: Sender<ActiveRemote>,
     pw_rx: Receiver<String>,
     cancelled: Arc<AtomicBool>,
+    shared: Arc<RemoteSessionShared>,
     handle: tokio::runtime::Handle,
 ) {
     use crate::remote::auth::{self, AuthProbe, SshAuth};
     use crate::remote::{bootstrap, ssh, RemoteTarget};
 
-    // Helper: push a state update back to the push_loop.
+    let is_cancelled = || cancelled.load(Ordering::Acquire) || !shared.is_current(attempt_id);
     let push_state = {
         let host_id = host_id.clone();
+        let state_tx = state_tx.clone();
         move |state: &str,
               user: Option<&str>,
               host: Option<&str>,
               session_id: Option<&str>,
               error: Option<&str>,
               sessions: Vec<serde_json::Value>| {
-            let _ = state_tx.send(RemoteStateUpdate {
-                state: state.to_string(),
-                host_id: Some(host_id.clone()),
-                user: user.map(str::to_string),
-                host: host.map(str::to_string),
-                session_id: session_id.map(str::to_string),
-                error: error.map(str::to_string),
-                sessions,
-            });
+            if !is_cancelled() {
+                let _ = state_tx.send(RemoteStateUpdate {
+                    attempt_id,
+                    state: state.to_string(),
+                    host_id: Some(host_id.clone()),
+                    user: user.map(str::to_string),
+                    host: host.map(str::to_string),
+                    session_id: session_id.map(str::to_string),
+                    error: error.map(str::to_string),
+                    sessions,
+                });
+            }
         }
     };
 
-    // 1. Load host from disk.
     let hosts = crate::remote::hosts::load_hosts();
     let host_data = match crate::remote::hosts::host_by_id(&hosts, &host_id) {
-        Some(h) => h.clone(),
+        Some(host) => host.clone(),
         None => {
             push_state(
                 "error",
@@ -119,25 +184,23 @@ fn remote_connect_worker(
                 Some("host not found"),
                 Vec::new(),
             );
+            shared.finish(attempt_id);
             return;
         }
     };
+    if is_cancelled() {
+        shared.finish(attempt_id);
+        return;
+    }
 
     let user_str = host_data.user.clone();
     let host_str = host_data.host.clone();
-    let port = if host_data.port == 22 {
-        None
-    } else {
-        Some(host_data.port)
-    };
-
     let target = RemoteTarget {
-        user: host_data.user.clone(),
-        host: host_data.host.clone(),
-        port,
-        key: host_data.key_path.clone(),
+        user: host_data.user,
+        host: host_data.host,
+        port: (host_data.port != 22).then_some(host_data.port),
+        key: host_data.key_path,
     };
-
     push_state(
         "resolving",
         Some(&user_str),
@@ -146,15 +209,21 @@ fn remote_connect_worker(
         None,
         Vec::new(),
     );
+    if is_cancelled() {
+        shared.finish(attempt_id);
+        return;
+    }
 
-    // 2. Probe key-based auth.
     let auth = match auth::probe_key_auth(&target) {
         AuthProbe::KeyReady => {
-            // Key-based auth works — no password needed.
+            shared.clear_password(attempt_id);
             None
         }
         AuthProbe::PasswordRequired => {
-            // 3. Password required — signal the GUI and wait.
+            if is_cancelled() {
+                shared.finish(attempt_id);
+                return;
+            }
             push_state(
                 "auth_required",
                 Some(&user_str),
@@ -163,39 +232,36 @@ fn remote_connect_worker(
                 None,
                 Vec::new(),
             );
-
-            // Block until a password arrives or the channel closes.
-            match pw_rx.recv() {
-                Ok(password) => match SshAuth::from_password(password) {
-                    Ok(auth) => Some(auth),
-                    Err(e) => {
-                        push_state(
-                            "error",
-                            Some(&user_str),
-                            Some(&host_str),
-                            None,
-                            Some(&format!("auth setup failed: {e:#}")),
-                            Vec::new(),
-                        );
-                        return;
-                    }
-                },
-                Err(_) => {
+            let password = match pw_rx.recv() {
+                Ok(password) if !is_cancelled() => password,
+                _ => {
+                    shared.finish(attempt_id);
+                    return;
+                }
+            };
+            shared.clear_password(attempt_id);
+            match SshAuth::from_password(password) {
+                Ok(auth) => Some(auth),
+                Err(error) => {
                     push_state(
                         "error",
                         Some(&user_str),
                         Some(&host_str),
                         None,
-                        Some("password input cancelled"),
+                        Some(&format!("auth setup failed: {error:#}")),
                         Vec::new(),
                     );
+                    shared.finish(attempt_id);
                     return;
                 }
             }
         }
     };
 
-    // 4. Bootstrap: check if koma is installed, install if not.
+    if is_cancelled() {
+        shared.finish(attempt_id);
+        return;
+    }
     push_state(
         "bootstrapping",
         Some(&user_str),
@@ -204,38 +270,45 @@ fn remote_connect_worker(
         None,
         Vec::new(),
     );
-
     let auth_ref = auth.as_ref();
     let installed = match bootstrap::is_koma_installed(&target, auth_ref) {
-        Ok(v) => v,
-        Err(e) => {
+        Ok(installed) => installed,
+        Err(error) => {
             push_state(
                 "error",
                 Some(&user_str),
                 Some(&host_str),
                 None,
-                Some(&format!("bootstrap check failed: {e:#}")),
+                Some(&format!("bootstrap check failed: {error:#}")),
                 Vec::new(),
             );
+            shared.finish(attempt_id);
             return;
         }
     };
-
+    if is_cancelled() {
+        shared.finish(attempt_id);
+        return;
+    }
     if !installed {
-        if let Err(e) = bootstrap::install_koma(&target, auth_ref) {
+        if let Err(error) = bootstrap::install_koma(&target, auth_ref) {
             push_state(
                 "error",
                 Some(&user_str),
                 Some(&host_str),
                 None,
-                Some(&format!("koma install failed: {e:#}")),
+                Some(&format!("koma install failed: {error:#}")),
                 Vec::new(),
             );
+            shared.finish(attempt_id);
+            return;
+        }
+        if is_cancelled() {
+            shared.finish(attempt_id);
             return;
         }
     }
 
-    // 5. SSH connect and exec `koma server --session <id>`.
     let session_id = uuid::Uuid::new_v4().to_string();
     push_state(
         "connecting",
@@ -245,65 +318,83 @@ fn remote_connect_worker(
         None,
         Vec::new(),
     );
-
+    if is_cancelled() {
+        shared.finish(attempt_id);
+        return;
+    }
     let ssh_session = match ssh::connect(&target, &session_id, auth_ref) {
-        Ok(s) => s,
-        Err(e) => {
+        Ok(session) => session,
+        Err(error) => {
             push_state(
                 "error",
                 Some(&user_str),
                 Some(&host_str),
                 None,
-                Some(&format!("ssh connect failed: {e:#}")),
+                Some(&format!("ssh connect failed: {error:#}")),
                 Vec::new(),
             );
+            shared.finish(attempt_id);
             return;
         }
     };
-
     let crate::remote::ssh::SshSession {
-        child: mut ssh_child,
+        mut child,
         stdin,
         stdout,
     } = ssh_session;
-    let connection = match crate::app::runtime::client::remote::connect_remote(
+    if is_cancelled() {
+        let _ = handle.block_on(async { child.kill().await });
+        shared.finish(attempt_id);
+        return;
+    }
+    let connection = match super::remote::connect_remote(
         &handle,
         stdout,
         stdin,
         host_str.clone(),
         session_id.clone(),
     ) {
-        Ok(conn) => conn,
-        Err(e) => {
+        Ok(connection) => connection,
+        Err(error) => {
+            let _ = handle.block_on(async { child.kill().await });
             push_state(
                 "error",
                 Some(&user_str),
                 Some(&host_str),
                 None,
-                Some(&format!("bridge failed: {e:#}")),
+                Some(&format!("bridge failed: {error:#}")),
                 Vec::new(),
             );
-            let mut ssh_child = ssh_child;
-            let _ = handle.block_on(async { ssh_child.kill().await });
+            shared.finish(attempt_id);
             return;
         }
     };
+    if is_cancelled() {
+        let _ = handle.block_on(async { child.kill().await });
+        shared.finish(attempt_id);
+        return;
+    }
 
-    // 7. Push connected state + list existing sessions on the remote host.
-    let sessions = match crate::remote::sessions::list_sessions_over_ssh(&target, auth_ref) {
-        Ok(s) => s
-            .iter()
-            .map(|s| {
-                serde_json::json!({
-                    "sessionId": s.session_id,
-                    "name": s.name,
-                    "working": s.working,
-                    "isForeground": s.is_foreground
+    let sessions = crate::remote::sessions::list_sessions_over_ssh(&target, auth_ref)
+        .map(|sessions| {
+            sessions
+                .iter()
+                .map(|session| {
+                    serde_json::json!({
+                        "sessionId": session.session_id,
+                        "name": session.name,
+                        "working": session.working,
+                        "isForeground": session.is_foreground
+                    })
                 })
-            })
-            .collect(),
-        Err(_) => Vec::new(), // non-fatal
-    };
+                .collect()
+        })
+        .unwrap_or_default();
+    if is_cancelled() {
+        let _ = handle.block_on(async { child.kill().await });
+        shared.finish(attempt_id);
+        return;
+    }
     push_state(
         "connected",
         Some(&user_str),
@@ -313,35 +404,56 @@ fn remote_connect_worker(
         sessions,
     );
 
-    // 8. Touch last_connected.
-    {
-        let mut hosts = crate::remote::hosts::load_hosts();
-        // Find the host by id and mutate in place.
-        if let Some(h) = hosts.hosts.iter_mut().find(|h| h.id == host_id) {
-            h.touch_last_connected();
-            let _ = crate::remote::hosts::save_hosts(&hosts);
-        }
-    }
-
-    // 9. Hand the established remote connection to the host relay. It now owns
-    // the SSH child and folds the remote daemon's frames into normal GUI pushes.
-    if cancelled.load(Ordering::Acquire) {
-        let _ = handle.block_on(async { ssh_child.kill().await });
+    if is_cancelled() {
+        let _ = handle.block_on(async { child.kill().await });
+        shared.finish(attempt_id);
         return;
     }
-    if let Err(e) = connected_tx.send(ActiveRemote {
+    let mut hosts = crate::remote::hosts::load_hosts();
+    if let Some(host) = hosts.hosts.iter_mut().find(|host| host.id == host_id) {
+        host.touch_last_connected();
+        let _ = crate::remote::hosts::save_hosts(&hosts);
+    }
+    if is_cancelled() {
+        let _ = handle.block_on(async { child.kill().await });
+        shared.finish(attempt_id);
+        return;
+    }
+    shared.finish(attempt_id);
+    if let Err(error) = connected_tx.send(ActiveRemote {
+        attempt_id,
         connection,
-        ssh_child,
+        ssh_child: child,
     }) {
-        let mut active = e.0;
+        let mut active = error.0;
         let _ = handle.block_on(async { active.ssh_child.kill().await });
-        push_state(
-            "error",
-            Some(&user_str),
-            Some(&host_str),
-            None,
-            Some("remote session could not be opened"),
-            Vec::new(),
-        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RemoteSessionShared;
+
+    #[test]
+    fn new_attempt_rejects_old_generation_and_closes_password_channel() {
+        let shared = RemoteSessionShared::new();
+        let (first_tx, first_rx) = std::sync::mpsc::channel();
+        let (first, first_cancel) = shared.begin(first_tx);
+        let (second_tx, _second_rx) = std::sync::mpsc::channel();
+        let (second, _) = shared.begin(second_tx);
+
+        assert!(first_cancel.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!shared.is_current(first));
+        assert!(shared.is_current(second));
+        assert!(first_rx.recv().is_err());
+    }
+
+    #[test]
+    fn finish_clears_password_sender() {
+        let shared = RemoteSessionShared::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (attempt, _) = shared.begin(tx);
+        shared.finish(attempt);
+        assert!(rx.recv().is_err());
     }
 }

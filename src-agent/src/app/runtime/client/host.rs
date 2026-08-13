@@ -324,6 +324,9 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
         // Push worker state first so `connected` clears the GUI's connection
         // overlay before the remote Snapshot starts rendering.
         while let Ok(update) = remote_state_rx.try_recv() {
+            if !remote_shared.is_current(update.attempt_id) {
+                continue;
+            }
             push_remote_state(
                 push,
                 &update.state,
@@ -335,7 +338,11 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 &update.sessions,
             );
         }
-        if let Ok(active) = remote_connected_rx.try_recv() {
+        while let Ok(mut active) = remote_connected_rx.try_recv() {
+            if !remote_shared.is_current(active.attempt_id) {
+                let _ = handle.block_on(async { active.ssh_child.kill().await });
+                continue;
+            }
             let session_id = match &active.connection.transport {
                 super::connect::TransportKind::Remote { session_id, .. }
                 | super::connect::TransportKind::Local { session_id } => session_id.clone(),
@@ -1063,12 +1070,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // ─── Remote host connect (available from the detached start screen) ───
             Ok(HostCtl::ConnectRemote { host_id }) => {
                 let (pw_tx, pw_rx) = std::sync::mpsc::channel::<String>();
-                if let Ok(mut tx) = remote_shared.password_tx.lock() {
-                    *tx = Some(pw_tx);
-                }
-                remote_shared
-                    .cancelled
-                    .store(false, std::sync::atomic::Ordering::Release);
+                let (attempt_id, cancelled) = remote_shared.begin(pw_tx);
                 push_remote_state(
                     push,
                     "resolving",
@@ -1080,28 +1082,21 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     &[],
                 );
                 super::remote_ctl::spawn_connect_worker(
+                    attempt_id,
                     host_id,
                     remote_state_tx.clone(),
                     remote_connected_tx.clone(),
                     pw_rx,
-                    std::sync::Arc::clone(&remote_shared.cancelled),
+                    cancelled,
+                    std::sync::Arc::clone(&remote_shared),
                     handle.clone(),
                 );
             }
             Ok(HostCtl::SubmitRemotePassword { password }) => {
-                if let Ok(mut tx) = remote_shared.password_tx.lock() {
-                    if let Some(tx) = tx.take() {
-                        let _ = tx.send(password);
-                    }
-                }
+                remote_shared.submit_password(password);
             }
             Ok(HostCtl::DisconnectRemote) | Ok(HostCtl::CancelRemoteConnect) => {
-                remote_shared
-                    .cancelled
-                    .store(true, std::sync::atomic::Ordering::Release);
-                if let Ok(mut tx) = remote_shared.password_tx.lock() {
-                    *tx = None;
-                }
+                remote_shared.cancel();
                 push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
             }
             // The ipc side hung up (window gone) — leave the host.
@@ -1249,6 +1244,7 @@ fn host_remote(
     }
     super::teardown_connection(handle, active.connection);
     let _ = handle.block_on(async { active.ssh_child.kill().await });
+    push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
     *current = None;
     transition_to_step(transition)
 }
