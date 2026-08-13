@@ -184,7 +184,7 @@ fn attach_session(
     let sock_path = store::daemon_sock_path(session_id)?;
     let my_fingerprint = store::build_fingerprint();
 
-    let mut conn = connect_attach_and_handshake(handle, &sock_path)?;
+    let mut conn = connect_attach_and_handshake(handle, &sock_path, session_id)?;
     let mut already_restarted = false;
     while conn
         .daemon_version
@@ -208,7 +208,7 @@ fn attach_session(
 
         restart_daemon_animated(terminal, session_id)?;
 
-        conn = connect_attach_and_handshake(handle, &sock_path)?;
+        conn = connect_attach_and_handshake(handle, &sock_path, session_id)?;
     }
     Ok(conn)
 }
@@ -228,6 +228,7 @@ fn teardown_connection(handle: &tokio::runtime::Handle, conn: Connection) {
         writer_handle,
         prebuffered: _,
         daemon_version: _,
+        transport: _,
     } = conn;
 
     let _ = req_tx.send(ClientRequest::Detach);

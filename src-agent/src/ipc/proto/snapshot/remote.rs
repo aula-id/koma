@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 /// Pure-data projection of `Mode::Remote`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RemoteSnapshot {
-    /// Sub-mode: "compact" | "fullscreen" | "connecting" | "password"
+    /// Sub-mode: "compact" | "fullscreen"
     pub sub: String,
     /// All saved hosts.
     pub hosts: Vec<RemoteHostSnapshot>,
@@ -15,9 +15,13 @@ pub struct RemoteSnapshot {
     pub filtered: Vec<usize>,
     /// Host ID when viewing detail (fullscreen sub).
     pub detail_host: Option<String>,
-    /// Connection stage: "resolving" | "authenticating" | "bootstrapping" | "connected" | None
+    /// Transient connection state serialized as a string.
+    /// "disconnected" | "resolving" | "authenticating" | "auth_required:<host_id>:<user>:<host>"
+    /// | "bootstrapping" | "connecting" | "connected:<session_id>" | "error:<message>" | None
+    pub connection_state: Option<String>,
+    /// Legacy: connection stage (kept for backward compat, mirrors connection_state).
     pub stage: Option<String>,
-    /// Connection error message.
+    /// Legacy: connection error (kept for backward compat, mirrors connection_state).
     pub error: Option<String>,
     /// Sessions on the selected remote host.
     pub sessions: Vec<RemoteSessionSnapshot>,

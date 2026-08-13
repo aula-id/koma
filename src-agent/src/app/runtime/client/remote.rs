@@ -10,7 +10,7 @@ use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use crate::ipc::frame::{self, FrameReader};
 use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame};
 
-use super::connect::{Connection, HELLO_HANDSHAKE_TIMEOUT};
+use super::connect::{Connection, TransportKind, HELLO_HANDSHAKE_TIMEOUT};
 use super::bridge::REQ_POLL;
 
 /// Connect to a remote koma server over generic async streams (stdin/stdout),
@@ -23,6 +23,8 @@ pub(crate) fn connect_remote<R, W>(
     handle: &tokio::runtime::Handle,
     reader: R,
     writer: W,
+    host_id: String,
+    session_id: String,
 ) -> Result<Connection>
 where
     R: AsyncRead + Unpin + Send + 'static,
@@ -129,5 +131,6 @@ where
         writer_handle,
         prebuffered,
         daemon_version,
+        transport: TransportKind::Remote { host_id, session_id },
     })
 }
