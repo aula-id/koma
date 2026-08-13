@@ -9,16 +9,22 @@ use crate::app::mode::remote::{RemoteState, RemoteSub};
 use crate::view::theme::Palette;
 
 /// Draw the remote host manager mode.
+///
+/// `input_rect` is the composer area; `transcript_rect` is the scrollable
+/// transcript above it. Compact mode renders as a popup overlay anchored
+/// above the composer (same pattern as `/skill`, `/bash`, `/todo`).
+/// Fullscreen modes take the full frame area.
 pub fn draw(
     frame: &mut ratatui::Frame,
     m: &RemoteState,
-    area: Rect,
+    input_rect: Rect,
+    transcript_rect: Rect,
     palette: &Palette,
 ) {
     match m.sub {
-        RemoteSub::Compact => render_compact(frame, m, area, palette),
+        RemoteSub::Compact => render_compact(frame, m, input_rect, transcript_rect, palette),
         RemoteSub::Fullscreen | RemoteSub::Connecting | RemoteSub::PasswordInput => {
-            render_fullscreen(frame, m, area, palette);
+            render_fullscreen(frame, m, frame.area(), palette);
         }
     }
 }
@@ -27,19 +33,20 @@ pub fn draw(
 fn render_compact(
     frame: &mut ratatui::Frame,
     m: &RemoteState,
-    area: Rect,
+    input_rect: Rect,
+    transcript_rect: Rect,
     palette: &Palette,
 ) {
-    let row_count = m.filtered.len().min(12) as u16;
+    let row_count = m.filtered.len().min(10) as u16;
     let height = row_count + 4; // search + borders + hint
-    let h = height.min(area.height.saturating_sub(2));
 
-    // Anchor above the bottom (composer area).
-    let y = area.y + area.height.saturating_sub(h);
+    // Anchor above the composer, extending upward into the transcript area.
+    let h = height.min(transcript_rect.height);
+    let y = input_rect.y.saturating_sub(h);
     let popup = Rect {
-        x: area.x + 2,
+        x: input_rect.x + 2,
         y,
-        width: area.width.saturating_sub(4).min(60),
+        width: input_rect.width.saturating_sub(4).min(60),
         height: h,
     };
 
@@ -74,7 +81,7 @@ fn render_compact(
         x: inner.x,
         y: inner.y + 1,
         width: inner.width,
-        height: inner.height.saturating_sub(1),
+        height: inner.height.saturating_sub(2), // minus search + hint
     };
     for (row, &host_idx) in m.filtered.iter().enumerate().take(list_area.height as usize) {
         let host = &m.hosts[host_idx];
@@ -121,7 +128,7 @@ fn render_compact(
     }
 
     // Empty state.
-    if m.filtered.is_empty() && inner.height > 2 {
+    if m.filtered.is_empty() && list_area.height > 0 {
         let empty = Line::from(Span::styled(
             "no hosts. Ctrl+A to add.",
             Style::default().fg(palette.dim),
