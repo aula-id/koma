@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Server, Plus, Trash2, Edit3, Link2 } from 'lucide-react'
+import { Plus, Trash2, Edit3, Link2 } from 'lucide-react'
 import { useKoma } from '../../store/koma'
 
 type RemotePanelView =
@@ -190,19 +190,19 @@ export function RemotePanel() {
               className="flex items-center justify-between bg-koma-panel border border-koma-border rounded px-2 py-1.5 hover:bg-koma-hover"
             >
               <div className="flex items-center gap-2 min-w-0">
-                <Server size={14} className={host.connected ? 'text-koma-success' : 'text-koma-dim'} />
+                <span
+                  className={`inline-block h-2.5 w-2.5 flex-none rounded-full ${
+                    host.connected
+                      ? 'bg-koma-success'
+                      : host.lastConnected
+                        ? 'bg-koma-warn'
+                        : 'bg-koma-dim'
+                  }`}
+                  title={formatLastSeen(host.lastConnected)}
+                />
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="text-koma-fg font-medium truncate">{host.name}</span>
-                    <span
-                      className={`text-[10px] px-1 rounded ${
-                        host.connected
-                          ? 'bg-koma-success/20 text-koma-success'
-                          : 'bg-koma-dim/20 text-koma-dim'
-                      }`}
-                    >
-                      {formatLastSeen(host.lastConnected)}
-                    </span>
                   </div>
                   <div className="text-koma-dim truncate">
                     {host.user}@{host.host}:{host.port}

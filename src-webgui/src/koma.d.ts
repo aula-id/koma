@@ -10,7 +10,7 @@ declare global {
     // one — mirrors KillSession's kill semantics (daemon stops, session moves
     // to History). Omitted/false (the default, unchanged) keeps the current
     // session cooking in the background.
-    | { r: 'NewSession'; kill?: boolean }
+    | { r: 'NewSession'; kill?: boolean; folder?: boolean }
     | { r: 'RefreshHub' }
     // Kill a session — works for a background cooking session AND the
     // currently-attached one. The daemon shuts down but the session stays on

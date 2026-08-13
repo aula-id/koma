@@ -88,6 +88,9 @@ pub(super) enum GuiReq {
     NewSession {
         #[serde(default)]
         kill: bool,
+        /// When true, open a native folder picker before creating the session.
+        #[serde(default)]
+        folder: bool,
     },
     /// A hub session row's KILL button (a live COOKING row, or the attached session itself).
     /// Forwarded as [`HostCtl::KillSession`]; the host escalates the kill off its control
