@@ -173,7 +173,7 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
   function handleMouseDown(e: MouseEvent<HTMLDivElement>) {
     if (e.button !== 0) return
     const target = e.target as HTMLElement
-    if (target.closest('button')) return
+    if (target.closest('button, input, textarea, select, [contenteditable="true"]')) return
     if (e.detail === 2) {
       post({ t: 'win', a: 'max' })
       return
