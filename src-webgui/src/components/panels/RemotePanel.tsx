@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Plus, Trash2, Edit3, Link2, LoaderCircle, Check, X } from 'lucide-react'
 import { useKoma } from '../../store/koma'
+import { RemotePasswordPrompt } from '../RemotePasswordPrompt'
 
 type RemotePanelView =
   | { kind: 'list' }
@@ -194,6 +195,21 @@ export function RemotePanel() {
             <span className="capitalize">{remoteState.state.replace('_', ' ')}</span>
           </div>
           {remoteState.error && <div className="mt-1 text-[11px] opacity-80">{remoteState.error}</div>}
+          <RemotePasswordPrompt
+            compact
+            active={remoteState.state === 'auth_required'}
+            target={remoteState.user && remoteState.host ? `${remoteState.user}@${remoteState.host}` : null}
+            onSubmit={(password) => push({ r: 'SubmitRemotePassword', password })}
+            onCancel={() => push({ r: 'CancelRemoteConnect' })}
+          />
+          {['resolving', 'bootstrapping', 'connecting'].includes(remoteState.state) && (
+            <button
+              className="mt-2 rounded border border-koma-border px-2 py-1 text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
+              onClick={() => push({ r: 'CancelRemoteConnect' })}
+            >
+              Cancel
+            </button>
+          )}
         </div>
       )}
 
