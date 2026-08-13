@@ -117,16 +117,7 @@ fn resolve_candidate(ctx: &ToolCtx, requested: &str) -> Result<PathBuf> {
 }
 
 fn image_workspace_roots(ctx: &ToolCtx) -> Vec<&PathBuf> {
-    let mut roots: Vec<&PathBuf> = Vec::new();
-    if !ctx.workspace.as_os_str().is_empty() {
-        roots.push(&ctx.workspace);
-    }
-    for root in &ctx.workspaces {
-        if !roots.contains(&root) {
-            roots.push(root);
-        }
-    }
-    roots
+    ctx.workspaces.iter().collect()
 }
 
 fn allowed_canonical_path(ctx: &ToolCtx, canonical: &Path) -> bool {
@@ -194,18 +185,36 @@ mod tests {
     }
 
     #[test]
-    fn accepts_workspace_active_workspace_and_exact_scratch() {
+    fn accepts_configured_workspace_worktree_and_exact_scratch() {
         let base = std::env::temp_dir().join(format!("koma-load-image-ok-{}", std::process::id()));
         let ws = base.join("ws");
-        let active = base.join("worktree");
+        let worktree = base.join("worktree");
         let scratch = base.join("scratch/session-a");
         put(&ws.join("a.png"), PNG);
-        put(&active.join("b.png"), PNG);
+        put(&worktree.join("b.png"), PNG);
         put(&scratch.join("c.png"), PNG);
-        let ctx = ctx(active.clone(), vec![ws.clone()], scratch.clone());
-        assert!(read_validated_image(&ctx, &ws.join("a.png").display().to_string()).is_ok());
+        let ctx = ctx(
+            worktree.clone(),
+            vec![worktree.clone(), ws.clone()],
+            scratch.clone(),
+        );
+        assert!(read_validated_image(&ctx, "[1]a.png").is_ok());
         assert!(read_validated_image(&ctx, "b.png").is_ok());
         assert!(read_validated_image(&ctx, &scratch.join("c.png").display().to_string()).is_ok());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn rejects_live_cwd_outside_configured_roots() {
+        let base = std::env::temp_dir().join(format!("koma-load-image-cwd-{}", std::process::id()));
+        let ws = base.join("ws");
+        let cwd = base.join("outside-cwd");
+        let scratch = base.join("scratch/session-a");
+        put(&cwd.join("outside.png"), PNG);
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::create_dir_all(&scratch).unwrap();
+        let ctx = ctx(cwd, vec![ws], scratch);
+        assert!(read_validated_image(&ctx, "outside.png").is_err());
         let _ = std::fs::remove_dir_all(base);
     }
 
