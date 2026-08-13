@@ -107,7 +107,7 @@ pub(super) enum HostTransition {
     /// signalled `OpenSwapper`). `run_host_relay` rebuilds the hub from discovery.
     ToSwapper,
     Remote {
-        connection: super::remote_ctl::ActiveRemote,
+        connection: Box<super::remote_ctl::ActiveRemote>,
         session_id: String,
     },
     /// Attach to this local session UUID (a hub `SelectSession`/`NewSession`, or a daemon
@@ -1215,7 +1215,7 @@ pub(super) fn push_loop(
                 super::connect::TransportKind::Local { session_id } => session_id.clone(),
             };
             return HostTransition::Remote {
-                connection: active,
+                connection: Box::new(active),
                 session_id,
             };
         }
