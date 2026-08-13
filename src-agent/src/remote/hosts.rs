@@ -234,15 +234,13 @@ pub fn import_ssh_config(hosts: &RemoteHosts) -> Vec<RemoteHost> {
                     current_port = p;
                 }
             }
-            "identityfile" => {
+            "identityfile" if current_host.is_some() => {
                 // Store for the CURRENT block (best-effort — if no block
                 // is active, ignore).
-                if current_host.is_some() {
-                    // We can't set key_path here because the RemoteHost
-                    // isn't built yet; stash it alongside. For simplicity
-                    // in v1 we'll handle this in the flush above.
-                    // TODO: carry key_path through the block parser
-                }
+                // We can't set key_path here because the RemoteHost
+                // isn't built yet; stash it alongside. For simplicity
+                // in v1 we'll handle this in the flush above.
+                // TODO: carry key_path through the block parser
             }
             _ => {}
         }
