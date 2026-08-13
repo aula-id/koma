@@ -106,7 +106,11 @@ pub(super) enum HostTransition {
     /// Detach and show the local session swapper (the daemon's socket closed, or it
     /// signalled `OpenSwapper`). `run_host_relay` rebuilds the hub from discovery.
     ToSwapper,
-    /// Attach to this session UUID (a hub `SelectSession`/`NewSession`, or a daemon
+    Remote {
+        connection: super::remote_ctl::ActiveRemote,
+        session_id: String,
+    },
+    /// Attach to this local session UUID (a hub `SelectSession`/`NewSession`, or a daemon
     /// `NewSession` hand-off). A minted uuid for a new session; an existing id otherwise.
     /// `workdir` is the folder a GUI `[+ new session]` native picker chose (the new
     /// session's working dir); `None` for every other attach inherits the host's cwd.
@@ -296,6 +300,8 @@ pub(super) fn push_loop(
     // and disconnect senders for in-flight operations.
     let (remote_state_tx, remote_state_rx) =
         std::sync::mpsc::channel::<super::remote_ctl::RemoteStateUpdate>();
+    let (remote_connected_tx, remote_connected_rx) =
+        std::sync::mpsc::channel::<super::remote_ctl::ActiveRemote>();
     let remote_shared = std::sync::Arc::new(super::remote_ctl::RemoteSessionShared::new());
 
     // Fold the handshake's prebuffered frames first, through the SAME `apply_frame`
@@ -992,32 +998,45 @@ pub(super) fn push_loop(
                 }
                 // ─── Remote host connect/disconnect ────────────────────────
                 Ok(super::HostCtl::ConnectRemote { host_id }) => {
-                    // Create password exchange channels.
+                    // Create a password exchange channel. The worker returns the
+                    // established remote transport through `remote_connected_tx`.
                     let (pw_tx, pw_rx) = std::sync::mpsc::channel::<String>();
-                    let (disc_tx, disc_rx) = std::sync::mpsc::channel::<()>();
-                    // Store the senders in shared state so SubmitRemotePassword
-                    // and DisconnectRemote can reach them.
                     if let Ok(mut tx) = remote_shared.password_tx.lock() {
                         *tx = Some(pw_tx);
                     }
-                    if let Ok(mut tx) = remote_shared.disconnect_tx.lock() {
-                        *tx = Some(disc_tx);
-                    }
+                    remote_shared
+                        .cancelled
+                        .store(false, std::sync::atomic::Ordering::Release);
+                    push_remote_state(
+                        push,
+                        "resolving",
+                        Some(&host_id),
+                        None,
+                        None,
+                        None,
+                        None,
+                        &[],
+                    );
                     super::remote_ctl::spawn_connect_worker(
                         host_id,
                         remote_state_tx.clone(),
+                        remote_connected_tx.clone(),
                         pw_rx,
-                        disc_rx,
-                        std::sync::Arc::clone(&remote_shared),
+                        std::sync::Arc::clone(&remote_shared.cancelled),
+                        tokio::runtime::Handle::current(),
                     );
                 }
-                Ok(super::HostCtl::DisconnectRemote) => {
-                    // Send disconnect signal through the shared channel.
-                    if let Ok(tx) = remote_shared.disconnect_tx.lock() {
-                        if let Some(tx) = tx.as_ref() {
-                            let _ = tx.send(());
-                        }
+                Ok(super::HostCtl::DisconnectRemote) | Ok(super::HostCtl::CancelRemoteConnect) => {
+                    // During connect/auth, dropping the password sender releases the
+                    // worker. Once connected, push_loop has already transitioned to
+                    // the remote transport; its normal detach path handles cleanup.
+                    remote_shared
+                        .cancelled
+                        .store(true, std::sync::atomic::Ordering::Release);
+                    if let Ok(mut tx) = remote_shared.password_tx.lock() {
+                        *tx = None;
                     }
+                    push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
                 }
                 Ok(super::HostCtl::SubmitRemotePassword { password }) => {
                     // Forward the password to the waiting connect worker.
@@ -1026,17 +1045,7 @@ pub(super) fn push_loop(
                             let _ = tx.send(password);
                         }
                     }
-                    // Push "connecting" immediately — the worker will follow
-                    // with "connected" or "error" once the SSH handshake completes.
                     push_remote_state(push, "connecting", None, None, None, None, None, &[]);
-                }
-                Ok(super::HostCtl::CancelRemoteConnect) => {
-                    // Cancel is equivalent to disconnect for v1.
-                    if let Ok(tx) = remote_shared.disconnect_tx.lock() {
-                        if let Some(tx) = tx.as_ref() {
-                            let _ = tx.send(());
-                        }
-                    }
                 }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.
@@ -1187,7 +1196,7 @@ pub(super) fn push_loop(
             super::push_proto::push_installed_ext_detail(push, id, detail, error);
         }
 
-        // --- REMOTE HOST CONNECT: push any state transitions from the worker ---
+        // --- REMOTE HOST CONNECT: push state transitions, then open the transport ---
         while let Ok(update) = remote_state_rx.try_recv() {
             push_remote_state(
                 push,
@@ -1199,6 +1208,16 @@ pub(super) fn push_loop(
                 update.error.as_deref(),
                 &update.sessions,
             );
+        }
+        if let Ok(active) = remote_connected_rx.try_recv() {
+            let session_id = match &active.connection.transport {
+                super::connect::TransportKind::Remote { session_id, .. } => session_id.clone(),
+                super::connect::TransportKind::Local { session_id } => session_id.clone(),
+            };
+            return HostTransition::Remote {
+                connection: active,
+                session_id,
+            };
         }
 
         // --- IMPORT GRAPH: push any completed off-thread linker daemon visualization ---

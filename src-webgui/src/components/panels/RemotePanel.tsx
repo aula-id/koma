@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Plus, Trash2, Edit3, Link2 } from 'lucide-react'
+import { Plus, Trash2, Edit3, Link2, LoaderCircle, Check, X } from 'lucide-react'
 import { useKoma } from '../../store/koma'
 
 type RemotePanelView =
@@ -24,10 +24,12 @@ const emptyDraft = (): RemoteHostDraft => ({
 
 export function RemotePanel() {
   const remoteHosts = useKoma((s) => s.remoteHosts)
+  const remoteState = useKoma((s) => s.remoteState)
   const push = useKoma((s) => s.req)
   const [view, setView] = useState<RemotePanelView>({ kind: 'list' })
   const [query, setQuery] = useState('')
   const [editId, setEditId] = useState<string | null>(null)
+  const [armedDelete, setArmedDelete] = useState<string | null>(null)
 
   useEffect(() => {
     push({ r: 'GetRemoteHosts' })
@@ -62,8 +64,15 @@ export function RemotePanel() {
       isNew: false,
     })
   }
-  const handleConnect = (hostId: string) => push({ r: 'ConnectRemoteHost', hostId })
-  const handleDelete = (hostId: string) => push({ r: 'DeleteRemoteHost', id: hostId })
+  const connecting = !['disconnected', 'connected', 'error'].includes(remoteState.state)
+  const handleConnect = (hostId: string) => {
+    if (connecting) return
+    push({ r: 'ConnectRemoteHost', hostId })
+  }
+  const confirmDelete = (hostId: string) => {
+    push({ r: 'DeleteRemoteHost', id: hostId })
+    setArmedDelete(null)
+  }
 
   const formatLastSeen = (ts: number | null) => {
     if (!ts) return 'Never connected'
@@ -178,17 +187,58 @@ export function RemotePanel() {
         />
       </div>
 
+      {remoteState.state !== 'disconnected' && (
+        <div className={`mx-2 mt-2 rounded border px-2 py-1.5 ${remoteState.state === 'error' ? 'border-koma-error/50 text-koma-error' : 'border-koma-border text-koma-fg'}`}>
+          <div className="flex items-center gap-1.5">
+            {connecting && <LoaderCircle size={13} className="animate-spin text-koma-accent" />}
+            <span className="capitalize">{remoteState.state.replace('_', ' ')}</span>
+          </div>
+          {remoteState.error && <div className="mt-1 text-[11px] opacity-80">{remoteState.error}</div>}
+        </div>
+      )}
+
       {/* Host list — scrollable, fills remaining space */}
       <div className="flex-1 overflow-auto px-2 py-1">
         <div className="flex flex-col gap-1">
           {filtered.length === 0 && (
             <div className="text-koma-dim text-center py-4">No hosts saved</div>
           )}
-          {filtered.map((host) => (
+          {filtered.map((host) => {
+            const armed = armedDelete === host.id
+            return (
             <div
               key={host.id}
-              className="flex items-center justify-between bg-koma-panel border border-koma-border rounded px-2 py-1.5 hover:bg-koma-hover"
+              className="flex min-h-[49px] items-center justify-between bg-koma-panel border border-koma-border rounded px-2 py-1.5 hover:bg-koma-hover"
             >
+              {armed ? (
+                <>
+                  <span className="min-w-0 flex-1 truncate text-[12px] text-koma-error">
+                    Delete {host.name} forever?
+                  </span>
+                  <div className="flex flex-none items-center gap-1">
+                    <button
+                      autoFocus
+                      aria-label={`Confirm delete ${host.name}`}
+                      title="Confirm delete"
+                      className="flex items-center gap-1 rounded px-2 py-1 text-koma-error hover:bg-koma-error/10"
+                      onClick={() => confirmDelete(host.id)}
+                    >
+                      <Check size={13} />
+                      yes
+                    </button>
+                    <button
+                      aria-label="Cancel delete"
+                      title="Cancel"
+                      className="flex items-center gap-1 rounded px-2 py-1 text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
+                      onClick={() => setArmedDelete(null)}
+                    >
+                      <X size={13} />
+                      no
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
               <div className="flex items-center gap-2 min-w-0">
                 <span
                   className={`inline-block h-2.5 w-2.5 flex-none rounded-full ${
@@ -211,11 +261,16 @@ export function RemotePanel() {
               </div>
               <div className="flex items-center gap-1">
                 <button
-                  className="p-1 text-koma-accent hover:text-koma-fg"
+                  disabled={connecting}
+                  className="p-1 text-koma-accent hover:text-koma-fg disabled:cursor-not-allowed disabled:opacity-40"
                   title="Connect"
                   onClick={() => handleConnect(host.id)}
                 >
-                  <Link2 size={14} />
+                  {connecting && remoteState.hostId === host.id ? (
+                    <LoaderCircle size={14} className="animate-spin" />
+                  ) : (
+                    <Link2 size={14} />
+                  )}
                 </button>
                 <button
                   className="p-1 text-koma-dim hover:text-koma-fg"
@@ -227,13 +282,16 @@ export function RemotePanel() {
                 <button
                   className="p-1 text-koma-dim hover:text-koma-error"
                   title="Delete"
-                  onClick={() => handleDelete(host.id)}
+                  onClick={() => setArmedDelete(host.id)}
                 >
                   <Trash2 size={14} />
                 </button>
               </div>
+                </>
+              )}
             </div>
-          ))}
+            )
+          })}
         </div>
       </div>
 

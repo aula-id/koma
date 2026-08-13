@@ -4042,8 +4042,8 @@ export const useKoma = create<KomaState>((set, get) => ({
         set(() => ({ remoteHosts: env.hosts }))
         break
       case 'RemoteState':
-        set(() => ({
-          remoteState: {
+        set((s) => {
+          const remoteState = {
             state: env.state,
             hostId: env.hostId ?? null,
             user: env.user ?? null,
@@ -4051,8 +4051,25 @@ export const useKoma = create<KomaState>((set, get) => ({
             sessionId: env.sessionId ?? null,
             error: env.error ?? null,
             sessions: env.sessions ?? [],
-          },
-        }))
+          }
+          if (env.state === 'connected') {
+            return { remoteState, ui: { ...s.ui, switchingTo: null } }
+          }
+          if (env.state === 'error') {
+            const text = env.error ? `SSH: ${env.error}` : 'SSH connection failed'
+            const seq = s.ui.toastSeq + 1
+            return {
+              remoteState,
+              ui: {
+                ...s.ui,
+                switchingTo: null,
+                toastSeq: seq,
+                toast: { id: seq, text, kind: 'error' as const },
+              },
+            }
+          }
+          return { remoteState }
+        })
         break
     }
   },

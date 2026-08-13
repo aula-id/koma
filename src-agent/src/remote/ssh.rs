@@ -14,9 +14,9 @@ use super::RemoteTarget;
 
 /// An active SSH session with piped stdio.
 pub(crate) struct SshSession {
-    pub child: Child,
-    pub stdin: tokio::process::ChildStdin,
-    pub stdout: BufReader<tokio::process::ChildStdout>,
+    pub(crate) child: Child,
+    pub(crate) stdin: tokio::process::ChildStdin,
+    pub(crate) stdout: BufReader<tokio::process::ChildStdout>,
 }
 
 /// Connect to the remote target and exec `koma server --session <id>`.
