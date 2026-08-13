@@ -208,8 +208,7 @@ fn handle_editor(m: &mut RemoteState, key: KeyEvent) -> Action {
             }
             KeyCode::Backspace => {
                 let focused = m.editor.as_ref().map(|e| e.focused);
-                if let Some(field) = focused {
-                    let editor = m.editor.as_mut().expect("editor must exist");
+                if let (Some(field), Some(editor)) = (focused, m.editor.as_mut()) {
                     match field {
                         HostEditField::Name => editor.name.pop(),
                         HostEditField::User => editor.user.pop(),
@@ -226,8 +225,7 @@ fn handle_editor(m: &mut RemoteState, key: KeyEvent) -> Action {
                     return Action::None;
                 }
                 let focused = m.editor.as_ref().map(|e| e.focused);
-                if let Some(field) = focused {
-                    let editor = m.editor.as_mut().expect("editor must exist");
+                if let (Some(field), Some(editor)) = (focused, m.editor.as_mut()) {
                     match field {
                         HostEditField::Name => editor.name.push(c),
                         HostEditField::User => editor.user.push(c),

@@ -60,10 +60,7 @@ impl SshAuth {
                     #[cfg(unix)]
                     {
                         use std::os::unix::fs::PermissionsExt;
-                        std::fs::set_permissions(
-                            &path,
-                            std::fs::Permissions::from_mode(0o700),
-                        )?;
+                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
                     }
                     break path;
                 }
@@ -182,9 +179,7 @@ pub(crate) fn prompt_password(user: &str, host: &str) -> Result<String> {
     // auth must go through GUI IPC, not terminal stderr. Return an error
     // so the caller uses the IPC password channel instead.
     if std::env::var("KOMA_GUI").is_ok() {
-        anyhow::bail!(
-            "password auth under GUI must use SubmitRemotePassword, not prompt_password"
-        );
+        anyhow::bail!("password auth under GUI must use SubmitRemotePassword, not prompt_password");
     }
 
     eprint!("{user}@{host}'s password: ");
@@ -206,9 +201,7 @@ pub(crate) fn prompt_password(user: &str, host: &str) -> Result<String> {
                     }
                     KeyCode::Char(c) => {
                         // Ctrl+C / Ctrl+D to cancel.
-                        if key.modifiers.contains(KeyModifiers::CONTROL)
-                            && matches!(c, 'c' | 'd')
-                        {
+                        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(c, 'c' | 'd') {
                             disable_raw_mode()?;
                             anyhow::bail!("password entry cancelled");
                         }
@@ -299,7 +292,10 @@ mod tests {
     fn ssh_auth_debug_hides_password() {
         let auth = SshAuth::new("topsecret".to_string()).unwrap();
         let debug = format!("{auth:?}");
-        assert!(!debug.contains("topsecret"), "Debug output must not contain the password");
+        assert!(
+            !debug.contains("topsecret"),
+            "Debug output must not contain the password"
+        );
         assert!(debug.contains("has_password: true"));
         assert!(debug.contains("has_askpass: true"));
     }

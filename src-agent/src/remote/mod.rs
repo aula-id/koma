@@ -23,7 +23,9 @@ pub(crate) struct RemoteTarget {
 /// Parse a target string like `user@host`, `user@host:22`, or `host`.
 pub(crate) fn parse_target(target: &str) -> Result<RemoteTarget> {
     let (user_host, port) = if let Some((uh, p)) = target.rsplit_once(':') {
-        let port: u16 = p.parse().map_err(|_| anyhow::anyhow!("invalid port: {p}"))?;
+        let port: u16 = p
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid port: {p}"))?;
         (uh, Some(port))
     } else {
         (target, None)

@@ -32,8 +32,8 @@ use crate::ipc::proto::{
     McpSnapshot, ModeSnapshot, ModelCmdSnapshot, ModelDraftSnapshot, ModelEndpointWire,
     ModelModalSnapshot, OAuthDraftSnapshot, OnboardProviderSnapshot, OnboardSnapshot,
     PathPickerSnapshot, PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot,
-    RemoteHostSnapshot, RemoteSessionSnapshot, RemoteSnapshot, RewindEntrySnapshot,
-    RewindSnapshot, RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot, SessionMetaSnapshot,
+    RemoteHostSnapshot, RemoteSessionSnapshot, RemoteSnapshot, RewindEntrySnapshot, RewindSnapshot,
+    RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot, SessionMetaSnapshot,
     SettingsSnapshot, SkillCmdSnapshot, SkillEntrySnapshot, TextEditorSnapshot, TodoItemSnapshot,
     TodoSnapshot, ToolPickerSnapshot, UsageSnapshot, WarmStatusWire,
 };
@@ -897,7 +897,11 @@ pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
         ConnectionState::Disconnected => "disconnected".into(),
         ConnectionState::Resolving => "resolving".into(),
         ConnectionState::Authenticating => "authenticating".into(),
-        ConnectionState::AuthRequired { host_id, user, host } => {
+        ConnectionState::AuthRequired {
+            host_id,
+            user,
+            host,
+        } => {
             format!("auth_required:{host_id}:{user}:{host}")
         }
         ConnectionState::Bootstrapping => "bootstrapping".into(),

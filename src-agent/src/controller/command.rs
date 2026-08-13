@@ -38,10 +38,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "Browse and install extensions from the koma.run marketplace",
     ),
     ("/security", "Security daemon control panel"),
-    (
-        "/remote",
-        "Manage remote SSH hosts and sessions",
-    ),
+    ("/remote", "Manage remote SSH hosts and sessions"),
     (
         "/task",
         "Run an agent on a task, or open the sub-agents viewer (no args)",

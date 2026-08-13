@@ -731,9 +731,8 @@ pub fn run(opts: crate::cli::Opts) -> Result<()> {
             drop(_guard);
 
             // Connect to the remote server (creates its own terminal).
-            let connect_result = crate::remote::client::run_remote_client_target(
-                &target, None, None,
-            );
+            let connect_result =
+                crate::remote::client::run_remote_client_target(&target, None, None);
 
             if let Err(e) = &connect_result {
                 crate::model::store::append_global_error_log(

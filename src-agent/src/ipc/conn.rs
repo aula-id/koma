@@ -211,12 +211,8 @@ async fn write_batch(write_half: &mut IpcWriteHalf, batch: &[DaemonFrame]) -> bo
 /// `AsyncRead + AsyncWrite` pair — typically `ChildStdin` / `ChildStdout` from
 /// an SSH channel or piped process. The IPC protocol is identical; only the
 /// transport differs.
-pub fn spawn_stdio<R, W>(
-    reader: R,
-    writer: W,
-    client_id: u64,
-    hub_tx: Sender<HubInbound>,
-) where
+pub fn spawn_stdio<R, W>(reader: R, writer: W, client_id: u64, hub_tx: Sender<HubInbound>)
+where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
     W: tokio::io::AsyncWrite + Unpin + Send + 'static,
 {

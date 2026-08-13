@@ -62,7 +62,7 @@ pub struct HostEditor {
     pub name: String,
     pub user: String,
     pub host: String,
-    pub port: String,  // String for editing, parsed to u16 on save
+    pub port: String, // String for editing, parsed to u16 on save
     pub key_path: String,
     /// Which field is focused.
     pub focused: HostEditField,
@@ -91,22 +91,6 @@ pub enum ConnectionState {
     Error {
         message: String,
     },
-}
-
-impl ConnectionState {
-    /// Human-readable stage label for rendering spinners / progress.
-    pub fn stage_label(&self) -> &'static str {
-        match self {
-            Self::Disconnected => "disconnected",
-            Self::Resolving => "resolving",
-            Self::Authenticating => "authenticating",
-            Self::AuthRequired { .. } => "password required",
-            Self::Bootstrapping => "bootstrapping",
-            Self::Connecting => "connecting",
-            Self::Connected { .. } => "connected",
-            Self::Error { .. } => "error",
-        }
-    }
 }
 
 /// State for the remote host manager mode.
@@ -274,7 +258,9 @@ impl RemoteState {
 
     /// Validate the editor fields. Returns true if all fields are valid.
     pub fn validate_editor(&mut self) -> bool {
-        let Some(editor) = &mut self.editor else { return false };
+        let Some(editor) = &mut self.editor else {
+            return false;
+        };
         editor.error = None;
 
         if editor.name.trim().is_empty() {

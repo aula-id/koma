@@ -54,7 +54,10 @@ fn render_compact(
     frame.render_widget(Clear, popup);
 
     let block = Block::bordered()
-        .title(Span::styled(" remote hosts ", Style::default().fg(palette.dim)))
+        .title(Span::styled(
+            " remote hosts ",
+            Style::default().fg(palette.dim),
+        ))
         .border_style(Style::default().fg(palette.dim))
         .padding(ratatui::widgets::Padding::horizontal(1));
 
@@ -69,12 +72,15 @@ fn render_compact(
     ]);
     let search_widget = Paragraph::new(search_line);
     if inner.height > 0 {
-        frame.render_widget(search_widget, Rect {
-            x: inner.x,
-            y: inner.y,
-            width: inner.width,
-            height: 1,
-        });
+        frame.render_widget(
+            search_widget,
+            Rect {
+                x: inner.x,
+                y: inner.y,
+                width: inner.width,
+                height: 1,
+            },
+        );
     }
 
     // Host list.
@@ -84,7 +90,12 @@ fn render_compact(
         width: inner.width,
         height: inner.height.saturating_sub(2), // minus search + hint
     };
-    for (row, &host_idx) in m.filtered.iter().enumerate().take(list_area.height as usize) {
+    for (row, &host_idx) in m
+        .filtered
+        .iter()
+        .enumerate()
+        .take(list_area.height as usize)
+    {
         let host = &m.hosts[host_idx];
         let is_selected = row == m.selected;
         let is_pending_delete = m.pending_delete.as_deref() == Some(&host.id);
@@ -123,7 +134,12 @@ fn render_compact(
         if y < list_area.y + list_area.height {
             frame.render_widget(
                 Paragraph::new(line),
-                Rect { x: list_area.x, y, width: list_area.width, height: 1 },
+                Rect {
+                    x: list_area.x,
+                    y,
+                    width: list_area.width,
+                    height: 1,
+                },
             );
         }
     }
@@ -136,7 +152,12 @@ fn render_compact(
         ));
         frame.render_widget(
             Paragraph::new(empty),
-            Rect { x: inner.x, y: inner.y + 1, width: inner.width, height: 1 },
+            Rect {
+                x: inner.x,
+                y: inner.y + 1,
+                width: inner.width,
+                height: 1,
+            },
         );
     }
 
@@ -155,20 +176,25 @@ fn render_compact(
         );
         frame.render_widget(
             Paragraph::new(Line::from(Span::raw(padded))).style(bar_style),
-            Rect { x: inner.x, y: hint_y, width: inner.width, height: 1 },
+            Rect {
+                x: inner.x,
+                y: hint_y,
+                width: inner.width,
+                height: 1,
+            },
         );
     }
 }
 
 /// Fullscreen view: host detail + sessions pane.
-fn render_fullscreen(
-    frame: &mut ratatui::Frame,
-    m: &RemoteState,
-    area: Rect,
-    palette: &Palette,
-) {
+fn render_fullscreen(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, palette: &Palette) {
     // Header (2 rows).
-    let header_area = Rect { x: area.x, y: area.y, width: area.width, height: 2 };
+    let header_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: 2,
+    };
     let body_area = Rect {
         x: area.x,
         y: area.y + 2,
@@ -185,7 +211,12 @@ fn render_fullscreen(
     // Header title depends on connection_state.
     let title = match m.connection_state {
         Some(ConnectionState::AuthRequired { .. }) => "remote > password required",
-        Some(ConnectionState::Resolving | ConnectionState::Authenticating | ConnectionState::Bootstrapping | ConnectionState::Connecting) => "remote > connecting...",
+        Some(
+            ConnectionState::Resolving
+            | ConnectionState::Authenticating
+            | ConnectionState::Bootstrapping
+            | ConnectionState::Connecting,
+        ) => "remote > connecting...",
         Some(ConnectionState::Error { .. }) => "remote > error",
         Some(ConnectionState::Connected { .. }) => "remote > connected",
         Some(ConnectionState::Disconnected) => "remote > disconnected",
@@ -193,7 +224,10 @@ fn render_fullscreen(
     };
     let header = Paragraph::new(Line::from(Span::styled(
         format!(" {title} "),
-        Style::default().fg(palette.fg).bg(palette.bg).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(palette.fg)
+            .bg(palette.bg)
+            .add_modifier(Modifier::BOLD),
     )));
     frame.render_widget(header, header_area);
     // Separator line.
@@ -203,7 +237,12 @@ fn render_fullscreen(
     )));
     frame.render_widget(
         sep,
-        Rect { x: area.x, y: area.y + 1, width: area.width, height: 1 },
+        Rect {
+            x: area.x,
+            y: area.y + 1,
+            width: area.width,
+            height: 1,
+        },
     );
 
     // Body: two panes (left = host detail, right = sessions).
@@ -220,22 +259,17 @@ fn render_fullscreen(
         Some(ConnectionState::AuthRequired { .. }) => {
             " Type password, Enter to submit, Esc to cancel ".into()
         }
-        Some(ConnectionState::Resolving
-        | ConnectionState::Authenticating
-        | ConnectionState::Bootstrapping
-        | ConnectionState::Connecting) => {
-            let stage = m.connection_state.as_ref().unwrap().stage_label();
-            format!(" {}... (Esc to cancel) ", stage)
-        }
+        Some(ConnectionState::Resolving) => " resolving... (Esc to cancel) ".into(),
+        Some(ConnectionState::Authenticating) => " authenticating... (Esc to cancel) ".into(),
+        Some(ConnectionState::Bootstrapping) => " bootstrapping... (Esc to cancel) ".into(),
+        Some(ConnectionState::Connecting) => " connecting... (Esc to cancel) ".into(),
         Some(ConnectionState::Error { message }) => {
             format!(" error: {} — Esc to dismiss ", message)
         }
         Some(ConnectionState::Connected { .. }) => {
             " Connected — Disconnect (d) or Esc back ".into()
         }
-        Some(ConnectionState::Disconnected) => {
-            " c connect  e edit  Del delete  Esc back ".into()
-        }
+        Some(ConnectionState::Disconnected) => " c connect  e edit  Del delete  Esc back ".into(),
         None => " c connect  e edit  Del delete  Esc back ".into(),
     };
     let hint_line = Line::from(Span::styled(
@@ -246,12 +280,7 @@ fn render_fullscreen(
 }
 
 /// Render the host detail pane (left half).
-fn render_host_detail(
-    frame: &mut ratatui::Frame,
-    m: &RemoteState,
-    area: Rect,
-    palette: &Palette,
-) {
+fn render_host_detail(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, palette: &Palette) {
     let block = Block::default()
         .title(" host detail ")
         .borders(Borders::ALL)
@@ -276,10 +305,7 @@ fn render_host_detail(
     ]));
     lines.push(Line::from(vec![
         Span::styled("  addr: ", Style::default().fg(palette.dim)),
-        Span::styled(
-            host.address(),
-            Style::default().fg(palette.accent),
-        ),
+        Span::styled(host.address(), Style::default().fg(palette.accent)),
     ]));
     if let Some(ref key) = host.key_path {
         lines.push(Line::from(vec![
@@ -299,10 +325,7 @@ fn render_host_detail(
     if !host.tags.is_empty() {
         lines.push(Line::from(vec![
             Span::styled("  tags: ", Style::default().fg(palette.dim)),
-            Span::styled(
-                host.tags.join(", "),
-                Style::default().fg(palette.info),
-            ),
+            Span::styled(host.tags.join(", "), Style::default().fg(palette.info)),
         ]));
     }
 
@@ -363,7 +386,12 @@ fn render_sessions_pane(
         let y = inner.y + i as u16;
         frame.render_widget(
             Paragraph::new(line),
-            Rect { x: inner.x, y, width: inner.width, height: 1 },
+            Rect {
+                x: inner.x,
+                y,
+                width: inner.width,
+                height: 1,
+            },
         );
     }
 }
@@ -375,15 +403,15 @@ fn render_sessions_pane(
 ///   5 rows for fields: name, user, host, port, key path
 ///   Error message (if any)
 ///   Footer hint bar
-fn render_editor(
-    frame: &mut ratatui::Frame,
-    m: &RemoteState,
-    area: Rect,
-    palette: &Palette,
-) {
+fn render_editor(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, palette: &Palette) {
     let Some(editor) = &m.editor else { return };
 
-    let header_area = Rect { x: area.x, y: area.y, width: area.width, height: 2 };
+    let header_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: 2,
+    };
     let footer_area = Rect {
         x: area.x,
         y: area.y + area.height - 1,
@@ -398,7 +426,10 @@ fn render_editor(
     };
     let header = Paragraph::new(Line::from(Span::styled(
         format!(" {title} "),
-        Style::default().fg(palette.fg).bg(palette.bg).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(palette.fg)
+            .bg(palette.bg)
+            .add_modifier(Modifier::BOLD),
     )));
     frame.render_widget(header, header_area);
     // Separator.
@@ -408,7 +439,12 @@ fn render_editor(
     )));
     frame.render_widget(
         sep,
-        Rect { x: area.x, y: area.y + 1, width: area.width, height: 1 },
+        Rect {
+            x: area.x,
+            y: area.y + 1,
+            width: area.width,
+            height: 1,
+        },
     );
 
     // Body area (between header and footer).
@@ -444,7 +480,9 @@ fn render_editor(
 
         // Label.
         let label_style = if is_focused {
-            Style::default().fg(palette.accent).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(palette.accent)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(palette.dim)
         };
@@ -478,7 +516,12 @@ fn render_editor(
 
         frame.render_widget(
             Paragraph::new(line),
-            Rect { x: inner.x, y, width: inner.width, height: 1 },
+            Rect {
+                x: inner.x,
+                y,
+                width: inner.width,
+                height: 1,
+            },
         );
     }
 

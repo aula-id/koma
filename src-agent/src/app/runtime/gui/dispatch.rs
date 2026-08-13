@@ -895,11 +895,37 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::GetRemoteHosts => {
             let _ = ctx.ctl.send(HostCtl::GetRemoteHosts);
         }
-        GuiReq::AddRemoteHost { name, user, host, port, key_path } => {
-            let _ = ctx.ctl.send(HostCtl::AddRemoteHost { name, user, host, port, key_path });
+        GuiReq::AddRemoteHost {
+            name,
+            user,
+            host,
+            port,
+            key_path,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::AddRemoteHost {
+                name,
+                user,
+                host,
+                port,
+                key_path,
+            });
         }
-        GuiReq::EditRemoteHost { id, name, user, host, port, key_path } => {
-            let _ = ctx.ctl.send(HostCtl::EditRemoteHost { id, name, user, host, port, key_path });
+        GuiReq::EditRemoteHost {
+            id,
+            name,
+            user,
+            host,
+            port,
+            key_path,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::EditRemoteHost {
+                id,
+                name,
+                user,
+                host,
+                port,
+                key_path,
+            });
         }
         GuiReq::DeleteRemoteHost { id } => {
             let _ = ctx.ctl.send(HostCtl::DeleteRemoteHost { id });

@@ -14,7 +14,7 @@ use ratatui::crossterm::{
 pub(crate) struct TerminalGuard;
 
 impl TerminalGuard {
-pub(crate) fn enter() -> anyhow::Result<Self> {
+    pub(crate) fn enter() -> anyhow::Result<Self> {
         enable_raw_mode()?;
         if let Err(e) = execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste) {
             let _ = disable_raw_mode();

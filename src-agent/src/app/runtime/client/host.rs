@@ -33,8 +33,7 @@ use super::host_config::{apply_swapper_config_mutation, push_swapper_config};
 use super::project::push_hub;
 use super::push_proto::{
     push_agents_values, push_analytics, push_file_diff, push_model_list, push_oauth_state,
-    push_remote_state, push_route_list, push_settings_values, push_switching,
-    push_usage_preview,
+    push_remote_state, push_route_list, push_settings_values, push_switching, push_usage_preview,
 };
 use super::store_host;
 use super::swapper::build_local_hub;
@@ -940,19 +939,47 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             | Ok(ctl @ HostCtl::DeleteRemoteHost { .. }) => {
                 let mut hosts = crate::remote::hosts::load_hosts();
                 let mutated = match ctl {
-                    HostCtl::AddRemoteHost { name, user, host, port, key_path } => {
+                    HostCtl::AddRemoteHost {
+                        name,
+                        user,
+                        host,
+                        port,
+                        key_path,
+                    } => {
                         let new_id = crate::model::app_config::new_uuid();
-                        crate::remote::hosts::upsert_host(&mut hosts, crate::remote::hosts::RemoteHost {
-                            id: new_id, name, user, host, port, key_path,
-                            last_connected: None, tags: vec![],
-                        });
+                        crate::remote::hosts::upsert_host(
+                            &mut hosts,
+                            crate::remote::hosts::RemoteHost {
+                                id: new_id,
+                                name,
+                                user,
+                                host,
+                                port,
+                                key_path,
+                                last_connected: None,
+                                tags: vec![],
+                            },
+                        );
                         true
                     }
-                    HostCtl::EditRemoteHost { id, name, user, host, port, key_path } => {
+                    HostCtl::EditRemoteHost {
+                        id,
+                        name,
+                        user,
+                        host,
+                        port,
+                        key_path,
+                    } => {
                         if let Some(h) = crate::remote::hosts::host_by_id(&hosts, &id) {
                             let updated = crate::remote::hosts::RemoteHost {
-                                id: h.id.clone(), name, user, host, port, key_path,
-                                last_connected: h.last_connected, tags: h.tags.clone(),
+                                id: h.id.clone(),
+                                name,
+                                user,
+                                host,
+                                port,
+                                key_path,
+                                last_connected: h.last_connected,
+                                tags: h.tags.clone(),
                             };
                             crate::remote::hosts::upsert_host(&mut hosts, updated);
                             true
@@ -968,15 +995,19 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 if mutated {
                     let _ = crate::remote::hosts::save_hosts(&hosts);
                 }
-                let wire_hosts: Vec<serde_json::Value> = hosts.hosts.iter().map(|h| {
-                    serde_json::json!({
-                        "id": h.id, "name": h.name, "user": h.user, "host": h.host,
-                        "port": h.port, "keyPath": h.key_path,
-                        "connected": h.last_connected.is_some(),
-                        "lastConnected": h.last_connected,
-                        "tags": h.tags,
+                let wire_hosts: Vec<serde_json::Value> = hosts
+                    .hosts
+                    .iter()
+                    .map(|h| {
+                        serde_json::json!({
+                            "id": h.id, "name": h.name, "user": h.user, "host": h.host,
+                            "port": h.port, "keyPath": h.key_path,
+                            "connected": h.last_connected.is_some(),
+                            "lastConnected": h.last_connected,
+                            "tags": h.tags,
+                        })
                     })
-                }).collect();
+                    .collect();
                 let envelope = serde_json::json!({ "k": "RemoteHosts", "hosts": wire_hosts });
                 if let Ok(json) = serde_json::to_string(&envelope) {
                     push(json);
@@ -989,7 +1020,16 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             | Ok(HostCtl::DisconnectRemote)
             | Ok(HostCtl::SubmitRemotePassword { password: _ })
             | Ok(HostCtl::CancelRemoteConnect) => {
-                push_remote_state(push, "error", None, None, None, None, Some("remote connect unavailable in session picker"), &[]);
+                push_remote_state(
+                    push,
+                    "error",
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("remote connect unavailable in session picker"),
+                    &[],
+                );
             }
             // The ipc side hung up (window gone) — leave the host.
             Err(_) => return HostStep::Done,
