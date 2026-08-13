@@ -1,11 +1,11 @@
-//! Remote host manager view — compact overlay and fullscreen detail.
+//! Remote host manager view — compact overlay, fullscreen detail, and editor forms.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::app::mode::remote::{RemoteState, RemoteSub};
+use crate::app::mode::remote::{ConnectionState, HostEditField, RemoteState, RemoteSub};
 use crate::view::theme::Palette;
 
 /// Draw the remote host manager mode.
@@ -23,8 +23,9 @@ pub fn draw(
 ) {
     match m.sub {
         RemoteSub::Compact => render_compact(frame, m, input_rect, transcript_rect, palette),
-        RemoteSub::Fullscreen | RemoteSub::Connecting | RemoteSub::PasswordInput => {
-            render_fullscreen(frame, m, frame.area(), palette);
+        RemoteSub::Fullscreen => render_fullscreen(frame, m, frame.area(), palette),
+        RemoteSub::CreateHost | RemoteSub::EditHost => {
+            render_editor(frame, m, frame.area(), palette)
         }
     }
 }
@@ -179,11 +180,14 @@ fn render_fullscreen(
         height: 1,
     };
 
-    // Header.
-    let title = match m.sub {
-        RemoteSub::Connecting => "remote > connecting...",
-        RemoteSub::PasswordInput => "remote > password required",
-        _ => "remote",
+    // Header title depends on connection_state.
+    let title = match m.connection_state {
+        Some(ConnectionState::AuthRequired { .. }) => "remote > password required",
+        Some(ConnectionState::Resolving | ConnectionState::Authenticating | ConnectionState::Bootstrapping | ConnectionState::Connecting) => "remote > connecting...",
+        Some(ConnectionState::Error { .. }) => "remote > error",
+        Some(ConnectionState::Connected { .. }) => "remote > connected",
+        Some(ConnectionState::Disconnected) => "remote > disconnected",
+        None => "remote",
     };
     let header = Paragraph::new(Line::from(Span::styled(
         format!(" {title} "),
@@ -209,23 +213,28 @@ fn render_fullscreen(
     render_host_detail(frame, m, halves[0], palette);
     render_sessions_pane(frame, m, halves[1], palette);
 
-    // Footer hint.
-    let hint = match m.sub {
-        RemoteSub::Connecting => {
-            let stage_text = m.connection_status.as_ref()
-                .map(|s| s.stage.as_str())
-                .unwrap_or("connecting");
-            let error_text = m.connection_status.as_ref()
-                .and_then(|s| s.error.as_deref())
-                .unwrap_or("");
-            if !error_text.is_empty() {
-                format!(" {} - error: {} ", stage_text, error_text)
-            } else {
-                format!(" {}... (Esc to cancel) ", stage_text)
-            }
+    // Footer hint depends on connection_state.
+    let hint = match &m.connection_state {
+        Some(ConnectionState::AuthRequired { .. }) => {
+            " Type password, Enter to submit, Esc to cancel ".into()
         }
-        RemoteSub::PasswordInput => " Type password, Enter to submit, Esc to cancel ".into(),
-        _ => " c connect  e edit  Del delete  Esc back ".into(),
+        Some(ConnectionState::Resolving
+        | ConnectionState::Authenticating
+        | ConnectionState::Bootstrapping
+        | ConnectionState::Connecting) => {
+            let stage = m.connection_state.as_ref().unwrap().stage_label();
+            format!(" {}... (Esc to cancel) ", stage)
+        }
+        Some(ConnectionState::Error { message }) => {
+            format!(" error: {} — Esc to dismiss ", message)
+        }
+        Some(ConnectionState::Connected { .. }) => {
+            " Connected — Disconnect (d) or Esc back ".into()
+        }
+        Some(ConnectionState::Disconnected) => {
+            " c connect  e edit  Del delete  Esc back ".into()
+        }
+        None => " c connect  e edit  Del delete  Esc back ".into(),
     };
     let hint_line = Line::from(Span::styled(
         hint,
@@ -355,4 +364,151 @@ fn render_sessions_pane(
             Rect { x: inner.x, y, width: inner.width, height: 1 },
         );
     }
+}
+
+/// Render the host editor form (create or edit).
+///
+/// Full-screen layout:
+///   Header: "remote > add host" or "remote > edit host"
+///   5 rows for fields: name, user, host, port, key path
+///   Error message (if any)
+///   Footer hint bar
+fn render_editor(
+    frame: &mut ratatui::Frame,
+    m: &RemoteState,
+    area: Rect,
+    palette: &Palette,
+) {
+    let Some(editor) = &m.editor else { return };
+
+    let header_area = Rect { x: area.x, y: area.y, width: area.width, height: 2 };
+    let footer_area = Rect {
+        x: area.x,
+        y: area.y + area.height - 1,
+        width: area.width,
+        height: 1,
+    };
+
+    // Header.
+    let title = match m.sub {
+        RemoteSub::EditHost => "remote > edit host",
+        _ => "remote > add host",
+    };
+    let header = Paragraph::new(Line::from(Span::styled(
+        format!(" {title} "),
+        Style::default().fg(palette.fg).bg(palette.bg).add_modifier(Modifier::BOLD),
+    )));
+    frame.render_widget(header, header_area);
+    // Separator.
+    let sep = Paragraph::new(Line::from(Span::styled(
+        "─".repeat(area.width as usize),
+        Style::default().fg(palette.dim),
+    )));
+    frame.render_widget(
+        sep,
+        Rect { x: area.x, y: area.y + 1, width: area.width, height: 1 },
+    );
+
+    // Body area (between header and footer).
+    let body_area = Rect {
+        x: area.x,
+        y: area.y + 2,
+        width: area.width,
+        height: area.height.saturating_sub(3),
+    };
+
+    // Render each field row inside a bordered block.
+    let block = Block::default()
+        .title(" fields ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(palette.dim));
+    let inner = block.inner(body_area);
+    frame.render_widget(block, body_area);
+
+    let fields: [(HostEditField, &str); 5] = [
+        (HostEditField::Name, &editor.name),
+        (HostEditField::User, &editor.user),
+        (HostEditField::Host, &editor.host),
+        (HostEditField::Port, &editor.port),
+        (HostEditField::KeyPath, &editor.key_path),
+    ];
+
+    for (row, &(field, value)) in fields.iter().enumerate() {
+        if row as u16 >= inner.height {
+            break;
+        }
+        let y = inner.y + row as u16;
+        let is_focused = editor.focused == field;
+
+        // Label.
+        let label_style = if is_focused {
+            Style::default().fg(palette.accent).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(palette.dim)
+        };
+
+        let cursor = if is_focused && m.editing_field {
+            "█"
+        } else if is_focused {
+            "▌"
+        } else {
+            " "
+        };
+
+        let value_display = if field == HostEditField::KeyPath && value.is_empty() {
+            "(none)".to_string()
+        } else {
+            value.to_string()
+        };
+
+        let value_style = if is_focused {
+            Style::default().fg(palette.fg).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(palette.fg)
+        };
+
+        let line = Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("{:>9}: ", field.label()), label_style),
+            Span::styled(&value_display, value_style),
+            Span::styled(cursor, Style::default().fg(palette.accent)),
+        ]);
+
+        frame.render_widget(
+            Paragraph::new(line),
+            Rect { x: inner.x, y, width: inner.width, height: 1 },
+        );
+    }
+
+    // Error message (below fields, inside the block).
+    if let Some(ref error) = editor.error {
+        let err_row = fields.len() as u16 + 1;
+        if err_row < inner.height {
+            let err_line = Line::from(Span::styled(
+                format!("  ✗ {error}"),
+                Style::default().fg(palette.error),
+            ));
+            frame.render_widget(
+                Paragraph::new(err_line),
+                Rect {
+                    x: inner.x,
+                    y: inner.y + err_row,
+                    width: inner.width,
+                    height: 1,
+                },
+            );
+        }
+    }
+
+    // Footer hint.
+    let hint = if m.editing_field {
+        " Enter confirm field  Esc cancel edit "
+    } else {
+        " Enter edit field  s save  Esc back  ↑↓ navigate "
+    };
+    let hint_line = Line::from(Span::styled(
+        hint,
+        Style::default().fg(palette.sel_fg).bg(palette.accent),
+    ));
+    frame.render_widget(Paragraph::new(hint_line), footer_area);
 }

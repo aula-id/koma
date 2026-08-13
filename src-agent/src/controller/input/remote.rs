@@ -1,8 +1,8 @@
 //! Keyboard input handler for the `/remote` host manager.
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::mode::remote::{RemoteState, RemoteSub};
+use crate::app::mode::remote::{ConnectionState, HostEditField, RemoteState, RemoteSub};
 use crate::app::state::AppStateRest;
 use crate::controller::input::is_ctrl;
 use crate::controller::input::Action;
@@ -11,8 +11,7 @@ pub fn handle_remote(m: &mut RemoteState, rest: &mut AppStateRest, key: KeyEvent
     match m.sub {
         RemoteSub::Compact => handle_compact(m, rest, key),
         RemoteSub::Fullscreen => handle_fullscreen(m, rest, key),
-        RemoteSub::Connecting => handle_connecting(m, key),
-        RemoteSub::PasswordInput => handle_password(m, key),
+        RemoteSub::CreateHost | RemoteSub::EditHost => handle_editor(m, key),
     }
 }
 
@@ -59,6 +58,27 @@ fn handle_compact(m: &mut RemoteState, _rest: &mut AppStateRest, key: KeyEvent) 
 }
 
 fn handle_fullscreen(m: &mut RemoteState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
+    // If we're in a transient connection state, route keys there instead.
+    match &m.connection_state {
+        Some(ConnectionState::AuthRequired { .. }) => {
+            return handle_password_state(m, key);
+        }
+        Some(
+            ConnectionState::Resolving
+            | ConnectionState::Authenticating
+            | ConnectionState::Bootstrapping
+            | ConnectionState::Connecting,
+        ) => {
+            return handle_connecting_state(m, key);
+        }
+        Some(ConnectionState::Error { .. }) => {
+            return handle_error_state(m, key);
+        }
+        Some(ConnectionState::Connected { .. }) | Some(ConnectionState::Disconnected) | None => {
+            // Fall through to normal fullscreen handling.
+        }
+    }
+
     match key.code {
         KeyCode::Esc => {
             // Back to compact.
@@ -106,25 +126,25 @@ fn handle_fullscreen(m: &mut RemoteState, _rest: &mut AppStateRest, key: KeyEven
     }
 }
 
-fn handle_connecting(m: &mut RemoteState, key: KeyEvent) -> Action {
+/// Handle keys while the connection is in a transient connecting/resolving state.
+fn handle_connecting_state(m: &mut RemoteState, key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc => {
-            // Cancel connection — back to fullscreen.
-            m.sub = RemoteSub::Fullscreen;
-            m.connection_status = None;
+            // Cancel connection.
+            m.connection_state = None;
             Action::None
         }
         _ => Action::None,
     }
 }
 
-fn handle_password(m: &mut RemoteState, key: KeyEvent) -> Action {
+/// Handle keys while waiting for a password.
+fn handle_password_state(m: &mut RemoteState, key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc => {
             // Cancel password entry.
-            m.sub = RemoteSub::Connecting;
             m.password_buf.clear();
-            m.connection_status = None;
+            m.connection_state = None;
             Action::None
         }
         KeyCode::Enter => {
@@ -142,5 +162,146 @@ fn handle_password(m: &mut RemoteState, key: KeyEvent) -> Action {
             Action::None
         }
         _ => Action::None,
+    }
+}
+
+/// Handle keys while showing an error state.
+fn handle_error_state(m: &mut RemoteState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => {
+            // Dismiss error.
+            m.connection_state = None;
+            Action::None
+        }
+        _ => Action::None,
+    }
+}
+
+/// Handle keys in the host editor (create/edit form).
+///
+/// Two modes:
+/// - **Navigation mode** (not editing a field): Up/Down/Tab navigate, Enter starts
+///   editing, `s` saves, Esc goes back.
+/// - **Edit mode** (typing into a field): Char/Backspace modify, Enter confirms the
+///   field, Esc cancels editing without clearing.
+fn handle_editor(m: &mut RemoteState, key: KeyEvent) -> Action {
+    if m.editing_field {
+        // --- Edit mode: typing into a focused field ---
+        match key.code {
+            KeyCode::Esc => {
+                // Cancel editing this field (don't clear it, just stop editing).
+                m.editing_field = false;
+                Action::None
+            }
+            KeyCode::Enter => {
+                // Confirm the field, move to next.
+                let next = m
+                    .editor
+                    .as_ref()
+                    .map(|e| e.focused.next())
+                    .unwrap_or(HostEditField::Name);
+                if let Some(editor) = &mut m.editor {
+                    editor.focused = next;
+                }
+                m.editing_field = false;
+                Action::None
+            }
+            KeyCode::Backspace => {
+                let focused = m.editor.as_ref().map(|e| e.focused);
+                if let Some(field) = focused {
+                    let editor = m.editor.as_mut().expect("editor must exist");
+                    match field {
+                        HostEditField::Name => editor.name.pop(),
+                        HostEditField::User => editor.user.pop(),
+                        HostEditField::Host => editor.host.pop(),
+                        HostEditField::Port => editor.port.pop(),
+                        HostEditField::KeyPath => editor.key_path.pop(),
+                    };
+                }
+                Action::None
+            }
+            KeyCode::Char(c) => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    // Ctrl+key in edit mode: ignore (don't capture Ctrl+S etc.)
+                    return Action::None;
+                }
+                let focused = m.editor.as_ref().map(|e| e.focused);
+                if let Some(field) = focused {
+                    let editor = m.editor.as_mut().expect("editor must exist");
+                    match field {
+                        HostEditField::Name => editor.name.push(c),
+                        HostEditField::User => editor.user.push(c),
+                        HostEditField::Host => editor.host.push(c),
+                        HostEditField::Port => editor.port.push(c),
+                        HostEditField::KeyPath => editor.key_path.push(c),
+                    };
+                }
+                Action::None
+            }
+            _ => Action::None,
+        }
+    } else {
+        // --- Navigation mode: moving between fields ---
+        match key.code {
+            KeyCode::Esc => {
+                // Go back to fullscreen.
+                m.cancel_edit();
+                Action::None
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let prev = m
+                    .editor
+                    .as_ref()
+                    .map(|e| e.focused.prev())
+                    .unwrap_or(HostEditField::Name);
+                if let Some(editor) = &mut m.editor {
+                    editor.focused = prev;
+                }
+                Action::None
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let next = m
+                    .editor
+                    .as_ref()
+                    .map(|e| e.focused.next())
+                    .unwrap_or(HostEditField::Name);
+                if let Some(editor) = &mut m.editor {
+                    editor.focused = next;
+                }
+                Action::None
+            }
+            KeyCode::Tab => {
+                let next = m
+                    .editor
+                    .as_ref()
+                    .map(|e| e.focused.next())
+                    .unwrap_or(HostEditField::Name);
+                if let Some(editor) = &mut m.editor {
+                    editor.focused = next;
+                }
+                Action::None
+            }
+            KeyCode::BackTab => {
+                let prev = m
+                    .editor
+                    .as_ref()
+                    .map(|e| e.focused.prev())
+                    .unwrap_or(HostEditField::Name);
+                if let Some(editor) = &mut m.editor {
+                    editor.focused = prev;
+                }
+                Action::None
+            }
+            KeyCode::Enter => {
+                // Start editing the focused field.
+                m.editing_field = true;
+                Action::None
+            }
+            KeyCode::Char('s') | KeyCode::Char('S') if !is_ctrl(&key, 's') => {
+                // Save (validate + commit).
+                Action::RemoteSaveHost
+            }
+            _ => Action::None,
+        }
     }
 }

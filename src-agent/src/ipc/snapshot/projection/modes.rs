@@ -921,6 +921,8 @@ pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
         sub: match m.sub {
             RemoteSub::Compact => "compact".into(),
             RemoteSub::Fullscreen => "fullscreen".into(),
+            RemoteSub::CreateHost => "create_host".into(),
+            RemoteSub::EditHost => "edit_host".into(),
         },
         hosts: m
             .hosts

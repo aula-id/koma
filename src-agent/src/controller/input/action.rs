@@ -366,13 +366,13 @@ pub enum Action {
     /// Enter on a host in the fullscreen detail — connect to it. Inner is host ID.
     RemoteConnect(String),
     /// `e` in the fullscreen detail — edit the host. Inner is host ID.
-    #[expect(dead_code)]
     RemoteEditHost(String),
     /// Backspace confirming delete of a host. Inner is host ID.
     RemoteDeleteHost(String),
     /// Enter in the password input — submit the password. Inner is the password.
-    #[expect(dead_code)]
     RemotePasswordSubmit(String),
     /// `i` in the remote compact overlay — import hosts from `~/.ssh/config`.
     RemoteImportSshConfig,
+    /// Save the host editor draft (validate + commit).
+    RemoteSaveHost,
 }

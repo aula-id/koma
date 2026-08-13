@@ -731,6 +731,8 @@ pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState 
     RemoteState {
         sub: match s.sub.as_str() {
             "fullscreen" => RemoteSub::Fullscreen,
+            "create_host" => RemoteSub::CreateHost,
+            "edit_host" => RemoteSub::EditHost,
             _ => RemoteSub::Compact,
         },
         hosts: s
@@ -765,5 +767,7 @@ pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState 
         session_selected: s.session_selected,
         pending_delete: s.pending_delete,
         password_buf: String::new(),
+        editor: None,
+        editing_field: false,
     }
 }
