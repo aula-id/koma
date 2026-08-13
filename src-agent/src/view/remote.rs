@@ -1,7 +1,7 @@
 //! Remote host manager view — compact overlay and fullscreen detail.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
@@ -323,15 +323,10 @@ fn render_sessions_pane(
         } else {
             Span::styled("○", Style::default().fg(palette.dim))
         };
-        let fg = if is_selected {
-            palette.sel_fg
+        let row_style = if is_selected {
+            Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
         } else {
-            palette.fg
-        };
-        let bg = if is_selected {
-            palette.sel_bg
-        } else {
-            Color::Reset
+            Style::default().fg(palette.fg)
         };
         let fg_label = if session.is_foreground {
             " (current)"
@@ -343,8 +338,8 @@ fn render_sessions_pane(
             Span::raw(" "),
             dot,
             Span::raw(" "),
-            Span::styled(&session.name, Style::default().fg(fg).bg(bg)),
-            Span::styled(fg_label, Style::default().fg(palette.dim).bg(bg)),
+            Span::styled(&session.name, row_style),
+            Span::styled(fg_label, Style::default().fg(palette.dim)),
         ]);
 
         let y = inner.y + i as u16;

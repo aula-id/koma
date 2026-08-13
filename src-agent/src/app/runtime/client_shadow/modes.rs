@@ -151,6 +151,7 @@ pub(crate) fn shadow_session_hub(h: SessionHubSnapshot) -> SessionHub {
                 session_id: c.session_id,
                 dir_label: String::new(), // not projected over the wire
                 is_current_dir: false,
+                remote_host: c.remote_host,
             })
             .collect(),
         history,

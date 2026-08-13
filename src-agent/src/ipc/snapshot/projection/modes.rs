@@ -195,6 +195,7 @@ pub fn cooking_entry_snapshot(e: &CookingEntry) -> CookingEntrySnapshot {
         working: e.working,
         is_foreground: e.is_foreground,
         session_id: e.session_id.clone(),
+        remote_host: e.remote_host.clone(),
     }
 }
 

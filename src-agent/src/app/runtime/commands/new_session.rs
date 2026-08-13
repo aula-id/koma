@@ -241,6 +241,7 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
         session_id: None,
         dir_label: String::new(),
         is_current_dir: false,
+        remote_host: None,
     });
     for (raw_idx, rt) in state.rest.sessions.iter().enumerate() {
         // Skip the initial empty placeholder AND any closed/tombstoned slot — the
@@ -264,6 +265,7 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
             session_id: Some(rt.id.clone()),
             dir_label: store::dir_basename(&workdir),
             is_current_dir,
+            remote_host: None,
         });
     }
 
