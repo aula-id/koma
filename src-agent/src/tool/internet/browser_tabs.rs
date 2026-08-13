@@ -170,6 +170,7 @@ mod tests {
             memory_dir: None,
             worktrees_dir: None,
             download_dir: None,
+            scratch_dir: None,
             internet_mode,
             ssh_key: None,
             skill_registry: None,

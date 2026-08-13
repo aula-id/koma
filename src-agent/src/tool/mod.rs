@@ -99,6 +99,7 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
             | "graph_query"
             | "search_screenshots"
             | "load_screenshot"
+            | "load_image"
             | "describe_screenshot"
             | "browser_tabs"
             | "browser_inspect"
@@ -483,6 +484,8 @@ pub struct ToolCtx {
     pub worktrees_dir: Option<std::path::PathBuf>,
     /// The per-session media download directory.
     pub download_dir: Option<PathBuf>,
+    /// Exact per-session scratch directory (`<tmp>/koma/<session-id>`).
+    pub scratch_dir: Option<PathBuf>,
     /// The session's active internet tier.
     pub internet_mode: crate::model::settings::InternetMode,
     /// The bare filename of the SSH identity key selected for this session.
@@ -604,6 +607,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(internet::SearchScreenshots),
         Box::new(internet::DescribeScreenshot),
         Box::new(internet::LoadScreenshot),
+        Box::new(internet::LoadImage),
         Box::new(internet::BrowserTabs),
         Box::new(internet::BrowserInspect),
         Box::new(internet::BrowserInteract),
@@ -623,7 +627,15 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
 }
 
 /// Tool names the /agents editor's tool picker EXCLUDES from the selectable list.
-const AGENT_PICKER_EXCLUDED: &[&str] = &["task", "task_send", "pong", "dir_cache_update", "skill"];
+const AGENT_PICKER_EXCLUDED: &[&str] = &[
+    "task",
+    "task_send",
+    "pong",
+    "dir_cache_update",
+    "skill",
+    // Sub-agent continuation currently cannot inject synthetic image messages.
+    "load_image",
+];
 
 /// The user-selectable tool names for the /agents editor.
 pub fn agent_selectable_tools() -> Vec<String> {
