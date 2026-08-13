@@ -53,7 +53,7 @@ enum HostStep {
         workdir: Option<std::path::PathBuf>,
     },
     Remote {
-        active: super::remote_ctl::ActiveRemote,
+        active: Box<super::remote_ctl::ActiveRemote>,
         session_id: String,
     },
     /// Leave the host-relay entirely (the window is gone).
@@ -189,7 +189,7 @@ pub(in crate::app::runtime) fn run_host_relay(
                 &live_view,
                 &mut push_state,
                 &mut current_session_id,
-                active,
+                *active,
                 session_id,
             ),
             HostStep::Attach { id, workdir } => host_attached(
@@ -340,7 +340,10 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 super::connect::TransportKind::Remote { session_id, .. }
                 | super::connect::TransportKind::Local { session_id } => session_id.clone(),
             };
-            return HostStep::Remote { active, session_id };
+            return HostStep::Remote {
+                active: Box::new(active),
+                session_id,
+            };
         }
 
         match ctl_rx.recv_timeout(std::time::Duration::from_millis(16)) {

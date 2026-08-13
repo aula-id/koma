@@ -729,12 +729,12 @@ pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState 
             Some(ConnectionState::Connected {
                 session_id: session_id.to_string(),
             })
-        } else if let Some(message) = cs_str.strip_prefix("error:") {
-            Some(ConnectionState::Error {
-                message: message.to_string(),
-            })
         } else {
-            None
+            cs_str
+                .strip_prefix("error:")
+                .map(|message| ConnectionState::Error {
+                    message: message.to_string(),
+                })
         }
     });
 
