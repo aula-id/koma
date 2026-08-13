@@ -45,18 +45,18 @@ fn render_compact(
     let h = height.min(transcript_rect.height);
     let y = input_rect.y.saturating_sub(h);
     let popup = Rect {
-        x: input_rect.x + 2,
+        x: input_rect.x,
         y,
-        width: input_rect.width.saturating_sub(4).min(60),
+        width: input_rect.width,
         height: h,
     };
 
     frame.render_widget(Clear, popup);
 
-    let block = Block::default()
-        .title(" remote hosts ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.dim));
+    let block = Block::bordered()
+        .title(Span::styled(" remote hosts ", Style::default().fg(palette.dim)))
+        .border_style(Style::default().fg(palette.dim))
+        .padding(ratatui::widgets::Padding::horizontal(1));
 
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -140,19 +140,21 @@ fn render_compact(
         );
     }
 
-    // Hint bar.
+    // Hint bar — full-width inverse bar matching other overlays.
     if inner.height > 0 {
         let hint_y = inner.y + inner.height - 1;
-        let hint = Line::from(vec![
-            Span::styled(" Enter ", Style::default().fg(palette.sel_fg).bg(palette.accent)),
-            Span::styled(" detail  ", Style::default().fg(palette.dim)),
-            Span::styled(" Ctrl+A ", Style::default().fg(palette.sel_fg).bg(palette.accent)),
-            Span::styled(" add  ", Style::default().fg(palette.dim)),
-            Span::styled(" Esc ", Style::default().fg(palette.sel_fg).bg(palette.accent)),
-            Span::styled(" close", Style::default().fg(palette.dim)),
-        ]);
+        let hint = "enter detail · ctrl+a add · esc close";
+        let bar_style = Style::default()
+            .fg(palette.sel_fg)
+            .bg(palette.sel_bg)
+            .add_modifier(Modifier::BOLD);
+        let padded = format!(
+            " {:<width$}",
+            hint,
+            width = inner.width.saturating_sub(1) as usize
+        );
         frame.render_widget(
-            Paragraph::new(hint),
+            Paragraph::new(Line::from(Span::raw(padded))).style(bar_style),
             Rect { x: inner.x, y: hint_y, width: inner.width, height: 1 },
         );
     }

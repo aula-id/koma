@@ -165,6 +165,12 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(app::run_doctor(opts.doctor_verbose));
     }
 
+    // --- short-circuit: `koma sessions --json` — list live sessions (no TUI) ---
+    if opts.sessions {
+        let code = run_sessions_json();
+        std::process::exit(code);
+    }
+
     // --- upgrade migration: reap any pre-0.2.0 global daemon on first 0.2.0 launch ---
     // The old 0.1.x daemon bound a bare `<base_dir>/daemon.sock`. 0.2.0 never creates
     // that path; its presence means a pre-0.2.0 orphan is still running. We SIGTERM it
@@ -368,4 +374,36 @@ fn main() -> anyhow::Result<()> {
     // Hand the minted id to the client so it connects to THIS session's keyed socket.
     opts.session = Some(session_id);
     app::client_run(opts)
+}
+
+/// List live remote koma sessions as JSON (machine-readable, for SSH discovery).
+///
+/// Scans the local session registry for live daemon sockets, probes each for
+/// status, and outputs a JSON array to stdout. Diagnostics go to stderr.
+fn run_sessions_json() -> i32 {
+    use app::runtime::list_live_sessions;
+
+    let statuses = list_live_sessions();
+    let sessions: Vec<serde_json::Value> = statuses
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "session_id": s.session_id,
+                "name": s.name,
+                "working": s.working,
+                "is_foreground": false
+            })
+        })
+        .collect();
+
+    match serde_json::to_string(&sessions) {
+        Ok(json) => {
+            println!("{json}");
+            0
+        }
+        Err(e) => {
+            eprintln!("error: failed to serialize sessions: {e}");
+            1
+        }
+    }
 }

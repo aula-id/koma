@@ -7,6 +7,7 @@ pub(crate) mod auth;
 pub(crate) mod bootstrap;
 pub(crate) mod client;
 pub(crate) mod hosts;
+pub(crate) mod sessions;
 pub(crate) mod ssh;
 
 use anyhow::Result;
