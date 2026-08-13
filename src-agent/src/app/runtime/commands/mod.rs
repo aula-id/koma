@@ -72,6 +72,22 @@ pub(super) fn apply_slash(
         Command::Extensions => extensions::handle_extensions(state)?,
         Command::Store => store::handle_store(state, handle)?,
         Command::Security => security::handle_security(state)?,
+        Command::Remote(args) => {
+            if args.is_empty() {
+                // Open the remote host manager.
+                let hosts = crate::remote::hosts::load_hosts();
+                state.set_mode(crate::app::mode::Mode::Remote(Box::new(
+                    crate::app::mode::RemoteState::new(hosts.hosts),
+                )));
+            } else {
+                // Ad-hoc: /remote user@host — create temp host and connect.
+                let hosts = crate::remote::hosts::load_hosts();
+                state.set_mode(crate::app::mode::Mode::Remote(Box::new(
+                    crate::app::mode::RemoteState::new(hosts.hosts),
+                )));
+                // TODO: start connection to the specified target.
+            }
+        }
         Command::Resume => new_session::handle_resume(state)?,
         Command::Select => misc::handle_select(state)?,
         Command::Help => misc::handle_help(state)?,

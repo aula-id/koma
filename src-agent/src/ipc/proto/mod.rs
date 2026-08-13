@@ -904,6 +904,7 @@ pub enum ModeSnapshot {
     Effort(EffortSnapshot),
     Model(Box<ModelCmdSnapshot>),
     Usage(Box<UsageSnapshot>),
+    Remote(Box<RemoteSnapshot>),
     MessageRewind(RewindSnapshot),
     QuitConfirm {
         working: usize,

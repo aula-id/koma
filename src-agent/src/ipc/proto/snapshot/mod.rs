@@ -9,6 +9,7 @@ pub mod connector;
 pub mod ext;
 pub mod global;
 pub mod panels;
+pub mod remote;
 pub mod session;
 pub mod settings;
 
@@ -16,5 +17,6 @@ pub use connector::*;
 pub use ext::*;
 pub use global::*;
 pub use panels::*;
+pub use remote::*;
 pub use session::*;
 pub use settings::*;

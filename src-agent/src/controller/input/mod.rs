@@ -29,6 +29,7 @@ mod paste;
 mod picker;
 mod quit_confirm;
 mod rewind;
+mod remote;
 mod security;
 mod session_hub;
 mod settings;
@@ -113,6 +114,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         Mode::Bash(b) => bash::handle_bash(b, &mut state.rest, key),
         Mode::Todo(t) => todo::handle_todo(t, &mut state.rest, key),
         Mode::Skill(s) => skill_cmd::handle_skill_cmd(s, &mut state.rest, key),
+        Mode::Remote(m) => remote::handle_remote(m, &mut state.rest, key),
         Mode::Help(h) => help::handle_help(h, &mut state.rest, key),
         Mode::Effort(e) => handle_effort(e, &mut state.rest, key),
         Mode::Model(m) => model_cmd::handle_model_cmd(m, &mut state.rest, key),

@@ -39,6 +39,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ),
     ("/security", "Security daemon control panel"),
     (
+        "/remote",
+        "Manage remote SSH hosts and sessions",
+    ),
+    (
         "/task",
         "Run an agent on a task, or open the sub-agents viewer (no args)",
     ),
@@ -148,6 +152,9 @@ pub enum Command {
     Store,
     /// Open the `/security` daemon control panel.
     Security,
+    /// Open the `/remote` host manager. Inner string is an optional target
+    /// like `user@host` to connect directly.
+    Remote(String),
     /// Run a named agent on a task in the background. Holds `<agent> <task>`.
     Task(String),
     /// Open the `/bash` background-job panel (read-only + kill). Takes no args.
@@ -238,6 +245,7 @@ pub fn parse(line: &str) -> Command {
         "extension" | "extensions" => Command::Extensions,
         "store" => Command::Store,
         "security" => Command::Security,
+        "remote" => Command::Remote(rest.to_string()),
         "task" => Command::Task(rest.to_string()),
         "model" => Command::Model(rest.to_string()),
         "skill" => Command::Skill(rest.to_string()),

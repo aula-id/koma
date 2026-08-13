@@ -484,6 +484,20 @@ pub(in crate::app::runtime) fn apply_action(
         Action::RewindToMessage(idx) => {
             rewind::handle_rewind_to_message(idx, state)?;
         }
+
+        Action::CloseRemote => {
+            *state.mode_mut() = crate::app::mode::Mode::Chat;
+        }
+
+        Action::RemoteAddHost
+        | Action::RemoteConnect(_)
+        | Action::RemoteEditHost(_)
+        | Action::RemoteDeleteHost(_)
+        | Action::RemotePasswordSubmit(_) => {
+            // Phase 3 TODO: implement actual connection/edit/delete logic.
+            // For now, close the remote view and show status.
+            *state.mode_mut() = crate::app::mode::Mode::Chat;
+        }
     }
     Ok(())
 }
