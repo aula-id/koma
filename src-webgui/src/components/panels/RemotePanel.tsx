@@ -180,7 +180,7 @@ export function RemotePanel() {
       {/* Search */}
       <div className="flex-none p-2 pb-1">
         <input
-          className="w-full bg-koma-panel border border-koma-border rounded px-2 py-1 text-koma-fg placeholder-koma-dim"
+          className="w-full bg-koma-panel border border-koma-border rounded px-2 py-1 text-koma-fg placeholder-koma-dim outline-none focus:border-koma-accent"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search hosts..."
