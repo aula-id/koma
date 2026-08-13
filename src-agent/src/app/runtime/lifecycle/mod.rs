@@ -68,7 +68,7 @@ pub(super) fn prefill_creds() -> (Option<String>, Option<String>, Option<String>
 /// SAFE FOR HEADLESS USE: nothing here touches stdout / the terminal. `warm_session`
 /// only spawns background tasks + mutates state + does best-effort lock IO, so the
 /// daemon path can call this identically to the TUI path.
-fn build_startup(
+pub(crate) fn build_startup(
     opts: &crate::cli::Opts,
 ) -> Result<(
     tokio::runtime::Runtime,
@@ -91,7 +91,7 @@ fn build_startup(
     let config = AppConfig::load();
 
     // Decide initial state.
-    let mut state = if opts.daemon {
+    let mut state = if opts.daemon || opts.server {
         // Daemon-per-session: `install_daemon_session` (called right after build_startup
         // in run_daemon) owns create/load for this daemon's keyed session id. Do NOT
         // create a throwaway returning-user session here (install would orphan it every
@@ -193,7 +193,7 @@ fn build_startup(
     // returns immediately and connects each enabled server in a background task; tools
     // appear once a server is ready. With no `mcp_servers` configured this spawns
     // nothing and advertises no tools — identical to a build without MCP.
-    if opts.daemon {
+    if opts.daemon || opts.server {
         state.rest.mcp_manager = None;
     } else {
         state.rest.mcp_manager = Some(crate::app::mcp::McpManager::connect_all(
@@ -354,7 +354,7 @@ fn build_startup(
 /// Best-effort and infallible at the type level: a create/load error degrades to a
 /// status line + KeyInput rather than aborting daemon startup, so a bad session can
 /// never wedge the daemon before it can even report the problem to a client.
-fn install_daemon_session(
+pub(crate) fn install_daemon_session(
     state: &mut AppState,
     client: &mut Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
@@ -628,7 +628,7 @@ fn notify_ext_owned_subagents_on_shutdown(state: &mut AppState) -> usize {
 /// owns the sender of its own per-request channel, and `let _ =` on each send
 /// makes a post-drop send a safe no-op (no panic, no deadlock). A crash that skips
 /// this is covered by PID-liveness staleness in `store::is_locked`.
-fn shutdown_runtime(state: &mut AppState, rt: tokio::runtime::Runtime) {
+pub(crate) fn shutdown_runtime(state: &mut AppState, rt: tokio::runtime::Runtime) {
     crate::model::store::append_global_error_log("daemon-exit", "shutdown_runtime: entering");
     // Death-notice pass FIRST — while the duplex ext wire AND the runtime are still live,
     // and BEFORE `stop_all` kills the extension children: tell every ext-owned in-flight

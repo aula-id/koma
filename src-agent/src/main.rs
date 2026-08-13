@@ -52,6 +52,7 @@ mod ipc;
 mod linker;
 mod model;
 mod re_util;
+mod remote;
 mod resources;
 mod security;
 mod service;
@@ -170,7 +171,7 @@ fn main() -> anyhow::Result<()> {
     // here (best-effort) so it releases any session write-locks it holds and vacates disk.
     // Skip in the daemon/mcp-daemon children — they are spawned AFTER this migration runs
     // in the parent, and a child re-running migrate would be a no-op race anyway.
-    if !opts.daemon && !opts.mcp_daemon && !opts.oauth_daemon {
+    if !opts.daemon && !opts.mcp_daemon && !opts.oauth_daemon && !opts.server {
         #[cfg(feature = "linker")]
         if !opts.linker_daemon {
             app::migrate_legacy_daemon();
@@ -259,6 +260,18 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "linker")]
     if opts.linker_daemon {
         return app::run_linker_daemon(opts);
+    }
+
+    // --- remote development: SSH-connect to a remote machine ---
+    if let Some(ref target) = opts.remote_target.clone() {
+        let key = opts.remote_key.clone();
+        let port = opts.remote_port;
+        return remote::client::run_remote_client_target(target, key.as_deref(), port);
+    }
+    // Speaks the IPC protocol over stdin/stdout instead of a unix socket.
+    // Checked BEFORE `--daemon` since `server` is a distinct mode.
+    if opts.server {
+        return app::run_server(opts);
     }
 
     // --- headless path: run the koma-daemon event loop (no TUI) ---
