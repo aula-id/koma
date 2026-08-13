@@ -76,19 +76,26 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // folder is confirmed. React raises its switch loader optimistically on
         // click, so on CANCEL create nothing but kick a hub RE-PUSH so the
         // loader (`switchingTo`) clears instead of stranding.
-        GuiReq::NewSession { kill } => {
-            let ctl = ctx.ctl.clone();
-            std::thread::spawn(move || match rfd::FileDialog::new().pick_folder() {
-                Some(folder) => {
-                    let _ = ctl.send(HostCtl::New {
-                        workdir: Some(folder),
-                        kill,
-                    });
-                }
-                None => {
-                    let _ = ctl.send(HostCtl::RefreshHub);
-                }
-            });
+        GuiReq::NewSession { kill, folder } => {
+            if folder {
+                let ctl = ctx.ctl.clone();
+                std::thread::spawn(move || match rfd::FileDialog::new().pick_folder() {
+                    Some(folder) => {
+                        let _ = ctl.send(HostCtl::New {
+                            workdir: Some(folder),
+                            kill,
+                        });
+                    }
+                    None => {
+                        let _ = ctl.send(HostCtl::RefreshHub);
+                    }
+                });
+            } else {
+                let _ = ctx.ctl.send(HostCtl::New {
+                    workdir: None,
+                    kill,
+                });
+            }
         }
         // A hub row's KILL button (a live session, or the attached one): the
         // client-thread escalates the kill off its control loop + refreshes the

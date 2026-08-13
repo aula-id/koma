@@ -149,7 +149,7 @@ export function StartScreen() {
           </span>
           <span className="min-w-0 flex-1">
             <span className="block text-[13px] font-semibold text-koma-fg">New session</span>
-            <span className="block text-[11px] text-koma-fg opacity-45">Pick a folder to work in</span>
+            <span className="block text-[11px] text-koma-fg opacity-45">Start working in your default directory</span>
           </span>
           <ArrowRight size={16} className="flex-none text-koma-fg opacity-30 transition group-hover:translate-x-0.5 group-hover:opacity-70" />
         </button>
