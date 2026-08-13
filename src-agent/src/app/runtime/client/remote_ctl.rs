@@ -5,6 +5,7 @@
 //! `std::thread::spawn` so the blocking SSH/auth operations never stall
 //! the 16ms push loop.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
@@ -12,20 +13,17 @@ use std::sync::{Arc, Mutex};
 /// The push_loop owns this; the worker thread reads/writes it through
 /// `Arc` clones.
 pub(super) struct RemoteSessionShared {
-    /// When the worker needs a password, it waits on the receiver end.
-    /// The push_loop stores the sender here so `SubmitRemotePassword`
-    /// can forward it.
+    /// The worker waits here when password authentication is required. The
+    /// relay sends the entered password, or drops the sender to cancel.
     pub password_tx: Mutex<Option<Sender<String>>>,
-    /// Sender for disconnect signal. `DisconnectRemote` / `CancelRemoteConnect`
-    /// sends through this; the worker's receiver wakes up and cleans up.
-    pub disconnect_tx: Mutex<Option<Sender<()>>>,
+    pub cancelled: Arc<AtomicBool>,
 }
 
 impl RemoteSessionShared {
     pub fn new() -> Self {
         Self {
             password_tx: Mutex::new(None),
-            disconnect_tx: Mutex::new(None),
+            cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -42,17 +40,25 @@ pub(super) struct RemoteStateUpdate {
     pub sessions: Vec<serde_json::Value>,
 }
 
-/// Spawn the remote connect worker thread. Called from the push_loop's
-/// `HostCtl::ConnectRemote` handler.
+/// A successfully established remote transport, handed back to the host relay
+/// so it can fold the remote daemon's frames into the GUI like a local session.
+pub(super) struct ActiveRemote {
+    pub connection: super::connect::Connection,
+    pub ssh_child: tokio::process::Child,
+}
+
+/// Spawn the remote connect worker thread. The blocking SSH/bootstrap work stays
+/// off the host relay; the resulting transport is returned over `connected_tx`.
 pub(super) fn spawn_connect_worker(
     host_id: String,
     state_tx: Sender<RemoteStateUpdate>,
+    connected_tx: Sender<ActiveRemote>,
     pw_rx: Receiver<String>,
-    disconnect_rx: Receiver<()>,
-    shared: Arc<RemoteSessionShared>,
+    cancelled: Arc<AtomicBool>,
+    handle: tokio::runtime::Handle,
 ) {
     std::thread::spawn(move || {
-        remote_connect_worker(host_id, state_tx, pw_rx, disconnect_rx, shared);
+        remote_connect_worker(host_id, state_tx, connected_tx, pw_rx, cancelled, handle);
     });
 }
 
@@ -66,14 +72,15 @@ pub(super) fn spawn_connect_worker(
 /// 6. Bridge the SSH channel to a Connection via `connect_remote`
 /// 7. Push `connected` with the session id
 /// 8. Touch `last_connected` on the host record
-/// 9. Wait for disconnect signal, then clean up
+/// 9. Hand the live transport back to the host relay
 #[allow(clippy::too_many_lines)]
 fn remote_connect_worker(
     host_id: String,
     state_tx: Sender<RemoteStateUpdate>,
+    connected_tx: Sender<ActiveRemote>,
     pw_rx: Receiver<String>,
-    disconnect_rx: Receiver<()>,
-    shared: Arc<RemoteSessionShared>,
+    cancelled: Arc<AtomicBool>,
+    handle: tokio::runtime::Handle,
 ) {
     use crate::remote::auth::{self, AuthProbe, SshAuth};
     use crate::remote::{bootstrap, ssh, RemoteTarget};
@@ -159,26 +166,20 @@ fn remote_connect_worker(
 
             // Block until a password arrives or the channel closes.
             match pw_rx.recv() {
-                Ok(password) => {
-                    // Clear the password sender from shared state — auth is done.
-                    if let Ok(mut tx) = shared.password_tx.lock() {
-                        *tx = None;
+                Ok(password) => match SshAuth::from_password(password) {
+                    Ok(auth) => Some(auth),
+                    Err(e) => {
+                        push_state(
+                            "error",
+                            Some(&user_str),
+                            Some(&host_str),
+                            None,
+                            Some(&format!("auth setup failed: {e:#}")),
+                            Vec::new(),
+                        );
+                        return;
                     }
-                    match SshAuth::from_password(password) {
-                        Ok(auth) => Some(auth),
-                        Err(e) => {
-                            push_state(
-                                "error",
-                                Some(&user_str),
-                                Some(&host_str),
-                                None,
-                                Some(&format!("auth setup failed: {e:#}")),
-                                Vec::new(),
-                            );
-                            return;
-                        }
-                    }
-                }
+                },
                 Err(_) => {
                     push_state(
                         "error",
@@ -245,7 +246,7 @@ fn remote_connect_worker(
         Vec::new(),
     );
 
-    let mut ssh_session = match ssh::connect(&target, &session_id, auth_ref) {
+    let ssh_session = match ssh::connect(&target, &session_id, auth_ref) {
         Ok(s) => s,
         Err(e) => {
             push_state(
@@ -260,30 +261,15 @@ fn remote_connect_worker(
         }
     };
 
-    // 6. Bridge the SSH channel to a Connection.
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            push_state(
-                "error",
-                Some(&user_str),
-                Some(&host_str),
-                None,
-                Some(&format!("runtime init failed: {e:#}")),
-                Vec::new(),
-            );
-            // Can't block_on without the runtime; just kill the child directly.
-            // best-effort: the OS will reap it when the process exits.
-            let _ = ssh_session.child.start_kill();
-            return;
-        }
-    };
-    let handle = rt.handle().clone();
-
+    let crate::remote::ssh::SshSession {
+        child: mut ssh_child,
+        stdin,
+        stdout,
+    } = ssh_session;
     let connection = match crate::app::runtime::client::remote::connect_remote(
         &handle,
-        ssh_session.stdout,
-        ssh_session.stdin,
+        stdout,
+        stdin,
         host_str.clone(),
         session_id.clone(),
     ) {
@@ -297,7 +283,8 @@ fn remote_connect_worker(
                 Some(&format!("bridge failed: {e:#}")),
                 Vec::new(),
             );
-            let _ = rt.block_on(async { ssh_session.child.kill().await });
+            let mut ssh_child = ssh_child;
+            let _ = handle.block_on(async { ssh_child.kill().await });
             return;
         }
     };
@@ -336,29 +323,25 @@ fn remote_connect_worker(
         }
     }
 
-    // 9. Wait for disconnect signal, then clean up.
-    //    For v1: the worker stays alive keeping the SSH session open.
-    //    The push_loop sends a disconnect signal through the channel.
-    let _ = disconnect_rx.recv();
-
-    // Kill the SSH child.
-    let _ = rt.block_on(async { ssh_session.child.kill().await });
-
-    // Drop the connection (frame_rx/req_tx).
-    drop(connection);
-    drop(rt);
-
-    push_state(
-        "disconnected",
-        Some(&user_str),
-        Some(&host_str),
-        None,
-        None,
-        Vec::new(),
-    );
-
-    // Clear the disconnect sender from shared state.
-    if let Ok(mut tx) = shared.disconnect_tx.lock() {
-        *tx = None;
+    // 9. Hand the established remote connection to the host relay. It now owns
+    // the SSH child and folds the remote daemon's frames into normal GUI pushes.
+    if cancelled.load(Ordering::Acquire) {
+        let _ = handle.block_on(async { ssh_child.kill().await });
+        return;
+    }
+    if let Err(e) = connected_tx.send(ActiveRemote {
+        connection,
+        ssh_child,
+    }) {
+        let mut active = e.0;
+        let _ = handle.block_on(async { active.ssh_child.kill().await });
+        push_state(
+            "error",
+            Some(&user_str),
+            Some(&host_str),
+            None,
+            Some("remote session could not be opened"),
+            Vec::new(),
+        );
     }
 }

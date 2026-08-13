@@ -3,7 +3,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::app::mode::remote::{ConnectionState, HostEditField, RemoteState, RemoteSub};
 use crate::view::theme::Palette;
@@ -51,7 +51,7 @@ fn render_compact(
         height: h,
     };
 
-    frame.render_widget(Clear, popup);
+    crate::view::clear_and_fill(frame, popup, palette.bg);
 
     let block = Block::bordered()
         .title(Span::styled(
@@ -100,35 +100,27 @@ fn render_compact(
         let is_selected = row == m.selected;
         let is_pending_delete = m.pending_delete.as_deref() == Some(&host.id);
 
-        let dot = if host.last_connected.is_some() {
-            Span::styled("●", Style::default().fg(palette.success))
-        } else {
-            Span::styled("○", Style::default().fg(palette.dim))
-        };
-
-        let name_style = if is_selected {
+        let row_style = if is_selected {
             Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
         } else {
-            Style::default().fg(palette.fg)
+            Style::default().fg(palette.fg).bg(palette.bg)
         };
 
-        let delete_warn = if is_pending_delete {
-            Span::styled(" [confirm?]", Style::default().fg(palette.error))
-        } else {
-            Span::raw("")
-        };
-
-        let line = Line::from(vec![
-            Span::raw(" "),
-            dot,
-            Span::raw(" "),
-            Span::styled(&host.name, name_style),
-            Span::styled(
-                format!("  {}@{}", host.user, host.host),
-                Style::default().fg(palette.dim),
-            ),
-            delete_warn,
-        ]);
+        let content = format!(
+            " {} {}  {}@{}{}",
+            if host.last_connected.is_some() {
+                "●"
+            } else {
+                "○"
+            },
+            host.name,
+            host.user,
+            host.host,
+            if is_pending_delete { " [confirm?]" } else { "" },
+        );
+        let width = list_area.width as usize;
+        let padded = format!("{content:<width$}");
+        let line = Line::from(Span::styled(padded, row_style));
 
         let y = list_area.y + row as u16;
         if y < list_area.y + list_area.height {

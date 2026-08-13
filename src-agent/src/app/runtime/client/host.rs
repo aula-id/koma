@@ -52,6 +52,10 @@ enum HostStep {
         id: String,
         workdir: Option<std::path::PathBuf>,
     },
+    Remote {
+        active: super::remote_ctl::ActiveRemote,
+        session_id: String,
+    },
     /// Leave the host-relay entirely (the window is gone).
     Done,
 }
@@ -175,6 +179,19 @@ pub(in crate::app::runtime) fn run_host_relay(
                 &mut push_state,
                 current_session_id.as_deref(),
             ),
+            HostStep::Remote { active, session_id } => host_remote(
+                &handle,
+                &push,
+                &ctl_tx,
+                &ctl_rx,
+                &live_req,
+                &live_marks,
+                &live_view,
+                &mut push_state,
+                &mut current_session_id,
+                active,
+                session_id,
+            ),
             HostStep::Attach { id, workdir } => host_attached(
                 &handle,
                 &push,
@@ -297,9 +314,36 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
     // the hub after an attach) naturally starts with none in flight, same as a fresh
     // daemon session.
     let mut oauth_task: Option<tokio::task::AbortHandle> = None;
+    let (remote_state_tx, remote_state_rx) =
+        std::sync::mpsc::channel::<super::remote_ctl::RemoteStateUpdate>();
+    let (remote_connected_tx, remote_connected_rx) =
+        std::sync::mpsc::channel::<super::remote_ctl::ActiveRemote>();
+    let remote_shared = std::sync::Arc::new(super::remote_ctl::RemoteSessionShared::new());
 
     loop {
-        match ctl_rx.recv() {
+        // Push worker state first so `connected` clears the GUI's connection
+        // overlay before the remote Snapshot starts rendering.
+        while let Ok(update) = remote_state_rx.try_recv() {
+            push_remote_state(
+                push,
+                &update.state,
+                update.host_id.as_deref(),
+                update.user.as_deref(),
+                update.host.as_deref(),
+                update.session_id.as_deref(),
+                update.error.as_deref(),
+                &update.sessions,
+            );
+        }
+        if let Ok(active) = remote_connected_rx.try_recv() {
+            let session_id = match &active.connection.transport {
+                super::connect::TransportKind::Remote { session_id, .. }
+                | super::connect::TransportKind::Local { session_id } => session_id.clone(),
+            };
+            return HostStep::Remote { active, session_id };
+        }
+
+        match ctl_rx.recv_timeout(std::time::Duration::from_millis(16)) {
             // Page reloaded (`Ready`) OR the ResumePalette opened (`RefreshHub`):
             // rediscover the live set + re-push the hub. In the swapper the blocking
             // discovery sweep is fine — nothing renders on this thread here.
@@ -1013,26 +1057,53 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     push(json);
                 }
             }
-            // ─── Remote host connect/disconnect (swapper — not available) ───
-            // These need the full push_loop infrastructure; push a graceful
-            // error state so the GUI never hangs.
-            Ok(HostCtl::ConnectRemote { host_id: _ })
-            | Ok(HostCtl::DisconnectRemote)
-            | Ok(HostCtl::SubmitRemotePassword { password: _ })
-            | Ok(HostCtl::CancelRemoteConnect) => {
+            // ─── Remote host connect (available from the detached start screen) ───
+            Ok(HostCtl::ConnectRemote { host_id }) => {
+                let (pw_tx, pw_rx) = std::sync::mpsc::channel::<String>();
+                if let Ok(mut tx) = remote_shared.password_tx.lock() {
+                    *tx = Some(pw_tx);
+                }
+                remote_shared
+                    .cancelled
+                    .store(false, std::sync::atomic::Ordering::Release);
                 push_remote_state(
                     push,
-                    "error",
+                    "resolving",
+                    Some(&host_id),
                     None,
                     None,
                     None,
                     None,
-                    Some("remote connect unavailable in session picker"),
                     &[],
                 );
+                super::remote_ctl::spawn_connect_worker(
+                    host_id,
+                    remote_state_tx.clone(),
+                    remote_connected_tx.clone(),
+                    pw_rx,
+                    std::sync::Arc::clone(&remote_shared.cancelled),
+                    handle.clone(),
+                );
+            }
+            Ok(HostCtl::SubmitRemotePassword { password }) => {
+                if let Ok(mut tx) = remote_shared.password_tx.lock() {
+                    if let Some(tx) = tx.take() {
+                        let _ = tx.send(password);
+                    }
+                }
+            }
+            Ok(HostCtl::DisconnectRemote) | Ok(HostCtl::CancelRemoteConnect) => {
+                remote_shared
+                    .cancelled
+                    .store(true, std::sync::atomic::Ordering::Release);
+                if let Ok(mut tx) = remote_shared.password_tx.lock() {
+                    *tx = None;
+                }
+                push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
             }
             // The ipc side hung up (window gone) — leave the host.
-            Err(_) => return HostStep::Done,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return HostStep::Done,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
         }
     }
 }
@@ -1111,12 +1182,70 @@ fn host_attached(
         *v = StreamView::default();
     }
     super::teardown_connection(handle, conn);
+    transition_to_step(transition)
+}
 
+fn transition_to_step(transition: push_loop::HostTransition) -> HostStep {
     match transition {
-        // Carry any GUI-picker workdir (a hub `New` while attached) into the next attach;
-        // a daemon `/new` hand-off / a `Select` carries `None` (inherit the host cwd).
         push_loop::HostTransition::Attach { id, workdir } => HostStep::Attach { id, workdir },
+        push_loop::HostTransition::Remote {
+            connection,
+            session_id,
+        } => HostStep::Remote {
+            active: connection,
+            session_id,
+        },
         push_loop::HostTransition::ToSwapper => HostStep::Swapper,
         push_loop::HostTransition::Exit => HostStep::Done,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn host_remote(
+    handle: &tokio::runtime::Handle,
+    push: &dyn Fn(String),
+    ctl_tx: &std::sync::mpsc::Sender<HostCtl>,
+    ctl_rx: &std::sync::mpsc::Receiver<HostCtl>,
+    live_req: &std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
+    live_marks: &std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+    live_view: &std::sync::Arc<std::sync::Mutex<StreamView>>,
+    push_state: &mut push_loop::PushState,
+    current: &mut Option<String>,
+    mut active: super::remote_ctl::ActiveRemote,
+    session_id: String,
+) -> HostStep {
+    *current = Some(session_id);
+    if let Ok(mut g) = live_req.lock() {
+        *g = Some(active.connection.req_tx.clone());
+    }
+    let prebuffered = std::mem::take(&mut active.connection.prebuffered);
+    push_state.reset();
+    let transition = {
+        let _rt_ctx = handle.enter();
+        push_loop::push_loop(
+            push,
+            &active.connection.frame_rx,
+            &active.connection.req_tx,
+            prebuffered,
+            ctl_tx,
+            ctl_rx,
+            push_state,
+            current.as_deref(),
+            live_marks,
+            live_view,
+        )
+    };
+    if let Ok(mut g) = live_req.lock() {
+        *g = None;
+    }
+    if let Ok(mut m) = live_marks.lock() {
+        m.clear();
+    }
+    if let Ok(mut v) = live_view.lock() {
+        *v = StreamView::default();
+    }
+    super::teardown_connection(handle, active.connection);
+    let _ = handle.block_on(async { active.ssh_child.kill().await });
+    *current = None;
+    transition_to_step(transition)
 }

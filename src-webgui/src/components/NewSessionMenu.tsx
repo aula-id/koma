@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, FolderOpen, Link2 } from 'lucide-react'
+import { ChevronDown, FolderOpen, Link2, LoaderCircle } from 'lucide-react'
 import { useKoma } from '../store/koma'
 
 // Track the trigger button's viewport rect while the menu is open, so the
@@ -42,6 +42,8 @@ const menuWidth = 240
 export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProps) {
   const req = useKoma((s) => s.req)
   const remoteHosts = useKoma((s) => s.remoteHosts)
+  const remoteState = useKoma((s) => s.remoteState)
+  const startSwitching = useKoma((s) => s.startSwitching)
   const attachedId = useKoma((s) => s.session.id)
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLButtonElement>(null)
@@ -80,7 +82,9 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
     afterPick?.()
   }
 
-  const connectRemote = (hostId: string) => {
+  const connectRemote = (hostId: string, name: string) => {
+    if (remoteState.state !== 'disconnected' && remoteState.state !== 'error') return
+    startSwitching(`remote ${name}`)
     req({ r: 'ConnectRemoteHost', hostId })
     setOpen(false)
     afterPick?.()
@@ -140,8 +144,13 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
                     {remoteHosts.map((host) => (
                       <MenuItem
                         key={host.id}
-                        onClick={() => connectRemote(host.id)}
-                        icon={<Link2 size={13} />}
+                        onClick={() => connectRemote(host.id, host.name)}
+                        disabled={remoteState.state !== 'disconnected' && remoteState.state !== 'error'}
+                        icon={
+                          remoteState.hostId === host.id && remoteState.state !== 'error' && remoteState.state !== 'disconnected'
+                            ? <LoaderCircle size={13} className="animate-spin" />
+                            : <Link2 size={13} />
+                        }
                       >
                         <span className="font-medium">{host.name}</span>
                         <span className="ml-1 text-koma-dim">
@@ -163,19 +172,22 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
 function MenuItem({
   onClick,
   icon,
+  disabled = false,
   children,
 }: {
   onClick: () => void
   icon?: React.ReactNode
+  disabled?: boolean
   children: React.ReactNode
 }) {
   return (
     <button
+      disabled={disabled}
       onMouseDown={(e) => {
         e.preventDefault()
-        onClick()
+        if (!disabled) onClick()
       }}
-      className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-80 transition-colors hover:bg-koma-hover hover:opacity-100"
+      className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-80 transition-colors hover:bg-koma-hover hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
     >
       {icon && <span className="flex-none text-koma-dim">{icon}</span>}
       {children}
