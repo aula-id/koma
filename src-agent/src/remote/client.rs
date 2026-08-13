@@ -1,10 +1,13 @@
 //! Remote client: connects to a remote `koma server` and runs the local TUI.
 
 use anyhow::Result;
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 
 use super::auth::{self, SshAuth};
 use super::{bootstrap, ssh, RemoteTarget};
 use crate::app::runtime::client::remote::connect_remote;
+use crate::app::runtime::terminal::TerminalGuard;
 
 /// Run a remote koma session: SSH connect, exec server, bridge to local TUI.
 pub(crate) fn run_remote_client(
@@ -19,24 +22,33 @@ pub(crate) fn run_remote_client(
 
     // Set up tokio runtime for the bridge.
     let rt = tokio::runtime::Runtime::new()?;
-    let handle = rt.handle();
+    let handle = rt.handle().clone();
 
     // Connect the client bridge over SSH stdin/stdout.
-    let connection = connect_remote(handle, session.stdout, session.stdin)?;
+    let connection = connect_remote(&handle, session.stdout, session.stdin)?;
 
-    // TODO: Wire connection to TUI render loop.
-    // For now, print connection status.
-    eprintln!("Connected to remote koma server.");
-    eprintln!("Daemon version: {:?}", connection.daemon_version);
+    // Set up terminal for TUI rendering.
+    let _guard = TerminalGuard::enter()?;
+    let backend = CrosstermBackend::new(std::io::stdout());
+    let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
 
-    // Keep the SSH process alive.
-    let status = rt.block_on(async { session.child.wait().await })?;
+    // Run the same render loop a local thin-client uses.
+    let result = crate::app::runtime::client::run_remote_render_loop(
+        &mut terminal,
+        connection,
+        &handle,
+    );
 
-    if !status.success() {
-        eprintln!("Remote koma server exited with status: {status}");
+    // Keep the SSH process alive if render loop exited cleanly.
+    if result.is_ok() {
+        let status = rt.block_on(async { session.child.wait().await })?;
+        if !status.success() {
+            eprintln!("Remote koma server exited with status: {status}");
+        }
     }
 
-    Ok(())
+    result
 }
 
 /// Entry point from main.rs: parse target, probe auth, and run.
@@ -61,10 +73,8 @@ pub(crate) fn run_remote_client_target(
     // Probe whether key-based auth works.
     eprintln!("Connecting to {}@{}...", target.user, target.host);
     let ssh_auth = if auth::probe_key_auth(&target) {
-        // Key auth works — no password needed.
         None
     } else {
-        // Key auth failed — prompt for password.
         eprintln!("Key-based authentication failed. Password required.");
         let password = auth::prompt_password(&target.user, &target.host)?;
         Some(SshAuth::new(password)?)

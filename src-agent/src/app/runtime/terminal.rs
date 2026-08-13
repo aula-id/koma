@@ -11,10 +11,10 @@ use ratatui::crossterm::{
 /// RAII guard for terminal state. Entering enables raw mode + the alternate
 /// screen; dropping (normal return, `?`-error after creation, or panic-unwind)
 /// always restores the terminal.
-pub(super) struct TerminalGuard;
+pub(crate) struct TerminalGuard;
 
 impl TerminalGuard {
-    pub(super) fn enter() -> anyhow::Result<Self> {
+pub(crate) fn enter() -> anyhow::Result<Self> {
         enable_raw_mode()?;
         if let Err(e) = execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste) {
             let _ = disable_raw_mode();
