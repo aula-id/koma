@@ -515,10 +515,14 @@ declare global {
     | { r: 'EditRemoteHost'; id: string; name: string; user: string; host: string; port: number; keyPath: string | null }
     // Delete a remote host by id. Reply lands as a fresh RemoteHosts push.
     | { r: 'DeleteRemoteHost'; id: string }
-    // Connect to a remote host (placeholder — starts SSH session).
+    // Connect to a remote host (starts SSH session).
     | { r: 'ConnectRemoteHost'; hostId: string }
-    // Disconnect from a remote host (placeholder).
+    // Disconnect from a remote host.
     | { r: 'DisconnectRemoteHost'; hostId: string }
+    // Submit a password for remote host authentication.
+    | { r: 'SubmitRemotePassword'; password: string }
+    // Cancel an in-progress remote connection.
+    | { r: 'CancelRemoteConnect' }
 
   // ─── Linker daemon import graph ─────────────────────────────────────
   // Fetch the linker daemon's code-dependency graph. `path` focuses on

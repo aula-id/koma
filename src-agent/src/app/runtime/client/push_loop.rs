@@ -24,7 +24,8 @@ use super::project_config::{push_config, ConfigProjection};
 use super::push_intercept;
 use super::push_proto::{
     push_analytics, push_ext_op_result, push_file_diff, push_installed_extensions,
-    push_store_catalogue, push_store_detail, push_switching, push_usage_preview,
+    push_remote_state, push_store_catalogue, push_store_detail, push_switching,
+    push_usage_preview,
 };
 use super::render::{advance_local_animations, FRAME_BUDGET};
 use super::shadow::apply_frame;
@@ -288,6 +289,15 @@ pub(super) fn push_loop(
         Option<crate::ipc::proto::InstalledExtensionDetailWire>,
         Option<String>,
     )>();
+
+    // --- REMOTE HOST CONNECT/DISCONNECT ---
+    // Worker thread pushes state transitions (resolving → auth_required →
+    // connecting → connected, etc.) over this channel; the loop drains and
+    // pushes them as `RemoteState` envelopes. Shared state holds the password
+    // and disconnect senders for in-flight operations.
+    let (remote_state_tx, remote_state_rx) =
+        std::sync::mpsc::channel::<super::remote_ctl::RemoteStateUpdate>();
+    let remote_shared = std::sync::Arc::new(super::remote_ctl::RemoteSessionShared::new());
 
     // Fold the handshake's prebuffered frames first, through the SAME `apply_frame`
     // path (seq seeding stays gap-free). The select/swapper/new latches can't fire
@@ -947,6 +957,54 @@ pub(super) fn push_loop(
                         push(json);
                     }
                 }
+                // ─── Remote host connect/disconnect ────────────────────────
+                Ok(super::HostCtl::ConnectRemote { host_id }) => {
+                    // Create password exchange channels.
+                    let (pw_tx, pw_rx) = std::sync::mpsc::channel::<String>();
+                    let (disc_tx, disc_rx) = std::sync::mpsc::channel::<()>();
+                    // Store the senders in shared state so SubmitRemotePassword
+                    // and DisconnectRemote can reach them.
+                    if let Ok(mut tx) = remote_shared.password_tx.lock() {
+                        *tx = Some(pw_tx);
+                    }
+                    if let Ok(mut tx) = remote_shared.disconnect_tx.lock() {
+                        *tx = Some(disc_tx);
+                    }
+                    super::remote_ctl::spawn_connect_worker(
+                        host_id,
+                        remote_state_tx.clone(),
+                        pw_rx,
+                        disc_rx,
+                        std::sync::Arc::clone(&remote_shared),
+                    );
+                }
+                Ok(super::HostCtl::DisconnectRemote) => {
+                    // Send disconnect signal through the shared channel.
+                    if let Ok(tx) = remote_shared.disconnect_tx.lock() {
+                        if let Some(tx) = tx.as_ref() {
+                            let _ = tx.send(());
+                        }
+                    }
+                }
+                Ok(super::HostCtl::SubmitRemotePassword { password }) => {
+                    // Forward the password to the waiting connect worker.
+                    if let Ok(mut tx) = remote_shared.password_tx.lock() {
+                        if let Some(tx) = tx.take() {
+                            let _ = tx.send(password);
+                        }
+                    }
+                    // Push "connecting" immediately — the worker will follow
+                    // with "connected" or "error" once the SSH handshake completes.
+                    push_remote_state(push, "connecting", None, None, None, None, None);
+                }
+                Ok(super::HostCtl::CancelRemoteConnect) => {
+                    // Cancel is equivalent to disconnect for v1.
+                    if let Ok(tx) = remote_shared.disconnect_tx.lock() {
+                        if let Some(tx) = tx.as_ref() {
+                            let _ = tx.send(());
+                        }
+                    }
+                }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.
                 Err(TryRecvError::Disconnected) => return HostTransition::Exit,
@@ -1092,6 +1150,19 @@ pub(super) fn push_loop(
         }
         while let Ok((id, detail, error)) = installed_detail_rx.try_recv() {
             super::push_proto::push_installed_ext_detail(push, id, detail, error);
+        }
+
+        // --- REMOTE HOST CONNECT: push any state transitions from the worker ---
+        while let Ok(update) = remote_state_rx.try_recv() {
+            push_remote_state(
+                push,
+                &update.state,
+                update.host_id.as_deref(),
+                update.user.as_deref(),
+                update.host.as_deref(),
+                update.session_id.as_deref(),
+                update.error.as_deref(),
+            );
         }
 
         // --- IMPORT GRAPH: push any completed off-thread linker daemon visualization ---

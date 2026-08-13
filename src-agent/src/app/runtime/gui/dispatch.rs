@@ -904,8 +904,18 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::DeleteRemoteHost { id } => {
             let _ = ctx.ctl.send(HostCtl::DeleteRemoteHost { id });
         }
-        GuiReq::ConnectRemoteHost { host_id: _ } | GuiReq::DisconnectRemoteHost { host_id: _ } => {
-            // Placeholder — SSH connect/disconnect not yet wired for GUI.
+        GuiReq::ConnectRemoteHost { host_id } => {
+            let _ = ctx.ctl.send(HostCtl::ConnectRemote { host_id });
+        }
+        GuiReq::DisconnectRemoteHost { host_id } => {
+            let _ = host_id; // single remote session — id is informational
+            let _ = ctx.ctl.send(HostCtl::DisconnectRemote);
+        }
+        GuiReq::SubmitRemotePassword { password } => {
+            let _ = ctx.ctl.send(HostCtl::SubmitRemotePassword { password });
+        }
+        GuiReq::CancelRemoteConnect => {
+            let _ = ctx.ctl.send(HostCtl::CancelRemoteConnect);
         }
         // Import graph visualization: always routed to the host-relay thread via
         // HostCtl::ImportGraph (linker daemon call, like FileDiff — never the session daemon).
