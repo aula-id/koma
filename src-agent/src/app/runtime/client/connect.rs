@@ -18,21 +18,21 @@ pub(super) const HELLO_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 /// One live daemon connection: the bridge channels + writer join handle the render
 /// loop and teardown drive, plus the frames the pre-render handshake already pulled
 /// off the wire and the daemon version it observed.
-pub(super) struct Connection {
+pub(crate) struct Connection {
     /// Incoming daemon frames (reader task -> render loop).
-    pub(super) frame_rx: std::sync::mpsc::Receiver<DaemonFrame>,
-    /// Outgoing client requests (render loop -> writer task).
-    pub(super) req_tx: Sender<ClientRequest>,
+    pub(crate) frame_rx: std::sync::mpsc::Receiver<DaemonFrame>,
+    /// Outgoing client requests (render loop -> daemon).
+    pub(crate) req_tx: Sender<ClientRequest>,
     /// Writer task handle, joined at teardown so the final `Detach`/`QuitDaemon`
     /// flushes before the runtime is dropped.
-    pub(super) writer_handle: tokio::task::JoinHandle<()>,
+    pub(crate) writer_handle: tokio::task::JoinHandle<()>,
     /// Frames the handshake read off `frame_rx` while hunting for `Hello` (normally
     /// none — `Hello` is the first frame — but any that arrived first are carried here
     /// so the render loop applies them BEFORE its own drain and no frame/seq is lost).
-    pub(super) prebuffered: Vec<DaemonFrame>,
+    pub(crate) prebuffered: Vec<DaemonFrame>,
     /// The daemon's reported build fingerprint, or `None` if no `Hello` arrived within
     /// the handshake window (a daemon predating the handshake, or a slow one).
-    pub(super) daemon_version: Option<String>,
+    pub(crate) daemon_version: Option<String>,
 }
 
 /// Connect to the daemon, spawn the I/O bridge, send `Attach`, and run the pre-render

@@ -17,7 +17,7 @@
 //! bookkeeping.
 
 mod actions;
-mod client;
+pub(crate) mod client;
 mod client_shadow;
 mod event_loop;
 mod manage;
@@ -29,6 +29,7 @@ pub(crate) mod commands;
 mod shortsend;
 
 mod lifecycle;
+mod server;
 #[cfg(feature = "linker")]
 mod linker_daemon;
 mod mcp_daemon;
@@ -77,6 +78,7 @@ pub(crate) use manage::{list_live_sessions, spawn_into_session, SpawnIntoReply};
 
 // Re-export lifecycle entry points (previously free fns in this file).
 pub use lifecycle::{run, run_daemon, run_daemon_selftest};
+pub use server::run_server;
 
 // Re-export the GLOBAL MCP daemon entry so `main` can dispatch `koma --mcp-daemon`
 // (built in the `mcp_daemon` submodule). Additive: no session-daemon path uses it yet

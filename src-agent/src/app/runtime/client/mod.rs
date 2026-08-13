@@ -75,6 +75,7 @@ mod push_proto;
 mod push_proto_git;
 mod push_rows;
 mod render;
+pub(crate) mod remote;
 mod shadow;
 mod store_host;
 mod swapper;
