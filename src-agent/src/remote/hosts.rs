@@ -138,6 +138,35 @@ pub fn delete_host(hosts: &mut RemoteHosts, id: &str) -> bool {
     hosts.hosts.len() < before
 }
 
+/// Flush a parsed SSH config block into an imported host entry.
+fn flush_host(
+    alias: Option<String>,
+    user: Option<String>,
+    hostname: Option<String>,
+    port: u16,
+    key_path: Option<String>,
+    existing_hosts: &std::collections::HashSet<&str>,
+    existing_names: &std::collections::HashSet<String>,
+    imported: &mut Vec<RemoteHost>,
+) {
+    if let (Some(alias), Some(user), Some(hostname)) = (alias, user, hostname) {
+        if !existing_hosts.contains(hostname.as_str())
+            && !existing_names.contains(&alias.to_lowercase())
+        {
+            imported.push(RemoteHost {
+                id: crate::model::app_config::new_uuid(),
+                name: alias,
+                user,
+                host: hostname,
+                port,
+                key_path,
+                last_connected: None,
+                tags: vec!["imported".into()],
+            });
+        }
+    }
+}
+
 /// Parse `~/.ssh/config` and return any host entries not already present in
 /// the saved hosts (by hostname match). This is read-only — imported hosts
 /// are suggestions, not synced back.
@@ -154,6 +183,11 @@ pub fn import_ssh_config(hosts: &RemoteHosts) -> Vec<RemoteHost> {
         Err(_) => return Vec::new(),
     };
 
+    parse_ssh_config_text(&text, hosts)
+}
+
+/// Parse SSH config text and return imported hosts not already present.
+fn parse_ssh_config_text(text: &str, hosts: &RemoteHosts) -> Vec<RemoteHost> {
     let existing_hosts: std::collections::HashSet<&str> =
         hosts.hosts.iter().map(|h| h.host.as_str()).collect();
     let existing_names: std::collections::HashSet<String> =
@@ -164,31 +198,24 @@ pub fn import_ssh_config(hosts: &RemoteHosts) -> Vec<RemoteHost> {
     let mut current_user: Option<String> = None;
     let mut current_hostname: Option<String> = None;
     let mut current_port: u16 = 22;
+    let mut current_key_path: Option<String> = None;
 
     for line in text.lines() {
         let trimmed = line.trim();
 
         // Blank line or comment → flush the current block.
         if trimmed.is_empty() || trimmed.starts_with('#') {
-            if let (Some(alias), Some(user), Some(hostname)) =
-                (current_host.take(), current_user.take(), current_hostname.take())
-            {
-                if !existing_hosts.contains(hostname.as_str())
-                    && !existing_names.contains(&alias.to_lowercase())
-                {
-                    imported.push(RemoteHost {
-                        id: crate::model::app_config::new_uuid(),
-                        name: alias,
-                        user,
-                        host: hostname,
-                        port: current_port,
-                        key_path: None,
-                        last_connected: None,
-                        tags: vec!["imported".into()],
-                    });
-                }
-                current_port = 22;
-            }
+            flush_host(
+                current_host.take(),
+                current_user.take(),
+                current_hostname.take(),
+                current_port,
+                current_key_path.take(),
+                &existing_hosts,
+                &existing_names,
+                &mut imported,
+            );
+            current_port = 22;
             continue;
         }
 
@@ -201,25 +228,18 @@ pub fn import_ssh_config(hosts: &RemoteHosts) -> Vec<RemoteHost> {
         match key.as_str() {
             "host" => {
                 // Flush previous block.
-                if let (Some(alias), Some(user), Some(hostname)) =
-                    (current_host.take(), current_user.take(), current_hostname.take())
-                {
-                    if !existing_hosts.contains(hostname.as_str())
-                        && !existing_names.contains(&alias.to_lowercase())
-                    {
-                        imported.push(RemoteHost {
-                            id: crate::model::app_config::new_uuid(),
-                            name: alias,
-                            user,
-                            host: hostname,
-                            port: current_port,
-                            key_path: None,
-                            last_connected: None,
-                            tags: vec!["imported".into()],
-                        });
-                    }
-                    current_port = 22;
-                }
+                flush_host(
+                    current_host.take(),
+                    current_user.take(),
+                    current_hostname.take(),
+                    current_port,
+                    current_key_path.take(),
+                    &existing_hosts,
+                    &existing_names,
+                    &mut imported,
+                );
+                current_port = 22;
+
                 // Skip wildcard/negated patterns.
                 if value.starts_with('*') || value.starts_with('!') {
                     current_host = None;
@@ -234,37 +254,35 @@ pub fn import_ssh_config(hosts: &RemoteHosts) -> Vec<RemoteHost> {
                     current_port = p;
                 }
             }
-            "identityfile" if current_host.is_some() => {
-                // Store for the CURRENT block (best-effort — if no block
-                // is active, ignore).
-                // We can't set key_path here because the RemoteHost
-                // isn't built yet; stash it alongside. For simplicity
-                // in v1 we'll handle this in the flush above.
-                // TODO: carry key_path through the block parser
+            "identityfile" if current_host.is_some() && current_key_path.is_none() => {
+                let path = value.trim_matches(|c| c == '"' || c == '\'');
+                // Expand leading ~/ with home_dir
+                let expanded = if let Some(rest) = path.strip_prefix("~/") {
+                    if let Some(home) = dirs::home_dir() {
+                        home.join(rest).to_string_lossy().into_owned()
+                    } else {
+                        path.to_string()
+                    }
+                } else {
+                    path.to_string()
+                };
+                current_key_path = Some(expanded);
             }
             _ => {}
         }
     }
 
     // Flush the final block.
-    if let (Some(alias), Some(user), Some(hostname)) =
-        (current_host, current_user, current_hostname)
-    {
-        if !existing_hosts.contains(hostname.as_str())
-            && !existing_names.contains(&alias.to_lowercase())
-        {
-            imported.push(RemoteHost {
-                id: crate::model::app_config::new_uuid(),
-                name: alias,
-                user,
-                host: hostname,
-                port: current_port,
-                key_path: None,
-                last_connected: None,
-                tags: vec!["imported".into()],
-            });
-        }
-    }
+    flush_host(
+        current_host,
+        current_user,
+        current_hostname,
+        current_port,
+        current_key_path,
+        &existing_hosts,
+        &existing_names,
+        &mut imported,
+    );
 
     imported
 }
@@ -273,6 +291,11 @@ pub fn import_ssh_config(hosts: &RemoteHosts) -> Vec<RemoteHost> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    fn import_ssh_config_text(text: &str) -> Vec<RemoteHost> {
+        let existing = RemoteHosts::default();
+        parse_ssh_config_text(text, &existing)
+    }
 
     #[test]
     fn upsert_inserts_new_host() {
@@ -399,5 +422,70 @@ mod tests {
         assert_eq!(back.hosts.len(), 1);
         assert_eq!(back.hosts[0].id, "rt");
         assert_eq!(back.hosts[0].key_path, Some("/home/user/.ssh/id_ed25519".into()));
+    }
+
+    #[test]
+    fn ssh_config_identity_file() {
+        let text = "Host myserver\n  User deploy\n  HostName 10.0.0.5\n  IdentityFile ~/.ssh/id_ed25519\n  Port 2222\n";
+        let imported = import_ssh_config_text(text);
+        assert_eq!(imported.len(), 1);
+        assert_eq!(
+            imported[0].key_path,
+            Some(
+                dirs::home_dir()
+                    .unwrap()
+                    .join(".ssh/id_ed25519")
+                    .to_string_lossy()
+                    .into_owned()
+            )
+        );
+        assert_eq!(imported[0].port, 2222);
+    }
+
+    #[test]
+    fn ssh_config_identity_file_quoted() {
+        let text = "Host srv\n  User u\n  HostName h\n  IdentityFile \"/path/to/key\"\n";
+        let imported = import_ssh_config_text(text);
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].key_path, Some("/path/to/key".to_string()));
+    }
+
+    #[test]
+    fn ssh_config_wildcard_skipped() {
+        let text = "Host *\n  User u\n  HostName h\n  IdentityFile ~/.ssh/id\n\nHost real\n  User r\n  HostName h2\n";
+        let imported = import_ssh_config_text(text);
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].name, "real");
+        assert!(imported[0].key_path.is_none()); // wildcard block ignored
+    }
+
+    #[test]
+    fn ssh_config_key_path_resets_between_blocks() {
+        let text = "Host a\n  User u1\n  HostName h1\n  IdentityFile /key/a\n\nHost b\n  User u2\n  HostName h2\n";
+        let imported = import_ssh_config_text(text);
+        assert_eq!(imported.len(), 2);
+        assert_eq!(imported[0].key_path, Some("/key/a".to_string()));
+        assert!(imported[1].key_path.is_none()); // key_path should NOT leak from block a
+    }
+
+    #[test]
+    fn ssh_config_first_identityfile_wins() {
+        let text = "Host srv\n  User u\n  HostName h\n  IdentityFile /first\n  IdentityFile /second\n";
+        let imported = import_ssh_config_text(text);
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].key_path, Some("/first".to_string()));
+    }
+
+    #[test]
+    fn ssh_config_home_expansion() {
+        let text = "Host srv\n  User u\n  HostName h\n  IdentityFile ~/mykey\n";
+        let imported = import_ssh_config_text(text);
+        assert_eq!(imported.len(), 1);
+        let expected = dirs::home_dir()
+            .unwrap()
+            .join("mykey")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(imported[0].key_path, Some(expected));
     }
 }
