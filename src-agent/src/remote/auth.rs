@@ -14,6 +14,14 @@ use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
 use super::RemoteTarget;
 
+/// Result of probing SSH authentication for a target.
+pub(crate) enum AuthProbe {
+    /// Key-based auth works; no password needed.
+    KeyReady,
+    /// Password required for authentication.
+    PasswordRequired,
+}
+
 /// Cached SSH password for the session lifetime.
 ///
 /// Holds the password in memory and manages the temporary askpass script.
@@ -27,26 +35,57 @@ impl SshAuth {
     /// Create a new auth context with the given password.
     ///
     /// Writes the askpass helper script to a temporary file with restrictive
-    /// permissions (0o600). The script validates prompt shapes before
-    /// answering to prevent host-key verification loops.
+    /// permissions (0o700). Uses `create_new` to avoid TOCTOU races and
+    /// retries with an incrementing attempt counter to handle collisions.
     pub fn new(password: String) -> Result<Self> {
-        let pid = std::process::id();
-        let askpass_path = PathBuf::from(format!("/tmp/koma-askpass-{pid}"));
+        use std::io::Write;
 
-        let script = askpass_script_content(&password);
-        std::fs::write(&askpass_path, script)?;
-
-        // Owner-only read+execute (0o600 → 0o700 after we need +x for exec).
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&askpass_path, std::fs::Permissions::from_mode(0o700))?;
-        }
+        // Create a unique temporary file with restrictive permissions.
+        // Use create_new to avoid TOCTOU races.
+        let dir = std::env::temp_dir();
+        let mut attempt = 0;
+        let askpass_path = loop {
+            let name = format!("koma-askpass-{}-{}", std::process::id(), attempt);
+            let path = dir.join(&name);
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut f) => {
+                    // Write the script content.
+                    let script = askpass_script_content(&password);
+                    f.write_all(script.as_bytes())?;
+                    // Set permissions to owner-only read+execute.
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::set_permissions(
+                            &path,
+                            std::fs::Permissions::from_mode(0o700),
+                        )?;
+                    }
+                    break path;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    attempt += 1;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        };
 
         Ok(Self {
             password,
             askpass_path: Some(askpass_path),
         })
+    }
+
+    /// Create auth from a pre-supplied password (no terminal prompt needed).
+    ///
+    /// Used by GUI auth flow and TUI password input.
+    pub fn from_password(password: String) -> Result<Self> {
+        Self::new(password)
     }
 
     /// Apply SSH_ASKPASS env vars to a `std::process::Command`.
@@ -69,7 +108,15 @@ impl SshAuth {
             cmd.env("DISPLAY", ":0");
         }
     }
+}
 
+impl std::fmt::Debug for SshAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshAuth")
+            .field("has_password", &true)
+            .field("has_askpass", &self.askpass_path.is_some())
+            .finish()
+    }
 }
 
 impl Drop for SshAuth {
@@ -94,8 +141,9 @@ impl Drop for SshAuth {
 /// Probe whether key-based SSH auth works for the given target.
 ///
 /// Runs a quick `ssh -o BatchMode=yes ... echo KEY_AUTH_OK` command.
-/// Returns `true` if exit code is 0 (key auth succeeded).
-pub(crate) fn probe_key_auth(target: &RemoteTarget) -> bool {
+/// Returns `AuthProbe::KeyReady` if exit code is 0 (key auth succeeded),
+/// `AuthProbe::PasswordRequired` otherwise.
+pub(crate) fn probe_key_auth(target: &RemoteTarget) -> AuthProbe {
     let mut cmd = StdCommand::new("ssh");
     cmd.arg("-o")
         .arg("BatchMode=yes")
@@ -119,9 +167,10 @@ pub(crate) fn probe_key_auth(target: &RemoteTarget) -> bool {
     cmd.stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
 
-    cmd.status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    match cmd.status() {
+        Ok(s) if s.success() => AuthProbe::KeyReady,
+        _ => AuthProbe::PasswordRequired,
+    }
 }
 
 /// Prompt for a password on the terminal without echo.
@@ -129,6 +178,15 @@ pub(crate) fn probe_key_auth(target: &RemoteTarget) -> bool {
 /// Uses crossterm raw mode to disable echo, reads characters one at a time,
 /// and prints `*` for each typed character. Returns the password on Enter.
 pub(crate) fn prompt_password(user: &str, host: &str) -> Result<String> {
+    // If KOMA_GUI is set, we're running under the GUI host — password
+    // auth must go through GUI IPC, not terminal stderr. Return an error
+    // so the caller uses the IPC password channel instead.
+    if std::env::var("KOMA_GUI").is_ok() {
+        anyhow::bail!(
+            "password auth under GUI must use SubmitRemotePassword, not prompt_password"
+        );
+    }
+
     eprint!("{user}@{host}'s password: ");
     io::stderr().flush()?;
 
@@ -217,5 +275,44 @@ mod tests {
         let script = askpass_script_content("it's-a-secret");
         // The escaped password should handle single quotes.
         assert!(script.contains("it'\\''s-a-secret"));
+    }
+
+    #[test]
+    fn ssh_auth_new_creates_unique_files() {
+        let auth1 = SshAuth::new("pass1".to_string()).unwrap();
+        let auth2 = SshAuth::new("pass2".to_string()).unwrap();
+        // Both should have different askpass paths.
+        assert_ne!(auth1.askpass_path, auth2.askpass_path);
+        // Both files should exist.
+        assert!(auth1.askpass_path.as_ref().unwrap().exists());
+        assert!(auth2.askpass_path.as_ref().unwrap().exists());
+    }
+
+    #[test]
+    fn ssh_auth_from_password_works() {
+        let auth = SshAuth::from_password("secret".to_string()).unwrap();
+        assert!(auth.askpass_path.is_some());
+        assert!(auth.askpass_path.as_ref().unwrap().exists());
+    }
+
+    #[test]
+    fn ssh_auth_debug_hides_password() {
+        let auth = SshAuth::new("topsecret".to_string()).unwrap();
+        let debug = format!("{auth:?}");
+        assert!(!debug.contains("topsecret"), "Debug output must not contain the password");
+        assert!(debug.contains("has_password: true"));
+        assert!(debug.contains("has_askpass: true"));
+    }
+
+    #[test]
+    fn ssh_auth_drop_cleans_up() {
+        let path;
+        {
+            let auth = SshAuth::new("cleanup-test".to_string()).unwrap();
+            path = auth.askpass_path.clone().unwrap();
+            assert!(path.exists());
+        }
+        // After drop, the file should be deleted.
+        assert!(!path.exists());
     }
 }

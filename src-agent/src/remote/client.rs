@@ -4,7 +4,7 @@ use anyhow::Result;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use super::auth::{self, SshAuth};
+use super::auth::{self, AuthProbe, SshAuth};
 use super::{bootstrap, ssh, RemoteTarget};
 use crate::app::runtime::client::remote::connect_remote;
 use crate::app::runtime::terminal::TerminalGuard;
@@ -25,7 +25,13 @@ pub(crate) fn run_remote_client(
     let handle = rt.handle().clone();
 
     // Connect the client bridge over SSH stdin/stdout.
-    let connection = connect_remote(&handle, session.stdout, session.stdin)?;
+    let connection = connect_remote(
+        &handle,
+        session.stdout,
+        session.stdin,
+        target.host.clone(),
+        session_id.clone(),
+    )?;
 
     // Touch last_connected for the matching host (best-effort).
     {
@@ -87,12 +93,13 @@ pub(crate) fn run_remote_client_target(
 
     // Probe whether key-based auth works.
     eprintln!("Connecting to {}@{}...", target.user, target.host);
-    let ssh_auth = if auth::probe_key_auth(&target) {
-        None
-    } else {
-        eprintln!("Key-based authentication failed. Password required.");
-        let password = auth::prompt_password(&target.user, &target.host)?;
-        Some(SshAuth::new(password)?)
+    let ssh_auth = match auth::probe_key_auth(&target) {
+        AuthProbe::KeyReady => None,
+        AuthProbe::PasswordRequired => {
+            eprintln!("Key-based authentication failed. Password required.");
+            let password = auth::prompt_password(&target.user, &target.host)?;
+            Some(SshAuth::new(password)?)
+        }
     };
 
     // Bootstrap: check/install koma on remote (uses same auth).
