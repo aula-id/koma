@@ -33,7 +33,8 @@ use super::host_config::{apply_swapper_config_mutation, push_swapper_config};
 use super::project::push_hub;
 use super::push_proto::{
     push_agents_values, push_analytics, push_file_diff, push_model_list, push_oauth_state,
-    push_route_list, push_settings_values, push_switching, push_usage_preview,
+    push_remote_state, push_route_list, push_settings_values, push_switching,
+    push_usage_preview,
 };
 use super::store_host;
 use super::swapper::build_local_hub;
@@ -980,6 +981,15 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 if let Ok(json) = serde_json::to_string(&envelope) {
                     push(json);
                 }
+            }
+            // ─── Remote host connect/disconnect (swapper — not available) ───
+            // These need the full push_loop infrastructure; push a graceful
+            // error state so the GUI never hangs.
+            Ok(HostCtl::ConnectRemote { host_id: _ })
+            | Ok(HostCtl::DisconnectRemote)
+            | Ok(HostCtl::SubmitRemotePassword { password: _ })
+            | Ok(HostCtl::CancelRemoteConnect) => {
+                push_remote_state(push, "error", None, None, None, None, Some("remote connect unavailable in session picker"));
             }
             // The ipc side hung up (window gone) — leave the host.
             Err(_) => return HostStep::Done,

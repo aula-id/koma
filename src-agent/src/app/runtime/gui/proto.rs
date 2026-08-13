@@ -976,6 +976,12 @@ pub(super) enum GuiReq {
         #[serde(rename = "hostId")]
         host_id: String,
     },
+    /// Submit a password for remote host authentication.
+    SubmitRemotePassword {
+        password: String,
+    },
+    /// Cancel an in-progress remote connection.
+    CancelRemoteConnect,
 
     /// Import-graph visualization request. `path` is the focal file (None = overview);
     /// `depth` is traversal depth (1–3, clamped); `direction` is

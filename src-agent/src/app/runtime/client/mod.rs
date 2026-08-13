@@ -74,6 +74,7 @@ mod push_loop;
 mod push_proto;
 mod push_proto_git;
 mod push_rows;
+mod remote_ctl;
 mod render;
 pub(crate) mod remote;
 mod shadow;
@@ -685,6 +686,16 @@ pub(super) enum HostCtl {
     },
     /// Delete a remote host by id and push the updated list.
     DeleteRemoteHost { id: String },
+
+    // ─── Remote host connect/disconnect ──────────────────────────────────────
+    /// Connect to a remote host via SSH (off-thread, blocking).
+    ConnectRemote { host_id: String },
+    /// Disconnect from the current remote host.
+    DisconnectRemote,
+    /// Submit a password for in-progress remote host authentication.
+    SubmitRemotePassword { password: String },
+    /// Cancel an in-progress remote connect attempt.
+    CancelRemoteConnect,
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.

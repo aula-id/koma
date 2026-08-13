@@ -1374,6 +1374,19 @@ export type PushEnvelope =
   // remote hosts. REPLACED wholesale on each push, never accumulated.
   | { k: 'RemoteHosts'; hosts: RemoteHost[] }
 
+  // Remote connection state pushed to React. State transitions during the
+  // SSH connect sequence: disconnected → resolving → auth_required |
+  // bootstrapping → connecting → connected | error.
+  | {
+      k: 'RemoteState'
+      state: string
+      hostId?: string | null
+      user?: string | null
+      host?: string | null
+      sessionId?: string | null
+      error?: string | null
+    }
+
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
 
@@ -1951,6 +1964,16 @@ type KomaState = {
   coding: CodingSlice
   // Saved remote hosts (GUI remote panel). REPLACED wholesale on each push.
   remoteHosts: RemoteHost[]
+  // Remote connection state (SSH connect/disconnect lifecycle). REPLACED
+  // wholesale on each push; drives the remote panel's connect/disconnect UI.
+  remoteState: {
+    state: string
+    hostId: string | null
+    user: string | null
+    host: string | null
+    sessionId: string | null
+    error: string | null
+  }
   // Open (or focus) the singleton commit-graph tab (id 'graph'). The GraphTab
   // itself fires refreshGraph on mount, so opening is enough. Mirrors
   // openSettingsTab's dedupe + activate shape.
@@ -2637,6 +2660,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   importGraph: initialImportGraph,
   coding: initialCoding,
   remoteHosts: [],
+  remoteState: { state: 'disconnected', hostId: null, user: null, host: null, sessionId: null, error: null },
   remoteBusy: null,
   commitDraft: '',
   keys: initialKeys,
@@ -4014,6 +4038,18 @@ export const useKoma = create<KomaState>((set, get) => ({
       }
       case 'RemoteHosts':
         set(() => ({ remoteHosts: env.hosts }))
+        break
+      case 'RemoteState':
+        set(() => ({
+          remoteState: {
+            state: env.state,
+            hostId: env.hostId ?? null,
+            user: env.user ?? null,
+            host: env.host ?? null,
+            sessionId: env.sessionId ?? null,
+            error: env.error ?? null,
+          },
+        }))
         break
     }
   },
