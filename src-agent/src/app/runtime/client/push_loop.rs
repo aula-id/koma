@@ -306,6 +306,7 @@ pub(super) fn push_loop(
         let mut select_requested = false;
         let mut open_swapper_requested = false;
         let mut new_session_requested: Option<bool> = None;
+        let mut connect_remote_requested: Option<String> = None;
         for frame in prebuffered {
             // Cache the config off any prebuffered full snapshot (normally none — Hello
             // is first, so the attach Snapshot lands in the live drain — but stay safe).
@@ -322,6 +323,7 @@ pub(super) fn push_loop(
                 &mut select_requested,
                 &mut open_swapper_requested,
                 &mut new_session_requested,
+                &mut connect_remote_requested,
                 req_tx,
             );
         }
@@ -995,7 +997,7 @@ pub(super) fn push_loop(
                     }
                     // Push "connecting" immediately — the worker will follow
                     // with "connected" or "error" once the SSH handshake completes.
-                    push_remote_state(push, "connecting", None, None, None, None, None);
+                    push_remote_state(push, "connecting", None, None, None, None, None, &[]);
                 }
                 Ok(super::HostCtl::CancelRemoteConnect) => {
                     // Cancel is equivalent to disconnect for v1.
@@ -1015,6 +1017,7 @@ pub(super) fn push_loop(
         let mut select_requested = false;
         let mut open_swapper_requested = false;
         let mut new_session_requested: Option<bool> = None;
+        let mut connect_remote_requested: Option<String> = None;
         loop {
             match frame_rx.try_recv() {
                 Ok(frame) => {
@@ -1040,6 +1043,7 @@ pub(super) fn push_loop(
                         &mut select_requested,
                         &mut open_swapper_requested,
                         &mut new_session_requested,
+                        &mut connect_remote_requested,
                         req_tx,
                     );
                 }
@@ -1162,6 +1166,7 @@ pub(super) fn push_loop(
                 update.host.as_deref(),
                 update.session_id.as_deref(),
                 update.error.as_deref(),
+                &update.sessions,
             );
         }
 

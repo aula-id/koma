@@ -193,6 +193,9 @@ pub struct Opts {
     pub remote_key: Option<String>,
     /// SSH port for remote connections (`--port <n>`).
     pub remote_port: Option<u16>,
+    /// When `true`, list remote koma sessions as JSON and exit
+    /// (`koma sessions` positional verb, hidden internal subcommand).
+    pub sessions: bool,
 }
 
 /// Print `koma <version>` to STDOUT and return the process exit code (`0`).
@@ -315,6 +318,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
         Some("update") => opts.update = true,
         Some("gui") => opts.gui = true,
         Some("server") => opts.server = true,
+        Some("sessions") => opts.sessions = true,
         Some("remote") => {
             // `remote <user@host>` — the next positional is the target.
             if let Some(target) = positional.next() {

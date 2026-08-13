@@ -735,7 +735,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
     // Terminal setup — identical to the local TUI (`run`). Guard first so a failure
     // anywhere after still restores the terminal. The guard persists ACROSS the loop so a
     // detach-then-swap re-attaches without re-entering the alt-screen.
-    let _guard = TerminalGuard::enter()?;
+    let mut _guard = TerminalGuard::enter()?;
     // Enable mouse capture so scroll events arrive as Event::Mouse. Auto resolves
     // to ON (the default). If the session's mouse_capture is Off, the first
     // Snapshot in render_loop will re-apply it via a one-shot sync.
@@ -862,6 +862,43 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                             }
                         }
                     }
+                    // `/remote`: DETACH from this daemon (leaving it cooking) and connect to
+                    // a remote host via SSH. The remote client owns its own full terminal
+                    // lifecycle (enter alt-screen, render, exit alt-screen), so we drop OUR
+                    // terminal guard before the call and re-enter after. On return, go back
+                    // to the local swapper so the user can pick another session or reconnect.
+                    Ok(render::ClientTransition::ConnectRemote { target }) => {
+                        teardown_connection(&handle, conn);
+
+                        // Drop the terminal + guard to restore the normal terminal.
+                        drop(terminal);
+                        drop(_guard);
+
+                        let result = crate::remote::client::run_remote_client_target(
+                            &target, None, None,
+                        );
+
+                        if let Err(e) = &result {
+                            crate::model::store::append_global_error_log(
+                                "client",
+                                &format!("remote connection failed: {e:#}"),
+                            );
+                        }
+
+                        // Re-enter the terminal for the local swapper/attach loop.
+                        _guard = TerminalGuard::enter()?;
+                        crate::app::runtime::actions::apply_mouse_capture(
+                            crate::model::settings::MouseCapture::Auto,
+                        );
+                        let backend = CrosstermBackend::new(stdout());
+                        terminal = Terminal::new(backend)?;
+                        terminal.clear()?;
+
+                        // Return to the swapper so the user can pick another session
+                        // or reconnect locally.
+                        prev_session = current_session_id.take();
+                        ClientState::Swapper(build_local_hub(prev_session.as_deref()))
+                    }
                     // A render error ends the loop like an exit, but the error is carried
                     // out and returned AFTER this connection's teardown so the daemon is
                     // never orphaned by an early return.
@@ -954,7 +991,8 @@ pub(crate) fn run_remote_render_loop(
     match transition {
         Ok(render::ClientTransition::Exit { .. })
         | Ok(render::ClientTransition::OpenSwapper)
-        | Ok(render::ClientTransition::NewSession { .. }) => {
+        | Ok(render::ClientTransition::NewSession { .. })
+        | Ok(render::ClientTransition::ConnectRemote { .. }) => {
             teardown_connection(handle, conn);
         }
         Err(e) => {

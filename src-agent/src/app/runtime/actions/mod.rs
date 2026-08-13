@@ -503,6 +503,12 @@ pub(in crate::app::runtime) fn apply_action(
             if let Some(host) = crate::remote::hosts::host_by_id(&hosts, &host_id) {
                 let target = host.address();
                 *state.mode_mut() = crate::app::mode::Mode::Chat;
+                // Set both signals:
+                // - `connect_remote_pending` for the daemon hub to drain into a
+                //   `DaemonEvent::ConnectRemote` to the controller thin-client.
+                // - `connect_remote_target` for the standalone lifecycle which reads it
+                //   directly (unchanged).
+                state.rest.connect_remote_pending = Some(target.clone());
                 state.rest.connect_remote_target = Some(target);
             }
         }

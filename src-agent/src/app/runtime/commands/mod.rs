@@ -81,6 +81,8 @@ pub(super) fn apply_slash(
                 )));
             } else {
                 // Ad-hoc: /remote user@host — set the break-out signal directly.
+                // Both signals: pending for daemon→thin-client, target for standalone.
+                state.rest.connect_remote_pending = Some(args.to_string());
                 state.rest.connect_remote_target = Some(args.to_string());
             }
         }

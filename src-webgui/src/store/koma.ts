@@ -1385,6 +1385,7 @@ export type PushEnvelope =
       host?: string | null
       sessionId?: string | null
       error?: string | null
+      sessions?: Array<{ sessionId: string; name: string; working: boolean; isForeground: boolean }>
     }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
@@ -1973,6 +1974,7 @@ type KomaState = {
     host: string | null
     sessionId: string | null
     error: string | null
+    sessions: Array<{ sessionId: string; name: string; working: boolean; isForeground: boolean }>
   }
   // Open (or focus) the singleton commit-graph tab (id 'graph'). The GraphTab
   // itself fires refreshGraph on mount, so opening is enough. Mirrors
@@ -2660,7 +2662,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   importGraph: initialImportGraph,
   coding: initialCoding,
   remoteHosts: [],
-  remoteState: { state: 'disconnected', hostId: null, user: null, host: null, sessionId: null, error: null },
+  remoteState: { state: 'disconnected', hostId: null, user: null, host: null, sessionId: null, error: null, sessions: [] },
   remoteBusy: null,
   commitDraft: '',
   keys: initialKeys,
@@ -4048,6 +4050,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             host: env.host ?? null,
             sessionId: env.sessionId ?? null,
             error: env.error ?? null,
+            sessions: env.sessions ?? [],
           },
         }))
         break

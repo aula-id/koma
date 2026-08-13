@@ -39,6 +39,7 @@ pub(super) struct RemoteStateUpdate {
     pub host: Option<String>,
     pub session_id: Option<String>,
     pub error: Option<String>,
+    pub sessions: Vec<serde_json::Value>,
 }
 
 /// Spawn the remote connect worker thread. Called from the push_loop's
@@ -84,7 +85,8 @@ fn remote_connect_worker(
               user: Option<&str>,
               host: Option<&str>,
               session_id: Option<&str>,
-              error: Option<&str>| {
+              error: Option<&str>,
+              sessions: Vec<serde_json::Value>| {
             let _ = state_tx.send(RemoteStateUpdate {
                 state: state.to_string(),
                 host_id: Some(host_id.clone()),
@@ -92,6 +94,7 @@ fn remote_connect_worker(
                 host: host.map(str::to_string),
                 session_id: session_id.map(str::to_string),
                 error: error.map(str::to_string),
+                sessions,
             });
         }
     };
@@ -101,7 +104,7 @@ fn remote_connect_worker(
     let host_data = match crate::remote::hosts::host_by_id(&hosts, &host_id) {
         Some(h) => h.clone(),
         None => {
-            push_state("error", None, None, None, Some("host not found"));
+            push_state("error", None, None, None, Some("host not found"), Vec::new());
             return;
         }
     };
@@ -121,7 +124,7 @@ fn remote_connect_worker(
         key: host_data.key_path.clone(),
     };
 
-    push_state("resolving", Some(&user_str), Some(&host_str), None, None);
+    push_state("resolving", Some(&user_str), Some(&host_str), None, None, Vec::new());
 
     // 2. Probe key-based auth.
     let auth = match auth::probe_key_auth(&target) {
@@ -137,6 +140,7 @@ fn remote_connect_worker(
                 Some(&host_str),
                 None,
                 None,
+                Vec::new(),
             );
 
             // Block until a password arrives or the channel closes.
@@ -155,6 +159,7 @@ fn remote_connect_worker(
                                 Some(&host_str),
                                 None,
                                 Some(&format!("auth setup failed: {e:#}")),
+                                Vec::new(),
                             );
                             return;
                         }
@@ -167,6 +172,7 @@ fn remote_connect_worker(
                         Some(&host_str),
                         None,
                         Some("password input cancelled"),
+                        Vec::new(),
                     );
                     return;
                 }
@@ -175,7 +181,7 @@ fn remote_connect_worker(
     };
 
     // 4. Bootstrap: check if koma is installed, install if not.
-    push_state("bootstrapping", Some(&user_str), Some(&host_str), None, None);
+    push_state("bootstrapping", Some(&user_str), Some(&host_str), None, None, Vec::new());
 
     let auth_ref = auth.as_ref();
     let installed = match bootstrap::is_koma_installed(&target, auth_ref) {
@@ -187,6 +193,7 @@ fn remote_connect_worker(
                 Some(&host_str),
                 None,
                 Some(&format!("bootstrap check failed: {e:#}")),
+                Vec::new(),
             );
             return;
         }
@@ -200,6 +207,7 @@ fn remote_connect_worker(
                 Some(&host_str),
                 None,
                 Some(&format!("koma install failed: {e:#}")),
+                Vec::new(),
             );
             return;
         }
@@ -207,7 +215,7 @@ fn remote_connect_worker(
 
     // 5. SSH connect and exec `koma server --session <id>`.
     let session_id = uuid::Uuid::new_v4().to_string();
-    push_state("connecting", Some(&user_str), Some(&host_str), None, None);
+    push_state("connecting", Some(&user_str), Some(&host_str), None, None, Vec::new());
 
     let mut ssh_session = match ssh::connect(&target, &session_id, auth_ref) {
         Ok(s) => s,
@@ -218,6 +226,7 @@ fn remote_connect_worker(
                 Some(&host_str),
                 None,
                 Some(&format!("ssh connect failed: {e:#}")),
+                Vec::new(),
             );
             return;
         }
@@ -233,6 +242,7 @@ fn remote_connect_worker(
                 Some(&host_str),
                 None,
                 Some(&format!("runtime init failed: {e:#}")),
+                Vec::new(),
             );
             // Can't block_on without the runtime; just kill the child directly.
             // best-effort: the OS will reap it when the process exits.
@@ -257,19 +267,35 @@ fn remote_connect_worker(
                 Some(&host_str),
                 None,
                 Some(&format!("bridge failed: {e:#}")),
+                Vec::new(),
             );
             let _ = rt.block_on(async { ssh_session.child.kill().await });
             return;
         }
     };
 
-    // 7. Push connected state.
+    // 7. Push connected state + list existing sessions on the remote host.
+    let sessions = match crate::remote::sessions::list_sessions_over_ssh(&target, auth_ref) {
+        Ok(s) => s
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "sessionId": s.session_id,
+                    "name": s.name,
+                    "working": s.working,
+                    "isForeground": s.is_foreground
+                })
+            })
+            .collect(),
+        Err(_) => Vec::new(), // non-fatal
+    };
     push_state(
         "connected",
         Some(&user_str),
         Some(&host_str),
         Some(&session_id),
         None,
+        sessions,
     );
 
     // 8. Touch last_connected.
@@ -300,6 +326,7 @@ fn remote_connect_worker(
         Some(&host_str),
         None,
         None,
+        Vec::new(),
     );
 
     // Clear the disconnect sender from shared state.

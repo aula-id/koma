@@ -692,7 +692,8 @@ pub(super) enum PushEnvelope {
     /// Remote connection state pushed to React. `state` is one of:
     /// `"disconnected"`, `"resolving"`, `"auth_required"`, `"bootstrapping"`,
     /// `"connecting"`, `"connected"`, `"error"`. Carries host identity + optional
-    /// `sessionId` (set once connected) + optional `error` (set on `"error"`).
+    /// `sessionId` (set once connected) + optional `error` (set on `"error"`) +
+    /// optional `sessions` (list of live remote sessions).
     #[serde(rename_all = "camelCase")]
     RemoteState {
         state: String,
@@ -706,6 +707,8 @@ pub(super) enum PushEnvelope {
         session_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        sessions: Vec<serde_json::Value>,
     },
 }
 
@@ -1026,6 +1029,7 @@ pub(super) fn push_remote_state(
     host: Option<&str>,
     session_id: Option<&str>,
     error: Option<&str>,
+    sessions: &[serde_json::Value],
 ) {
     super::render::emit(
         push,
@@ -1036,6 +1040,7 @@ pub(super) fn push_remote_state(
             host: host.map(str::to_string),
             session_id: session_id.map(str::to_string),
             error: error.map(str::to_string),
+            sessions: sessions.to_vec(),
         },
     );
 }

@@ -989,7 +989,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             | Ok(HostCtl::DisconnectRemote)
             | Ok(HostCtl::SubmitRemotePassword { password: _ })
             | Ok(HostCtl::CancelRemoteConnect) => {
-                push_remote_state(push, "error", None, None, None, None, Some("remote connect unavailable in session picker"));
+                push_remote_state(push, "error", None, None, None, None, Some("remote connect unavailable in session picker"), &[]);
             }
             // The ipc side hung up (window gone) — leave the host.
             Err(_) => return HostStep::Done,

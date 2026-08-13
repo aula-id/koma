@@ -388,6 +388,17 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     control-frame seam BEFORE `stream_deltas`.
         hub.drain_new_pending(state);
 
+        // 3a-pre3b. `/remote` hand-off: `Action::RemoteConnect` set
+        //     `state.rest.connect_remote_pending = Some(target)` INSTEAD of relying on the
+        //     thin-client seeing the transient `connect_remote_target` (which is never
+        //     propagated through the snapshot/delta protocol). Mirror `/resume` / `/new`:
+        //     signal the CONTROLLER client to connect to a remote host via SSH via a
+        //     one-shot `DaemonEvent::ConnectRemote { target }`, leaving the daemon's own
+        //     mode untouched (it stays in Chat, cooking). Consume the flag here, right
+        //     after `drain_new_pending`, so it rides the same control-frame seam BEFORE
+        //     `stream_deltas`.
+        hub.drain_connect_remote_pending(state);
+
         // 3a-pre4. Extension `sessions.switch` hand-off (W7): the grant broker set
         //     `state.rest.ext_switch_pending = Some(uuid)` when a `sessions.switch` targeted a
         //     session THIS daemon does not own (a live LOCAL target took the in-daemon
