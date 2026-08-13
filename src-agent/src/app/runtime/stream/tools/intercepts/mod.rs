@@ -47,7 +47,7 @@ pub(super) use plan::{
     build_convo_context, intercept_checklist_plan, intercept_plan_enter,
     intercept_plan_readonly_gate, intercept_plan_ready,
 };
-pub(super) use screenshot::intercept_load_screenshot;
+pub(super) use screenshot::{intercept_load_image, intercept_load_screenshot};
 pub(super) use sdlc::{
     intercept_checklist_sdlc, intercept_mission_integrate, intercept_mission_prepare,
     intercept_mission_ready, intercept_mission_verify, intercept_sdlc_assess_gate,

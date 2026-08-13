@@ -449,6 +449,13 @@ pub(crate) fn process_tools(
                 InterceptFlow::Fallthrough => {}
             }
         }
+        if call.function.name == "load_image" {
+            match intercepts::intercept_load_image(state, sess_idx, &call) {
+                InterceptFlow::Continue => continue,
+                InterceptFlow::Return => return,
+                InterceptFlow::Fallthrough => {}
+            }
+        }
         // Intercept `load_screenshot` before the generic dispatch: the tool validates
         // + resolves, but the actual image-attachment injection into the conversation
         // must happen here because `Tool::run()` cannot produce image-bearing results.
