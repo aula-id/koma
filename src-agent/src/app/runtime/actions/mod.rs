@@ -507,12 +507,43 @@ pub(in crate::app::runtime) fn apply_action(
             }
         }
 
-        Action::RemoteAddHost | Action::RemoteEditHost(_) => {
-            state.rest.fg_mut().status = "Use the GUI panel (/remote) to add/edit hosts".into();
+        Action::RemoteAddHost => {
+            if let crate::app::mode::Mode::Remote(ref mut remote) = state.mode_mut() {
+                remote.enter_create();
+            }
         }
 
-        Action::RemotePasswordSubmit(_) => {
-            state.rest.fg_mut().status = "Password auth handled automatically".into();
+        Action::RemoteEditHost(id) => {
+            if let crate::app::mode::Mode::Remote(ref mut remote) = state.mode_mut() {
+                remote.detail_host = Some(id);
+                remote.enter_edit();
+            }
+        }
+
+        Action::RemoteSaveHost => {
+            if let crate::app::mode::Mode::Remote(ref mut remote) = state.mode_mut() {
+                if remote.validate_editor() {
+                    if let Some(host) = remote.build_host() {
+                        let mut hosts = crate::remote::hosts::load_hosts();
+                        crate::remote::hosts::upsert_host(&mut hosts, host);
+                        let _ = crate::remote::hosts::save_hosts(&hosts);
+                        *state.mode_mut() = crate::app::mode::Mode::Remote(Box::new(
+                            crate::app::mode::RemoteState::new(hosts.hosts),
+                        ));
+                    }
+                }
+            }
+        }
+
+        Action::RemotePasswordSubmit(pw) => {
+            if let crate::app::mode::Mode::Remote(ref mut remote) = state.mode_mut() {
+                remote.password_buf.clear();
+                // Wire up password auth in a later phase; for now acknowledge.
+                state.rest.fg_mut().status = format!(
+                    "password submitted ({} chars) — auth will be wired in a later phase",
+                    pw.len()
+                );
+            }
         }
 
         Action::RemoteImportSshConfig => {
