@@ -505,6 +505,21 @@ declare global {
     // app (not in dev mode). No reply, no session needed.
     | { r: 'WriteErrorLog'; message: string }
 
+    // ─── Remote host management ───────────────────────────────────────
+    // Fetch the saved remote hosts list. Reply lands as the RemoteHosts
+    // push envelope.
+    | { r: 'GetRemoteHosts' }
+    // Add a new remote host. Reply lands as a fresh RemoteHosts push.
+    | { r: 'AddRemoteHost'; name: string; user: string; host: string; port: number; keyPath: string | null }
+    // Edit an existing remote host by id. Reply lands as a fresh RemoteHosts push.
+    | { r: 'EditRemoteHost'; id: string; name: string; user: string; host: string; port: number; keyPath: string | null }
+    // Delete a remote host by id. Reply lands as a fresh RemoteHosts push.
+    | { r: 'DeleteRemoteHost'; id: string }
+    // Connect to a remote host (placeholder — starts SSH session).
+    | { r: 'ConnectRemoteHost'; hostId: string }
+    // Disconnect from a remote host (placeholder).
+    | { r: 'DisconnectRemoteHost'; hostId: string }
+
   // ─── Linker daemon import graph ─────────────────────────────────────
   // Fetch the linker daemon's code-dependency graph. `path` focuses on
   // one file (null = overview mode). `depth` limits traversal depth.
@@ -554,6 +569,18 @@ declare global {
     | { k: 'FileCreate'; root: string; path: string; requestId: string; error: string | null }
     | { k: 'FileRename'; root: string; oldPath: string; newPath: string; requestId: string; error: string | null }
     | { k: 'FileDelete'; root: string; path: string; requestId: string; error: string | null }
+
+  type RemoteHost = {
+    id: string
+    name: string
+    user: string
+    host: string
+    port: number
+    keyPath: string | null
+    connected: boolean
+    lastConnected: number | null
+    tags: string[]
+  }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded

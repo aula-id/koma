@@ -1370,6 +1370,10 @@ export type PushEnvelope =
       sessionId?: string | null
     }
 
+  // Reply to remote host CRUD requests — the authoritative list of saved
+  // remote hosts. REPLACED wholesale on each push, never accumulated.
+  | { k: 'RemoteHosts'; hosts: RemoteHost[] }
+
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
 
@@ -1945,6 +1949,8 @@ type KomaState = {
   importGraph: ImportGraphSlice
   // Coding panel slice — workspace roots, lazy dir listings, open file docs.
   coding: CodingSlice
+  // Saved remote hosts (GUI remote panel). REPLACED wholesale on each push.
+  remoteHosts: RemoteHost[]
   // Open (or focus) the singleton commit-graph tab (id 'graph'). The GraphTab
   // itself fires refreshGraph on mount, so opening is enough. Mirrors
   // openSettingsTab's dedupe + activate shape.
@@ -2630,6 +2636,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   analytics: initialAnalytics,
   importGraph: initialImportGraph,
   coding: initialCoding,
+  remoteHosts: [],
   remoteBusy: null,
   commitDraft: '',
   keys: initialKeys,
@@ -4005,6 +4012,9 @@ export const useKoma = create<KomaState>((set, get) => ({
         }
         break
       }
+      case 'RemoteHosts':
+        set(() => ({ remoteHosts: env.hosts }))
+        break
     }
   },
 

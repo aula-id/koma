@@ -891,6 +891,22 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::WriteErrorLog { message } => {
             crate::model::store::append_global_error_log("frontend", &message);
         }
+        // ─── Remote host management (host-local CRUD, no daemon round-trip) ──
+        GuiReq::GetRemoteHosts => {
+            let _ = ctx.ctl.send(HostCtl::GetRemoteHosts);
+        }
+        GuiReq::AddRemoteHost { name, user, host, port, key_path } => {
+            let _ = ctx.ctl.send(HostCtl::AddRemoteHost { name, user, host, port, key_path });
+        }
+        GuiReq::EditRemoteHost { id, name, user, host, port, key_path } => {
+            let _ = ctx.ctl.send(HostCtl::EditRemoteHost { id, name, user, host, port, key_path });
+        }
+        GuiReq::DeleteRemoteHost { id } => {
+            let _ = ctx.ctl.send(HostCtl::DeleteRemoteHost { id });
+        }
+        GuiReq::ConnectRemoteHost { host_id: _ } | GuiReq::DisconnectRemoteHost { host_id: _ } => {
+            // Placeholder — SSH connect/disconnect not yet wired for GUI.
+        }
         // Import graph visualization: always routed to the host-relay thread via
         // HostCtl::ImportGraph (linker daemon call, like FileDiff — never the session daemon).
         #[cfg(feature = "linker")]

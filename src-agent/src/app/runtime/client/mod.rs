@@ -661,6 +661,29 @@ pub(super) enum HostCtl {
     /// off-thread; `request_id` is echoed back so the GUI can correlate.
     #[cfg(feature = "linker")]
     ImportGraphReindex { request_id: Option<String> },
+
+    // ─── Remote host management (host-local CRUD, fast file I/O) ──────────────
+    /// Fetch the saved remote hosts list and push a RemoteHosts envelope.
+    GetRemoteHosts,
+    /// Add a new remote host and push the updated list.
+    AddRemoteHost {
+        name: String,
+        user: String,
+        host: String,
+        port: u16,
+        key_path: Option<String>,
+    },
+    /// Edit an existing remote host by id and push the updated list.
+    EditRemoteHost {
+        id: String,
+        name: String,
+        user: String,
+        host: String,
+        port: u16,
+        key_path: Option<String>,
+    },
+    /// Delete a remote host by id and push the updated list.
+    DeleteRemoteHost { id: String },
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.
@@ -892,6 +915,42 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
     drop(rt);
 
     render_result
+}
+
+/// Run the TUI render loop for a remote connection.
+///
+/// Used by `koma remote` to display the remote koma server's UI over SSH.
+/// Takes a pre-built [`Connection`] (from [`remote::connect_remote`]) and drives
+/// the same render loop a local thin-client uses — so the remote UI is
+/// byte-for-byte identical.
+pub(crate) fn run_remote_render_loop(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    mut conn: Connection,
+    handle: &tokio::runtime::Handle,
+) -> Result<()> {
+    let prebuffered = std::mem::take(&mut conn.prebuffered);
+    let frame_rx = &conn.frame_rx;
+    let req_tx = &conn.req_tx;
+
+    let transition = {
+        let _rt_ctx = handle.enter();
+        render::render_loop(terminal, frame_rx, req_tx, prebuffered)
+    };
+
+    // Only Exit or error are expected transitions for remote.
+    // OpenSwapper/NewSession don't make sense over SSH — treat as exit.
+    match transition {
+        Ok(render::ClientTransition::Exit { .. })
+        | Ok(render::ClientTransition::OpenSwapper)
+        | Ok(render::ClientTransition::NewSession { .. }) => {
+            teardown_connection(handle, conn);
+        }
+        Err(e) => {
+            teardown_connection(handle, conn);
+            return Err(e);
+        }
+    }
+    Ok(())
 }
 
 /// Run the `/select` transcript dump on the CLIENT's terminal.
