@@ -246,7 +246,12 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             let chunks = chat::layout_chunks(&state.rest, frame.area());
             skill_cmd::render_overlay(frame, chunks[4], chunks[1], s, &state.rest, &palette);
         }
-        Mode::Remote(m) => remote::draw(frame, m, frame.area(), &palette),
+        Mode::Remote(m) => {
+            let resolved_model = resolved_main_model(&state.rest);
+            chat::draw(frame, &state.rest, &resolved_model, &palette);
+            let chunks = chat::layout_chunks(&state.rest, frame.area());
+            remote::draw(frame, m, chunks[4], chunks[1], &palette);
+        }
         Mode::Help(h) => help::draw(frame, &state.rest, h, &palette),
         Mode::Effort(e) => effort::draw(frame, &state.rest, e, &palette),
         Mode::Model(m) => {

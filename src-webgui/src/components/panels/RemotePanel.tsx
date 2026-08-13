@@ -65,6 +65,15 @@ export function RemotePanel() {
   const handleConnect = (hostId: string) => push({ r: 'ConnectRemoteHost', hostId })
   const handleDelete = (hostId: string) => push({ r: 'DeleteRemoteHost', id: hostId })
 
+  const formatLastSeen = (ts: number | null) => {
+    if (!ts) return 'Never connected'
+    const diff = Math.floor(Date.now() / 1000) - ts
+    if (diff < 60) return 'Connected just now'
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+    return `${Math.floor(diff / 86400)}d ago`
+  }
+
   const handleSave = () => {
     if (view.kind !== 'form') return
     const { draft, isNew } = view
@@ -96,8 +105,8 @@ export function RemotePanel() {
   if (view.kind === 'form') {
     const { draft, isNew } = view
     return (
-      <div className="flex flex-col gap-2 p-2 text-xs">
-        <div className="flex items-center justify-between">
+      <div className="flex flex-col h-full overflow-hidden text-xs">
+        <div className="flex-none flex items-center justify-between p-2 pb-1">
           <span className="text-koma-fg font-medium">
             {isNew ? 'Add Remote Host' : 'Edit Remote Host'}
           </span>
@@ -108,7 +117,7 @@ export function RemotePanel() {
             Cancel
           </button>
         </div>
-        <div className="flex flex-col gap-1.5">
+        <div className="flex-1 overflow-auto px-2 py-1 flex flex-col gap-1.5">
           <label className="text-koma-dim">Name</label>
           <input
             className="bg-koma-panel border border-koma-border rounded px-2 py-1 text-koma-fg"
@@ -145,80 +154,99 @@ export function RemotePanel() {
             placeholder="~/.ssh/id_ed25519"
           />
         </div>
-        <button
-          className="mt-1 bg-koma-accent text-koma-bg rounded px-2 py-1 hover:opacity-90"
-          onClick={handleSave}
-        >
-          {isNew ? 'Add Host' : 'Save'}
-        </button>
+        <div className="flex-none border-t border-koma-border p-2">
+          <button
+            className="flex w-full items-center justify-center gap-1.5 rounded bg-koma-accent text-koma-bg py-1.5 text-[12px] hover:opacity-90"
+            onClick={handleSave}
+          >
+            {isNew ? 'Add Host' : 'Save'}
+          </button>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col gap-1 p-2 text-xs">
+    <div className="flex flex-col h-full overflow-hidden text-xs">
       {/* Search */}
-      <input
-        className="bg-koma-panel border border-koma-border rounded px-2 py-1 text-koma-fg placeholder-koma-dim"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search hosts..."
-      />
-
-      {/* Host list */}
-      <div className="flex flex-col gap-1 mt-1">
-        {filtered.length === 0 && (
-          <div className="text-koma-dim text-center py-4">No hosts saved</div>
-        )}
-        {filtered.map((host) => (
-          <div
-            key={host.id}
-            className="flex items-center justify-between bg-koma-panel border border-koma-border rounded px-2 py-1.5 hover:bg-koma-hover"
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <Server size={14} className={host.connected ? 'text-koma-success' : 'text-koma-dim'} />
-              <div className="min-w-0">
-                <div className="text-koma-fg font-medium truncate">{host.name}</div>
-                <div className="text-koma-dim truncate">
-                  {host.user}@{host.host}:{host.port}
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center gap-1">
-              <button
-                className="p-1 text-koma-accent hover:text-koma-fg"
-                title="Connect"
-                onClick={() => handleConnect(host.id)}
-              >
-                <Link2 size={14} />
-              </button>
-              <button
-                className="p-1 text-koma-dim hover:text-koma-fg"
-                title="Edit"
-                onClick={() => handleEdit(host)}
-              >
-                <Edit3 size={14} />
-              </button>
-              <button
-                className="p-1 text-koma-dim hover:text-koma-error"
-                title="Delete"
-                onClick={() => handleDelete(host.id)}
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-          </div>
-        ))}
+      <div className="flex-none p-2 pb-1">
+        <input
+          className="w-full bg-koma-panel border border-koma-border rounded px-2 py-1 text-koma-fg placeholder-koma-dim"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search hosts..."
+        />
       </div>
 
-      {/* Add button */}
-      <button
-        className="mt-1 flex items-center justify-center gap-1 border border-koma-border rounded px-2 py-1.5 text-koma-accent hover:bg-koma-hover"
-        onClick={handleAdd}
-      >
-        <Plus size={14} />
-        Add Host
-      </button>
+      {/* Host list — scrollable, fills remaining space */}
+      <div className="flex-1 overflow-auto px-2 py-1">
+        <div className="flex flex-col gap-1">
+          {filtered.length === 0 && (
+            <div className="text-koma-dim text-center py-4">No hosts saved</div>
+          )}
+          {filtered.map((host) => (
+            <div
+              key={host.id}
+              className="flex items-center justify-between bg-koma-panel border border-koma-border rounded px-2 py-1.5 hover:bg-koma-hover"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <Server size={14} className={host.connected ? 'text-koma-success' : 'text-koma-dim'} />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-koma-fg font-medium truncate">{host.name}</span>
+                    <span
+                      className={`text-[10px] px-1 rounded ${
+                        host.connected
+                          ? 'bg-koma-success/20 text-koma-success'
+                          : 'bg-koma-dim/20 text-koma-dim'
+                      }`}
+                    >
+                      {formatLastSeen(host.lastConnected)}
+                    </span>
+                  </div>
+                  <div className="text-koma-dim truncate">
+                    {host.user}@{host.host}:{host.port}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  className="p-1 text-koma-accent hover:text-koma-fg"
+                  title="Connect"
+                  onClick={() => handleConnect(host.id)}
+                >
+                  <Link2 size={14} />
+                </button>
+                <button
+                  className="p-1 text-koma-dim hover:text-koma-fg"
+                  title="Edit"
+                  onClick={() => handleEdit(host)}
+                >
+                  <Edit3 size={14} />
+                </button>
+                <button
+                  className="p-1 text-koma-dim hover:text-koma-error"
+                  title="Delete"
+                  onClick={() => handleDelete(host.id)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Add button — pinned to bottom */}
+      <div className="flex-none border-t border-koma-border p-2">
+        <button
+          className="flex w-full items-center justify-center gap-1.5 rounded border border-koma-border py-1.5 text-[12px] text-koma-accent hover:bg-koma-hover"
+          onClick={handleAdd}
+        >
+          <Plus size={14} />
+          Add Host
+        </button>
+      </div>
     </div>
   )
 }
