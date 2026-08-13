@@ -382,6 +382,7 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
         ModeSnapshot::Todo(t) => Mode::Todo(Box::new(shadow_todo(*t))),
         ModeSnapshot::Help(h) => Mode::Help(Box::new(shadow_help(*h))),
         ModeSnapshot::Skill(s) => Mode::Skill(Box::new(shadow_skill_cmd(*s))),
+        ModeSnapshot::Remote(s) => Mode::Remote(Box::new(shadow_remote(*s))),
         ModeSnapshot::Effort(e) => Mode::Effort(Box::new(shadow_effort(e))),
         ModeSnapshot::Model(m) => Mode::Model(Box::new(shadow_model_cmd(*m))),
         ModeSnapshot::Usage(u) => {

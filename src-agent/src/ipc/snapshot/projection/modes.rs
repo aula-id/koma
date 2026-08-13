@@ -32,10 +32,10 @@ use crate::ipc::proto::{
     McpSnapshot, ModeSnapshot, ModelCmdSnapshot, ModelDraftSnapshot, ModelEndpointWire,
     ModelModalSnapshot, OAuthDraftSnapshot, OnboardProviderSnapshot, OnboardSnapshot,
     PathPickerSnapshot, PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot,
-    RewindEntrySnapshot, RewindSnapshot, RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot,
-    SessionMetaSnapshot, SettingsSnapshot, SkillCmdSnapshot, SkillEntrySnapshot,
-    TextEditorSnapshot, TodoItemSnapshot, TodoSnapshot, ToolPickerSnapshot, UsageSnapshot,
-    WarmStatusWire,
+    RemoteHostSnapshot, RemoteSessionSnapshot, RemoteSnapshot, RewindEntrySnapshot,
+    RewindSnapshot, RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot, SessionMetaSnapshot,
+    SettingsSnapshot, SkillCmdSnapshot, SkillEntrySnapshot, TextEditorSnapshot, TodoItemSnapshot,
+    TodoSnapshot, ToolPickerSnapshot, UsageSnapshot, WarmStatusWire,
 };
 
 pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
@@ -88,6 +88,7 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
         // instead of a blank Chat screen.
         Mode::Help(h) => ModeSnapshot::Help(Box::new(help_snapshot(h))),
         Mode::Skill(s) => ModeSnapshot::Skill(Box::new(skill_cmd_snapshot(s))),
+        Mode::Remote(m) => ModeSnapshot::Remote(Box::new(remote_snapshot(m))),
         Mode::Effort(e) => ModeSnapshot::Effort(effort_snapshot(e)),
         Mode::Model(m) => ModeSnapshot::Model(Box::new(model_cmd_snapshot(m))),
         Mode::Usage(nav) => ModeSnapshot::Usage(Box::new(usage_snapshot(nav, state))),
@@ -884,6 +885,58 @@ pub fn text_editor_snapshot(ed: &TextEditorState) -> TextEditorSnapshot {
         row: ed.row,
         col: ed.col,
         scroll: ed.scroll,
+    }
+}
+
+/// Project the `/remote` host manager.
+pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
+    use crate::app::mode::remote::RemoteSub;
+    RemoteSnapshot {
+        sub: match m.sub {
+            RemoteSub::Compact => "compact".into(),
+            RemoteSub::Fullscreen => "fullscreen".into(),
+            RemoteSub::Connecting => "connecting".into(),
+            RemoteSub::PasswordInput => "password".into(),
+        },
+        hosts: m
+            .hosts
+            .iter()
+            .map(|h| RemoteHostSnapshot {
+                id: h.id.clone(),
+                name: h.name.clone(),
+                user: h.user.clone(),
+                host: h.host.clone(),
+                port: h.port,
+                key_path: h.key_path.clone(),
+                connected: h.last_connected.is_some(),
+                last_connected: h.last_connected,
+                tags: h.tags.clone(),
+            })
+            .collect(),
+        selected: m.selected,
+        query: m.query.clone(),
+        filtered: m.filtered.clone(),
+        detail_host: m.detail_host.clone(),
+        stage: m
+            .connection_status
+            .as_ref()
+            .map(|s| s.stage.as_str().to_string()),
+        error: m
+            .connection_status
+            .as_ref()
+            .and_then(|s| s.error.clone()),
+        sessions: m
+            .sessions
+            .iter()
+            .map(|s| RemoteSessionSnapshot {
+                session_id: s.session_id.clone(),
+                name: s.name.clone(),
+                working: s.working,
+                is_foreground: s.is_foreground,
+            })
+            .collect(),
+        session_selected: m.session_selected,
+        pending_delete: m.pending_delete.clone(),
     }
 }
 

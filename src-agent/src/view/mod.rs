@@ -29,6 +29,7 @@ pub mod model_cmd;
 pub mod onboard;
 pub mod onboard_provider;
 pub mod quit_confirm;
+pub mod remote;
 pub mod scroll;
 pub mod security;
 pub mod session_hub;
@@ -245,6 +246,7 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             let chunks = chat::layout_chunks(&state.rest, frame.area());
             skill_cmd::render_overlay(frame, chunks[4], chunks[1], s, &state.rest, &palette);
         }
+        Mode::Remote(m) => remote::draw(frame, m, frame.area(), &palette),
         Mode::Help(h) => help::draw(frame, &state.rest, h, &palette),
         Mode::Effort(e) => effort::draw(frame, &state.rest, e, &palette),
         Mode::Model(m) => {
