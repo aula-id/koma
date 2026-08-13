@@ -63,6 +63,10 @@ pub(super) enum ClientTransition {
     /// Detach (or kill, on `kill`) the current daemon and attach a brand-new
     /// session-daemon (`/new` / `/new kill`). The bool is the `/new kill` flag.
     NewSession { kill: bool },
+    // TODO: ConnectRemote(String) — when the thin-client needs remote break-out,
+    // add a variant here and handle it in `client_run` (teardown connection, drop
+    // terminal+guard, call `run_remote_client_target`, re-enter terminal, continue).
+    // For v1, remote connect only works in standalone mode.
 }
 
 /// The synchronous render loop, decoupled from the socket and paced at ~60fps.
