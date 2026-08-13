@@ -891,13 +891,36 @@ pub fn text_editor_snapshot(ed: &TextEditorState) -> TextEditorSnapshot {
 
 /// Project the `/remote` host manager.
 pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
-    use crate::app::mode::remote::RemoteSub;
+    use crate::app::mode::remote::{ConnectionState, RemoteSub};
+
+    let connection_state_str: Option<String> = m.connection_state.as_ref().map(|cs| match cs {
+        ConnectionState::Disconnected => "disconnected".into(),
+        ConnectionState::Resolving => "resolving".into(),
+        ConnectionState::Authenticating => "authenticating".into(),
+        ConnectionState::AuthRequired { host_id, user, host } => {
+            format!("auth_required:{host_id}:{user}:{host}")
+        }
+        ConnectionState::Bootstrapping => "bootstrapping".into(),
+        ConnectionState::Connecting => "connecting".into(),
+        ConnectionState::Connected { session_id } => format!("connected:{session_id}"),
+        ConnectionState::Error { message } => format!("error:{message}"),
+    });
+
+    // Legacy stage/error fields (populated from connection_state for backward compat).
+    let (stage, error) = match &m.connection_state {
+        Some(ConnectionState::Resolving) => (Some("resolving".into()), None),
+        Some(ConnectionState::Authenticating) => (Some("authenticating".into()), None),
+        Some(ConnectionState::Bootstrapping) => (Some("bootstrapping".into()), None),
+        Some(ConnectionState::Connecting) => (Some("connecting".into()), None),
+        Some(ConnectionState::Connected { .. }) => (Some("connected".into()), None),
+        Some(ConnectionState::Error { message }) => (None, Some(message.clone())),
+        _ => (None, None),
+    };
+
     RemoteSnapshot {
         sub: match m.sub {
             RemoteSub::Compact => "compact".into(),
             RemoteSub::Fullscreen => "fullscreen".into(),
-            RemoteSub::Connecting => "connecting".into(),
-            RemoteSub::PasswordInput => "password".into(),
         },
         hosts: m
             .hosts
@@ -918,14 +941,9 @@ pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
         query: m.query.clone(),
         filtered: m.filtered.clone(),
         detail_host: m.detail_host.clone(),
-        stage: m
-            .connection_status
-            .as_ref()
-            .map(|s| s.stage.as_str().to_string()),
-        error: m
-            .connection_status
-            .as_ref()
-            .and_then(|s| s.error.clone()),
+        connection_state: connection_state_str,
+        stage,
+        error,
         sessions: m
             .sessions
             .iter()

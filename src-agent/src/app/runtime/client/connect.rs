@@ -15,6 +15,13 @@ use super::bridge::{reader_task, writer_task};
 /// a mere absence — only on a CONFIRMED mismatch).
 pub(super) const HELLO_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// What transport backs this connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TransportKind {
+    Local { session_id: String },
+    Remote { host_id: String, session_id: String },
+}
+
 /// One live daemon connection: the bridge channels + writer join handle the render
 /// loop and teardown drive, plus the frames the pre-render handshake already pulled
 /// off the wire and the daemon version it observed.
@@ -33,6 +40,8 @@ pub(crate) struct Connection {
     /// The daemon's reported build fingerprint, or `None` if no `Hello` arrived within
     /// the handshake window (a daemon predating the handshake, or a slow one).
     pub(crate) daemon_version: Option<String>,
+    /// What transport backs this connection (for teardown routing).
+    pub(crate) transport: TransportKind,
 }
 
 /// Connect to the daemon, spawn the I/O bridge, send `Attach`, and run the pre-render
@@ -48,6 +57,7 @@ pub(crate) struct Connection {
 pub(super) fn connect_attach_and_handshake(
     handle: &tokio::runtime::Handle,
     sock_path: &std::path::Path,
+    session_id: &str,
 ) -> Result<Connection> {
     // Connect first so a missing daemon fails BEFORE we touch the terminal (no
     // alt-screen flash on "no daemon"). The connected stream is split into the two
@@ -123,5 +133,8 @@ pub(super) fn connect_attach_and_handshake(
         writer_handle,
         prebuffered,
         daemon_version,
+        transport: TransportKind::Local {
+            session_id: session_id.to_string(),
+        },
     })
 }

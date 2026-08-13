@@ -74,7 +74,7 @@ fn attach_session_headless(
     let sock_path = store::daemon_sock_path(session_id)?;
     let my_fingerprint = store::build_fingerprint();
 
-    let mut conn = connect_attach_and_handshake(handle, &sock_path)?;
+    let mut conn = connect_attach_and_handshake(handle, &sock_path, session_id)?;
     let mut already_restarted = false;
     while conn
         .daemon_version
@@ -98,7 +98,7 @@ fn attach_session_headless(
         crate::app::runtime::manage::restart_daemon(session_id, true)
             .map_err(|e| anyhow::anyhow!("failed to restart the stale koma daemon: {e:#}"))?;
 
-        conn = connect_attach_and_handshake(handle, &sock_path)?;
+        conn = connect_attach_and_handshake(handle, &sock_path, session_id)?;
     }
     Ok(conn)
 }

@@ -699,12 +699,38 @@ pub(crate) fn shadow_todo(s: crate::ipc::proto::TodoSnapshot) -> crate::app::mod
 
 /// Rebuild the `/remote` host manager ([`RemoteState`]) from its projection.
 pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState {
-    use crate::app::mode::remote::{ConnectionStatus, ConnectStage, RemoteSession, RemoteState, RemoteSub};
+    use crate::app::mode::remote::{ConnectionState, RemoteSession, RemoteState, RemoteSub};
+
+    let connection_state = s.connection_state.and_then(|cs_str| {
+        if cs_str == "disconnected" {
+            Some(ConnectionState::Disconnected)
+        } else if cs_str == "resolving" {
+            Some(ConnectionState::Resolving)
+        } else if cs_str == "authenticating" {
+            Some(ConnectionState::Authenticating)
+        } else if let Some(rest) = cs_str.strip_prefix("auth_required:") {
+            // Format: "auth_required:<host_id>:<user>:<host>"
+            let mut parts = rest.splitn(3, ':');
+            let host_id = parts.next()?.to_string();
+            let user = parts.next()?.to_string();
+            let host = parts.next()?.to_string();
+            Some(ConnectionState::AuthRequired { host_id, user, host })
+        } else if cs_str == "bootstrapping" {
+            Some(ConnectionState::Bootstrapping)
+        } else if cs_str == "connecting" {
+            Some(ConnectionState::Connecting)
+        } else if let Some(session_id) = cs_str.strip_prefix("connected:") {
+            Some(ConnectionState::Connected { session_id: session_id.to_string() })
+        } else if let Some(message) = cs_str.strip_prefix("error:") {
+            Some(ConnectionState::Error { message: message.to_string() })
+        } else {
+            None
+        }
+    });
+
     RemoteState {
         sub: match s.sub.as_str() {
             "fullscreen" => RemoteSub::Fullscreen,
-            "connecting" => RemoteSub::Connecting,
-            "password" => RemoteSub::PasswordInput,
             _ => RemoteSub::Compact,
         },
         hosts: s
@@ -725,15 +751,7 @@ pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState 
         query: s.query,
         filtered: s.filtered,
         detail_host: s.detail_host,
-        connection_status: s.stage.map(|stage_str| ConnectionStatus {
-            stage: match stage_str.as_str() {
-                "authenticating" => ConnectStage::Authenticating,
-                "bootstrapping" => ConnectStage::Bootstrapping,
-                "connected" => ConnectStage::Connected,
-                _ => ConnectStage::Resolving,
-            },
-            error: s.error,
-        }),
+        connection_state,
         sessions: s
             .sessions
             .into_iter()
@@ -747,6 +765,5 @@ pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState 
         session_selected: s.session_selected,
         pending_delete: s.pending_delete,
         password_buf: String::new(),
-        connecting_host: None,
     }
 }
