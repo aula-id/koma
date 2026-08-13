@@ -21,7 +21,9 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "Spawn a new session, swap to it (current keeps running)",
     ),
     ("/new kill", "Spawn a new session and close the current one"),
+    ("/new remote", "Start a new session on a saved remote host"),
     ("/resume", "Open the session hub (live + past sessions)"),
+    ("/resume remote", "Resume a session on a saved remote host"),
     ("/mode", "Toggle Normal/Auto tool approval"),
     ("/effort", "Set model reasoning/thinking effort"),
     ("/free", "Toggle this session to use koma-free"),
@@ -114,6 +116,20 @@ pub enum NewMode {
     Kill,
 }
 
+/// Destination selected by session lifecycle commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionDestination {
+    Local,
+    Remote,
+}
+
+/// Parsed `/new` request: destination is independent from local disposition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NewRequest {
+    pub destination: SessionDestination,
+    pub mode: NewMode,
+}
+
 /// A parsed in-chat slash command.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
@@ -124,7 +140,7 @@ pub enum Command {
     Clear,
     /// Spawn a fresh PARALLEL session. `NewMode` controls whether the previous
     /// foreground is kept running (`Swap`) or tombstoned (`Kill`).
-    New(NewMode),
+    New(NewRequest),
     /// Set or cycle the tool-approval policy. `None` = armed-aware cycle
     /// (Auto→Normal→[Yolo when armed]→Auto); `Some(token)` explicitly sets the
     /// named mode (`auto` / `normal` / `yolo`). `yolo` is refused unless armed.
@@ -149,8 +165,8 @@ pub enum Command {
     Store,
     /// Open the `/security` daemon control panel.
     Security,
-    /// Open the `/remote` host manager. Inner string is an optional target
-    /// like `user@host` to connect directly.
+    /// Open the `/remote` host manager. Arguments are retained only so dispatch
+    /// can reject the deprecated slash ad-hoc connection form with clear usage.
     Remote(String),
     /// Run a named agent on a task in the background. Holds `<agent> <task>`.
     Task(String),
@@ -167,9 +183,8 @@ pub enum Command {
     AddDir(String),
     /// Toggle or set internet mode. `None` = toggle; `Some(mode)` = set explicitly.
     Internet(Option<InternetMode>),
-    /// Open the unified session hub — live (cooking) + past (history) sessions in
-    /// one two-pane overlay (alias: `/sessions`).
-    Resume,
+    /// Open a local or remote session hub.
+    Resume(SessionDestination),
     /// Dump the conversation to the normal terminal for native copy/paste.
     Select,
     /// Print available commands to the chat view.
@@ -216,17 +231,29 @@ pub fn parse(line: &str) -> Command {
         "compact" => Command::Compact,
         "clear" => Command::Clear,
         "new" => {
-            let mode = match rest
+            let args: Vec<String> = rest
                 .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_lowercase()
-                .as_str()
-            {
-                "kill" => NewMode::Kill,
-                _ => NewMode::Swap,
-            };
-            Command::New(mode)
+                .map(|arg| arg.to_lowercase())
+                .collect();
+            match args.as_slice() {
+                [] => Command::New(NewRequest {
+                    destination: SessionDestination::Local,
+                    mode: NewMode::Swap,
+                }),
+                [one] if one == "swap" => Command::New(NewRequest {
+                    destination: SessionDestination::Local,
+                    mode: NewMode::Swap,
+                }),
+                [one] if one == "kill" => Command::New(NewRequest {
+                    destination: SessionDestination::Local,
+                    mode: NewMode::Kill,
+                }),
+                [one] if one == "remote" => Command::New(NewRequest {
+                    destination: SessionDestination::Remote,
+                    mode: NewMode::Swap,
+                }),
+                _ => Command::Unknown("new (usage: /new [swap|kill|remote])".into()),
+            }
         }
         "mode" => {
             // Bare `/mode` cycles (None); `/mode <token>` sets explicitly. The token
@@ -251,7 +278,11 @@ pub fn parse(line: &str) -> Command {
         "cd" => Command::Cd(rest.to_string()),
         "adddir" => Command::AddDir(rest.to_string()),
         "internet" => Command::Internet(InternetMode::from_token(rest)),
-        "resume" | "sessions" => Command::Resume,
+        "resume" | "sessions" => match rest.to_lowercase().as_str() {
+            "" => Command::Resume(SessionDestination::Local),
+            "remote" => Command::Resume(SessionDestination::Remote),
+            _ => Command::Unknown("resume (usage: /resume [remote])".into()),
+        },
         "select" => Command::Select,
         "help" => Command::Help,
         "usage" => Command::Usage,
@@ -327,6 +358,48 @@ mod parse_tests {
             Command::Attach(".screenshoot/shot.png".to_string())
         );
         assert_eq!(parse("/attach"), Command::Attach(String::new()));
+    }
+
+    #[test]
+    fn parse_session_destinations_and_rejects_extra_args() {
+        let local_new = NewRequest {
+            destination: SessionDestination::Local,
+            mode: NewMode::Swap,
+        };
+        assert_eq!(parse("/new"), Command::New(local_new));
+        assert_eq!(parse("/new swap"), Command::New(local_new));
+        assert_eq!(
+            parse("/new kill"),
+            Command::New(NewRequest {
+                destination: SessionDestination::Local,
+                mode: NewMode::Kill,
+            })
+        );
+        assert_eq!(
+            parse("/new remote"),
+            Command::New(NewRequest {
+                destination: SessionDestination::Remote,
+                mode: NewMode::Swap,
+            })
+        );
+        assert!(matches!(parse("/new remote kill"), Command::Unknown(_)));
+        assert!(matches!(parse("/new nonsense"), Command::Unknown(_)));
+
+        assert_eq!(parse("/resume"), Command::Resume(SessionDestination::Local));
+        assert_eq!(
+            parse("/resume remote"),
+            Command::Resume(SessionDestination::Remote)
+        );
+        assert!(matches!(parse("/resume remote extra"), Command::Unknown(_)));
+    }
+
+    #[test]
+    fn remote_target_is_retained_for_usage_rejection() {
+        assert_eq!(parse("/remote"), Command::Remote(String::new()));
+        assert_eq!(
+            parse("/remote user@example.com"),
+            Command::Remote("user@example.com".into())
+        );
     }
 
     #[test]

@@ -28,7 +28,10 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 /// shortcut and the synthetic "[+ new session]" row both resolve to it.
 fn new_session_action() -> Action {
     Action::Slash(crate::controller::command::Command::New(
-        crate::controller::command::NewMode::Swap,
+        crate::controller::command::NewRequest {
+            destination: crate::controller::command::SessionDestination::Local,
+            mode: crate::controller::command::NewMode::Swap,
+        },
     ))
 }
 

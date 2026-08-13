@@ -891,7 +891,7 @@ pub fn text_editor_snapshot(ed: &TextEditorState) -> TextEditorSnapshot {
 
 /// Project the `/remote` host manager.
 pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
-    use crate::app::mode::remote::{ConnectionState, RemoteSub};
+    use crate::app::mode::remote::{ConnectionState, RemoteIntent, RemoteView};
 
     let connection_state_str: Option<String> = m.connection_state.as_ref().map(|cs| match cs {
         ConnectionState::Disconnected => "disconnected".into(),
@@ -921,13 +921,23 @@ pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
         _ => (None, None),
     };
 
+    // Encode intent + view as "intent:view" for the wire.
+    let intent_token = match m.intent {
+        RemoteIntent::Manage => "manage",
+        RemoteIntent::Resume => "resume",
+        RemoteIntent::New => "new",
+    };
+    let view_token = match m.view {
+        RemoteView::HostManager => "host_manager",
+        RemoteView::HostPicker => "host_picker",
+        RemoteView::HostDetail => "host_detail",
+        RemoteView::SessionHub => "session_hub",
+        RemoteView::CreateHost => "create_host",
+        RemoteView::EditHost => "edit_host",
+    };
+
     RemoteSnapshot {
-        sub: match m.sub {
-            RemoteSub::Compact => "compact".into(),
-            RemoteSub::Fullscreen => "fullscreen".into(),
-            RemoteSub::CreateHost => "create_host".into(),
-            RemoteSub::EditHost => "edit_host".into(),
-        },
+        sub: format!("{intent_token}:{view_token}"),
         hosts: m
             .hosts
             .iter()
@@ -947,6 +957,7 @@ pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
         query: m.query.clone(),
         filtered: m.filtered.clone(),
         detail_host: m.detail_host.clone(),
+        selected_host_id: m.selected_host_id.clone(),
         connection_state: connection_state_str,
         stage,
         error,

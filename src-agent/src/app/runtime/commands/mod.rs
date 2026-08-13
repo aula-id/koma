@@ -61,7 +61,20 @@ pub(super) fn apply_slash(
     match cmd {
         Command::Compact => compact::handle_compact(state, client, handle, None)?,
         Command::Clear => clear::handle_clear(state)?,
-        Command::New(mode) => new_session::handle_new(state, client, handle, mode)?,
+        Command::New(request) => match request.destination {
+            crate::controller::command::SessionDestination::Local => {
+                new_session::handle_new(state, client, handle, request.mode)?
+            }
+            crate::controller::command::SessionDestination::Remote => {
+                let hosts = crate::remote::hosts::load_hosts();
+                state.set_mode(crate::app::mode::Mode::Remote(Box::new(
+                    crate::app::mode::RemoteState::for_intent(
+                        hosts.hosts,
+                        crate::app::mode::remote::RemoteIntent::New,
+                    ),
+                )));
+            }
+        },
         Command::Mode(arg) => misc::handle_mode(state, arg)?,
         Command::Effort => effort::handle_effort(state, client)?,
         Command::Free => free::handle_free(state)?,
@@ -74,19 +87,29 @@ pub(super) fn apply_slash(
         Command::Security => security::handle_security(state)?,
         Command::Remote(args) => {
             if args.is_empty() {
-                // Open the remote host manager.
                 let hosts = crate::remote::hosts::load_hosts();
                 state.set_mode(crate::app::mode::Mode::Remote(Box::new(
                     crate::app::mode::RemoteState::new(hosts.hosts),
                 )));
             } else {
-                // Ad-hoc: /remote user@host — set the break-out signal directly.
-                // Both signals: pending for daemon→thin-client, target for standalone.
-                state.rest.connect_remote_pending = Some(args.to_string());
-                state.rest.connect_remote_target = Some(args.to_string());
+                state.rest.fg_mut().status =
+                    "usage: /remote (save the host here) or CLI: koma remote user@host".into();
             }
         }
-        Command::Resume => new_session::handle_resume(state)?,
+        Command::Resume(destination) => match destination {
+            crate::controller::command::SessionDestination::Local => {
+                new_session::handle_resume(state)?
+            }
+            crate::controller::command::SessionDestination::Remote => {
+                let hosts = crate::remote::hosts::load_hosts();
+                state.set_mode(crate::app::mode::Mode::Remote(Box::new(
+                    crate::app::mode::RemoteState::for_intent(
+                        hosts.hosts,
+                        crate::app::mode::remote::RemoteIntent::Resume,
+                    ),
+                )));
+            }
+        },
         Command::Select => misc::handle_select(state)?,
         Command::Help => misc::handle_help(state)?,
         Command::Usage => misc::handle_usage(state)?,
