@@ -50,6 +50,7 @@ pub use runtime::run_daemon_selftest;
 pub use runtime::run_linker_daemon;
 pub use runtime::run_mcp_daemon;
 pub use runtime::run_oauth_daemon;
+pub use runtime::run_server;
 pub use runtime::{
     any_daemon_alive, ensure_daemon_running, migrate_legacy_daemon, print_daemon_usage,
     run_daemon_subcommand, run_doctor,

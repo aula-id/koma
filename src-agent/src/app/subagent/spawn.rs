@@ -123,6 +123,9 @@ pub fn spawn_subagent(
     // would write the real per-directory `memory/TODO.md`, breaking plan-mode
     // read-only). This only ever NARROWS whatever the agent declared.
     let mut tools = agent.effective_tools();
+    // `load_image` requires the main runtime's synthetic attachment interceptor;
+    // sub-agent continuations are text-only, so strip even hand-authored agent defs.
+    tools.retain(|name| name != "load_image");
     // Inherit connected MCP tools automatically, exactly like the main agent does
     // (no per-agent MCP picker): snapshot the shared manager's discovered tools —
     // the wire `ToolDef`s to advertise, plus their namespaced names appended to

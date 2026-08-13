@@ -687,6 +687,29 @@ pub(super) enum PushEnvelope {
     /// One-shot impact analysis result answering a `GuiReq::ImportGraphImpact`.
     #[cfg(feature = "linker")]
     ImportGraphImpact(ImportGraphImpactResult),
+
+    // ─── Remote host connect/disconnect ──────────────────────────────────────
+    /// Remote connection state pushed to React. `state` is one of:
+    /// `"disconnected"`, `"resolving"`, `"auth_required"`, `"bootstrapping"`,
+    /// `"connecting"`, `"connected"`, `"error"`. Carries host identity + optional
+    /// `sessionId` (set once connected) + optional `error` (set on `"error"`) +
+    /// optional `sessions` (list of live remote sessions).
+    #[serde(rename_all = "camelCase")]
+    RemoteState {
+        state: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        host_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        user: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        sessions: Vec<serde_json::Value>,
+    },
 }
 
 /// Push a swap-START [`PushEnvelope::Switching`] for target session `to`. Called at every
@@ -990,6 +1013,34 @@ pub(super) fn push_oauth_state(
             error,
             conns,
             providers,
+        },
+    );
+}
+
+/// Emit a one-shot `RemoteState` envelope for the GUI remote-host panel.
+/// `state` is one of: `"disconnected"`, `"resolving"`, `"auth_required"`,
+/// `"bootstrapping"`, `"connecting"`, `"connected"`, `"error"`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn push_remote_state(
+    push: &dyn Fn(String),
+    state: &str,
+    host_id: Option<&str>,
+    user: Option<&str>,
+    host: Option<&str>,
+    session_id: Option<&str>,
+    error: Option<&str>,
+    sessions: &[serde_json::Value],
+) {
+    super::render::emit(
+        push,
+        &PushEnvelope::RemoteState {
+            state: state.to_string(),
+            host_id: host_id.map(str::to_string),
+            user: user.map(str::to_string),
+            host: host.map(str::to_string),
+            session_id: session_id.map(str::to_string),
+            error: error.map(str::to_string),
+            sessions: sessions.to_vec(),
         },
     );
 }

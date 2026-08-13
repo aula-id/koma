@@ -646,6 +646,15 @@ pub enum DaemonEvent {
     /// treats it as a non-visual no-op (it MAY ignore the hand-off); GUI wiring lands in a
     /// later wave. Zero attached clients → structural no-op.
     AttachSession { session_id: String },
+    /// One-shot: signal the foreground client to connect to a remote host via SSH (the
+    /// `/remote host_id` hand-off in thin-client mode). Mirrors `OpenSwapper`/`NewSession`:
+    /// `Action::RemoteConnect` sets `state.rest.connect_remote_pending`; the hub drains it
+    /// into this event to the controller client. The `target` is the `user@host[:port]`
+    /// address string. The client tears down its local connection, drops the terminal+guard,
+    /// calls [`crate::remote::client::run_remote_client_target`], and re-enters the terminal
+    /// on return. The TUI shadow treats it as a non-visual no-op. Zero attached clients →
+    /// flag cleared (no-op).
+    ConnectRemote { target: String },
     /// One-shot reply to a [`ClientRequest::Status`] discovery probe: this daemon's
     /// single owned session's metadata. Sent WITHOUT attaching the client or streaming
     /// any snapshot — the connection is expected to close right after.
@@ -904,6 +913,7 @@ pub enum ModeSnapshot {
     Effort(EffortSnapshot),
     Model(Box<ModelCmdSnapshot>),
     Usage(Box<UsageSnapshot>),
+    Remote(Box<RemoteSnapshot>),
     MessageRewind(RewindSnapshot),
     QuitConfirm {
         working: usize,

@@ -98,6 +98,7 @@ fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>)
         session_id: None,
         dir_label: String::new(),
         is_current_dir: false,
+        remote_host: None,
     });
     for status in live {
         // Compute the foreground flag BEFORE moving the id/name out of `status`.
@@ -113,6 +114,7 @@ fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>)
             session_id: Some(status.session_id),
             dir_label,
             is_current_dir,
+            remote_host: None,
         });
     }
 
