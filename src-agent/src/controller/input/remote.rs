@@ -63,12 +63,6 @@ fn handle_browse(m: &mut RemoteState, key: KeyEvent) -> Action {
             }
         }
         KeyCode::Char('i') if m.intent == RemoteIntent::Manage => Action::RemoteImportSshConfig,
-        KeyCode::Char(c) => {
-            // Type to filter.
-            m.query.push(c);
-            m.refilter();
-            Action::None
-        }
         _ => Action::None,
     }
 }
