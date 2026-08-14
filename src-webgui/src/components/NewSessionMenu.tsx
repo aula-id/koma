@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, FolderOpen, Link2, LoaderCircle } from 'lucide-react'
+import { ChevronDown, FolderOpen, Link2 } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import { BrailleSpinner } from './BrailleSpinner'
 
 // Track the trigger button's viewport rect while the menu is open, so the
 // menu can render in a body portal (fixed positioning) that no `overflow`
@@ -151,7 +152,7 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
                     disabled={remoteState.state !== 'disconnected' && remoteState.state !== 'error'}
                     icon={
                       remoteState.hostId === host.id && remoteState.state !== 'error' && remoteState.state !== 'disconnected'
-                        ? <LoaderCircle size={13} className="animate-spin" />
+                        ? <BrailleSpinner size={13} />
                         : <Link2 size={13} />
                     }
                   >
