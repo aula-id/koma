@@ -109,6 +109,7 @@ pub(super) struct ActiveRemote {
     pub ssh_child: tokio::process::Child,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_connect_worker(
     attempt_id: u64,
     host_id: String,
