@@ -747,20 +747,13 @@ pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState 
             _ => RemoteIntent::Manage,
         };
         let view = match parts.next() {
-            Some("host_picker") => RemoteView::HostPicker,
-            Some("host_detail") => RemoteView::HostDetail,
+            Some("browse") | Some("host_picker") | Some("host_manager") => RemoteView::Browse,
             Some("session_hub") => RemoteView::SessionHub,
-            Some("create_host") => RemoteView::CreateHost,
-            Some("edit_host") => RemoteView::EditHost,
+            Some("edit") | Some("create_host") | Some("edit_host") => RemoteView::Edit,
             // Legacy single-token values from old clients.
-            Some("fullscreen") | Some("host_manager") | None => {
-                if intent == RemoteIntent::Manage {
-                    RemoteView::HostManager
-                } else {
-                    RemoteView::HostPicker
-                }
-            }
-            _ => RemoteView::HostManager,
+            Some("fullscreen") | None => RemoteView::Browse,
+            // Unknown view tokens → Browse (safe fallback).
+            _ => RemoteView::Browse,
         };
         (intent, view)
     };
@@ -785,7 +778,6 @@ pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState 
         selected: s.selected,
         query: s.query,
         filtered: s.filtered,
-        detail_host: s.detail_host,
         selected_host_id: s.selected_host_id,
         connection_state,
         sessions: s
