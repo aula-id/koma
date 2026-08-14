@@ -9,20 +9,18 @@ pub enum RemoteIntent {
 }
 
 /// Current screen within the remote workflow.
+///
+/// Mirrors the `/agents` two-pane pattern: `Browse` shows a list sidebar + detail
+/// pane; `Edit` takes over the full screen for create/edit form; `SessionHub` is
+/// an overlay session picker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteView {
-    /// Fullscreen searchable saved-host manager.
-    HostManager,
-    /// Fullscreen host picker used by remote resume/new.
-    HostPicker,
-    /// Management-only host details and diagnostics.
-    HostDetail,
-    /// Existing sessions on the prepared remote host.
+    /// Browse hosts: list sidebar + detail pane.
+    Browse,
+    /// Create or edit a host (form fields take over the full screen).
+    Edit,
+    /// Resume session picker (overlay on top of Browse).
     SessionHub,
-    /// Create a new host (form fields).
-    CreateHost,
-    /// Edit an existing host (form fields).
-    EditHost,
 }
 
 /// Which field is focused in the create/edit form.
@@ -116,12 +114,8 @@ pub struct RemoteState {
     pub hosts: Vec<crate::remote::hosts::RemoteHost>,
     /// Selected index in the host list.
     pub selected: usize,
-    /// Search/filter query.
-    pub query: String,
-    /// Indices matching the current query.
+    /// Indices matching the current query (always all indices — kept for wire compat).
     pub filtered: Vec<usize>,
-    /// Host ID shown in management detail.
-    pub detail_host: Option<String>,
     /// Host ID selected for preparation or session discovery.
     pub selected_host_id: Option<String>,
     /// Transient connection state (while preparing / authenticating / connecting).
@@ -134,7 +128,7 @@ pub struct RemoteState {
     pub pending_delete: Option<String>,
     /// Password input buffer (masked in rendering).
     pub password_buf: String,
-    /// Host editor state (Some when in CreateHost/EditHost sub).
+    /// Host editor state (Some when in Edit sub-mode).
     pub editor: Option<HostEditor>,
     /// Whether the editor is in text-edit mode (actively typing into a field).
     pub editing_field: bool,
@@ -160,16 +154,10 @@ impl RemoteState {
         let filtered: Vec<usize> = (0..hosts.len()).collect();
         Self {
             intent,
-            view: if intent == RemoteIntent::Manage {
-                RemoteView::HostManager
-            } else {
-                RemoteView::HostPicker
-            },
+            view: RemoteView::Browse,
             selected: 0,
             hosts,
             filtered,
-            query: String::new(),
-            detail_host: None,
             selected_host_id: None,
             connection_state: None,
             sessions: Vec::new(),
@@ -178,31 +166,6 @@ impl RemoteState {
             password_buf: String::new(),
             editor: None,
             editing_field: false,
-        }
-    }
-
-    /// Refilter the host list based on the current query.
-    pub fn refilter(&mut self) {
-        if self.query.is_empty() {
-            self.filtered = (0..self.hosts.len()).collect();
-        } else {
-            let q = self.query.to_lowercase();
-            self.filtered = self
-                .hosts
-                .iter()
-                .enumerate()
-                .filter(|(_, h)| {
-                    h.name.to_lowercase().contains(&q)
-                        || h.host.to_lowercase().contains(&q)
-                        || h.user.to_lowercase().contains(&q)
-                        || h.tags.iter().any(|t| t.to_lowercase().contains(&q))
-                })
-                .map(|(i, _)| i)
-                .collect();
-        }
-        // Clamp selection.
-        if self.selected >= self.filtered.len() {
-            self.selected = self.filtered.len().saturating_sub(1);
         }
     }
 
@@ -234,17 +197,6 @@ impl RemoteState {
         Some(host_id)
     }
 
-    /// Open management detail for the currently selected host.
-    pub fn enter_detail(&mut self) {
-        if self.intent != RemoteIntent::Manage {
-            return;
-        }
-        if let Some(host) = self.selected_host() {
-            self.detail_host = Some(host.id.clone());
-            self.view = RemoteView::HostDetail;
-        }
-    }
-
     /// Enter the create-host form.
     pub fn enter_create(&mut self) {
         self.editor = Some(HostEditor {
@@ -258,7 +210,7 @@ impl RemoteState {
             error: None,
         });
         self.editing_field = false;
-        self.view = RemoteView::CreateHost;
+        self.view = RemoteView::Edit;
     }
 
     /// Enter the edit-host form for the currently selected host.
@@ -275,15 +227,15 @@ impl RemoteState {
                 error: None,
             });
             self.editing_field = false;
-            self.view = RemoteView::EditHost;
+            self.view = RemoteView::Edit;
         }
     }
 
-    /// Cancel editing and return to the management root.
+    /// Cancel editing and return to the browse root.
     pub fn cancel_edit(&mut self) {
         self.editor = None;
         self.editing_field = false;
-        self.view = RemoteView::HostManager;
+        self.view = RemoteView::Browse;
     }
 
     /// Validate the editor fields. Returns true if all fields are valid.
@@ -379,67 +331,49 @@ mod tests {
     }
 
     #[test]
-    fn manage_intent_starts_at_host_manager() {
+    fn manage_intent_starts_at_browse() {
         let hosts = vec![make_test_host("h1", "srv")];
         let state = RemoteState::for_intent(hosts, RemoteIntent::Manage);
         assert_eq!(state.intent, RemoteIntent::Manage);
-        assert_eq!(state.view, RemoteView::HostManager);
+        assert_eq!(state.view, RemoteView::Browse);
     }
 
     #[test]
-    fn resume_intent_starts_at_host_picker() {
+    fn resume_intent_starts_at_browse() {
         let state = RemoteState::for_intent(vec![], RemoteIntent::Resume);
         assert_eq!(state.intent, RemoteIntent::Resume);
-        assert_eq!(state.view, RemoteView::HostPicker);
+        assert_eq!(state.view, RemoteView::Browse);
     }
 
     #[test]
-    fn new_intent_starts_at_host_picker() {
+    fn new_intent_starts_at_browse() {
         let state = RemoteState::for_intent(vec![], RemoteIntent::New);
         assert_eq!(state.intent, RemoteIntent::New);
-        assert_eq!(state.view, RemoteView::HostPicker);
+        assert_eq!(state.view, RemoteView::Browse);
     }
 
     #[test]
-    fn new_alias_starts_at_host_manager() {
+    fn new_alias_starts_at_browse() {
         let state = RemoteState::new(vec![]);
         assert_eq!(state.intent, RemoteIntent::Manage);
-        assert_eq!(state.view, RemoteView::HostManager);
+        assert_eq!(state.view, RemoteView::Browse);
     }
 
     #[test]
-    fn enter_detail_only_for_manage_intent() {
-        let hosts = vec![make_test_host("h1", "srv")];
-
-        // Manage intent: enter_detail transitions to HostDetail.
-        let mut state = RemoteState::for_intent(hosts.clone(), RemoteIntent::Manage);
-        state.enter_detail();
-        assert_eq!(state.view, RemoteView::HostDetail);
-        assert_eq!(state.detail_host.as_deref(), Some("h1"));
-
-        // Resume intent: enter_detail is a no-op.
-        let mut state = RemoteState::for_intent(hosts, RemoteIntent::Resume);
-        state.enter_detail();
-        assert_eq!(state.view, RemoteView::HostPicker);
-        assert!(state.detail_host.is_none());
-    }
-
-    #[test]
-    fn enter_create_transitions_to_create_host() {
+    fn enter_create_transitions_to_edit() {
         let mut state = RemoteState::for_intent(vec![], RemoteIntent::Manage);
         state.enter_create();
-        assert_eq!(state.view, RemoteView::CreateHost);
+        assert_eq!(state.view, RemoteView::Edit);
         assert!(state.editor.is_some());
         assert!(!state.editing_field);
     }
 
     #[test]
-    fn enter_edit_transitions_to_edit_host() {
+    fn enter_edit_transitions_to_edit() {
         let hosts = vec![make_test_host("h1", "srv")];
         let mut state = RemoteState::for_intent(hosts, RemoteIntent::Manage);
-        state.enter_detail();
         state.enter_edit();
-        assert_eq!(state.view, RemoteView::EditHost);
+        assert_eq!(state.view, RemoteView::Edit);
         assert!(state.editor.is_some());
         let editor = state.editor.as_ref().unwrap();
         assert_eq!(editor.edit_id.as_deref(), Some("h1"));
@@ -447,14 +381,13 @@ mod tests {
     }
 
     #[test]
-    fn cancel_edit_returns_to_host_manager() {
+    fn cancel_edit_returns_to_browse() {
         let hosts = vec![make_test_host("h1", "srv")];
         let mut state = RemoteState::for_intent(hosts, RemoteIntent::Manage);
-        state.enter_detail();
         state.enter_edit();
-        assert_eq!(state.view, RemoteView::EditHost);
+        assert_eq!(state.view, RemoteView::Edit);
         state.cancel_edit();
-        assert_eq!(state.view, RemoteView::HostManager);
+        assert_eq!(state.view, RemoteView::Browse);
         assert!(state.editor.is_none());
     }
 
@@ -529,30 +462,6 @@ mod tests {
         }
         let host = state.build_host().expect("build_host should succeed");
         assert!(host.key_path.is_none());
-    }
-
-    #[test]
-    fn refilter_matches_name_host_user_tags() {
-        let hosts = vec![
-            make_test_host("h1", "prod-server"),
-            make_test_host("h2", "staging-server"),
-            make_test_host("h3", "dev"),
-        ];
-        let mut state = RemoteState::for_intent(hosts, RemoteIntent::Manage);
-        // Search by name substring.
-        state.query = "prod".into();
-        state.refilter();
-        assert_eq!(state.filtered, vec![0]);
-
-        // Search by user (all have "root").
-        state.query = "root".into();
-        state.refilter();
-        assert_eq!(state.filtered.len(), 3);
-
-        // Empty query: all match.
-        state.query.clear();
-        state.refilter();
-        assert_eq!(state.filtered.len(), 3);
     }
 
     #[test]

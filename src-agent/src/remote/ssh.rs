@@ -116,6 +116,7 @@ pub(crate) fn exec_remote(
 
     cmd.arg(format!("{}@{}", target.user, target.host))
         .arg(command)
+        .stdin(Stdio::null()) // Force SSH to use SSH_ASKPASS, not terminal stdin.
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 

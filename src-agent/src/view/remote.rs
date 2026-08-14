@@ -1,148 +1,99 @@
-//! Fullscreen remote host management and intent-specific host/session pickers.
+//! Two-pane remote host management dashboard (mirrors `/agents` layout).
+//!
+//! ```text
+//! ┌──────────────────┬──────────────────────────────┐
+//! │ remote hosts     │ host detail                  │
+//! │                  │                              │
+//! │ › prod-server    │  name    prod-server         │
+//! │   staging-server │  addr    root@10.0.0.1       │
+//! │   dev-box        │  key     ~/.ssh/id_ed25519   │
+//! │                  │  status  ● connected          │
+//! │                  │                              │
+//! │                  │  sessions                    │
+//! │                  │  ● session-a (current)       │
+//! │                  │  ○ session-b                 │
+//! │                  │                              │
+//! └──────────────────┴──────────────────────────────┘
+//!   ↑↓ pick · Enter connect · n new · d delete · e edit · Esc close
+//! ```
 
 use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Direction, Layout, Margin};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::Frame;
 
-use crate::app::mode::remote::{HostEditField, RemoteIntent, RemoteState, RemoteView};
+use crate::app::mode::remote::{RemoteIntent, RemoteState, RemoteView};
 use crate::view::theme::Palette;
 
-/// Draw the fullscreen remote workflow.
-pub fn draw(frame: &mut ratatui::Frame, m: &RemoteState, palette: &Palette) {
+/// List sidebar column width (includes RIGHT border).
+const SIDEBAR_W: u16 = 26;
+
+/// Draw the remote workflow.
+pub fn draw(frame: &mut Frame, m: &RemoteState, palette: &Palette) {
     match m.view {
-        RemoteView::HostManager | RemoteView::HostPicker => {
-            render_host_list(frame, m, frame.area(), palette)
+        RemoteView::Edit => {
+            crate::view::clear_and_fill(frame, frame.area(), palette.bg);
+            if let Some(editor) = &m.editor {
+                draw_editor_inner(frame, editor, m.editing_field, frame.area(), palette);
+            }
         }
-        RemoteView::HostDetail => render_host_detail_screen(frame, m, frame.area(), palette),
-        RemoteView::SessionHub => render_session_hub(frame, m, frame.area(), palette),
-        RemoteView::CreateHost | RemoteView::EditHost => {
-            render_editor(frame, m, frame.area(), palette)
+        RemoteView::SessionHub => {
+            draw_session_hub(frame, m, frame.area(), palette);
+        }
+        RemoteView::Browse => {
+            draw_browse(frame, m, palette);
         }
     }
 }
 
-/// Fullscreen searchable saved-host list.
-fn render_host_list(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, palette: &Palette) {
-    crate::view::clear_and_fill(frame, area, palette.bg);
-    let popup = area;
+/// Two-pane browse layout: header | body (list + detail) | footer.
+fn draw_browse(frame: &mut Frame, m: &RemoteState, palette: &Palette) {
+    // Fill background so the chat underneath doesn't bleed through.
+    crate::view::clear_and_fill(frame, frame.area(), palette.bg);
 
-    let block = Block::bordered()
-        .title(Span::styled(
-            match m.intent {
-                RemoteIntent::Manage => " remote hosts ",
-                RemoteIntent::Resume => " resume remote · choose host ",
-                RemoteIntent::New => " new remote · choose host ",
-            },
-            Style::default().fg(palette.dim),
-        ))
-        .border_style(Style::default().fg(palette.dim))
-        .padding(ratatui::widgets::Padding::horizontal(1));
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // header
+            Constraint::Min(0),   // body
+            Constraint::Length(1), // footer
+        ])
+        .split(frame.area());
 
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-
-    // Search line.
-    let search_line = Line::from(vec![
-        Span::styled(" > ", Style::default().fg(palette.accent)),
-        Span::styled(&m.query, Style::default().fg(palette.fg)),
-        Span::styled("_", Style::default().fg(palette.accent)),
-    ]);
-    let search_widget = Paragraph::new(search_line);
-    if inner.height > 0 {
-        frame.render_widget(
-            search_widget,
-            Rect {
-                x: inner.x,
-                y: inner.y,
-                width: inner.width,
-                height: 1,
-            },
-        );
-    }
-
-    // Host list.
-    let list_area = Rect {
-        x: inner.x,
-        y: inner.y + 1,
-        width: inner.width,
-        height: inner.height.saturating_sub(2), // minus search + hint
+    // Header.
+    let header_block = Block::new()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(palette.dim));
+    let header_inner = header_block.inner(outer[0]);
+    frame.render_widget(header_block, outer[0]);
+    let title = match m.intent {
+        RemoteIntent::Manage => "remote",
+        RemoteIntent::Resume => "remote — resume",
+        RemoteIntent::New => "remote — new session",
     };
-    for (row, &host_idx) in m
-        .filtered
-        .iter()
-        .enumerate()
-        .take(list_area.height as usize)
-    {
-        let host = &m.hosts[host_idx];
-        let is_selected = row == m.selected;
-        let is_pending_delete = m.pending_delete.as_deref() == Some(&host.id);
+    frame.render_widget(
+        Paragraph::new(Span::styled(title, Style::default().fg(palette.dim))),
+        header_inner.inner(Margin {
+            horizontal: 2,
+            vertical: 0,
+        }),
+    );
 
-        let row_style = if is_selected {
-            Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
-        } else {
-            Style::default().fg(palette.fg).bg(palette.bg)
-        };
+    // Body: list sidebar + detail pane.
+    let body_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(SIDEBAR_W), Constraint::Min(0)])
+        .split(outer[1]);
 
-        let content = format!(
-            " {} {}  {}@{}{}",
-            if host.last_connected.is_some() {
-                "●"
-            } else {
-                "○"
-            },
-            host.name,
-            host.user,
-            host.host,
-            if is_pending_delete { " [confirm?]" } else { "" },
-        );
-        let width = list_area.width as usize;
-        let padded = format!("{content:<width$}");
-        let line = Line::from(Span::styled(padded, row_style));
+    draw_host_list(frame, m, palette, body_cols[0]);
+    draw_detail(frame, m, palette, body_cols[1]);
 
-        let y = list_area.y + row as u16;
-        if y < list_area.y + list_area.height {
-            frame.render_widget(
-                Paragraph::new(line),
-                Rect {
-                    x: list_area.x,
-                    y,
-                    width: list_area.width,
-                    height: 1,
-                },
-            );
-        }
-    }
-
-    // Empty state.
-    if m.filtered.is_empty() && list_area.height > 0 {
-        let empty_text = if m.intent == RemoteIntent::Manage {
-            "no hosts. Ctrl+A to add."
-        } else {
-            "no saved hosts. Use /remote to add one."
-        };
-        let empty = Line::from(Span::styled(empty_text, Style::default().fg(palette.dim)));
-        frame.render_widget(
-            Paragraph::new(empty),
-            Rect {
-                x: inner.x,
-                y: inner.y + 1,
-                width: inner.width,
-                height: 1,
-            },
-        );
-    }
-
-    // Hint bar — full-width inverse bar matching other overlays.
-    if inner.height > 0 {
-        let hint_y = inner.y + inner.height - 1;
-        let hint = match m.intent {
-            RemoteIntent::Manage => {
-                "enter detail · ctrl+a add · i import · backspace delete (enter/y confirm) · esc close"
-            }
-            RemoteIntent::Resume => "enter prepare host · esc close",
-            RemoteIntent::New => "enter prepare host and create session · esc close",
-        };
+    // Footer.
+    let footer_rect = outer[2];
+    if footer_rect.width > 0 {
+        let hint = footer_hint(m);
         let bar_style = Style::default()
             .fg(palette.sel_fg)
             .bg(palette.sel_bg)
@@ -150,13 +101,99 @@ fn render_host_list(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, pal
         let padded = format!(
             " {:<width$}",
             hint,
-            width = inner.width.saturating_sub(1) as usize
+            width = footer_rect.width.saturating_sub(1) as usize
         );
         frame.render_widget(
             Paragraph::new(Line::from(Span::raw(padded))).style(bar_style),
+            footer_rect,
+        );
+    }
+
+    // Delete confirm overlay (on top of everything).
+    if m.pending_delete.is_some() {
+        draw_delete_confirm(frame, m, frame.area(), palette);
+    }
+}
+
+/// Render the host list sidebar (left pane) with search + selection.
+fn draw_host_list(frame: &mut Frame, m: &RemoteState, palette: &Palette, area: Rect) {
+    let block = Block::new()
+        .borders(Borders::RIGHT)
+        .border_style(Style::default().fg(palette.dim));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height == 0 {
+        return;
+    }
+
+    // Host rows.
+    let list_start_y = inner.y;
+    let list_height = inner.height;
+    for (row, &host_idx) in m
+        .filtered
+        .iter()
+        .enumerate()
+        .take(list_height as usize)
+    {
+        let host = &m.hosts[host_idx];
+        let is_selected = row == m.selected;
+
+        let dot = if host.last_connected.is_some() {
+            Span::styled("●", Style::default().fg(palette.success))
+        } else {
+            Span::styled("○", Style::default().fg(palette.dim))
+        };
+
+        let name_w = (inner.width as usize).saturating_sub(3).max(2);
+        let name = truncate_str(&host.name, name_w);
+
+        let line = if is_selected {
+            let hl = Style::default().fg(palette.sel_fg).bg(palette.sel_bg);
+            Line::from(vec![
+                Span::styled("› ", hl),
+                Span::styled(format!("{name:<width$}", width = name_w), hl),
+                Span::styled(" ", Style::default()),
+                dot,
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled("  ", Style::default().fg(palette.dim)),
+                Span::styled(
+                    format!("{name:<width$}", width = name_w),
+                    Style::default().fg(palette.dim),
+                ),
+                Span::styled(" ", Style::default()),
+                dot,
+            ])
+        };
+
+        frame.render_widget(
+            Paragraph::new(line),
             Rect {
                 x: inner.x,
-                y: hint_y,
+                y: list_start_y + row as u16,
+                width: inner.width,
+                height: 1,
+            },
+        );
+    }
+
+    // Empty state.
+    if m.filtered.is_empty() && list_height > 0 {
+        let empty_text = if m.intent == RemoteIntent::Manage {
+            "no hosts. Press n to add."
+        } else {
+            "no saved hosts. Use /remote to add one."
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                empty_text,
+                Style::default().fg(palette.dim),
+            ))),
+            Rect {
+                x: inner.x,
+                y: list_start_y,
                 width: inner.width,
                 height: 1,
             },
@@ -164,81 +201,12 @@ fn render_host_list(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, pal
     }
 }
 
-/// Fullscreen management diagnostics for one saved host.
-fn render_host_detail_screen(
-    frame: &mut ratatui::Frame,
-    m: &RemoteState,
-    area: Rect,
-    palette: &Palette,
-) {
-    // Header (2 rows).
-    let header_area = Rect {
-        x: area.x,
-        y: area.y,
-        width: area.width,
-        height: 2,
-    };
-    let body_area = Rect {
-        x: area.x,
-        y: area.y + 2,
-        width: area.width,
-        height: area.height.saturating_sub(3),
-    };
-    let footer_area = Rect {
-        x: area.x,
-        y: area.y + area.height - 1,
-        width: area.width,
-        height: 1,
-    };
-
-    let title = "remote > host diagnostics";
-    let header = Paragraph::new(Line::from(Span::styled(
-        format!(" {title} "),
-        Style::default()
-            .fg(palette.fg)
-            .bg(palette.bg)
-            .add_modifier(Modifier::BOLD),
-    )));
-    frame.render_widget(header, header_area);
-    // Separator line.
-    let sep = Paragraph::new(Line::from(Span::styled(
-        "─".repeat(area.width as usize),
-        Style::default().fg(palette.dim),
-    )));
-    frame.render_widget(
-        sep,
-        Rect {
-            x: area.x,
-            y: area.y + 1,
-            width: area.width,
-            height: 1,
-        },
-    );
-
-    // Body: management detail and diagnostics.
-    render_host_detail(frame, m, body_area, palette);
-
-    let hint = if m.pending_delete.is_some() {
-        " delete host? Enter/y confirm · Esc/n cancel ".to_string()
-    } else {
-        " e edit · Backspace delete · Esc back ".to_string()
-    };
-    let hint_line = Line::from(Span::styled(
-        hint,
-        Style::default().fg(palette.sel_fg).bg(palette.accent),
-    ));
-    frame.render_widget(Paragraph::new(hint_line), footer_area);
-}
-
-/// Render the host detail pane (left half).
-fn render_host_detail(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, palette: &Palette) {
-    let block = Block::default()
-        .title(" host detail ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.dim));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+/// Render the detail pane (right side of browse mode).
+fn draw_detail(frame: &mut Frame, m: &RemoteState, palette: &Palette, area: Rect) {
+    let inner = area.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
 
     let Some(host) = m.selected_host() else {
         let msg = Paragraph::new(Span::styled(
@@ -249,48 +217,170 @@ fn render_host_detail(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, p
         return;
     };
 
+    let value_w = (inner.width as usize).saturating_sub(14).max(4);
     let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(vec![
-        Span::styled("  name: ", Style::default().fg(palette.dim)),
-        Span::styled(&host.name, Style::default().fg(palette.fg)),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  addr: ", Style::default().fg(palette.dim)),
-        Span::styled(host.address(), Style::default().fg(palette.accent)),
-    ]));
+
+    let row = |label: &str, value: String, color: ratatui::style::Color| -> Line<'static> {
+        Line::from(vec![
+            Span::styled(format!("{label:<14}"), Style::default().fg(palette.dim)),
+            Span::styled(value, Style::default().fg(color)),
+        ])
+    };
+
+    lines.push(row("name", host.name.clone(), palette.accent));
+    lines.push(row(
+        "addr",
+        host.address(),
+        palette.fg,
+    ));
     if let Some(ref key) = host.key_path {
-        lines.push(Line::from(vec![
-            Span::styled("  key:  ", Style::default().fg(palette.dim)),
-            Span::styled(key.as_str(), Style::default().fg(palette.fg)),
-        ]));
+        lines.push(row("key", truncate_str(key, value_w), palette.fg));
     }
+
     let status_span = if host.last_connected.is_some() {
         Span::styled("● connected", Style::default().fg(palette.success))
     } else {
         Span::styled("○ not connected", Style::default().fg(palette.dim))
     };
     lines.push(Line::from(vec![
-        Span::styled("  status: ", Style::default().fg(palette.dim)),
+        Span::styled("status         ", Style::default().fg(palette.dim)),
         status_span,
     ]));
+
     if !host.tags.is_empty() {
+        lines.push(row(
+            "tags",
+            truncate_str(&host.tags.join(", "), value_w),
+            palette.info,
+        ));
+    }
+
+    // Connection state (if active).
+    if let Some(ref cs) = m.connection_state {
+        use crate::app::mode::remote::ConnectionState;
+        let cs_text = match cs {
+            ConnectionState::Disconnected => "disconnected".to_string(),
+            ConnectionState::Resolving => "resolving…".to_string(),
+            ConnectionState::Authenticating => "authenticating…".to_string(),
+            ConnectionState::AuthRequired { .. } => "auth required".to_string(),
+            ConnectionState::Bootstrapping => "bootstrapping…".to_string(),
+            ConnectionState::Connecting => "connecting…".to_string(),
+            ConnectionState::Connected { session_id } => {
+                format!("connected ({})", truncate_str(session_id, 12))
+            }
+            ConnectionState::Error { message } => format!("error: {}", truncate_str(message, 30)),
+        };
+        lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("  tags: ", Style::default().fg(palette.dim)),
-            Span::styled(host.tags.join(", "), Style::default().fg(palette.info)),
+            Span::styled("connection     ", Style::default().fg(palette.dim)),
+            Span::styled(cs_text, Style::default().fg(palette.accent)),
         ]));
+    }
+
+    // Sessions (if any discovered).
+    if !m.sessions.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "sessions",
+            Style::default().fg(palette.dim),
+        )));
+        for (i, session) in m.sessions.iter().take(8).enumerate() {
+            let dot = if session.working {
+                Span::styled("●", Style::default().fg(palette.accent))
+            } else {
+                Span::styled("○", Style::default().fg(palette.dim))
+            };
+            let fg_label = if session.is_foreground {
+                " (current)"
+            } else {
+                ""
+            };
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                dot,
+                Span::raw(" "),
+                Span::styled(&session.name, Style::default().fg(palette.fg)),
+                Span::styled(fg_label, Style::default().fg(palette.dim)),
+            ]));
+            let _ = i; // suppress unused warning
+        }
     }
 
     let widget = Paragraph::new(lines).wrap(Wrap { trim: true });
     frame.render_widget(widget, inner);
 }
 
-/// Render the sessions pane (right half).
-fn render_sessions_pane(
-    frame: &mut ratatui::Frame,
-    m: &RemoteState,
-    area: Rect,
-    palette: &Palette,
-) {
+/// Render a delete confirm popup overlaid on the center of the screen.
+fn draw_delete_confirm(frame: &mut Frame, m: &RemoteState, area: Rect, palette: &Palette) {
+    let host_name = m
+        .pending_delete
+        .as_deref()
+        .and_then(|id| m.hosts.iter().find(|h| h.id == id))
+        .map(|h| h.name.as_str())
+        .unwrap_or("host");
+
+    let msg = format!(" Delete {host_name}? (y/n) ");
+    let popup_w = msg.len() as u16 + 4;
+    let popup_h: u16 = 3;
+    let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
+    let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
+    let popup = Rect {
+        x,
+        y,
+        width: popup_w.min(area.width),
+        height: popup_h.min(area.height),
+    };
+
+    let block = Block::bordered()
+        .title(Span::styled(
+            " confirm ",
+            Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
+        ))
+        .border_style(Style::default().fg(palette.accent));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!("Delete {host_name}?"),
+            Style::default().fg(palette.fg),
+        ))),
+        inner,
+    );
+}
+
+/// Render the dedicated remote session hub (fullscreen overlay).
+fn draw_session_hub(frame: &mut Frame, m: &RemoteState, area: Rect, palette: &Palette) {
+    crate::view::clear_and_fill(frame, area, palette.bg);
+    let host_name = m
+        .selected_host_id
+        .as_deref()
+        .and_then(|id| m.hosts.iter().find(|host| host.id == id))
+        .map(|host| host.name.as_str())
+        .unwrap_or("remote host");
+    let rows = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Length(2),
+        ratatui::layout::Constraint::Min(1),
+        ratatui::layout::Constraint::Length(1),
+    ])
+    .split(area);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!(" resume remote · {host_name} "),
+            Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
+        ))),
+        rows[0],
+    );
+    draw_sessions_list(frame, m, rows[1], palette);
+    frame.render_widget(
+        Paragraph::new(" enter resume selected UUID · esc choose another host ")
+            .style(Style::default().fg(palette.sel_fg).bg(palette.accent)),
+        rows[2],
+    );
+}
+
+/// Render the sessions list inside the session hub.
+fn draw_sessions_list(frame: &mut Frame, m: &RemoteState, area: Rect, palette: &Palette) {
     let block = Block::default()
         .title(" sessions ")
         .borders(Borders::ALL)
@@ -347,36 +437,6 @@ fn render_sessions_pane(
     }
 }
 
-/// Render the dedicated remote session hub.
-fn render_session_hub(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, palette: &Palette) {
-    crate::view::clear_and_fill(frame, area, palette.bg);
-    let host_name = m
-        .selected_host_id
-        .as_deref()
-        .and_then(|id| m.hosts.iter().find(|host| host.id == id))
-        .map(|host| host.name.as_str())
-        .unwrap_or("remote host");
-    let rows = ratatui::layout::Layout::vertical([
-        ratatui::layout::Constraint::Length(2),
-        ratatui::layout::Constraint::Min(1),
-        ratatui::layout::Constraint::Length(1),
-    ])
-    .split(area);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!(" resume remote · {host_name} "),
-            Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
-        ))),
-        rows[0],
-    );
-    render_sessions_pane(frame, m, rows[1], palette);
-    frame.render_widget(
-        Paragraph::new(" enter resume selected UUID · esc choose another host ")
-            .style(Style::default().fg(palette.sel_fg).bg(palette.accent)),
-        rows[2],
-    );
-}
-
 /// Render the host editor form (create or edit).
 ///
 /// Full-screen layout:
@@ -384,9 +444,13 @@ fn render_session_hub(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, p
 ///   5 rows for fields: name, user, host, port, key path
 ///   Error message (if any)
 ///   Footer hint bar
-fn render_editor(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, palette: &Palette) {
-    let Some(editor) = &m.editor else { return };
-
+fn draw_editor_inner(
+    frame: &mut Frame,
+    editor: &crate::app::mode::remote::HostEditor,
+    editing_field: bool,
+    area: Rect,
+    palette: &Palette,
+) {
     let header_area = Rect {
         x: area.x,
         y: area.y,
@@ -401,9 +465,10 @@ fn render_editor(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, palett
     };
 
     // Header.
-    let title = match m.view {
-        RemoteView::EditHost => "remote > edit host",
-        _ => "remote > add host",
+    let title = if editor.edit_id.is_some() {
+        "remote > edit host"
+    } else {
+        "remote > add host"
     };
     let header = Paragraph::new(Line::from(Span::styled(
         format!(" {title} "),
@@ -444,6 +509,7 @@ fn render_editor(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, palett
     let inner = block.inner(body_area);
     frame.render_widget(block, body_area);
 
+    use crate::app::mode::remote::HostEditField;
     let fields: [(HostEditField, &str); 5] = [
         (HostEditField::Name, &editor.name),
         (HostEditField::User, &editor.user),
@@ -468,7 +534,7 @@ fn render_editor(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, palett
             Style::default().fg(palette.dim)
         };
 
-        let cursor = if is_focused && m.editing_field {
+        let cursor = if is_focused && editing_field {
             "█"
         } else if is_focused {
             "▌"
@@ -527,7 +593,7 @@ fn render_editor(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, palett
     }
 
     // Footer hint.
-    let hint = if m.editing_field {
+    let hint = if editing_field {
         " Enter confirm field  Esc cancel edit "
     } else {
         " Enter edit field  s save  Esc back  ↑↓ navigate "
@@ -537,4 +603,27 @@ fn render_editor(frame: &mut ratatui::Frame, m: &RemoteState, area: Rect, palett
         Style::default().fg(palette.sel_fg).bg(palette.accent),
     ));
     frame.render_widget(Paragraph::new(hint_line), footer_area);
+}
+
+/// Context-sensitive footer hint for the active view.
+fn footer_hint(m: &RemoteState) -> &'static str {
+    match m.intent {
+        RemoteIntent::Manage => "↑↓ pick · Enter connect · n new · d delete · e edit · i import · Esc close",
+        RemoteIntent::Resume => "↑↓ pick · Enter connect · Esc close",
+        RemoteIntent::New => "↑↓ pick · Enter connect · Esc close",
+    }
+}
+
+/// Truncate `s` to at most `max` chars, appending `…` if cut.
+fn truncate_str(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        s.to_string()
+    } else {
+        let cut = max.saturating_sub(1);
+        chars[..cut].iter().collect::<String>() + "…"
+    }
 }
