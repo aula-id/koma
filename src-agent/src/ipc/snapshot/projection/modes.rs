@@ -951,7 +951,7 @@ pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
             })
             .collect(),
         selected: m.selected,
-        query: m.query.clone(),
+        query: String::new(),
         filtered: m.filtered.clone(),
         detail_host: None,
         selected_host_id: m.selected_host_id.clone(),
