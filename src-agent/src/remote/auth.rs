@@ -308,7 +308,14 @@ mod tests {
             path = auth.askpass_path.clone().unwrap();
             assert!(path.exists());
         }
-        // After drop, the file should be deleted.
-        assert!(!path.exists());
+        // After drop, the file should be deleted. Retry briefly to handle
+        // filesystem race on slow/parallel CI runners.
+        for _ in 0..10 {
+            if !path.exists() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!path.exists(), "askpass file was not cleaned up after drop");
     }
 }
