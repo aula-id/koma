@@ -242,7 +242,7 @@ fn askpass_script_content(password: &str) -> String {
     format!(
         r#"#!/bin/sh
 case "$1" in
-  *[Pp]assword*|*[Pp]assphrase*) printf '%s\\n' '{escaped}' ;;
+  *[Pp]assword*|*[Pp]assphrase*) printf '%s\n' '{escaped}' ;;
   *) exit 1 ;;
 esac
 "#
@@ -268,6 +268,29 @@ mod tests {
         let script = askpass_script_content("it's-a-secret");
         // The escaped password should handle single quotes.
         assert!(script.contains("it'\\''s-a-secret"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn askpass_helper_outputs_password_with_newline_and_rejects_other_prompts() {
+        let auth = SshAuth::new("it's-a-secret".to_string()).unwrap();
+        let helper = auth.askpass_path.as_ref().unwrap();
+
+        let password_output = StdCommand::new("sh")
+            .arg(helper)
+            .arg("user@example.com's password:")
+            .output()
+            .unwrap();
+        assert!(password_output.status.success());
+        assert_eq!(password_output.stdout, b"it's-a-secret\n");
+
+        let unrelated_output = StdCommand::new("sh")
+            .arg(helper)
+            .arg("Are you sure you want to continue connecting (yes/no)?")
+            .output()
+            .unwrap();
+        assert!(!unrelated_output.status.success());
+        assert!(unrelated_output.stdout.is_empty());
     }
 
     #[test]
