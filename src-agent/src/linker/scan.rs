@@ -171,7 +171,8 @@ pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
     }
 
     // Build the known_files set from the ProjectIndex for resolution.
-    let known_files: HashSet<String> = index.known_file_set();
+    // NOTE: deferred until after reclassification block to avoid borrow conflict.
+    // The reclassification block mutates `index`, so we cannot hold a borrow.
 
     // Phase 3: reclassify .h files using compile DB header language detection.
     // Without this, .h files are always Lang::C.  When compile DB owns a .h
@@ -209,6 +210,8 @@ pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
         }
     }
 
+    let known_files = index.known_file_set();
+
     for sf in &source_files {
         let lang = detect_lang(&sf.rel_path);
         if lang == Lang::Unknown {
@@ -232,7 +235,7 @@ pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
 
         if lang == Lang::Rust {
             let structured = extract_rust_imports(&content);
-            let ctx = compute_module_context(&sf.abs_path, owner_path, &known_files);
+            let ctx = compute_module_context(&sf.abs_path, owner_path, known_files);
             for ri in &structured {
                 let is_mod = ri.kind == RustImportKind::Mod;
                 let edge_kind = if is_mod {
@@ -252,10 +255,10 @@ pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
                         ri.path_attr.as_deref(),
                         &sf.abs_path,
                         &ctx,
-                        &known_files,
+                        known_files,
                     )
                 } else {
-                    resolve_rust_use(&ri.raw, &sf.abs_path, &ctx, &known_files)
+                    resolve_rust_use(&ri.raw, &sf.abs_path, &ctx, known_files)
                 };
 
                 // mod declarations are always local (inherently module-scoped).
@@ -357,7 +360,7 @@ pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
                     let ctx = CFamilyResolveContext {
                         importer_path: &sf.abs_path,
                         compile_flags: entry_flags_ref,
-                        known_files: &known_files,
+                        known_files,
                         owner_root: owner,
                     };
                     c_family::resolve_c_include(import_ref, &ctx)
@@ -366,7 +369,7 @@ pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
                         importer_path: &sf.abs_path,
                         ts_config,
                         package_json: package_json_info,
-                        known_files: &known_files,
+                        known_files,
                         owner_root: owner,
                     };
                     js_ts::resolve_js_ts_import(import_ref, &ctx)
@@ -433,7 +436,7 @@ pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
         } else {
             let raw_imports = extract_imports_for_file(lang, &sf.abs_path, &content);
             for raw in &raw_imports {
-                let resolved = resolve_import(lang, raw, &sf.abs_path, owner_path, &known_files);
+                let resolved = resolve_import(lang, raw, &sf.abs_path, owner_path, known_files);
 
                 let local = is_local_looking_import(lang, raw);
                 match resolved {
@@ -524,7 +527,7 @@ pub fn scan_file(
 
     if lang == Lang::Rust {
         let structured = extract_rust_imports(&content);
-        let ctx = compute_module_context(&path_str, owner_path, &known_files);
+        let ctx = compute_module_context(&path_str, owner_path, known_files);
         for ri in &structured {
             let is_mod = ri.kind == RustImportKind::Mod;
             let edge_kind = if is_mod {
@@ -544,10 +547,10 @@ pub fn scan_file(
                     ri.path_attr.as_deref(),
                     &path_str,
                     &ctx,
-                    &known_files,
+                    known_files,
                 )
             } else {
-                resolve_rust_use(&ri.raw, &path_str, &ctx, &known_files)
+                resolve_rust_use(&ri.raw, &path_str, &ctx, known_files)
             };
 
             // mod declarations are always local (inherently module-scoped).
@@ -647,7 +650,7 @@ pub fn scan_file(
                 let ctx = CFamilyResolveContext {
                     importer_path: &path_str,
                     compile_flags: entry_flags_ref,
-                    known_files: &known_files,
+                    known_files,
                     owner_root: &owner,
                 };
                 c_family::resolve_c_include(import_ref, &ctx)
@@ -656,7 +659,7 @@ pub fn scan_file(
                     importer_path: &path_str,
                     ts_config,
                     package_json: package_json_info,
-                    known_files: &known_files,
+                    known_files,
                     owner_root: &owner,
                 };
                 js_ts::resolve_js_ts_import(import_ref, &ctx)
@@ -718,7 +721,7 @@ pub fn scan_file(
     } else {
         let raw_imports = extract_imports_for_file(lang, &path_str, &content);
         for raw in &raw_imports {
-            let resolved = resolve_import(lang, raw, &path_str, owner_path, &known_files);
+            let resolved = resolve_import(lang, raw, &path_str, owner_path, known_files);
 
             let local = is_local_looking_import(lang, raw);
             match resolved {
