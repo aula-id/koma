@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, type FormEvent, type KeyboardEvent } from 'react'
-import { Plus, Trash2, Edit3, Link2, LoaderCircle, Check, X, Lock } from 'lucide-react'
+import { Plus, Trash2, Edit3, Link2, Check, X, Lock } from 'lucide-react'
 import { useKoma } from '../../store/koma'
+import { BrailleSpinner } from '../BrailleSpinner'
 
 type RemotePanelView =
   | { kind: 'list' }
@@ -209,7 +210,7 @@ export function RemotePanel() {
                   className="flex min-h-[49px] items-center justify-between bg-koma-panel border border-koma-accent/40 rounded px-2 py-1.5"
                 >
                   <div className="flex items-center gap-2 min-w-0">
-                    <LoaderCircle size={13} className="flex-none animate-spin text-koma-accent" />
+                    <BrailleSpinner size={13} className="text-koma-accent" />
                     <div className="min-w-0">
                       <div className="text-koma-fg font-medium truncate">{host.name}</div>
                       <div className="text-koma-dim truncate">
