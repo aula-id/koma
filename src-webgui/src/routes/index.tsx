@@ -12,6 +12,7 @@ import { ResumePalette } from '../components/ResumePalette'
 import { RenameOverlay } from '../components/RenameOverlay'
 import { OmniSearchPalette } from '../components/OmniSearchPalette'
 import { SwitchingOverlay } from '../components/SwitchingOverlay'
+import { RemotePasswordPrompt } from '../components/RemotePasswordPrompt'
 import { ToastContainer } from '../components/ToastContainer'
 import { UsageFooter } from '../components/UsageFooter'
 import { useKoma } from '../store/koma'
@@ -64,6 +65,7 @@ function RootLayout() {
   const omnisearchOpen = useKoma((s) => s.ui.omnisearchOpen)
   const closeOmniSearch = useKoma((s) => s.closeOmniSearch)
   const cancelSwitching = useKoma((s) => s.cancelSwitching)
+  const remoteState = useKoma((s) => s.remoteState)
   const req = useKoma((s) => s.req)
   const openSettingsTab = useKoma((s) => s.openSettingsTab)
   const openHelpTab = useKoma((s) => s.openHelpTab)
@@ -262,6 +264,18 @@ function RootLayout() {
           req({ r: 'CancelSwitch' })
           cancelSwitching()
           setOverlay('resume')
+        }}
+      />
+      <RemotePasswordPrompt
+        active={remoteState.state === 'auth_required'}
+        target={remoteState.user && remoteState.host ? `${remoteState.user}@${remoteState.host}` : null}
+        onSubmit={(password) => req({ r: 'SubmitRemotePassword', password })}
+        onCancel={() => {
+          req({ r: 'CancelRemoteConnect' })
+          if (useKoma.getState().ui.switchingTo) {
+            req({ r: 'CancelSwitch' })
+            cancelSwitching()
+          }
         }}
       />
       <ToastContainer />

@@ -83,7 +83,15 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
   }
 
   const connectRemote = (hostId: string, name: string) => {
-    if (remoteState.state !== 'disconnected' && remoteState.state !== 'error') return
+    if (remoteState.state !== 'disconnected' && remoteState.state !== 'error') {
+      // Already connecting/connected — let the user know why nothing happened.
+      const s = useKoma.getState()
+      const seq = s.ui.toastSeq + 1
+      useKoma.setState((prev) => ({
+        ui: { ...prev.ui, toastSeq: seq, toast: { id: seq, text: `Already ${remoteState.state.replace('_', ' ')}`, kind: 'error' } },
+      }))
+      return
+    }
     startSwitching(`remote ${name}`)
     req({ r: 'ConnectRemoteHost', hostId })
     setOpen(false)
