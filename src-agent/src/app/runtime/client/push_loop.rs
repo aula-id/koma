@@ -1001,12 +1001,7 @@ pub(super) fn push_loop(
                     // Create a password exchange channel. The worker returns the
                     // established remote transport through `remote_connected_tx`.
                     let (pw_tx, pw_rx) = std::sync::mpsc::channel::<String>();
-                    if let Ok(mut tx) = remote_shared.password_tx.lock() {
-                        *tx = Some(pw_tx);
-                    }
-                    remote_shared
-                        .cancelled
-                        .store(false, std::sync::atomic::Ordering::Release);
+                    let (attempt_id, cancelled) = remote_shared.begin(pw_tx);
                     push_remote_state(
                         push,
                         "resolving",
@@ -1018,11 +1013,13 @@ pub(super) fn push_loop(
                         &[],
                     );
                     super::remote_ctl::spawn_connect_worker(
+                        attempt_id,
                         host_id,
                         remote_state_tx.clone(),
                         remote_connected_tx.clone(),
                         pw_rx,
-                        std::sync::Arc::clone(&remote_shared.cancelled),
+                        cancelled,
+                        std::sync::Arc::clone(&remote_shared),
                         tokio::runtime::Handle::current(),
                     );
                 }
@@ -1030,22 +1027,11 @@ pub(super) fn push_loop(
                     // During connect/auth, dropping the password sender releases the
                     // worker. Once connected, push_loop has already transitioned to
                     // the remote transport; its normal detach path handles cleanup.
-                    remote_shared
-                        .cancelled
-                        .store(true, std::sync::atomic::Ordering::Release);
-                    if let Ok(mut tx) = remote_shared.password_tx.lock() {
-                        *tx = None;
-                    }
+                    remote_shared.cancel();
                     push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
                 }
                 Ok(super::HostCtl::SubmitRemotePassword { password }) => {
-                    // Forward the password to the waiting connect worker.
-                    if let Ok(mut tx) = remote_shared.password_tx.lock() {
-                        if let Some(tx) = tx.take() {
-                            let _ = tx.send(password);
-                        }
-                    }
-                    push_remote_state(push, "connecting", None, None, None, None, None, &[]);
+                    remote_shared.submit_password(password);
                 }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.
@@ -1198,6 +1184,9 @@ pub(super) fn push_loop(
 
         // --- REMOTE HOST CONNECT: push state transitions, then open the transport ---
         while let Ok(update) = remote_state_rx.try_recv() {
+            if !remote_shared.is_current(update.attempt_id) {
+                continue;
+            }
             push_remote_state(
                 push,
                 &update.state,
@@ -1209,7 +1198,12 @@ pub(super) fn push_loop(
                 &update.sessions,
             );
         }
-        if let Ok(active) = remote_connected_rx.try_recv() {
+        while let Ok(mut active) = remote_connected_rx.try_recv() {
+            if !remote_shared.is_current(active.attempt_id) {
+                let _ = tokio::runtime::Handle::current()
+                    .block_on(async { active.ssh_child.kill().await });
+                continue;
+            }
             let session_id = match &active.connection.transport {
                 super::connect::TransportKind::Remote { session_id, .. } => session_id.clone(),
                 super::connect::TransportKind::Local { session_id } => session_id.clone(),
