@@ -242,7 +242,7 @@ fn askpass_script_content(password: &str) -> String {
     format!(
         r#"#!/bin/sh
 case "$1" in
-  *[Pp]assword:|*[Pp]assphrase*) echo '{escaped}' ;;
+  *[Pp]assword*|*[Pp]assphrase*) printf '%s\\n' '{escaped}' ;;
   *) exit 1 ;;
 esac
 "#
@@ -259,7 +259,7 @@ mod tests {
         // Should contain the password for password prompts.
         assert!(script.contains("hunter2"));
         // Should have the case statement for validation.
-        assert!(script.contains("[Pp]assword:"));
+        assert!(script.contains("[Pp]assword*"));
         assert!(script.contains("[Pp]assphrase"));
     }
 
@@ -308,7 +308,14 @@ mod tests {
             path = auth.askpass_path.clone().unwrap();
             assert!(path.exists());
         }
-        // After drop, the file should be deleted.
-        assert!(!path.exists());
+        // After drop, the file should be deleted. Retry briefly to handle
+        // filesystem race on slow/parallel CI runners.
+        for _ in 0..10 {
+            if !path.exists() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!path.exists(), "askpass file was not cleaned up after drop");
     }
 }

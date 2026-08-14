@@ -4,7 +4,6 @@ import { Check, Minus, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import type { LoadPhase } from '../store/koma'
 import { BrailleSpinner, useBrailleFrame } from './BrailleSpinner'
-import { RemotePasswordPrompt } from './RemotePasswordPrompt'
 
 // Duplicated from Titlebar.tsx's private (unexported) `post` helper — this
 // overlay covers the titlebar region too and needs the same win-drag/maximize
@@ -221,15 +220,9 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
               </motion.div>
             )}
             {remoteState.state === 'auth_required' ? (
-              <RemotePasswordPrompt
-                active
-                target={remoteState.user && remoteState.host ? `${remoteState.user}@${remoteState.host}` : null}
-                onSubmit={(password) => useKoma.getState().req({ r: 'SubmitRemotePassword', password })}
-                onCancel={() => {
-                  useKoma.getState().req({ r: 'CancelRemoteConnect' })
-                  useKoma.getState().cancelSwitching()
-                }}
-              />
+              <div className="text-[12px] text-koma-fg opacity-50">
+                Waiting for password…
+              </div>
             ) : (
               <button
                 onClick={() => {

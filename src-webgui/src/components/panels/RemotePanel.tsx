@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo } from 'react'
-import { Plus, Trash2, Edit3, Link2, LoaderCircle, Check, X } from 'lucide-react'
+import { useState, useEffect, useMemo, useRef, type FormEvent, type KeyboardEvent } from 'react'
+import { Plus, Trash2, Edit3, Link2, Check, X, Lock } from 'lucide-react'
 import { useKoma } from '../../store/koma'
-import { RemotePasswordPrompt } from '../RemotePasswordPrompt'
+import { BrailleSpinner } from '../BrailleSpinner'
 
 type RemotePanelView =
   | { kind: 'list' }
@@ -22,6 +22,9 @@ const emptyDraft = (): RemoteHostDraft => ({
   port: 22,
   keyPath: '',
 })
+
+/** States where the connection is in-progress (not idle). */
+const ACTIVE_STATES = ['resolving', 'auth_required', 'bootstrapping', 'connecting']
 
 export function RemotePanel() {
   const remoteHosts = useKoma((s) => s.remoteHosts)
@@ -65,9 +68,9 @@ export function RemotePanel() {
       isNew: false,
     })
   }
-  const connecting = !['disconnected', 'connected', 'error'].includes(remoteState.state)
+  const isBusy = ACTIVE_STATES.includes(remoteState.state)
   const handleConnect = (hostId: string) => {
-    if (connecting) return
+    if (isBusy) return
     push({ r: 'ConnectRemoteHost', hostId })
   }
   const confirmDelete = (hostId: string) => {
@@ -188,31 +191,6 @@ export function RemotePanel() {
         />
       </div>
 
-      {remoteState.state !== 'disconnected' && (
-        <div className={`mx-2 mt-2 rounded border px-2 py-1.5 ${remoteState.state === 'error' ? 'border-koma-error/50 text-koma-error' : 'border-koma-border text-koma-fg'}`}>
-          <div className="flex items-center gap-1.5">
-            {connecting && <LoaderCircle size={13} className="animate-spin text-koma-accent" />}
-            <span className="capitalize">{remoteState.state.replace('_', ' ')}</span>
-          </div>
-          {remoteState.error && <div className="mt-1 text-[11px] opacity-80">{remoteState.error}</div>}
-          <RemotePasswordPrompt
-            compact
-            active={remoteState.state === 'auth_required'}
-            target={remoteState.user && remoteState.host ? `${remoteState.user}@${remoteState.host}` : null}
-            onSubmit={(password) => push({ r: 'SubmitRemotePassword', password })}
-            onCancel={() => push({ r: 'CancelRemoteConnect' })}
-          />
-          {['resolving', 'bootstrapping', 'connecting'].includes(remoteState.state) && (
-            <button
-              className="mt-2 rounded border border-koma-border px-2 py-1 text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
-              onClick={() => push({ r: 'CancelRemoteConnect' })}
-            >
-              Cancel
-            </button>
-          )}
-        </div>
-      )}
-
       {/* Host list — scrollable, fills remaining space */}
       <div className="flex-1 overflow-auto px-2 py-1">
         <div className="flex flex-col gap-1">
@@ -221,10 +199,42 @@ export function RemotePanel() {
           )}
           {filtered.map((host) => {
             const armed = armedDelete === host.id
+            const isActiveHost = isBusy && remoteState.hostId === host.id
+            const isOtherBusy = isBusy && remoteState.hostId !== host.id
+
+            /* ── Active host: inline loading / auth state ── */
+            if (isActiveHost) {
+              return (
+                <div
+                  key={host.id}
+                  className="flex min-h-[49px] items-center justify-between bg-koma-panel border border-koma-accent/40 rounded px-2 py-1.5"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <BrailleSpinner size={13} className="text-koma-accent" />
+                    <div className="min-w-0">
+                      <div className="text-koma-fg font-medium truncate">{host.name}</div>
+                      <div className="text-koma-dim truncate">
+                        {remoteState.state === 'auth_required'
+                          ? 'Waiting for password…'
+                          : `${remoteState.state.replace('_', ' ')}…`}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    className="flex-none rounded border border-koma-border px-2 py-0.5 text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
+                    onClick={() => push({ r: 'CancelRemoteConnect' })}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )
+            }
+
+            /* ── Normal / armed / disabled host row ── */
             return (
             <div
               key={host.id}
-              className="flex min-h-[49px] items-center justify-between bg-koma-panel border border-koma-border rounded px-2 py-1.5 hover:bg-koma-hover"
+              className={`flex min-h-[49px] items-center justify-between bg-koma-panel border border-koma-border rounded px-2 py-1.5 ${isOtherBusy ? 'opacity-40 pointer-events-none' : 'hover:bg-koma-hover'}`}
             >
               {armed ? (
                 <>
@@ -277,26 +287,24 @@ export function RemotePanel() {
               </div>
               <div className="flex items-center gap-1">
                 <button
-                  disabled={connecting}
+                  disabled={isBusy}
                   className="p-1 text-koma-accent hover:text-koma-fg disabled:cursor-not-allowed disabled:opacity-40"
                   title="Connect"
                   onClick={() => handleConnect(host.id)}
                 >
-                  {connecting && remoteState.hostId === host.id ? (
-                    <LoaderCircle size={14} className="animate-spin" />
-                  ) : (
-                    <Link2 size={14} />
-                  )}
+                  <Link2 size={14} />
                 </button>
                 <button
-                  className="p-1 text-koma-dim hover:text-koma-fg"
+                  disabled={isBusy}
+                  className="p-1 text-koma-dim hover:text-koma-fg disabled:cursor-not-allowed disabled:opacity-40"
                   title="Edit"
                   onClick={() => handleEdit(host)}
                 >
                   <Edit3 size={14} />
                 </button>
                 <button
-                  className="p-1 text-koma-dim hover:text-koma-error"
+                  disabled={isBusy}
+                  className="p-1 text-koma-dim hover:text-koma-error disabled:cursor-not-allowed disabled:opacity-40"
                   title="Delete"
                   onClick={() => setArmedDelete(host.id)}
                 >
@@ -314,7 +322,8 @@ export function RemotePanel() {
       {/* Add button — pinned to bottom */}
       <div className="flex-none border-t border-koma-border p-2">
         <button
-          className="flex w-full items-center justify-center gap-1.5 rounded border border-koma-border py-1.5 text-[12px] text-koma-accent hover:bg-koma-hover"
+          disabled={isBusy}
+          className="flex w-full items-center justify-center gap-1.5 rounded border border-koma-border py-1.5 text-[12px] text-koma-accent hover:bg-koma-hover disabled:cursor-not-allowed disabled:opacity-40"
           onClick={handleAdd}
         >
           <Plus size={14} />

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, FolderOpen, Link2, LoaderCircle } from 'lucide-react'
+import { ChevronDown, FolderOpen, Link2 } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import { BrailleSpinner } from './BrailleSpinner'
 
 // Track the trigger button's viewport rect while the menu is open, so the
 // menu can render in a body portal (fixed positioning) that no `overflow`
@@ -34,11 +35,10 @@ type NewSessionMenuProps = {
 
 const menuWidth = 240
 
-// The chevron segment of the split "+ New session" button. Shows different
-// content depending on whether a session is attached:
-//
-//   Attached (hub):  New session  |  New session + close current
-//   Detached (start): Open folder  ────────  Remote host A / B
+// The chevron segment of the split "+ New session" button. Always shows:
+//   - "New session" (opens folder picker)
+//   - "New session + close current" (only when a session is attached)
+//   - Remote host list (when any hosts are saved)
 export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProps) {
   const req = useKoma((s) => s.req)
   const remoteHosts = useKoma((s) => s.remoteHosts)
@@ -83,7 +83,15 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
   }
 
   const connectRemote = (hostId: string, name: string) => {
-    if (remoteState.state !== 'disconnected' && remoteState.state !== 'error') return
+    if (remoteState.state !== 'disconnected' && remoteState.state !== 'error') {
+      // Already connecting/connected — let the user know why nothing happened.
+      const s = useKoma.getState()
+      const seq = s.ui.toastSeq + 1
+      useKoma.setState((prev) => ({
+        ui: { ...prev.ui, toastSeq: seq, toast: { id: seq, text: `Already ${remoteState.state.replace('_', ' ')}`, kind: 'error' } },
+      }))
+      return
+    }
     startSwitching(`remote ${name}`)
     req({ r: 'ConnectRemoteHost', hostId })
     setOpen(false)
@@ -123,43 +131,37 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
             style={menuStyle}
             className="overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm"
           >
-            {attachedId ? (
-              // In-session: "New session" / "New session + close current"
+            {/* Local session options — always visible */}
+            <MenuItem onClick={openFolder} icon={<FolderOpen size={13} />}>
+              New session
+            </MenuItem>
+            {attachedId && (
+              <MenuItem onClick={() => pick(true)}>New session + close current</MenuItem>
+            )}
+            {/* Remote hosts — always visible when any are saved */}
+            {remoteHosts.length > 0 && (
               <>
-                <MenuItem onClick={() => pick(false)}>New session</MenuItem>
-                <MenuItem onClick={() => pick(true)}>New session + close current</MenuItem>
-              </>
-            ) : (
-              // Start screen: Open folder, separator, remote hosts
-              <>
-                <MenuItem onClick={openFolder} icon={<FolderOpen size={13} />}>
-                  Open folder
-                </MenuItem>
-                {remoteHosts.length > 0 && (
-                  <>
-                    <div className="my-1 mx-2 h-px bg-koma-border" />
-                    <div className="px-2.5 py-1 text-[10px] font-medium text-koma-dim uppercase tracking-wider">
-                      Remote
-                    </div>
-                    {remoteHosts.map((host) => (
-                      <MenuItem
-                        key={host.id}
-                        onClick={() => connectRemote(host.id, host.name)}
-                        disabled={remoteState.state !== 'disconnected' && remoteState.state !== 'error'}
-                        icon={
-                          remoteState.hostId === host.id && remoteState.state !== 'error' && remoteState.state !== 'disconnected'
-                            ? <LoaderCircle size={13} className="animate-spin" />
-                            : <Link2 size={13} />
-                        }
-                      >
-                        <span className="font-medium">{host.name}</span>
-                        <span className="ml-1 text-koma-dim">
-                          {host.user}@{host.host}
-                        </span>
-                      </MenuItem>
-                    ))}
-                  </>
-                )}
+                <div className="my-1 mx-2 h-px bg-koma-border" />
+                <div className="px-2.5 py-1 text-[10px] font-medium text-koma-dim uppercase tracking-wider">
+                  Remote
+                </div>
+                {remoteHosts.map((host) => (
+                  <MenuItem
+                    key={host.id}
+                    onClick={() => connectRemote(host.id, host.name)}
+                    disabled={remoteState.state !== 'disconnected' && remoteState.state !== 'error'}
+                    icon={
+                      remoteState.hostId === host.id && remoteState.state !== 'error' && remoteState.state !== 'disconnected'
+                        ? <BrailleSpinner size={13} />
+                        : <Link2 size={13} />
+                    }
+                  >
+                    <span className="font-medium">{host.name}</span>
+                    <span className="ml-1 text-koma-dim">
+                      {host.user}@{host.host}
+                    </span>
+                  </MenuItem>
+                ))}
               </>
             )}
           </div>,

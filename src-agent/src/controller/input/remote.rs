@@ -8,14 +8,14 @@ use crate::controller::input::Action;
 
 pub fn handle_remote(m: &mut RemoteState, key: KeyEvent) -> Action {
     match m.view {
-        RemoteView::HostManager | RemoteView::HostPicker => handle_host_list(m, key),
-        RemoteView::HostDetail => handle_host_detail(m, key),
+        RemoteView::Browse => handle_browse(m, key),
         RemoteView::SessionHub => handle_session_hub(m, key),
-        RemoteView::CreateHost | RemoteView::EditHost => handle_editor(m, key),
+        RemoteView::Edit => handle_editor(m, key),
     }
 }
 
-fn handle_host_list(m: &mut RemoteState, key: KeyEvent) -> Action {
+fn handle_browse(m: &mut RemoteState, key: KeyEvent) -> Action {
+    // Delete confirm modal
     if let Some(id) = m.pending_delete.clone() {
         return match key.code {
             KeyCode::Enter | KeyCode::Char('y' | 'Y') => {
@@ -41,73 +41,28 @@ fn handle_host_list(m: &mut RemoteState, key: KeyEvent) -> Action {
             Action::None
         }
         KeyCode::Enter => {
-            if m.intent == RemoteIntent::Manage {
-                m.enter_detail();
-                Action::None
-            } else if let Some(host_id) = m.select_current_host() {
+            // Connect to selected host.
+            if let Some(host_id) = m.select_current_host() {
                 Action::RemoteConnect(host_id)
             } else {
                 Action::None
             }
         }
-        KeyCode::Backspace if m.intent == RemoteIntent::Manage => {
+        KeyCode::Char('n' | 'N') if m.intent == RemoteIntent::Manage => Action::RemoteAddHost,
+        KeyCode::Char('d' | 'D') if m.intent == RemoteIntent::Manage => {
             if let Some(host) = m.selected_host() {
                 m.pending_delete = Some(host.id.clone());
             }
             Action::None
         }
-        KeyCode::Char(c) => {
-            if m.intent == RemoteIntent::Manage && is_ctrl(&key, 'a') {
-                Action::RemoteAddHost
-            } else if m.intent == RemoteIntent::Manage && c == 'i' {
-                Action::RemoteImportSshConfig
-            } else {
-                // Type to filter.
-                m.query.push(c);
-                m.refilter();
-                Action::None
-            }
-        }
-        _ => Action::None,
-    }
-}
-
-fn handle_host_detail(m: &mut RemoteState, key: KeyEvent) -> Action {
-    if let Some(id) = m.pending_delete.clone() {
-        return match key.code {
-            KeyCode::Enter | KeyCode::Char('y' | 'Y') => {
-                m.pending_delete = None;
-                Action::RemoteDeleteHost(id)
-            }
-            KeyCode::Esc | KeyCode::Char('n' | 'N') => {
-                m.pending_delete = None;
-                Action::None
-            }
-            _ => Action::None,
-        };
-    }
-
-    match key.code {
-        KeyCode::Esc => {
-            // Back to fullscreen manager.
-            m.view = RemoteView::HostManager;
-            m.detail_host = None;
-            Action::None
-        }
-        KeyCode::Char('e') | KeyCode::Char('E') => {
-            // Edit host.
+        KeyCode::Char('e' | 'E') if m.intent == RemoteIntent::Manage => {
             if let Some(host) = m.selected_host() {
                 Action::RemoteEditHost(host.id.clone())
             } else {
                 Action::None
             }
         }
-        KeyCode::Backspace => {
-            if let Some(host) = m.selected_host() {
-                m.pending_delete = Some(host.id.clone());
-            }
-            Action::None
-        }
+        KeyCode::Char('i') if m.intent == RemoteIntent::Manage => Action::RemoteImportSshConfig,
         _ => Action::None,
     }
 }
@@ -119,7 +74,7 @@ fn handle_session_hub(m: &mut RemoteState, key: KeyEvent) -> Action {
             m.session_selected = 0;
             m.connection_state = None;
             m.password_buf.clear();
-            m.view = RemoteView::HostPicker;
+            m.view = RemoteView::Browse;
             Action::None
         }
         KeyCode::Up | KeyCode::Char('k') => {
@@ -211,7 +166,7 @@ fn handle_editor(m: &mut RemoteState, key: KeyEvent) -> Action {
         // --- Navigation mode: moving between fields ---
         match key.code {
             KeyCode::Esc => {
-                // Go back to fullscreen.
+                // Go back to browse.
                 m.cancel_edit();
                 Action::None
             }
