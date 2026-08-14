@@ -49,6 +49,9 @@ pub fn draw(frame: &mut Frame, m: &RemoteState, palette: &Palette) {
 
 /// Two-pane browse layout: header | body (list + detail) | footer.
 fn draw_browse(frame: &mut Frame, m: &RemoteState, palette: &Palette) {
+    // Fill background so the chat underneath doesn't bleed through.
+    crate::view::clear_and_fill(frame, frame.area(), palette.bg);
+
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -123,26 +126,9 @@ fn draw_host_list(frame: &mut Frame, m: &RemoteState, palette: &Palette, area: R
         return;
     }
 
-    // Search line at top.
-    let search_y = inner.y;
-    let search_line = Line::from(vec![
-        Span::styled(" > ", Style::default().fg(palette.accent)),
-        Span::styled(&m.query, Style::default().fg(palette.fg)),
-        Span::styled("_", Style::default().fg(palette.accent)),
-    ]);
-    frame.render_widget(
-        Paragraph::new(search_line),
-        Rect {
-            x: inner.x,
-            y: search_y,
-            width: inner.width,
-            height: 1,
-        },
-    );
-
-    // Host rows (below search).
-    let list_start_y = inner.y + 1;
-    let list_height = inner.height.saturating_sub(1);
+    // Host rows.
+    let list_start_y = inner.y;
+    let list_height = inner.height;
     for (row, &host_idx) in m
         .filtered
         .iter()
@@ -457,6 +443,9 @@ fn draw_sessions_list(frame: &mut Frame, m: &RemoteState, area: Rect, palette: &
 ///   Footer hint bar
 fn draw_editor(frame: &mut Frame, m: &RemoteState, area: Rect, palette: &Palette) {
     let Some(editor) = &m.editor else { return };
+
+    // Fill background so the chat underneath doesn't bleed through.
+    crate::view::clear_and_fill(frame, area, palette.bg);
 
     let header_area = Rect {
         x: area.x,
