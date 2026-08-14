@@ -34,8 +34,9 @@ const SIDEBAR_W: u16 = 26;
 pub fn draw(frame: &mut Frame, m: &RemoteState, palette: &Palette) {
     match m.view {
         RemoteView::Edit => {
-            if m.editor.is_some() {
-                draw_editor(frame, m, frame.area(), palette);
+            crate::view::clear_and_fill(frame, frame.area(), palette.bg);
+            if let Some(editor) = &m.editor {
+                draw_editor_inner(frame, editor, m.editing_field, frame.area(), palette);
             }
         }
         RemoteView::SessionHub => {
@@ -139,41 +140,43 @@ fn draw_host_list(frame: &mut Frame, m: &RemoteState, palette: &Palette, area: R
         let is_selected = row == m.selected;
 
         let dot = if host.last_connected.is_some() {
-            "●"
+            Span::styled("●", Style::default().fg(palette.success))
         } else {
-            "○"
+            Span::styled("○", Style::default().fg(palette.dim))
         };
 
         let name_w = (inner.width as usize).saturating_sub(3).max(2);
         let name = truncate_str(&host.name, name_w);
 
-        if is_selected {
+        let line = if is_selected {
             let hl = Style::default().fg(palette.sel_fg).bg(palette.sel_bg);
-            let content = format!("{dot} {name:<width$}", width = name_w);
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(content, hl))),
-                Rect {
-                    x: inner.x,
-                    y: list_start_y + row as u16,
-                    width: inner.width,
-                    height: 1,
-                },
-            );
+            Line::from(vec![
+                Span::styled("› ", hl),
+                Span::styled(format!("{name:<width$}", width = name_w), hl),
+                Span::styled(" ", Style::default()),
+                dot,
+            ])
         } else {
-            let content = format!(" {dot} {name:<width$}", width = name_w);
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    content,
-                    Style::default().fg(palette.fg),
-                ))),
-                Rect {
-                    x: inner.x,
-                    y: list_start_y + row as u16,
-                    width: inner.width,
-                    height: 1,
-                },
-            );
-        }
+            Line::from(vec![
+                Span::styled("  ", Style::default().fg(palette.dim)),
+                Span::styled(
+                    format!("{name:<width$}", width = name_w),
+                    Style::default().fg(palette.dim),
+                ),
+                Span::styled(" ", Style::default()),
+                dot,
+            ])
+        };
+
+        frame.render_widget(
+            Paragraph::new(line),
+            Rect {
+                x: inner.x,
+                y: list_start_y + row as u16,
+                width: inner.width,
+                height: 1,
+            },
+        );
     }
 
     // Empty state.
@@ -441,12 +444,13 @@ fn draw_sessions_list(frame: &mut Frame, m: &RemoteState, area: Rect, palette: &
 ///   5 rows for fields: name, user, host, port, key path
 ///   Error message (if any)
 ///   Footer hint bar
-fn draw_editor(frame: &mut Frame, m: &RemoteState, area: Rect, palette: &Palette) {
-    let Some(editor) = &m.editor else { return };
-
-    // Fill background so the chat underneath doesn't bleed through.
-    crate::view::clear_and_fill(frame, area, palette.bg);
-
+fn draw_editor_inner(
+    frame: &mut Frame,
+    editor: &crate::app::mode::remote::HostEditor,
+    editing_field: bool,
+    area: Rect,
+    palette: &Palette,
+) {
     let header_area = Rect {
         x: area.x,
         y: area.y,
@@ -530,7 +534,7 @@ fn draw_editor(frame: &mut Frame, m: &RemoteState, area: Rect, palette: &Palette
             Style::default().fg(palette.dim)
         };
 
-        let cursor = if is_focused && m.editing_field {
+        let cursor = if is_focused && editing_field {
             "█"
         } else if is_focused {
             "▌"
@@ -589,7 +593,7 @@ fn draw_editor(frame: &mut Frame, m: &RemoteState, area: Rect, palette: &Palette
     }
 
     // Footer hint.
-    let hint = if m.editing_field {
+    let hint = if editing_field {
         " Enter confirm field  Esc cancel edit "
     } else {
         " Enter edit field  s save  Esc back  ↑↓ navigate "
