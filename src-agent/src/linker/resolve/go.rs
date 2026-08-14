@@ -102,7 +102,7 @@ pub fn resolve_go_import(
                             normalize_lexical(&format!("{mod_dir}/{sub}"))
                         };
                         let known = ctx.project.known_file_set();
-                        let targets = resolve_go_package(&local_path, &known);
+                        let targets = resolve_go_package(&local_path, known);
                         if !targets.is_empty() {
                             return Resolution::Resolved(targets);
                         }
@@ -151,7 +151,7 @@ fn resolve_relative_import(
 
     // Try as directory with Go files.
     let known = ctx.project.known_file_set();
-    let targets = resolve_go_package(&resolved, &known);
+    let targets = resolve_go_package(&resolved, known);
     if !targets.is_empty() {
         let _ = conditions; // conditions preserved via meta at scan level
         return Resolution::Resolved(targets);
@@ -202,7 +202,7 @@ fn resolve_local_replace(
     };
 
     let known = ctx.project.known_file_set();
-    let targets = resolve_go_package(&target_dir, &known);
+    let targets = resolve_go_package(&target_dir, known);
     if !targets.is_empty() {
         return Resolution::Resolved(targets);
     }
@@ -279,7 +279,7 @@ fn resolve_in_vendor(
 
     let vendor_dir = format!("{mod_dir}/vendor/{specifier}");
     let known = project.known_file_set();
-    let targets = resolve_go_package(&vendor_dir, &known);
+    let targets = resolve_go_package(&vendor_dir, known);
     if targets.is_empty() {
         None
     } else {

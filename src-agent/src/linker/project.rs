@@ -70,6 +70,8 @@ pub struct ProjectIndex {
     root_configs: HashMap<String, RootConfig>,
     /// Monotonically increasing generation counter for cache identity.
     generation: u64,
+    /// Cached set of all file names (keys of `files`). Rebuilt on add/remove.
+    file_names: HashSet<String>,
 }
 
 impl ProjectIndex {
@@ -132,6 +134,7 @@ impl ProjectIndex {
         };
         self.by_dir.entry(dir).or_default().push(path.clone());
         self.by_lang.entry(lang).or_default().push(path.clone());
+        self.file_names.insert(path.clone());
         self.files.insert(path, entry);
         Ok(())
     }
@@ -142,6 +145,7 @@ impl ProjectIndex {
         let Some(old) = self.files.remove(&path) else {
             return false;
         };
+        self.file_names.remove(&path);
         remove_group_entry(&mut self.by_dir, &old.dir, &path);
         remove_group_entry(&mut self.by_lang, &old.lang, &path);
         true
@@ -168,8 +172,8 @@ impl ProjectIndex {
     pub fn known_files(&self) -> &HashMap<String, KnownFileEntry> {
         &self.files
     }
-    pub fn known_file_set(&self) -> HashSet<String> {
-        self.files.keys().cloned().collect()
+    pub fn known_file_set(&self) -> &HashSet<String> {
+        &self.file_names
     }
     #[allow(dead_code)]
     pub fn file_count(&self) -> usize {

@@ -93,13 +93,13 @@ fn resolve_relative_import(py_meta: &PythonMeta, ctx: &ResolveContext<'_>) -> Re
                 };
             }
             let known = ctx.project.known_file_set();
-            let targets = resolve_module_targets(&full_path, &known);
+            let targets = resolve_module_targets(&full_path, known);
             if !targets.is_empty() {
                 let mut all = targets;
                 if !py_meta.names.is_empty() && py_meta.names[0] != "*" {
                     for name in &py_meta.names {
                         let sub = normalize_lexical(&format!("{full_path}/{name}"));
-                        for t in resolve_module_targets(&sub, &known) {
+                        for t in resolve_module_targets(&sub, known) {
                             if !all.contains(&t) {
                                 all.push(t);
                             }
@@ -122,7 +122,7 @@ fn resolve_relative_import(py_meta: &PythonMeta, ctx: &ResolveContext<'_>) -> Re
                 };
             }
             let sub = normalize_lexical(&format!("{current}/{name}"));
-            let targets = resolve_module_targets(&sub, &known);
+            let targets = resolve_module_targets(&sub, known);
             if !targets.is_empty() {
                 let mut all = targets;
                 let sub_init = normalize_lexical(&format!("{sub}/__init__.py"));
@@ -162,7 +162,7 @@ fn resolve_absolute_import_fallback(
     let known = ctx.project.known_file_set();
     for root in &roots {
         let base = normalize_lexical(&format!("{root}/{path}"));
-        let targets = resolve_module_targets(&base, &known);
+        let targets = resolve_module_targets(&base, known);
         if !targets.is_empty() {
             return Resolution::Resolved(targets);
         }
@@ -189,13 +189,13 @@ fn resolve_module_in_roots(
 
     for root in &roots {
         let base = normalize_lexical(&format!("{root}/{module_path}"));
-        let targets = resolve_module_targets(&base, &known);
+        let targets = resolve_module_targets(&base, known);
         if !targets.is_empty() {
             let mut all = targets;
             if !py_meta.names.is_empty() && py_meta.names[0] != "*" {
                 for name in &py_meta.names {
                     let sub = normalize_lexical(&format!("{base}/{name}"));
-                    for t in resolve_module_targets(&sub, &known) {
+                    for t in resolve_module_targets(&sub, known) {
                         if !all.contains(&t) {
                             all.push(t);
                         }
