@@ -4,6 +4,7 @@ import { Check, Minus, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import type { LoadPhase } from '../store/koma'
 import { BrailleSpinner, useBrailleFrame } from './BrailleSpinner'
+import { RemotePasswordPrompt } from './RemotePasswordPrompt'
 
 // Duplicated from Titlebar.tsx's private (unexported) `post` helper — this
 // overlay covers the titlebar region too and needs the same win-drag/maximize
@@ -172,7 +173,7 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
   function handleMouseDown(e: MouseEvent<HTMLDivElement>) {
     if (e.button !== 0) return
     const target = e.target as HTMLElement
-    if (target.closest('button')) return
+    if (target.closest('button, input, textarea, select, [contenteditable="true"]')) return
     if (e.detail === 2) {
       post({ t: 'win', a: 'max' })
       return
@@ -219,23 +220,35 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
                 Taking longer than expected…
               </motion.div>
             )}
-            <button
-              onClick={() => {
-                if (remoteConnecting) {
+            {remoteState.state === 'auth_required' ? (
+              <RemotePasswordPrompt
+                active
+                target={remoteState.user && remoteState.host ? `${remoteState.user}@${remoteState.host}` : null}
+                onSubmit={(password) => useKoma.getState().req({ r: 'SubmitRemotePassword', password })}
+                onCancel={() => {
                   useKoma.getState().req({ r: 'CancelRemoteConnect' })
                   useKoma.getState().cancelSwitching()
-                  return
-                }
-                onCancel()
-              }}
-              className={`rounded-md border px-3 py-1.5 text-[12px] transition-colors ${
-                stuck
-                  ? 'border-koma-accent bg-koma-accent/10 text-koma-accent opacity-100 hover:bg-koma-accent/20'
-                  : 'border-koma-border bg-koma-panel text-koma-fg opacity-70 hover:opacity-100 hover:bg-koma-hover'
-              }`}
-            >
-              Cancel
-            </button>
+                }}
+              />
+            ) : (
+              <button
+                onClick={() => {
+                  if (remoteConnecting) {
+                    useKoma.getState().req({ r: 'CancelRemoteConnect' })
+                    useKoma.getState().cancelSwitching()
+                    return
+                  }
+                  onCancel()
+                }}
+                className={`rounded-md border px-3 py-1.5 text-[12px] transition-colors ${
+                  stuck
+                    ? 'border-koma-accent bg-koma-accent/10 text-koma-accent opacity-100 hover:bg-koma-accent/20'
+                    : 'border-koma-border bg-koma-panel text-koma-fg opacity-70 hover:opacity-100 hover:bg-koma-hover'
+                }`}
+              >
+                Cancel
+              </button>
+            )}
           </>
         )}
       </motion.div>
