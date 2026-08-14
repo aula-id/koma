@@ -242,7 +242,7 @@ fn askpass_script_content(password: &str) -> String {
     format!(
         r#"#!/bin/sh
 case "$1" in
-  *[Pp]assword:|*[Pp]assphrase*) echo '{escaped}' ;;
+  *[Pp]assword*|*[Pp]assphrase*) printf '%s\\n' '{escaped}' ;;
   *) exit 1 ;;
 esac
 "#
@@ -259,7 +259,7 @@ mod tests {
         // Should contain the password for password prompts.
         assert!(script.contains("hunter2"));
         // Should have the case statement for validation.
-        assert!(script.contains("[Pp]assword:"));
+        assert!(script.contains("[Pp]assword*"));
         assert!(script.contains("[Pp]assphrase"));
     }
 
