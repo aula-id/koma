@@ -114,9 +114,7 @@ pub struct RemoteState {
     pub hosts: Vec<crate::remote::hosts::RemoteHost>,
     /// Selected index in the host list.
     pub selected: usize,
-    /// Search/filter query.
-    pub query: String,
-    /// Indices matching the current query.
+    /// Indices matching the current query (always all indices — kept for wire compat).
     pub filtered: Vec<usize>,
     /// Host ID selected for preparation or session discovery.
     pub selected_host_id: Option<String>,
@@ -160,7 +158,6 @@ impl RemoteState {
             selected: 0,
             hosts,
             filtered,
-            query: String::new(),
             selected_host_id: None,
             connection_state: None,
             sessions: Vec::new(),
@@ -169,31 +166,6 @@ impl RemoteState {
             password_buf: String::new(),
             editor: None,
             editing_field: false,
-        }
-    }
-
-    /// Refilter the host list based on the current query.
-    pub fn refilter(&mut self) {
-        if self.query.is_empty() {
-            self.filtered = (0..self.hosts.len()).collect();
-        } else {
-            let q = self.query.to_lowercase();
-            self.filtered = self
-                .hosts
-                .iter()
-                .enumerate()
-                .filter(|(_, h)| {
-                    h.name.to_lowercase().contains(&q)
-                        || h.host.to_lowercase().contains(&q)
-                        || h.user.to_lowercase().contains(&q)
-                        || h.tags.iter().any(|t| t.to_lowercase().contains(&q))
-                })
-                .map(|(i, _)| i)
-                .collect();
-        }
-        // Clamp selection.
-        if self.selected >= self.filtered.len() {
-            self.selected = self.filtered.len().saturating_sub(1);
         }
     }
 
@@ -490,30 +462,6 @@ mod tests {
         }
         let host = state.build_host().expect("build_host should succeed");
         assert!(host.key_path.is_none());
-    }
-
-    #[test]
-    fn refilter_matches_name_host_user_tags() {
-        let hosts = vec![
-            make_test_host("h1", "prod-server"),
-            make_test_host("h2", "staging-server"),
-            make_test_host("h3", "dev"),
-        ];
-        let mut state = RemoteState::for_intent(hosts, RemoteIntent::Manage);
-        // Search by name substring.
-        state.query = "prod".into();
-        state.refilter();
-        assert_eq!(state.filtered, vec![0]);
-
-        // Search by user (all have "root").
-        state.query = "root".into();
-        state.refilter();
-        assert_eq!(state.filtered.len(), 3);
-
-        // Empty query: all match.
-        state.query.clear();
-        state.refilter();
-        assert_eq!(state.filtered.len(), 3);
     }
 
     #[test]

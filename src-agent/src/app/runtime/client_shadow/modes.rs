@@ -776,7 +776,6 @@ pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState 
             })
             .collect(),
         selected: s.selected,
-        query: s.query,
         filtered: s.filtered,
         selected_host_id: s.selected_host_id,
         connection_state,
