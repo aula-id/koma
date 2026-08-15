@@ -131,67 +131,30 @@ function buildTaskScreen(
   selectedIdx: number,
   opts: {
     mode?: string
-    userMsg?: string
   } = {},
 ): string {
   const W = 80
   const LIST_TEXT_W = 17     // left pane inner text width (list_inner.width)
   const RIGHT_TEXT_W = 59    // right pane inner text width after Margin(1)
   const CONTENT_ROWS = 10   // box content rows (boxH - 2)
-  const CHAT_ROWS = 12      // rows 0-11: chat chrome
 
   const mode = opts.mode ?? 'auto'
 
-  const lines: string[] = []
+  // ── Input bar (3 rows: rule, input, rule) ──
+  const inputBar: string[] = [
+    DIM + bar('\u2500', W) + RST,
+    padRight('  ' + ACC + '[$] /task\u2588' + RST, W),
+    DIM + bar('\u2500', W) + RST,
+  ]
 
-  // ── Chat chrome (rows 0-11) ──
-  // Row 0: header with version + mode indicator (80 visible chars)
-  const brandVis = 'koma 0.3.16'  // 11 chars
-  const modeVis = '\u25cf ' + mode  // 6 chars
-  const gap = Math.max(1, W - 2 - brandVis.length - modeVis.length)
-  lines.push(padRight('  ' + DIM + 'koma' + RST + ' ' + ACC + '0.3.16' + RST, 2 + brandVis.length) +
-    ' '.repeat(gap) + ACC + modeVis + RST)
-  // Row 1: dim rule
-  lines.push(DIM + bar('\u2500', W) + RST)
-  // Row 2: user message
-  lines.push(padRight('  ' + FG + '\u25cf find the auth middleware and fix the connection pool race condition' + RST, W))
-  // Row 3: assistant response
-  lines.push(padRight('  ' + FG + '\u25cf I\u2019ll investigate both issues. Let me start by exploring the auth middleware.' + RST, W))
-  // Row 4: tool call
-  lines.push(padRight('    \u2699 ' + ACC + 'spawn explore \u2192 #1 find-auth-middleware' + RST, W))
-  // Row 5: spawned notice
-  lines.push(padRight('    ' + DIM + '\u2192 #1 explore spawned' + RST, W))
-  // Row 6: assistant
-  lines.push(padRight('  ' + FG + '\u25cf Meanwhile, let me examine the connection pool directly.' + RST, W))
-  // Row 7: tool call
-  lines.push(padRight('    \u2699 ' + ACC + 'read src/pool.rs:42-89' + RST, W))
-  // Row 8: tool output
-  lines.push(padRight('    ' + DIM + '// BUG: Relaxed allows reordering \u2014 two threads can both see' + RST, W))
-  // Row 9: assistant
-  lines.push(padRight('  ' + FG + '\u25cf Found the race: Ordering::Relaxed on the atomic counter.' + RST, W))
-  // Row 10: tool call
-  lines.push(padRight('    \u2699 ' + ACC + 'spawn code-impl \u2192 #2 fix-connection-pool' + RST, W))
-  // Row 11: spawned notice
-  lines.push(padRight('    ' + DIM + '\u2192 #2 code-impl spawned' + RST, W))
-
-  // ── Overlay: title border (row 12) ──
+  // ── Overlay lines (12 rows: top border + 10 content + bottom border) ──
+  const overlayLines: string[] = []
   const title = ' sub-agents  Ctrl+X kill \u00b7 Ctrl+B background '
-  lines.push(
+  overlayLines.push(
     DIM + '\u250c' + title + bar('\u2500', W - 2 - title.length) + '\u2510' + RST,
   )
 
-  // ── Overlay: content rows (rows 13-22) ──
-  //
-  // LEFT PANE — one row per sub-agent:
-  //   Selected: INVERSE + padRight(trunc(label, 17), 17) + RST
-  //   Non-selected: ACC+"#id "+RST + trunc(rest, restMax)
-  //
-  // RIGHT PANE — independent of left-pane row index:
-  //   Row 0: status line (accent)
-  //   Rows 1+: transcript lines (dim), last N that fit
-  //   All padded to 59 chars
-
-  // Pre-build right pane lines (independent of left pane)
+  // Pre-build right pane lines
   const sel = subagents[selectedIdx]
   const rightLines: string[] = []
   rightLines.push(ACC + sel.statusLine + RST)
@@ -200,20 +163,16 @@ function buildTaskScreen(
   for (const tl of sel.transcript.slice(tStart)) {
     rightLines.push(DIM + tl + RST)
   }
-  // Pad right lines to CONTENT_ROWS
   while (rightLines.length < CONTENT_ROWS) rightLines.push('')
 
   for (let i = 0; i < CONTENT_ROWS; i++) {
-    // Left pane
     let leftText: string
     if (i < subagents.length) {
       const sa = subagents[i]
       if (i === selectedIdx) {
-        // Selected: entire row inverse
         const label = `#${sa.id} ${sa.name} ${sa.tag} ${sa.label}`
         leftText = INVERSE + padRight(trunc(label, LIST_TEXT_W), LIST_TEXT_W) + RST
       } else {
-        // Non-selected: #id in accent, rest truncated to fit
         const idVis = `#${sa.id} `.length
         const restMax = LIST_TEXT_W - idVis
         leftText =
@@ -223,12 +182,8 @@ function buildTaskScreen(
     } else {
       leftText = ' '.repeat(LIST_TEXT_W)
     }
-
-    // Right pane — padded to 59 visible chars
     const rightText = padRight(rightLines[i], RIGHT_TEXT_W)
-
-    // Full row: │ left │ right │  (padded to 80 visible chars)
-    lines.push(
+    overlayLines.push(
       DIM + '\u2502' + RST +
       leftText +
       DIM + '\u2502' + RST +
@@ -236,11 +191,30 @@ function buildTaskScreen(
       DIM + '\u2502' + RST,
     )
   }
+  overlayLines.push(DIM + '\u2514' + bar('\u2500', W - 2) + '\u2518' + RST)
 
-  // ── Overlay: bottom border (row 23) ──
-  lines.push(DIM + '\u2514' + bar('\u2500', W - 2) + '\u2518' + RST)
+  // ── Chat chrome (fits above overlay + input bar) ──
+  const lines: string[] = []
+  const brandVis = 'koma 0.3.16'
+  const modeVis = '\u25cf ' + mode
+  const gap = Math.max(1, W - 2 - brandVis.length - modeVis.length)
+  lines.push(padRight('  ' + DIM + 'koma' + RST + ' ' + ACC + '0.3.16' + RST, 2 + brandVis.length) +
+    ' '.repeat(gap) + ACC + modeVis + RST)
+  lines.push(DIM + bar('\u2500', W) + RST)
+  lines.push(padRight('  ' + FG + '\u25cf find the auth middleware and fix the connection pool race condition' + RST, W))
+  lines.push(padRight('  ' + FG + '\u25cf I\u2019ll investigate both issues. Let me start by exploring the auth middleware.' + RST, W))
+  lines.push(padRight('    \u2699 ' + ACC + 'spawn explore \u2192 #1 find-auth-middleware' + RST, W))
+  lines.push(padRight('    ' + DIM + '\u2192 #1 explore spawned' + RST, W))
+  lines.push(padRight('  ' + FG + '\u25cf Meanwhile, let me examine the connection pool directly.' + RST, W))
+  lines.push(padRight('    \u2699 ' + ACC + 'read src/pool.rs:42-89' + RST, W))
+  lines.push(padRight('  ' + FG + '\u25cf Found the race: Ordering::Relaxed on the atomic counter.' + RST, W))
 
-  // Ensure exactly `rows` lines, each padded/truncated to exactly 80 visible chars
+  // ── Compose full screen: chat + overlay above input bar ──
+  const targetStart = rows - inputBar.length - overlayLines.length
+  while (lines.length < targetStart) lines.push('')
+  lines.push(...overlayLines)
+  lines.push(...inputBar)
+
   while (lines.length < rows) lines.push('')
   return lines.slice(0, rows).map(l => padRight(trunc(l, W), W)).join('\n')
 }
