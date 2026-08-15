@@ -16,65 +16,7 @@
  *   \x1b[32m  success (#00c853) — same ANSI code as accent in dark theme
  */
 
-const RST = '\x1b[0m'
-const ACC = '\x1b[32m'     // accent green #39ff14
-const FG  = '\x1b[37m'     // fg white #e6e6e6
-const DIM = '\x1b[90m'     // dim #adadad
-const WARN = '\x1b[33m'    // warn amber #ffb43c
-const BOLD_ACC = '\x1b[1;32m'
-
-// ─── helpers ──────────────────────────────────────────────────────────
-
-/** Strip ANSI escape codes from a string. */
-function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m/g, '')
-}
-
-/**
- * Truncate a line to `w` visible characters, preserving ANSI state.
- * Appends a reset if the line is cut mid-sequence.
- */
-function trunc(line: string, w: number): string {
-  let vis = 0
-  let out = ''
-  const re = /\x1b\[[0-9;]*m/g
-  let last = 0
-  let m: RegExpExecArray | null
-  while ((m = re.exec(line)) !== null) {
-    const text = line.slice(last, m.index)
-    for (const ch of text) {
-      if (vis >= w) return out + RST
-      out += ch
-      vis++
-    }
-    out += m[0]
-    last = re.lastIndex
-  }
-  const tail = line.slice(last)
-  for (const ch of tail) {
-    if (vis >= w) return out + RST
-    out += ch
-    vis++
-  }
-  return out
-}
-
-/** Right-align `text` (with ANSI) within `w` visible chars. */
-function rightAlign(text: string, w: number): string {
-  const vis = stripAnsi(text).length
-  return ' '.repeat(Math.max(0, w - vis)) + text
-}
-
-/** Pad `text` (with ANSI) on the right to `w` visible chars. */
-function padRight(text: string, w: number): string {
-  const vis = stripAnsi(text).length
-  return text + ' '.repeat(Math.max(0, w - vis))
-}
-
-/** Fill a row with `ch` repeated `w` times. */
-function bar(ch: string, w: number): string {
-  return ch.repeat(w)
-}
+import { RST, ACC, FG, DIM, WARN, BOLD_ACC, stripAnsi, trunc, padRight, rightAlign, bar } from './chat-chrome'
 
 // ─── Screen: Onboarding Chooser ───────────────────────────────────────
 // Matches onboard.rs::draw — 64-char block centered at col 8 in 80-col terminal.

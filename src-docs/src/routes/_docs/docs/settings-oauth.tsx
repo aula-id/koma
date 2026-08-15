@@ -34,9 +34,10 @@ function SettingsOAuthPage() {
         </p>
         <p>
           <strong className="text-koma-accent">Browser Flow</strong>{' '}
-          Koma starts a local HTTP listener and opens your browser for the OAuth
-          redirect. The URL is copied to clipboard automatically. Approve in the
-          browser and the token is captured.
+          Koma shows the browser URL in the OAuth body. Press{' '}
+          <code className="text-koma-fg">c</code> to copy it (then the copy
+          confirmation appears), or <code className="text-koma-fg">o</code> to
+          open it. Approve in the browser and the token is captured.
         </p>
       </div>
     </article>

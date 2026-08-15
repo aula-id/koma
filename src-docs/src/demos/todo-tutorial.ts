@@ -9,72 +9,7 @@
  * Step 2: pending item selected
  */
 
-const RST = '\x1b[0m'
-const ACC = '\x1b[32m'
-const FG  = '\x1b[37m'
-const DIM = '\x1b[90m'
-const SEL_FG = '\x1b[30m'
-const SEL_BG = '\x1b[42m'
-const INVERSE = SEL_FG + SEL_BG + '\x1b[1m'
-const SUCCESS = '\x1b[92m'
-
-function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m/g, '')
-}
-
-function trunc(line: string, w: number): string {
-  let vis = 0, out = '', last = 0
-  const re = /\x1b\[[0-9;]*m/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(line)) !== null) {
-    for (const ch of line.slice(last, m.index)) {
-      if (vis >= w) return out + RST
-      out += ch; vis++
-    }
-    out += m[0]; last = re.lastIndex
-  }
-  for (const ch of line.slice(last)) {
-    if (vis >= w) return out + RST
-    out += ch; vis++
-  }
-  return out
-}
-
-function padRight(text: string, w: number): string {
-  const vis = stripAnsi(text).length
-  return text + ' '.repeat(Math.max(0, w - vis))
-}
-
-function line80(content: string): string {
-  return padRight(trunc(content, 80), 80)
-}
-
-function bar(ch: string, w: number): string {
-  return ch.repeat(w)
-}
-
-// ─── Chat chrome ──────────────────────────────────────────────────────
-
-function chatHeader(): string[] {
-  const W = 80
-  // visible: "  koma 0.3.16" = 13, then 59 spaces, then "● normal" = 8 → 80
-  const line = '  ' + DIM + 'koma' + RST + ' ' + ACC + '0.3.16' + RST
-    + ' '.repeat(59) + ACC + '\u25cf normal' + RST
-  return [line, DIM + bar('\u2500', W) + RST]
-}
-
-function chatInputBar(text: string): string[] {
-  const W = 80
-  return [
-    // Model name row (right-aligned, dim) — matches render_model_row
-    line80('     ' + DIM + 'claude-3.5-sonnet' + RST),
-    DIM + bar('\u2500', W) + RST,
-    line80('  ' + ACC + '[$] ' + RST + ACC + text + '\u2588' + RST),
-    DIM + bar('\u2500', W) + RST,
-    // Session name row (left-aligned, accent) — matches status bar
-    line80('  ' + ACC + 'session-71cdd2dc' + RST),
-  ]
-}
+import { RST, ACC, FG, DIM, INVERSE, trunc, padRight, bar, line80, chatHeader, chatInput, commandEntryScreen } from './chat-chrome'
 
 // ─── Todo overlay builder ─────────────────────────────────────────────
 // Matches Rust: bordered overlay, LIST_W=24 left pane (RIGHT border),
@@ -96,7 +31,7 @@ function truncatePlain(s: string, max: number): string {
 
 function buildTodoOverlay(items: TodoItem[], selectedIdx: number, rows: number): string {
   const W = 80
-  const OVERLAY_H = 12 // total height including borders
+  const OVERLAY_H = 16 // total height including borders
   const done = items.filter(i => i.completed).length
   const innerW = W - 2 // 78 (inside outer borders)
 
@@ -199,11 +134,8 @@ function buildTodoOverlay(items: TodoItem[], selectedIdx: number, rows: number):
   // ── Compose full screen ──
   const lines: string[] = []
   lines.push(...chatHeader())
-  lines.push('')
-  lines.push(line80('  ' + FG + 'implement auth and add tests' + RST))
-  lines.push('')
 
-  const inputBar = chatInputBar('/todo')
+  const inputBar = chatInput('/todo')
   const targetStart = rows - inputBar.length - overlayLines.length
   while (lines.length < targetStart) lines.push('')
   lines.push(...overlayLines)
@@ -231,9 +163,14 @@ export function getTodoSteps(rows = 24): TutorialStep[] {
 
   return [
     {
+      title: 'Type /todo',
+      narration: 'From normal chat, type /todo in the composer and press Enter to open the model-managed task panel.',
+      screen: commandEntryScreen(rows, '/todo'),
+    },
+    {
       title: 'Task Panel',
       narration:
-        'Type /todo to open the task tracker overlay. It shows all tracked tasks with their status symbols and a detail pane for the selected item.',
+        'Type /todo to view the model-managed, read-only task tracker overlay. It shows tracked tasks with their status symbols and a detail pane for the selected item.',
       points: [
         '\u25d0 in-progress  \u25cb pending  \u25cf completed  \u2298 cancelled',
         'The right pane shows status, priority, and content for the selected task',
@@ -244,11 +181,11 @@ export function getTodoSteps(rows = 24): TutorialStep[] {
     {
       title: 'Task Detail',
       narration:
-        'Navigate with \u2191\u2193 to select a different task. The detail pane updates immediately to show the status, priority, and content of the highlighted item.',
+        'Navigate with \u2191\u2193 or k/j to select a different task. The detail pane updates immediately to show the status, priority, and content of the highlighted item.',
       points: [
-        'Press Enter to toggle status, n to add a new task',
-        'Press d to delete the selected task',
-        'Tasks persist across sessions in the project memory',
+        'The model manages checklist items; this panel has no add or delete controls',
+        'Enter resets an unlocked non-pending item to pending, signalling the model to redo it',
+        'Esc closes the panel',
       ],
       screen: screen2,
     },

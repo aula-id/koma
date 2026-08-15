@@ -69,6 +69,8 @@ const sections: SidebarSection[] = [
     title: 'Settings',
     modes: ['tui'],
     items: [
+      { label: 'Appearance', to: '/docs/settings-appearance', desc: '/settings' },
+      { label: 'General', to: '/docs/settings-general', desc: '/settings' },
       { label: 'Providers', to: '/docs/settings-provider', desc: '/settings' },
       { label: 'OAuth', to: '/docs/settings-oauth', desc: '/settings' },
       { label: 'Add Model', to: '/docs/settings-model', desc: '/settings' },
@@ -110,8 +112,7 @@ const sections: SidebarSection[] = [
       {
         label: 'Config',
         items: [
-          { label: '/settings', to: '/docs/settings-provider', desc: 'edit settings' },
-          { label: '/mode', to: '/docs/commands-mode', desc: 'Normal/Auto approval' },
+          { label: '/mode', to: '/docs/commands-mode', desc: 'cycle or set agent mode' },
           { label: '/effort', to: '/docs/commands-effort', desc: 'reasoning effort' },
           { label: '/free', to: '/docs/commands-free', desc: 'toggle koma-free' },
           { label: '/internet', to: '/docs/commands-internet', desc: 'simple/full mode' },

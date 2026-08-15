@@ -14,57 +14,9 @@
  *   Row 23:    INVERSE footer bar
  */
 
-const RST = '\x1b[0m'
-const ACC = '\x1b[32m'  // accent green #39ff14
-const FG  = '\x1b[37m'  // foreground #e6e6e6
-const DIM = '\x1b[90m'  // dim #adadad
-const SEL_FG = '\x1b[30m'  // selection foreground black
-const SEL_BG = '\x1b[42m'  // selection background accent green
-const INVERSE = SEL_FG + SEL_BG + '\x1b[1m'
+import { RST, ACC, FG, DIM, INVERSE, trunc, padRight, line80, commandEntryScreen } from './chat-chrome'
+
 const SUCCESS = '\x1b[92m'  // bright green #00c853
-const WARN = '\x1b[33m'    // yellow #ffb43c
-const INFO = '\x1b[94m'    // bright blue #50c8ff
-
-// ─── helpers ──────────────────────────────────────────────────────────
-
-function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m/g, '')
-}
-
-function trunc(line: string, w: number): string {
-  let vis = 0
-  let out = ''
-  const re = /\x1b\[[0-9;]*m/g
-  let last = 0
-  let m: RegExpExecArray | null
-  while ((m = re.exec(line)) !== null) {
-    const text = line.slice(last, m.index)
-    for (const ch of text) {
-      if (vis >= w) return out + RST
-      out += ch
-      vis++
-    }
-    out += m[0]
-    last = re.lastIndex
-  }
-  const tail = line.slice(last)
-  for (const ch of tail) {
-    if (vis >= w) return out + RST
-    out += ch
-    vis++
-  }
-  return out
-}
-
-function padRight(text: string, w: number): string {
-  const vis = stripAnsi(text).length
-  if (vis >= w) return text
-  return text + ' '.repeat(w - vis)
-}
-
-function line80(content: string): string {
-  return padRight(trunc(content, 80), 80)
-}
 
 // ─── Data ─────────────────────────────────────────────────────────────
 
@@ -87,7 +39,7 @@ const ALL_ENTRIES: HelpEntry[] = [
   { key: '/new remote',    desc: 'Start a new session on a saved remote host',                  isCommand: true },
   { key: '/resume',        desc: 'Open the session hub (live + past sessions)',                 isCommand: true },
   { key: '/resume remote', desc: 'Resume a session on a saved remote host',                    isCommand: true },
-  { key: '/mode',          desc: 'Toggle Normal/Auto tool approval',                           isCommand: true },
+  { key: '/mode',          desc: 'Cycle or explicitly set the agent mode',                    isCommand: true },
   { key: '/effort',        desc: 'Set model reasoning/thinking effort',                        isCommand: true },
   { key: '/free',          desc: 'Toggle this session to use koma-free',                       isCommand: true },
   { key: '/internet',      desc: 'Toggle internet mode (simple | full)',                       isCommand: true },
@@ -215,11 +167,16 @@ export function getHelpSteps(rows = 24): TutorialStep[] {
   // Step 2: Filtered by "mod" — /model (selected) and /mode
   const filteredMod: HelpEntry[] = [
     { key: '/model', desc: 'Switch session / agent model  (/model for help)', isCommand: true },
-    { key: '/mode',  desc: 'Toggle Normal/Auto tool approval',                isCommand: true },
+    { key: '/mode',  desc: 'Cycle or explicitly set the agent mode',             isCommand: true },
   ]
   const screen2 = buildHelpScreen(rows, filteredMod, 'mod', 0)
 
   return [
+    {
+      title: 'Type /help',
+      narration: 'From normal chat, type /help in the composer and press Enter to open the searchable help reference.',
+      screen: commandEntryScreen(rows, '/help'),
+    },
     {
       title: 'Command Reference',
       narration:
@@ -238,7 +195,7 @@ export function getHelpSteps(rows = 24): TutorialStep[] {
       narration:
         'As you type in the search bar, the list narrows in real time. ' +
         'Here "mod" filters to /model and /mode \u2014 two commands for switching ' +
-        'your AI provider and tool-approval mode.',
+        'your session model and agent mode.',
       points: [
         'Partial matches work \u2014 "mod" matches both /model and /mode',
         'The cursor stays in the search bar for further filtering',

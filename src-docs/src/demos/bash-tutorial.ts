@@ -8,12 +8,12 @@
  *
  * Layouts match src-agent/src/view/bash/mod.rs exactly.
  *
- * Overlay dimensions (80-col terminal, 12-row box):
+ * Overlay dimensions (80-col terminal, 18-row box):
  *   Outer box: 80 chars including │ borders
  *   Left pane: 18 cols with │ RIGHT border (17 inner text cols)
  *   Right pane: 60 cols after │ divider + Margin(1) left = 59 inner text cols
  *
- * Chat chrome fills rows 0-11 (12 rows), overlay fills rows 12-23 (12 rows).
+ * Chat chrome fills rows 0-5 (6 rows), overlay fills rows 6-23 (18 rows).
  *
  * Colours use the same ANSI mappings as theme.rs dark():
  *   \x1b[32m  accent  (#39ff14)
@@ -23,60 +23,7 @@
  *   \x1b[42m  sel_bg  (accent)
  */
 
-const RST = '\x1b[0m'
-const ACC = '\x1b[32m'     // accent green #39ff14
-const FG  = '\x1b[37m'     // fg white #e6e6e6
-const DIM = '\x1b[90m'     // dim #adadad
-const SEL_FG = '\x1b[30m'  // selection foreground black
-const SEL_BG = '\x1b[42m'  // selection background accent
-const INVERSE = SEL_FG + SEL_BG + '\x1b[1m'
-
-// ─── helpers ──────────────────────────────────────────────────────────
-
-/** Strip ANSI escape codes from a string. */
-function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m/g, '')
-}
-
-/**
- * Truncate a line to `w` visible characters, preserving ANSI state.
- * Appends a reset if the line is cut mid-sequence.
- */
-function trunc(line: string, w: number): string {
-  let vis = 0
-  let out = ''
-  const re = /\x1b\[[0-9;]*m/g
-  let last = 0
-  let m: RegExpExecArray | null
-  while ((m = re.exec(line)) !== null) {
-    const text = line.slice(last, m.index)
-    for (const ch of text) {
-      if (vis >= w) return out + RST
-      out += ch
-      vis++
-    }
-    out += m[0]
-    last = re.lastIndex
-  }
-  const tail = line.slice(last)
-  for (const ch of tail) {
-    if (vis >= w) return out + RST
-    out += ch
-    vis++
-  }
-  return out
-}
-
-/** Pad `text` (with ANSI) on the right to `w` visible chars. */
-function padRight(text: string, w: number): string {
-  const vis = stripAnsi(text).length
-  return text + ' '.repeat(Math.max(0, w - vis))
-}
-
-/** Fill a row with `ch` repeated `w` times. */
-function bar(ch: string, w: number): string {
-  return ch.repeat(w)
-}
+import { RST, ACC, FG, DIM, INVERSE, trunc, padRight, bar, chatInput, commandEntryScreen } from './chat-chrome'
 
 // ─── Bash job data ────────────────────────────────────────────────────
 
@@ -153,10 +100,11 @@ function buildBashScreen(
   const W = 80
   const LIST_TEXT_W = 17     // left pane inner text width (list_inner.width)
   const RIGHT_TEXT_W = 59    // right pane inner text width after Margin(1)
-  const CONTENT_ROWS = 10   // box content rows (boxH - 2)
-  const CHAT_ROWS = 12      // rows 0-11: chat chrome
+  const CONTENT_ROWS = 14   // box content rows (16-row box minus borders)
+  const CHAT_ROWS = 6       // rows 0-5: chat chrome
 
   const lines: string[] = []
+  const inputBar = chatInput('/bash')
 
   // ── Chat chrome (rows 0-11) ──
   // Row 0: header with version + mode indicator (80 visible chars)
@@ -187,6 +135,9 @@ function buildBashScreen(
   lines.push(padRight('    ' + DIM + '\u2713 bash-3 completed (12s)' + RST, W))
   // Row 11: assistant
   lines.push(padRight('  ' + FG + '\u25cf Pytest done \u2014 18 tests passed. Waiting on cargo + npm.' + RST, W))
+
+  // The overlay covers older transcript rows while preserving the composer.
+  lines.length = Math.min(lines.length, rows - inputBar.length - (CONTENT_ROWS + 2))
 
   // ── Overlay: title border (row 12) ──
   const title = ' bash '
@@ -272,8 +223,9 @@ function buildBashScreen(
     )
   }
 
-  // ── Overlay: bottom border (row 23) ──
+  // ── Overlay: bottom border ──
   lines.push(DIM + '\u2514' + bar('\u2500', W - 2) + '\u2518' + RST)
+  lines.push(...inputBar)
 
   // Ensure exactly `rows` lines, each padded/truncated to exactly 80 visible chars
   while (lines.length < rows) lines.push('')
@@ -299,6 +251,11 @@ import type { TutorialStep } from './first-run-tutorial'
 /** Build the tutorial steps for a given terminal row count. */
 export function getBashSteps(rows = 24): TutorialStep[] {
   return [
+    {
+      title: 'Type /bash',
+      narration: 'From normal chat, type /bash in the composer and press Enter to open the read-only background jobs panel.',
+      screen: commandEntryScreen(rows, '/bash'),
+    },
     {
       title: 'Running Job',
       narration:

@@ -30,9 +30,9 @@ function SettingsProviderPage() {
         <p>
           <strong className="text-koma-accent">Provider Table</strong>{' '}
           Shows all saved providers with name, endpoint URL, API type, and masked
-          key. Use{' '}
-          <code className="text-koma-fg">a</code> to add a new provider or{' '}
-          <code className="text-koma-fg">Ctrl+X</code> twice to delete.
+          key. Move to <code className="text-koma-fg">[ + add provider ]</code>{' '}
+          and press <code className="text-koma-fg">Enter</code> to add, or press{' '}
+          <code className="text-koma-fg">Ctrl+X</code> twice to delete the selected provider.
         </p>
         <p>
           <strong className="text-koma-accent">Add Form</strong>{' '}

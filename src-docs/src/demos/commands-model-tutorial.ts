@@ -11,75 +11,7 @@
  * Hint line INSIDE the box, dim.
  */
 
-const RST = '\x1b[0m'
-const ACC = '\x1b[32m'
-const FG  = '\x1b[37m'
-const DIM = '\x1b[90m'
-const SEL_FG = '\x1b[30m'
-const SEL_BG = '\x1b[42m'
-const INVERSE = SEL_FG + SEL_BG + '\x1b[1m'
-
-function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m/g, '')
-}
-
-function trunc(line: string, w: number): string {
-  let vis = 0
-  let out = ''
-  const re = /\x1b\[[0-9;]*m/g
-  let last = 0
-  let m: RegExpExecArray | null
-  while ((m = re.exec(line)) !== null) {
-    const text = line.slice(last, m.index)
-    for (const ch of text) {
-      if (vis >= w) return out + RST
-      out += ch
-      vis++
-    }
-    out += m[0]
-    last = re.lastIndex
-  }
-  const tail = line.slice(last)
-  for (const ch of tail) {
-    if (vis >= w) return out + RST
-    out += ch
-    vis++
-  }
-  return out
-}
-
-function padRight(text: string, w: number): string {
-  const vis = stripAnsi(text).length
-  return text + ' '.repeat(Math.max(0, w - vis))
-}
-
-function bar(ch: string, w: number): string {
-  return ch.repeat(w)
-}
-
-// ─── Shared: Chat chrome ──────────────────────────────────────────────
-
-function chatHeader(): string[] {
-  const W = 80
-  const brand = DIM + 'koma' + RST + ' ' + ACC + '0.3.16' + RST
-  const mode = ACC + '\u25cf normal' + RST
-  const gap = Math.max(1, W - 4 - stripAnsi(brand).length - stripAnsi(mode).length)
-  return [
-    '  ' + brand + ' '.repeat(gap) + mode,
-    DIM + bar('\u2500', W) + RST,
-  ]
-}
-
-function chatInput(text: string): string[] {
-  const W = 80
-  return [
-    line80('     ' + DIM + 'claude-3.5-sonnet' + RST),
-    DIM + bar('\u2500', W) + RST,
-    '  ' + ACC + '[$] ' + RST + ACC + text + '\u{2588}' + RST,
-    DIM + bar('\u2500', W) + RST,
-    line80('  ' + ACC + 'session-71cdd2dc' + RST),
-  ]
-}
+import { RST, ACC, FG, DIM, INVERSE, trunc, padRight, bar, chatHeader, chatInput, commandEntryScreen } from './chat-chrome'
 
 // ─── Screen: /model Help ──────────────────────────────────────────────
 // Full-width overlay anchored right above the input bar.
@@ -92,11 +24,6 @@ function screenModelHelp(rows = 24): string {
 
   // Chat header
   lines.push(...chatHeader())
-
-  // Brief transcript — overlay covers most of the screen
-  lines.push('')
-  lines.push('  ' + FG + 'what files changed in the last commit?' + RST)
-  lines.push('')
 
   // Build overlay lines
   const overlayLines: string[] = []
@@ -204,6 +131,11 @@ import type { TutorialStep } from './first-run-tutorial'
 export function getCommandsModelSteps(rows = 24): TutorialStep[] {
   return [
     {
+      title: 'Type /model',
+      narration: 'From normal chat, type /model in the composer and press Enter to open its help overlay.',
+      screen: commandEntryScreen(rows, '/model'),
+    },
+    {
       title: '/model Help',
       narration:
         'Type /model in the chat to see available model management commands. The overlay appears above the input bar showing all sub-commands and current role assignments.',
@@ -215,11 +147,16 @@ export function getCommandsModelSteps(rows = 24): TutorialStep[] {
       screen: screenModelHelp(rows),
     },
     {
+      title: 'Type /model main',
+      narration: 'Return to normal chat, type /model main, and press Enter to open the main-role model picker.',
+      screen: commandEntryScreen(rows, '/model main'),
+    },
+    {
       title: 'Role Picker',
       narration:
         'After /model main, a picker overlay lists all configured models. The current selection is highlighted. Choose a different model or press Escape to keep the current one.',
       points: [
-        'Inherit (session default) uses the model from /settings \u2192 Models',
+        'Inherit removes the session override and uses the global role model',
         'Koma free uses the keyless models hosted by koma',
         'Models show their name, ID, and provider',
         'Press Enter to apply, Esc to cancel without changing',

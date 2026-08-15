@@ -6,7 +6,7 @@ const commands = [
   { name: '/new remote', desc: 'Start session on remote host' },
   { name: '/resume', desc: 'Open session hub' },
   { name: '/resume remote', desc: 'Resume on remote host' },
-  { name: '/mode', desc: 'Toggle Normal/Auto approval' },
+  { name: '/mode', desc: 'Cycle or explicitly set agent mode' },
   { name: '/effort', desc: 'Set reasoning effort' },
   { name: '/free', desc: 'Toggle koma-free' },
   { name: '/internet', desc: 'Toggle simple/full internet' },

@@ -21,59 +21,7 @@
  *   Row 23:     Footer hint (dim)
  */
 
-const RST = '\x1b[0m'
-const ACC = '\x1b[32m'     // accent green #39ff14
-const FG  = '\x1b[37m'     // fg white #e6e6e6
-const DIM = '\x1b[90m'     // dim #adadad
-const WARN = '\x1b[33m'    // warn amber #ffb43c
-const INFO = '\x1b[36m'    // info #50c8ff
-const SEL_FG = '\x1b[30m'  // selection foreground black
-const SEL_BG = '\x1b[42m'  // selection background accent
-const INVERSE = SEL_FG + SEL_BG + '\x1b[1m'
-const SUCCESS = '\x1b[92m' // bright green #00c853
-
-// ─── helpers ──────────────────────────────────────────────────────────
-
-/** Strip ANSI escape codes from a string. */
-function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m/g, '')
-}
-
-/**
- * Truncate a line to `w` visible characters, preserving ANSI state.
- * Appends a reset if the line is cut mid-sequence.
- */
-function trunc(line: string, w: number): string {
-  let vis = 0
-  let out = ''
-  const re = /\x1b\[[0-9;]*m/g
-  let last = 0
-  let m: RegExpExecArray | null
-  while ((m = re.exec(line)) !== null) {
-    const text = line.slice(last, m.index)
-    for (const ch of text) {
-      if (vis >= w) return out + RST
-      out += ch
-      vis++
-    }
-    out += m[0]
-    last = re.lastIndex
-  }
-  const tail = line.slice(last)
-  for (const ch of tail) {
-    if (vis >= w) return out + RST
-    out += ch
-    vis++
-  }
-  return out
-}
-
-/** Pad `text` (with ANSI) on the right to `w` visible chars. */
-function padRight(text: string, w: number): string {
-  const vis = stripAnsi(text).length
-  if (vis >= w) return text
-  return text + ' '.repeat(w - vis)
-}
+import { RST, ACC, FG, DIM, INVERSE, trunc, padRight, commandEntryScreen } from './chat-chrome'
 
 /** Build a box-drawing top border: ╭ <title> ───...──╮  (exactly `w` visible chars). */
 function borderLine(title: string, w: number): string {
@@ -221,14 +169,19 @@ import type { TutorialStep } from './first-run-tutorial'
 export function getResumeSteps(rows = 24): TutorialStep[] {
   return [
     {
+      title: 'Type /resume',
+      narration: 'From normal chat, type /resume in the composer and press Enter to open the standalone Session Hub.',
+      screen: commandEntryScreen(rows, '/resume'),
+    },
+    {
       title: 'Session Hub',
       narration:
-        'Type /resume to open the session hub — a full-screen view of all your active and past sessions. ' +
-        'The top half lists live "cooking" sessions with their status, while the bottom half shows session history.',
+        'The standalone Session Hub lists live and past sessions. Choosing a live cooking session swaps the daemon client foreground; choosing a history session loads it into a new appended tab. ' +
+        'The top half lists live sessions with their status, while the bottom half shows session history.',
       points: [
         'Tab switches focus between the cooking (live) and history panes',
         'The focused pane gets an accent-colored header rule',
-        'The current session is shown in italic+underline',
+        'The foreground session is tagged (current)',
       ],
       screen: screenHubCooking(rows),
     },

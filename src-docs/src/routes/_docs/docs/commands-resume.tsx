@@ -13,9 +13,9 @@ function CommandsResumePage() {
       <h1 className="mb-4 text-2xl font-bold text-koma-accent">Command: /resume</h1>
       <p className="mb-6 text-koma-fg">
         The <code className="text-koma-fg">/resume</code> command opens the session hub
-        — a full-screen view split into two halves showing live "cooking" sessions and
-        past "history" sessions. Swap between sessions, kill running ones, or delete
-        old ones from disk.
+        — a full-screen view split into live “cooking” sessions and past “history”
+        sessions. Selecting a live session swaps the daemon client’s foreground session;
+        selecting history loads that session into a new appended tab.
       </p>
 
       <TuiTutorial steps={getResumeSteps(24)} />
@@ -25,7 +25,7 @@ function CommandsResumePage() {
         <p>
           <strong className="text-koma-accent">Cooking</strong>{' '}
           The top half shows live sessions with ● working / ○ ready status markers.
-          The current foreground session is italic and underlined.
+          The current foreground session is tagged <code className="text-koma-fg">(current)</code>.
         </p>
         <p>
           <strong className="text-koma-accent">History</strong>{' '}

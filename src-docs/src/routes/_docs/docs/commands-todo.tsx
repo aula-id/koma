@@ -13,8 +13,8 @@ function CommandsTodoPage() {
       <h1 className="mb-4 text-2xl font-bold text-koma-accent">Command: /todo</h1>
       <p className="mb-6 text-koma-fg">
         The <code className="text-koma-fg">/todo</code> command opens the task panel
-        — a shared checklist between you and the agent. It appears as an overlay above
-        the input bar with a two-pane layout: task list on the left, detail on the right.
+        — a model-managed, read-only checklist shown above the input bar with a
+        two-pane layout: task list on the left, detail on the right.
       </p>
 
       <TuiTutorial steps={getTodoSteps(24)} />
@@ -30,6 +30,12 @@ function CommandsTodoPage() {
           <strong className="text-koma-accent">Two-Pane View</strong>{' '}
           The left pane shows the task list with status symbols. The right pane shows
           detail for the selected item: status, priority, and content.
+        </p>
+        <p>
+          <strong className="text-koma-accent">Controls</strong>{' '}
+          Use ↑/↓ or k/j to navigate. Enter resets an unlocked non-pending item to
+          pending, signalling the model to redo it; Esc closes the panel. The panel has
+          no user add or delete controls.
         </p>
         <p>
           <strong className="text-koma-accent">Persistent</strong>{' '}
