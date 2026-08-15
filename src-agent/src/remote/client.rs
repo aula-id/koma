@@ -96,12 +96,13 @@ pub(crate) fn run_remote_client_target(
         }
     };
 
-    // Bootstrap: check/install koma on remote (uses same auth).
+    // Bootstrap: validate/install/upgrade koma on remote (uses same auth).
     let auth_ref = ssh_auth.as_ref();
-    if !bootstrap::is_koma_installed(&target, auth_ref)? {
-        eprintln!("koma not found on remote. Installing...");
-        bootstrap::install_koma(&target, auth_ref)?;
-        eprintln!("koma installed successfully.");
+    eprintln!("Checking remote Koma version...");
+    if bootstrap::ensure_koma_compatible(&target, auth_ref)? {
+        eprintln!("Remote Koma installed or upgraded successfully.");
+    } else {
+        eprintln!("Remote Koma version matches.");
     }
 
     run_remote_client(&target, auth_ref)

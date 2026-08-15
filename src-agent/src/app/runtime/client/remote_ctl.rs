@@ -272,42 +272,21 @@ fn remote_connect_worker(
         Vec::new(),
     );
     let auth_ref = auth.as_ref();
-    let installed = match bootstrap::is_koma_installed(&target, auth_ref) {
-        Ok(installed) => installed,
-        Err(error) => {
-            push_state(
-                "error",
-                Some(&user_str),
-                Some(&host_str),
-                None,
-                Some(&format!("bootstrap check failed: {error:#}")),
-                Vec::new(),
-            );
-            shared.finish(attempt_id);
-            return;
-        }
-    };
-    if is_cancelled() {
+    if let Err(error) = bootstrap::ensure_koma_compatible(&target, auth_ref) {
+        push_state(
+            "error",
+            Some(&user_str),
+            Some(&host_str),
+            None,
+            Some(&format!("remote bootstrap failed: {error:#}")),
+            Vec::new(),
+        );
         shared.finish(attempt_id);
         return;
     }
-    if !installed {
-        if let Err(error) = bootstrap::install_koma(&target, auth_ref) {
-            push_state(
-                "error",
-                Some(&user_str),
-                Some(&host_str),
-                None,
-                Some(&format!("koma install failed: {error:#}")),
-                Vec::new(),
-            );
-            shared.finish(attempt_id);
-            return;
-        }
-        if is_cancelled() {
-            shared.finish(attempt_id);
-            return;
-        }
+    if is_cancelled() {
+        shared.finish(attempt_id);
+        return;
     }
 
     let session_id = uuid::Uuid::new_v4().to_string();
