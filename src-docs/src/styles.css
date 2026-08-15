@@ -2,8 +2,8 @@
 
 /* ── Koma palette tokens (1:1 with webgui) ─────────────────────────── */
 @theme {
-  --font-sans: 'KomaMono', ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
-  --font-mono: 'KomaMono', ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  --font-sans: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
   --default-font-family: var(--font-sans);
 
   --color-koma-fg: var(--koma-fg, #c8d3f5);
@@ -21,35 +21,13 @@
 }
 
 /* ── Font ───────────────────────────────────────────────────────────── */
-@font-face {
-  font-family: 'KomaMono';
-  src: url('/fonts/jetbrains-mono-400.woff2') format('woff2');
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: 'KomaMono';
-  src: url('/fonts/jetbrains-mono-500.woff2') format('woff2');
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: 'KomaMono';
-  src: url('/fonts/jetbrains-mono-700.woff2') format('woff2');
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-}
-
-/* ── Base ───────────────────────────────────────────────────────────── */
-html, body, #root {
+/* JetBrains Mono loaded via Google Fonts CDN (see index.html <link>) */
+html, body, #root, .xterm {
   margin: 0;
   height: 100%;
   background: var(--koma-bg, #0b0e14);
   color: var(--koma-fg, #c8d3f5);
-  font-family: 'KomaMono', ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-family: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
   font-synthesis: none;
 }
 

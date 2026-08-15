@@ -1,0 +1,249 @@
+/**
+ * Tutorial screens for /todo — the task list overlay.
+ *
+ * Layout matches src-agent/src/view/todo/mod.rs exactly: bordered overlay
+ * anchored above composer, two-pane split with LIST_W=24 left pane
+ * (Block::borders(RIGHT)) and right pane (Margin{horizontal:1}).
+ *
+ * Step 1: in-progress item selected
+ * Step 2: pending item selected
+ */
+
+const RST = '\x1b[0m'
+const ACC = '\x1b[32m'
+const FG  = '\x1b[37m'
+const DIM = '\x1b[90m'
+const SEL_FG = '\x1b[30m'
+const SEL_BG = '\x1b[42m'
+const INVERSE = SEL_FG + SEL_BG + '\x1b[1m'
+const SUCCESS = '\x1b[92m'
+
+function stripAnsi(s: string): string {
+  return s.replace(/\x1b\[[0-9;]*m/g, '')
+}
+
+function trunc(line: string, w: number): string {
+  let vis = 0, out = '', last = 0
+  const re = /\x1b\[[0-9;]*m/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(line)) !== null) {
+    for (const ch of line.slice(last, m.index)) {
+      if (vis >= w) return out + RST
+      out += ch; vis++
+    }
+    out += m[0]; last = re.lastIndex
+  }
+  for (const ch of line.slice(last)) {
+    if (vis >= w) return out + RST
+    out += ch; vis++
+  }
+  return out
+}
+
+function padRight(text: string, w: number): string {
+  const vis = stripAnsi(text).length
+  return text + ' '.repeat(Math.max(0, w - vis))
+}
+
+function line80(content: string): string {
+  return padRight(trunc(content, 80), 80)
+}
+
+function bar(ch: string, w: number): string {
+  return ch.repeat(w)
+}
+
+// ─── Chat chrome ──────────────────────────────────────────────────────
+
+function chatHeader(): string[] {
+  const W = 80
+  // visible: "  koma 0.3.16" = 13, then 59 spaces, then "● normal" = 8 → 80
+  const line = '  ' + DIM + 'koma' + RST + ' ' + ACC + '0.3.16' + RST
+    + ' '.repeat(59) + ACC + '\u25cf normal' + RST
+  return [line, DIM + bar('\u2500', W) + RST]
+}
+
+function chatInputBar(text: string): string[] {
+  const W = 80
+  return [
+    DIM + bar('\u2500', W) + RST,
+    line80('  ' + ACC + '[$] ' + RST + ACC + text + '\u2588' + RST),
+    DIM + bar('\u2500', W) + RST,
+  ]
+}
+
+// ─── Todo overlay builder ─────────────────────────────────────────────
+// Matches Rust: bordered overlay, LIST_W=24 left pane (RIGHT border),
+// right pane with Margin{horizontal:1}, " todo (N/M) " title.
+
+interface TodoItem {
+  symbol: string
+  label: string
+  status: string
+  priority: string
+  content: string
+  completed: boolean
+}
+
+function truncatePlain(s: string, max: number): string {
+  if (s.length <= max) return s
+  return s.slice(0, max - 1) + '\u2026'
+}
+
+function buildTodoOverlay(items: TodoItem[], selectedIdx: number, rows: number): string {
+  const W = 80
+  const OVERLAY_H = 12 // total height including borders
+  const done = items.filter(i => i.completed).length
+  const innerW = W - 2 // 78 (inside outer borders)
+
+  // Two-pane split: [LIST_W=24, Min(0)]
+  const LIST_W = 24
+  const LIST_TEXT_W = 23 // 24 - 1 (RIGHT border)
+  const RIGHT_W = innerW - LIST_W // 54
+  const RIGHT_TEXT_W = RIGHT_W - 2 // 52 (Margin{horizontal:1})
+
+  // ── Top border ──
+  const title = ` todo (${done}/${items.length}) `
+  const overlayLines: string[] = []
+  overlayLines.push(DIM + '\u250c' + title + bar('\u2500', innerW - title.length) + '\u2510' + RST)
+
+  // ── Build left pane rows (independent of right pane) ──
+  const leftRows: string[] = []
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    const sel = i === selectedIdx
+    const labelTrunc = truncatePlain(item.label, LIST_TEXT_W - 2) // 21 chars max
+    const text = item.symbol + ' ' + labelTrunc
+
+    if (sel) {
+      leftRows.push(INVERSE + padRight(text, LIST_TEXT_W) + RST)
+    } else {
+      // Symbol always dim; label dim if completed/cancelled, fg otherwise
+      const labelDim = item.completed || item.status === 'cancelled'
+      leftRows.push(
+        DIM + item.symbol + ' ' + RST +
+        (labelDim ? DIM : FG) + labelTrunc + RST
+      )
+    }
+  }
+
+  // ── Build right pane rows (detail for selected item) ──
+  const sel = items[selectedIdx]
+  const rightRows: string[] = []
+
+  // Line 1: status + priority
+  const sc = sel.status === 'in-progress' ? ACC : sel.completed ? DIM : FG
+  rightRows.push(
+    FG + 'status: ' + sc + sel.status + FG + '   \u00b7   priority: ' + sel.priority + RST
+  )
+
+  // Line 2: status-dependent hint
+  const hints: Record<string, [string, string]> = {
+    'in-progress': ['(currently being worked on)', ACC],
+    completed:     ['(completed)', DIM],
+    cancelled:     ['(cancelled)', DIM],
+    pending:       ['(awaiting model or user action)', DIM],
+  }
+  const hint = hints[sel.status] || hints.pending
+  rightRows.push(hint[1] + hint[0] + RST)
+
+  // Line 3: blank
+  rightRows.push('')
+
+  // Line 4: "content:" header
+  rightRows.push(DIM + 'content:' + RST)
+
+  // Lines 5+: word-wrapped content
+  const words = sel.content.split(' ')
+  let contentLine = ''
+  for (const word of words) {
+    const test = contentLine ? contentLine + ' ' + word : word
+    if (contentLine && test.length > RIGHT_TEXT_W) {
+      rightRows.push(FG + contentLine + RST)
+      contentLine = word
+    } else {
+      contentLine = test
+    }
+  }
+  if (contentLine) rightRows.push(FG + contentLine + RST)
+
+  // ── Pad both panes to content height ──
+  const contentH = OVERLAY_H - 2 // 10 rows of content
+  while (leftRows.length < contentH) leftRows.push(' '.repeat(LIST_TEXT_W))
+  while (rightRows.length < contentH) rightRows.push('')
+
+  // ── Combine panes row by row ──
+  // Each row: │(1) + left(23) + │(1) + rightPane(54) + │(1) = 80
+  // rightPane = Margin{h:1}: ' ' + text padded to 52 + ' '
+  for (let i = 0; i < contentH; i++) {
+    const rightContent = padRight(' ' + rightRows[i], RIGHT_W)
+    overlayLines.push(
+      DIM + '\u2502' + RST
+      + leftRows[i]
+      + DIM + '\u2502' + RST
+      + rightContent
+      + DIM + '\u2502' + RST
+    )
+  }
+
+  // ── Bottom border ──
+  overlayLines.push(DIM + '\u2514' + bar('\u2500', innerW) + '\u2518' + RST)
+
+  // ── Compose full screen ──
+  const lines: string[] = []
+  lines.push(...chatHeader())
+  lines.push('')
+  lines.push(line80('  ' + FG + 'implement auth and add tests' + RST))
+  lines.push('')
+
+  const inputBar = chatInputBar('/todo')
+  const targetStart = rows - inputBar.length - overlayLines.length
+  while (lines.length < targetStart) lines.push('')
+  lines.push(...overlayLines)
+  lines.push(...inputBar)
+
+  while (lines.length < rows) lines.push('')
+  return lines.slice(0, rows).map(l => line80(l)).join('\n')
+}
+
+// ─── Tutorial Steps ───────────────────────────────────────────────────
+
+import type { TutorialStep } from './first-run-tutorial'
+
+export function getTodoSteps(rows = 24): TutorialStep[] {
+  const items: TodoItem[] = [
+    { symbol: '\u25d0', label: 'Implement auth middleware', status: 'in-progress', priority: 'high',   content: 'Add JWT-based authentication middleware to the API gateway. Must support token refresh and role-based access control.', completed: false },
+    { symbol: '\u25cb', label: 'Add unit tests',           status: 'pending',    priority: 'medium', content: 'Write comprehensive unit tests for the auth module covering edge cases like expired tokens and invalid signatures.', completed: false },
+    { symbol: '\u25cf', label: 'Update README',            status: 'completed',  priority: 'high',   content: 'Update the project README with new setup instructions, API documentation, and contribution guidelines.', completed: true },
+    { symbol: '\u25cb', label: 'Write migration script',   status: 'pending',    priority: 'high',   content: 'Create a database migration script to add the users table with proper indexes and constraints.', completed: false },
+    { symbol: '\u2298', label: 'Refactor utils',           status: 'cancelled',  priority: 'low',    content: 'Refactor utility functions into a separate crate. Cancelled \u2014 not enough benefit for the effort.', completed: false },
+  ]
+
+  const screen1 = buildTodoOverlay(items, 0, rows)
+  const screen2 = buildTodoOverlay(items, 1, rows)
+
+  return [
+    {
+      title: 'Task Panel',
+      narration:
+        'Type /todo to open the task tracker overlay. It shows all tracked tasks with their status symbols and a detail pane for the selected item.',
+      points: [
+        '\u25d0 in-progress  \u25cb pending  \u25cf completed  \u2298 cancelled',
+        'The right pane shows status, priority, and content for the selected task',
+        'Completed and cancelled items appear dimmed',
+      ],
+      screen: screen1,
+    },
+    {
+      title: 'Task Detail',
+      narration:
+        'Navigate with \u2191\u2193 to select a different task. The detail pane updates immediately to show the status, priority, and content of the highlighted item.',
+      points: [
+        'Press Enter to toggle status, n to add a new task',
+        'Press d to delete the selected task',
+        'Tasks persist across sessions in the project memory',
+      ],
+      screen: screen2,
+    },
+  ]
+}
