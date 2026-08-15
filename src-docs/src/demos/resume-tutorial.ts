@@ -131,10 +131,11 @@ function buildCookingPane(lines: string[], focused: boolean) {
   lines.push(borderStyle + borderLine('cooking (3)', W) + RST)
 
   // [ + new session ] button — INVERSE when focused
+  const btnText = ' [+ new session]'
   if (focused) {
-    lines.push(lineW(INVERSE + ' [+ new session]' + ' '.repeat(INNER_W - 16) + RST, W))
+    lines.push(INVERSE + padRight(btnText, W) + RST)
   } else {
-    lines.push(lineW(DIM + ' [+ new session]' + ' '.repeat(INNER_W - 16) + RST, W))
+    lines.push(DIM + padRight(btnText, W) + RST)
   }
 
   // Session rows — two-column: name LEFT, dir + status RIGHT
@@ -144,7 +145,7 @@ function buildCookingPane(lines: string[], focused: boolean) {
     const name = s.name.length > nameW ? s.name.slice(0, nameW - 1) + '\u2026' : s.name.padEnd(nameW)
     const sel = s.selected && focused
     if (sel) {
-      lines.push(lineW('  ' + INVERSE + name + '  ' + rightPart + RST, W))
+      lines.push(INVERSE + padRight('  ' + name + '  ' + rightPart, W) + RST)
     } else {
       const nameStyle = s.status === 'working' ? ACC : FG
       lines.push(lineW('  ' + nameStyle + name + '  ' + DIM + rightPart + RST, W))
@@ -211,7 +212,7 @@ function screenHubKillConfirm(rows = 24): string {
 
   // Row 23: INVERSE kill confirmation bar
   const killMsg = "Stop running session 'my-project'?  Ctrl+X/Enter confirm \u00b7 Esc cancel"
-  lines.push(INVERSE + (' ' + killMsg).padEnd(W) + RST)
+  lines.push(INVERSE + padRight(' ' + killMsg, W) + RST)
 
   return lines.slice(0, rows).join('\n')
 }
