@@ -114,13 +114,12 @@ function screenSettingsMenu(rows = 24): string {
   for (const item of items) {
     const chip = `[${item.num}]`
     const text = `  ${item.label}`
+    const content = ` ${chip}${text}` // leading space matches inner margin
     if (item.sel) {
-      const content = ` ${chip}${text}`
-      const padded = padRight(content, innerW)
-      overlayLines.push(DIM + '\u2502' + RST + INVERSE + padded + RST + DIM + '\u2502' + RST)
+      overlayLines.push(DIM + '\u2502' + RST + INVERSE + padRight(content, innerW) + RST + DIM + '\u2502' + RST)
     } else {
-      const content = ` ${chip}${text}`
-      overlayLines.push(DIM + '\u2502' + RST + ACC + chip + RST + FG + text + RST + ' '.repeat(Math.max(0, innerW - stripAnsi(content).length)) + DIM + '\u2502' + RST)
+      const styled = ACC + chip + RST + FG + text + RST
+      overlayLines.push(DIM + '\u2502' + RST + padRight(' ' + styled, innerW) + DIM + '\u2502' + RST)
     }
   }
 
