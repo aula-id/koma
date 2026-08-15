@@ -1,14 +1,13 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { CommandPage } from '../../../components/CommandPage'
+import { TuiTutorial } from '../../../components/TuiTutorial'
+import { getStoreSteps } from '../../../demos/store-tutorial'
 
 export const Route = createFileRoute('/_docs/docs/commands-store')({
   component: () => (
-    <CommandPage
-      name="/store"
-      description="Browse and install extensions from the koma.run marketplace."
-      details={
-        <p>Opens the extension marketplace where you can discover, install, and update community extensions. Extensions add new tools, UI panels, and integrations to koma.</p>
-      }
-    />
+    <article>
+      <h1 className="mb-4 text-2xl font-bold text-koma-accent">/store</h1>
+      <p className="mb-6 text-koma-fg">Browse the public KomaRun extension catalogue and install an extension after connecting KomaRun OAuth.</p>
+      <TuiTutorial steps={getStoreSteps(24)} />
+    </article>
   ),
 })

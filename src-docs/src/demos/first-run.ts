@@ -15,25 +15,13 @@
  *   \x1b[7m      = reverse video (for selection)
  */
 
-const CLR = '\x1b[2J\x1b[H'
-const RST = '\x1b[0m'
-const ACC = '\x1b[32m'    // accent green
-const FG = '\x1b[37m'     // white fg
-const DIM = '\x1b[90m'    // dim
-const WARN = '\x1b[33m'   // amber
-const BOLD_ACC = '\x1b[1;32m'
-const REVERSE = '\x1b[7m'
+import { CLR, RST, ACC, FG, DIM, WARN, BOLD_ACC, REVERSE, padRight } from './chat-chrome'
 
 // helper: center-pad a string in cols
 function center(text: string, cols = 80): string {
   const stripped = text.replace(/\x1b\[[0-9;]*m/g, '')
   const pad = Math.max(0, Math.floor((cols - stripped.length) / 2))
   return ' '.repeat(pad) + text
-}
-
-function padRight(text: string, width: number): string {
-  const stripped = text.replace(/\x1b\[[0-9;]*m/g, '')
-  return text + ' '.repeat(Math.max(0, width - stripped.length))
 }
 
 // ─── Screen 1: Onboarding Chooser ────────────────────────────────────

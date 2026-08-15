@@ -1,8 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { TuiTutorial } from '../../../components/TuiTutorial'
-import { getKeyboardShortcutsSteps } from '../../../demos/keyboard-shortcuts-tutorial'
-
 export const Route = createFileRoute('/_docs/docs/keyboard-shortcuts')({
   component: KeyboardShortcutsPage,
 })
@@ -12,29 +9,15 @@ function KeyboardShortcutsPage() {
     <article>
       <h1 className="mb-4 text-2xl font-bold text-koma-accent">Keyboard Shortcuts</h1>
       <p className="mb-6 text-koma-fg">
-        Global keyboard shortcuts available in the chat input. These work across all
-        modes and can be used to quickly navigate, edit, and control the agent.
+        Keyboard shortcuts are documented in the real <code className="text-koma-fg">/help</code>{' '}
+        reference; there is no separate keyboard-shortcuts TUI page.
       </p>
 
-      <TuiTutorial steps={getKeyboardShortcutsSteps(24)} />
-
-      <div className="mt-8 space-y-3 text-sm text-koma-dim">
-        <h3 className="text-base font-semibold text-koma-fg">Key Details</h3>
-        <p>
-          <strong className="text-koma-accent">Quick Actions</strong>{' '}
-          Enter sends messages, Tab switches context, Ctrl+R regenerates the last
-          response, and Ctrl+E edits it.
-        </p>
-        <p>
-          <strong className="text-koma-accent">Navigation</strong>{' '}
-          Up/Down scrolls the transcript, Esc closes overlays or cancels operations,
-          and pressing Esc twice rewinds to edit a previous message.
-        </p>
-        <p>
-          <strong className="text-koma-accent">Panel Shortcuts</strong>{' '}
-          $ opens the sub-agents panel, # toggles code selection mode, and
-          Ctrl+F searches chat history.
-        </p>
+      <div className="space-y-3 text-sm text-koma-dim">
+        <p><strong className="text-koma-accent">Enter</strong> sends a message or runs a slash command; <strong className="text-koma-accent">Tab</strong> completes the selected command.</p>
+        <p><strong className="text-koma-accent">Ctrl+R</strong> resends the last message while idle. <strong className="text-koma-accent">Ctrl+E</strong> toggles internet mode, and <strong className="text-koma-accent">Ctrl+J</strong> inserts a newline.</p>
+        <p><strong className="text-koma-accent">Ctrl+V</strong> stages an image from the clipboard. <strong className="text-koma-accent">Esc</strong> interrupts while busy; Esc twice opens rewind editing.</p>
+        <p><strong className="text-koma-accent">Up/Down/wheel</strong> scroll the transcript. On an empty composer, <strong className="text-koma-accent">$</strong> opens the sub-agents panel; Ctrl+X kills a selected bash job or sub-agent in its panel.</p>
       </div>
     </article>
   )

@@ -1,17 +1,13 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { CommandPage } from '../../../components/CommandPage'
+import { TuiTutorial } from '../../../components/TuiTutorial'
+import { getModeSteps } from '../../../demos/mode-tutorial'
 
 export const Route = createFileRoute('/_docs/docs/commands-mode')({
   component: () => (
-    <CommandPage
-      name="/mode"
-      description="Toggle between Normal and Auto tool approval modes."
-      shortcut="N/A — type in chat"
-      details={<>
-        <p>In <strong className="text-koma-accent">Normal</strong> mode, the agent asks for your approval before running tools (file edits, shell commands, etc.).</p>
-        <p>In <strong className="text-koma-accent">Auto</strong> mode, tools execute without confirmation — faster but less control.</p>
-        <p>The current mode is shown in the header bar.</p>
-      </>}
-    />
+    <article>
+      <h1 className="mb-4 text-2xl font-bold text-koma-accent">/mode</h1>
+      <p className="mb-6 text-koma-fg">Cycle or explicitly select the session’s Auto, Normal, Plan, SDLC, or armed YOLO mode.</p>
+      <TuiTutorial steps={getModeSteps(24)} />
+    </article>
   ),
 })

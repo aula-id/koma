@@ -23,60 +23,7 @@
  *   \x1b[42m  sel_bg  (accent)
  */
 
-const RST = '\x1b[0m'
-const ACC = '\x1b[32m'     // accent green #39ff14
-const FG  = '\x1b[37m'     // fg white #e6e6e6
-const DIM = '\x1b[90m'     // dim #adadad
-const SEL_FG = '\x1b[30m'  // selection foreground black
-const SEL_BG = '\x1b[42m'  // selection background accent
-const INVERSE = SEL_FG + SEL_BG + '\x1b[1m'
-
-// ─── helpers ──────────────────────────────────────────────────────────
-
-/** Strip ANSI escape codes from a string. */
-function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m/g, '')
-}
-
-/**
- * Truncate a line to `w` visible characters, preserving ANSI state.
- * Appends a reset if the line is cut mid-sequence.
- */
-function trunc(line: string, w: number): string {
-  let vis = 0
-  let out = ''
-  const re = /\x1b\[[0-9;]*m/g
-  let last = 0
-  let m: RegExpExecArray | null
-  while ((m = re.exec(line)) !== null) {
-    const text = line.slice(last, m.index)
-    for (const ch of text) {
-      if (vis >= w) return out + RST
-      out += ch
-      vis++
-    }
-    out += m[0]
-    last = re.lastIndex
-  }
-  const tail = line.slice(last)
-  for (const ch of tail) {
-    if (vis >= w) return out + RST
-    out += ch
-    vis++
-  }
-  return out
-}
-
-/** Pad `text` (with ANSI) on the right to `w` visible chars. */
-function padRight(text: string, w: number): string {
-  const vis = stripAnsi(text).length
-  return text + ' '.repeat(Math.max(0, w - vis))
-}
-
-/** Fill a row with `ch` repeated `w` times. */
-function bar(ch: string, w: number): string {
-  return ch.repeat(w)
-}
+import { RST, ACC, FG, DIM, INVERSE, trunc, padRight, bar, chatInput, commandEntryScreen } from './chat-chrome'
 
 // ─── Sub-agent data ───────────────────────────────────────────────────
 
@@ -136,20 +83,14 @@ function buildTaskScreen(
   const W = 80
   const LIST_TEXT_W = 17     // left pane inner text width (list_inner.width)
   const RIGHT_TEXT_W = 59    // right pane inner text width after Margin(1)
-  const CONTENT_ROWS = 10   // box content rows (boxH - 2)
+  const CONTENT_ROWS = 10   // box content rows (12-row box minus borders)
 
   const mode = opts.mode ?? 'auto'
 
-  // ── Input bar (5 rows: model name, rule, input, rule, session name) ──
-  const inputBar: string[] = [
-    padRight('     ' + DIM + 'claude-3.5-sonnet' + RST, W),
-    DIM + bar('\u2500', W) + RST,
-    padRight('  ' + ACC + '[$] /task\u2588' + RST, W),
-    DIM + bar('\u2500', W) + RST,
-    padRight('  ' + ACC + 'session-71cdd2dc' + RST, W),
-  ]
+  // ── Input bar ──
+  const inputBar = chatInput('/task')
 
-  // ── Overlay lines (12 rows: top border + 10 content + bottom border) ──
+  // ── Overlay lines (18 rows: top border + 16 content + bottom border) ──
   const overlayLines: string[] = []
   const title = ' sub-agents  Ctrl+X kill \u00b7 Ctrl+B background '
   overlayLines.push(
@@ -243,9 +184,14 @@ import type { TutorialStep } from './first-run-tutorial'
 export function getTaskSteps(rows = 24): TutorialStep[] {
   return [
     {
+      title: 'Type /task',
+      narration: 'From normal chat, type bare /task in the composer and press Enter to open the sub-agents viewer.',
+      screen: commandEntryScreen(rows, '/task'),
+    },
+    {
       title: 'Running Agent',
       narration:
-        'Type /task to open the sub-agents panel \u2014 a bordered popup anchored above the input. ' +
+        'Bare /task opens the sub-agents panel \u2014 a bordered popup anchored above the input. ' +
         'The left pane lists all active sub-agents; the right pane shows the selected agent\u2019s ' +
         'live status and streaming transcript.',
       points: [

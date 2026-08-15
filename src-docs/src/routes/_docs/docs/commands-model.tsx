@@ -29,9 +29,8 @@ function CommandsModelPage() {
         </p>
         <p>
           <strong className="text-koma-accent">Inherit</strong>{' '}
-          The first option in the picker is "(inherit session default)" — this
-          uses whatever model is set in <code className="text-koma-fg">/settings</code>
-          {' '}→ Models for that role.
+          The first option in the picker is “(inherit global)” — this removes the
+          session override and uses the globally configured model for that role.
         </p>
         <p>
           <strong className="text-koma-accent">Per-Agent</strong>{' '}

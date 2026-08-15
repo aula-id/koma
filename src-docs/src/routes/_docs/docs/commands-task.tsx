@@ -12,9 +12,10 @@ function CommandsTaskPage() {
     <article>
       <h1 className="mb-4 text-2xl font-bold text-koma-accent">Command: /task</h1>
       <p className="mb-6 text-koma-fg">
-        The <code className="text-koma-fg">/task</code> command opens the sub-agents
-        panel — a bordered overlay showing all running and completed sub-agents. With
-        arguments, it dispatches a task to a named agent instead.
+        Bare <code className="text-koma-fg">/task</code> opens the sub-agents viewer —
+        a bordered overlay showing running and completed sub-agents. Use{' '}
+        <code className="text-koma-fg">/task &lt;agent&gt; &lt;task&gt;</code> to delegate
+        work to a named agent instead.
       </p>
 
       <TuiTutorial steps={getTaskSteps(24)} />

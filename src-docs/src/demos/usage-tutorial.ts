@@ -28,64 +28,7 @@
  *   \x1b[92m  success (#00c853)
  */
 
-const RST = '\x1b[0m'
-const ACC = '\x1b[32m'     // accent green #39ff14
-const FG  = '\x1b[37m'     // fg white #e6e6e6
-const DIM = '\x1b[90m'     // dim #adadad
-const WARN = '\x1b[33m'    // warn amber #ffb43c
-const INFO = '\x1b[36m'    // info #50c8ff
-const SEL_FG = '\x1b[30m'  // selection foreground black
-const SEL_BG = '\x1b[42m'  // selection background accent
-const INVERSE = SEL_FG + SEL_BG + '\x1b[1m'
-const SUCCESS = '\x1b[92m' // bright green #00c853
-const BOLD_ACC = '\x1b[1;32m'
-
-// ─── helpers ──────────────────────────────────────────────────────────
-
-/** Strip ANSI escape codes from a string. */
-function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m/g, '')
-}
-
-/**
- * Truncate a line to `w` visible characters, preserving ANSI state.
- * Appends a reset if the line is cut mid-sequence.
- */
-function trunc(line: string, w: number): string {
-  let vis = 0
-  let out = ''
-  const re = /\x1b\[[0-9;]*m/g
-  let last = 0
-  let m: RegExpExecArray | null
-  while ((m = re.exec(line)) !== null) {
-    const text = line.slice(last, m.index)
-    for (const ch of text) {
-      if (vis >= w) return out + RST
-      out += ch
-      vis++
-    }
-    out += m[0]
-    last = re.lastIndex
-  }
-  const tail = line.slice(last)
-  for (const ch of tail) {
-    if (vis >= w) return out + RST
-    out += ch
-    vis++
-  }
-  return out
-}
-
-/** Pad a string to `w` visible characters (right-pad with spaces). */
-function padRight(text: string, w: number): string {
-  const vis = stripAnsi(text).length
-  return text + ' '.repeat(Math.max(0, w - vis))
-}
-
-/** Repeat a character `w` times. */
-function bar(ch: string, w: number): string {
-  return ch.repeat(w)
-}
+import { RST, ACC, FG, DIM, INVERSE, BOLD_ACC, trunc, padRight, bar, commandEntryScreen } from './chat-chrome'
 
 // ─── Screen: Global Dashboard ────────────────────────────────────────
 // Full-screen dashboard (80×24):
@@ -256,175 +199,82 @@ function screenGlobalDashboard(rows = 24): string {
 }
 
 // ─── Screen: Session View ────────────────────────────────────────────
-// After pressing Tab — session-scoped KPI, models used, and hourly
-// heatmap for a single session.
+// After pressing Tab — session totals, models used, and hourly heatmap for
+// one session. The lower-hour slice reflects how the live 24-row viewport
+// clips the 24 hourly bars from the top.
 //
 // Layout (80×24):
 //   Row 0:      header [tab: session]
 //   Row 1:      dim rule
-//   Row 2:      SESSION KPI section header
-//   Rows 3-8:   6 KPI values (two-column: left cost, right activity)
-//   Row 9:      blank
-//   Row 10:     MODELS USED section header
-//   Row 11:     column headers
-//   Rows 12-15: 2 models × 2 rows (data + bar)
-//   Row 16:     blank
-//   Row 17:     HOURLY HEATMAP section header
-//   Rows 18-21: 4 heatmap rows (Thu-Sun)
-//   Row 22:     legend
+//   Row 2:      SESSION TOTALS section header
+//   Rows 3-7:   in, cached, out, cost, calls
+//   Row 8:      blank
+//   Row 9:      MODELS USED (42) + gap (2) + HOURLY HEATMAP (36)
+//   Rows 10-22: model rows + clipped hourly bars and legend
 //   Row 23:     footer
 
 function screenSessionView(rows = 24): string {
   const W = 80
+  const MODELS_W = 42
+  const HEATMAP_W = 36
+  const GAP = 2
   const lines: string[] = []
 
-  // ── Row 0: Header ───────────────────────────────────────────────
-  const hdr = [
-    '  ',
-    BOLD_ACC + 'koma / usage ' + RST,
-    DIM + '[tab: session] ' + RST,
-    INVERSE + ' 1:today ' + RST,
-    DIM + ' 2:week ' + RST,
-    DIM + ' 3:year ' + RST,
-    DIM + ' [m: cost]' + RST,
-  ].join('')
-  lines.push(hdr)
+  // The session header deliberately omits global-only range and metric controls.
+  lines.push(' ' + BOLD_ACC + 'koma / usage  ' + RST + DIM + '[tab: session]' + RST)
+  lines.push(DIM + bar('─', W) + RST)
 
-  // ── Row 1: Dim rule ─────────────────────────────────────────────
-  lines.push(DIM + bar('\u2500', W) + RST)
-
-  // ── Row 2: SESSION KPI section header ───────────────────────────
-  lines.push(
-    '  ' + BOLD_ACC + 'SESSION KPI' + RST + ' ' + DIM + bar('\u2500', W - 17) + RST,
-  )
-
-  // ── Rows 3-8: KPI data (two-column: left cost metrics, right activity) ──
-  const leftKpis = [
-    { label: 'total',    value: '$3.42' },
-    { label: 'in',       value: '340K' },
-    { label: 'out',      value: '128K' },
-    { label: 'cached',   value: '42K' },
-    { label: 'calls',    value: '13' },
-    { label: 'avg/call', value: '$0.26' },
+  // The live view has five session totals and no activity-derived metrics.
+  lines.push(BOLD_ACC + 'SESSION TOTALS' + RST + ' ' + DIM + bar('─', W - 15) + RST)
+  const totals = [
+    { label: 'in', value: '340K' },
+    { label: 'cached', value: '42K' },
+    { label: 'out', value: '128K' },
+    { label: 'cost', value: '$3.42' },
+    { label: 'calls', value: '13' },
   ]
-  const rightKpis = [
-    { label: 'duration', value: '2h 14m' },
-    { label: 'messages', value: '18' },
-    { label: 'tools',    value: '7' },
-    { label: 'edits',    value: '3' },
-    { label: 'files',    value: '5' },
-  ]
-
-  for (let i = 0; i < leftKpis.length; i++) {
-    const left = leftKpis[i]
-    const leftLabel = DIM + left.label.padEnd(10) + RST
-    const leftValue = FG + left.value + RST
-    let line = '    ' + leftLabel + ' ' + leftValue
-
-    if (i < rightKpis.length) {
-      const right = rightKpis[i]
-      const rightLabel = DIM + right.label.padEnd(11) + RST
-      const rightValue = FG + right.value + RST
-      line += '        ' + rightLabel + ' ' + rightValue
-    }
-
-    lines.push(line)
+  for (const total of totals) {
+    lines.push(' ' + DIM + total.label.padEnd(10) + RST + FG + total.value + RST)
   }
-
-  // ── Row 9: Blank ────────────────────────────────────────────────
   lines.push('')
 
-  // ── Row 10: MODELS USED section header ──────────────────────────
-  lines.push(
-    '  ' +
-      BOLD_ACC + 'MODELS USED' + RST +
-      ' ' + DIM + bar('\u2500', W - 17) + RST,
-  )
+  // At 80 columns draw_session() allocates 42 model columns, a two-cell gap,
+  // and 36 heatmap columns. Both section labels occupy the same row.
+  const modelsHeading = BOLD_ACC + 'MODELS USED' + RST + ' ' + DIM + bar('─', MODELS_W - 12) + RST
+  const heatmapHeading = BOLD_ACC + 'HOURLY HEATMAP' + RST + ' ' + DIM + bar('─', HEATMAP_W - 15) + RST
+  lines.push(padRight(modelsHeading, MODELS_W) + ' '.repeat(GAP) + padRight(heatmapHeading, HEATMAP_W))
 
-  // ── Row 11: Column headers ──────────────────────────────────────
-  lines.push(
-    '    ' +
-      DIM +
-      'model'.padEnd(17) +
-      'cost'.padStart(5) +
-      '  ' +
-      'calls'.padStart(5) +
-      '  ' +
-      '%'.padStart(4) +
-      RST,
-  )
-
-  // ── Rows 12-15: Model data ─────────────────────────────────────
-  const models = [
-    {
-      name: 'claude-3.5-sonnet',
-      cost: '$2.18',
-      calls: '8',
-      pct: '64%',
-      barLen: 26,
-    },
-    {
-      name: 'gpt-4o-mini',
-      cost: '$1.24',
-      calls: '5',
-      pct: '36%',
-      barLen: 14,
-    },
+  const modelRows = [
+    DIM + 'model'.padEnd(11) + '  ' + 'cost'.padStart(7) + '  ' + 'tokens'.padStart(6) + '  ' + 'calls'.padStart(5) + RST,
+    FG + 'claude-3.5'.padEnd(11) + RST + '  ' + FG + '$2.18'.padStart(7) + RST + '  ' + DIM + '320K'.padStart(6) + RST + '  ' + DIM + '8'.padStart(5) + RST + ' ' + ACC + '██████' + RST,
+    FG + 'gpt-4o-mini'.padEnd(11) + RST + '  ' + FG + '$1.24'.padStart(7) + RST + '  ' + DIM + '148K'.padStart(6) + RST + '  ' + DIM + '5'.padStart(5) + RST + ' ' + ACC + '██▍' + RST,
   ]
 
-  for (const m of models) {
-    // Data row
-    const dataRow =
-      '    ' +
-        FG + m.name.padEnd(17) + RST +
-        FG + m.cost.padStart(5) + RST +
-        '  ' +
-        DIM + m.calls.padStart(5) + '  ' +
-        m.pct.padStart(4) + RST
-    lines.push(dataRow)
-    // Bar chart row
-    lines.push('    ' + ACC + bar('\u2588', m.barLen) + RST)
-  }
-
-  // ── Row 16: Blank ───────────────────────────────────────────────
-  lines.push('')
-
-  // ── Row 17: HOURLY HEATMAP section header ───────────────────────
-  lines.push(
-    '  ' +
-      BOLD_ACC + 'HOURLY HEATMAP' + RST +
-      ' ' + DIM + bar('\u2500', W - 20) + RST,
+  // The renderer creates up to 24 hourly rows plus a legend, but a 24-row
+  // terminal clips the middle panel. Show the fitting lower-hour portion,
+  // rather than inventing a multi-day grid.
+  const hourly = [
+    { hour: '12', fill: 4 }, { hour: '13', fill: 8 }, { hour: '14', fill: 16 },
+    { hour: '15', fill: 22 }, { hour: '16', fill: 18 }, { hour: '17', fill: 12 },
+    { hour: '18', fill: 8 }, { hour: '19', fill: 5 }, { hour: '20', fill: 3 },
+    { hour: '21', fill: 1 }, { hour: '22', fill: 0 }, { hour: '23', fill: 0 },
+  ]
+  const heatmapRows = hourly.map(({ hour, fill }) =>
+    DIM + hour + RST + ACC + bar('█', fill) + DIM + bar('█', 34 - fill) + RST,
   )
 
-  // ── Rows 18-21: Heatmap (4 rows for session window) ────────────
-  const heatmapData: number[][] = [
-    //0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
-    [0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 2, 1, 0, 1, 3, 2, 1, 0, 0, 0, 0, 0, 0, 0], // Thu
-    [0, 0, 0, 0, 0, 0, 0, 1, 2, 2, 1, 1, 0, 1, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0], // Fri
-    [0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 2, 1, 2, 3, 2, 1, 0, 0, 0, 0, 0, 0, 0], // Sat
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0], // Sun
-  ]
-  const dayLabels = ['Thu', 'Fri', 'Sat', 'Sun']
-
-  const BLOCK = ['\u2591', '\u2592', '\u2593', '\u2588']
-
-  for (let i = 0; i < heatmapData.length; i++) {
-    const dayLabel = DIM + dayLabels[i] + ' ' + RST
-    let heatRow = ''
-    for (const v of heatmapData[i]) {
-      const ch = BLOCK[Math.min(v, 3)]
-      const color = v >= 2 ? ACC : DIM
-      heatRow += color + ch + RST
-    }
-    lines.push('    ' + dayLabel + heatRow)
+  // Thirteen rows remain before the footer: table header/data on the left,
+  // twelve hourly bars and the legend on the right.
+  for (let i = 0; i < 13; i++) {
+    const left = modelRows[i] ?? ''
+    const right = i < heatmapRows.length
+      ? heatmapRows[i]
+      : DIM + '     cheap ' + RST + ACC + '█████' + RST + DIM + ' expensive' + RST
+    lines.push(padRight(left, MODELS_W) + ' '.repeat(GAP) + padRight(right, HEATMAP_W))
   }
 
-  // ── Row 22: Legend ──────────────────────────────────────────────
-  lines.push('    ' + DIM + '\u2591 low  \u2592 med  \u2593 high  \u2588 peak' + RST)
-
-  // ── Row 23: Footer (inverse bar) ────────────────────────────────
-  const footerText = ' [Tab] global  [1\u20133] range  [m] metric  [Esc] exit '
-  lines.push(INVERSE + padRight(footerText, W) + RST)
+  // The real footer is dim text on the normal background, with a one-cell margin.
+  lines.push(' ' + DIM + '[Tab] view  [1-3] range  [m] metric  [Esc] exit' + RST)
 
   return lines.slice(0, rows).map((l) => padRight(trunc(l, W), W)).join('\n')
 }
@@ -435,6 +285,11 @@ import type { TutorialStep } from './first-run-tutorial'
 
 export function getUsageSteps(rows = 24): TutorialStep[] {
   return [
+    {
+      title: 'Type /usage',
+      narration: 'From normal chat, type /usage in the composer and press Enter to open the cost and token dashboard.',
+      screen: commandEntryScreen(rows, '/usage'),
+    },
     {
       title: 'Global Dashboard',
       narration:
@@ -452,13 +307,12 @@ export function getUsageSteps(rows = 24): TutorialStep[] {
     {
       title: 'Session View',
       narration:
-        'Press Tab to switch to session view. This scopes every metric to the current ' +
-        'session \u2014 showing which models were used, how many tools and edits ran, ' +
-        'and the session-specific activity heatmap.',
+        'Press Tab to switch to session view. This scopes token totals, cost, calls, ' +
+        'model usage, and the hourly spend heatmap to the current session.',
       points: [
-        'Session KPI includes activity metrics (messages, tools, edits, files)',
-        'Model list shows only models called during this session',
-        'Heatmap covers the session time window rather than the full week',
+        'Session totals show input, cached, output, cost, and call count',
+        'Model rows include cost, token volume, calls, and an inline token bar',
+        'The 24-row terminal shows the lower hours and heatmap legend that fit',
         'Press Tab again to return to the global dashboard',
       ],
       screen: screenSessionView(rows),

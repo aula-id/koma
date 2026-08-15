@@ -45,6 +45,8 @@ import { Route as DocsDocsGettingStartedRouteImport } from './routes/_docs/docs/
 import { Route as DocsDocsGuiRouteImport } from './routes/_docs/docs/gui'
 import { Route as DocsDocsKeyboardShortcutsRouteImport } from './routes/_docs/docs/keyboard-shortcuts'
 import { Route as DocsDocsOverviewRouteImport } from './routes/_docs/docs/overview'
+import { Route as DocsDocsSettingsAppearanceRouteImport } from './routes/_docs/docs/settings-appearance'
+import { Route as DocsDocsSettingsGeneralRouteImport } from './routes/_docs/docs/settings-general'
 import { Route as DocsDocsSettingsModelRouteImport } from './routes/_docs/docs/settings-model'
 import { Route as DocsDocsSettingsOauthRouteImport } from './routes/_docs/docs/settings-oauth'
 import { Route as DocsDocsSettingsProviderRouteImport } from './routes/_docs/docs/settings-provider'
@@ -233,6 +235,17 @@ const DocsDocsOverviewRoute = DocsDocsOverviewRouteImport.update({
   path: '/overview',
   getParentRoute: () => DocsDocsRoute,
 } as any)
+const DocsDocsSettingsAppearanceRoute =
+  DocsDocsSettingsAppearanceRouteImport.update({
+    id: '/settings-appearance',
+    path: '/settings-appearance',
+    getParentRoute: () => DocsDocsRoute,
+  } as any)
+const DocsDocsSettingsGeneralRoute = DocsDocsSettingsGeneralRouteImport.update({
+  id: '/settings-general',
+  path: '/settings-general',
+  getParentRoute: () => DocsDocsRoute,
+} as any)
 const DocsDocsSettingsModelRoute = DocsDocsSettingsModelRouteImport.update({
   id: '/settings-model',
   path: '/settings-model',
@@ -291,6 +304,8 @@ export interface FileRoutesByFullPath {
   '/docs/gui': typeof DocsDocsGuiRoute
   '/docs/keyboard-shortcuts': typeof DocsDocsKeyboardShortcutsRoute
   '/docs/overview': typeof DocsDocsOverviewRoute
+  '/docs/settings-appearance': typeof DocsDocsSettingsAppearanceRoute
+  '/docs/settings-general': typeof DocsDocsSettingsGeneralRoute
   '/docs/settings-model': typeof DocsDocsSettingsModelRoute
   '/docs/settings-oauth': typeof DocsDocsSettingsOauthRoute
   '/docs/settings-provider': typeof DocsDocsSettingsProviderRoute
@@ -332,6 +347,8 @@ export interface FileRoutesByTo {
   '/docs/gui': typeof DocsDocsGuiRoute
   '/docs/keyboard-shortcuts': typeof DocsDocsKeyboardShortcutsRoute
   '/docs/overview': typeof DocsDocsOverviewRoute
+  '/docs/settings-appearance': typeof DocsDocsSettingsAppearanceRoute
+  '/docs/settings-general': typeof DocsDocsSettingsGeneralRoute
   '/docs/settings-model': typeof DocsDocsSettingsModelRoute
   '/docs/settings-oauth': typeof DocsDocsSettingsOauthRoute
   '/docs/settings-provider': typeof DocsDocsSettingsProviderRoute
@@ -375,6 +392,8 @@ export interface FileRoutesById {
   '/_docs/docs/gui': typeof DocsDocsGuiRoute
   '/_docs/docs/keyboard-shortcuts': typeof DocsDocsKeyboardShortcutsRoute
   '/_docs/docs/overview': typeof DocsDocsOverviewRoute
+  '/_docs/docs/settings-appearance': typeof DocsDocsSettingsAppearanceRoute
+  '/_docs/docs/settings-general': typeof DocsDocsSettingsGeneralRoute
   '/_docs/docs/settings-model': typeof DocsDocsSettingsModelRoute
   '/_docs/docs/settings-oauth': typeof DocsDocsSettingsOauthRoute
   '/_docs/docs/settings-provider': typeof DocsDocsSettingsProviderRoute
@@ -418,6 +437,8 @@ export interface FileRouteTypes {
     | '/docs/gui'
     | '/docs/keyboard-shortcuts'
     | '/docs/overview'
+    | '/docs/settings-appearance'
+    | '/docs/settings-general'
     | '/docs/settings-model'
     | '/docs/settings-oauth'
     | '/docs/settings-provider'
@@ -459,6 +480,8 @@ export interface FileRouteTypes {
     | '/docs/gui'
     | '/docs/keyboard-shortcuts'
     | '/docs/overview'
+    | '/docs/settings-appearance'
+    | '/docs/settings-general'
     | '/docs/settings-model'
     | '/docs/settings-oauth'
     | '/docs/settings-provider'
@@ -501,6 +524,8 @@ export interface FileRouteTypes {
     | '/_docs/docs/gui'
     | '/_docs/docs/keyboard-shortcuts'
     | '/_docs/docs/overview'
+    | '/_docs/docs/settings-appearance'
+    | '/_docs/docs/settings-general'
     | '/_docs/docs/settings-model'
     | '/_docs/docs/settings-oauth'
     | '/_docs/docs/settings-provider'
@@ -766,6 +791,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsDocsOverviewRouteImport
       parentRoute: typeof DocsDocsRoute
     }
+    '/_docs/docs/settings-appearance': {
+      id: '/_docs/docs/settings-appearance'
+      path: '/settings-appearance'
+      fullPath: '/docs/settings-appearance'
+      preLoaderRoute: typeof DocsDocsSettingsAppearanceRouteImport
+      parentRoute: typeof DocsDocsRoute
+    }
+    '/_docs/docs/settings-general': {
+      id: '/_docs/docs/settings-general'
+      path: '/settings-general'
+      fullPath: '/docs/settings-general'
+      preLoaderRoute: typeof DocsDocsSettingsGeneralRouteImport
+      parentRoute: typeof DocsDocsRoute
+    }
     '/_docs/docs/settings-model': {
       id: '/_docs/docs/settings-model'
       path: '/settings-model'
@@ -831,6 +870,8 @@ interface DocsDocsRouteChildren {
   DocsDocsGuiRoute: typeof DocsDocsGuiRoute
   DocsDocsKeyboardShortcutsRoute: typeof DocsDocsKeyboardShortcutsRoute
   DocsDocsOverviewRoute: typeof DocsDocsOverviewRoute
+  DocsDocsSettingsAppearanceRoute: typeof DocsDocsSettingsAppearanceRoute
+  DocsDocsSettingsGeneralRoute: typeof DocsDocsSettingsGeneralRoute
   DocsDocsSettingsModelRoute: typeof DocsDocsSettingsModelRoute
   DocsDocsSettingsOauthRoute: typeof DocsDocsSettingsOauthRoute
   DocsDocsSettingsProviderRoute: typeof DocsDocsSettingsProviderRoute
@@ -871,6 +912,8 @@ const DocsDocsRouteChildren: DocsDocsRouteChildren = {
   DocsDocsGuiRoute: DocsDocsGuiRoute,
   DocsDocsKeyboardShortcutsRoute: DocsDocsKeyboardShortcutsRoute,
   DocsDocsOverviewRoute: DocsDocsOverviewRoute,
+  DocsDocsSettingsAppearanceRoute: DocsDocsSettingsAppearanceRoute,
+  DocsDocsSettingsGeneralRoute: DocsDocsSettingsGeneralRoute,
   DocsDocsSettingsModelRoute: DocsDocsSettingsModelRoute,
   DocsDocsSettingsOauthRoute: DocsDocsSettingsOauthRoute,
   DocsDocsSettingsProviderRoute: DocsDocsSettingsProviderRoute,

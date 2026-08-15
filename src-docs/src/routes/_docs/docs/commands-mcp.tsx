@@ -1,14 +1,9 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { CommandPage } from '../../../components/CommandPage'
+import { TuiTutorial } from '../../../components/TuiTutorial'
+import { getMcpSteps } from '../../../demos/mcp-tutorial'
 
-export const Route = createFileRoute('/_docs/docs/commands-mcp')({
-  component: () => (
-    <CommandPage
-      name="/mcp"
-      description="Add, edit, or remove MCP (Model Context Protocol) servers."
-      details={
-        <p>MCP servers extend the agent's capabilities with custom tools. This command opens the MCP server management panel where you can configure server connections, test them, and manage which tools are available.</p>
-      }
-    />
-  ),
-})
+export const Route = createFileRoute('/_docs/docs/commands-mcp')({ component: McpPage })
+
+function McpPage() {
+  return <article><h1 className="mb-4 text-2xl font-bold text-koma-accent">/mcp</h1><p className="mb-6 text-koma-fg">Add, edit, and remove global MCP (Model Context Protocol) servers. Unlike chat commands, <strong className="text-koma-accent">/mcp is available without an active session</strong>.</p><TuiTutorial steps={getMcpSteps(24)} /></article>
+}
