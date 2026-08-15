@@ -140,11 +140,13 @@ function buildTaskScreen(
 
   const mode = opts.mode ?? 'auto'
 
-  // ── Input bar (3 rows: rule, input, rule) ──
+  // ── Input bar (5 rows: model name, rule, input, rule, session name) ──
   const inputBar: string[] = [
+    padRight('     ' + DIM + 'claude-3.5-sonnet' + RST, W),
     DIM + bar('\u2500', W) + RST,
     padRight('  ' + ACC + '[$] /task\u2588' + RST, W),
     DIM + bar('\u2500', W) + RST,
+    padRight('  ' + ACC + 'session-71cdd2dc' + RST, W),
   ]
 
   // ── Overlay lines (12 rows: top border + 10 content + bottom border) ──
@@ -193,7 +195,7 @@ function buildTaskScreen(
   }
   overlayLines.push(DIM + '\u2514' + bar('\u2500', W - 2) + '\u2518' + RST)
 
-  // ── Chat chrome (fits above overlay + input bar) ──
+  // ── Chat chrome (7 rows: header + rule + 5 messages) ──
   const lines: string[] = []
   const brandVis = 'koma 0.3.16'
   const modeVis = '\u25cf ' + mode
@@ -202,10 +204,8 @@ function buildTaskScreen(
     ' '.repeat(gap) + ACC + modeVis + RST)
   lines.push(DIM + bar('\u2500', W) + RST)
   lines.push(padRight('  ' + FG + '\u25cf find the auth middleware and fix the connection pool race condition' + RST, W))
-  lines.push(padRight('  ' + FG + '\u25cf I\u2019ll investigate both issues. Let me start by exploring the auth middleware.' + RST, W))
+  lines.push(padRight('  ' + FG + '\u25cf I\u2019ll investigate both issues.' + RST, W))
   lines.push(padRight('    \u2699 ' + ACC + 'spawn explore \u2192 #1 find-auth-middleware' + RST, W))
-  lines.push(padRight('    ' + DIM + '\u2192 #1 explore spawned' + RST, W))
-  lines.push(padRight('  ' + FG + '\u25cf Meanwhile, let me examine the connection pool directly.' + RST, W))
   lines.push(padRight('    \u2699 ' + ACC + 'read src/pool.rs:42-89' + RST, W))
   lines.push(padRight('  ' + FG + '\u25cf Found the race: Ordering::Relaxed on the atomic counter.' + RST, W))
 
