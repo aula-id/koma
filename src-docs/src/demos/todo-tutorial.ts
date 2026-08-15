@@ -121,8 +121,11 @@ function buildTodoOverlay(items: TodoItem[], selectedIdx: number, rows: number):
       // Symbol always dim; label dim if completed/cancelled, fg otherwise
       const labelDim = item.completed || item.status === 'cancelled'
       leftRows.push(
-        DIM + item.symbol + ' ' + RST +
-        (labelDim ? DIM : FG) + labelTrunc + RST
+        padRight(
+          DIM + item.symbol + ' ' + RST +
+          (labelDim ? DIM : FG) + labelTrunc + RST,
+          LIST_TEXT_W
+        )
       )
     }
   }
