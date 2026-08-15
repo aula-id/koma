@@ -56,7 +56,7 @@ export function TuiTutorial({
     if (!containerRef.current) return
     const term = new Terminal({
       theme: KOMA_THEME,
-      fontFamily: "'KomaMono', 'JetBrains Mono', 'Fira Code', monospace",
+      fontFamily: "'JetBrains Mono', monospace",
       fontSize: 14,
       lineHeight: 1.3,
       cols,
