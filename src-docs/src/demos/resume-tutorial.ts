@@ -130,12 +130,12 @@ function buildCookingPane(lines: string[], focused: boolean) {
   const borderStyle = focused ? ACC : DIM
   lines.push(borderStyle + borderLine('cooking (3)', W) + RST)
 
-  // [ + new session ] button — INVERSE when focused
+  // [ + new session ] button — INVERSE when focused (matches real TUI)
   const btnText = ' [+ new session]'
   if (focused) {
     lines.push(INVERSE + padRight(btnText, W) + RST)
   } else {
-    lines.push(DIM + padRight(btnText, W) + RST)
+    lines.push(lineW(DIM + btnText + RST, W))
   }
 
   // Session rows — two-column: name LEFT, dir + status RIGHT
@@ -143,13 +143,8 @@ function buildCookingPane(lines: string[], focused: boolean) {
     const rightPart = s.dir + '  ' + s.marker + ' ' + s.status
     const nameW = Math.max(4, INNER_W - rightPart.length - 2)
     const name = s.name.length > nameW ? s.name.slice(0, nameW - 1) + '\u2026' : s.name.padEnd(nameW)
-    const sel = s.selected && focused
-    if (sel) {
-      lines.push(INVERSE + padRight('  ' + name + '  ' + rightPart, W) + RST)
-    } else {
-      const nameStyle = s.status === 'working' ? ACC : FG
-      lines.push(lineW('  ' + nameStyle + name + '  ' + DIM + rightPart + RST, W))
-    }
+    const nameStyle = s.status === 'working' ? ACC : FG
+    lines.push(lineW('  ' + nameStyle + name + '  ' + DIM + rightPart + RST, W))
   }
 
   // Pad remaining rows to COOKING_ROWS (11)
