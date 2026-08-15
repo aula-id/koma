@@ -99,13 +99,11 @@ interface CookingSession {
   marker: string
   dir: string
   selected: boolean
-  isNew?: boolean
 }
 
 const COOKING: CookingSession[] = [
   { name: 'my-project',  status: 'working', marker: '\u25cf', dir: 'src/proj',   selected: true },
   { name: 'api-server',  status: 'ready',   marker: '\u25cb', dir: 'api-server', selected: false },
-  { name: 'new-session', status: '',         marker: '>',      dir: '',            selected: false, isNew: true },
 ]
 
 interface HistoryEntry {
@@ -126,25 +124,30 @@ const HISTORY: HistoryEntry[] = [
 
 /** Render the cooking pane border + sessions into `lines`. */
 function buildCookingPane(lines: string[], focused: boolean) {
-  // Row 0 (or 11): border
+  const INNER_W = W - 4 // content area (margin 2 each side)
+
+  // Row 0: border
   const borderStyle = focused ? ACC : DIM
   lines.push(borderStyle + borderLine('cooking (3)', W) + RST)
 
-  // Session rows
+  // [ + new session ] button — INVERSE when focused
+  if (focused) {
+    lines.push(lineW(INVERSE + ' [+ new session]' + ' '.repeat(INNER_W - 16) + RST, W))
+  } else {
+    lines.push(lineW(DIM + ' [+ new session]' + ' '.repeat(INNER_W - 16) + RST, W))
+  }
+
+  // Session rows — two-column: name LEFT, dir + status RIGHT
   for (const s of COOKING) {
-    if (s.isNew) {
-      // NewSession kind: accent-styled marker + name
-      lines.push(lineW('  ' + ACC + s.marker + ' ' + s.name + RST, W))
-    } else if (s.selected && focused) {
-      // Selected row: INVERSE highlight (only when cooking pane is focused)
-      const vis = '  ' + s.marker + ' ' + s.status + '  ' + s.name + '  ' + s.dir
-      lines.push(INVERSE + vis.padEnd(W) + RST)
+    const rightPart = s.dir + '  ' + s.marker + ' ' + s.status
+    const nameW = Math.max(4, INNER_W - rightPart.length - 2)
+    const name = s.name.length > nameW ? s.name.slice(0, nameW - 1) + '\u2026' : s.name.padEnd(nameW)
+    const sel = s.selected && focused
+    if (sel) {
+      lines.push(lineW('  ' + INVERSE + name + '  ' + rightPart + RST, W))
     } else {
-      // Normal row
-      const marker = s.status === 'working'
-        ? ACC + s.marker + ' ' + s.status + RST
-        : DIM + s.marker + ' ' + s.status + RST
-      lines.push(lineW('  ' + marker + '  ' + FG + s.name + RST + DIM + '  ' + s.dir + RST, W))
+      const nameStyle = s.status === 'working' ? ACC : FG
+      lines.push(lineW('  ' + nameStyle + name + '  ' + DIM + rightPart + RST, W))
     }
   }
 
@@ -154,29 +157,28 @@ function buildCookingPane(lines: string[], focused: boolean) {
 
 /** Render the history pane border + search + entries into `lines`. */
 function buildHistoryPane(lines: string[], focused: boolean, query?: string) {
-  // Row 11: border
+  const INNER_W = W - 4
+
+  // Border
   const borderStyle = focused ? ACC : DIM
   lines.push(borderStyle + borderLine('history (5)', W) + RST)
 
-  // Row 12: search line
+  // Search line
   const cursor = query
     ? FG + query + '\u{2588}' + RST
     : FG + '\u{2588}' + RST
   lines.push(lineW(DIM + '  \u25b8 ' + RST + cursor, W))
 
-  // Rows 13-21: history entries (up to 9 visible rows)
+  // History entries — two-column: name LEFT, dir + age RIGHT
   const entries = query
     ? HISTORY.filter(h => h.name.toLowerCase().includes(query.toLowerCase()))
     : HISTORY
 
   for (const h of entries) {
-    if (focused) {
-      // Focused pane: plain dim entries (first one auto-selected visually is up to caller)
-      lines.push(lineW('    ' + DIM + h.name + '  ' + h.dir + '  ' + h.age + RST, W))
-    } else {
-      // Unfocused pane: dim entries
-      lines.push(lineW('    ' + DIM + h.name + '  ' + h.dir + '  ' + h.age + RST, W))
-    }
+    const rightPart = h.dir + '  ' + h.age
+    const nameW = Math.max(4, INNER_W - rightPart.length - 2)
+    const name = h.name.length > nameW ? h.name.slice(0, nameW - 1) + '\u2026' : h.name.padEnd(nameW)
+    lines.push(lineW('  ' + DIM + name + '  ' + DIM + rightPart + RST, W))
   }
 
   // Pad to COOKING_ROWS + HISTORY_ROWS (23)
