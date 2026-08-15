@@ -1,0 +1,84 @@
+@import "tailwindcss";
+
+/* ── Koma palette tokens (1:1 with webgui) ─────────────────────────── */
+@theme {
+  --font-sans: 'KomaMono', ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  --font-mono: 'KomaMono', ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  --default-font-family: var(--font-sans);
+
+  --color-koma-fg: var(--koma-fg, #c8d3f5);
+  --color-koma-bg: var(--koma-bg, #0b0e14);
+  --color-koma-panel: color-mix(in srgb, var(--koma-fg, #c8d3f5) 6%, var(--koma-bg, #0b0e14));
+  --color-koma-panel2: color-mix(in srgb, var(--koma-fg, #c8d3f5) 4%, var(--koma-bg, #0b0e14));
+  --color-koma-border: color-mix(in srgb, var(--koma-fg, #c8d3f5) 10%, var(--koma-bg, #0b0e14));
+  --color-koma-hover: color-mix(in srgb, var(--koma-fg, #c8d3f5) 8%, var(--koma-bg, #0b0e14));
+  --color-koma-dim: var(--koma-dim, #adadad);
+  --color-koma-accent: var(--koma-accent, #39ff14);
+  --color-koma-warn: var(--koma-warn, #ffb43c);
+  --color-koma-success: var(--koma-success, #00c853);
+  --color-koma-info: var(--koma-info, #50c8ff);
+  --color-koma-error: var(--koma-error, #ff3c3c);
+}
+
+/* ── Font ───────────────────────────────────────────────────────────── */
+@font-face {
+  font-family: 'KomaMono';
+  src: url('/fonts/jetbrains-mono-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'KomaMono';
+  src: url('/fonts/jetbrains-mono-500.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'KomaMono';
+  src: url('/fonts/jetbrains-mono-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ── Base ───────────────────────────────────────────────────────────── */
+html, body, #root {
+  margin: 0;
+  height: 100%;
+  background: var(--koma-bg, #0b0e14);
+  color: var(--koma-fg, #c8d3f5);
+  font-family: 'KomaMono', ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-synthesis: none;
+}
+
+/* ── Scrollbar (webgui match) ───────────────────────────────────────── */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--color-koma-dim, #888);
+  border-radius: 4px;
+  opacity: 0.5;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--color-koma-fg, #aaa); }
+*::-webkit-scrollbar-corner { background: transparent; }
+
+/* ── Sidebar nav active indicator ───────────────────────────────────── */
+.nav-link {
+  display: block;
+  padding: 0.3rem 0.75rem;
+  font-size: 13px;
+  color: var(--color-koma-dim);
+  text-decoration: none;
+  border-radius: 4px;
+  transition: background 0.1s, color 0.1s;
+}
+.nav-link:hover {
+  background: var(--color-koma-hover);
+  color: var(--color-koma-fg);
+}
+.nav-link-active {
+  color: var(--color-koma-accent);
+  background: var(--color-koma-hover);
+}
