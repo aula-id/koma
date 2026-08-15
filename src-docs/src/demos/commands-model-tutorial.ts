@@ -73,9 +73,11 @@ function chatHeader(): string[] {
 function chatInput(text: string): string[] {
   const W = 80
   return [
+    line80('     ' + DIM + 'claude-3.5-sonnet' + RST),
     DIM + bar('\u2500', W) + RST,
     '  ' + ACC + '[$] ' + RST + ACC + text + '\u{2588}' + RST,
     DIM + bar('\u2500', W) + RST,
+    line80('  ' + ACC + 'session-71cdd2dc' + RST),
   ]
 }
 
