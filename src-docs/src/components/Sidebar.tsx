@@ -157,8 +157,9 @@ const sections: SidebarSection[] = [
     modes: ['gui'],
     items: [
       { label: 'Overview', to: '/docs/gui' },
+      { label: 'Tutorial: First Run', to: '/docs/tutorial-gui-first-run' },
     ],
-  },
+  }
 ]
 
 // ── Sidebar component ───────────────────────────────────────────────────────
