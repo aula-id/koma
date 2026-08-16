@@ -41,7 +41,6 @@ import { Route as DocsDocsCommandsStoreRouteImport } from './routes/_docs/docs/c
 import { Route as DocsDocsCommandsTaskRouteImport } from './routes/_docs/docs/commands-task'
 import { Route as DocsDocsCommandsTodoRouteImport } from './routes/_docs/docs/commands-todo'
 import { Route as DocsDocsCommandsUsageRouteImport } from './routes/_docs/docs/commands-usage'
-import { Route as DocsDocsConnectProviderRouteImport } from './routes/_docs/docs/connect-provider'
 import { Route as DocsDocsGettingStartedRouteImport } from './routes/_docs/docs/getting-started'
 import { Route as DocsDocsGuiRouteImport } from './routes/_docs/docs/gui'
 import { Route as DocsDocsKeyboardShortcutsRouteImport } from './routes/_docs/docs/keyboard-shortcuts'
@@ -215,11 +214,6 @@ const DocsDocsCommandsUsageRoute = DocsDocsCommandsUsageRouteImport.update({
   path: '/commands-usage',
   getParentRoute: () => DocsDocsRoute,
 } as any)
-const DocsDocsConnectProviderRoute = DocsDocsConnectProviderRouteImport.update({
-  id: '/connect-provider',
-  path: '/connect-provider',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
 const DocsDocsGettingStartedRoute = DocsDocsGettingStartedRouteImport.update({
   id: '/getting-started',
   path: '/getting-started',
@@ -306,7 +300,6 @@ export interface FileRoutesByFullPath {
   '/docs/commands-task': typeof DocsDocsCommandsTaskRoute
   '/docs/commands-todo': typeof DocsDocsCommandsTodoRoute
   '/docs/commands-usage': typeof DocsDocsCommandsUsageRoute
-  '/docs/connect-provider': typeof DocsDocsConnectProviderRoute
   '/docs/getting-started': typeof DocsDocsGettingStartedRoute
   '/docs/gui': typeof DocsDocsGuiRoute
   '/docs/keyboard-shortcuts': typeof DocsDocsKeyboardShortcutsRoute
@@ -350,7 +343,6 @@ export interface FileRoutesByTo {
   '/docs/commands-task': typeof DocsDocsCommandsTaskRoute
   '/docs/commands-todo': typeof DocsDocsCommandsTodoRoute
   '/docs/commands-usage': typeof DocsDocsCommandsUsageRoute
-  '/docs/connect-provider': typeof DocsDocsConnectProviderRoute
   '/docs/getting-started': typeof DocsDocsGettingStartedRoute
   '/docs/gui': typeof DocsDocsGuiRoute
   '/docs/keyboard-shortcuts': typeof DocsDocsKeyboardShortcutsRoute
@@ -396,7 +388,6 @@ export interface FileRoutesById {
   '/_docs/docs/commands-task': typeof DocsDocsCommandsTaskRoute
   '/_docs/docs/commands-todo': typeof DocsDocsCommandsTodoRoute
   '/_docs/docs/commands-usage': typeof DocsDocsCommandsUsageRoute
-  '/_docs/docs/connect-provider': typeof DocsDocsConnectProviderRoute
   '/_docs/docs/getting-started': typeof DocsDocsGettingStartedRoute
   '/_docs/docs/gui': typeof DocsDocsGuiRoute
   '/_docs/docs/keyboard-shortcuts': typeof DocsDocsKeyboardShortcutsRoute
@@ -442,7 +433,6 @@ export interface FileRouteTypes {
     | '/docs/commands-task'
     | '/docs/commands-todo'
     | '/docs/commands-usage'
-    | '/docs/connect-provider'
     | '/docs/getting-started'
     | '/docs/gui'
     | '/docs/keyboard-shortcuts'
@@ -486,7 +476,6 @@ export interface FileRouteTypes {
     | '/docs/commands-task'
     | '/docs/commands-todo'
     | '/docs/commands-usage'
-    | '/docs/connect-provider'
     | '/docs/getting-started'
     | '/docs/gui'
     | '/docs/keyboard-shortcuts'
@@ -531,7 +520,6 @@ export interface FileRouteTypes {
     | '/_docs/docs/commands-task'
     | '/_docs/docs/commands-todo'
     | '/_docs/docs/commands-usage'
-    | '/_docs/docs/connect-provider'
     | '/_docs/docs/getting-started'
     | '/_docs/docs/gui'
     | '/_docs/docs/keyboard-shortcuts'
@@ -775,13 +763,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsDocsCommandsUsageRouteImport
       parentRoute: typeof DocsDocsRoute
     }
-    '/_docs/docs/connect-provider': {
-      id: '/_docs/docs/connect-provider'
-      path: '/connect-provider'
-      fullPath: '/docs/connect-provider'
-      preLoaderRoute: typeof DocsDocsConnectProviderRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
     '/_docs/docs/getting-started': {
       id: '/_docs/docs/getting-started'
       path: '/getting-started'
@@ -885,7 +866,6 @@ interface DocsDocsRouteChildren {
   DocsDocsCommandsTaskRoute: typeof DocsDocsCommandsTaskRoute
   DocsDocsCommandsTodoRoute: typeof DocsDocsCommandsTodoRoute
   DocsDocsCommandsUsageRoute: typeof DocsDocsCommandsUsageRoute
-  DocsDocsConnectProviderRoute: typeof DocsDocsConnectProviderRoute
   DocsDocsGettingStartedRoute: typeof DocsDocsGettingStartedRoute
   DocsDocsGuiRoute: typeof DocsDocsGuiRoute
   DocsDocsKeyboardShortcutsRoute: typeof DocsDocsKeyboardShortcutsRoute
@@ -928,7 +908,6 @@ const DocsDocsRouteChildren: DocsDocsRouteChildren = {
   DocsDocsCommandsTaskRoute: DocsDocsCommandsTaskRoute,
   DocsDocsCommandsTodoRoute: DocsDocsCommandsTodoRoute,
   DocsDocsCommandsUsageRoute: DocsDocsCommandsUsageRoute,
-  DocsDocsConnectProviderRoute: DocsDocsConnectProviderRoute,
   DocsDocsGettingStartedRoute: DocsDocsGettingStartedRoute,
   DocsDocsGuiRoute: DocsDocsGuiRoute,
   DocsDocsKeyboardShortcutsRoute: DocsDocsKeyboardShortcutsRoute,
