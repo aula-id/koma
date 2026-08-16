@@ -8,7 +8,7 @@ export const Route = createFileRoute('/_docs/gui/first-run')({
 
 function TutorialGuiFirstRunPage() {
   return (
-    <article>
+    <article className="gui-first-run-page">
       <h1 className="mb-4 text-2xl font-bold text-koma-accent">Tutorial: First Run</h1>
       <p className="mb-6 text-koma-fg">
         Follow the desktop GUI&apos;s supported first-run path: configuration loads,
