@@ -1,6 +1,9 @@
 import { getTaskSteps } from './src/demos/task-tutorial'
 import { getBashSteps } from './src/demos/bash-tutorial'
 import { getUsageSteps } from './src/demos/usage-tutorial'
+import { getSecuritySteps } from './src/demos/security-tutorial'
+import { getInternetSteps } from './src/demos/internet-tutorial'
+import { getQuitSteps } from './src/demos/quit-tutorial'
 
 function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, '')
@@ -41,4 +44,19 @@ for (const step of bashSteps) {
 const usageSteps = getUsageSteps(48)
 for (const step of usageSteps) {
   verifyScreen(`usage: ${step.title}`, step.screen)
+}
+
+const securitySteps = getSecuritySteps(48)
+for (const step of securitySteps) {
+  verifyScreen(`security: ${step.title}`, step.screen)
+}
+
+const internetSteps = getInternetSteps(48)
+for (const step of internetSteps) {
+  verifyScreen(`internet: ${step.title}`, step.screen)
+}
+
+const quitSteps = getQuitSteps(48)
+for (const step of quitSteps) {
+  verifyScreen(`quit: ${step.title}`, step.screen)
 }
