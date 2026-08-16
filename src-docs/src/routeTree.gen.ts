@@ -51,6 +51,9 @@ import { Route as DocsDocsSettingsModelRouteImport } from './routes/_docs/docs/s
 import { Route as DocsDocsSettingsOauthRouteImport } from './routes/_docs/docs/settings-oauth'
 import { Route as DocsDocsSettingsProviderRouteImport } from './routes/_docs/docs/settings-provider'
 import { Route as DocsDocsTuiRouteImport } from './routes/_docs/docs/tui'
+import { Route as DocsDocsTutorialFirstRunRouteImport } from './routes/_docs/docs/tutorial-first-run'
+import { Route as DocsDocsTutorialOauthRouteImport } from './routes/_docs/docs/tutorial-oauth'
+import { Route as DocsDocsTutorialProviderModelRouteImport } from './routes/_docs/docs/tutorial-provider-model'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -267,6 +270,23 @@ const DocsDocsTuiRoute = DocsDocsTuiRouteImport.update({
   path: '/tui',
   getParentRoute: () => DocsDocsRoute,
 } as any)
+const DocsDocsTutorialFirstRunRoute =
+  DocsDocsTutorialFirstRunRouteImport.update({
+    id: '/tutorial-first-run',
+    path: '/tutorial-first-run',
+    getParentRoute: () => DocsDocsRoute,
+  } as any)
+const DocsDocsTutorialOauthRoute = DocsDocsTutorialOauthRouteImport.update({
+  id: '/tutorial-oauth',
+  path: '/tutorial-oauth',
+  getParentRoute: () => DocsDocsRoute,
+} as any)
+const DocsDocsTutorialProviderModelRoute =
+  DocsDocsTutorialProviderModelRouteImport.update({
+    id: '/tutorial-provider-model',
+    path: '/tutorial-provider-model',
+    getParentRoute: () => DocsDocsRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -310,6 +330,9 @@ export interface FileRoutesByFullPath {
   '/docs/settings-oauth': typeof DocsDocsSettingsOauthRoute
   '/docs/settings-provider': typeof DocsDocsSettingsProviderRoute
   '/docs/tui': typeof DocsDocsTuiRoute
+  '/docs/tutorial-first-run': typeof DocsDocsTutorialFirstRunRoute
+  '/docs/tutorial-oauth': typeof DocsDocsTutorialOauthRoute
+  '/docs/tutorial-provider-model': typeof DocsDocsTutorialProviderModelRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -353,6 +376,9 @@ export interface FileRoutesByTo {
   '/docs/settings-oauth': typeof DocsDocsSettingsOauthRoute
   '/docs/settings-provider': typeof DocsDocsSettingsProviderRoute
   '/docs/tui': typeof DocsDocsTuiRoute
+  '/docs/tutorial-first-run': typeof DocsDocsTutorialFirstRunRoute
+  '/docs/tutorial-oauth': typeof DocsDocsTutorialOauthRoute
+  '/docs/tutorial-provider-model': typeof DocsDocsTutorialProviderModelRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -398,6 +424,9 @@ export interface FileRoutesById {
   '/_docs/docs/settings-oauth': typeof DocsDocsSettingsOauthRoute
   '/_docs/docs/settings-provider': typeof DocsDocsSettingsProviderRoute
   '/_docs/docs/tui': typeof DocsDocsTuiRoute
+  '/_docs/docs/tutorial-first-run': typeof DocsDocsTutorialFirstRunRoute
+  '/_docs/docs/tutorial-oauth': typeof DocsDocsTutorialOauthRoute
+  '/_docs/docs/tutorial-provider-model': typeof DocsDocsTutorialProviderModelRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -443,6 +472,9 @@ export interface FileRouteTypes {
     | '/docs/settings-oauth'
     | '/docs/settings-provider'
     | '/docs/tui'
+    | '/docs/tutorial-first-run'
+    | '/docs/tutorial-oauth'
+    | '/docs/tutorial-provider-model'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -486,6 +518,9 @@ export interface FileRouteTypes {
     | '/docs/settings-oauth'
     | '/docs/settings-provider'
     | '/docs/tui'
+    | '/docs/tutorial-first-run'
+    | '/docs/tutorial-oauth'
+    | '/docs/tutorial-provider-model'
   id:
     | '__root__'
     | '/'
@@ -530,6 +565,9 @@ export interface FileRouteTypes {
     | '/_docs/docs/settings-oauth'
     | '/_docs/docs/settings-provider'
     | '/_docs/docs/tui'
+    | '/_docs/docs/tutorial-first-run'
+    | '/_docs/docs/tutorial-oauth'
+    | '/_docs/docs/tutorial-provider-model'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -833,6 +871,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsDocsTuiRouteImport
       parentRoute: typeof DocsDocsRoute
     }
+    '/_docs/docs/tutorial-first-run': {
+      id: '/_docs/docs/tutorial-first-run'
+      path: '/tutorial-first-run'
+      fullPath: '/docs/tutorial-first-run'
+      preLoaderRoute: typeof DocsDocsTutorialFirstRunRouteImport
+      parentRoute: typeof DocsDocsRoute
+    }
+    '/_docs/docs/tutorial-oauth': {
+      id: '/_docs/docs/tutorial-oauth'
+      path: '/tutorial-oauth'
+      fullPath: '/docs/tutorial-oauth'
+      preLoaderRoute: typeof DocsDocsTutorialOauthRouteImport
+      parentRoute: typeof DocsDocsRoute
+    }
+    '/_docs/docs/tutorial-provider-model': {
+      id: '/_docs/docs/tutorial-provider-model'
+      path: '/tutorial-provider-model'
+      fullPath: '/docs/tutorial-provider-model'
+      preLoaderRoute: typeof DocsDocsTutorialProviderModelRouteImport
+      parentRoute: typeof DocsDocsRoute
+    }
   }
 }
 
@@ -876,6 +935,9 @@ interface DocsDocsRouteChildren {
   DocsDocsSettingsOauthRoute: typeof DocsDocsSettingsOauthRoute
   DocsDocsSettingsProviderRoute: typeof DocsDocsSettingsProviderRoute
   DocsDocsTuiRoute: typeof DocsDocsTuiRoute
+  DocsDocsTutorialFirstRunRoute: typeof DocsDocsTutorialFirstRunRoute
+  DocsDocsTutorialOauthRoute: typeof DocsDocsTutorialOauthRoute
+  DocsDocsTutorialProviderModelRoute: typeof DocsDocsTutorialProviderModelRoute
 }
 
 const DocsDocsRouteChildren: DocsDocsRouteChildren = {
@@ -918,6 +980,9 @@ const DocsDocsRouteChildren: DocsDocsRouteChildren = {
   DocsDocsSettingsOauthRoute: DocsDocsSettingsOauthRoute,
   DocsDocsSettingsProviderRoute: DocsDocsSettingsProviderRoute,
   DocsDocsTuiRoute: DocsDocsTuiRoute,
+  DocsDocsTutorialFirstRunRoute: DocsDocsTutorialFirstRunRoute,
+  DocsDocsTutorialOauthRoute: DocsDocsTutorialOauthRoute,
+  DocsDocsTutorialProviderModelRoute: DocsDocsTutorialProviderModelRoute,
 }
 
 const DocsDocsRouteWithChildren = DocsDocsRoute._addFileChildren(
