@@ -16,6 +16,14 @@ export function TopBar() {
           Docs
         </Link>
         <a
+          href="https://koma.run"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-koma-dim transition hover:text-koma-fg no-underline"
+        >
+          koma.run
+        </a>
+        <a
           href="https://github.com/aula-id/koma"
           target="_blank"
           rel="noopener noreferrer"

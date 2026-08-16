@@ -8,6 +8,7 @@
 target/
 node_modules/
 dist/
+.tanstack/
 
 # Python virtual environments
 .venv/
