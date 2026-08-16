@@ -1,9 +1,10 @@
 import { createFileRoute, Outlet } from '@tanstack/react-router'
 
-function DocsLayout() {
+/** Legacy /docs layout — pass-through for redirect catchers. */
+function DocsRedirectLayout() {
   return <Outlet />
 }
 
 export const Route = createFileRoute('/_docs/docs')({
-  component: DocsLayout,
+  component: DocsRedirectLayout,
 })

@@ -12,49 +12,63 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DocsRouteImport } from './routes/_docs'
 import { Route as DocsDocsRouteImport } from './routes/_docs/docs'
-import { Route as DocsDocsArchitectureRouteImport } from './routes/_docs/docs/architecture'
-import { Route as DocsDocsCommandsAdddirRouteImport } from './routes/_docs/docs/commands-adddir'
-import { Route as DocsDocsCommandsAgentsRouteImport } from './routes/_docs/docs/commands-agents'
-import { Route as DocsDocsCommandsAllRouteImport } from './routes/_docs/docs/commands-all'
-import { Route as DocsDocsCommandsAttachRouteImport } from './routes/_docs/docs/commands-attach'
-import { Route as DocsDocsCommandsBashRouteImport } from './routes/_docs/docs/commands-bash'
-import { Route as DocsDocsCommandsCdRouteImport } from './routes/_docs/docs/commands-cd'
-import { Route as DocsDocsCommandsClearRouteImport } from './routes/_docs/docs/commands-clear'
-import { Route as DocsDocsCommandsCompactRouteImport } from './routes/_docs/docs/commands-compact'
-import { Route as DocsDocsCommandsEffortRouteImport } from './routes/_docs/docs/commands-effort'
-import { Route as DocsDocsCommandsExtensionRouteImport } from './routes/_docs/docs/commands-extension'
-import { Route as DocsDocsCommandsFreeRouteImport } from './routes/_docs/docs/commands-free'
-import { Route as DocsDocsCommandsHelpRouteImport } from './routes/_docs/docs/commands-help'
-import { Route as DocsDocsCommandsInternetRouteImport } from './routes/_docs/docs/commands-internet'
-import { Route as DocsDocsCommandsMcpRouteImport } from './routes/_docs/docs/commands-mcp'
-import { Route as DocsDocsCommandsModeRouteImport } from './routes/_docs/docs/commands-mode'
-import { Route as DocsDocsCommandsModelRouteImport } from './routes/_docs/docs/commands-model'
-import { Route as DocsDocsCommandsNewRouteImport } from './routes/_docs/docs/commands-new'
-import { Route as DocsDocsCommandsQuitRouteImport } from './routes/_docs/docs/commands-quit'
-import { Route as DocsDocsCommandsRemoteRouteImport } from './routes/_docs/docs/commands-remote'
-import { Route as DocsDocsCommandsRenameRouteImport } from './routes/_docs/docs/commands-rename'
-import { Route as DocsDocsCommandsResumeRouteImport } from './routes/_docs/docs/commands-resume'
-import { Route as DocsDocsCommandsSecurityRouteImport } from './routes/_docs/docs/commands-security'
-import { Route as DocsDocsCommandsSelectRouteImport } from './routes/_docs/docs/commands-select'
-import { Route as DocsDocsCommandsSkillRouteImport } from './routes/_docs/docs/commands-skill'
-import { Route as DocsDocsCommandsStoreRouteImport } from './routes/_docs/docs/commands-store'
-import { Route as DocsDocsCommandsTaskRouteImport } from './routes/_docs/docs/commands-task'
-import { Route as DocsDocsCommandsTodoRouteImport } from './routes/_docs/docs/commands-todo'
-import { Route as DocsDocsCommandsUsageRouteImport } from './routes/_docs/docs/commands-usage'
-import { Route as DocsDocsGettingStartedRouteImport } from './routes/_docs/docs/getting-started'
-import { Route as DocsDocsGuiRouteImport } from './routes/_docs/docs/gui'
-import { Route as DocsDocsKeyboardShortcutsRouteImport } from './routes/_docs/docs/keyboard-shortcuts'
-import { Route as DocsDocsOverviewRouteImport } from './routes/_docs/docs/overview'
-import { Route as DocsDocsSettingsAppearanceRouteImport } from './routes/_docs/docs/settings-appearance'
-import { Route as DocsDocsSettingsGeneralRouteImport } from './routes/_docs/docs/settings-general'
-import { Route as DocsDocsSettingsModelRouteImport } from './routes/_docs/docs/settings-model'
-import { Route as DocsDocsSettingsOauthRouteImport } from './routes/_docs/docs/settings-oauth'
-import { Route as DocsDocsSettingsProviderRouteImport } from './routes/_docs/docs/settings-provider'
-import { Route as DocsDocsTuiRouteImport } from './routes/_docs/docs/tui'
-import { Route as DocsDocsTutorialFirstRunRouteImport } from './routes/_docs/docs/tutorial-first-run'
-import { Route as DocsDocsTutorialGuiFirstRunRouteImport } from './routes/_docs/docs/tutorial-gui-first-run'
-import { Route as DocsDocsTutorialOauthRouteImport } from './routes/_docs/docs/tutorial-oauth'
-import { Route as DocsDocsTutorialProviderModelRouteImport } from './routes/_docs/docs/tutorial-provider-model'
+import { Route as DocsGuiRouteImport } from './routes/_docs/gui'
+import { Route as DocsTuiRouteImport } from './routes/_docs/tui'
+import { Route as DocsWelcomeRouteImport } from './routes/_docs/welcome'
+import { Route as DocsDocsIndexRouteImport } from './routes/_docs/docs/index'
+import { Route as DocsDocsSlugRouteImport } from './routes/_docs/docs/$slug'
+import { Route as DocsGuiIndexRouteImport } from './routes/_docs/gui/index'
+import { Route as DocsGuiAnalyticsRouteImport } from './routes/_docs/gui/analytics'
+import { Route as DocsGuiChatComposerRouteImport } from './routes/_docs/gui/chat-composer'
+import { Route as DocsGuiCodeEditorRouteImport } from './routes/_docs/gui/code-editor'
+import { Route as DocsGuiExtensionsRouteImport } from './routes/_docs/gui/extensions'
+import { Route as DocsGuiFirstRunRouteImport } from './routes/_docs/gui/first-run'
+import { Route as DocsGuiGitDiffRouteImport } from './routes/_docs/gui/git-diff'
+import { Route as DocsGuiImportGraphRouteImport } from './routes/_docs/gui/import-graph'
+import { Route as DocsGuiLayoutRouteImport } from './routes/_docs/gui/layout'
+import { Route as DocsGuiOauthRouteImport } from './routes/_docs/gui/oauth'
+import { Route as DocsGuiProviderModelRouteImport } from './routes/_docs/gui/provider-model'
+import { Route as DocsTuiIndexRouteImport } from './routes/_docs/tui/index'
+import { Route as DocsTuiCommandsAdddirRouteImport } from './routes/_docs/tui/commands-adddir'
+import { Route as DocsTuiCommandsAgentsRouteImport } from './routes/_docs/tui/commands-agents'
+import { Route as DocsTuiCommandsAllRouteImport } from './routes/_docs/tui/commands-all'
+import { Route as DocsTuiCommandsAttachRouteImport } from './routes/_docs/tui/commands-attach'
+import { Route as DocsTuiCommandsBashRouteImport } from './routes/_docs/tui/commands-bash'
+import { Route as DocsTuiCommandsCdRouteImport } from './routes/_docs/tui/commands-cd'
+import { Route as DocsTuiCommandsClearRouteImport } from './routes/_docs/tui/commands-clear'
+import { Route as DocsTuiCommandsCompactRouteImport } from './routes/_docs/tui/commands-compact'
+import { Route as DocsTuiCommandsEffortRouteImport } from './routes/_docs/tui/commands-effort'
+import { Route as DocsTuiCommandsExtensionRouteImport } from './routes/_docs/tui/commands-extension'
+import { Route as DocsTuiCommandsFreeRouteImport } from './routes/_docs/tui/commands-free'
+import { Route as DocsTuiCommandsHelpRouteImport } from './routes/_docs/tui/commands-help'
+import { Route as DocsTuiCommandsInternetRouteImport } from './routes/_docs/tui/commands-internet'
+import { Route as DocsTuiCommandsMcpRouteImport } from './routes/_docs/tui/commands-mcp'
+import { Route as DocsTuiCommandsModeRouteImport } from './routes/_docs/tui/commands-mode'
+import { Route as DocsTuiCommandsModelRouteImport } from './routes/_docs/tui/commands-model'
+import { Route as DocsTuiCommandsNewRouteImport } from './routes/_docs/tui/commands-new'
+import { Route as DocsTuiCommandsQuitRouteImport } from './routes/_docs/tui/commands-quit'
+import { Route as DocsTuiCommandsRemoteRouteImport } from './routes/_docs/tui/commands-remote'
+import { Route as DocsTuiCommandsRenameRouteImport } from './routes/_docs/tui/commands-rename'
+import { Route as DocsTuiCommandsResumeRouteImport } from './routes/_docs/tui/commands-resume'
+import { Route as DocsTuiCommandsSecurityRouteImport } from './routes/_docs/tui/commands-security'
+import { Route as DocsTuiCommandsSelectRouteImport } from './routes/_docs/tui/commands-select'
+import { Route as DocsTuiCommandsSkillRouteImport } from './routes/_docs/tui/commands-skill'
+import { Route as DocsTuiCommandsStoreRouteImport } from './routes/_docs/tui/commands-store'
+import { Route as DocsTuiCommandsTaskRouteImport } from './routes/_docs/tui/commands-task'
+import { Route as DocsTuiCommandsTodoRouteImport } from './routes/_docs/tui/commands-todo'
+import { Route as DocsTuiCommandsUsageRouteImport } from './routes/_docs/tui/commands-usage'
+import { Route as DocsTuiFirstRunRouteImport } from './routes/_docs/tui/first-run'
+import { Route as DocsTuiKeyboardShortcutsRouteImport } from './routes/_docs/tui/keyboard-shortcuts'
+import { Route as DocsTuiOauthRouteImport } from './routes/_docs/tui/oauth'
+import { Route as DocsTuiProviderModelRouteImport } from './routes/_docs/tui/provider-model'
+import { Route as DocsTuiSettingsAppearanceRouteImport } from './routes/_docs/tui/settings-appearance'
+import { Route as DocsTuiSettingsGeneralRouteImport } from './routes/_docs/tui/settings-general'
+import { Route as DocsTuiSettingsModelRouteImport } from './routes/_docs/tui/settings-model'
+import { Route as DocsTuiSettingsOauthRouteImport } from './routes/_docs/tui/settings-oauth'
+import { Route as DocsTuiSettingsProviderRouteImport } from './routes/_docs/tui/settings-provider'
+import { Route as DocsWelcomeIndexRouteImport } from './routes/_docs/welcome/index'
+import { Route as DocsWelcomeArchitectureRouteImport } from './routes/_docs/welcome/architecture'
+import { Route as DocsWelcomeGettingStartedRouteImport } from './routes/_docs/welcome/getting-started'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -70,517 +84,658 @@ const DocsDocsRoute = DocsDocsRouteImport.update({
   path: '/docs',
   getParentRoute: () => DocsRoute,
 } as any)
-const DocsDocsArchitectureRoute = DocsDocsArchitectureRouteImport.update({
-  id: '/architecture',
-  path: '/architecture',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsAdddirRoute = DocsDocsCommandsAdddirRouteImport.update({
-  id: '/commands-adddir',
-  path: '/commands-adddir',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsAgentsRoute = DocsDocsCommandsAgentsRouteImport.update({
-  id: '/commands-agents',
-  path: '/commands-agents',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsAllRoute = DocsDocsCommandsAllRouteImport.update({
-  id: '/commands-all',
-  path: '/commands-all',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsAttachRoute = DocsDocsCommandsAttachRouteImport.update({
-  id: '/commands-attach',
-  path: '/commands-attach',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsBashRoute = DocsDocsCommandsBashRouteImport.update({
-  id: '/commands-bash',
-  path: '/commands-bash',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsCdRoute = DocsDocsCommandsCdRouteImport.update({
-  id: '/commands-cd',
-  path: '/commands-cd',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsClearRoute = DocsDocsCommandsClearRouteImport.update({
-  id: '/commands-clear',
-  path: '/commands-clear',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsCompactRoute = DocsDocsCommandsCompactRouteImport.update({
-  id: '/commands-compact',
-  path: '/commands-compact',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsEffortRoute = DocsDocsCommandsEffortRouteImport.update({
-  id: '/commands-effort',
-  path: '/commands-effort',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsExtensionRoute =
-  DocsDocsCommandsExtensionRouteImport.update({
-    id: '/commands-extension',
-    path: '/commands-extension',
-    getParentRoute: () => DocsDocsRoute,
-  } as any)
-const DocsDocsCommandsFreeRoute = DocsDocsCommandsFreeRouteImport.update({
-  id: '/commands-free',
-  path: '/commands-free',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsHelpRoute = DocsDocsCommandsHelpRouteImport.update({
-  id: '/commands-help',
-  path: '/commands-help',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsInternetRoute =
-  DocsDocsCommandsInternetRouteImport.update({
-    id: '/commands-internet',
-    path: '/commands-internet',
-    getParentRoute: () => DocsDocsRoute,
-  } as any)
-const DocsDocsCommandsMcpRoute = DocsDocsCommandsMcpRouteImport.update({
-  id: '/commands-mcp',
-  path: '/commands-mcp',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsModeRoute = DocsDocsCommandsModeRouteImport.update({
-  id: '/commands-mode',
-  path: '/commands-mode',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsModelRoute = DocsDocsCommandsModelRouteImport.update({
-  id: '/commands-model',
-  path: '/commands-model',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsNewRoute = DocsDocsCommandsNewRouteImport.update({
-  id: '/commands-new',
-  path: '/commands-new',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsQuitRoute = DocsDocsCommandsQuitRouteImport.update({
-  id: '/commands-quit',
-  path: '/commands-quit',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsRemoteRoute = DocsDocsCommandsRemoteRouteImport.update({
-  id: '/commands-remote',
-  path: '/commands-remote',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsRenameRoute = DocsDocsCommandsRenameRouteImport.update({
-  id: '/commands-rename',
-  path: '/commands-rename',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsResumeRoute = DocsDocsCommandsResumeRouteImport.update({
-  id: '/commands-resume',
-  path: '/commands-resume',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsSecurityRoute =
-  DocsDocsCommandsSecurityRouteImport.update({
-    id: '/commands-security',
-    path: '/commands-security',
-    getParentRoute: () => DocsDocsRoute,
-  } as any)
-const DocsDocsCommandsSelectRoute = DocsDocsCommandsSelectRouteImport.update({
-  id: '/commands-select',
-  path: '/commands-select',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsSkillRoute = DocsDocsCommandsSkillRouteImport.update({
-  id: '/commands-skill',
-  path: '/commands-skill',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsStoreRoute = DocsDocsCommandsStoreRouteImport.update({
-  id: '/commands-store',
-  path: '/commands-store',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsTaskRoute = DocsDocsCommandsTaskRouteImport.update({
-  id: '/commands-task',
-  path: '/commands-task',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsTodoRoute = DocsDocsCommandsTodoRouteImport.update({
-  id: '/commands-todo',
-  path: '/commands-todo',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsCommandsUsageRoute = DocsDocsCommandsUsageRouteImport.update({
-  id: '/commands-usage',
-  path: '/commands-usage',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsGettingStartedRoute = DocsDocsGettingStartedRouteImport.update({
-  id: '/getting-started',
-  path: '/getting-started',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsGuiRoute = DocsDocsGuiRouteImport.update({
+const DocsGuiRoute = DocsGuiRouteImport.update({
   id: '/gui',
   path: '/gui',
-  getParentRoute: () => DocsDocsRoute,
+  getParentRoute: () => DocsRoute,
 } as any)
-const DocsDocsKeyboardShortcutsRoute =
-  DocsDocsKeyboardShortcutsRouteImport.update({
-    id: '/keyboard-shortcuts',
-    path: '/keyboard-shortcuts',
-    getParentRoute: () => DocsDocsRoute,
-  } as any)
-const DocsDocsOverviewRoute = DocsDocsOverviewRouteImport.update({
-  id: '/overview',
-  path: '/overview',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsSettingsAppearanceRoute =
-  DocsDocsSettingsAppearanceRouteImport.update({
-    id: '/settings-appearance',
-    path: '/settings-appearance',
-    getParentRoute: () => DocsDocsRoute,
-  } as any)
-const DocsDocsSettingsGeneralRoute = DocsDocsSettingsGeneralRouteImport.update({
-  id: '/settings-general',
-  path: '/settings-general',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsSettingsModelRoute = DocsDocsSettingsModelRouteImport.update({
-  id: '/settings-model',
-  path: '/settings-model',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsSettingsOauthRoute = DocsDocsSettingsOauthRouteImport.update({
-  id: '/settings-oauth',
-  path: '/settings-oauth',
-  getParentRoute: () => DocsDocsRoute,
-} as any)
-const DocsDocsSettingsProviderRoute =
-  DocsDocsSettingsProviderRouteImport.update({
-    id: '/settings-provider',
-    path: '/settings-provider',
-    getParentRoute: () => DocsDocsRoute,
-  } as any)
-const DocsDocsTuiRoute = DocsDocsTuiRouteImport.update({
+const DocsTuiRoute = DocsTuiRouteImport.update({
   id: '/tui',
   path: '/tui',
+  getParentRoute: () => DocsRoute,
+} as any)
+const DocsWelcomeRoute = DocsWelcomeRouteImport.update({
+  id: '/welcome',
+  path: '/welcome',
+  getParentRoute: () => DocsRoute,
+} as any)
+const DocsDocsIndexRoute = DocsDocsIndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => DocsDocsRoute,
 } as any)
-const DocsDocsTutorialFirstRunRoute =
-  DocsDocsTutorialFirstRunRouteImport.update({
-    id: '/tutorial-first-run',
-    path: '/tutorial-first-run',
-    getParentRoute: () => DocsDocsRoute,
-  } as any)
-const DocsDocsTutorialGuiFirstRunRoute =
-  DocsDocsTutorialGuiFirstRunRouteImport.update({
-    id: '/tutorial-gui-first-run',
-    path: '/tutorial-gui-first-run',
-    getParentRoute: () => DocsDocsRoute,
-  } as any)
-const DocsDocsTutorialOauthRoute = DocsDocsTutorialOauthRouteImport.update({
-  id: '/tutorial-oauth',
-  path: '/tutorial-oauth',
+const DocsDocsSlugRoute = DocsDocsSlugRouteImport.update({
+  id: '/$slug',
+  path: '/$slug',
   getParentRoute: () => DocsDocsRoute,
 } as any)
-const DocsDocsTutorialProviderModelRoute =
-  DocsDocsTutorialProviderModelRouteImport.update({
-    id: '/tutorial-provider-model',
-    path: '/tutorial-provider-model',
-    getParentRoute: () => DocsDocsRoute,
+const DocsGuiIndexRoute = DocsGuiIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => DocsGuiRoute,
+} as any)
+const DocsGuiAnalyticsRoute = DocsGuiAnalyticsRouteImport.update({
+  id: '/analytics',
+  path: '/analytics',
+  getParentRoute: () => DocsGuiRoute,
+} as any)
+const DocsGuiChatComposerRoute = DocsGuiChatComposerRouteImport.update({
+  id: '/chat-composer',
+  path: '/chat-composer',
+  getParentRoute: () => DocsGuiRoute,
+} as any)
+const DocsGuiCodeEditorRoute = DocsGuiCodeEditorRouteImport.update({
+  id: '/code-editor',
+  path: '/code-editor',
+  getParentRoute: () => DocsGuiRoute,
+} as any)
+const DocsGuiExtensionsRoute = DocsGuiExtensionsRouteImport.update({
+  id: '/extensions',
+  path: '/extensions',
+  getParentRoute: () => DocsGuiRoute,
+} as any)
+const DocsGuiFirstRunRoute = DocsGuiFirstRunRouteImport.update({
+  id: '/first-run',
+  path: '/first-run',
+  getParentRoute: () => DocsGuiRoute,
+} as any)
+const DocsGuiGitDiffRoute = DocsGuiGitDiffRouteImport.update({
+  id: '/git-diff',
+  path: '/git-diff',
+  getParentRoute: () => DocsGuiRoute,
+} as any)
+const DocsGuiImportGraphRoute = DocsGuiImportGraphRouteImport.update({
+  id: '/import-graph',
+  path: '/import-graph',
+  getParentRoute: () => DocsGuiRoute,
+} as any)
+const DocsGuiLayoutRoute = DocsGuiLayoutRouteImport.update({
+  id: '/layout',
+  path: '/layout',
+  getParentRoute: () => DocsGuiRoute,
+} as any)
+const DocsGuiOauthRoute = DocsGuiOauthRouteImport.update({
+  id: '/oauth',
+  path: '/oauth',
+  getParentRoute: () => DocsGuiRoute,
+} as any)
+const DocsGuiProviderModelRoute = DocsGuiProviderModelRouteImport.update({
+  id: '/provider-model',
+  path: '/provider-model',
+  getParentRoute: () => DocsGuiRoute,
+} as any)
+const DocsTuiIndexRoute = DocsTuiIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsAdddirRoute = DocsTuiCommandsAdddirRouteImport.update({
+  id: '/commands-adddir',
+  path: '/commands-adddir',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsAgentsRoute = DocsTuiCommandsAgentsRouteImport.update({
+  id: '/commands-agents',
+  path: '/commands-agents',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsAllRoute = DocsTuiCommandsAllRouteImport.update({
+  id: '/commands-all',
+  path: '/commands-all',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsAttachRoute = DocsTuiCommandsAttachRouteImport.update({
+  id: '/commands-attach',
+  path: '/commands-attach',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsBashRoute = DocsTuiCommandsBashRouteImport.update({
+  id: '/commands-bash',
+  path: '/commands-bash',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsCdRoute = DocsTuiCommandsCdRouteImport.update({
+  id: '/commands-cd',
+  path: '/commands-cd',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsClearRoute = DocsTuiCommandsClearRouteImport.update({
+  id: '/commands-clear',
+  path: '/commands-clear',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsCompactRoute = DocsTuiCommandsCompactRouteImport.update({
+  id: '/commands-compact',
+  path: '/commands-compact',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsEffortRoute = DocsTuiCommandsEffortRouteImport.update({
+  id: '/commands-effort',
+  path: '/commands-effort',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsExtensionRoute =
+  DocsTuiCommandsExtensionRouteImport.update({
+    id: '/commands-extension',
+    path: '/commands-extension',
+    getParentRoute: () => DocsTuiRoute,
+  } as any)
+const DocsTuiCommandsFreeRoute = DocsTuiCommandsFreeRouteImport.update({
+  id: '/commands-free',
+  path: '/commands-free',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsHelpRoute = DocsTuiCommandsHelpRouteImport.update({
+  id: '/commands-help',
+  path: '/commands-help',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsInternetRoute = DocsTuiCommandsInternetRouteImport.update({
+  id: '/commands-internet',
+  path: '/commands-internet',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsMcpRoute = DocsTuiCommandsMcpRouteImport.update({
+  id: '/commands-mcp',
+  path: '/commands-mcp',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsModeRoute = DocsTuiCommandsModeRouteImport.update({
+  id: '/commands-mode',
+  path: '/commands-mode',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsModelRoute = DocsTuiCommandsModelRouteImport.update({
+  id: '/commands-model',
+  path: '/commands-model',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsNewRoute = DocsTuiCommandsNewRouteImport.update({
+  id: '/commands-new',
+  path: '/commands-new',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsQuitRoute = DocsTuiCommandsQuitRouteImport.update({
+  id: '/commands-quit',
+  path: '/commands-quit',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsRemoteRoute = DocsTuiCommandsRemoteRouteImport.update({
+  id: '/commands-remote',
+  path: '/commands-remote',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsRenameRoute = DocsTuiCommandsRenameRouteImport.update({
+  id: '/commands-rename',
+  path: '/commands-rename',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsResumeRoute = DocsTuiCommandsResumeRouteImport.update({
+  id: '/commands-resume',
+  path: '/commands-resume',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsSecurityRoute = DocsTuiCommandsSecurityRouteImport.update({
+  id: '/commands-security',
+  path: '/commands-security',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsSelectRoute = DocsTuiCommandsSelectRouteImport.update({
+  id: '/commands-select',
+  path: '/commands-select',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsSkillRoute = DocsTuiCommandsSkillRouteImport.update({
+  id: '/commands-skill',
+  path: '/commands-skill',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsStoreRoute = DocsTuiCommandsStoreRouteImport.update({
+  id: '/commands-store',
+  path: '/commands-store',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsTaskRoute = DocsTuiCommandsTaskRouteImport.update({
+  id: '/commands-task',
+  path: '/commands-task',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsTodoRoute = DocsTuiCommandsTodoRouteImport.update({
+  id: '/commands-todo',
+  path: '/commands-todo',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiCommandsUsageRoute = DocsTuiCommandsUsageRouteImport.update({
+  id: '/commands-usage',
+  path: '/commands-usage',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiFirstRunRoute = DocsTuiFirstRunRouteImport.update({
+  id: '/first-run',
+  path: '/first-run',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiKeyboardShortcutsRoute =
+  DocsTuiKeyboardShortcutsRouteImport.update({
+    id: '/keyboard-shortcuts',
+    path: '/keyboard-shortcuts',
+    getParentRoute: () => DocsTuiRoute,
+  } as any)
+const DocsTuiOauthRoute = DocsTuiOauthRouteImport.update({
+  id: '/oauth',
+  path: '/oauth',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiProviderModelRoute = DocsTuiProviderModelRouteImport.update({
+  id: '/provider-model',
+  path: '/provider-model',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiSettingsAppearanceRoute =
+  DocsTuiSettingsAppearanceRouteImport.update({
+    id: '/settings-appearance',
+    path: '/settings-appearance',
+    getParentRoute: () => DocsTuiRoute,
+  } as any)
+const DocsTuiSettingsGeneralRoute = DocsTuiSettingsGeneralRouteImport.update({
+  id: '/settings-general',
+  path: '/settings-general',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiSettingsModelRoute = DocsTuiSettingsModelRouteImport.update({
+  id: '/settings-model',
+  path: '/settings-model',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiSettingsOauthRoute = DocsTuiSettingsOauthRouteImport.update({
+  id: '/settings-oauth',
+  path: '/settings-oauth',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsTuiSettingsProviderRoute = DocsTuiSettingsProviderRouteImport.update({
+  id: '/settings-provider',
+  path: '/settings-provider',
+  getParentRoute: () => DocsTuiRoute,
+} as any)
+const DocsWelcomeIndexRoute = DocsWelcomeIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => DocsWelcomeRoute,
+} as any)
+const DocsWelcomeArchitectureRoute = DocsWelcomeArchitectureRouteImport.update({
+  id: '/architecture',
+  path: '/architecture',
+  getParentRoute: () => DocsWelcomeRoute,
+} as any)
+const DocsWelcomeGettingStartedRoute =
+  DocsWelcomeGettingStartedRouteImport.update({
+    id: '/getting-started',
+    path: '/getting-started',
+    getParentRoute: () => DocsWelcomeRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/docs': typeof DocsDocsRouteWithChildren
-  '/docs/architecture': typeof DocsDocsArchitectureRoute
-  '/docs/commands-adddir': typeof DocsDocsCommandsAdddirRoute
-  '/docs/commands-agents': typeof DocsDocsCommandsAgentsRoute
-  '/docs/commands-all': typeof DocsDocsCommandsAllRoute
-  '/docs/commands-attach': typeof DocsDocsCommandsAttachRoute
-  '/docs/commands-bash': typeof DocsDocsCommandsBashRoute
-  '/docs/commands-cd': typeof DocsDocsCommandsCdRoute
-  '/docs/commands-clear': typeof DocsDocsCommandsClearRoute
-  '/docs/commands-compact': typeof DocsDocsCommandsCompactRoute
-  '/docs/commands-effort': typeof DocsDocsCommandsEffortRoute
-  '/docs/commands-extension': typeof DocsDocsCommandsExtensionRoute
-  '/docs/commands-free': typeof DocsDocsCommandsFreeRoute
-  '/docs/commands-help': typeof DocsDocsCommandsHelpRoute
-  '/docs/commands-internet': typeof DocsDocsCommandsInternetRoute
-  '/docs/commands-mcp': typeof DocsDocsCommandsMcpRoute
-  '/docs/commands-mode': typeof DocsDocsCommandsModeRoute
-  '/docs/commands-model': typeof DocsDocsCommandsModelRoute
-  '/docs/commands-new': typeof DocsDocsCommandsNewRoute
-  '/docs/commands-quit': typeof DocsDocsCommandsQuitRoute
-  '/docs/commands-remote': typeof DocsDocsCommandsRemoteRoute
-  '/docs/commands-rename': typeof DocsDocsCommandsRenameRoute
-  '/docs/commands-resume': typeof DocsDocsCommandsResumeRoute
-  '/docs/commands-security': typeof DocsDocsCommandsSecurityRoute
-  '/docs/commands-select': typeof DocsDocsCommandsSelectRoute
-  '/docs/commands-skill': typeof DocsDocsCommandsSkillRoute
-  '/docs/commands-store': typeof DocsDocsCommandsStoreRoute
-  '/docs/commands-task': typeof DocsDocsCommandsTaskRoute
-  '/docs/commands-todo': typeof DocsDocsCommandsTodoRoute
-  '/docs/commands-usage': typeof DocsDocsCommandsUsageRoute
-  '/docs/getting-started': typeof DocsDocsGettingStartedRoute
-  '/docs/gui': typeof DocsDocsGuiRoute
-  '/docs/keyboard-shortcuts': typeof DocsDocsKeyboardShortcutsRoute
-  '/docs/overview': typeof DocsDocsOverviewRoute
-  '/docs/settings-appearance': typeof DocsDocsSettingsAppearanceRoute
-  '/docs/settings-general': typeof DocsDocsSettingsGeneralRoute
-  '/docs/settings-model': typeof DocsDocsSettingsModelRoute
-  '/docs/settings-oauth': typeof DocsDocsSettingsOauthRoute
-  '/docs/settings-provider': typeof DocsDocsSettingsProviderRoute
-  '/docs/tui': typeof DocsDocsTuiRoute
-  '/docs/tutorial-first-run': typeof DocsDocsTutorialFirstRunRoute
-  '/docs/tutorial-gui-first-run': typeof DocsDocsTutorialGuiFirstRunRoute
-  '/docs/tutorial-oauth': typeof DocsDocsTutorialOauthRoute
-  '/docs/tutorial-provider-model': typeof DocsDocsTutorialProviderModelRoute
+  '/gui': typeof DocsGuiRouteWithChildren
+  '/tui': typeof DocsTuiRouteWithChildren
+  '/welcome': typeof DocsWelcomeRouteWithChildren
+  '/docs/$slug': typeof DocsDocsSlugRoute
+  '/gui/analytics': typeof DocsGuiAnalyticsRoute
+  '/gui/chat-composer': typeof DocsGuiChatComposerRoute
+  '/gui/code-editor': typeof DocsGuiCodeEditorRoute
+  '/gui/extensions': typeof DocsGuiExtensionsRoute
+  '/gui/first-run': typeof DocsGuiFirstRunRoute
+  '/gui/git-diff': typeof DocsGuiGitDiffRoute
+  '/gui/import-graph': typeof DocsGuiImportGraphRoute
+  '/gui/layout': typeof DocsGuiLayoutRoute
+  '/gui/oauth': typeof DocsGuiOauthRoute
+  '/gui/provider-model': typeof DocsGuiProviderModelRoute
+  '/tui/commands-adddir': typeof DocsTuiCommandsAdddirRoute
+  '/tui/commands-agents': typeof DocsTuiCommandsAgentsRoute
+  '/tui/commands-all': typeof DocsTuiCommandsAllRoute
+  '/tui/commands-attach': typeof DocsTuiCommandsAttachRoute
+  '/tui/commands-bash': typeof DocsTuiCommandsBashRoute
+  '/tui/commands-cd': typeof DocsTuiCommandsCdRoute
+  '/tui/commands-clear': typeof DocsTuiCommandsClearRoute
+  '/tui/commands-compact': typeof DocsTuiCommandsCompactRoute
+  '/tui/commands-effort': typeof DocsTuiCommandsEffortRoute
+  '/tui/commands-extension': typeof DocsTuiCommandsExtensionRoute
+  '/tui/commands-free': typeof DocsTuiCommandsFreeRoute
+  '/tui/commands-help': typeof DocsTuiCommandsHelpRoute
+  '/tui/commands-internet': typeof DocsTuiCommandsInternetRoute
+  '/tui/commands-mcp': typeof DocsTuiCommandsMcpRoute
+  '/tui/commands-mode': typeof DocsTuiCommandsModeRoute
+  '/tui/commands-model': typeof DocsTuiCommandsModelRoute
+  '/tui/commands-new': typeof DocsTuiCommandsNewRoute
+  '/tui/commands-quit': typeof DocsTuiCommandsQuitRoute
+  '/tui/commands-remote': typeof DocsTuiCommandsRemoteRoute
+  '/tui/commands-rename': typeof DocsTuiCommandsRenameRoute
+  '/tui/commands-resume': typeof DocsTuiCommandsResumeRoute
+  '/tui/commands-security': typeof DocsTuiCommandsSecurityRoute
+  '/tui/commands-select': typeof DocsTuiCommandsSelectRoute
+  '/tui/commands-skill': typeof DocsTuiCommandsSkillRoute
+  '/tui/commands-store': typeof DocsTuiCommandsStoreRoute
+  '/tui/commands-task': typeof DocsTuiCommandsTaskRoute
+  '/tui/commands-todo': typeof DocsTuiCommandsTodoRoute
+  '/tui/commands-usage': typeof DocsTuiCommandsUsageRoute
+  '/tui/first-run': typeof DocsTuiFirstRunRoute
+  '/tui/keyboard-shortcuts': typeof DocsTuiKeyboardShortcutsRoute
+  '/tui/oauth': typeof DocsTuiOauthRoute
+  '/tui/provider-model': typeof DocsTuiProviderModelRoute
+  '/tui/settings-appearance': typeof DocsTuiSettingsAppearanceRoute
+  '/tui/settings-general': typeof DocsTuiSettingsGeneralRoute
+  '/tui/settings-model': typeof DocsTuiSettingsModelRoute
+  '/tui/settings-oauth': typeof DocsTuiSettingsOauthRoute
+  '/tui/settings-provider': typeof DocsTuiSettingsProviderRoute
+  '/welcome/architecture': typeof DocsWelcomeArchitectureRoute
+  '/welcome/getting-started': typeof DocsWelcomeGettingStartedRoute
+  '/docs/': typeof DocsDocsIndexRoute
+  '/gui/': typeof DocsGuiIndexRoute
+  '/tui/': typeof DocsTuiIndexRoute
+  '/welcome/': typeof DocsWelcomeIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/docs': typeof DocsDocsRouteWithChildren
-  '/docs/architecture': typeof DocsDocsArchitectureRoute
-  '/docs/commands-adddir': typeof DocsDocsCommandsAdddirRoute
-  '/docs/commands-agents': typeof DocsDocsCommandsAgentsRoute
-  '/docs/commands-all': typeof DocsDocsCommandsAllRoute
-  '/docs/commands-attach': typeof DocsDocsCommandsAttachRoute
-  '/docs/commands-bash': typeof DocsDocsCommandsBashRoute
-  '/docs/commands-cd': typeof DocsDocsCommandsCdRoute
-  '/docs/commands-clear': typeof DocsDocsCommandsClearRoute
-  '/docs/commands-compact': typeof DocsDocsCommandsCompactRoute
-  '/docs/commands-effort': typeof DocsDocsCommandsEffortRoute
-  '/docs/commands-extension': typeof DocsDocsCommandsExtensionRoute
-  '/docs/commands-free': typeof DocsDocsCommandsFreeRoute
-  '/docs/commands-help': typeof DocsDocsCommandsHelpRoute
-  '/docs/commands-internet': typeof DocsDocsCommandsInternetRoute
-  '/docs/commands-mcp': typeof DocsDocsCommandsMcpRoute
-  '/docs/commands-mode': typeof DocsDocsCommandsModeRoute
-  '/docs/commands-model': typeof DocsDocsCommandsModelRoute
-  '/docs/commands-new': typeof DocsDocsCommandsNewRoute
-  '/docs/commands-quit': typeof DocsDocsCommandsQuitRoute
-  '/docs/commands-remote': typeof DocsDocsCommandsRemoteRoute
-  '/docs/commands-rename': typeof DocsDocsCommandsRenameRoute
-  '/docs/commands-resume': typeof DocsDocsCommandsResumeRoute
-  '/docs/commands-security': typeof DocsDocsCommandsSecurityRoute
-  '/docs/commands-select': typeof DocsDocsCommandsSelectRoute
-  '/docs/commands-skill': typeof DocsDocsCommandsSkillRoute
-  '/docs/commands-store': typeof DocsDocsCommandsStoreRoute
-  '/docs/commands-task': typeof DocsDocsCommandsTaskRoute
-  '/docs/commands-todo': typeof DocsDocsCommandsTodoRoute
-  '/docs/commands-usage': typeof DocsDocsCommandsUsageRoute
-  '/docs/getting-started': typeof DocsDocsGettingStartedRoute
-  '/docs/gui': typeof DocsDocsGuiRoute
-  '/docs/keyboard-shortcuts': typeof DocsDocsKeyboardShortcutsRoute
-  '/docs/overview': typeof DocsDocsOverviewRoute
-  '/docs/settings-appearance': typeof DocsDocsSettingsAppearanceRoute
-  '/docs/settings-general': typeof DocsDocsSettingsGeneralRoute
-  '/docs/settings-model': typeof DocsDocsSettingsModelRoute
-  '/docs/settings-oauth': typeof DocsDocsSettingsOauthRoute
-  '/docs/settings-provider': typeof DocsDocsSettingsProviderRoute
-  '/docs/tui': typeof DocsDocsTuiRoute
-  '/docs/tutorial-first-run': typeof DocsDocsTutorialFirstRunRoute
-  '/docs/tutorial-gui-first-run': typeof DocsDocsTutorialGuiFirstRunRoute
-  '/docs/tutorial-oauth': typeof DocsDocsTutorialOauthRoute
-  '/docs/tutorial-provider-model': typeof DocsDocsTutorialProviderModelRoute
+  '/docs/$slug': typeof DocsDocsSlugRoute
+  '/gui/analytics': typeof DocsGuiAnalyticsRoute
+  '/gui/chat-composer': typeof DocsGuiChatComposerRoute
+  '/gui/code-editor': typeof DocsGuiCodeEditorRoute
+  '/gui/extensions': typeof DocsGuiExtensionsRoute
+  '/gui/first-run': typeof DocsGuiFirstRunRoute
+  '/gui/git-diff': typeof DocsGuiGitDiffRoute
+  '/gui/import-graph': typeof DocsGuiImportGraphRoute
+  '/gui/layout': typeof DocsGuiLayoutRoute
+  '/gui/oauth': typeof DocsGuiOauthRoute
+  '/gui/provider-model': typeof DocsGuiProviderModelRoute
+  '/tui/commands-adddir': typeof DocsTuiCommandsAdddirRoute
+  '/tui/commands-agents': typeof DocsTuiCommandsAgentsRoute
+  '/tui/commands-all': typeof DocsTuiCommandsAllRoute
+  '/tui/commands-attach': typeof DocsTuiCommandsAttachRoute
+  '/tui/commands-bash': typeof DocsTuiCommandsBashRoute
+  '/tui/commands-cd': typeof DocsTuiCommandsCdRoute
+  '/tui/commands-clear': typeof DocsTuiCommandsClearRoute
+  '/tui/commands-compact': typeof DocsTuiCommandsCompactRoute
+  '/tui/commands-effort': typeof DocsTuiCommandsEffortRoute
+  '/tui/commands-extension': typeof DocsTuiCommandsExtensionRoute
+  '/tui/commands-free': typeof DocsTuiCommandsFreeRoute
+  '/tui/commands-help': typeof DocsTuiCommandsHelpRoute
+  '/tui/commands-internet': typeof DocsTuiCommandsInternetRoute
+  '/tui/commands-mcp': typeof DocsTuiCommandsMcpRoute
+  '/tui/commands-mode': typeof DocsTuiCommandsModeRoute
+  '/tui/commands-model': typeof DocsTuiCommandsModelRoute
+  '/tui/commands-new': typeof DocsTuiCommandsNewRoute
+  '/tui/commands-quit': typeof DocsTuiCommandsQuitRoute
+  '/tui/commands-remote': typeof DocsTuiCommandsRemoteRoute
+  '/tui/commands-rename': typeof DocsTuiCommandsRenameRoute
+  '/tui/commands-resume': typeof DocsTuiCommandsResumeRoute
+  '/tui/commands-security': typeof DocsTuiCommandsSecurityRoute
+  '/tui/commands-select': typeof DocsTuiCommandsSelectRoute
+  '/tui/commands-skill': typeof DocsTuiCommandsSkillRoute
+  '/tui/commands-store': typeof DocsTuiCommandsStoreRoute
+  '/tui/commands-task': typeof DocsTuiCommandsTaskRoute
+  '/tui/commands-todo': typeof DocsTuiCommandsTodoRoute
+  '/tui/commands-usage': typeof DocsTuiCommandsUsageRoute
+  '/tui/first-run': typeof DocsTuiFirstRunRoute
+  '/tui/keyboard-shortcuts': typeof DocsTuiKeyboardShortcutsRoute
+  '/tui/oauth': typeof DocsTuiOauthRoute
+  '/tui/provider-model': typeof DocsTuiProviderModelRoute
+  '/tui/settings-appearance': typeof DocsTuiSettingsAppearanceRoute
+  '/tui/settings-general': typeof DocsTuiSettingsGeneralRoute
+  '/tui/settings-model': typeof DocsTuiSettingsModelRoute
+  '/tui/settings-oauth': typeof DocsTuiSettingsOauthRoute
+  '/tui/settings-provider': typeof DocsTuiSettingsProviderRoute
+  '/welcome/architecture': typeof DocsWelcomeArchitectureRoute
+  '/welcome/getting-started': typeof DocsWelcomeGettingStartedRoute
+  '/docs': typeof DocsDocsIndexRoute
+  '/gui': typeof DocsGuiIndexRoute
+  '/tui': typeof DocsTuiIndexRoute
+  '/welcome': typeof DocsWelcomeIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_docs': typeof DocsRouteWithChildren
   '/_docs/docs': typeof DocsDocsRouteWithChildren
-  '/_docs/docs/architecture': typeof DocsDocsArchitectureRoute
-  '/_docs/docs/commands-adddir': typeof DocsDocsCommandsAdddirRoute
-  '/_docs/docs/commands-agents': typeof DocsDocsCommandsAgentsRoute
-  '/_docs/docs/commands-all': typeof DocsDocsCommandsAllRoute
-  '/_docs/docs/commands-attach': typeof DocsDocsCommandsAttachRoute
-  '/_docs/docs/commands-bash': typeof DocsDocsCommandsBashRoute
-  '/_docs/docs/commands-cd': typeof DocsDocsCommandsCdRoute
-  '/_docs/docs/commands-clear': typeof DocsDocsCommandsClearRoute
-  '/_docs/docs/commands-compact': typeof DocsDocsCommandsCompactRoute
-  '/_docs/docs/commands-effort': typeof DocsDocsCommandsEffortRoute
-  '/_docs/docs/commands-extension': typeof DocsDocsCommandsExtensionRoute
-  '/_docs/docs/commands-free': typeof DocsDocsCommandsFreeRoute
-  '/_docs/docs/commands-help': typeof DocsDocsCommandsHelpRoute
-  '/_docs/docs/commands-internet': typeof DocsDocsCommandsInternetRoute
-  '/_docs/docs/commands-mcp': typeof DocsDocsCommandsMcpRoute
-  '/_docs/docs/commands-mode': typeof DocsDocsCommandsModeRoute
-  '/_docs/docs/commands-model': typeof DocsDocsCommandsModelRoute
-  '/_docs/docs/commands-new': typeof DocsDocsCommandsNewRoute
-  '/_docs/docs/commands-quit': typeof DocsDocsCommandsQuitRoute
-  '/_docs/docs/commands-remote': typeof DocsDocsCommandsRemoteRoute
-  '/_docs/docs/commands-rename': typeof DocsDocsCommandsRenameRoute
-  '/_docs/docs/commands-resume': typeof DocsDocsCommandsResumeRoute
-  '/_docs/docs/commands-security': typeof DocsDocsCommandsSecurityRoute
-  '/_docs/docs/commands-select': typeof DocsDocsCommandsSelectRoute
-  '/_docs/docs/commands-skill': typeof DocsDocsCommandsSkillRoute
-  '/_docs/docs/commands-store': typeof DocsDocsCommandsStoreRoute
-  '/_docs/docs/commands-task': typeof DocsDocsCommandsTaskRoute
-  '/_docs/docs/commands-todo': typeof DocsDocsCommandsTodoRoute
-  '/_docs/docs/commands-usage': typeof DocsDocsCommandsUsageRoute
-  '/_docs/docs/getting-started': typeof DocsDocsGettingStartedRoute
-  '/_docs/docs/gui': typeof DocsDocsGuiRoute
-  '/_docs/docs/keyboard-shortcuts': typeof DocsDocsKeyboardShortcutsRoute
-  '/_docs/docs/overview': typeof DocsDocsOverviewRoute
-  '/_docs/docs/settings-appearance': typeof DocsDocsSettingsAppearanceRoute
-  '/_docs/docs/settings-general': typeof DocsDocsSettingsGeneralRoute
-  '/_docs/docs/settings-model': typeof DocsDocsSettingsModelRoute
-  '/_docs/docs/settings-oauth': typeof DocsDocsSettingsOauthRoute
-  '/_docs/docs/settings-provider': typeof DocsDocsSettingsProviderRoute
-  '/_docs/docs/tui': typeof DocsDocsTuiRoute
-  '/_docs/docs/tutorial-first-run': typeof DocsDocsTutorialFirstRunRoute
-  '/_docs/docs/tutorial-gui-first-run': typeof DocsDocsTutorialGuiFirstRunRoute
-  '/_docs/docs/tutorial-oauth': typeof DocsDocsTutorialOauthRoute
-  '/_docs/docs/tutorial-provider-model': typeof DocsDocsTutorialProviderModelRoute
+  '/_docs/gui': typeof DocsGuiRouteWithChildren
+  '/_docs/tui': typeof DocsTuiRouteWithChildren
+  '/_docs/welcome': typeof DocsWelcomeRouteWithChildren
+  '/_docs/docs/$slug': typeof DocsDocsSlugRoute
+  '/_docs/gui/analytics': typeof DocsGuiAnalyticsRoute
+  '/_docs/gui/chat-composer': typeof DocsGuiChatComposerRoute
+  '/_docs/gui/code-editor': typeof DocsGuiCodeEditorRoute
+  '/_docs/gui/extensions': typeof DocsGuiExtensionsRoute
+  '/_docs/gui/first-run': typeof DocsGuiFirstRunRoute
+  '/_docs/gui/git-diff': typeof DocsGuiGitDiffRoute
+  '/_docs/gui/import-graph': typeof DocsGuiImportGraphRoute
+  '/_docs/gui/layout': typeof DocsGuiLayoutRoute
+  '/_docs/gui/oauth': typeof DocsGuiOauthRoute
+  '/_docs/gui/provider-model': typeof DocsGuiProviderModelRoute
+  '/_docs/tui/commands-adddir': typeof DocsTuiCommandsAdddirRoute
+  '/_docs/tui/commands-agents': typeof DocsTuiCommandsAgentsRoute
+  '/_docs/tui/commands-all': typeof DocsTuiCommandsAllRoute
+  '/_docs/tui/commands-attach': typeof DocsTuiCommandsAttachRoute
+  '/_docs/tui/commands-bash': typeof DocsTuiCommandsBashRoute
+  '/_docs/tui/commands-cd': typeof DocsTuiCommandsCdRoute
+  '/_docs/tui/commands-clear': typeof DocsTuiCommandsClearRoute
+  '/_docs/tui/commands-compact': typeof DocsTuiCommandsCompactRoute
+  '/_docs/tui/commands-effort': typeof DocsTuiCommandsEffortRoute
+  '/_docs/tui/commands-extension': typeof DocsTuiCommandsExtensionRoute
+  '/_docs/tui/commands-free': typeof DocsTuiCommandsFreeRoute
+  '/_docs/tui/commands-help': typeof DocsTuiCommandsHelpRoute
+  '/_docs/tui/commands-internet': typeof DocsTuiCommandsInternetRoute
+  '/_docs/tui/commands-mcp': typeof DocsTuiCommandsMcpRoute
+  '/_docs/tui/commands-mode': typeof DocsTuiCommandsModeRoute
+  '/_docs/tui/commands-model': typeof DocsTuiCommandsModelRoute
+  '/_docs/tui/commands-new': typeof DocsTuiCommandsNewRoute
+  '/_docs/tui/commands-quit': typeof DocsTuiCommandsQuitRoute
+  '/_docs/tui/commands-remote': typeof DocsTuiCommandsRemoteRoute
+  '/_docs/tui/commands-rename': typeof DocsTuiCommandsRenameRoute
+  '/_docs/tui/commands-resume': typeof DocsTuiCommandsResumeRoute
+  '/_docs/tui/commands-security': typeof DocsTuiCommandsSecurityRoute
+  '/_docs/tui/commands-select': typeof DocsTuiCommandsSelectRoute
+  '/_docs/tui/commands-skill': typeof DocsTuiCommandsSkillRoute
+  '/_docs/tui/commands-store': typeof DocsTuiCommandsStoreRoute
+  '/_docs/tui/commands-task': typeof DocsTuiCommandsTaskRoute
+  '/_docs/tui/commands-todo': typeof DocsTuiCommandsTodoRoute
+  '/_docs/tui/commands-usage': typeof DocsTuiCommandsUsageRoute
+  '/_docs/tui/first-run': typeof DocsTuiFirstRunRoute
+  '/_docs/tui/keyboard-shortcuts': typeof DocsTuiKeyboardShortcutsRoute
+  '/_docs/tui/oauth': typeof DocsTuiOauthRoute
+  '/_docs/tui/provider-model': typeof DocsTuiProviderModelRoute
+  '/_docs/tui/settings-appearance': typeof DocsTuiSettingsAppearanceRoute
+  '/_docs/tui/settings-general': typeof DocsTuiSettingsGeneralRoute
+  '/_docs/tui/settings-model': typeof DocsTuiSettingsModelRoute
+  '/_docs/tui/settings-oauth': typeof DocsTuiSettingsOauthRoute
+  '/_docs/tui/settings-provider': typeof DocsTuiSettingsProviderRoute
+  '/_docs/welcome/architecture': typeof DocsWelcomeArchitectureRoute
+  '/_docs/welcome/getting-started': typeof DocsWelcomeGettingStartedRoute
+  '/_docs/docs/': typeof DocsDocsIndexRoute
+  '/_docs/gui/': typeof DocsGuiIndexRoute
+  '/_docs/tui/': typeof DocsTuiIndexRoute
+  '/_docs/welcome/': typeof DocsWelcomeIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/docs'
-    | '/docs/architecture'
-    | '/docs/commands-adddir'
-    | '/docs/commands-agents'
-    | '/docs/commands-all'
-    | '/docs/commands-attach'
-    | '/docs/commands-bash'
-    | '/docs/commands-cd'
-    | '/docs/commands-clear'
-    | '/docs/commands-compact'
-    | '/docs/commands-effort'
-    | '/docs/commands-extension'
-    | '/docs/commands-free'
-    | '/docs/commands-help'
-    | '/docs/commands-internet'
-    | '/docs/commands-mcp'
-    | '/docs/commands-mode'
-    | '/docs/commands-model'
-    | '/docs/commands-new'
-    | '/docs/commands-quit'
-    | '/docs/commands-remote'
-    | '/docs/commands-rename'
-    | '/docs/commands-resume'
-    | '/docs/commands-security'
-    | '/docs/commands-select'
-    | '/docs/commands-skill'
-    | '/docs/commands-store'
-    | '/docs/commands-task'
-    | '/docs/commands-todo'
-    | '/docs/commands-usage'
-    | '/docs/getting-started'
-    | '/docs/gui'
-    | '/docs/keyboard-shortcuts'
-    | '/docs/overview'
-    | '/docs/settings-appearance'
-    | '/docs/settings-general'
-    | '/docs/settings-model'
-    | '/docs/settings-oauth'
-    | '/docs/settings-provider'
-    | '/docs/tui'
-    | '/docs/tutorial-first-run'
-    | '/docs/tutorial-gui-first-run'
-    | '/docs/tutorial-oauth'
-    | '/docs/tutorial-provider-model'
+    | '/gui'
+    | '/tui'
+    | '/welcome'
+    | '/docs/$slug'
+    | '/gui/analytics'
+    | '/gui/chat-composer'
+    | '/gui/code-editor'
+    | '/gui/extensions'
+    | '/gui/first-run'
+    | '/gui/git-diff'
+    | '/gui/import-graph'
+    | '/gui/layout'
+    | '/gui/oauth'
+    | '/gui/provider-model'
+    | '/tui/commands-adddir'
+    | '/tui/commands-agents'
+    | '/tui/commands-all'
+    | '/tui/commands-attach'
+    | '/tui/commands-bash'
+    | '/tui/commands-cd'
+    | '/tui/commands-clear'
+    | '/tui/commands-compact'
+    | '/tui/commands-effort'
+    | '/tui/commands-extension'
+    | '/tui/commands-free'
+    | '/tui/commands-help'
+    | '/tui/commands-internet'
+    | '/tui/commands-mcp'
+    | '/tui/commands-mode'
+    | '/tui/commands-model'
+    | '/tui/commands-new'
+    | '/tui/commands-quit'
+    | '/tui/commands-remote'
+    | '/tui/commands-rename'
+    | '/tui/commands-resume'
+    | '/tui/commands-security'
+    | '/tui/commands-select'
+    | '/tui/commands-skill'
+    | '/tui/commands-store'
+    | '/tui/commands-task'
+    | '/tui/commands-todo'
+    | '/tui/commands-usage'
+    | '/tui/first-run'
+    | '/tui/keyboard-shortcuts'
+    | '/tui/oauth'
+    | '/tui/provider-model'
+    | '/tui/settings-appearance'
+    | '/tui/settings-general'
+    | '/tui/settings-model'
+    | '/tui/settings-oauth'
+    | '/tui/settings-provider'
+    | '/welcome/architecture'
+    | '/welcome/getting-started'
+    | '/docs/'
+    | '/gui/'
+    | '/tui/'
+    | '/welcome/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/docs/$slug'
+    | '/gui/analytics'
+    | '/gui/chat-composer'
+    | '/gui/code-editor'
+    | '/gui/extensions'
+    | '/gui/first-run'
+    | '/gui/git-diff'
+    | '/gui/import-graph'
+    | '/gui/layout'
+    | '/gui/oauth'
+    | '/gui/provider-model'
+    | '/tui/commands-adddir'
+    | '/tui/commands-agents'
+    | '/tui/commands-all'
+    | '/tui/commands-attach'
+    | '/tui/commands-bash'
+    | '/tui/commands-cd'
+    | '/tui/commands-clear'
+    | '/tui/commands-compact'
+    | '/tui/commands-effort'
+    | '/tui/commands-extension'
+    | '/tui/commands-free'
+    | '/tui/commands-help'
+    | '/tui/commands-internet'
+    | '/tui/commands-mcp'
+    | '/tui/commands-mode'
+    | '/tui/commands-model'
+    | '/tui/commands-new'
+    | '/tui/commands-quit'
+    | '/tui/commands-remote'
+    | '/tui/commands-rename'
+    | '/tui/commands-resume'
+    | '/tui/commands-security'
+    | '/tui/commands-select'
+    | '/tui/commands-skill'
+    | '/tui/commands-store'
+    | '/tui/commands-task'
+    | '/tui/commands-todo'
+    | '/tui/commands-usage'
+    | '/tui/first-run'
+    | '/tui/keyboard-shortcuts'
+    | '/tui/oauth'
+    | '/tui/provider-model'
+    | '/tui/settings-appearance'
+    | '/tui/settings-general'
+    | '/tui/settings-model'
+    | '/tui/settings-oauth'
+    | '/tui/settings-provider'
+    | '/welcome/architecture'
+    | '/welcome/getting-started'
     | '/docs'
-    | '/docs/architecture'
-    | '/docs/commands-adddir'
-    | '/docs/commands-agents'
-    | '/docs/commands-all'
-    | '/docs/commands-attach'
-    | '/docs/commands-bash'
-    | '/docs/commands-cd'
-    | '/docs/commands-clear'
-    | '/docs/commands-compact'
-    | '/docs/commands-effort'
-    | '/docs/commands-extension'
-    | '/docs/commands-free'
-    | '/docs/commands-help'
-    | '/docs/commands-internet'
-    | '/docs/commands-mcp'
-    | '/docs/commands-mode'
-    | '/docs/commands-model'
-    | '/docs/commands-new'
-    | '/docs/commands-quit'
-    | '/docs/commands-remote'
-    | '/docs/commands-rename'
-    | '/docs/commands-resume'
-    | '/docs/commands-security'
-    | '/docs/commands-select'
-    | '/docs/commands-skill'
-    | '/docs/commands-store'
-    | '/docs/commands-task'
-    | '/docs/commands-todo'
-    | '/docs/commands-usage'
-    | '/docs/getting-started'
-    | '/docs/gui'
-    | '/docs/keyboard-shortcuts'
-    | '/docs/overview'
-    | '/docs/settings-appearance'
-    | '/docs/settings-general'
-    | '/docs/settings-model'
-    | '/docs/settings-oauth'
-    | '/docs/settings-provider'
-    | '/docs/tui'
-    | '/docs/tutorial-first-run'
-    | '/docs/tutorial-gui-first-run'
-    | '/docs/tutorial-oauth'
-    | '/docs/tutorial-provider-model'
+    | '/gui'
+    | '/tui'
+    | '/welcome'
   id:
     | '__root__'
     | '/'
     | '/_docs'
     | '/_docs/docs'
-    | '/_docs/docs/architecture'
-    | '/_docs/docs/commands-adddir'
-    | '/_docs/docs/commands-agents'
-    | '/_docs/docs/commands-all'
-    | '/_docs/docs/commands-attach'
-    | '/_docs/docs/commands-bash'
-    | '/_docs/docs/commands-cd'
-    | '/_docs/docs/commands-clear'
-    | '/_docs/docs/commands-compact'
-    | '/_docs/docs/commands-effort'
-    | '/_docs/docs/commands-extension'
-    | '/_docs/docs/commands-free'
-    | '/_docs/docs/commands-help'
-    | '/_docs/docs/commands-internet'
-    | '/_docs/docs/commands-mcp'
-    | '/_docs/docs/commands-mode'
-    | '/_docs/docs/commands-model'
-    | '/_docs/docs/commands-new'
-    | '/_docs/docs/commands-quit'
-    | '/_docs/docs/commands-remote'
-    | '/_docs/docs/commands-rename'
-    | '/_docs/docs/commands-resume'
-    | '/_docs/docs/commands-security'
-    | '/_docs/docs/commands-select'
-    | '/_docs/docs/commands-skill'
-    | '/_docs/docs/commands-store'
-    | '/_docs/docs/commands-task'
-    | '/_docs/docs/commands-todo'
-    | '/_docs/docs/commands-usage'
-    | '/_docs/docs/getting-started'
-    | '/_docs/docs/gui'
-    | '/_docs/docs/keyboard-shortcuts'
-    | '/_docs/docs/overview'
-    | '/_docs/docs/settings-appearance'
-    | '/_docs/docs/settings-general'
-    | '/_docs/docs/settings-model'
-    | '/_docs/docs/settings-oauth'
-    | '/_docs/docs/settings-provider'
-    | '/_docs/docs/tui'
-    | '/_docs/docs/tutorial-first-run'
-    | '/_docs/docs/tutorial-gui-first-run'
-    | '/_docs/docs/tutorial-oauth'
-    | '/_docs/docs/tutorial-provider-model'
+    | '/_docs/gui'
+    | '/_docs/tui'
+    | '/_docs/welcome'
+    | '/_docs/docs/$slug'
+    | '/_docs/gui/analytics'
+    | '/_docs/gui/chat-composer'
+    | '/_docs/gui/code-editor'
+    | '/_docs/gui/extensions'
+    | '/_docs/gui/first-run'
+    | '/_docs/gui/git-diff'
+    | '/_docs/gui/import-graph'
+    | '/_docs/gui/layout'
+    | '/_docs/gui/oauth'
+    | '/_docs/gui/provider-model'
+    | '/_docs/tui/commands-adddir'
+    | '/_docs/tui/commands-agents'
+    | '/_docs/tui/commands-all'
+    | '/_docs/tui/commands-attach'
+    | '/_docs/tui/commands-bash'
+    | '/_docs/tui/commands-cd'
+    | '/_docs/tui/commands-clear'
+    | '/_docs/tui/commands-compact'
+    | '/_docs/tui/commands-effort'
+    | '/_docs/tui/commands-extension'
+    | '/_docs/tui/commands-free'
+    | '/_docs/tui/commands-help'
+    | '/_docs/tui/commands-internet'
+    | '/_docs/tui/commands-mcp'
+    | '/_docs/tui/commands-mode'
+    | '/_docs/tui/commands-model'
+    | '/_docs/tui/commands-new'
+    | '/_docs/tui/commands-quit'
+    | '/_docs/tui/commands-remote'
+    | '/_docs/tui/commands-rename'
+    | '/_docs/tui/commands-resume'
+    | '/_docs/tui/commands-security'
+    | '/_docs/tui/commands-select'
+    | '/_docs/tui/commands-skill'
+    | '/_docs/tui/commands-store'
+    | '/_docs/tui/commands-task'
+    | '/_docs/tui/commands-todo'
+    | '/_docs/tui/commands-usage'
+    | '/_docs/tui/first-run'
+    | '/_docs/tui/keyboard-shortcuts'
+    | '/_docs/tui/oauth'
+    | '/_docs/tui/provider-model'
+    | '/_docs/tui/settings-appearance'
+    | '/_docs/tui/settings-general'
+    | '/_docs/tui/settings-model'
+    | '/_docs/tui/settings-oauth'
+    | '/_docs/tui/settings-provider'
+    | '/_docs/welcome/architecture'
+    | '/_docs/welcome/getting-started'
+    | '/_docs/docs/'
+    | '/_docs/gui/'
+    | '/_docs/tui/'
+    | '/_docs/welcome/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -611,412 +766,566 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsDocsRouteImport
       parentRoute: typeof DocsRoute
     }
-    '/_docs/docs/architecture': {
-      id: '/_docs/docs/architecture'
-      path: '/architecture'
-      fullPath: '/docs/architecture'
-      preLoaderRoute: typeof DocsDocsArchitectureRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-adddir': {
-      id: '/_docs/docs/commands-adddir'
-      path: '/commands-adddir'
-      fullPath: '/docs/commands-adddir'
-      preLoaderRoute: typeof DocsDocsCommandsAdddirRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-agents': {
-      id: '/_docs/docs/commands-agents'
-      path: '/commands-agents'
-      fullPath: '/docs/commands-agents'
-      preLoaderRoute: typeof DocsDocsCommandsAgentsRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-all': {
-      id: '/_docs/docs/commands-all'
-      path: '/commands-all'
-      fullPath: '/docs/commands-all'
-      preLoaderRoute: typeof DocsDocsCommandsAllRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-attach': {
-      id: '/_docs/docs/commands-attach'
-      path: '/commands-attach'
-      fullPath: '/docs/commands-attach'
-      preLoaderRoute: typeof DocsDocsCommandsAttachRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-bash': {
-      id: '/_docs/docs/commands-bash'
-      path: '/commands-bash'
-      fullPath: '/docs/commands-bash'
-      preLoaderRoute: typeof DocsDocsCommandsBashRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-cd': {
-      id: '/_docs/docs/commands-cd'
-      path: '/commands-cd'
-      fullPath: '/docs/commands-cd'
-      preLoaderRoute: typeof DocsDocsCommandsCdRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-clear': {
-      id: '/_docs/docs/commands-clear'
-      path: '/commands-clear'
-      fullPath: '/docs/commands-clear'
-      preLoaderRoute: typeof DocsDocsCommandsClearRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-compact': {
-      id: '/_docs/docs/commands-compact'
-      path: '/commands-compact'
-      fullPath: '/docs/commands-compact'
-      preLoaderRoute: typeof DocsDocsCommandsCompactRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-effort': {
-      id: '/_docs/docs/commands-effort'
-      path: '/commands-effort'
-      fullPath: '/docs/commands-effort'
-      preLoaderRoute: typeof DocsDocsCommandsEffortRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-extension': {
-      id: '/_docs/docs/commands-extension'
-      path: '/commands-extension'
-      fullPath: '/docs/commands-extension'
-      preLoaderRoute: typeof DocsDocsCommandsExtensionRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-free': {
-      id: '/_docs/docs/commands-free'
-      path: '/commands-free'
-      fullPath: '/docs/commands-free'
-      preLoaderRoute: typeof DocsDocsCommandsFreeRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-help': {
-      id: '/_docs/docs/commands-help'
-      path: '/commands-help'
-      fullPath: '/docs/commands-help'
-      preLoaderRoute: typeof DocsDocsCommandsHelpRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-internet': {
-      id: '/_docs/docs/commands-internet'
-      path: '/commands-internet'
-      fullPath: '/docs/commands-internet'
-      preLoaderRoute: typeof DocsDocsCommandsInternetRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-mcp': {
-      id: '/_docs/docs/commands-mcp'
-      path: '/commands-mcp'
-      fullPath: '/docs/commands-mcp'
-      preLoaderRoute: typeof DocsDocsCommandsMcpRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-mode': {
-      id: '/_docs/docs/commands-mode'
-      path: '/commands-mode'
-      fullPath: '/docs/commands-mode'
-      preLoaderRoute: typeof DocsDocsCommandsModeRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-model': {
-      id: '/_docs/docs/commands-model'
-      path: '/commands-model'
-      fullPath: '/docs/commands-model'
-      preLoaderRoute: typeof DocsDocsCommandsModelRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-new': {
-      id: '/_docs/docs/commands-new'
-      path: '/commands-new'
-      fullPath: '/docs/commands-new'
-      preLoaderRoute: typeof DocsDocsCommandsNewRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-quit': {
-      id: '/_docs/docs/commands-quit'
-      path: '/commands-quit'
-      fullPath: '/docs/commands-quit'
-      preLoaderRoute: typeof DocsDocsCommandsQuitRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-remote': {
-      id: '/_docs/docs/commands-remote'
-      path: '/commands-remote'
-      fullPath: '/docs/commands-remote'
-      preLoaderRoute: typeof DocsDocsCommandsRemoteRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-rename': {
-      id: '/_docs/docs/commands-rename'
-      path: '/commands-rename'
-      fullPath: '/docs/commands-rename'
-      preLoaderRoute: typeof DocsDocsCommandsRenameRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-resume': {
-      id: '/_docs/docs/commands-resume'
-      path: '/commands-resume'
-      fullPath: '/docs/commands-resume'
-      preLoaderRoute: typeof DocsDocsCommandsResumeRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-security': {
-      id: '/_docs/docs/commands-security'
-      path: '/commands-security'
-      fullPath: '/docs/commands-security'
-      preLoaderRoute: typeof DocsDocsCommandsSecurityRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-select': {
-      id: '/_docs/docs/commands-select'
-      path: '/commands-select'
-      fullPath: '/docs/commands-select'
-      preLoaderRoute: typeof DocsDocsCommandsSelectRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-skill': {
-      id: '/_docs/docs/commands-skill'
-      path: '/commands-skill'
-      fullPath: '/docs/commands-skill'
-      preLoaderRoute: typeof DocsDocsCommandsSkillRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-store': {
-      id: '/_docs/docs/commands-store'
-      path: '/commands-store'
-      fullPath: '/docs/commands-store'
-      preLoaderRoute: typeof DocsDocsCommandsStoreRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-task': {
-      id: '/_docs/docs/commands-task'
-      path: '/commands-task'
-      fullPath: '/docs/commands-task'
-      preLoaderRoute: typeof DocsDocsCommandsTaskRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-todo': {
-      id: '/_docs/docs/commands-todo'
-      path: '/commands-todo'
-      fullPath: '/docs/commands-todo'
-      preLoaderRoute: typeof DocsDocsCommandsTodoRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/commands-usage': {
-      id: '/_docs/docs/commands-usage'
-      path: '/commands-usage'
-      fullPath: '/docs/commands-usage'
-      preLoaderRoute: typeof DocsDocsCommandsUsageRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/getting-started': {
-      id: '/_docs/docs/getting-started'
-      path: '/getting-started'
-      fullPath: '/docs/getting-started'
-      preLoaderRoute: typeof DocsDocsGettingStartedRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/gui': {
-      id: '/_docs/docs/gui'
+    '/_docs/gui': {
+      id: '/_docs/gui'
       path: '/gui'
-      fullPath: '/docs/gui'
-      preLoaderRoute: typeof DocsDocsGuiRouteImport
-      parentRoute: typeof DocsDocsRoute
+      fullPath: '/gui'
+      preLoaderRoute: typeof DocsGuiRouteImport
+      parentRoute: typeof DocsRoute
     }
-    '/_docs/docs/keyboard-shortcuts': {
-      id: '/_docs/docs/keyboard-shortcuts'
-      path: '/keyboard-shortcuts'
-      fullPath: '/docs/keyboard-shortcuts'
-      preLoaderRoute: typeof DocsDocsKeyboardShortcutsRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/overview': {
-      id: '/_docs/docs/overview'
-      path: '/overview'
-      fullPath: '/docs/overview'
-      preLoaderRoute: typeof DocsDocsOverviewRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/settings-appearance': {
-      id: '/_docs/docs/settings-appearance'
-      path: '/settings-appearance'
-      fullPath: '/docs/settings-appearance'
-      preLoaderRoute: typeof DocsDocsSettingsAppearanceRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/settings-general': {
-      id: '/_docs/docs/settings-general'
-      path: '/settings-general'
-      fullPath: '/docs/settings-general'
-      preLoaderRoute: typeof DocsDocsSettingsGeneralRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/settings-model': {
-      id: '/_docs/docs/settings-model'
-      path: '/settings-model'
-      fullPath: '/docs/settings-model'
-      preLoaderRoute: typeof DocsDocsSettingsModelRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/settings-oauth': {
-      id: '/_docs/docs/settings-oauth'
-      path: '/settings-oauth'
-      fullPath: '/docs/settings-oauth'
-      preLoaderRoute: typeof DocsDocsSettingsOauthRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/settings-provider': {
-      id: '/_docs/docs/settings-provider'
-      path: '/settings-provider'
-      fullPath: '/docs/settings-provider'
-      preLoaderRoute: typeof DocsDocsSettingsProviderRouteImport
-      parentRoute: typeof DocsDocsRoute
-    }
-    '/_docs/docs/tui': {
-      id: '/_docs/docs/tui'
+    '/_docs/tui': {
+      id: '/_docs/tui'
       path: '/tui'
-      fullPath: '/docs/tui'
-      preLoaderRoute: typeof DocsDocsTuiRouteImport
+      fullPath: '/tui'
+      preLoaderRoute: typeof DocsTuiRouteImport
+      parentRoute: typeof DocsRoute
+    }
+    '/_docs/welcome': {
+      id: '/_docs/welcome'
+      path: '/welcome'
+      fullPath: '/welcome'
+      preLoaderRoute: typeof DocsWelcomeRouteImport
+      parentRoute: typeof DocsRoute
+    }
+    '/_docs/docs/': {
+      id: '/_docs/docs/'
+      path: '/'
+      fullPath: '/docs/'
+      preLoaderRoute: typeof DocsDocsIndexRouteImport
       parentRoute: typeof DocsDocsRoute
     }
-    '/_docs/docs/tutorial-first-run': {
-      id: '/_docs/docs/tutorial-first-run'
-      path: '/tutorial-first-run'
-      fullPath: '/docs/tutorial-first-run'
-      preLoaderRoute: typeof DocsDocsTutorialFirstRunRouteImport
+    '/_docs/docs/$slug': {
+      id: '/_docs/docs/$slug'
+      path: '/$slug'
+      fullPath: '/docs/$slug'
+      preLoaderRoute: typeof DocsDocsSlugRouteImport
       parentRoute: typeof DocsDocsRoute
     }
-    '/_docs/docs/tutorial-gui-first-run': {
-      id: '/_docs/docs/tutorial-gui-first-run'
-      path: '/tutorial-gui-first-run'
-      fullPath: '/docs/tutorial-gui-first-run'
-      preLoaderRoute: typeof DocsDocsTutorialGuiFirstRunRouteImport
-      parentRoute: typeof DocsDocsRoute
+    '/_docs/gui/': {
+      id: '/_docs/gui/'
+      path: '/'
+      fullPath: '/gui/'
+      preLoaderRoute: typeof DocsGuiIndexRouteImport
+      parentRoute: typeof DocsGuiRoute
     }
-    '/_docs/docs/tutorial-oauth': {
-      id: '/_docs/docs/tutorial-oauth'
-      path: '/tutorial-oauth'
-      fullPath: '/docs/tutorial-oauth'
-      preLoaderRoute: typeof DocsDocsTutorialOauthRouteImport
-      parentRoute: typeof DocsDocsRoute
+    '/_docs/gui/analytics': {
+      id: '/_docs/gui/analytics'
+      path: '/analytics'
+      fullPath: '/gui/analytics'
+      preLoaderRoute: typeof DocsGuiAnalyticsRouteImport
+      parentRoute: typeof DocsGuiRoute
     }
-    '/_docs/docs/tutorial-provider-model': {
-      id: '/_docs/docs/tutorial-provider-model'
-      path: '/tutorial-provider-model'
-      fullPath: '/docs/tutorial-provider-model'
-      preLoaderRoute: typeof DocsDocsTutorialProviderModelRouteImport
-      parentRoute: typeof DocsDocsRoute
+    '/_docs/gui/chat-composer': {
+      id: '/_docs/gui/chat-composer'
+      path: '/chat-composer'
+      fullPath: '/gui/chat-composer'
+      preLoaderRoute: typeof DocsGuiChatComposerRouteImport
+      parentRoute: typeof DocsGuiRoute
+    }
+    '/_docs/gui/code-editor': {
+      id: '/_docs/gui/code-editor'
+      path: '/code-editor'
+      fullPath: '/gui/code-editor'
+      preLoaderRoute: typeof DocsGuiCodeEditorRouteImport
+      parentRoute: typeof DocsGuiRoute
+    }
+    '/_docs/gui/extensions': {
+      id: '/_docs/gui/extensions'
+      path: '/extensions'
+      fullPath: '/gui/extensions'
+      preLoaderRoute: typeof DocsGuiExtensionsRouteImport
+      parentRoute: typeof DocsGuiRoute
+    }
+    '/_docs/gui/first-run': {
+      id: '/_docs/gui/first-run'
+      path: '/first-run'
+      fullPath: '/gui/first-run'
+      preLoaderRoute: typeof DocsGuiFirstRunRouteImport
+      parentRoute: typeof DocsGuiRoute
+    }
+    '/_docs/gui/git-diff': {
+      id: '/_docs/gui/git-diff'
+      path: '/git-diff'
+      fullPath: '/gui/git-diff'
+      preLoaderRoute: typeof DocsGuiGitDiffRouteImport
+      parentRoute: typeof DocsGuiRoute
+    }
+    '/_docs/gui/import-graph': {
+      id: '/_docs/gui/import-graph'
+      path: '/import-graph'
+      fullPath: '/gui/import-graph'
+      preLoaderRoute: typeof DocsGuiImportGraphRouteImport
+      parentRoute: typeof DocsGuiRoute
+    }
+    '/_docs/gui/layout': {
+      id: '/_docs/gui/layout'
+      path: '/layout'
+      fullPath: '/gui/layout'
+      preLoaderRoute: typeof DocsGuiLayoutRouteImport
+      parentRoute: typeof DocsGuiRoute
+    }
+    '/_docs/gui/oauth': {
+      id: '/_docs/gui/oauth'
+      path: '/oauth'
+      fullPath: '/gui/oauth'
+      preLoaderRoute: typeof DocsGuiOauthRouteImport
+      parentRoute: typeof DocsGuiRoute
+    }
+    '/_docs/gui/provider-model': {
+      id: '/_docs/gui/provider-model'
+      path: '/provider-model'
+      fullPath: '/gui/provider-model'
+      preLoaderRoute: typeof DocsGuiProviderModelRouteImport
+      parentRoute: typeof DocsGuiRoute
+    }
+    '/_docs/tui/': {
+      id: '/_docs/tui/'
+      path: '/'
+      fullPath: '/tui/'
+      preLoaderRoute: typeof DocsTuiIndexRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-adddir': {
+      id: '/_docs/tui/commands-adddir'
+      path: '/commands-adddir'
+      fullPath: '/tui/commands-adddir'
+      preLoaderRoute: typeof DocsTuiCommandsAdddirRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-agents': {
+      id: '/_docs/tui/commands-agents'
+      path: '/commands-agents'
+      fullPath: '/tui/commands-agents'
+      preLoaderRoute: typeof DocsTuiCommandsAgentsRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-all': {
+      id: '/_docs/tui/commands-all'
+      path: '/commands-all'
+      fullPath: '/tui/commands-all'
+      preLoaderRoute: typeof DocsTuiCommandsAllRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-attach': {
+      id: '/_docs/tui/commands-attach'
+      path: '/commands-attach'
+      fullPath: '/tui/commands-attach'
+      preLoaderRoute: typeof DocsTuiCommandsAttachRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-bash': {
+      id: '/_docs/tui/commands-bash'
+      path: '/commands-bash'
+      fullPath: '/tui/commands-bash'
+      preLoaderRoute: typeof DocsTuiCommandsBashRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-cd': {
+      id: '/_docs/tui/commands-cd'
+      path: '/commands-cd'
+      fullPath: '/tui/commands-cd'
+      preLoaderRoute: typeof DocsTuiCommandsCdRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-clear': {
+      id: '/_docs/tui/commands-clear'
+      path: '/commands-clear'
+      fullPath: '/tui/commands-clear'
+      preLoaderRoute: typeof DocsTuiCommandsClearRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-compact': {
+      id: '/_docs/tui/commands-compact'
+      path: '/commands-compact'
+      fullPath: '/tui/commands-compact'
+      preLoaderRoute: typeof DocsTuiCommandsCompactRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-effort': {
+      id: '/_docs/tui/commands-effort'
+      path: '/commands-effort'
+      fullPath: '/tui/commands-effort'
+      preLoaderRoute: typeof DocsTuiCommandsEffortRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-extension': {
+      id: '/_docs/tui/commands-extension'
+      path: '/commands-extension'
+      fullPath: '/tui/commands-extension'
+      preLoaderRoute: typeof DocsTuiCommandsExtensionRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-free': {
+      id: '/_docs/tui/commands-free'
+      path: '/commands-free'
+      fullPath: '/tui/commands-free'
+      preLoaderRoute: typeof DocsTuiCommandsFreeRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-help': {
+      id: '/_docs/tui/commands-help'
+      path: '/commands-help'
+      fullPath: '/tui/commands-help'
+      preLoaderRoute: typeof DocsTuiCommandsHelpRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-internet': {
+      id: '/_docs/tui/commands-internet'
+      path: '/commands-internet'
+      fullPath: '/tui/commands-internet'
+      preLoaderRoute: typeof DocsTuiCommandsInternetRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-mcp': {
+      id: '/_docs/tui/commands-mcp'
+      path: '/commands-mcp'
+      fullPath: '/tui/commands-mcp'
+      preLoaderRoute: typeof DocsTuiCommandsMcpRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-mode': {
+      id: '/_docs/tui/commands-mode'
+      path: '/commands-mode'
+      fullPath: '/tui/commands-mode'
+      preLoaderRoute: typeof DocsTuiCommandsModeRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-model': {
+      id: '/_docs/tui/commands-model'
+      path: '/commands-model'
+      fullPath: '/tui/commands-model'
+      preLoaderRoute: typeof DocsTuiCommandsModelRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-new': {
+      id: '/_docs/tui/commands-new'
+      path: '/commands-new'
+      fullPath: '/tui/commands-new'
+      preLoaderRoute: typeof DocsTuiCommandsNewRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-quit': {
+      id: '/_docs/tui/commands-quit'
+      path: '/commands-quit'
+      fullPath: '/tui/commands-quit'
+      preLoaderRoute: typeof DocsTuiCommandsQuitRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-remote': {
+      id: '/_docs/tui/commands-remote'
+      path: '/commands-remote'
+      fullPath: '/tui/commands-remote'
+      preLoaderRoute: typeof DocsTuiCommandsRemoteRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-rename': {
+      id: '/_docs/tui/commands-rename'
+      path: '/commands-rename'
+      fullPath: '/tui/commands-rename'
+      preLoaderRoute: typeof DocsTuiCommandsRenameRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-resume': {
+      id: '/_docs/tui/commands-resume'
+      path: '/commands-resume'
+      fullPath: '/tui/commands-resume'
+      preLoaderRoute: typeof DocsTuiCommandsResumeRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-security': {
+      id: '/_docs/tui/commands-security'
+      path: '/commands-security'
+      fullPath: '/tui/commands-security'
+      preLoaderRoute: typeof DocsTuiCommandsSecurityRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-select': {
+      id: '/_docs/tui/commands-select'
+      path: '/commands-select'
+      fullPath: '/tui/commands-select'
+      preLoaderRoute: typeof DocsTuiCommandsSelectRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-skill': {
+      id: '/_docs/tui/commands-skill'
+      path: '/commands-skill'
+      fullPath: '/tui/commands-skill'
+      preLoaderRoute: typeof DocsTuiCommandsSkillRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-store': {
+      id: '/_docs/tui/commands-store'
+      path: '/commands-store'
+      fullPath: '/tui/commands-store'
+      preLoaderRoute: typeof DocsTuiCommandsStoreRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-task': {
+      id: '/_docs/tui/commands-task'
+      path: '/commands-task'
+      fullPath: '/tui/commands-task'
+      preLoaderRoute: typeof DocsTuiCommandsTaskRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-todo': {
+      id: '/_docs/tui/commands-todo'
+      path: '/commands-todo'
+      fullPath: '/tui/commands-todo'
+      preLoaderRoute: typeof DocsTuiCommandsTodoRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/commands-usage': {
+      id: '/_docs/tui/commands-usage'
+      path: '/commands-usage'
+      fullPath: '/tui/commands-usage'
+      preLoaderRoute: typeof DocsTuiCommandsUsageRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/first-run': {
+      id: '/_docs/tui/first-run'
+      path: '/first-run'
+      fullPath: '/tui/first-run'
+      preLoaderRoute: typeof DocsTuiFirstRunRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/keyboard-shortcuts': {
+      id: '/_docs/tui/keyboard-shortcuts'
+      path: '/keyboard-shortcuts'
+      fullPath: '/tui/keyboard-shortcuts'
+      preLoaderRoute: typeof DocsTuiKeyboardShortcutsRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/oauth': {
+      id: '/_docs/tui/oauth'
+      path: '/oauth'
+      fullPath: '/tui/oauth'
+      preLoaderRoute: typeof DocsTuiOauthRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/provider-model': {
+      id: '/_docs/tui/provider-model'
+      path: '/provider-model'
+      fullPath: '/tui/provider-model'
+      preLoaderRoute: typeof DocsTuiProviderModelRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/settings-appearance': {
+      id: '/_docs/tui/settings-appearance'
+      path: '/settings-appearance'
+      fullPath: '/tui/settings-appearance'
+      preLoaderRoute: typeof DocsTuiSettingsAppearanceRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/settings-general': {
+      id: '/_docs/tui/settings-general'
+      path: '/settings-general'
+      fullPath: '/tui/settings-general'
+      preLoaderRoute: typeof DocsTuiSettingsGeneralRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/settings-model': {
+      id: '/_docs/tui/settings-model'
+      path: '/settings-model'
+      fullPath: '/tui/settings-model'
+      preLoaderRoute: typeof DocsTuiSettingsModelRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/settings-oauth': {
+      id: '/_docs/tui/settings-oauth'
+      path: '/settings-oauth'
+      fullPath: '/tui/settings-oauth'
+      preLoaderRoute: typeof DocsTuiSettingsOauthRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/tui/settings-provider': {
+      id: '/_docs/tui/settings-provider'
+      path: '/settings-provider'
+      fullPath: '/tui/settings-provider'
+      preLoaderRoute: typeof DocsTuiSettingsProviderRouteImport
+      parentRoute: typeof DocsTuiRoute
+    }
+    '/_docs/welcome/': {
+      id: '/_docs/welcome/'
+      path: '/'
+      fullPath: '/welcome/'
+      preLoaderRoute: typeof DocsWelcomeIndexRouteImport
+      parentRoute: typeof DocsWelcomeRoute
+    }
+    '/_docs/welcome/architecture': {
+      id: '/_docs/welcome/architecture'
+      path: '/architecture'
+      fullPath: '/welcome/architecture'
+      preLoaderRoute: typeof DocsWelcomeArchitectureRouteImport
+      parentRoute: typeof DocsWelcomeRoute
+    }
+    '/_docs/welcome/getting-started': {
+      id: '/_docs/welcome/getting-started'
+      path: '/getting-started'
+      fullPath: '/welcome/getting-started'
+      preLoaderRoute: typeof DocsWelcomeGettingStartedRouteImport
+      parentRoute: typeof DocsWelcomeRoute
     }
   }
 }
 
 interface DocsDocsRouteChildren {
-  DocsDocsArchitectureRoute: typeof DocsDocsArchitectureRoute
-  DocsDocsCommandsAdddirRoute: typeof DocsDocsCommandsAdddirRoute
-  DocsDocsCommandsAgentsRoute: typeof DocsDocsCommandsAgentsRoute
-  DocsDocsCommandsAllRoute: typeof DocsDocsCommandsAllRoute
-  DocsDocsCommandsAttachRoute: typeof DocsDocsCommandsAttachRoute
-  DocsDocsCommandsBashRoute: typeof DocsDocsCommandsBashRoute
-  DocsDocsCommandsCdRoute: typeof DocsDocsCommandsCdRoute
-  DocsDocsCommandsClearRoute: typeof DocsDocsCommandsClearRoute
-  DocsDocsCommandsCompactRoute: typeof DocsDocsCommandsCompactRoute
-  DocsDocsCommandsEffortRoute: typeof DocsDocsCommandsEffortRoute
-  DocsDocsCommandsExtensionRoute: typeof DocsDocsCommandsExtensionRoute
-  DocsDocsCommandsFreeRoute: typeof DocsDocsCommandsFreeRoute
-  DocsDocsCommandsHelpRoute: typeof DocsDocsCommandsHelpRoute
-  DocsDocsCommandsInternetRoute: typeof DocsDocsCommandsInternetRoute
-  DocsDocsCommandsMcpRoute: typeof DocsDocsCommandsMcpRoute
-  DocsDocsCommandsModeRoute: typeof DocsDocsCommandsModeRoute
-  DocsDocsCommandsModelRoute: typeof DocsDocsCommandsModelRoute
-  DocsDocsCommandsNewRoute: typeof DocsDocsCommandsNewRoute
-  DocsDocsCommandsQuitRoute: typeof DocsDocsCommandsQuitRoute
-  DocsDocsCommandsRemoteRoute: typeof DocsDocsCommandsRemoteRoute
-  DocsDocsCommandsRenameRoute: typeof DocsDocsCommandsRenameRoute
-  DocsDocsCommandsResumeRoute: typeof DocsDocsCommandsResumeRoute
-  DocsDocsCommandsSecurityRoute: typeof DocsDocsCommandsSecurityRoute
-  DocsDocsCommandsSelectRoute: typeof DocsDocsCommandsSelectRoute
-  DocsDocsCommandsSkillRoute: typeof DocsDocsCommandsSkillRoute
-  DocsDocsCommandsStoreRoute: typeof DocsDocsCommandsStoreRoute
-  DocsDocsCommandsTaskRoute: typeof DocsDocsCommandsTaskRoute
-  DocsDocsCommandsTodoRoute: typeof DocsDocsCommandsTodoRoute
-  DocsDocsCommandsUsageRoute: typeof DocsDocsCommandsUsageRoute
-  DocsDocsGettingStartedRoute: typeof DocsDocsGettingStartedRoute
-  DocsDocsGuiRoute: typeof DocsDocsGuiRoute
-  DocsDocsKeyboardShortcutsRoute: typeof DocsDocsKeyboardShortcutsRoute
-  DocsDocsOverviewRoute: typeof DocsDocsOverviewRoute
-  DocsDocsSettingsAppearanceRoute: typeof DocsDocsSettingsAppearanceRoute
-  DocsDocsSettingsGeneralRoute: typeof DocsDocsSettingsGeneralRoute
-  DocsDocsSettingsModelRoute: typeof DocsDocsSettingsModelRoute
-  DocsDocsSettingsOauthRoute: typeof DocsDocsSettingsOauthRoute
-  DocsDocsSettingsProviderRoute: typeof DocsDocsSettingsProviderRoute
-  DocsDocsTuiRoute: typeof DocsDocsTuiRoute
-  DocsDocsTutorialFirstRunRoute: typeof DocsDocsTutorialFirstRunRoute
-  DocsDocsTutorialGuiFirstRunRoute: typeof DocsDocsTutorialGuiFirstRunRoute
-  DocsDocsTutorialOauthRoute: typeof DocsDocsTutorialOauthRoute
-  DocsDocsTutorialProviderModelRoute: typeof DocsDocsTutorialProviderModelRoute
+  DocsDocsSlugRoute: typeof DocsDocsSlugRoute
+  DocsDocsIndexRoute: typeof DocsDocsIndexRoute
 }
 
 const DocsDocsRouteChildren: DocsDocsRouteChildren = {
-  DocsDocsArchitectureRoute: DocsDocsArchitectureRoute,
-  DocsDocsCommandsAdddirRoute: DocsDocsCommandsAdddirRoute,
-  DocsDocsCommandsAgentsRoute: DocsDocsCommandsAgentsRoute,
-  DocsDocsCommandsAllRoute: DocsDocsCommandsAllRoute,
-  DocsDocsCommandsAttachRoute: DocsDocsCommandsAttachRoute,
-  DocsDocsCommandsBashRoute: DocsDocsCommandsBashRoute,
-  DocsDocsCommandsCdRoute: DocsDocsCommandsCdRoute,
-  DocsDocsCommandsClearRoute: DocsDocsCommandsClearRoute,
-  DocsDocsCommandsCompactRoute: DocsDocsCommandsCompactRoute,
-  DocsDocsCommandsEffortRoute: DocsDocsCommandsEffortRoute,
-  DocsDocsCommandsExtensionRoute: DocsDocsCommandsExtensionRoute,
-  DocsDocsCommandsFreeRoute: DocsDocsCommandsFreeRoute,
-  DocsDocsCommandsHelpRoute: DocsDocsCommandsHelpRoute,
-  DocsDocsCommandsInternetRoute: DocsDocsCommandsInternetRoute,
-  DocsDocsCommandsMcpRoute: DocsDocsCommandsMcpRoute,
-  DocsDocsCommandsModeRoute: DocsDocsCommandsModeRoute,
-  DocsDocsCommandsModelRoute: DocsDocsCommandsModelRoute,
-  DocsDocsCommandsNewRoute: DocsDocsCommandsNewRoute,
-  DocsDocsCommandsQuitRoute: DocsDocsCommandsQuitRoute,
-  DocsDocsCommandsRemoteRoute: DocsDocsCommandsRemoteRoute,
-  DocsDocsCommandsRenameRoute: DocsDocsCommandsRenameRoute,
-  DocsDocsCommandsResumeRoute: DocsDocsCommandsResumeRoute,
-  DocsDocsCommandsSecurityRoute: DocsDocsCommandsSecurityRoute,
-  DocsDocsCommandsSelectRoute: DocsDocsCommandsSelectRoute,
-  DocsDocsCommandsSkillRoute: DocsDocsCommandsSkillRoute,
-  DocsDocsCommandsStoreRoute: DocsDocsCommandsStoreRoute,
-  DocsDocsCommandsTaskRoute: DocsDocsCommandsTaskRoute,
-  DocsDocsCommandsTodoRoute: DocsDocsCommandsTodoRoute,
-  DocsDocsCommandsUsageRoute: DocsDocsCommandsUsageRoute,
-  DocsDocsGettingStartedRoute: DocsDocsGettingStartedRoute,
-  DocsDocsGuiRoute: DocsDocsGuiRoute,
-  DocsDocsKeyboardShortcutsRoute: DocsDocsKeyboardShortcutsRoute,
-  DocsDocsOverviewRoute: DocsDocsOverviewRoute,
-  DocsDocsSettingsAppearanceRoute: DocsDocsSettingsAppearanceRoute,
-  DocsDocsSettingsGeneralRoute: DocsDocsSettingsGeneralRoute,
-  DocsDocsSettingsModelRoute: DocsDocsSettingsModelRoute,
-  DocsDocsSettingsOauthRoute: DocsDocsSettingsOauthRoute,
-  DocsDocsSettingsProviderRoute: DocsDocsSettingsProviderRoute,
-  DocsDocsTuiRoute: DocsDocsTuiRoute,
-  DocsDocsTutorialFirstRunRoute: DocsDocsTutorialFirstRunRoute,
-  DocsDocsTutorialGuiFirstRunRoute: DocsDocsTutorialGuiFirstRunRoute,
-  DocsDocsTutorialOauthRoute: DocsDocsTutorialOauthRoute,
-  DocsDocsTutorialProviderModelRoute: DocsDocsTutorialProviderModelRoute,
+  DocsDocsSlugRoute: DocsDocsSlugRoute,
+  DocsDocsIndexRoute: DocsDocsIndexRoute,
 }
 
 const DocsDocsRouteWithChildren = DocsDocsRoute._addFileChildren(
   DocsDocsRouteChildren,
 )
 
+interface DocsGuiRouteChildren {
+  DocsGuiAnalyticsRoute: typeof DocsGuiAnalyticsRoute
+  DocsGuiChatComposerRoute: typeof DocsGuiChatComposerRoute
+  DocsGuiCodeEditorRoute: typeof DocsGuiCodeEditorRoute
+  DocsGuiExtensionsRoute: typeof DocsGuiExtensionsRoute
+  DocsGuiFirstRunRoute: typeof DocsGuiFirstRunRoute
+  DocsGuiGitDiffRoute: typeof DocsGuiGitDiffRoute
+  DocsGuiImportGraphRoute: typeof DocsGuiImportGraphRoute
+  DocsGuiLayoutRoute: typeof DocsGuiLayoutRoute
+  DocsGuiOauthRoute: typeof DocsGuiOauthRoute
+  DocsGuiProviderModelRoute: typeof DocsGuiProviderModelRoute
+  DocsGuiIndexRoute: typeof DocsGuiIndexRoute
+}
+
+const DocsGuiRouteChildren: DocsGuiRouteChildren = {
+  DocsGuiAnalyticsRoute: DocsGuiAnalyticsRoute,
+  DocsGuiChatComposerRoute: DocsGuiChatComposerRoute,
+  DocsGuiCodeEditorRoute: DocsGuiCodeEditorRoute,
+  DocsGuiExtensionsRoute: DocsGuiExtensionsRoute,
+  DocsGuiFirstRunRoute: DocsGuiFirstRunRoute,
+  DocsGuiGitDiffRoute: DocsGuiGitDiffRoute,
+  DocsGuiImportGraphRoute: DocsGuiImportGraphRoute,
+  DocsGuiLayoutRoute: DocsGuiLayoutRoute,
+  DocsGuiOauthRoute: DocsGuiOauthRoute,
+  DocsGuiProviderModelRoute: DocsGuiProviderModelRoute,
+  DocsGuiIndexRoute: DocsGuiIndexRoute,
+}
+
+const DocsGuiRouteWithChildren =
+  DocsGuiRoute._addFileChildren(DocsGuiRouteChildren)
+
+interface DocsTuiRouteChildren {
+  DocsTuiCommandsAdddirRoute: typeof DocsTuiCommandsAdddirRoute
+  DocsTuiCommandsAgentsRoute: typeof DocsTuiCommandsAgentsRoute
+  DocsTuiCommandsAllRoute: typeof DocsTuiCommandsAllRoute
+  DocsTuiCommandsAttachRoute: typeof DocsTuiCommandsAttachRoute
+  DocsTuiCommandsBashRoute: typeof DocsTuiCommandsBashRoute
+  DocsTuiCommandsCdRoute: typeof DocsTuiCommandsCdRoute
+  DocsTuiCommandsClearRoute: typeof DocsTuiCommandsClearRoute
+  DocsTuiCommandsCompactRoute: typeof DocsTuiCommandsCompactRoute
+  DocsTuiCommandsEffortRoute: typeof DocsTuiCommandsEffortRoute
+  DocsTuiCommandsExtensionRoute: typeof DocsTuiCommandsExtensionRoute
+  DocsTuiCommandsFreeRoute: typeof DocsTuiCommandsFreeRoute
+  DocsTuiCommandsHelpRoute: typeof DocsTuiCommandsHelpRoute
+  DocsTuiCommandsInternetRoute: typeof DocsTuiCommandsInternetRoute
+  DocsTuiCommandsMcpRoute: typeof DocsTuiCommandsMcpRoute
+  DocsTuiCommandsModeRoute: typeof DocsTuiCommandsModeRoute
+  DocsTuiCommandsModelRoute: typeof DocsTuiCommandsModelRoute
+  DocsTuiCommandsNewRoute: typeof DocsTuiCommandsNewRoute
+  DocsTuiCommandsQuitRoute: typeof DocsTuiCommandsQuitRoute
+  DocsTuiCommandsRemoteRoute: typeof DocsTuiCommandsRemoteRoute
+  DocsTuiCommandsRenameRoute: typeof DocsTuiCommandsRenameRoute
+  DocsTuiCommandsResumeRoute: typeof DocsTuiCommandsResumeRoute
+  DocsTuiCommandsSecurityRoute: typeof DocsTuiCommandsSecurityRoute
+  DocsTuiCommandsSelectRoute: typeof DocsTuiCommandsSelectRoute
+  DocsTuiCommandsSkillRoute: typeof DocsTuiCommandsSkillRoute
+  DocsTuiCommandsStoreRoute: typeof DocsTuiCommandsStoreRoute
+  DocsTuiCommandsTaskRoute: typeof DocsTuiCommandsTaskRoute
+  DocsTuiCommandsTodoRoute: typeof DocsTuiCommandsTodoRoute
+  DocsTuiCommandsUsageRoute: typeof DocsTuiCommandsUsageRoute
+  DocsTuiFirstRunRoute: typeof DocsTuiFirstRunRoute
+  DocsTuiKeyboardShortcutsRoute: typeof DocsTuiKeyboardShortcutsRoute
+  DocsTuiOauthRoute: typeof DocsTuiOauthRoute
+  DocsTuiProviderModelRoute: typeof DocsTuiProviderModelRoute
+  DocsTuiSettingsAppearanceRoute: typeof DocsTuiSettingsAppearanceRoute
+  DocsTuiSettingsGeneralRoute: typeof DocsTuiSettingsGeneralRoute
+  DocsTuiSettingsModelRoute: typeof DocsTuiSettingsModelRoute
+  DocsTuiSettingsOauthRoute: typeof DocsTuiSettingsOauthRoute
+  DocsTuiSettingsProviderRoute: typeof DocsTuiSettingsProviderRoute
+  DocsTuiIndexRoute: typeof DocsTuiIndexRoute
+}
+
+const DocsTuiRouteChildren: DocsTuiRouteChildren = {
+  DocsTuiCommandsAdddirRoute: DocsTuiCommandsAdddirRoute,
+  DocsTuiCommandsAgentsRoute: DocsTuiCommandsAgentsRoute,
+  DocsTuiCommandsAllRoute: DocsTuiCommandsAllRoute,
+  DocsTuiCommandsAttachRoute: DocsTuiCommandsAttachRoute,
+  DocsTuiCommandsBashRoute: DocsTuiCommandsBashRoute,
+  DocsTuiCommandsCdRoute: DocsTuiCommandsCdRoute,
+  DocsTuiCommandsClearRoute: DocsTuiCommandsClearRoute,
+  DocsTuiCommandsCompactRoute: DocsTuiCommandsCompactRoute,
+  DocsTuiCommandsEffortRoute: DocsTuiCommandsEffortRoute,
+  DocsTuiCommandsExtensionRoute: DocsTuiCommandsExtensionRoute,
+  DocsTuiCommandsFreeRoute: DocsTuiCommandsFreeRoute,
+  DocsTuiCommandsHelpRoute: DocsTuiCommandsHelpRoute,
+  DocsTuiCommandsInternetRoute: DocsTuiCommandsInternetRoute,
+  DocsTuiCommandsMcpRoute: DocsTuiCommandsMcpRoute,
+  DocsTuiCommandsModeRoute: DocsTuiCommandsModeRoute,
+  DocsTuiCommandsModelRoute: DocsTuiCommandsModelRoute,
+  DocsTuiCommandsNewRoute: DocsTuiCommandsNewRoute,
+  DocsTuiCommandsQuitRoute: DocsTuiCommandsQuitRoute,
+  DocsTuiCommandsRemoteRoute: DocsTuiCommandsRemoteRoute,
+  DocsTuiCommandsRenameRoute: DocsTuiCommandsRenameRoute,
+  DocsTuiCommandsResumeRoute: DocsTuiCommandsResumeRoute,
+  DocsTuiCommandsSecurityRoute: DocsTuiCommandsSecurityRoute,
+  DocsTuiCommandsSelectRoute: DocsTuiCommandsSelectRoute,
+  DocsTuiCommandsSkillRoute: DocsTuiCommandsSkillRoute,
+  DocsTuiCommandsStoreRoute: DocsTuiCommandsStoreRoute,
+  DocsTuiCommandsTaskRoute: DocsTuiCommandsTaskRoute,
+  DocsTuiCommandsTodoRoute: DocsTuiCommandsTodoRoute,
+  DocsTuiCommandsUsageRoute: DocsTuiCommandsUsageRoute,
+  DocsTuiFirstRunRoute: DocsTuiFirstRunRoute,
+  DocsTuiKeyboardShortcutsRoute: DocsTuiKeyboardShortcutsRoute,
+  DocsTuiOauthRoute: DocsTuiOauthRoute,
+  DocsTuiProviderModelRoute: DocsTuiProviderModelRoute,
+  DocsTuiSettingsAppearanceRoute: DocsTuiSettingsAppearanceRoute,
+  DocsTuiSettingsGeneralRoute: DocsTuiSettingsGeneralRoute,
+  DocsTuiSettingsModelRoute: DocsTuiSettingsModelRoute,
+  DocsTuiSettingsOauthRoute: DocsTuiSettingsOauthRoute,
+  DocsTuiSettingsProviderRoute: DocsTuiSettingsProviderRoute,
+  DocsTuiIndexRoute: DocsTuiIndexRoute,
+}
+
+const DocsTuiRouteWithChildren =
+  DocsTuiRoute._addFileChildren(DocsTuiRouteChildren)
+
+interface DocsWelcomeRouteChildren {
+  DocsWelcomeArchitectureRoute: typeof DocsWelcomeArchitectureRoute
+  DocsWelcomeGettingStartedRoute: typeof DocsWelcomeGettingStartedRoute
+  DocsWelcomeIndexRoute: typeof DocsWelcomeIndexRoute
+}
+
+const DocsWelcomeRouteChildren: DocsWelcomeRouteChildren = {
+  DocsWelcomeArchitectureRoute: DocsWelcomeArchitectureRoute,
+  DocsWelcomeGettingStartedRoute: DocsWelcomeGettingStartedRoute,
+  DocsWelcomeIndexRoute: DocsWelcomeIndexRoute,
+}
+
+const DocsWelcomeRouteWithChildren = DocsWelcomeRoute._addFileChildren(
+  DocsWelcomeRouteChildren,
+)
+
 interface DocsRouteChildren {
   DocsDocsRoute: typeof DocsDocsRouteWithChildren
+  DocsGuiRoute: typeof DocsGuiRouteWithChildren
+  DocsTuiRoute: typeof DocsTuiRouteWithChildren
+  DocsWelcomeRoute: typeof DocsWelcomeRouteWithChildren
 }
 
 const DocsRouteChildren: DocsRouteChildren = {
   DocsDocsRoute: DocsDocsRouteWithChildren,
+  DocsGuiRoute: DocsGuiRouteWithChildren,
+  DocsTuiRoute: DocsTuiRouteWithChildren,
+  DocsWelcomeRoute: DocsWelcomeRouteWithChildren,
 }
 
 const DocsRouteWithChildren = DocsRoute._addFileChildren(DocsRouteChildren)

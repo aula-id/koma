@@ -1,12 +1,12 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 
 const CARDS = [
-  { to: '/docs/getting-started', title: 'Getting Started', desc: 'Install koma and make your first request.' },
-  { to: '/docs/tui', title: 'TUI Commands', desc: 'Every slash command, with live terminal tutorials.' },
-  { to: '/docs/keyboard-shortcuts', title: 'Keyboard Shortcuts', desc: 'The full key map for chat and panels.' },
-  { to: '/docs/settings-oauth', title: 'OAuth & Providers', desc: 'Connect koma.run, Codex, Claude and more.' },
-  { to: '/docs/gui', title: 'Desktop GUI', desc: 'Run koma in a native webview window.' },
-  { to: '/docs/overview', title: 'Overview', desc: 'What koma is and how it is built.' },
+  { to: '/welcome/getting-started', title: 'Getting Started', desc: 'Install koma and make your first request.' },
+  { to: '/tui', title: 'TUI Documentation', desc: 'Terminal commands, tutorials, and keyboard shortcuts.' },
+  { to: '/gui', title: 'GUI Documentation', desc: 'Desktop interface, code editor, and visual tools.' },
+  { to: '/tui/keyboard-shortcuts', title: 'Keyboard Shortcuts', desc: 'The full key map for chat and panels.' },
+  { to: '/tui/settings-oauth', title: 'OAuth & Providers', desc: 'Connect koma.run, Codex, Claude and more.' },
+  { to: '/welcome/architecture', title: 'Architecture', desc: 'How koma is built internally.' },
 ]
 
 function HomePage() {
@@ -20,7 +20,7 @@ function HomePage() {
           </p>
           <div className="flex flex-wrap items-center justify-center gap-4">
             <Link
-              to="/docs/getting-started"
+              to="/welcome/getting-started"
               className="rounded bg-koma-accent px-6 py-2.5 font-semibold text-koma-bg transition hover:opacity-80"
             >
               Get Started
