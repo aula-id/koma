@@ -1,6 +1,7 @@
-import { ArrowLeft, ArrowRight, Brain, Check, Minus, Plus } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Brain, Check } from 'lucide-react'
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { ConnectorPanel, ModelPicker, useConnectorTutorial } from './gui-provider-model/ConnectorTutorial'
+import { GuiTutorialCardHeader } from './gui-tutorial/GuiTutorialCardHeader'
 import { GuiTutorialDesktopFrame, TutorialActivity, TutorialChat } from './gui-tutorial/TutorialDesktop'
 import { GUI_TUTORIAL_CANVAS } from './gui-tutorial/model'
 
@@ -50,11 +51,16 @@ export function GuiProviderModelTutorial() {
   }
 
   return <section className="gpm-tutorial" aria-label="Desktop GUI provider and model tutorial">
-    <header className="gpm-header">
-      <div><span className="gpm-kicker">Interactive WebGUI Connector rendering · sample data only · no network or saved configuration</span><strong>Step {step + 1} of {STEPS.length}: {current.title}</strong></div>
+    <GuiTutorialCardHeader
+      eyebrow="Interactive WebGUI Connector rendering · sample data only · no network or saved configuration"
+      title={`Step ${step + 1} of ${STEPS.length}: ${current.title}`}
+      zoom={zoom}
+      zoomIndex={zoomIndex}
+      zoomLevels={ZOOM_LEVELS}
+      onZoomIndex={setZoomIndex}
+    >
       <div className="gpm-step-dots" aria-label={`Tutorial progress: step ${step + 1} of ${STEPS.length}`}>{STEPS.map((_, index) => <i key={index} className={index === step ? 'active' : index < step ? 'done' : ''}/>)}</div>
-      <div className="gpm-zoom" aria-label="Stage zoom"><button type="button" onClick={() => setZoomIndex((value) => Math.max(0, value - 1))} disabled={zoomIndex === 0} aria-label="Zoom out"><Minus size={13}/></button><button type="button" onClick={() => setZoomIndex(1)}>{Math.round(zoom * 100)}%</button><button type="button" onClick={() => setZoomIndex((value) => Math.min(ZOOM_LEVELS.length - 1, value + 1))} disabled={zoomIndex === ZOOM_LEVELS.length - 1} aria-label="Zoom in"><Plus size={13}/></button></div>
-    </header>
+    </GuiTutorialCardHeader>
     <div className="gpm-instruction"><span>{complete ? <Check size={16}/> : <Brain size={16}/>}</span><p>{current.instruction}</p></div>
     <div className="gui-tutorial-viewport gpm-viewport"><div ref={viewportRef} className="gui-tutorial-canvas"><div className="gui-tutorial-stage gpm-focus-stage" style={{ '--gui-tutorial-scale': stageScale, '--gpm-focus-x': `${focusOffset.x}px`, '--gpm-focus-y': `${focusOffset.y}px` } as CSSProperties}>
       <GuiTutorialDesktopFrame><div className="gui-shell"><TutorialActivity active="Connector" onConnector={() => move(0)}/><aside className="gui-sidebar gpm-sidebar"><header>Connector</header><div className="relative min-h-0 flex-1"><ConnectorPanel controller={controller} target={current.target}/></div></aside><div className="gui-sidebar-resize"/><main className="gui-main"><TutorialChat modelPicker={step >= 6 ? <ModelPicker models={controller.models} sessionMain={controller.sessionMain} onSelect={controller.setSessionMain} target={current.target === 'model-picker'}/> : undefined}/></main></div></GuiTutorialDesktopFrame>
