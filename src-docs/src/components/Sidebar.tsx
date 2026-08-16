@@ -55,6 +55,7 @@ const sections: SidebarSection[] = [
     modes: ['tui'],
     items: [
       { label: 'TUI Overview', to: '/docs/tui' },
+      { label: 'Connect a Provider', to: '/docs/connect-provider' },
     ],
   },
   {
