@@ -60,3 +60,33 @@ html, body, #root, .xterm {
   color: var(--color-koma-accent);
   background: var(--color-koma-hover);
 }
+
+/* ── GUI tutorial: a fixed desktop canvas fitted into a responsive viewport ── */
+.gui-tutorial-viewport { width: 100%; min-width: 0; overflow: hidden; aspect-ratio: 16 / 9; }
+.gui-tutorial-canvas { position: relative; width: 100%; height: 100%; overflow: hidden; }
+.gui-tutorial-stage {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1280px;
+  height: 720px;
+  transform: translate(-50%, -50%) scale(var(--gui-tutorial-scale, 1));
+  transform-origin: center;
+  transition: transform 360ms cubic-bezier(.2, .8, .2, 1);
+}
+.gui-desktop { width: 1280px; height: 720px; overflow: hidden; border: 1px solid var(--color-koma-border); border-radius: 7px; background: var(--color-koma-bg); box-shadow: 0 18px 40px rgb(0 0 0 / 45%); }
+.gui-titlebar { display: flex; align-items: center; height: 30px; padding-left: 11px; border-bottom: 1px solid var(--color-koma-border); background: var(--color-koma-panel2); font-size: 10px; color: var(--color-koma-fg); }
+.gui-titlebar button { display: grid; width: 30px; place-items: center; border: 0; background: transparent; color: inherit; }
+.gui-desktop-body { height: calc(100% - 30px); overflow: hidden; }
+.gui-activity { display: flex; width: 38px; flex: none; flex-direction: column; align-items: center; gap: 17px; border-right: 1px solid var(--color-koma-border); padding: 12px 0; color: var(--color-koma-dim); }
+.gui-sidebar { width: 21%; min-width: 115px; border-right: 1px solid var(--color-koma-border); background: var(--color-koma-panel); }
+.gui-tutorial-control { display: grid; height: 25px; width: 25px; place-items: center; color: var(--color-koma-dim); transition: color 120ms ease, background 120ms ease; }
+.gui-tutorial-control:hover:not(:disabled) { background: var(--color-koma-hover); color: var(--color-koma-fg); }
+.gui-tutorial-control:disabled { cursor: not-allowed; opacity: .35; }
+.gui-tutorial-cursor { inset: 0; color: var(--color-koma-fg); filter: drop-shadow(0 1px 2px rgb(0 0 0 / 70%)); transition: transform 520ms cubic-bezier(.2, .8, .2, 1); }
+.gui-tutorial-cursor svg { display: block; width: 24px; height: 24px; }
+.gui-tutorial-cursor-ring { position: absolute; left: 8px; top: 8px; width: 12px; height: 12px; border: 2px solid var(--color-koma-accent); border-radius: 999px; opacity: 0; animation: gui-tutorial-click 480ms ease-out; }
+.gui-tutorial-spinner { display: inline-block; color: var(--color-koma-accent); }
+@keyframes gui-tutorial-click { 0% { transform: scale(.3); opacity: 1; } 100% { transform: scale(2.6); opacity: 0; } }
+@media (max-width: 520px) { .gui-sidebar { min-width: 80px; } }
+@media (prefers-reduced-motion: reduce) { .gui-tutorial-stage, .gui-tutorial-cursor { transition: none; } .gui-tutorial-cursor-ring { animation: none; } }
