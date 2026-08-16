@@ -54,7 +54,6 @@ const sections: SidebarSection[] = [
     title: 'Terminal UI',
     modes: ['tui'],
     items: [
-      { label: 'TUI Overview', to: '/docs/tui' },
       { label: 'Tutorial: First Run', to: '/docs/tutorial-first-run' },
       { label: 'Tutorial: Provider & Model', to: '/docs/tutorial-provider-model' },
       { label: 'Tutorial: OAuth', to: '/docs/tutorial-oauth' },
