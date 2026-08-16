@@ -42,12 +42,6 @@ function GettingStarted() {
           in Settings → OAuth to start coding.
         </li>
         <li>
-          <Link to="/docs/connect-provider" className="text-koma-accent hover:underline">
-            Full connection walkthrough
-          </Link>{' '}
-          — first run, manual provider + model, or OAuth.
-        </li>
-        <li>
           <Link to="/docs/gui" className="text-koma-accent hover:underline">
             Desktop GUI
           </Link>{' '}
