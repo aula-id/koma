@@ -590,6 +590,14 @@ pub enum ClientRequest {
         req_id: Option<String>,
         payload: serde_json::Value,
     },
+
+    /// LIFECYCLE ERROR REPORT: the thin client's `run_remote_client_target` call
+    /// failed (SSH auth failure, unreachable host, etc.) BEFORE teardown. The
+    /// client pushes this to the daemon so the user sees a toast instead of
+    /// silent failure. The daemon MUST still call `teardown_connection` afterwards.
+    ConnectFailed {
+        error: String,
+    },
 }
 
 // ─── daemon -> client ────────────────────────────────────────────────────────
@@ -1074,5 +1082,17 @@ mod tests {
         };
         let back: DaemonEvent = serde_json::from_slice(&serde_json::to_vec(&ev).unwrap()).unwrap();
         assert_eq!(back, ev);
+    }
+
+    /// The lifecycle error report (remote connect failure) round-trips — the
+    /// thin client pushes this to the daemon so the user sees a toast.
+    #[test]
+    fn connect_failed_serde_roundtrip() {
+        let req = ClientRequest::ConnectFailed {
+            error: "ssh: auth failed".into(),
+        };
+        let back: ClientRequest =
+            serde_json::from_slice(&serde_json::to_vec(&req).unwrap()).unwrap();
+        assert_eq!(back, req);
     }
 }

@@ -248,14 +248,21 @@ fn resolve_enter(hub: &SessionHub) -> Option<SwapperOutcome> {
     match hub.focus {
         HubPane::Cooking => match hub.selected_cooking() {
             // "[+ new session]" → mint a brand-new session UUID; `client_run` spawns its
-            // daemon (create branch) and attaches.
+            // daemon (create branch) and attaches. Propagate `remote_host` so the pick
+            // routes back through SSH when the hub is a remote hub.
             Some(entry) if entry.kind == SessionKind::NewSession => {
-                Some(SwapperOutcome::Pick(uuid::Uuid::new_v4().to_string()))
+                Some(SwapperOutcome::Pick {
+                    session_id: uuid::Uuid::new_v4().to_string(),
+                    remote_host: entry.remote_host.clone(),
+                })
             }
             // A real live session → attach to its already-running daemon by its id. A
             // real row always carries `Some(id)`; the `?`-less guard degrades a (never-
             // expected) `None` to staying in the picker rather than picking a blank id.
-            Some(entry) => entry.session_id.clone().map(SwapperOutcome::Pick),
+            Some(entry) => entry.session_id.clone().map(|id| SwapperOutcome::Pick {
+                session_id: id,
+                remote_host: entry.remote_host.clone(),
+            }),
             // Empty cooking pane (can't happen — the synthetic row is always present) →
             // stay in the picker.
             None => None,
@@ -270,7 +277,10 @@ fn resolve_enter(hub: &SessionHub) -> Option<SwapperOutcome> {
                 .get(real)
                 .and_then(|h| h.path.file_name())
                 .and_then(|n| n.to_str())
-                .map(|id| SwapperOutcome::Pick(id.to_string())),
+                .map(|id| SwapperOutcome::Pick {
+                    session_id: id.to_string(),
+                    remote_host: None,
+                }),
             // Empty filtered history (e.g. a search that matched nothing) → stay.
             None => None,
         },

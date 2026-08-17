@@ -9,8 +9,19 @@ use super::{bootstrap, ssh, RemoteTarget};
 use crate::app::runtime::client::remote::connect_remote;
 use crate::app::runtime::terminal::TerminalGuard;
 
+/// Outcome of a remote session — did the user want to resume or fully exit?
+pub(crate) enum RemoteExit {
+    /// The user exited the remote session completely (e.g. `/quit`).
+    Exit,
+    /// The user opened the swapper inside the remote session (`/resume`).
+    Resume,
+}
+
 /// Run a remote koma session: SSH connect, exec server, bridge to local TUI.
-pub(crate) fn run_remote_client(target: &RemoteTarget, auth: Option<&SshAuth>) -> Result<()> {
+pub(crate) fn run_remote_client(
+    target: &RemoteTarget,
+    auth: Option<&SshAuth>,
+) -> Result<RemoteExit> {
     // Generate session id.
     let session_id = uuid::Uuid::new_v4().to_string();
 
@@ -50,20 +61,20 @@ pub(crate) fn run_remote_client(target: &RemoteTarget, auth: Option<&SshAuth>) -
     terminal.clear()?;
 
     // Run the same render loop a local thin-client uses.
-    let result =
-        crate::app::runtime::client::run_remote_render_loop(&mut terminal, connection, &handle);
+    let transition =
+        crate::app::runtime::client::run_remote_render_loop(&mut terminal, connection, &handle)?;
 
-    // Clean up the SSH child process on ALL paths.
-    if result.is_err() {
-        let _ = rt.block_on(async { session.child.kill().await });
-    } else {
-        let status = rt.block_on(async { session.child.wait().await })?;
-        if !status.success() {
-            eprintln!("Remote koma server exited with status: {status}");
-        }
-    }
+    // Map the render-loop transition to a RemoteExit.
+    let outcome = match transition {
+        crate::app::runtime::client::ClientTransition::OpenSwapper => RemoteExit::Resume,
+        _ => RemoteExit::Exit,
+    };
 
-    result
+    // Clean up the SSH child process — always kill on exit (the session is
+    // ephemeral to the remote client; the daemon owns the real lifecycle).
+    let _ = rt.block_on(async { session.child.kill().await });
+
+    Ok(outcome)
 }
 
 /// Entry point from main.rs: parse target, probe auth, and run.
@@ -76,7 +87,7 @@ pub(crate) fn run_remote_client_target(
     target_str: &str,
     key: Option<&str>,
     port: Option<u16>,
-) -> Result<()> {
+) -> Result<RemoteExit> {
     let mut target = super::parse_target(target_str)?;
     if let Some(k) = key {
         target.key = Some(k.to_string());
