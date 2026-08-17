@@ -792,7 +792,26 @@ pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState 
             .collect(),
         session_selected: s.session_selected,
         password_buf: String::new(),
-        editor: None,
-        editing_field: false,
+        editor: s.editor.map(|es| {
+            use crate::app::mode::remote::HostEditField;
+            let focused = match es.focused.as_str() {
+                "user" => HostEditField::User,
+                "host" => HostEditField::Host,
+                "port" => HostEditField::Port,
+                "key_path" => HostEditField::KeyPath,
+                _ => HostEditField::Name,
+            };
+            crate::app::mode::remote::HostEditor {
+                name: es.name,
+                user: es.user,
+                host: es.host,
+                port: es.port,
+                key_path: es.key_path,
+                focused,
+                edit_id: es.edit_id,
+                error: es.error,
+            }
+        }),
+        editing_field: s.editing_field,
     }
 }
