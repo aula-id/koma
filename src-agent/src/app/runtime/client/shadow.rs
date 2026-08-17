@@ -24,7 +24,7 @@ pub(super) fn apply_frame(
     select_requested: &mut bool,
     open_swapper_requested: &mut bool,
     new_session_requested: &mut Option<bool>,
-    connect_remote_requested: &mut Option<(String, Option<String>)>,
+    connect_remote_requested: &mut Option<(String, Option<String>, bool, Option<String>)>,
     req_tx: &std::sync::mpsc::Sender<ClientRequest>,
 ) -> bool {
     // --- seq-gap detection (critique #1) ---
@@ -106,8 +106,13 @@ pub(super) fn apply_frame(
         // remote host via SSH. Latch the target address so `render_loop` returns
         // `ClientTransition::ConnectRemote { target }` AFTER this drain pass. Mirrors
         // `OpenSwapper` / `NewSession`. Non-visual to the shadow.
-        DaemonEvent::ConnectRemote { target, key } => {
-            *connect_remote_requested = Some((target.clone(), key.clone()));
+        DaemonEvent::ConnectRemote {
+            target,
+            key,
+            new_session,
+            session_id,
+        } => {
+            *connect_remote_requested = Some((target, key, new_session, session_id));
             false
         }
         // Non-visual control replies. (A future refinement could toast an Error.)

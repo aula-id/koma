@@ -363,6 +363,7 @@ fn remote_connect_worker(
                     serde_json::json!({
                         "sessionId": session.session_id,
                         "name": session.name,
+                        "pwd": session.pwd,
                         "working": session.working,
                         "isForeground": session.is_foreground
                     })

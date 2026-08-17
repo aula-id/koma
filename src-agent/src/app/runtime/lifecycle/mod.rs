@@ -725,20 +725,23 @@ pub fn run(opts: crate::cli::Opts) -> Result<()> {
         let result = run_loop(&mut terminal, &mut state, &handle, &mut client);
 
         // Check for remote connect break-out.
-        if let Some((target, key)) = state.rest.connect_remote_target.take() {
+        if let Some(request) = state.rest.connect_remote_target.take() {
             // Drop the terminal + guard to restore the normal terminal.
             drop(terminal);
             drop(_guard);
 
-            // Connect to the remote server (creates its own terminal).
-            // The daemon-side path ignores Resume — it has no swapper to open.
-            let _connect_result =
-                crate::remote::client::run_remote_client_target(&target, key.as_deref(), None);
+            let _connect_result = crate::remote::client::run_remote_client_target(
+                &request.target,
+                request.key.as_deref(),
+                None,
+                request.new_session,
+                request.session_id.as_deref(),
+            );
 
             if let Err(e) = &_connect_result {
                 crate::model::store::append_global_error_log(
                     "remote",
-                    &format!("remote connect to {target} failed: {e:#}"),
+                    &format!("remote connect to {} failed: {e:#}", request.target),
                 );
                 state.rest.fg_mut().set_toast(format!(
                     "remote connect failed: {e:#}"

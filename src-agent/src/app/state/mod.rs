@@ -34,6 +34,7 @@ use crate::app::mode::Mode;
 // external paths remain identical.
 pub use rest::AppStateRest;
 pub use rest::ExtOAuthFlow;
+pub use rest::RemoteConnectRequest;
 pub use types::{AgentMode, ToastKind};
 // Public surface for the upcoming multi-session stages; not yet referenced
 // outside this module while there is a single foreground session.

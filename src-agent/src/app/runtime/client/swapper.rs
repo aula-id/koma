@@ -120,7 +120,7 @@ pub(crate) fn build_remote_hub(
             working: session.working,
             is_foreground,
             session_id: Some(session.session_id),
-            dir_label: String::new(),
+            dir_label: session.pwd,
             is_current_dir: false,
             remote_host: Some(host_label.clone()),
         });
