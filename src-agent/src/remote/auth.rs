@@ -85,7 +85,12 @@ impl SshAuth {
         Self::new(password)
     }
 
-    /// Apply SSH_ASKPASS env vars to a `std::process::Command`.
+    /// Return a copy for a lifecycle hand-off that must reuse authentication.
+    /// The caller owns the new auth context and this one remains session-scoped.
+    pub(crate) fn password(&self) -> &str {
+        &self.password
+    }
+
     ///
     /// Sets `SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE=force`, and `DISPLAY=:0`.
     /// Also removes `BatchMode=yes` so ssh will actually invoke the askpass helper.

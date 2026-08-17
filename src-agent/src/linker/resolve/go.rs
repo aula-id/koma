@@ -297,7 +297,7 @@ fn find_nearest_module<'a>(
 
     for (mod_dir, mod_config) in &config.mods {
         if importer_path.starts_with(mod_dir.as_str()) {
-            if best.is_none() || mod_dir.len() > best.unwrap().0.len() {
+            if best.map_or(true, |b| mod_dir.len() > b.0.len()) {
                 best = Some((mod_dir.as_str(), mod_config));
             }
         }
@@ -313,7 +313,7 @@ fn find_module_dir(importer: &str, config: &GoModuleConfig) -> Option<String> {
 
     for mod_dir in config.mods.keys() {
         if importer_path.starts_with(mod_dir.as_str()) {
-            if best.is_none() || mod_dir.len() > best.unwrap().len() {
+            if best.map_or(true, |b| mod_dir.len() > b.len()) {
                 best = Some(mod_dir.as_str());
             }
         }

@@ -38,6 +38,18 @@ use super::super::manage;
 use super::render::FRAME_BUDGET;
 use super::swapper_keys::handle_swapper_key;
 
+/// Where the swapper's background probe thread discovers sessions.
+#[derive(Clone)]
+pub(super) enum DiscoverySource {
+    /// Local daemon discovery via unix sockets (default).
+    Local,
+    /// Remote session discovery over SSH.
+    Remote {
+        target: crate::remote::RemoteTarget,
+        password: Option<String>,
+    },
+}
+
 /// Build a CLIENT-side [`SessionHub`] from cross-daemon discovery.
 ///
 /// COOKING = a synthetic "[+ new session]" row, then one row per LIVE
@@ -62,6 +74,73 @@ pub(crate) fn build_local_hub(current_session_id: Option<&str>) -> SessionHub {
     // see `run_swapper`). Drives the COOKING rows AND the HISTORY dedup below.
     let live = manage::list_live_sessions();
     hub_from_snapshot(live, current_session_id)
+}
+
+/// Build a CLIENT-side [`SessionHub`] from remote session discovery over SSH.
+///
+/// Similar to [`build_local_hub`] but discovers sessions on a remote host by running
+/// `koma sessions --json` over SSH. The COOKING pane gets the remote sessions (each
+/// tagged with `remote_host`), the HISTORY pane is empty (no on-disk sessions locally
+/// for a remote host). The synthetic `[+ new session]` row is also tagged with
+/// `remote_host` so `resolve_enter` routes the pick back through SSH.
+pub(crate) fn build_remote_hub(
+    target: &crate::remote::RemoteTarget,
+    password: Option<&str>,
+    current_session_id: Option<&str>,
+) -> SessionHub {
+    let auth = password
+        .map(|p| crate::remote::auth::SshAuth::new(p.to_string()))
+        .transpose()
+        .ok()
+        .flatten();
+
+    let host_label = format!("{}@{}", target.user, target.host);
+
+    let remote_sessions =
+        crate::remote::sessions::list_sessions_over_ssh(target, auth.as_ref()).unwrap_or_default();
+
+    let mut cooking: Vec<CookingEntry> = Vec::with_capacity(remote_sessions.len() + 1);
+    cooking.push(CookingEntry {
+        idx: usize::MAX,
+        kind: SessionKind::NewSession,
+        name: "[+ new session]".to_string(),
+        working: false,
+        is_foreground: false,
+        session_id: None,
+        dir_label: String::new(),
+        is_current_dir: false,
+        remote_host: Some(host_label.clone()),
+    });
+    for session in remote_sessions {
+        let is_foreground = current_session_id == Some(session.session_id.as_str());
+        cooking.push(CookingEntry {
+            idx: usize::MAX,
+            kind: SessionKind::Session,
+            name: session.name,
+            working: session.working,
+            is_foreground,
+            session_id: Some(session.session_id),
+            dir_label: String::new(),
+            is_current_dir: false,
+            remote_host: Some(host_label.clone()),
+        });
+    }
+
+    // No local history for remote hubs.
+    let history: Vec<HistoryEntry> = Vec::new();
+    let history_filtered: Vec<usize> = Vec::new();
+
+    SessionHub {
+        cooking,
+        history,
+        focus: HubPane::Cooking,
+        cooking_selected: 0,
+        history_selected: 0,
+        history_query: String::new(),
+        history_filtered,
+        pending_kill: None,
+        pending_delete: None,
+    }
 }
 
 /// Build a client-side [`SessionHub`] from an ALREADY-GATHERED discovery snapshot.
@@ -157,12 +236,61 @@ fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>)
     }
 }
 
+/// Build a remote client-side [`SessionHub`] from an already-gathered discovery snapshot.
+fn hub_from_remote_snapshot(
+    sessions: Vec<SessionStatus>,
+    remote_host: &str,
+    current_session_id: Option<&str>,
+) -> SessionHub {
+    let cooking = std::iter::once(CookingEntry {
+        idx: usize::MAX,
+        kind: SessionKind::NewSession,
+        name: "[+ new session]".to_string(),
+        working: false,
+        is_foreground: false,
+        session_id: None,
+        dir_label: String::new(),
+        is_current_dir: false,
+        remote_host: Some(remote_host.to_string()),
+    })
+    .chain(sessions.into_iter().map(|session| CookingEntry {
+        idx: usize::MAX,
+        kind: SessionKind::Session,
+        name: session.name,
+        working: session.working,
+        is_foreground: current_session_id == Some(session.session_id.as_str()),
+        session_id: Some(session.session_id),
+        dir_label: String::new(),
+        is_current_dir: false,
+        remote_host: Some(remote_host.to_string()),
+    }))
+    .collect();
+
+    SessionHub {
+        cooking,
+        history: Vec::new(),
+        focus: HubPane::Cooking,
+        cooking_selected: 0,
+        history_selected: 0,
+        history_query: String::new(),
+        history_filtered: Vec::new(),
+        pending_kill: None,
+        pending_delete: None,
+    }
+}
+
 /// What [`run_swapper`] resolved to — the instruction [`super::client_run`] acts on.
 pub(super) enum SwapperOutcome {
     /// Attach to the session with this UUID (spawning its daemon if needed). For a
     /// `[+ new session]` pick this is a freshly-minted UUID; for a live cooking row it
     /// is that session's id; for a history row it is the on-disk session's id.
-    Pick(String),
+    /// `remote_host` carries the target string (e.g. `user@host`) when the session
+    /// lives on a remote host, so `client_run` can re-SSH to the same host.
+    Pick {
+        session_id: String,
+        remote_host: Option<String>,
+        new_session: bool,
+    },
     /// The user cancelled (Esc / Ctrl+C). `client_run` reconnects to the previously
     /// attached session, or exits if there was none (a `--resume` cold start).
     Cancel,
@@ -181,7 +309,12 @@ pub(super) enum SwapperOutcome {
 /// the background probe thread, never on the input/render thread — the caller
 /// ([`run_swapper`]) hands over whatever the probe thread last produced. The SAME function
 /// backs both the live merge and the immediate post-kill refresh.
-fn apply_snapshot(hub: &mut SessionHub, fresh: Vec<SessionStatus>, current_id: Option<&str>) {
+fn apply_snapshot(
+    hub: &mut SessionHub,
+    fresh: Vec<SessionStatus>,
+    current_id: Option<&str>,
+    source: &DiscoverySource,
+) {
     // Capture focus + selection identity before rebuild.
     let saved_focus = hub.focus;
     let saved_query = hub.history_query.clone();
@@ -211,7 +344,14 @@ fn apply_snapshot(hub: &mut SessionHub, fresh: Vec<SessionStatus>, current_id: O
     let saved_delete_id: Option<String> = hub.pending_delete.clone();
 
     // Rebuild the panes from the handed-in snapshot (no blocking discovery on this thread).
-    let mut fresh = hub_from_snapshot(fresh, current_id);
+    let mut fresh = match source {
+        DiscoverySource::Local => hub_from_snapshot(fresh, current_id),
+        DiscoverySource::Remote { target, .. } => hub_from_remote_snapshot(
+            fresh,
+            &format!("{}@{}", target.user, target.host),
+            current_id,
+        ),
+    };
 
     // Restore focus.
     fresh.focus = saved_focus;
@@ -316,6 +456,7 @@ pub(super) fn run_swapper(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     hub: &mut SessionHub,
     current_id: Option<&str>,
+    source: DiscoverySource,
 ) -> Result<SwapperOutcome> {
     use std::time::{Duration, Instant};
 
@@ -332,38 +473,67 @@ pub(super) fn run_swapper(
     const INPUT_POLL: Duration = Duration::from_millis(50);
 
     // --- spawn the background discovery probe ---
-    // The thread sweeps `list_live_sessions()` (the blocking part), sends the raw result,
-    // then sleeps ~1s in `PROBE_SLEEP_STEP` increments checking `stop`. Bounded channel is
-    // unnecessary — the receiver drains to the newest each frame, so at most a few stale
-    // snapshots ever queue.
+    // The thread sweeps discovery (local socket or remote SSH), sends the raw
+    // result, then sleeps ~1s in `PROBE_SLEEP_STEP` increments checking `stop`.
     let stop = Arc::new(AtomicBool::new(false));
     let (snap_tx, snap_rx) = mpsc::channel::<Vec<SessionStatus>>();
-    // A sender clone for the off-thread session-KILL worker (a Ctrl+X confirm): it runs the
-    // escalating kill + a fresh discovery sweep on its OWN thread and ships the result back
-    // through this SAME channel, so the ~seconds-long kill never blocks the input/render loop
-    // (the killed row just disappears on the resulting snapshot push). The probe thread below
-    // still owns the ORIGINAL `snap_tx`; both senders feed the one `snap_rx` the loop drains.
     let kill_snap_tx = snap_tx.clone();
     let probe = {
         let stop = Arc::clone(&stop);
-        std::thread::spawn(move || loop {
-            if stop.load(Ordering::Relaxed) {
-                return;
-            }
-            // The blocking sweep — done HERE, never on the input thread.
-            let live = manage::list_live_sessions();
-            // A send failure means the receiver hung up (loop returning) — stop.
-            if snap_tx.send(live).is_err() {
-                return;
-            }
-            // Interruptible sleep: wake early if a stop was requested mid-interval.
-            let mut slept = Duration::ZERO;
-            while slept < PROBE_INTERVAL {
+        // Keep the descriptor on the render/input thread; the probe gets its own clone so
+        // refreshes can select the correct hub builder without moving the source away.
+        let source = match source.clone() {
+            DiscoverySource::Local => None,
+            DiscoverySource::Remote { target, password } => Some((target, password)),
+        };
+        std::thread::spawn(move || {
+            // Remote probe uses a longer interval (SSH round-trip cost).
+            let interval = if source.is_some() {
+                Duration::from_millis(3000)
+            } else {
+                PROBE_INTERVAL
+            };
+            loop {
                 if stop.load(Ordering::Relaxed) {
                     return;
                 }
-                std::thread::sleep(PROBE_SLEEP_STEP);
-                slept += PROBE_SLEEP_STEP;
+                // The blocking sweep — done HERE, never on the input thread.
+                let live = if let Some((ref target, ref password)) = source {
+                    let auth = password
+                        .as_deref()
+                        .map(|p| crate::remote::auth::SshAuth::new(p.to_string()))
+                        .transpose()
+                        .ok()
+                        .flatten();
+                    crate::remote::sessions::list_sessions_over_ssh(target, auth.as_ref())
+                        .map(|discovered| {
+                            discovered
+                                .into_iter()
+                                .map(|d| SessionStatus {
+                                    session_id: d.session_id,
+                                    name: d.name,
+                                    pwd: String::new(),
+                                    working: d.working,
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    manage::list_live_sessions()
+                };
+                // A send failure means the receiver hung up (loop returning) — stop.
+                if snap_tx.send(live).is_err() {
+                    return;
+                }
+                // Interruptible sleep: wake early if a stop was requested mid-interval.
+                let mut slept = Duration::ZERO;
+                while slept < interval {
+                    if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    std::thread::sleep(PROBE_SLEEP_STEP);
+                    slept += PROBE_SLEEP_STEP;
+                }
             }
         })
     };
@@ -421,7 +591,7 @@ pub(super) fn run_swapper(
             latest = Some(snap);
         }
         if let Some(snap) = latest {
-            apply_snapshot(hub, snap, current_id);
+            apply_snapshot(hub, snap, current_id, &source);
         }
 
         // (4) Pace to ~60fps (skip the sleep if a frame overran the budget). The input poll
@@ -453,5 +623,65 @@ impl Drop for ProbeGuard {
             // panicked probe thread just yields `Err` here — nothing to do but move on.
             let _ = handle.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn remote_source() -> DiscoverySource {
+        DiscoverySource::Remote {
+            target: crate::remote::RemoteTarget {
+                user: "alice".to_string(),
+                host: "example.test".to_string(),
+                port: None,
+                key: None,
+            },
+            password: None,
+        }
+    }
+
+    #[test]
+    fn remote_snapshot_tags_rows_and_preserves_foreground_session() {
+        let current_id = "remote-current";
+        let mut hub = hub_from_remote_snapshot(Vec::new(), "alice@example.test", Some(current_id));
+        let source = remote_source();
+        apply_snapshot(
+            &mut hub,
+            vec![
+                SessionStatus {
+                    session_id: current_id.to_string(),
+                    name: "Current".to_string(),
+                    pwd: String::new(),
+                    working: true,
+                },
+                SessionStatus {
+                    session_id: "remote-other".to_string(),
+                    name: "Other".to_string(),
+                    pwd: String::new(),
+                    working: false,
+                },
+            ],
+            Some(current_id),
+            &source,
+        );
+
+        assert!(hub.history.is_empty());
+        assert!(hub.history_filtered.is_empty());
+        assert_eq!(hub.cooking.len(), 3);
+        assert!(hub
+            .cooking
+            .iter()
+            .all(|row| { row.remote_host.as_deref() == Some("alice@example.test") }));
+        assert!(hub.cooking[0].session_id.is_none());
+        assert!(!hub.cooking[0].is_foreground);
+        assert_eq!(
+            hub.cooking
+                .iter()
+                .find(|row| row.session_id.as_deref() == Some(current_id))
+                .map(|row| row.is_foreground),
+            Some(true)
+        );
     }
 }

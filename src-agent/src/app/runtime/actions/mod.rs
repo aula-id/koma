@@ -508,26 +508,9 @@ pub(in crate::app::runtime) fn apply_action(
                 //   `DaemonEvent::ConnectRemote` to the controller thin-client.
                 // - `connect_remote_target` for the standalone lifecycle which reads it
                 //   directly (unchanged).
-                state.rest.connect_remote_pending = Some(target.clone());
-                state.rest.connect_remote_target = Some(target);
-            }
-        }
-
-        Action::RemoteAddHost => {
-            if let crate::app::mode::Mode::Remote(ref mut remote) = state.mode_mut() {
-                remote.enter_create();
-            }
-        }
-
-        Action::RemoteEditHost(id) => {
-            if let crate::app::mode::Mode::Remote(ref mut remote) = state.mode_mut() {
-                // Find the host by id and set selection to it before entering edit.
-                if let Some(idx) = remote.filtered.iter().position(|&i| {
-                    remote.hosts.get(i).is_some_and(|h| h.id == id)
-                }) {
-                    remote.selected = idx;
-                }
-                remote.enter_edit();
+                let params = (target, host.key_path.clone());
+                state.rest.connect_remote_pending = Some(params.clone());
+                state.rest.connect_remote_target = Some(params);
             }
         }
 
@@ -557,8 +540,9 @@ pub(in crate::app::runtime) fn apply_action(
             if let Some(host) = crate::remote::hosts::host_by_id(&hosts, &host_id) {
                 let target = host.address();
                 *state.mode_mut() = crate::app::mode::Mode::Chat;
-                state.rest.connect_remote_pending = Some(target.clone());
-                state.rest.connect_remote_target = Some(target);
+                let params = (target, host.key_path.clone());
+                state.rest.connect_remote_pending = Some(params.clone());
+                state.rest.connect_remote_target = Some(params);
                 state.rest.connect_remote_session_id = Some(session_id);
             } else {
                 *state.mode_mut() = crate::app::mode::Mode::Chat;

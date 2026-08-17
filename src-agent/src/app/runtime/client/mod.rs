@@ -98,7 +98,7 @@ use crate::model::store;
 
 use bridge::WRITER_FLUSH_TIMEOUT;
 use connect::{connect_attach_and_handshake, Connection};
-use swapper::{build_local_hub, run_swapper, SwapperOutcome};
+use swapper::{build_local_hub, build_remote_hub, run_swapper, DiscoverySource, SwapperOutcome};
 
 use crate::app::runtime::terminal::TerminalGuard;
 
@@ -106,6 +106,9 @@ use crate::app::runtime::terminal::TerminalGuard;
 // keeps resolving unchanged after `run_host_relay` moved into the sibling `host`
 // module (that call site lives outside `client`, hence the `pub(in ...)` reach).
 pub(in crate::app::runtime) use host::run_host_relay;
+// Re-export ClientTransition so `remote::client` can reference it without making
+// the entire `render` module public.
+pub(crate) use render::ClientTransition;
 
 /// The client's run-loop state: either ATTACHED to a session-daemon (rendering its frames
 /// and forwarding input) or running the local detached SWAPPER (the `/resume` picker).
@@ -665,6 +668,12 @@ pub(super) enum HostCtl {
     ImportGraphReindex { request_id: Option<String> },
 
     // ─── Remote host management (host-local CRUD, fast file I/O) ──────────────
+    /// Request/list/confirm/cancel a remote working directory. These are serviced
+    /// over the retained SSH transport; they never inspect the local filesystem.
+    RequestRemotePath,
+    ListRemotePath { path: String },
+    ConfirmRemotePath { path: String },
+    CancelRemotePath,
     /// Fetch the saved remote hosts list and push a RemoteHosts envelope.
     GetRemoteHosts,
     /// Add a new remote host and push the updated list.
@@ -749,6 +758,9 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
     // (the swapper opens cold); otherwise `current` is the minted/`--session` id.
     let mut current_session_id: Option<String> = None;
     let mut prev_session: Option<String> = None;
+    // When the user exits a remote session via `/resume`, we store the target+password
+    // so the swapper can use a remote discovery source and picks can re-SSH.
+    let mut remote_resume: Option<(crate::remote::RemoteTarget, Option<String>)> = None;
 
     // Seed the initial state. Build-skew handling + daemon-spawn live in `attach_session`,
     // so an `Err` here (no daemon could be started, or the initial connect failed) is
@@ -865,24 +877,52 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                     // `/remote`: DETACH from this daemon (leaving it cooking) and connect to
                     // a remote host via SSH. The remote client owns its own full terminal
                     // lifecycle (enter alt-screen, render, exit alt-screen), so we drop OUR
-                    // terminal guard before the call and re-enter after. On return, go back
-                    // to the local swapper so the user can pick another session or reconnect.
-                    Ok(render::ClientTransition::ConnectRemote { target }) => {
-                        teardown_connection(&handle, conn);
-
-                        // Drop the terminal + guard to restore the normal terminal.
+                    // terminal guard before the call and re-enter after. On return, check
+                    // whether the user opened the swapper inside the remote session — if so,
+                    // build a remote hub so the local swapper shows remote sessions.
+                    Ok(render::ClientTransition::ConnectRemote { target, key }) => {
+                        // Drop the terminal + guard to restore the normal terminal
+                        // BEFORE the remote call so the remote client can own it.
                         drop(terminal);
                         drop(_guard);
 
-                        let result =
-                            crate::remote::client::run_remote_client_target(&target, None, None);
+                        let result = crate::remote::client::run_remote_client_target(
+                            &target,
+                            key.as_deref(),
+                            None,
+                        );
+
+                        let remote_target = match &result {
+                            Ok(crate::remote::client::RemoteExit::Resume { context }) => {
+                                let mut target = context.target.clone();
+                                if target.key.is_none() {
+                                    target.key = context.key_hint.clone();
+                                }
+                                Some(target)
+                            }
+                            _ => None,
+                        };
+
+                        let remote_password = match &result {
+                            Ok(crate::remote::client::RemoteExit::Resume { context }) => {
+                                context.password.clone()
+                            }
+                            _ => None,
+                        };
 
                         if let Err(e) = &result {
                             crate::model::store::append_global_error_log(
                                 "client",
                                 &format!("remote connection failed: {e:#}"),
                             );
+                            // Surface the error to the user via toast BEFORE
+                            // teardown drops the request channel.
+                            let _ = conn.req_tx.send(ClientRequest::ConnectFailed {
+                                error: format!("{e:#}"),
+                            });
                         }
+
+                        teardown_connection(&handle, conn);
 
                         // Re-enter the terminal for the local swapper/attach loop.
                         _guard = TerminalGuard::enter()?;
@@ -893,10 +933,24 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                         terminal = Terminal::new(backend)?;
                         terminal.clear()?;
 
-                        // Return to the swapper so the user can pick another session
-                        // or reconnect locally.
+                        // Return to the swapper — local or remote depending on outcome.
                         prev_session = current_session_id.take();
-                        ClientState::Swapper(build_local_hub(prev_session.as_deref()))
+                        if let Some(mut rt) = remote_target {
+                            // Apply the key hint from the ConnectRemote transition.
+                            if let Some(k) = &key {
+                                rt.key = Some(k.clone());
+                            }
+                            remote_resume = Some((rt.clone(), remote_password.clone()));
+                            let hub = build_remote_hub(
+                                &rt,
+                                remote_password.as_deref(),
+                                prev_session.as_deref(),
+                            );
+                            ClientState::Swapper(hub)
+                        } else {
+                            remote_resume = None;
+                            ClientState::Swapper(build_local_hub(prev_session.as_deref()))
+                        }
                     }
                     // A render error ends the loop like an exit, but the error is carried
                     // out and returned AFTER this connection's teardown so the daemon is
@@ -911,23 +965,111 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
 
             // --- SWAPPER: the detached `/resume` picker ---
             ClientState::Swapper(mut hub) => {
-                match run_swapper(&mut terminal, &mut hub, prev_session.as_deref())? {
-                    // Picked a target session: attach to its daemon (spawning if needed). On
-                    // success it becomes the foreground; on failure DEGRADE to the swapper
-                    // rebuilt from fresh discovery (the dead/unreachable session drops out)
-                    // rather than crash — the user can pick again.
-                    SwapperOutcome::Pick(target) => {
-                        match attach_session(&mut terminal, &handle, &target) {
-                            Ok(conn) => {
-                                current_session_id = Some(target);
-                                ClientState::Attached(conn)
+                // Use remote discovery when resuming from a remote session.
+                let source = match &remote_resume {
+                    Some((target, password)) => DiscoverySource::Remote {
+                        target: target.clone(),
+                        password: password.clone(),
+                    },
+                    None => DiscoverySource::Local,
+                };
+                match run_swapper(&mut terminal, &mut hub, prev_session.as_deref(), source)? {
+                    // Picked a target session: attach to its daemon (spawning if needed),
+                    // or re-SSH for remote picks. On success it becomes the foreground; on
+                    // failure DEGRADE to the swapper rebuilt from fresh discovery rather
+                    // than crash — the user can pick again.
+                    SwapperOutcome::Pick {
+                        session_id,
+                        remote_host,
+                        new_session,
+                    } => {
+                        if let Some(host) = remote_host {
+                            // Remote pick: drop the terminal, run the remote session
+                            // (it owns its own terminal lifecycle), then handle the
+                            // exit outcome — Resume goes back to the remote swapper,
+                            // Exit goes back to the local swapper.
+                            drop(terminal);
+                            drop(_guard);
+
+                            let (attach_target, attach_key, attach_password) = remote_resume
+                                .as_ref()
+                                .map(|(target, password)| {
+                                    let address = match target.port {
+                                        Some(port) => {
+                                            format!("{}@{}:{}", target.user, target.host, port)
+                                        }
+                                        None => format!("{}@{}", target.user, target.host),
+                                    };
+                                    (address, target.key.as_deref(), password.as_deref())
+                                })
+                                .unwrap_or((host.clone(), None, None));
+                            let result = remote_attach(
+                                &attach_target,
+                                attach_key,
+                                attach_password,
+                                new_session,
+                            );
+
+                            // Re-enter the terminal for the local swapper/attach loop.
+                            _guard = TerminalGuard::enter()?;
+                            crate::app::runtime::actions::apply_mouse_capture(
+                                crate::model::settings::MouseCapture::Auto,
+                            );
+                            let backend = CrosstermBackend::new(stdout());
+                            terminal = Terminal::new(backend)?;
+                            terminal.clear()?;
+
+                            match result {
+                                Ok(crate::remote::client::RemoteExit::Resume { .. })
+                                | Ok(crate::remote::client::RemoteExit::NewSession { .. }) => {
+                                    // The user opened the swapper inside the remote
+                                    // session — rebuild the remote hub.
+                                    if let Ok(rt) = crate::remote::parse_target(&host) {
+                                        // Keep the existing target/auth context when returning
+                                        // from a remote session; a password prompt must not be
+                                        // repeated merely because the user opened `/resume`.
+                                        let (rt, password) = match remote_resume.take() {
+                                            Some((saved, password)) => (saved, password),
+                                            None => (rt, None),
+                                        };
+                                        remote_resume = Some((rt.clone(), password.clone()));
+                                        prev_session = current_session_id.take();
+                                        let hub = build_remote_hub(
+                                            &rt,
+                                            password.as_deref(),
+                                            prev_session.as_deref(),
+                                        );
+                                        ClientState::Swapper(hub)
+                                    } else {
+                                        // Can't parse target — degrade to local swapper.
+                                        prev_session = current_session_id.take();
+                                        remote_resume = None;
+                                        ClientState::Swapper(build_local_hub(
+                                            prev_session.as_deref(),
+                                        ))
+                                    }
+                                }
+                                Ok(crate::remote::client::RemoteExit::Exit) | Err(_) => {
+                                    // Remote session ended or failed — back to local swapper.
+                                    prev_session = current_session_id.take();
+                                    remote_resume = None;
+                                    ClientState::Swapper(build_local_hub(prev_session.as_deref()))
+                                }
                             }
-                            Err(e) => {
-                                crate::model::store::append_global_error_log(
-                                    "client",
-                                    &format!("could not attach to session {target}: {e:#}"),
-                                );
-                                ClientState::Swapper(build_local_hub(prev_session.as_deref()))
+                        } else {
+                            // Local pick: existing path.
+                            match attach_session(&mut terminal, &handle, &session_id) {
+                                Ok(conn) => {
+                                    current_session_id = Some(session_id);
+                                    ClientState::Attached(conn)
+                                }
+                                Err(e) => {
+                                    crate::model::store::append_global_error_log(
+                                        "client",
+                                        &format!("could not attach to session {session_id}: {e:#}"),
+                                    );
+                                    ClientState::Swapper(build_local_hub(prev_session.as_deref()))
+                                }
                             }
                         }
                     }
@@ -965,6 +1107,73 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
     render_result
 }
 
+/// Attach to a session on a remote host over SSH.
+///
+/// Parses `target_str`, probes key auth, then runs a self-contained remote TUI
+/// session (the same path as `koma remote`). On return, the caller re-enters
+/// the terminal and handles the [`RemoteExit`] outcome.
+///
+/// This does NOT return a [`Connection`] because the SSH child process lifecycle
+/// is managed internally by [`crate::remote::client::run_remote_client`]. The
+/// remote session owns its own terminal, render loop, and cleanup.
+fn remote_attach(
+    target_str: &str,
+    key: Option<&str>,
+    password: Option<&str>,
+    new_session: bool,
+) -> Result<crate::remote::client::RemoteExit> {
+    // Apply the key hint if provided.
+    let mut target = crate::remote::parse_target(target_str)?;
+    if let Some(k) = key {
+        target.key = Some(k.to_string());
+    }
+
+    // Probe key-based auth first (fast, silent), prompt for password if needed.
+    let ssh_auth = match password {
+        Some(password) => Some(crate::remote::auth::SshAuth::new(password.to_string())?),
+        None => match crate::remote::auth::probe_key_auth(&target) {
+            crate::remote::auth::AuthProbe::KeyReady => None,
+            crate::remote::auth::AuthProbe::PasswordRequired => {
+                eprintln!("Key-based authentication failed. Password required.");
+                let password = crate::remote::auth::prompt_password(&target.user, &target.host)?;
+                Some(crate::remote::auth::SshAuth::new(password)?)
+            }
+        },
+    };
+
+    let auth_ref = ssh_auth.as_ref();
+    let cwd = if new_session {
+        crate::remote::client::prompt_remote_cwd(&target, auth_ref)?
+    } else {
+        None
+    };
+
+    if new_session && cwd.is_none() {
+        return Ok(crate::remote::client::RemoteExit::Resume {
+            context: crate::remote::client::RemoteContext {
+                target: target.clone(),
+                key_hint: target.key.clone(),
+                password: password.map(str::to_string),
+            },
+        });
+    }
+
+    // Bootstrap koma on the remote host (ensures compatibility).
+    let auth_ref = ssh_auth.as_ref();
+    eprintln!("Checking remote Koma version...");
+    let _ = crate::remote::bootstrap::ensure_koma_compatible(&target, auth_ref)?;
+
+    // Run remote lifecycle operations in-place: `/new` creates another remote
+    // daemon/session while preserving target and authentication.
+    loop {
+        match crate::remote::client::run_remote_client_with_cwd(&target, auth_ref, cwd.as_deref())?
+        {
+            crate::remote::client::RemoteExit::NewSession { .. } => continue,
+            outcome => return Ok(outcome),
+        }
+    }
+}
+
 /// Run the TUI render loop for a remote connection.
 ///
 /// Used by `koma remote` to display the remote koma server's UI over SSH.
@@ -975,7 +1184,7 @@ pub(crate) fn run_remote_render_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     mut conn: Connection,
     handle: &tokio::runtime::Handle,
-) -> Result<()> {
+) -> Result<render::ClientTransition> {
     let prebuffered = std::mem::take(&mut conn.prebuffered);
     let frame_rx = &conn.frame_rx;
     let req_tx = &conn.req_tx;
@@ -985,21 +1194,19 @@ pub(crate) fn run_remote_render_loop(
         render::render_loop(terminal, frame_rx, req_tx, prebuffered)
     };
 
-    // Only Exit or error are expected transitions for remote.
-    // OpenSwapper/NewSession don't make sense over SSH — treat as exit.
-    match transition {
-        Ok(render::ClientTransition::Exit { .. })
-        | Ok(render::ClientTransition::OpenSwapper)
-        | Ok(render::ClientTransition::NewSession { .. })
-        | Ok(render::ClientTransition::ConnectRemote { .. }) => {
-            teardown_connection(handle, conn);
-        }
-        Err(e) => {
-            teardown_connection(handle, conn);
-            return Err(e);
-        }
+    // A remote `/new kill` must reach the remote daemon before the SSH bridge is
+    // consumed. Plain `/new` only detaches and leaves the old daemon resumable.
+    if matches!(
+        &transition,
+        Ok(render::ClientTransition::NewSession { kill: true })
+    ) {
+        let _ = conn.req_tx.send(ClientRequest::QuitDaemon);
     }
-    Ok(())
+
+    // Tear down the connection on every path — the caller owns the outcome.
+    teardown_connection(handle, conn);
+
+    transition
 }
 
 /// Run the `/select` transcript dump on the CLIENT's terminal.

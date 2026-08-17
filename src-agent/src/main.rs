@@ -272,7 +272,7 @@ fn main() -> anyhow::Result<()> {
     if let Some(ref target) = opts.remote_target.clone() {
         let key = opts.remote_key.clone();
         let port = opts.remote_port;
-        return remote::client::run_remote_client_target(target, key.as_deref(), port);
+        return remote::client::run_remote_client_target(target, key.as_deref(), port).map(|_| ());
     }
     // Speaks the IPC protocol over stdin/stdout instead of a unix socket.
     // Checked BEFORE `--daemon` since `server` is a distinct mode.

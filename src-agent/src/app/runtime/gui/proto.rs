@@ -986,6 +986,15 @@ pub(super) enum GuiReq {
     /// Cancel an in-progress remote connection.
     CancelRemoteConnect,
 
+    /// Open the GUI remote working-directory picker using retained SSH context.
+    RequestRemotePath,
+    /// List remote directories over SSH; never uses local filesystem APIs.
+    ListRemotePath { path: String },
+    /// Confirm a remote working directory.
+    ConfirmRemotePath { path: String },
+    /// Cancel the remote working-directory picker.
+    CancelRemotePath,
+
     /// Import-graph visualization request. `path` is the focal file (None = overview);
     /// `depth` is traversal depth (1–3, clamped); `direction` is
     /// `"dependencies"`/`"dependents"`/`"both"`.

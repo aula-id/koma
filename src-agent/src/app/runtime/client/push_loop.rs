@@ -311,7 +311,7 @@ pub(super) fn push_loop(
         let mut select_requested = false;
         let mut open_swapper_requested = false;
         let mut new_session_requested: Option<bool> = None;
-        let mut connect_remote_requested: Option<String> = None;
+        let mut connect_remote_requested: Option<(String, Option<String>)> = None;
         for frame in prebuffered {
             // Cache the config off any prebuffered full snapshot (normally none — Hello
             // is first, so the attach Snapshot lands in the live drain — but stay safe).
@@ -370,6 +370,22 @@ pub(super) fn push_loop(
                         id: new_id,
                         workdir,
                     };
+                }
+                // Remote path controls are handled by the remote host state. A local
+                // attached daemon cannot service them, so return structured state rather
+                // than touching the local filesystem or opening rfd.
+                Ok(super::HostCtl::RequestRemotePath)
+                | Ok(super::HostCtl::ListRemotePath { .. })
+                | Ok(super::HostCtl::ConfirmRemotePath { .. })
+                | Ok(super::HostCtl::CancelRemotePath) => {
+                    let envelope = serde_json::json!({
+                        "k": "RemotePathPicker",
+                        "state": "error",
+                        "error": "active session is not remote"
+                    });
+                    if let Ok(json) = serde_json::to_string(&envelope) {
+                        push(json);
+                    }
                 }
                 // KILL the daemon `id`. Killing the CURRENTLY-ATTACHED session: queue a
                 // graceful QuitDaemon on the live conn (flushed by teardown), ensure its death
@@ -1043,7 +1059,7 @@ pub(super) fn push_loop(
         let mut select_requested = false;
         let mut open_swapper_requested = false;
         let mut new_session_requested: Option<bool> = None;
-        let mut connect_remote_requested: Option<String> = None;
+        let mut connect_remote_requested: Option<(String, Option<String>)> = None;
         loop {
             match frame_rx.try_recv() {
                 Ok(frame) => {

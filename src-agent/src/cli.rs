@@ -173,6 +173,8 @@ pub struct Opts {
     /// socket and create-or-loads exactly session `<id>`. `None` on a bare `koma` until
     /// `main` mints one; a stray `--session` on a path that ignores it is harmless.
     pub session: Option<String>,
+    /// The remote working directory for `koma server` startup.
+    pub cwd: Option<String>,
     /// When `true`, launch the feature-gated desktop GUI (`koma gui` positional verb):
     /// a wry webview hosting xterm.js that renders the real koma client in a PTY.
     pub gui: bool,
@@ -292,6 +294,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
     for pair in all.windows(2) {
         if pair[0] == "--session" {
             opts.session = Some(pair[1].clone());
+        }
+        if pair[0] == "--cwd" {
+            opts.cwd = Some(pair[1].clone());
         }
     }
 

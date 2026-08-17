@@ -16,6 +16,10 @@
 //! └──────────────────┴──────────────────────────────┘
 //!   ↑↓ pick · Enter connect · n new · d delete · e edit · Esc close
 //! ```
+//!
+//! Edit/Create/DeleteConfirm share the same two-pane layout as Browse — the
+//! detail pane shows the editor form fields or delete prompt instead of the
+//! host metadata. Only `SessionHub` takes over the full frame.
 
 use ratatui::layout::Rect;
 use ratatui::layout::{Constraint, Direction, Layout, Margin};
@@ -24,25 +28,23 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::mode::remote::{RemoteIntent, RemoteState, RemoteView};
+use crate::app::mode::remote::{HostEditField, RemoteIntent, RemoteState, RemoteView};
 use crate::view::theme::Palette;
 
 /// List sidebar column width (includes RIGHT border).
 const SIDEBAR_W: u16 = 26;
 
 /// Draw the remote workflow.
+///
+/// Matches the `/agents` design signature: Browse/Edit/DeleteConfirm all share
+/// the same two-pane layout (sidebar + detail). Only `SessionHub` takes over
+/// the full frame.
 pub fn draw(frame: &mut Frame, m: &RemoteState, palette: &Palette) {
     match m.view {
-        RemoteView::Edit => {
-            crate::view::clear_and_fill(frame, frame.area(), palette.bg);
-            if let Some(editor) = &m.editor {
-                draw_editor_inner(frame, editor, m.editing_field, frame.area(), palette);
-            }
-        }
         RemoteView::SessionHub => {
             draw_session_hub(frame, m, frame.area(), palette);
         }
-        RemoteView::Browse => {
+        RemoteView::Browse | RemoteView::DeleteConfirm | RemoteView::Edit => {
             draw_browse(frame, m, palette);
         }
     }
@@ -107,11 +109,6 @@ fn draw_browse(frame: &mut Frame, m: &RemoteState, palette: &Palette) {
             Paragraph::new(Line::from(Span::raw(padded))).style(bar_style),
             footer_rect,
         );
-    }
-
-    // Delete confirm overlay (on top of everything).
-    if m.pending_delete.is_some() {
-        draw_delete_confirm(frame, m, frame.area(), palette);
     }
 }
 
@@ -201,13 +198,28 @@ fn draw_host_list(frame: &mut Frame, m: &RemoteState, palette: &Palette, area: R
     }
 }
 
-/// Render the detail pane (right side of browse mode).
+/// Render the detail pane (right side) based on the active view.
 fn draw_detail(frame: &mut Frame, m: &RemoteState, palette: &Palette, area: Rect) {
     let inner = area.inner(Margin {
         horizontal: 2,
         vertical: 1,
     });
 
+    match m.view {
+        RemoteView::Edit => {
+            draw_editor_detail(frame, m, palette, inner);
+        }
+        RemoteView::DeleteConfirm => {
+            draw_delete_detail(frame, m, palette, inner);
+        }
+        RemoteView::Browse | RemoteView::SessionHub => {
+            draw_host_detail(frame, m, palette, inner);
+        }
+    }
+}
+
+/// Detail rows for Browse: the selected host's metadata.
+fn draw_host_detail(frame: &mut Frame, m: &RemoteState, palette: &Palette, inner: Rect) {
     let Some(host) = m.selected_host() else {
         let msg = Paragraph::new(Span::styled(
             "no host selected",
@@ -228,11 +240,7 @@ fn draw_detail(frame: &mut Frame, m: &RemoteState, palette: &Palette, area: Rect
     };
 
     lines.push(row("name", host.name.clone(), palette.accent));
-    lines.push(row(
-        "addr",
-        host.address(),
-        palette.fg,
-    ));
+    lines.push(row("addr", host.address(), palette.fg));
     if let Some(ref key) = host.key_path {
         lines.push(row("key", truncate_str(key, value_w), palette.fg));
     }
@@ -284,7 +292,7 @@ fn draw_detail(frame: &mut Frame, m: &RemoteState, palette: &Palette, area: Rect
             "sessions",
             Style::default().fg(palette.dim),
         )));
-        for (i, session) in m.sessions.iter().take(8).enumerate() {
+        for session in m.sessions.iter().take(8) {
             let dot = if session.working {
                 Span::styled("●", Style::default().fg(palette.accent))
             } else {
@@ -302,7 +310,6 @@ fn draw_detail(frame: &mut Frame, m: &RemoteState, palette: &Palette, area: Rect
                 Span::styled(&session.name, Style::default().fg(palette.fg)),
                 Span::styled(fg_label, Style::default().fg(palette.dim)),
             ]));
-            let _ = i; // suppress unused warning
         }
     }
 
@@ -310,43 +317,128 @@ fn draw_detail(frame: &mut Frame, m: &RemoteState, palette: &Palette, area: Rect
     frame.render_widget(widget, inner);
 }
 
-/// Render a delete confirm popup overlaid on the center of the screen.
-fn draw_delete_confirm(frame: &mut Frame, m: &RemoteState, area: Rect, palette: &Palette) {
-    let host_name = m
-        .pending_delete
-        .as_deref()
-        .and_then(|id| m.hosts.iter().find(|h| h.id == id))
-        .map(|h| h.name.as_str())
-        .unwrap_or("host");
-
-    let msg = format!(" Delete {host_name}? (y/n) ");
-    let popup_w = msg.len() as u16 + 4;
-    let popup_h: u16 = 3;
-    let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-    let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-    let popup = Rect {
-        x,
-        y,
-        width: popup_w.min(area.width),
-        height: popup_h.min(area.height),
+/// Detail rows for Edit/Create: the host editor form fields.
+///
+/// Matches the agents `editor_lines` pattern: `›` marker on the selected field,
+/// label in accent/dim, value display, and an `(editing)` hint when actively
+/// typing into a field.
+fn draw_editor_detail(
+    frame: &mut Frame,
+    m: &RemoteState,
+    palette: &Palette,
+    inner: Rect,
+) {
+    let Some(editor) = &m.editor else {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "no editor",
+                Style::default().fg(palette.dim),
+            )),
+            inner,
+        );
+        return;
     };
 
-    let block = Block::bordered()
-        .title(Span::styled(
-            " confirm ",
-            Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
-        ))
-        .border_style(Style::default().fg(palette.accent));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let value_w = (inner.width as usize).saturating_sub(16).max(4);
+    let mut lines: Vec<Line> = Vec::new();
 
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!("Delete {host_name}?"),
-            Style::default().fg(palette.fg),
-        ))),
-        inner,
-    );
+    // Title row: "add host" or "edit host".
+    let title = if editor.edit_id.is_some() {
+        "edit host"
+    } else {
+        "add host"
+    };
+    lines.push(Line::from(Span::styled(
+        title,
+        Style::default().fg(palette.dim),
+    )));
+    lines.push(Line::from(""));
+
+    // Editor fields with `›` marker pattern (matching agents design).
+    let fields: [(HostEditField, &str); 5] = [
+        (HostEditField::Name, &editor.name),
+        (HostEditField::User, &editor.user),
+        (HostEditField::Host, &editor.host),
+        (HostEditField::Port, &editor.port),
+        (HostEditField::KeyPath, &editor.key_path),
+    ];
+
+    for &(field, value) in &fields {
+        let selected = field == editor.focused;
+        let editing_here = m.editing_field && selected;
+
+        let marker = Span::styled(
+            if selected { "› " } else { "  " },
+            Style::default().fg(palette.accent),
+        );
+        let label_color = if selected {
+            palette.accent
+        } else {
+            palette.dim
+        };
+        let label = Span::styled(
+            format!("{:<14}", field.label()),
+            Style::default().fg(label_color),
+        );
+
+        // Value: show placeholder for empty key_path, block cursor when editing.
+        let (shown, color) = if field == HostEditField::KeyPath && value.is_empty() {
+            ("(none)".to_string(), palette.dim)
+        } else if editing_here {
+            let mut s = truncate_str(value, value_w.saturating_sub(1));
+            s.push('█');
+            (s, palette.fg)
+        } else {
+            (truncate_str(value, value_w), palette.fg)
+        };
+
+        let mut row = vec![marker, label, Span::styled(shown, Style::default().fg(color))];
+        if selected && !editing_here {
+            row.push(Span::styled(
+                "  Enter edit",
+                Style::default().fg(palette.dim),
+            ));
+        }
+        lines.push(Line::from(row));
+    }
+
+    // Error message (below fields).
+    if let Some(ref error) = editor.error {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  ✗ {error}"),
+            Style::default().fg(palette.error),
+        )));
+    }
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Detail rows for DeleteConfirm: a one-line y/n prompt (matches agents
+/// `delete_lines` pattern).
+fn draw_delete_detail(
+    frame: &mut Frame,
+    m: &RemoteState,
+    palette: &Palette,
+    inner: Rect,
+) {
+    let host_name = m
+        .selected_host()
+        .map(|h| h.name.as_str())
+        .unwrap_or("host");
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("delete ", Style::default().fg(palette.fg)),
+            Span::styled(format!("'{host_name}'"), Style::default().fg(palette.accent)),
+            Span::styled("?", Style::default().fg(palette.fg)),
+        ]),
+        Line::from(Span::styled(
+            "this removes the saved host",
+            Style::default().fg(palette.dim),
+        )),
+    ];
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// Render the dedicated remote session hub (fullscreen overlay).
@@ -437,180 +529,26 @@ fn draw_sessions_list(frame: &mut Frame, m: &RemoteState, area: Rect, palette: &
     }
 }
 
-/// Render the host editor form (create or edit).
-///
-/// Full-screen layout:
-///   Header: "remote > add host" or "remote > edit host"
-///   5 rows for fields: name, user, host, port, key path
-///   Error message (if any)
-///   Footer hint bar
-fn draw_editor_inner(
-    frame: &mut Frame,
-    editor: &crate::app::mode::remote::HostEditor,
-    editing_field: bool,
-    area: Rect,
-    palette: &Palette,
-) {
-    let header_area = Rect {
-        x: area.x,
-        y: area.y,
-        width: area.width,
-        height: 2,
-    };
-    let footer_area = Rect {
-        x: area.x,
-        y: area.y + area.height - 1,
-        width: area.width,
-        height: 1,
-    };
-
-    // Header.
-    let title = if editor.edit_id.is_some() {
-        "remote > edit host"
-    } else {
-        "remote > add host"
-    };
-    let header = Paragraph::new(Line::from(Span::styled(
-        format!(" {title} "),
-        Style::default()
-            .fg(palette.fg)
-            .bg(palette.bg)
-            .add_modifier(Modifier::BOLD),
-    )));
-    frame.render_widget(header, header_area);
-    // Separator.
-    let sep = Paragraph::new(Line::from(Span::styled(
-        "─".repeat(area.width as usize),
-        Style::default().fg(palette.dim),
-    )));
-    frame.render_widget(
-        sep,
-        Rect {
-            x: area.x,
-            y: area.y + 1,
-            width: area.width,
-            height: 1,
-        },
-    );
-
-    // Body area (between header and footer).
-    let body_area = Rect {
-        x: area.x,
-        y: area.y + 2,
-        width: area.width,
-        height: area.height.saturating_sub(3),
-    };
-
-    // Render each field row inside a bordered block.
-    let block = Block::default()
-        .title(" fields ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.dim));
-    let inner = block.inner(body_area);
-    frame.render_widget(block, body_area);
-
-    use crate::app::mode::remote::HostEditField;
-    let fields: [(HostEditField, &str); 5] = [
-        (HostEditField::Name, &editor.name),
-        (HostEditField::User, &editor.user),
-        (HostEditField::Host, &editor.host),
-        (HostEditField::Port, &editor.port),
-        (HostEditField::KeyPath, &editor.key_path),
-    ];
-
-    for (row, &(field, value)) in fields.iter().enumerate() {
-        if row as u16 >= inner.height {
-            break;
-        }
-        let y = inner.y + row as u16;
-        let is_focused = editor.focused == field;
-
-        // Label.
-        let label_style = if is_focused {
-            Style::default()
-                .fg(palette.accent)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(palette.dim)
-        };
-
-        let cursor = if is_focused && editing_field {
-            "█"
-        } else if is_focused {
-            "▌"
-        } else {
-            " "
-        };
-
-        let value_display = if field == HostEditField::KeyPath && value.is_empty() {
-            "(none)".to_string()
-        } else {
-            value.to_string()
-        };
-
-        let value_style = if is_focused {
-            Style::default().fg(palette.fg).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(palette.fg)
-        };
-
-        let line = Line::from(vec![
-            Span::raw("  "),
-            Span::styled(format!("{:>9}: ", field.label()), label_style),
-            Span::styled(&value_display, value_style),
-            Span::styled(cursor, Style::default().fg(palette.accent)),
-        ]);
-
-        frame.render_widget(
-            Paragraph::new(line),
-            Rect {
-                x: inner.x,
-                y,
-                width: inner.width,
-                height: 1,
-            },
-        );
-    }
-
-    // Error message (below fields, inside the block).
-    if let Some(ref error) = editor.error {
-        let err_row = fields.len() as u16 + 1;
-        if err_row < inner.height {
-            let err_line = Line::from(Span::styled(
-                format!("  ✗ {error}"),
-                Style::default().fg(palette.error),
-            ));
-            frame.render_widget(
-                Paragraph::new(err_line),
-                Rect {
-                    x: inner.x,
-                    y: inner.y + err_row,
-                    width: inner.width,
-                    height: 1,
-                },
-            );
-        }
-    }
-
-    // Footer hint.
-    let hint = if editing_field {
-        " Enter confirm field  Esc cancel edit "
-    } else {
-        " Enter edit field  s save  Esc back  ↑↓ navigate "
-    };
-    let hint_line = Line::from(Span::styled(
-        hint,
-        Style::default().fg(palette.sel_fg).bg(palette.accent),
-    ));
-    frame.render_widget(Paragraph::new(hint_line), footer_area);
-}
-
 /// Context-sensitive footer hint for the active view.
 fn footer_hint(m: &RemoteState) -> &'static str {
-    match m.intent {
-        RemoteIntent::Manage => "↑↓ pick · Enter connect · n new · d delete · e edit · i import · Esc close",
-        RemoteIntent::Resume => "↑↓ pick · Enter connect · Esc close",
-        RemoteIntent::New => "↑↓ pick · Enter connect · Esc close",
+    match m.view {
+        RemoteView::Edit => {
+            if m.editing_field {
+                "Enter confirm field · Esc cancel edit"
+            } else {
+                "↑↓ navigate · Enter edit field · s save · Esc back"
+            }
+        }
+        RemoteView::DeleteConfirm => "y delete · n/Esc cancel",
+        RemoteView::SessionHub => "↑↓ pick · Enter resume · Esc back",
+        RemoteView::Browse => match m.intent {
+            RemoteIntent::Manage => {
+                "↑↓ pick · Enter connect · n new · d delete · e edit · i import · Esc close"
+            }
+            RemoteIntent::Resume | RemoteIntent::New => {
+                "↑↓ pick · Enter connect · Esc close"
+            }
+        },
     }
 }
 

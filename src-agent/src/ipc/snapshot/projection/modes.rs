@@ -32,7 +32,7 @@ use crate::ipc::proto::{
     McpSnapshot, ModeSnapshot, ModelCmdSnapshot, ModelDraftSnapshot, ModelEndpointWire,
     ModelModalSnapshot, OAuthDraftSnapshot, OnboardProviderSnapshot, OnboardSnapshot,
     PathPickerSnapshot, PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot,
-    RemoteHostSnapshot, RemoteSessionSnapshot, RemoteSnapshot, RewindEntrySnapshot, RewindSnapshot,
+    RemoteEditorSnapshot, RemoteHostSnapshot, RemoteSessionSnapshot, RemoteSnapshot, RewindEntrySnapshot, RewindSnapshot,
     RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot, SessionMetaSnapshot,
     SettingsSnapshot, SkillCmdSnapshot, SkillEntrySnapshot, TextEditorSnapshot, TodoItemSnapshot,
     TodoSnapshot, ToolPickerSnapshot, UsageSnapshot, WarmStatusWire,
@@ -931,6 +931,7 @@ pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
         RemoteView::Browse => "browse",
         RemoteView::SessionHub => "session_hub",
         RemoteView::Edit => "edit",
+        RemoteView::DeleteConfirm => "delete_confirm",
     };
 
     RemoteSnapshot {
@@ -969,7 +970,27 @@ pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
             })
             .collect(),
         session_selected: m.session_selected,
-        pending_delete: m.pending_delete.clone(),
+        editor: m.editor.as_ref().map(|e| {
+            use crate::app::mode::remote::HostEditField;
+            let focused = match e.focused {
+                HostEditField::Name => "name",
+                HostEditField::User => "user",
+                HostEditField::Host => "host",
+                HostEditField::Port => "port",
+                HostEditField::KeyPath => "key_path",
+            };
+            RemoteEditorSnapshot {
+                name: e.name.clone(),
+                user: e.user.clone(),
+                host: e.host.clone(),
+                port: e.port.clone(),
+                key_path: e.key_path.clone(),
+                focused: focused.to_string(),
+                edit_id: e.edit_id.clone(),
+                error: e.error.clone(),
+            }
+        }),
+        editing_field: m.editing_field,
     }
 }
 
