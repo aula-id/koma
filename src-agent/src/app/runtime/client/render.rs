@@ -64,8 +64,8 @@ pub(super) enum ClientTransition {
     /// session-daemon (`/new` / `/new kill`). The bool is the `/new kill` flag.
     NewSession { kill: bool },
     /// Detach from the local daemon and connect to a remote host via SSH.
-    /// Carries the `user@host[:port]` address string.
-    ConnectRemote { target: String },
+    /// Carries the `user@host[:port]` address string and optional SSH key path.
+    ConnectRemote { target: String, key: Option<String> },
 }
 
 /// The synchronous render loop, decoupled from the socket and paced at ~60fps.
@@ -150,7 +150,7 @@ pub(super) fn render_loop(
         let mut select_requested = false;
         let mut open_swapper_requested = false;
         let mut new_session_requested: Option<bool> = None;
-        let mut connect_remote_requested: Option<String> = None;
+        let mut connect_remote_requested: Option<(String, Option<String>)> = None;
         for frame in prebuffered {
             apply_frame(
                 frame,
@@ -189,7 +189,7 @@ pub(super) fn render_loop(
         // hand-off): the daemon asked this client to connect to a remote host via SSH.
         // Checked AFTER the drain, where we return `ConnectRemote` so `client_run`
         // tears down the local connection and runs the remote client.
-        let mut connect_remote_requested: Option<String> = None;
+        let mut connect_remote_requested: Option<(String, Option<String>)> = None;
 
         // --- (a) drain every queued incoming frame (NON-BLOCKING) ---
         // try_recv never blocks, so a quiet daemon can't stall the paint below. The
@@ -271,8 +271,8 @@ pub(super) fn render_loop(
         // pass. Hand control back to `client_run` so it tears down the local connection
         // (leaving the daemon cooking) and runs `run_remote_client_target`. Like
         // `OpenSwapper`/`NewSession`, returned BEFORE any further work this frame.
-        if let Some(target) = connect_remote_requested {
-            return Ok(ClientTransition::ConnectRemote { target });
+        if let Some((target, key)) = connect_remote_requested {
+            return Ok(ClientTransition::ConnectRemote { target, key });
         }
 
         // --- (a-bis) `/select` transcript dump (controller-side) ---
