@@ -9,8 +9,18 @@ use super::ssh;
 use super::RemoteTarget;
 
 const MISSING: &str = "MISSING";
-const VERSION_COMMAND: &str =
-    "if command -v koma >/dev/null 2>&1; then koma --version; else echo MISSING; fi";
+/// Version probe run on the remote host via SSH.
+///
+/// The `2>/dev/null || echo MISSING` fallback is critical: if the existing
+/// `koma` binary exists but cannot execute (wrong architecture triggering
+/// QEMU/binfmt, missing shared libraries, corrupt download, etc.), the
+/// command prints `MISSING` instead of propagating the error.  This lets the
+/// bootstrap proceed to reinstall the correct binary via the official
+/// installer, which re-detects OS + architecture.
+const VERSION_COMMAND: &str = "\
+    if command -v koma >/dev/null 2>&1; \
+    then koma --version 2>/dev/null || echo MISSING; \
+    else echo MISSING; fi";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SemanticVersion {
@@ -127,13 +137,22 @@ where
     let expected = parse_semantic_version(local).ok_or_else(|| {
         anyhow::anyhow!("local Koma version is not valid semantic version: {local:?}")
     })?;
-    let observed = parse_version_output(&query()?);
+
+    // Treat a probe failure (SSH error, broken binary, QEMU/binfmt, etc.) as
+    // "missing" so we fall through to the install path instead of aborting.
+    let observed = match query() {
+        Ok(output) => parse_version_output(&output),
+        Err(_) => RemoteVersion::Missing,
+    };
     if observed == RemoteVersion::Version(expected.clone()) {
         return Ok(false);
     }
 
     install()?;
-    let observed = parse_version_output(&query()?);
+    let observed = match query() {
+        Ok(output) => parse_version_output(&output),
+        Err(_) => RemoteVersion::Missing,
+    };
     if observed != RemoteVersion::Version(expected.clone()) {
         anyhow::bail!(
             "remote Koma version mismatch after install: expected {expected}, observed {observed}"
@@ -218,6 +237,57 @@ mod tests {
         assert_eq!(installs.get(), 1);
         assert!(error.contains("expected 0.3.16"));
         assert!(error.contains("observed 0.3.14"));
+    }
+
+    #[test]
+    fn query_error_treated_as_missing_triggers_install() {
+        let installs = Cell::new(0);
+        let mut probe_results: VecDeque<Result<String>> = vec![
+            Err(anyhow::anyhow!(
+                "binfmt exec failed: x86_64-binfmt-P: Could not open '/lib64/ld-linux-x86-64.so.2'"
+            )),
+            Ok("koma 0.3.16".to_string()),
+        ]
+        .into();
+        let result = ensure_compatible_with(
+            "0.3.16",
+            || {
+                probe_results
+                    .pop_front()
+                    .unwrap_or_else(|| Err(anyhow::anyhow!("unexpected version query")))
+            },
+            || {
+                installs.set(installs.get() + 1);
+                Ok(())
+            },
+        );
+        assert!(result.unwrap());
+        assert_eq!(installs.get(), 1);
+    }
+
+    #[test]
+    fn query_error_post_install_also_errors_propagates() {
+        let installs = Cell::new(0);
+        let mut probe_results: VecDeque<Result<String>> = vec![
+            Err(anyhow::anyhow!("connection refused")),
+            Err(anyhow::anyhow!("connection refused")),
+        ]
+        .into();
+        let result = ensure_compatible_with(
+            "0.3.16",
+            || {
+                probe_results
+                    .pop_front()
+                    .unwrap_or_else(|| Err(anyhow::anyhow!("unexpected version query")))
+            },
+            || {
+                installs.set(installs.get() + 1);
+                Ok(())
+            },
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("version mismatch after install"));
+        assert_eq!(installs.get(), 1);
     }
 
     #[test]
