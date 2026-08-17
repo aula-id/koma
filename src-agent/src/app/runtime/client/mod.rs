@@ -110,6 +110,13 @@ pub(in crate::app::runtime) use host::run_host_relay;
 // the entire `render` module public.
 pub(crate) use render::ClientTransition;
 
+type RemoteResume = (
+    crate::remote::RemoteTarget,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 /// The client's run-loop state: either ATTACHED to a session-daemon (rendering its frames
 /// and forwarding input) or running the local detached SWAPPER (the `/resume` picker).
 ///
@@ -760,12 +767,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
     let mut prev_session: Option<String> = None;
     // When the user exits a remote session via `/resume`, we store the target+password
     // so the swapper can use a remote discovery source and picks can re-SSH.
-    let mut remote_resume: Option<(
-        crate::remote::RemoteTarget,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )> = None;
+    let mut remote_resume: Option<RemoteResume> = None;
 
     // Seed the initial state. Build-skew handling + daemon-spawn live in `attach_session`,
     // so an `Err` here (no daemon could be started, or the initial connect failed) is
