@@ -13,6 +13,7 @@ pub(crate) mod ssh;
 use anyhow::Result;
 
 /// Parsed remote target.
+#[derive(Clone)]
 pub(crate) struct RemoteTarget {
     pub user: String,
     pub host: String,

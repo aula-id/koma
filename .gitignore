@@ -18,6 +18,11 @@ dist/
 # nix build output symlinks
 result
 result-*
+
+# frontend build artifacts
+package-lock.json
+src-docs/.vite/
+
 # browser screenshots (transient)
 .screenshoot/
 .problems/

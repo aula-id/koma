@@ -30,8 +30,12 @@ pub struct RemoteSnapshot {
     pub sessions: Vec<RemoteSessionSnapshot>,
     /// Selected session index.
     pub session_selected: usize,
-    /// Host ID pending delete confirmation.
-    pub pending_delete: Option<String>,
+    /// Host editor draft state (present when view == "edit").
+    #[serde(default)]
+    pub editor: Option<RemoteEditorSnapshot>,
+    /// Whether the editor is actively typing into a field.
+    #[serde(default)]
+    pub editing_field: bool,
 }
 
 /// Snapshot of a single remote host for the wire.
@@ -55,4 +59,26 @@ pub struct RemoteSessionSnapshot {
     pub name: String,
     pub working: bool,
     pub is_foreground: bool,
+}
+
+/// Snapshot of the host editor form (create/edit) for the wire.
+///
+/// Carried inside [`RemoteSnapshot`] so thin clients see the editor draft
+/// fields when `view == "edit"`. The daemon owns the source-of-truth
+/// [`crate::app::mode::remote::HostEditor`]; this is a projection only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RemoteEditorSnapshot {
+    pub name: String,
+    pub user: String,
+    pub host: String,
+    pub port: String,
+    pub key_path: String,
+    /// Which field is focused, encoded as: "name" | "user" | "host" | "port" | "key_path".
+    pub focused: String,
+    /// `Some(id)` when editing an existing host, `None` when creating.
+    #[serde(default)]
+    pub edit_id: Option<String>,
+    /// Validation error message, if any.
+    #[serde(default)]
+    pub error: Option<String>,
 }

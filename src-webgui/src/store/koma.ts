@@ -1387,6 +1387,13 @@ export type PushEnvelope =
       error?: string | null
       sessions?: Array<{ sessionId: string; name: string; working: boolean; isForeground: boolean }>
     }
+  | {
+      k: 'RemotePathPicker'
+      state: 'idle' | 'listing' | 'ready' | 'error' | 'cancelled'
+      path?: string | null
+      dirs?: string[]
+      error?: string | null
+    }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -1975,6 +1982,12 @@ type KomaState = {
     sessionId: string | null
     error: string | null
     sessions: Array<{ sessionId: string; name: string; working: boolean; isForeground: boolean }>
+  }
+  remotePath: {
+    state: 'idle' | 'listing' | 'ready' | 'error' | 'cancelled'
+    path: string
+    dirs: string[]
+    error: string | null
   }
   // Open (or focus) the singleton commit-graph tab (id 'graph'). The GraphTab
   // itself fires refreshGraph on mount, so opening is enough. Mirrors
@@ -2663,6 +2676,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   coding: initialCoding,
   remoteHosts: [],
   remoteState: { state: 'disconnected', hostId: null, user: null, host: null, sessionId: null, error: null, sessions: [] },
+  remotePath: { state: 'idle', path: '', dirs: [], error: null },
   remoteBusy: null,
   commitDraft: '',
   keys: initialKeys,
@@ -4070,6 +4084,16 @@ export const useKoma = create<KomaState>((set, get) => ({
           }
           return { remoteState }
         })
+        break
+      case 'RemotePathPicker':
+        set(() => ({
+          remotePath: {
+            state: env.state,
+            path: env.path ?? '',
+            dirs: env.dirs ?? [],
+            error: env.error ?? null,
+          },
+        }))
         break
     }
   },

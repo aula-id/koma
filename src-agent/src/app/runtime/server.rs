@@ -34,6 +34,14 @@ pub fn run_server(opts: crate::cli::Opts) -> Result<()> {
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
+    if let Some(cwd) = opts.cwd.as_deref() {
+        if cwd.is_empty() || cwd.contains('\0') {
+            anyhow::bail!("invalid remote working directory");
+        }
+        std::env::set_current_dir(cwd)
+            .map_err(|e| anyhow::anyhow!("cannot use remote working directory {cwd:?}: {e}"))?;
+    }
+
     // Shared startup — identical to the TUI/daemon path.
     let (rt, handle, mut state, mut client) = build_startup(&opts)?;
 
