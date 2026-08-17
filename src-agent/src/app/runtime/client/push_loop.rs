@@ -371,6 +371,22 @@ pub(super) fn push_loop(
                         workdir,
                     };
                 }
+                // Remote path controls are handled by the remote host state. A local
+                // attached daemon cannot service them, so return structured state rather
+                // than touching the local filesystem or opening rfd.
+                Ok(super::HostCtl::RequestRemotePath)
+                | Ok(super::HostCtl::ListRemotePath { .. })
+                | Ok(super::HostCtl::ConfirmRemotePath { .. })
+                | Ok(super::HostCtl::CancelRemotePath) => {
+                    let envelope = serde_json::json!({
+                        "k": "RemotePathPicker",
+                        "state": "error",
+                        "error": "active session is not remote"
+                    });
+                    if let Ok(json) = serde_json::to_string(&envelope) {
+                        push(json);
+                    }
+                }
                 // KILL the daemon `id`. Killing the CURRENTLY-ATTACHED session: queue a
                 // graceful QuitDaemon on the live conn (flushed by teardown), ensure its death
                 // OFF-thread — a harmless double-QuitDaemon that ALSO fires a follow-up

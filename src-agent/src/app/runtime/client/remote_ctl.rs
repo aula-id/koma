@@ -302,7 +302,7 @@ fn remote_connect_worker(
         shared.finish(attempt_id);
         return;
     }
-    let ssh_session = match ssh::connect(&target, &session_id, auth_ref) {
+    let ssh_session = match ssh::connect(&target, &session_id, auth_ref, None) {
         Ok(session) => session,
         Err(error) => {
             push_state(

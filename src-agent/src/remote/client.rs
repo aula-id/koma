@@ -6,6 +6,16 @@ use ratatui::Terminal;
 
 use super::auth::{self, AuthProbe, SshAuth};
 use super::{bootstrap, ssh, RemoteTarget};
+
+/// Cloneable remote handoff state. `SshAuth` is reconstructed only when an
+/// SSH/bootstrap operation is about to start because it owns temporary askpass state.
+#[derive(Clone)]
+pub(crate) struct RemoteContext {
+    pub(crate) target: RemoteTarget,
+    pub(crate) key_hint: Option<String>,
+    pub(crate) password: Option<String>,
+}
+
 use crate::app::runtime::client::remote::connect_remote;
 use crate::app::runtime::terminal::TerminalGuard;
 
@@ -14,19 +24,35 @@ pub(crate) enum RemoteExit {
     /// The user exited the remote session completely (e.g. `/quit`).
     Exit,
     /// The user opened the swapper inside the remote session (`/resume`).
-    Resume,
+    Resume {
+        /// Target and authentication retained for remote reattachment.
+        context: RemoteContext,
+    },
+    /// The remote daemon requested a distinct new session (`/new`).
+    /// The caller reconnects using the same target and authentication context.
+    NewSession {
+        /// Whether the old remote daemon should be terminated.
+        kill: bool,
+    },
 }
-
 /// Run a remote koma session: SSH connect, exec server, bridge to local TUI.
 pub(crate) fn run_remote_client(
     target: &RemoteTarget,
     auth: Option<&SshAuth>,
 ) -> Result<RemoteExit> {
+    run_remote_client_with_cwd(target, auth, None)
+}
+
+pub(crate) fn run_remote_client_with_cwd(
+    target: &RemoteTarget,
+    auth: Option<&SshAuth>,
+    cwd: Option<&str>,
+) -> Result<RemoteExit> {
     // Generate session id.
     let session_id = uuid::Uuid::new_v4().to_string();
 
     // SSH connect and exec `koma server`.
-    let mut session = ssh::connect(target, &session_id, auth)?;
+    let mut session = ssh::connect(target, &session_id, auth, cwd)?;
 
     // Set up tokio runtime for the bridge.
     let rt = tokio::runtime::Runtime::new()?;
@@ -66,7 +92,18 @@ pub(crate) fn run_remote_client(
 
     // Map the render-loop transition to a RemoteExit.
     let outcome = match transition {
-        crate::app::runtime::client::ClientTransition::OpenSwapper => RemoteExit::Resume,
+        crate::app::runtime::client::ClientTransition::OpenSwapper => RemoteExit::Resume {
+            context: RemoteContext {
+                target: target.clone(),
+                key_hint: target.key.clone(),
+                password: auth.map(|a| a.password().to_string()),
+            },
+        },
+        crate::app::runtime::client::ClientTransition::NewSession { kill } => {
+            // `run_remote_render_loop` queues QuitDaemon before it tears down the
+            // bridge, so this outcome is only the lifecycle result to the caller.
+            RemoteExit::NewSession { kill }
+        }
         _ => RemoteExit::Exit,
     };
 
@@ -77,7 +114,24 @@ pub(crate) fn run_remote_client(
     Ok(outcome)
 }
 
-/// Entry point from main.rs: parse target, probe auth, and run.
+pub(crate) fn prompt_remote_cwd(
+    target: &RemoteTarget,
+    auth: Option<&SshAuth>,
+) -> Result<Option<String>> {
+    use std::io::{self, Write};
+    print!("Remote working directory (empty to cancel): ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let input = input.trim();
+    if input.is_empty() {
+        return Ok(None);
+    }
+    let path = ssh::validate_remote_path(input)?;
+    let _dirs = ssh::list_dirs(target, path, auth)?;
+    Ok(Some(path.to_string()))
+}
+
 ///
 /// Auth flow mirrors VS Code Remote-SSH:
 /// 1. Try key-based auth first (fast, silent).
@@ -116,5 +170,16 @@ pub(crate) fn run_remote_client_target(
         eprintln!("Remote Koma version matches.");
     }
 
-    run_remote_client(&target, auth_ref)
+    loop {
+        match run_remote_client(&target, auth_ref)? {
+            // `/new` is a remote lifecycle operation, not an exit to the local
+            // session picker. Keep both the target and the already-established
+            // authentication context and start the newly requested remote daemon.
+            RemoteExit::NewSession { kill } => {
+                let _ = kill;
+                continue;
+            }
+            outcome => return Ok(outcome),
+        }
+    }
 }
