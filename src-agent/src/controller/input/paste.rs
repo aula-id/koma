@@ -187,10 +187,26 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
                 }
             }
         }
+        Mode::Remote(m) => {
+            // Single-line fields: feed the paste into the focused editor field
+            // when in edit mode, stripping newlines so a multi-line clipboard
+            // can't corrupt a one-line field. Matches the agents `editing` path.
+            if m.editing_field {
+                if let Some(editor) = m.editor.as_mut() {
+                    let field = editor.focused;
+                    paste_single_line(text, |c| match field {
+                        crate::app::mode::remote::HostEditField::Name => editor.name.push(c),
+                        crate::app::mode::remote::HostEditField::User => editor.user.push(c),
+                        crate::app::mode::remote::HostEditField::Host => editor.host.push(c),
+                        crate::app::mode::remote::HostEditField::Port => editor.port.push(c),
+                        crate::app::mode::remote::HostEditField::KeyPath => editor.key_path.push(c),
+                    });
+                }
+            }
+        }
         // No text entry on the connection chooser, effort picker, loading splash,
-        // usage dashboard, the message-rewind picker, the session hub, the
-        // quit-confirm overlay, the security control panel, or the background-bash
-        // panel — paste is a no-op in all of them.
+        // usage dashboard, the message-rewind picker, the session hub, or the
+        // quit-confirm overlay — paste is a no-op in all of them.
         Mode::Onboard(_)
         | Mode::Effort(_)
         | Mode::Model(_)
@@ -204,8 +220,7 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
         | Mode::ExtScreen(_)
         | Mode::ExtStore(_)
         | Mode::Bash(_)
-        | Mode::Todo(_)
-        | Mode::Remote(_) => {}
+        | Mode::Todo(_) => {}
     }
     // Put the (possibly edited) mode back onto the foreground session.
     state.set_mode(mode);
