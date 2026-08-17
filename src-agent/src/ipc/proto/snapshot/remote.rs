@@ -30,8 +30,6 @@ pub struct RemoteSnapshot {
     pub sessions: Vec<RemoteSessionSnapshot>,
     /// Selected session index.
     pub session_selected: usize,
-    /// Host ID pending delete confirmation.
-    pub pending_delete: Option<String>,
 }
 
 /// Snapshot of a single remote host for the wire.

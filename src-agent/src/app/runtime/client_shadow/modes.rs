@@ -750,6 +750,7 @@ pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState 
             Some("browse") | Some("host_picker") | Some("host_manager") => RemoteView::Browse,
             Some("session_hub") => RemoteView::SessionHub,
             Some("edit") | Some("create_host") | Some("edit_host") => RemoteView::Edit,
+            Some("delete_confirm") => RemoteView::DeleteConfirm,
             // Legacy single-token values from old clients.
             Some("fullscreen") | None => RemoteView::Browse,
             // Unknown view tokens → Browse (safe fallback).
@@ -790,7 +791,6 @@ pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState 
             })
             .collect(),
         session_selected: s.session_selected,
-        pending_delete: s.pending_delete,
         password_buf: String::new(),
         editor: None,
         editing_field: false,

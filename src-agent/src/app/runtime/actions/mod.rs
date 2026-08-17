@@ -513,24 +513,6 @@ pub(in crate::app::runtime) fn apply_action(
             }
         }
 
-        Action::RemoteAddHost => {
-            if let crate::app::mode::Mode::Remote(ref mut remote) = state.mode_mut() {
-                remote.enter_create();
-            }
-        }
-
-        Action::RemoteEditHost(id) => {
-            if let crate::app::mode::Mode::Remote(ref mut remote) = state.mode_mut() {
-                // Find the host by id and set selection to it before entering edit.
-                if let Some(idx) = remote.filtered.iter().position(|&i| {
-                    remote.hosts.get(i).is_some_and(|h| h.id == id)
-                }) {
-                    remote.selected = idx;
-                }
-                remote.enter_edit();
-            }
-        }
-
         Action::RemoteSaveHost => {
             if let crate::app::mode::Mode::Remote(ref mut remote) = state.mode_mut() {
                 if remote.validate_editor() {

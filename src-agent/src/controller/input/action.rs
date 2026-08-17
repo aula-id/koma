@@ -361,15 +361,11 @@ pub enum Action {
     // --- Remote host manager actions ---
     /// Esc from the remote host manager — close it and return to Chat.
     CloseRemote,
-    /// Ctrl+A in the remote compact overlay — open the add-host form.
-    RemoteAddHost,
     /// Select a prepared host. Runtime behavior depends on `RemoteIntent`.
     RemoteConnect(String),
     /// Resume the exact selected remote session UUID on the prepared host.
     RemoteConnectSession { host_id: String, session_id: String },
-    /// `e` in the fullscreen detail — edit the host. Inner is host ID.
-    RemoteEditHost(String),
-    /// Backspace confirming delete of a host. Inner is host ID.
+    /// Delete the selected host (y in delete confirm). Inner is host ID.
     RemoteDeleteHost(String),
     /// `i` in the remote compact overlay — import hosts from `~/.ssh/config`.
     RemoteImportSshConfig,

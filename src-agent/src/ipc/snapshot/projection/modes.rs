@@ -931,6 +931,7 @@ pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
         RemoteView::Browse => "browse",
         RemoteView::SessionHub => "session_hub",
         RemoteView::Edit => "edit",
+        RemoteView::DeleteConfirm => "delete_confirm",
     };
 
     RemoteSnapshot {
@@ -969,7 +970,6 @@ pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
             })
             .collect(),
         session_selected: m.session_selected,
-        pending_delete: m.pending_delete.clone(),
     }
 }
 

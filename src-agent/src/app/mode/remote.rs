@@ -12,7 +12,7 @@ pub enum RemoteIntent {
 ///
 /// Mirrors the `/agents` two-pane pattern: `Browse` shows a list sidebar + detail
 /// pane; `Edit` takes over the full screen for create/edit form; `SessionHub` is
-/// an overlay session picker.
+/// an overlay session picker; `DeleteConfirm` is a modal on top of Browse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteView {
     /// Browse hosts: list sidebar + detail pane.
@@ -21,6 +21,8 @@ pub enum RemoteView {
     Edit,
     /// Resume session picker (overlay on top of Browse).
     SessionHub,
+    /// Delete confirmation modal (overlay on top of Browse).
+    DeleteConfirm,
 }
 
 /// Which field is focused in the create/edit form.
@@ -124,8 +126,6 @@ pub struct RemoteState {
     pub sessions: Vec<RemoteSession>,
     /// Selected session index.
     pub session_selected: usize,
-    /// Host ID pending delete confirmation.
-    pub pending_delete: Option<String>,
     /// Password input buffer (masked in rendering).
     pub password_buf: String,
     /// Host editor state (Some when in Edit sub-mode).
@@ -162,7 +162,6 @@ impl RemoteState {
             connection_state: None,
             sessions: Vec::new(),
             session_selected: 0,
-            pending_delete: None,
             password_buf: String::new(),
             editor: None,
             editing_field: false,
@@ -228,6 +227,13 @@ impl RemoteState {
             });
             self.editing_field = false;
             self.view = RemoteView::Edit;
+        }
+    }
+
+    /// Enter the delete confirmation modal for the currently selected host.
+    pub fn enter_delete(&mut self) {
+        if self.selected_host().is_some() {
+            self.view = RemoteView::DeleteConfirm;
         }
     }
 
