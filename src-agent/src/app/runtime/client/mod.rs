@@ -771,7 +771,47 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
     // so an `Err` here (no daemon could be started, or the initial connect failed) is
     // surfaced to the caller exactly as before — BUT only on the non-resume path, where an
     // attach happens up front. The `--resume` path can't fail here (no attach yet).
-    let mut state = if opts.resume {
+    let mut state = if opts.remote_entry {
+        let target = opts
+            .remote_target
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("remote entry requires a target"))?;
+        drop(terminal);
+        drop(_guard);
+        let result = remote_attach(target, opts.remote_key.as_deref(), None, false, None)?;
+        _guard = TerminalGuard::enter()?;
+        crate::app::runtime::actions::apply_mouse_capture(
+            crate::model::settings::MouseCapture::Auto,
+        );
+        let backend = CrosstermBackend::new(stdout());
+        terminal = Terminal::new(backend)?;
+        terminal.clear()?;
+        match result {
+            crate::remote::client::RemoteExit::Resume { context } => {
+                let mut target = context.target;
+                if target.key.is_none() {
+                    target.key = context.key_hint;
+                }
+                let password = context.password;
+                let session_id = context.session_id;
+                remote_resume = Some((
+                    target.clone(),
+                    password.clone(),
+                    session_id.clone(),
+                    context.cwd,
+                ));
+                ClientState::Swapper(build_remote_hub(
+                    &target,
+                    password.as_deref(),
+                    session_id.as_deref(),
+                ))
+            }
+            crate::remote::client::RemoteExit::Exit => return Ok(()),
+            crate::remote::client::RemoteExit::NewSession { .. } => {
+                return Err(anyhow::anyhow!("remote session handoff escaped remote loop"));
+            }
+        }
+    } else if opts.resume {
         // `--resume` / `koma agents`: swapper first, no connection, nothing to return to.
         ClientState::Swapper(build_local_hub(None))
     } else {

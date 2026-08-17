@@ -91,7 +91,20 @@ pub(crate) fn build_startup(
     let config = AppConfig::load();
 
     // Decide initial state.
-    let mut state = if opts.daemon || opts.server {
+    let mut state = if opts.remote_picker {
+        let (lk, lm, lp) = prefill_creds();
+        let hosts = crate::remote::hosts::load_hosts();
+        let mut state = AppState::new(Mode::Remote(Box::new(
+            crate::app::mode::RemoteState::for_intent(
+                hosts.hosts,
+                crate::app::mode::remote::RemoteIntent::Manage,
+            ),
+        )));
+        state.rest.last_key = lk;
+        state.rest.last_model = lm;
+        state.rest.last_provider = lp;
+        state
+    } else if opts.daemon || opts.server {
         // Daemon-per-session: `install_daemon_session` (called right after build_startup
         // in run_daemon) owns create/load for this daemon's keyed session id. Do NOT
         // create a throwaway returning-user session here (install would orphan it every
@@ -726,9 +739,14 @@ pub fn run(opts: crate::cli::Opts) -> Result<()> {
 
         // Check for remote connect break-out.
         if let Some(request) = state.rest.connect_remote_target.take() {
-            // Drop the terminal + guard to restore the normal terminal.
-            drop(terminal);
-            drop(_guard);
+            if opts.remote_picker {
+                let mut remote_opts = opts.clone();
+                remote_opts.remote_picker = false;
+                remote_opts.remote_entry = true;
+                remote_opts.remote_target = Some(request.target);
+                remote_opts.remote_key = request.key;
+                return crate::app::client_run(remote_opts);
+            }
 
             let _connect_result = crate::remote::client::run_remote_client_target(
                 &request.target,

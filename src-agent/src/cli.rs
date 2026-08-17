@@ -189,6 +189,10 @@ pub struct Opts {
     /// verb). Speaks the IPC protocol over stdin/stdout instead of a unix socket —
     /// designed for SSH remote development.
     pub server: bool,
+    /// When `true`, `koma remote` opens the saved remote-host selector.
+    pub remote_picker: bool,
+    /// When `true`, enter the remote client directly and open its remote resume hub.
+    pub remote_entry: bool,
     /// A `koma remote <user@host>` invocation: the target string for SSH connection.
     pub remote_target: Option<String>,
     /// SSH key path for remote connections (`--key <path>`).
@@ -325,18 +329,20 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
         Some("server") => opts.server = true,
         Some("sessions") => opts.sessions = true,
         Some("remote") => {
-            // `remote <user@host>` — the next positional is the target.
+            // `remote <user@host>` connects directly; bare `remote` opens the saved-host picker.
             if let Some(target) = positional.next() {
                 opts.remote_target = Some(target.clone());
-                // Scan for `--key <path>` and `--port <n>` in the remaining args.
-                for pair in all.windows(2) {
-                    if pair[0] == "--key" {
-                        opts.remote_key = Some(pair[1].clone());
-                    }
-                    if pair[0] == "--port" {
-                        if let Ok(p) = pair[1].parse::<u16>() {
-                            opts.remote_port = Some(p);
-                        }
+            } else {
+                opts.remote_picker = true;
+            }
+            // Scan for `--key <path>` and `--port <n>` in the remaining args.
+            for pair in all.windows(2) {
+                if pair[0] == "--key" {
+                    opts.remote_key = Some(pair[1].clone());
+                }
+                if pair[0] == "--port" {
+                    if let Ok(p) = pair[1].parse::<u16>() {
+                        opts.remote_port = Some(p);
                     }
                 }
             }
@@ -376,4 +382,25 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
     }
 
     opts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse;
+
+    #[test]
+    fn bare_remote_opens_saved_host_picker() {
+        let opts = parse(["koma", "remote"].into_iter().map(String::from));
+        assert!(opts.remote_picker);
+        assert!(opts.remote_target.is_none());
+    }
+
+    #[test]
+    fn remote_target_uses_direct_remote_entry() {
+        let opts = parse(["koma", "remote", "alice@example.test"]
+            .into_iter()
+            .map(String::from));
+        assert!(!opts.remote_picker);
+        assert_eq!(opts.remote_target.as_deref(), Some("alice@example.test"));
+    }
 }
