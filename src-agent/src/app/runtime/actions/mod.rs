@@ -508,8 +508,9 @@ pub(in crate::app::runtime) fn apply_action(
                 //   `DaemonEvent::ConnectRemote` to the controller thin-client.
                 // - `connect_remote_target` for the standalone lifecycle which reads it
                 //   directly (unchanged).
-                state.rest.connect_remote_pending = Some(target.clone());
-                state.rest.connect_remote_target = Some(target);
+                let params = (target, host.key_path.clone());
+                state.rest.connect_remote_pending = Some(params.clone());
+                state.rest.connect_remote_target = Some(params);
             }
         }
 
@@ -539,8 +540,9 @@ pub(in crate::app::runtime) fn apply_action(
             if let Some(host) = crate::remote::hosts::host_by_id(&hosts, &host_id) {
                 let target = host.address();
                 *state.mode_mut() = crate::app::mode::Mode::Chat;
-                state.rest.connect_remote_pending = Some(target.clone());
-                state.rest.connect_remote_target = Some(target);
+                let params = (target, host.key_path.clone());
+                state.rest.connect_remote_pending = Some(params.clone());
+                state.rest.connect_remote_target = Some(params);
                 state.rest.connect_remote_session_id = Some(session_id);
             } else {
                 *state.mode_mut() = crate::app::mode::Mode::Chat;

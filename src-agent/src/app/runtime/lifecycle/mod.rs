@@ -725,14 +725,14 @@ pub fn run(opts: crate::cli::Opts) -> Result<()> {
         let result = run_loop(&mut terminal, &mut state, &handle, &mut client);
 
         // Check for remote connect break-out.
-        if let Some(target) = state.rest.connect_remote_target.take() {
+        if let Some((target, key)) = state.rest.connect_remote_target.take() {
             // Drop the terminal + guard to restore the normal terminal.
             drop(terminal);
             drop(_guard);
 
             // Connect to the remote server (creates its own terminal).
             let connect_result =
-                crate::remote::client::run_remote_client_target(&target, None, None);
+                crate::remote::client::run_remote_client_target(&target, key.as_deref(), None);
 
             if let Err(e) = &connect_result {
                 crate::model::store::append_global_error_log(

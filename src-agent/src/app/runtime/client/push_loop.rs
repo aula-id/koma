@@ -311,7 +311,7 @@ pub(super) fn push_loop(
         let mut select_requested = false;
         let mut open_swapper_requested = false;
         let mut new_session_requested: Option<bool> = None;
-        let mut connect_remote_requested: Option<String> = None;
+        let mut connect_remote_requested: Option<(String, Option<String>)> = None;
         for frame in prebuffered {
             // Cache the config off any prebuffered full snapshot (normally none — Hello
             // is first, so the attach Snapshot lands in the live drain — but stay safe).
@@ -1043,7 +1043,7 @@ pub(super) fn push_loop(
         let mut select_requested = false;
         let mut open_swapper_requested = false;
         let mut new_session_requested: Option<bool> = None;
-        let mut connect_remote_requested: Option<String> = None;
+        let mut connect_remote_requested: Option<(String, Option<String>)> = None;
         loop {
             match frame_rx.try_recv() {
                 Ok(frame) => {

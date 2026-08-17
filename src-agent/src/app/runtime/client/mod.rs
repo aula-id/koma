@@ -867,7 +867,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                     // lifecycle (enter alt-screen, render, exit alt-screen), so we drop OUR
                     // terminal guard before the call and re-enter after. On return, go back
                     // to the local swapper so the user can pick another session or reconnect.
-                    Ok(render::ClientTransition::ConnectRemote { target }) => {
+                    Ok(render::ClientTransition::ConnectRemote { target, key }) => {
                         teardown_connection(&handle, conn);
 
                         // Drop the terminal + guard to restore the normal terminal.
@@ -875,7 +875,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                         drop(_guard);
 
                         let result =
-                            crate::remote::client::run_remote_client_target(&target, None, None);
+                            crate::remote::client::run_remote_client_target(&target, key.as_deref(), None);
 
                         if let Err(e) = &result {
                             crate::model::store::append_global_error_log(
