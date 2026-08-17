@@ -14,6 +14,8 @@ pub(crate) struct RemoteContext {
     pub(crate) target: RemoteTarget,
     pub(crate) key_hint: Option<String>,
     pub(crate) password: Option<String>,
+    pub(crate) session_id: Option<String>,
+    pub(crate) cwd: Option<String>,
 }
 
 use crate::app::runtime::client::remote::connect_remote;
@@ -35,21 +37,20 @@ pub(crate) enum RemoteExit {
         kill: bool,
     },
 }
-/// Run a remote koma session: SSH connect, exec server, bridge to local TUI.
-pub(crate) fn run_remote_client(
-    target: &RemoteTarget,
-    auth: Option<&SshAuth>,
-) -> Result<RemoteExit> {
-    run_remote_client_with_cwd(target, auth, None)
+fn session_id_for(requested: Option<&str>) -> String {
+    requested
+        .map(str::to_string)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
 }
 
+/// Run a remote session, optionally reusing an existing remote session id.
 pub(crate) fn run_remote_client_with_cwd(
     target: &RemoteTarget,
     auth: Option<&SshAuth>,
+    requested_session_id: Option<&str>,
     cwd: Option<&str>,
 ) -> Result<RemoteExit> {
-    // Generate session id.
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = session_id_for(requested_session_id);
 
     // SSH connect and exec `koma server`.
     let mut session = ssh::connect(target, &session_id, auth, cwd)?;
@@ -97,6 +98,8 @@ pub(crate) fn run_remote_client_with_cwd(
                 target: target.clone(),
                 key_hint: target.key.clone(),
                 password: auth.map(|a| a.password().to_string()),
+                session_id: Some(session_id.clone()),
+                cwd: cwd.map(str::to_string),
             },
         },
         crate::app::runtime::client::ClientTransition::NewSession { kill } => {
@@ -141,6 +144,8 @@ pub(crate) fn run_remote_client_target(
     target_str: &str,
     key: Option<&str>,
     port: Option<u16>,
+    new_session: bool,
+    session_id: Option<&str>,
 ) -> Result<RemoteExit> {
     let mut target = super::parse_target(target_str)?;
     if let Some(k) = key {
@@ -161,8 +166,26 @@ pub(crate) fn run_remote_client_target(
         }
     };
 
-    // Bootstrap: validate/install/upgrade koma on remote (uses same auth).
     let auth_ref = ssh_auth.as_ref();
+    let retained_password = auth_ref.map(|a| a.password().to_string());
+    let cwd = if new_session {
+        prompt_remote_cwd(&target, auth_ref)?
+    } else {
+        None
+    };
+    if new_session && cwd.is_none() {
+        return Ok(RemoteExit::Resume {
+            context: RemoteContext {
+                target,
+                key_hint: key.map(str::to_string),
+                password: retained_password,
+                session_id: None,
+                cwd: None,
+            },
+        });
+    }
+
+    // Bootstrap: validate/install/upgrade koma on remote (uses same auth).
     eprintln!("Checking remote Koma version...");
     if bootstrap::ensure_koma_compatible(&target, auth_ref)? {
         eprintln!("Remote Koma installed or upgraded successfully.");
@@ -170,16 +193,38 @@ pub(crate) fn run_remote_client_target(
         eprintln!("Remote Koma version matches.");
     }
 
+    let mut requested_session_id = session_id.map(str::to_string);
     loop {
-        match run_remote_client(&target, auth_ref)? {
+        match run_remote_client_with_cwd(
+            &target,
+            auth_ref,
+            requested_session_id.as_deref(),
+            cwd.as_deref(),
+        )? {
             // `/new` is a remote lifecycle operation, not an exit to the local
-            // session picker. Keep both the target and the already-established
-            // authentication context and start the newly requested remote daemon.
+            // session picker. The next remote server gets a fresh id but keeps cwd/auth.
             RemoteExit::NewSession { kill } => {
                 let _ = kill;
-                continue;
+                requested_session_id = None;
             }
             outcome => return Ok(outcome),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_id_for;
+
+    #[test]
+    fn existing_remote_session_id_is_preserved() {
+        assert_eq!(session_id_for(Some("remote-session")), "remote-session");
+    }
+
+    #[test]
+    fn new_remote_session_gets_a_uuid() {
+        let id = session_id_for(None);
+        assert!(!id.is_empty());
+        assert!(uuid::Uuid::parse_str(&id).is_ok());
     }
 }

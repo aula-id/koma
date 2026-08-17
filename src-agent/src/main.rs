@@ -268,11 +268,14 @@ fn main() -> anyhow::Result<()> {
         return app::run_linker_daemon(opts);
     }
 
-    // --- remote development: SSH-connect to a remote machine ---
-    if let Some(ref target) = opts.remote_target.clone() {
-        let key = opts.remote_key.clone();
-        let port = opts.remote_port;
-        return remote::client::run_remote_client_target(target, key.as_deref(), port).map(|_| ());
+    // --- remote development: saved-host picker or direct target ---
+    if opts.remote_picker {
+        return app::run(opts);
+    }
+    if opts.remote_target.is_some() {
+        let mut opts = opts;
+        opts.remote_entry = true;
+        return app::client_run(opts);
     }
     // Speaks the IPC protocol over stdin/stdout instead of a unix socket.
     // Checked BEFORE `--daemon` since `server` is a distinct mode.
@@ -390,6 +393,7 @@ fn run_sessions_json() -> i32 {
             serde_json::json!({
                 "session_id": s.session_id,
                 "name": s.name,
+                "pwd": s.pwd,
                 "working": s.working,
                 "is_foreground": false
             })
