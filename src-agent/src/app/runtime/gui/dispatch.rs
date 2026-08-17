@@ -950,6 +950,18 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::CancelRemoteConnect => {
             let _ = ctx.ctl.send(HostCtl::CancelRemoteConnect);
         }
+        GuiReq::RequestRemotePath => {
+            let _ = ctx.ctl.send(HostCtl::RequestRemotePath);
+        }
+        GuiReq::ListRemotePath { path } => {
+            let _ = ctx.ctl.send(HostCtl::ListRemotePath { path });
+        }
+        GuiReq::ConfirmRemotePath { path } => {
+            let _ = ctx.ctl.send(HostCtl::ConfirmRemotePath { path });
+        }
+        GuiReq::CancelRemotePath => {
+            let _ = ctx.ctl.send(HostCtl::CancelRemotePath);
+        }
         // Import graph visualization: always routed to the host-relay thread via
         // HostCtl::ImportGraph (linker daemon call, like FileDiff — never the session daemon).
         #[cfg(feature = "linker")]

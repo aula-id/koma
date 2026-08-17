@@ -1099,6 +1099,21 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 remote_shared.cancel();
                 push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
             }
+            // Remote path selection is only meaningful once an SSH transport is active;
+            // the detached local hub has no retained remote context to query.
+            Ok(HostCtl::RequestRemotePath)
+            | Ok(HostCtl::ListRemotePath { .. })
+            | Ok(HostCtl::ConfirmRemotePath { .. })
+            | Ok(HostCtl::CancelRemotePath) => {
+                let envelope = serde_json::json!({
+                    "k": "RemotePathPicker",
+                    "state": "error",
+                    "error": "no active remote session"
+                });
+                if let Ok(json) = serde_json::to_string(&envelope) {
+                    push(json);
+                }
+            }
             // The ipc side hung up (window gone) — leave the host.
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return HostStep::Done,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}

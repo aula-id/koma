@@ -96,11 +96,8 @@ pub(crate) fn build_remote_hub(
 
     let host_label = format!("{}@{}", target.user, target.host);
 
-    let remote_sessions = crate::remote::sessions::list_sessions_over_ssh(
-        target,
-        auth.as_ref(),
-    )
-    .unwrap_or_default();
+    let remote_sessions =
+        crate::remote::sessions::list_sessions_over_ssh(target, auth.as_ref()).unwrap_or_default();
 
     let mut cooking: Vec<CookingEntry> = Vec::with_capacity(remote_sessions.len() + 1);
     cooking.push(CookingEntry {
@@ -292,6 +289,7 @@ pub(super) enum SwapperOutcome {
     Pick {
         session_id: String,
         remote_host: Option<String>,
+        new_session: bool,
     },
     /// The user cancelled (Esc / Ctrl+C). `client_run` reconnects to the previously
     /// attached session, or exits if there was none (a `--resume` cold start).
@@ -672,9 +670,10 @@ mod tests {
         assert!(hub.history.is_empty());
         assert!(hub.history_filtered.is_empty());
         assert_eq!(hub.cooking.len(), 3);
-        assert!(hub.cooking.iter().all(|row| {
-            row.remote_host.as_deref() == Some("alice@example.test")
-        }));
+        assert!(hub
+            .cooking
+            .iter()
+            .all(|row| { row.remote_host.as_deref() == Some("alice@example.test") }));
         assert!(hub.cooking[0].session_id.is_none());
         assert!(!hub.cooking[0].is_foreground);
         assert_eq!(
