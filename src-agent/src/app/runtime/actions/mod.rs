@@ -502,15 +502,20 @@ pub(in crate::app::runtime) fn apply_action(
             let hosts = crate::remote::hosts::load_hosts();
             if let Some(host) = crate::remote::hosts::host_by_id(&hosts, &host_id) {
                 let target = host.address();
+                let new_session = matches!(
+                    state.mode(),
+                    crate::app::mode::Mode::Remote(remote)
+                        if remote.intent == crate::app::mode::remote::RemoteIntent::New
+                );
+                let request = crate::app::state::RemoteConnectRequest {
+                    target,
+                    key: host.key_path.clone(),
+                    new_session,
+                    session_id: None,
+                };
                 *state.mode_mut() = crate::app::mode::Mode::Chat;
-                // Set both signals:
-                // - `connect_remote_pending` for the daemon hub to drain into a
-                //   `DaemonEvent::ConnectRemote` to the controller thin-client.
-                // - `connect_remote_target` for the standalone lifecycle which reads it
-                //   directly (unchanged).
-                let params = (target, host.key_path.clone());
-                state.rest.connect_remote_pending = Some(params.clone());
-                state.rest.connect_remote_target = Some(params);
+                state.rest.connect_remote_pending = Some(request.clone());
+                state.rest.connect_remote_target = Some(request);
             }
         }
 
@@ -539,11 +544,15 @@ pub(in crate::app::runtime) fn apply_action(
             let hosts = crate::remote::hosts::load_hosts();
             if let Some(host) = crate::remote::hosts::host_by_id(&hosts, &host_id) {
                 let target = host.address();
+                let request = crate::app::state::RemoteConnectRequest {
+                    target,
+                    key: host.key_path.clone(),
+                    new_session: false,
+                    session_id: Some(session_id),
+                };
                 *state.mode_mut() = crate::app::mode::Mode::Chat;
-                let params = (target, host.key_path.clone());
-                state.rest.connect_remote_pending = Some(params.clone());
-                state.rest.connect_remote_target = Some(params);
-                state.rest.connect_remote_session_id = Some(session_id);
+                state.rest.connect_remote_pending = Some(request.clone());
+                state.rest.connect_remote_target = Some(request);
             } else {
                 *state.mode_mut() = crate::app::mode::Mode::Chat;
                 state.rest.fg_mut().status = "host not found".into();

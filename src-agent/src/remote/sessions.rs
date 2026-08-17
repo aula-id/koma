@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 pub struct DiscoveredSession {
     pub session_id: String,
     pub name: String,
+    #[serde(default)]
+    pub pwd: String,
     pub working: bool,
     #[serde(rename = "is_foreground")]
     pub is_foreground: bool,
