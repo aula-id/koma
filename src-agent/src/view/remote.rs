@@ -42,7 +42,7 @@ pub fn draw(frame: &mut Frame, m: &RemoteState, palette: &Palette) {
         RemoteView::SessionHub => {
             draw_session_hub(frame, m, frame.area(), palette);
         }
-        RemoteView::Browse => {
+        RemoteView::Browse | RemoteView::DeleteConfirm => {
             draw_browse(frame, m, palette);
         }
     }
@@ -110,7 +110,7 @@ fn draw_browse(frame: &mut Frame, m: &RemoteState, palette: &Palette) {
     }
 
     // Delete confirm overlay (on top of everything).
-    if m.pending_delete.is_some() {
+    if m.view == RemoteView::DeleteConfirm {
         draw_delete_confirm(frame, m, frame.area(), palette);
     }
 }
@@ -313,9 +313,7 @@ fn draw_detail(frame: &mut Frame, m: &RemoteState, palette: &Palette, area: Rect
 /// Render a delete confirm popup overlaid on the center of the screen.
 fn draw_delete_confirm(frame: &mut Frame, m: &RemoteState, area: Rect, palette: &Palette) {
     let host_name = m
-        .pending_delete
-        .as_deref()
-        .and_then(|id| m.hosts.iter().find(|h| h.id == id))
+        .selected_host()
         .map(|h| h.name.as_str())
         .unwrap_or("host");
 

@@ -8,22 +8,26 @@ use crate::controller::input::Action;
 
 pub fn handle_remote(m: &mut RemoteState, key: KeyEvent) -> Action {
     match m.view {
-        RemoteView::Browse => handle_browse(m, key),
+        RemoteView::Browse | RemoteView::DeleteConfirm => handle_browse(m, key),
         RemoteView::SessionHub => handle_session_hub(m, key),
         RemoteView::Edit => handle_editor(m, key),
     }
 }
 
 fn handle_browse(m: &mut RemoteState, key: KeyEvent) -> Action {
-    // Delete confirm modal
-    if let Some(id) = m.pending_delete.clone() {
+    // Delete confirm modal.
+    if m.view == RemoteView::DeleteConfirm {
         return match key.code {
             KeyCode::Enter | KeyCode::Char('y' | 'Y') => {
-                m.pending_delete = None;
-                Action::RemoteDeleteHost(id)
+                if let Some(host) = m.selected_host() {
+                    Action::RemoteDeleteHost(host.id.clone())
+                } else {
+                    m.view = RemoteView::Browse;
+                    Action::None
+                }
             }
             KeyCode::Esc | KeyCode::Char('n' | 'N') => {
-                m.pending_delete = None;
+                m.view = RemoteView::Browse;
                 Action::None
             }
             _ => Action::None,
@@ -48,19 +52,17 @@ fn handle_browse(m: &mut RemoteState, key: KeyEvent) -> Action {
                 Action::None
             }
         }
-        KeyCode::Char('n' | 'N') if m.intent == RemoteIntent::Manage => Action::RemoteAddHost,
+        KeyCode::Char('n' | 'N') if m.intent == RemoteIntent::Manage => {
+            m.enter_create();
+            Action::None
+        }
         KeyCode::Char('d' | 'D') if m.intent == RemoteIntent::Manage => {
-            if let Some(host) = m.selected_host() {
-                m.pending_delete = Some(host.id.clone());
-            }
+            m.enter_delete();
             Action::None
         }
         KeyCode::Char('e' | 'E') if m.intent == RemoteIntent::Manage => {
-            if let Some(host) = m.selected_host() {
-                Action::RemoteEditHost(host.id.clone())
-            } else {
-                Action::None
-            }
+            m.enter_edit();
+            Action::None
         }
         KeyCode::Char('i') if m.intent == RemoteIntent::Manage => Action::RemoteImportSshConfig,
         _ => Action::None,
