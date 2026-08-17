@@ -707,6 +707,18 @@ impl DaemonHub {
                 self.compact(idx, state, client, handle);
             }
 
+
+            // LIFECYCLE ERROR REPORT: the thin client's remote connect failed.
+            // The C2 LOAD bracket already resolved the foreground cursor to this
+            // client's session, so set_toast targets the right session.
+            ClientRequest::ConnectFailed { error } => {
+                state
+                    .rest
+                    .fg_mut()
+                    .set_toast(format!("remote connect failed: {error}"));
+                self.send_to(idx, DaemonEvent::Ack);
+            }
+
             // Read-only / already-handled variants never reach here (handle_request
             // dispatches them); treat any residual as a no-op Ack so the match is
             // exhaustive without a spurious error. `Status` is among these — it is

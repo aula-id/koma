@@ -52,7 +52,7 @@ pub(super) const FRAME_BUDGET: Duration = Duration::from_millis(16);
 ///   [`crate::ipc::proto::DaemonEvent::NewSession`] (a `/new` hand-off), so `client_run`
 ///   should DETACH from the current daemon — or, on `kill`, send `QuitDaemon` first to reap
 ///   it — and attach a freshly minted brand-new session-daemon.
-pub(super) enum ClientTransition {
+pub(crate) enum ClientTransition {
     /// Tear the client down and return from `client_run` (detach / ExitClient /
     /// frame channel disconnected). `kill` is true when the quit-confirm overlay's
     /// `[k]` was activated — the client must wait for the daemon to die before
