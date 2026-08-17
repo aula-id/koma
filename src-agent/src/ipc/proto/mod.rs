@@ -662,7 +662,14 @@ pub enum DaemonEvent {
     /// calls [`crate::remote::client::run_remote_client_target`], and re-enters the terminal
     /// on return. The TUI shadow treats it as a non-visual no-op. Zero attached clients →
     /// flag cleared (no-op).
-    ConnectRemote { target: String, key: Option<String> },
+    ConnectRemote {
+        target: String,
+        key: Option<String>,
+        /// Whether the remote connection should create a new session and ask for cwd.
+        new_session: bool,
+        /// Existing remote session to resume, when selected from the remote hub.
+        session_id: Option<String>,
+    },
     /// One-shot reply to a [`ClientRequest::Status`] discovery probe: this daemon's
     /// single owned session's metadata. Sent WITHOUT attaching the client or streaming
     /// any snapshot — the connection is expected to close right after.

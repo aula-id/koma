@@ -133,8 +133,13 @@ impl DaemonHub {
         &mut self,
         state: &mut AppState,
     ) {
-        if let Some((target, key)) = state.rest.connect_remote_pending.take() {
-            self.send_to_controller(DaemonEvent::ConnectRemote { target, key });
+        if let Some(request) = state.rest.connect_remote_pending.take() {
+            self.send_to_controller(DaemonEvent::ConnectRemote {
+                target: request.target,
+                key: request.key,
+                new_session: request.new_session,
+                session_id: request.session_id,
+            });
         }
     }
 

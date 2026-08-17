@@ -59,7 +59,7 @@ fn draw_browse(frame: &mut Frame, m: &RemoteState, palette: &Palette) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2), // header
-            Constraint::Min(0),   // body
+            Constraint::Min(0),    // body
             Constraint::Length(1), // footer
         ])
         .split(frame.area());
@@ -127,12 +127,7 @@ fn draw_host_list(frame: &mut Frame, m: &RemoteState, palette: &Palette, area: R
     // Host rows.
     let list_start_y = inner.y;
     let list_height = inner.height;
-    for (row, &host_idx) in m
-        .filtered
-        .iter()
-        .enumerate()
-        .take(list_height as usize)
-    {
+    for (row, &host_idx) in m.filtered.iter().enumerate().take(list_height as usize) {
         let host = &m.hosts[host_idx];
         let is_selected = row == m.selected;
 
@@ -322,18 +317,10 @@ fn draw_host_detail(frame: &mut Frame, m: &RemoteState, palette: &Palette, inner
 /// Matches the agents `editor_lines` pattern: `›` marker on the selected field,
 /// label in accent/dim, value display, and an `(editing)` hint when actively
 /// typing into a field.
-fn draw_editor_detail(
-    frame: &mut Frame,
-    m: &RemoteState,
-    palette: &Palette,
-    inner: Rect,
-) {
+fn draw_editor_detail(frame: &mut Frame, m: &RemoteState, palette: &Palette, inner: Rect) {
     let Some(editor) = &m.editor else {
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                "no editor",
-                Style::default().fg(palette.dim),
-            )),
+            Paragraph::new(Span::styled("no editor", Style::default().fg(palette.dim))),
             inner,
         );
         return;
@@ -392,7 +379,11 @@ fn draw_editor_detail(
             (truncate_str(value, value_w), palette.fg)
         };
 
-        let mut row = vec![marker, label, Span::styled(shown, Style::default().fg(color))];
+        let mut row = vec![
+            marker,
+            label,
+            Span::styled(shown, Style::default().fg(color)),
+        ];
         if selected && !editing_here {
             row.push(Span::styled(
                 "  Enter edit",
@@ -416,21 +407,16 @@ fn draw_editor_detail(
 
 /// Detail rows for DeleteConfirm: a one-line y/n prompt (matches agents
 /// `delete_lines` pattern).
-fn draw_delete_detail(
-    frame: &mut Frame,
-    m: &RemoteState,
-    palette: &Palette,
-    inner: Rect,
-) {
-    let host_name = m
-        .selected_host()
-        .map(|h| h.name.as_str())
-        .unwrap_or("host");
+fn draw_delete_detail(frame: &mut Frame, m: &RemoteState, palette: &Palette, inner: Rect) {
+    let host_name = m.selected_host().map(|h| h.name.as_str()).unwrap_or("host");
     let lines = vec![
         Line::from(""),
         Line::from(vec![
             Span::styled("delete ", Style::default().fg(palette.fg)),
-            Span::styled(format!("'{host_name}'"), Style::default().fg(palette.accent)),
+            Span::styled(
+                format!("'{host_name}'"),
+                Style::default().fg(palette.accent),
+            ),
             Span::styled("?", Style::default().fg(palette.fg)),
         ]),
         Line::from(Span::styled(
@@ -545,9 +531,7 @@ fn footer_hint(m: &RemoteState) -> &'static str {
             RemoteIntent::Manage => {
                 "↑↓ pick · Enter connect · n new · d delete · e edit · i import · Esc close"
             }
-            RemoteIntent::Resume | RemoteIntent::New => {
-                "↑↓ pick · Enter connect · Esc close"
-            }
+            RemoteIntent::Resume | RemoteIntent::New => "↑↓ pick · Enter connect · Esc close",
         },
     }
 }
