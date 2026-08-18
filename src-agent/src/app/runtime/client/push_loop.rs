@@ -1050,6 +1050,13 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::SubmitRemotePassword { password }) => {
                     remote_shared.submit_password(password);
                 }
+                // ─── GUI terminal view (host-local PTY stubs) ─────────────
+                // Terminal sessions are managed host-side. These stubs accept the
+                // requests; PTY lifecycle management will be wired in a later step.
+                Ok(super::HostCtl::TerminalCreate { .. }) => {}
+                Ok(super::HostCtl::TerminalInput { .. }) => {}
+                Ok(super::HostCtl::TerminalResize { .. }) => {}
+                Ok(super::HostCtl::TerminalKill { .. }) => {}
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.
                 Err(TryRecvError::Disconnected) => return HostTransition::Exit,

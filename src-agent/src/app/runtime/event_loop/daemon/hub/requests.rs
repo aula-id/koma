@@ -743,6 +743,17 @@ impl DaemonHub {
             | ClientRequest::ReloadGlobalCatalogue => {
                 self.send_to(idx, DaemonEvent::Ack);
             }
+
+            // ─── GUI terminal view (host-local, never crosses daemon socket) ─
+            // These arrive via the daemon socket for protocol completeness but are
+            // handled entirely host-side (the host process owns the PTY lifecycle).
+            // The daemon Ack's them and the host ignores the request.
+            ClientRequest::TerminalCreate { .. }
+            | ClientRequest::TerminalInput { .. }
+            | ClientRequest::TerminalResize { .. }
+            | ClientRequest::TerminalKill { .. } => {
+                self.send_to(idx, DaemonEvent::Ack);
+            }
         }
     }
 

@@ -1114,6 +1114,13 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     push(json);
                 }
             }
+            // ─── GUI terminal view (host-local PTY stubs, swapper) ───────
+            // Terminal sessions are managed host-side. These stubs accept the
+            // requests; PTY lifecycle management will be wired in a later step.
+            Ok(HostCtl::TerminalCreate { .. }) => {}
+            Ok(HostCtl::TerminalInput { .. }) => {}
+            Ok(HostCtl::TerminalResize { .. }) => {}
+            Ok(HostCtl::TerminalKill { .. }) => {}
             // The ipc side hung up (window gone) — leave the host.
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return HostStep::Done,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
