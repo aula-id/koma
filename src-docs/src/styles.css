@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+/* ── Koma palette tokens (1:1 with webgui) ─────────────────────────── */
+@theme {
+  --font-sans: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --default-font-family: var(--font-sans);
+
+  --color-koma-fg: var(--koma-fg, #c8d3f5);
+  --color-koma-bg: var(--koma-bg, #0b0e14);
+  --color-koma-panel: color-mix(in srgb, var(--koma-fg, #c8d3f5) 6%, var(--koma-bg, #0b0e14));
+  --color-koma-panel2: color-mix(in srgb, var(--koma-fg, #c8d3f5) 4%, var(--koma-bg, #0b0e14));
+  --color-koma-head: color-mix(in srgb, var(--koma-fg, #c8d3f5) 8%, var(--koma-bg, #0b0e14));
+  --color-koma-grip: color-mix(in srgb, var(--koma-fg, #c8d3f5) 35%, var(--koma-bg, #0b0e14));
+  --color-koma-border: color-mix(in srgb, var(--koma-fg, #c8d3f5) 10%, var(--koma-bg, #0b0e14));
+  --color-koma-hover: color-mix(in srgb, var(--koma-fg, #c8d3f5) 8%, var(--koma-bg, #0b0e14));
+  --color-koma-dim: var(--koma-dim, #adadad);
+  --color-koma-accent: var(--koma-accent, #39ff14);
+  --color-koma-warn: var(--koma-warn, #ffb43c);
+  --color-koma-success: var(--koma-success, #00c853);
+  --color-koma-info: var(--koma-info, #50c8ff);
+  --color-koma-error: var(--koma-error, #ff3c3c);
+}
+
+/* ── Font ───────────────────────────────────────────────────────────── */
+/* JetBrains Mono loaded via Google Fonts CDN (see index.html <link>) */
+html, body, #root, .xterm {
+  margin: 0;
+  height: 100%;
+  background: var(--koma-bg, #0b0e14);
+  color: var(--koma-fg, #c8d3f5);
+  font-family: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-synthesis: none;
+}
+
+/* ── Scrollbar (webgui match) ───────────────────────────────────────── */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--color-koma-dim, #888);
+  border-radius: 4px;
+  opacity: 0.5;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--color-koma-fg, #aaa); }
+*::-webkit-scrollbar-corner { background: transparent; }
+
+/* ── Sidebar nav active indicator ───────────────────────────────────── */
+.nav-link {
+  display: block;
+  padding: 0.3rem 0.75rem;
+  font-size: 13px;
+  color: var(--color-koma-dim);
+  text-decoration: none;
+  border-radius: 4px;
+  transition: background 0.1s, color 0.1s;
+}
+.nav-link:hover {
+  background: var(--color-koma-hover);
+  color: var(--color-koma-fg);
+}
+.nav-link-active {
+  color: var(--color-koma-accent);
+  background: var(--color-koma-hover);
+}
+
+
+/* GUI tutorial: docs-local presentational port of src-webgui's shell dimensions/tokens. */
+.gui-first-run-page{animation:gui-first-run-enter 360ms cubic-bezier(.2,.8,.2,1) both;transform-origin:center top}@keyframes gui-first-run-enter{from{opacity:0;transform:translateY(12px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
+.gui-tutorial-viewport{width:100%;min-width:0;overflow:hidden;aspect-ratio:16/9}.gui-tutorial-canvas{position:relative;width:100%;height:100%;overflow:hidden}.gui-tutorial-stage{position:absolute;top:50%;left:50%;width:1280px;height:720px;transform:translate(-50%,-50%) scale(var(--gui-tutorial-scale,1));transform-origin:center;transition:transform 360ms cubic-bezier(.2,.8,.2,1)}
+.gui-desktop{box-sizing:border-box;width:1280px;height:720px;overflow:hidden;border:1px solid var(--color-koma-border);border-radius:10px;background:var(--koma-bg,#0b0e14);color:var(--color-koma-fg);font:12px 'JetBrains Mono',ui-monospace,monospace}.gui-desktop *{box-sizing:border-box}.gui-desktop button{font:inherit;color:inherit;cursor:pointer}.gui-titlebar{height:32px;display:flex;align-items:center;padding:0 4px 0 12px;background:var(--koma-bg);position:relative;z-index:1}.gui-titlebar #gui-title{opacity:.75}.gui-command{position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;width:340px;max-width:46vw;height:22px;padding:0 10px;border:1px solid var(--color-koma-border);border-radius:6px;background:var(--color-koma-panel);font-size:12px;opacity:.7;text-align:left}.gui-window-controls{display:flex;gap:2px;margin-left:auto}.gui-window-controls button{width:34px;height:24px;border:0;border-radius:4px;background:transparent;font-size:13px}.gui-window-controls button:hover{background:rgb(255 255 255 / 12%)}.gui-window-controls button:last-child:hover{background:#e81123;color:#fff}.gui-body{height:calc(100% - 32px);display:flex;overflow:hidden}
+.gui-onboard-loading{height:100%;width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}.gui-onboard-loading b{font-size:22px}.gui-onboard-loading span{color:var(--color-koma-dim)}.gui-onboarding{width:560px;min-height:100%;margin:auto;padding:40px 24px}.gui-onboard-brand{display:flex;align-items:baseline;gap:8px}.gui-onboard-brand b{font-size:24px}.gui-onboard-brand span{font-size:12px;opacity:.45}.gui-steps{display:flex;align-items:center;gap:16px;margin:16px 0 24px}.gui-step{display:flex;align-items:center;gap:8px}.gui-step>span{display:grid;place-items:center;width:24px;height:24px;border:1px solid var(--color-koma-border);border-radius:50%;font-size:11px;font-weight:600;opacity:.4}.gui-step>span.active{border-color:var(--color-koma-accent);background:color-mix(in srgb,var(--color-koma-accent) 15%,transparent);color:var(--color-koma-accent);opacity:1}.gui-step>span.done{border-color:color-mix(in srgb,var(--color-koma-accent) 50%,transparent);color:var(--color-koma-accent);opacity:1}.gui-step label{font-size:12px;opacity:.45}.gui-step label.current{opacity:1}.gui-steps>i{width:24px;height:1px;background:var(--color-koma-border)}.gui-onboard-content h3{display:flex;align-items:center;gap:6px;margin:0 0 12px;font-size:10px;letter-spacing:.08em;text-transform:uppercase;opacity:.45}.gui-onboard-content p{margin:0 0 12px;font-size:12px;line-height:1.5;opacity:.55}.gui-theme-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.gui-theme-grid button,.gui-connect-options button,.gui-connect-options>div{border:1px solid var(--color-koma-border);border-radius:8px;background:transparent;text-align:left}.gui-theme-grid button{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;font-size:12.5px}.gui-theme-grid button.selected{border-color:var(--color-koma-accent);background:color-mix(in srgb,var(--color-koma-accent) 10%,transparent)}.gui-theme-grid button>span{width:14px;height:14px;border:1px solid var(--color-koma-border);border-radius:50%}.gui-onboard-next{display:flex;justify-content:flex-end;margin-top:24px}.gui-onboard-next button,.gui-back{display:flex;align-items:center;gap:6px;border:1px solid var(--color-koma-border);border-radius:8px;background:transparent;padding:8px 14px;font-size:12.5px}.gui-connect-options{display:flex;flex-direction:column;gap:8px}.gui-connect-options button,.gui-connect-options>div{display:flex;flex-direction:column;gap:4px;padding:12px 14px}.gui-connect-options b{display:flex;align-items:center;gap:6px;font-size:13px}.gui-connect-options b svg{color:var(--color-koma-accent)}.gui-connect-options span{font-size:11.5px;opacity:.6}.gui-connect-options>div{border-style:dashed;opacity:.55}.gui-back{margin-top:24px;border:0;padding-left:12px;opacity:.7}
+.gui-shell{display:flex;width:100%;height:100%}.gui-activity{display:flex;width:48px;flex:none;flex-direction:column;align-items:center;gap:2px;padding-top:6px;border-right:1px solid var(--color-koma-border);background:var(--color-koma-panel2)}.gui-activity button{position:relative;display:grid;place-items:center;width:40px;height:40px;border:0;border-radius:6px;background:transparent;opacity:.5}.gui-activity button:hover{background:var(--color-koma-hover);opacity:.85}.gui-activity button.active{opacity:1}.gui-activity button.active:before{content:'';position:absolute;left:-4px;width:2px;height:22px;background:var(--color-koma-fg)}.gui-activity>span{flex:1}.gui-sidebar{width:240px;flex:none;overflow:hidden;border-right:1px solid var(--color-koma-border);background:var(--color-koma-panel)}.gui-sidebar-resize{width:5px;flex:none;cursor:ew-resize}.gui-sidebar>header{height:35px;padding:11px 20px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.6}.gui-explorer-section{border-top:1px solid var(--color-koma-border)}.gui-explorer-section h3{display:flex;align-items:center;gap:4px;height:25px;margin:0;padding:0 10px;font-size:11px;font-weight:400;letter-spacing:.04em;text-transform:uppercase;opacity:.65}.gui-empty{min-height:30px;padding:7px 12px 7px 32px;font-size:12px;opacity:.4}.gui-main{display:flex;min-width:0;flex:1;flex-direction:column}.gui-start{flex:1;overflow:auto}.gui-start-columns{display:flex;gap:24px;max-width:980px;margin:0 auto;padding:40px 24px}.gui-start-actions{flex:1;min-width:0}.gui-start-heading{display:flex;align-items:baseline;gap:8px;margin-bottom:16px}.gui-start-heading b{font-size:22px}.gui-start-heading span{font-size:12px;opacity:.45}.gui-new-session{display:flex;align-items:center;width:100%;gap:12px;padding:12px 16px;border:1px solid var(--color-koma-border);border-radius:12px;background:var(--color-koma-panel);text-align:left}.gui-new-session:hover{border-color:color-mix(in srgb,var(--color-koma-accent) 60%,transparent);background:var(--color-koma-hover)}.gui-new-session i{display:grid;place-items:center;width:36px;height:36px;border-radius:8px;background:color-mix(in srgb,var(--color-koma-accent) 15%,transparent);color:var(--color-koma-accent)}.gui-new-session span{display:flex;flex:1;flex-direction:column;gap:3px}.gui-new-session b{font-size:13px}.gui-new-session small{font-size:11px;opacity:.45}.gui-recent,.gui-about{border:1px solid var(--color-koma-border);border-radius:12px;background:var(--color-koma-panel2)}.gui-recent{margin-top:16px;padding:16px}.gui-recent label,.gui-about label{display:flex;gap:6px;font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;opacity:.45}.gui-recent p{margin:14px 4px 0;font-size:12px;opacity:.35}.gui-about{width:300px;flex:none;padding:16px}.gui-about p{font-size:12.5px;line-height:1.55;opacity:.8}.gui-about>span{display:block;margin-top:10px;font-size:12px;opacity:.7}.gui-about>span::first-letter{color:var(--color-koma-accent)}
+.gui-chat{display:flex;flex:1;justify-content:center;min-height:0}.gui-chat-scroll{width:calc(100% - 48px);max-width:1024px;height:100%;margin:0 auto}.gui-composer-wrap{padding:4px 8px 12px}.gui-composer{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--color-koma-border);border-radius:16px;background:var(--color-koma-panel);box-shadow:0 1px 2px #0003}.gui-compose-input{height:24px;font-size:14px;line-height:24px;color:var(--color-koma-fg);opacity:.4}.gui-composer footer{display:flex;align-items:center;justify-content:space-between}.gui-composer footer>div{display:flex;align-items:center;gap:4px;min-width:0}.gui-composer footer>div>button,.gui-composer-trigger{display:flex;align-items:center;justify-content:center;gap:4px;height:32px;border:0;border-radius:8px;background:transparent;color:var(--color-koma-fg);opacity:.7}.gui-composer footer>div>button[aria-label]{width:32px}.gui-composer-trigger{max-width:160px;padding:0 8px;font-size:12px}.gui-composer-trigger span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.gui-send{display:grid;place-items:center;width:32px;height:32px;border:0;border-radius:50%;background:var(--color-koma-hover);color:var(--color-koma-fg);opacity:.4}.gui-usage{display:flex;align-items:center;gap:8px;height:20px;padding:0 12px;border-top:1px solid var(--color-koma-border);background:var(--color-koma-panel);font-size:11px;color:var(--color-koma-dim)}.gui-usage i{flex:1}.gui-usage b{color:var(--color-koma-accent);font-weight:400}
+.gui-tutorial-control{display:grid;height:25px;width:25px;place-items:center;color:var(--color-koma-dim)}.gui-tutorial-control:disabled{cursor:not-allowed;opacity:.35}.gui-tutorial-cursor{position:absolute;width:0;height:0;color:var(--color-koma-fg);filter:drop-shadow(0 1px 2px rgb(0 0 0 / 70%));transition:left 520ms cubic-bezier(.2,.8,.2,1),top 520ms cubic-bezier(.2,.8,.2,1)}.gui-tutorial-cursor svg{position:absolute;left:0;top:0;display:block;width:24px;height:24px;transform:translate(-4px,-2.5px);fill:currentColor;stroke:var(--color-koma-bg);stroke-width:1.5}.gui-tutorial-cursor-ring{position:absolute;left:0;top:0;box-sizing:border-box;width:24px;height:24px;border:2px solid var(--color-koma-accent);border-radius:50%;opacity:0;animation:gui-tutorial-click 480ms ease-out}@keyframes gui-tutorial-click{0%{transform:translate(-50%,-50%) scale(.3);opacity:1}100%{transform:translate(-50%,-50%) scale(12);opacity:0}}@media(prefers-reduced-motion:reduce){.gui-first-run-page,.gui-tutorial-cursor-ring{animation:none}.gui-tutorial-stage,.gui-tutorial-cursor{transition:none}}
+
+/* Provider/model tutorial chrome only. Connector presentation uses transplanted Tailwind utilities. */
+.gpm-tutorial [data-gui-tour-action]{opacity:1}
+.gpm-tutorial{overflow:hidden;border:1px solid var(--color-koma-border);border-radius:8px;background:var(--color-koma-panel);font-size:12px}.gpm-instruction{display:flex;align-items:center;gap:9px;padding:12px 14px;border-bottom:1px solid var(--color-koma-border);background:var(--color-koma-panel2);color:var(--color-koma-fg)}.gpm-instruction span{display:grid;place-items:center;color:var(--color-koma-accent)}.gpm-instruction p{margin:0;line-height:1.5}.gpm-target{outline:1px solid var(--color-koma-accent)!important;box-shadow:0 0 0 3px color-mix(in srgb,var(--color-koma-accent) 10%,transparent)}.gpm-controls{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;border-top:1px solid var(--color-koma-border);color:var(--color-koma-dim);font-size:10px;line-height:1.4}.gpm-controls>div{display:flex;gap:6px;flex:none}.gpm-controls button{display:flex;align-items:center;gap:5px;border:1px solid var(--color-koma-border);border-radius:5px;background:transparent;padding:5px 9px;color:var(--color-koma-fg);font-size:11px}.gpm-controls button:disabled{cursor:not-allowed;opacity:.35}.gpm-controls .gpm-next{border-color:color-mix(in srgb,var(--color-koma-accent) 50%,transparent);color:var(--color-koma-accent)}.gpm-viewport{aspect-ratio:16/9}.gpm-sidebar{display:flex;width:360px;flex-direction:column}.gpm-step-dots{display:flex;align-items:center;gap:5px;margin-left:auto}.gpm-step-dots i{width:7px;height:7px;border-radius:50%;background:var(--color-koma-border)}.gpm-step-dots i.done{background:color-mix(in srgb,var(--color-koma-accent) 50%,var(--color-koma-border))}.gpm-step-dots i.active{width:9px;height:9px;background:var(--color-koma-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--color-koma-accent) 16%,transparent)}.gpm-focus-stage{transform:translate(calc(-50% + var(--gpm-focus-x)),calc(-50% + var(--gpm-focus-y))) scale(var(--gui-tutorial-scale,1));transform-origin:center;transition:none}.gui-composer:has(.relative){position:relative}@media(max-width:560px){.gpm-header{align-items:flex-start;flex-direction:column;gap:8px}.gpm-controls{align-items:flex-start;flex-direction:column}}@media(prefers-reduced-motion:reduce){.gui-tutorial-cursor-ring{animation:none}.gpm-focus-stage{transition:none}}
