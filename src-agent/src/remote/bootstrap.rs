@@ -9,19 +9,6 @@ use super::ssh;
 use super::RemoteTarget;
 
 const MISSING: &str = "MISSING";
-/// Version probe run on the remote host via SSH.
-///
-/// The `2>/dev/null || echo MISSING` fallback is critical: if the existing
-/// `koma` binary exists but cannot execute (wrong architecture triggering
-/// QEMU/binfmt, missing shared libraries, corrupt download, etc.), the
-/// command prints `MISSING` instead of propagating the error.  This lets the
-/// bootstrap proceed to reinstall the correct binary via the official
-/// installer, which re-detects OS + architecture.
-const VERSION_COMMAND: &str = "\
-    if command -v koma >/dev/null 2>&1; \
-    then koma --version 2>/dev/null || echo MISSING; \
-    else echo MISSING; fi";
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SemanticVersion {
     major: u64,
@@ -171,7 +158,15 @@ pub(crate) fn ensure_koma_compatible(
 ) -> Result<bool> {
     ensure_compatible_with(
         env!("CARGO_PKG_VERSION"),
-        || ssh::exec_remote(target, VERSION_COMMAND, auth),
+        || {
+            let path = ssh::find_koma(target, auth)?;
+            let command = ssh::remote_command(&path, &["--version"])?;
+            ssh::exec_remote(
+                target,
+                &format!("{command} 2>/dev/null || echo {MISSING}"),
+                auth,
+            )
+        },
         || install_koma(target, auth),
     )
 }

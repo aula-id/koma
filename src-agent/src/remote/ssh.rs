@@ -34,12 +34,57 @@ pub(crate) fn server_args(session_id: &str, cwd: Option<&str>) -> Result<Vec<Str
     Ok(args)
 }
 
+/// Quote one argument for the remote POSIX shell. SSH joins command arguments into a
+/// shell command, so passing unquoted values would allow shell metacharacters through.
+pub(crate) fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// Construct a remote command with each argument safely shell-quoted.
+pub(crate) fn remote_command(program: &str, args: &[&str]) -> Result<String> {
+    if program.is_empty() || program.contains('\0') || program.contains('\n') {
+        anyhow::bail!("invalid remote executable path");
+    }
+    if !program.starts_with('/') {
+        anyhow::bail!("remote executable path must be absolute");
+    }
+    let mut command = shell_quote(program);
+    for arg in args {
+        if arg.contains('\0') || arg.contains('\n') {
+            anyhow::bail!("invalid remote command argument");
+        }
+        command.push(' ');
+        command.push_str(&shell_quote(arg));
+    }
+    Ok(command)
+}
+
+/// Locate the installed remote Koma binary without relying on interactive shell startup files.
+pub(crate) fn find_koma(target: &RemoteTarget, auth: Option<&SshAuth>) -> Result<String> {
+    let output = exec_remote(
+        target,
+        "for p in \"$HOME/.local/bin/koma\" \"$HOME/bin/koma\" /usr/local/bin/koma /usr/bin/koma; do if [ -x \"$p\" ]; then printf '%s' \"$p\"; exit 0; fi; done; exit 1",
+        auth,
+    )?;
+    if output.is_empty()
+        || !output.starts_with('/')
+        || output.contains('\0')
+        || output.contains('\n')
+    {
+        anyhow::bail!("remote Koma executable path is invalid");
+    }
+    Ok(output)
+}
 pub(crate) fn connect(
     target: &RemoteTarget,
     session_id: &str,
     auth: Option<&SshAuth>,
     cwd: Option<&str>,
+    koma_path: &str,
 ) -> Result<SshSession> {
+    if koma_path.is_empty() || koma_path.contains('\0') || koma_path.contains('\n') {
+        anyhow::bail!("invalid remote Koma executable path");
+    }
     let mut cmd = Command::new("ssh");
     cmd.arg("-o")
         .arg("StrictHostKeyChecking=accept-new")
@@ -58,11 +103,10 @@ pub(crate) fn connect(
         a.apply_to_tokio_command(&mut cmd);
     }
     let remote_args = server_args(session_id, cwd)?;
+    let remote_arg_refs: Vec<&str> = remote_args.iter().map(String::as_str).collect();
+    let remote_command = remote_command(koma_path, &remote_arg_refs)?;
     cmd.arg(format!("{}@{}", target.user, target.host));
-    cmd.arg("koma");
-    for arg in remote_args {
-        cmd.arg(arg);
-    }
+    cmd.arg(remote_command);
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -153,7 +197,22 @@ pub(crate) fn exec_remote(
 
 #[cfg(test)]
 mod tests {
-    use super::{server_args, validate_remote_path};
+    use super::{remote_command, server_args, shell_quote, validate_remote_path};
+    #[test]
+    fn remote_command_quotes_program_and_arguments() {
+        assert_eq!(
+            remote_command(
+                "/home/me/.local/bin/koma",
+                &["server", "--session", "id; echo bad"]
+            )
+            .unwrap(),
+            "'/home/me/.local/bin/koma' 'server' '--session' 'id; echo bad'"
+        );
+        assert_eq!(shell_quote("/home/a'b/koma"), "'/home/a'\\''b/koma'");
+        assert!(remote_command("koma", &[]).is_err());
+        assert!(remote_command("/usr/bin/koma", &["bad\narg"]).is_err());
+    }
+
     #[test]
     fn server_args_keep_cwd_as_one_argument() {
         let args = server_args("id", Some("/tmp/a; echo bad")).unwrap();

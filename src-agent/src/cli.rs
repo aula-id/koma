@@ -397,9 +397,11 @@ mod tests {
 
     #[test]
     fn remote_target_uses_direct_remote_entry() {
-        let opts = parse(["koma", "remote", "alice@example.test"]
-            .into_iter()
-            .map(String::from));
+        let opts = parse(
+            ["koma", "remote", "alice@example.test"]
+                .into_iter()
+                .map(String::from),
+        );
         assert!(!opts.remote_picker);
         assert_eq!(opts.remote_target.as_deref(), Some("alice@example.test"));
     }
