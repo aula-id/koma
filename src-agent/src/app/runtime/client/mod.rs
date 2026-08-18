@@ -1197,7 +1197,33 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                         ))
                                     }
                                 }
-                                Ok(crate::remote::client::RemoteExit::Exit) | Err(_) => {
+                                Ok(crate::remote::client::RemoteExit::Exit) => {
+                                    // Ordinary remote QUIT means detach and return to the local
+                                    // client; it must never reopen the remote hub.
+                                    remote_resume = None;
+                                    match prev_session.take() {
+                                        Some(previous) => {
+                                            match attach_session(&mut terminal, &handle, &previous)
+                                            {
+                                                Ok(conn) => {
+                                                    current_session_id = Some(previous);
+                                                    ClientState::Attached(conn)
+                                                }
+                                                Err(error) => {
+                                                    crate::model::store::append_global_error_log(
+                                                        "client",
+                                                        &format!(
+                                                            "could not reconnect to session {previous}: {error:#}"
+                                                        ),
+                                                    );
+                                                    ClientState::Swapper(build_local_hub(None))
+                                                }
+                                            }
+                                        }
+                                        None => break,
+                                    }
+                                }
+                                Err(_) => {
                                     if let Some((rt, password, remote_id, _cwd)) =
                                         remote_resume.take()
                                     {
@@ -1242,7 +1268,10 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                     // failed reconnect to a since-died previous daemon also degrades back to
                     // the swapper instead of crashing.
                     SwapperOutcome::Cancel => {
-                        if let Some((target, password, session_id, _cwd)) = remote_resume.clone() {
+                        if let Some((target, password, session_id, _cwd)) = remote_resume
+                            .clone()
+                            .filter(|(_, _, session_id, _)| session_id.is_some())
+                        {
                             let address = match target.port {
                                 Some(port) => format!("{}@{}:{}", target.user, target.host, port),
                                 None => format!("{}@{}", target.user, target.host),

@@ -141,17 +141,23 @@ pub(crate) fn list_dirs(
     path: &str,
     auth: Option<&SshAuth>,
 ) -> Result<Vec<String>> {
+    const MAX_DIRS: usize = 200;
+
     let path = validate_remote_path(path)?;
     let quoted = format!("'{}'", path.replace('\'', "'\\''"));
     let output = exec_remote(
         target,
-        &format!("test -d {quoted} && find {quoted} -mindepth 1 -maxdepth 1 -type d -print"),
+        &format!(
+            "test -d {quoted} && find {quoted} -xdev -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | head -n {}",
+            MAX_DIRS + 1
+        ),
         auth,
     )?;
     Ok(output
         .lines()
         .map(str::trim)
         .filter(|p| !p.is_empty())
+        .take(MAX_DIRS)
         .map(str::to_string)
         .collect())
 }
