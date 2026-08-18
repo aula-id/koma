@@ -734,63 +734,36 @@ pub fn run(opts: crate::cli::Opts) -> Result<()> {
         .unwrap_or_default();
     crate::app::runtime::actions::apply_mouse_capture(mc);
 
-    loop {
-        let result = run_loop(&mut terminal, &mut state, &handle, &mut client);
+    let result = run_loop(&mut terminal, &mut state, &handle, &mut client);
 
-        // Check for remote connect break-out.
-        if let Some(request) = state.rest.connect_remote_target.take() {
-            if opts.remote_picker {
-                let mut remote_opts = opts.clone();
-                remote_opts.remote_picker = false;
-                remote_opts.remote_entry = true;
-                remote_opts.remote_target = Some(request.target);
-                remote_opts.remote_key = request.key;
-                return crate::app::client_run(remote_opts);
-            }
-
-            let _connect_result = crate::remote::client::run_remote_client_target(
-                &request.target,
-                request.key.as_deref(),
-                None,
-                request.new_session,
-                request.session_id.as_deref(),
-            );
-
-            if let Err(e) = &_connect_result {
-                crate::model::store::append_global_error_log(
-                    "remote",
-                    &format!("remote connect to {} failed: {e:#}", request.target),
-                );
-                state
-                    .rest
-                    .fg_mut()
-                    .set_toast(format!("remote connect failed: {e:#}"));
-            }
-
-            // Re-enter the terminal and loop.
-            _guard = TerminalGuard::enter()?;
-            let backend = CrosstermBackend::new(stdout());
-            terminal = Terminal::new(backend)?;
-            terminal.clear()?;
-            let mc = state
-                .rest
-                .fg()
-                .session
-                .as_ref()
-                .map(|s| s.settings.mouse_capture)
-                .unwrap_or_default();
-            crate::app::runtime::actions::apply_mouse_capture(mc);
-            continue;
+    // Check for remote connect break-out.
+    if let Some(request) = state.rest.connect_remote_target.take() {
+        if opts.remote_picker {
+            let mut remote_opts = opts.clone();
+            remote_opts.remote_picker = false;
+            remote_opts.remote_entry = true;
+            remote_opts.remote_target = Some(request.target);
+            remote_opts.remote_key = request.key;
+            return crate::app::client_run(remote_opts);
         }
 
-        // Normal exit path.
-        if let Err(e) = result {
-            shutdown_runtime(&mut state, rt);
-            return Err(e);
-        }
-        break;
+        // Remote connects always hand off to the client-owned session hub.  The
+        // legacy direct `run_remote_client_target` path entered a remote chat
+        // session (and, on `/resume`, could bounce back into this lifecycle loop),
+        // while `client_run` owns the same hub used by `--resume`/`agents`.
+        let mut remote_opts = opts.clone();
+        remote_opts.remote_picker = false;
+        remote_opts.remote_entry = true;
+        remote_opts.remote_target = Some(request.target);
+        remote_opts.remote_key = request.key;
+        return crate::app::client_run(remote_opts);
     }
 
+    // Normal exit path.
+    if let Err(e) = result {
+        shutdown_runtime(&mut state, rt);
+        return Err(e);
+    }
     shutdown_runtime(&mut state, rt);
     Ok(())
 }
