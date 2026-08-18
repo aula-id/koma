@@ -81,6 +81,7 @@ mod shadow;
 mod store_host;
 mod swapper;
 mod swapper_keys;
+mod terminal_host;
 
 #[cfg(test)]
 #[path = "analytics_test.rs"]
