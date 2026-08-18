@@ -52,12 +52,16 @@ pub(crate) fn run_remote_client_with_cwd(
 ) -> Result<RemoteExit> {
     let session_id = session_id_for(requested_session_id);
 
-    // SSH connect and exec `koma server`.
-    let koma_path = ssh::find_koma(target, auth)?;
-    let mut session = ssh::connect(target, &session_id, auth, cwd, &koma_path)?;
-
-    // Set up tokio runtime for the bridge.
     let rt = tokio::runtime::Runtime::new()?;
+
+    // SSH connect and exec `koma server`; tokio::process::Command::spawn
+    // requires an entered runtime even though connect itself is synchronous.
+    let koma_path = ssh::find_koma(target, auth)?;
+    let mut session = {
+        let _rt_ctx = rt.enter();
+        ssh::connect(target, &session_id, auth, cwd, &koma_path)?
+    };
+
     let handle = rt.handle().clone();
 
     // Connect the client bridge over SSH stdin/stdout.
