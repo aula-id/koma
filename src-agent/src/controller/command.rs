@@ -24,7 +24,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/new remote", "Start a new session on a saved remote host"),
     ("/resume", "Open the session hub (live + past sessions)"),
     ("/resume remote", "Resume a session on a saved remote host"),
-    ("/mode", "Toggle Normal/Auto tool approval"),
+    ("/mode", "Cycle or explicitly set the agent mode"),
     ("/effort", "Set model reasoning/thinking effort"),
     ("/free", "Toggle this session to use koma-free"),
     ("/internet", "Toggle internet mode (simple | full)"),
