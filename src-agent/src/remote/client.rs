@@ -150,10 +150,7 @@ pub(crate) fn prompt_remote_cwd(
         let password = password.map(str::to_string);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let auth = password
-                .map(SshAuth::new)
-                .transpose()
-                .map_err(anyhow::Error::from);
+            let auth = password.map(SshAuth::new).transpose();
             let result = match auth {
                 Ok(auth) => ssh::list_dirs(&target, &path, auth.as_ref()),
                 Err(error) => Err(error),
@@ -364,11 +361,7 @@ pub(crate) fn prompt_remote_cwd(
                 if c == '/' && path.ends_with('/') {
                     continue;
                 }
-                if path == "/" {
-                    path.push(c);
-                } else {
-                    path.push(c);
-                }
+                path.push(c);
                 selected = 0;
             }
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {

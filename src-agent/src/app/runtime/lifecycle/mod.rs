@@ -734,24 +734,11 @@ pub fn run(opts: crate::cli::Opts) -> Result<()> {
         .unwrap_or_default();
     crate::app::runtime::actions::apply_mouse_capture(mc);
 
-    loop {
-        let result = run_loop(&mut terminal, &mut state, &handle, &mut client);
+    let result = run_loop(&mut terminal, &mut state, &handle, &mut client);
 
-        // Check for remote connect break-out.
-        if let Some(request) = state.rest.connect_remote_target.take() {
-            if opts.remote_picker {
-                let mut remote_opts = opts.clone();
-                remote_opts.remote_picker = false;
-                remote_opts.remote_entry = true;
-                remote_opts.remote_target = Some(request.target);
-                remote_opts.remote_key = request.key;
-                return crate::app::client_run(remote_opts);
-            }
-
-            // Remote connects always hand off to the client-owned session hub.  The
-            // legacy direct `run_remote_client_target` path entered a remote chat
-            // session (and, on `/resume`, could bounce back into this lifecycle loop),
-            // while `client_run` owns the same hub used by `--resume`/`agents`.
+    // Check for remote connect break-out.
+    if let Some(request) = state.rest.connect_remote_target.take() {
+        if opts.remote_picker {
             let mut remote_opts = opts.clone();
             remote_opts.remote_picker = false;
             remote_opts.remote_entry = true;
@@ -760,14 +747,23 @@ pub fn run(opts: crate::cli::Opts) -> Result<()> {
             return crate::app::client_run(remote_opts);
         }
 
-        // Normal exit path.
-        if let Err(e) = result {
-            shutdown_runtime(&mut state, rt);
-            return Err(e);
-        }
-        break;
+        // Remote connects always hand off to the client-owned session hub.  The
+        // legacy direct `run_remote_client_target` path entered a remote chat
+        // session (and, on `/resume`, could bounce back into this lifecycle loop),
+        // while `client_run` owns the same hub used by `--resume`/`agents`.
+        let mut remote_opts = opts.clone();
+        remote_opts.remote_picker = false;
+        remote_opts.remote_entry = true;
+        remote_opts.remote_target = Some(request.target);
+        remote_opts.remote_key = request.key;
+        return crate::app::client_run(remote_opts);
     }
 
+    // Normal exit path.
+    if let Err(e) = result {
+        shutdown_runtime(&mut state, rt);
+        return Err(e);
+    }
     shutdown_runtime(&mut state, rt);
     Ok(())
 }
