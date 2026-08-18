@@ -324,17 +324,24 @@ pub(super) enum HostCtl {
     /// config, runs the `GET {endpoint}/models` OFF-thread, and pushes the SAME `ModelList`
     /// envelope the attached daemon path produces — ALWAYS a reply so the picker's spinner
     /// can never hang.
-    ListModels { provider: String },
+    ListModels {
+        provider: String,
+    },
     /// UN-ATTACHED twin of [`ListModels`](Self::ListModels) for the ROUTE picker: fetch one
     /// model's live provider-route list off-thread and push a `RouteList` envelope (echoing
     /// `provider` + `model_id`). EMPTY routes for a non-OpenRouter provider or any fetch
     /// error — again ALWAYS a reply so the form falls back to "Auto" instead of hanging.
-    ListRoutes { provider: String, model_id: String },
+    ListRoutes {
+        provider: String,
+        model_id: String,
+    },
     /// Host-side FILE DIFF fetch for the Explore "FILE CHANGED" panel's Monaco diff tab
     /// (`path` is a `fileChanges` record's path). Unlike [`ListModels`]/[`ListRoutes`], this
     /// NEVER prefers the attached daemon — the host already has direct filesystem + git
     /// access. Serviced off-thread in both host states; see [`compute_file_diff`].
-    FileDiff { path: String },
+    FileDiff {
+        path: String,
+    },
     /// Host-side GIT STATUS fetch for the Explore "GIT" panel (branch, ahead/behind,
     /// staged/unstaged file lists). NEVER touches the daemon regardless of attach
     /// state — the host already has direct git access. Serviced off-thread (git is
@@ -345,34 +352,53 @@ pub(super) enum HostCtl {
     /// clicked entry's path; `staged` selects index-vs-HEAD when `true`, worktree-vs-
     /// index when `false`). Same reasoning + routing as [`GitStatus`](Self::GitStatus);
     /// see [`compute_git_diff`].
-    GitDiff { path: String, staged: bool },
+    GitDiff {
+        path: String,
+        staged: bool,
+    },
     /// Host-side GIT STAGE mutation for the GIT panel's "+" row button / "Stage All"
     /// (`paths` repo-root-relative). Same reasoning as [`GitStatus`](Self::GitStatus);
     /// the worker pushes a `GitOp` reply THEN a follow-up `GitStatus` push so the
     /// panel's lists refresh after the mutation. See [`git_stage`].
-    GitStage { paths: Vec<String> },
+    GitStage {
+        paths: Vec<String>,
+    },
     /// Host-side GIT UNSTAGE mutation ("−" row button / "Unstage All"). Same
     /// reasoning + reply pattern as [`GitStage`](Self::GitStage); see [`git_unstage`].
-    GitUnstage { paths: Vec<String> },
+    GitUnstage {
+        paths: Vec<String>,
+    },
     /// Host-side GIT DISCARD mutation (destructive — the React side gates this behind
     /// a confirm before ever sending it). Same reasoning + reply pattern as
     /// [`GitStage`](Self::GitStage); see [`git_discard`].
-    GitDiscard { paths: Vec<String> },
+    GitDiscard {
+        paths: Vec<String>,
+    },
     /// Host-side GIT COMMIT of whatever is currently staged. Same reasoning + reply
     /// pattern as [`GitStage`](Self::GitStage); see [`git_commit`].
-    GitCommit { message: String },
+    GitCommit {
+        message: String,
+    },
     /// Host-side COMMIT GRAPH fetch for a GitKraken-style commit-graph panel view
     /// (`limit` rows starting `skip` back, across every ref). Same reasoning as
     /// [`GitStatus`](Self::GitStatus); see [`git_graph::compute_git_graph`].
-    GitGraph { limit: u32, skip: u32 },
+    GitGraph {
+        limit: u32,
+        skip: u32,
+    },
     /// Host-side COMMIT DETAIL fetch for a commit-graph row click (full metadata +
     /// changed-file list). Same reasoning + routing as
     /// [`GitGraph`](Self::GitGraph); see [`git_graph::compute_commit_detail`].
-    GitCommitDetail { sha: String },
+    GitCommitDetail {
+        sha: String,
+    },
     /// Host-side COMMIT DIFF fetch for a commit-detail file-row click (`path` at
     /// commit `sha` vs its first parent). Same reasoning + routing as
     /// [`GitGraph`](Self::GitGraph); see [`git_graph::compute_commit_diff`].
-    GitCommitDiff { sha: String, path: String },
+    GitCommitDiff {
+        sha: String,
+        path: String,
+    },
     /// UN-ATTACHED GUI Settings-tab fetch (a [`ClientRequest::GetSettings`] serviced by the
     /// swapper). There is no foreground session pre-attach, so the swapper answers from the
     /// GLOBAL config: the active `palette` plus [`crate::model::settings::Settings`]
@@ -393,7 +419,9 @@ pub(super) enum HostCtl {
     /// `~/.koma/config.json`, persist, evict its token-refresh cache entry, and re-push a
     /// fresh `idle` `OAuthState`. Reachable pre-session (the login FLOW itself stays
     /// attached-only). The `uuid` is the connection to drop.
-    DeleteOAuthConn { uuid: String },
+    DeleteOAuthConn {
+        uuid: String,
+    },
     /// UN-ATTACHED GUI OAuth login START (the home-screen / Settings-pre-session "Sign
     /// in to koma.run" etc. button): there is no attached daemon to run the flow on, so
     /// the swapper runs it HOST-side — the exact same `service::oauth::flow::run_flow`
@@ -404,7 +432,9 @@ pub(super) enum HostCtl {
     /// `waiting_url`/`waiting_code` `OAuthState` pushes, ending in `success` (after the
     /// connection is appended to the GLOBAL config + persisted) or `failed`. Superseding a
     /// flow already in flight aborts it first, mirroring `handle_oauth_start`'s supersede.
-    StartOAuth { provider: String },
+    StartOAuth {
+        provider: String,
+    },
     /// UN-ATTACHED GUI OAuth login CANCEL: abort whatever host-local flow
     /// [`StartOAuth`](Self::StartOAuth) started (a no-op if none is in flight) and
     /// re-push a fresh `idle` `OAuthState` so the Cancel button always lands somewhere
@@ -445,25 +475,38 @@ pub(super) enum HostCtl {
     /// keypair). Same reasoning + reply pattern as [`GitStage`](Self::GitStage) —
     /// the worker pushes a `KeyOp` reply THEN a follow-up `KeyList` push. See
     /// [`keys::generate_key`].
-    KeyGenerate { name: String, comment: String },
+    KeyGenerate {
+        name: String,
+        comment: String,
+    },
     /// Host-side SSH KEY IMPORT mutation (an existing pasted private key). Same
     /// reasoning + reply pattern as [`KeyGenerate`](Self::KeyGenerate); see
     /// [`keys::import_key`].
-    KeyImport { name: String, private_key: String },
+    KeyImport {
+        name: String,
+        private_key: String,
+    },
     /// Host-side SSH KEY REVEAL fetch ("Copy public key" / "Reveal private key").
     /// Same reasoning as [`GitDiff`](Self::GitDiff) — ALWAYS a one-shot `KeyReveal`
     /// reply, never touches the daemon. See [`keys::reveal_key`].
-    KeyReveal { name: String, private: bool },
+    KeyReveal {
+        name: String,
+        private: bool,
+    },
     /// Host-side SSH KEY DELETE mutation. Same reasoning + reply pattern as
     /// [`KeyGenerate`](Self::KeyGenerate); see [`keys::delete_key`].
-    KeyDelete { name: String },
+    KeyDelete {
+        name: String,
+    },
     /// Source Control panel's key-picker changed: assign (`Some(name)`) or clear
     /// (`None`, "Default (system ssh)") the foreground session's repo's SSH key for
     /// remote ops. Same reasoning as [`GitStatus`](Self::GitStatus); see
     /// [`git_remote::set_current_key`]. Carries no reply of its own — the worker
     /// pushes a follow-up [`GitStatus`](Self::GitStatus) reflecting the new
     /// assignment (`GitStatusResult.key_name`).
-    SetGitKey { name: Option<String> },
+    SetGitKey {
+        name: Option<String>,
+    },
     /// Source Control panel's Fetch button: `git fetch --prune`, using the repo's
     /// assigned key's `GIT_SSH_COMMAND` override if one is set. Same reasoning +
     /// reply pattern as [`GitStage`](Self::GitStage); see [`git_remote::git_fetch`].
@@ -481,7 +524,9 @@ pub(super) enum HostCtl {
     /// Branch-switcher popover (footer/GitPanel) or graph context menu opened:
     /// fetch every local + remote-tracking branch. Host-local, never the daemon,
     /// like [`GitStatus`](Self::GitStatus); see [`git_branch::git_branch_list`].
-    GitBranchList { request_id: Option<u64> },
+    GitBranchList {
+        request_id: Option<u64>,
+    },
     /// Source Control multi-repo picker opened: discover every git repo across the
     /// session's workdirs. Host-local, never the daemon, like
     /// [`GitBranchList`](Self::GitBranchList); see [`git_repos::discover_repos`].
@@ -491,7 +536,9 @@ pub(super) enum HostCtl {
     /// (an absolute toplevel path from a prior `RepoList`). Host-local, never the
     /// daemon, like [`SetGitKey`](Self::SetGitKey) — no reply of its own; the worker
     /// pushes a follow-up [`GitStatus`](Self::GitStatus) for the newly-active repo.
-    SetActiveRepo { root: String },
+    SetActiveRepo {
+        root: String,
+    },
     /// Branch-switcher pick / graph "Checkout" (SAFE only, never `--force`): switch
     /// (or detach onto) `ref_name` (a branch or a sha). Same reply pattern as
     /// [`GitStage`](Self::GitStage) — React also fires a client-local
@@ -514,18 +561,27 @@ pub(super) enum HostCtl {
     /// conflicted — the follow-up `GitStatus` reports that via `inProgress`/
     /// `conflicted`, not this reply's `error` alone. See
     /// [`git_destructive::git_cherry_pick`].
-    GitCherryPick { sha: String },
+    GitCherryPick {
+        sha: String,
+    },
     /// Commit-graph row context menu "Revert" (G5b). Same conflict reasoning as
     /// [`GitCherryPick`](Self::GitCherryPick). See [`git_destructive::git_revert`].
-    GitRevert { sha: String },
+    GitRevert {
+        sha: String,
+    },
     /// Commit-graph row context menu "Reset branch to here" (G5b). `mode` is
     /// `"soft"`/`"mixed"`/`"hard"` — `hard` is destructive; the React confirm is the
     /// gate, not this handler. See [`git_destructive::git_reset`].
-    GitReset { sha: String, mode: String },
+    GitReset {
+        sha: String,
+        mode: String,
+    },
     /// Branch-switcher / graph context menu "Merge into current branch" (G5b). May
     /// conflict, same reasoning as [`GitCherryPick`](Self::GitCherryPick). See
     /// [`git_destructive::git_merge`].
-    GitMerge { ref_name: String },
+    GitMerge {
+        ref_name: String,
+    },
     /// Rebase onto `upstream` (G5b/G6). `branch: Some(name)` is the GitKraken-style
     /// drag-to-rebase (checks out + rebases `branch`, not the current branch);
     /// `None` rebases the current branch. May conflict. See
@@ -536,11 +592,15 @@ pub(super) enum HostCtl {
     },
     /// The conflict banner's Abort button (G5b). `kind` is `"merge"`/`"rebase"`/
     /// `"cherry-pick"`/`"revert"`. See [`git_destructive::git_op_abort`].
-    GitOpAbort { kind: String },
+    GitOpAbort {
+        kind: String,
+    },
     /// The conflict banner's Continue button (G5b) — runs with `GIT_EDITOR=true` so
     /// a `--continue` never hangs on an editor. See
     /// [`git_destructive::git_op_continue`].
-    GitOpContinue { kind: String },
+    GitOpContinue {
+        kind: String,
+    },
     /// Source Control toolbar Stash button (GK4a): `git stash push`. Same reply
     /// pattern as [`GitStage`](Self::GitStage). See [`git_stash::git_stash`].
     GitStash,
@@ -555,7 +615,10 @@ pub(super) enum HostCtl {
     /// lines-changed for `limit` commits on `HEAD`, optionally scoped to `path`.
     /// Host-local, never the daemon, like [`GitGraph`](Self::GitGraph); see
     /// [`git_activity::compute_git_activity`].
-    GitActivity { path: Option<String>, limit: u32 },
+    GitActivity {
+        path: Option<String>,
+        limit: u32,
+    },
     /// Extension-STORE browse (Store tab search/filter, or a mount-time fetch on the
     /// home screen): fetch the koma.run catalogue. NEVER touches the daemon regardless
     /// of attach state — the host does the PUBLIC (no-auth) network fetch itself, same
@@ -570,7 +633,9 @@ pub(super) enum HostCtl {
     /// Extension-STORE detail (a catalogue card click): fetch one extension's full
     /// detail. Same host-local reasoning as [`StoreBrowse`](Self::StoreBrowse); see
     /// `store_host::fetch_detail`.
-    StoreDetail { id: String },
+    StoreDetail {
+        id: String,
+    },
     /// Extension-STORE "Installed" section fetch: read the local
     /// `~/.koma/config.json` registry. Same host-local reasoning as
     /// [`StoreBrowse`](Self::StoreBrowse) (a config read, not a daemon call); see
@@ -580,7 +645,9 @@ pub(super) enum HostCtl {
     /// on-disk manifest contributions (tools/models/panels/sub-agents). Same
     /// host-local reasoning as [`ListInstalledExtensions`] — see
     /// `store_host::get_installed_detail`.
-    GetInstalledExtensionDetail { id: String },
+    GetInstalledExtensionDetail {
+        id: String,
+    },
     /// PRE-SESSION install: `GuiReq::InstallExtension` arrived with NO attached daemon
     /// (the ipc `live_req` slot is `None` — the home screen / swapper). Runs the SAME
     /// KomaRun sign-in check + download + verify/unpack pipeline the daemon's
@@ -594,13 +661,18 @@ pub(super) enum HostCtl {
     /// every boot too; a not-yet-started daemon-kind extension also lazily auto-starts on
     /// its first opened panel (see `requests_ext::panel_start_decision`). See
     /// `store_host::spawn_install`.
-    InstallExtension { id: String, version: Option<String> },
+    InstallExtension {
+        id: String,
+        version: Option<String>,
+    },
     /// PRE-SESSION uninstall — same host-local reasoning as [`InstallExtension`]:
     /// purges the on-disk package + registry entry. No live `ext_manager`/`mcp_manager`
     /// to purge contributions from or stop a running child — nothing is registered
     /// pre-session in the first place — so there is nothing to undo. See
     /// `store_host::spawn_uninstall`.
-    UninstallExtension { id: String },
+    UninstallExtension {
+        id: String,
+    },
     /// Coding panel: list a directory's immediate children.
     FileTree {
         root: String,
@@ -672,14 +744,20 @@ pub(super) enum HostCtl {
     /// completes, then refresh the scoped visualization. Handled entirely
     /// off-thread; `request_id` is echoed back so the GUI can correlate.
     #[cfg(feature = "linker")]
-    ImportGraphReindex { request_id: Option<String> },
+    ImportGraphReindex {
+        request_id: Option<String>,
+    },
 
     // ─── Remote host management (host-local CRUD, fast file I/O) ──────────────
     /// Request/list/confirm/cancel a remote working directory. These are serviced
     /// over the retained SSH transport; they never inspect the local filesystem.
     RequestRemotePath,
-    ListRemotePath { path: String },
-    ConfirmRemotePath { path: String },
+    ListRemotePath {
+        path: String,
+    },
+    ConfirmRemotePath {
+        path: String,
+    },
     CancelRemotePath,
     /// Fetch the saved remote hosts list and push a RemoteHosts envelope.
     GetRemoteHosts,
@@ -701,15 +779,21 @@ pub(super) enum HostCtl {
         key_path: Option<String>,
     },
     /// Delete a remote host by id and push the updated list.
-    DeleteRemoteHost { id: String },
+    DeleteRemoteHost {
+        id: String,
+    },
 
     // ─── Remote host connect/disconnect ──────────────────────────────────────
     /// Connect to a remote host via SSH (off-thread, blocking).
-    ConnectRemote { host_id: String },
+    ConnectRemote {
+        host_id: String,
+    },
     /// Disconnect from the current remote host.
     DisconnectRemote,
     /// Submit a password for in-progress remote host authentication.
-    SubmitRemotePassword { password: String },
+    SubmitRemotePassword {
+        password: String,
+    },
     /// Cancel an in-progress remote connect attempt.
     CancelRemoteConnect,
 }
@@ -810,7 +894,9 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
             }
             crate::remote::client::RemoteExit::Exit => return Ok(()),
             crate::remote::client::RemoteExit::NewSession { .. } => {
-                return Err(anyhow::anyhow!("remote session handoff escaped remote loop"));
+                return Err(anyhow::anyhow!(
+                    "remote session handoff escaped remote loop"
+                ));
             }
         }
     } else if opts.resume {
@@ -1057,7 +1143,11 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                 attach_key,
                                 attach_password,
                                 new_session,
-                                if new_session { None } else { Some(session_id.as_str()) },
+                                if new_session {
+                                    None
+                                } else {
+                                    Some(session_id.as_str())
+                                },
                             );
 
                             // Re-enter the terminal for the local swapper/attach loop.
@@ -1200,7 +1290,9 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                     Err(e) => {
                                         crate::model::store::append_global_error_log(
                                             "client",
-                                            &format!("could not reconnect to session {prev}: {e:#}"),
+                                            &format!(
+                                                "could not reconnect to session {prev}: {e:#}"
+                                            ),
                                         );
                                         ClientState::Swapper(build_local_hub(None))
                                     }
@@ -1208,7 +1300,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                 None => break,
                             }
                         }
-                    },
+                    }
                 }
             }
         };
@@ -1258,9 +1350,7 @@ fn remote_attach(
         },
     };
 
-    let retained_password = ssh_auth
-        .as_ref()
-        .map(|auth| auth.password().to_string());
+    let retained_password = ssh_auth.as_ref().map(|auth| auth.password().to_string());
     let auth_ref = ssh_auth.as_ref();
     let cwd = if new_session {
         crate::remote::client::prompt_remote_cwd(&target, auth_ref)?

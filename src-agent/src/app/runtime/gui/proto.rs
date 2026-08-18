@@ -989,9 +989,13 @@ pub(super) enum GuiReq {
     /// Open the GUI remote working-directory picker using retained SSH context.
     RequestRemotePath,
     /// List remote directories over SSH; never uses local filesystem APIs.
-    ListRemotePath { path: String },
+    ListRemotePath {
+        path: String,
+    },
     /// Confirm a remote working directory.
-    ConfirmRemotePath { path: String },
+    ConfirmRemotePath {
+        path: String,
+    },
     /// Cancel the remote working-directory picker.
     CancelRemotePath,
 

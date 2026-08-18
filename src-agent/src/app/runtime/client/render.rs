@@ -155,7 +155,8 @@ pub(super) fn render_loop(
         let mut select_requested = false;
         let mut open_swapper_requested = false;
         let mut new_session_requested: Option<bool> = None;
-        let mut connect_remote_requested: Option<(String, Option<String>, bool, Option<String>)> = None;
+        let mut connect_remote_requested: Option<(String, Option<String>, bool, Option<String>)> =
+            None;
         for frame in prebuffered {
             apply_frame(
                 frame,
@@ -194,7 +195,8 @@ pub(super) fn render_loop(
         // hand-off): the daemon asked this client to connect to a remote host via SSH.
         // Checked AFTER the drain, where we return `ConnectRemote` so `client_run`
         // tears down the local connection and runs the remote client.
-        let mut connect_remote_requested: Option<(String, Option<String>, bool, Option<String>)> = None;
+        let mut connect_remote_requested: Option<(String, Option<String>, bool, Option<String>)> =
+            None;
 
         // --- (a) drain every queued incoming frame (NON-BLOCKING) ---
         // try_recv never blocks, so a quiet daemon can't stall the paint below. The

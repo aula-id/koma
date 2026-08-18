@@ -27,7 +27,9 @@ pub fn list_sessions_over_ssh(
     target: &super::RemoteTarget,
     auth: Option<&super::auth::SshAuth>,
 ) -> Result<Vec<DiscoveredSession>> {
-    let output = super::ssh::exec_remote(target, "koma sessions --json", auth)?;
+    let path = super::ssh::find_koma(target, auth)?;
+    let command = super::ssh::remote_command(&path, &["sessions", "--json"])?;
+    let output = super::ssh::exec_remote(target, &command, auth)?;
     // Handle empty output (no sessions) gracefully.
     if output.trim().is_empty() {
         return Ok(Vec::new());

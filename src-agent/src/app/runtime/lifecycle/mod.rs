@@ -761,9 +761,10 @@ pub fn run(opts: crate::cli::Opts) -> Result<()> {
                     "remote",
                     &format!("remote connect to {} failed: {e:#}", request.target),
                 );
-                state.rest.fg_mut().set_toast(format!(
-                    "remote connect failed: {e:#}"
-                ));
+                state
+                    .rest
+                    .fg_mut()
+                    .set_toast(format!("remote connect failed: {e:#}"));
             }
 
             // Re-enter the terminal and loop.

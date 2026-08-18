@@ -302,7 +302,22 @@ fn remote_connect_worker(
         shared.finish(attempt_id);
         return;
     }
-    let ssh_session = match ssh::connect(&target, &session_id, auth_ref, None) {
+    let koma_path = match ssh::find_koma(&target, auth_ref) {
+        Ok(path) => path,
+        Err(error) => {
+            push_state(
+                "error",
+                Some(&user_str),
+                Some(&host_str),
+                None,
+                Some(&format!("remote Koma executable not found: {error:#}")),
+                Vec::new(),
+            );
+            shared.finish(attempt_id);
+            return;
+        }
+    };
+    let ssh_session = match ssh::connect(&target, &session_id, auth_ref, None, &koma_path) {
         Ok(session) => session,
         Err(error) => {
             push_state(
