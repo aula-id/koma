@@ -317,19 +317,24 @@ fn remote_connect_worker(
             return;
         }
     };
-    let ssh_session = match ssh::connect(&target, &session_id, auth_ref, None, &koma_path) {
-        Ok(session) => session,
-        Err(error) => {
-            push_state(
-                "error",
-                Some(&user_str),
-                Some(&host_str),
-                None,
-                Some(&format!("ssh connect failed: {error:#}")),
-                Vec::new(),
-            );
-            shared.finish(attempt_id);
-            return;
+    // `ssh::connect` uses tokio::process::Command::spawn synchronously, so the
+    // worker thread must have an entered runtime while spawning SSH.
+    let ssh_session = {
+        let _rt_ctx = handle.enter();
+        match ssh::connect(&target, &session_id, auth_ref, None, &koma_path) {
+            Ok(session) => session,
+            Err(error) => {
+                push_state(
+                    "error",
+                    Some(&user_str),
+                    Some(&host_str),
+                    None,
+                    Some(&format!("ssh connect failed: {error:#}")),
+                    Vec::new(),
+                );
+                shared.finish(attempt_id);
+                return;
+            }
         }
     };
     let crate::remote::ssh::SshSession {
