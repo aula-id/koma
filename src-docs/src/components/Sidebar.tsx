@@ -191,7 +191,7 @@ function detectProduct(pathname: string): ProductDef {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function isActive(pathname: string, to: string): boolean {
-  return pathname === to || pathname.startsWith(to + '/')
+  return pathname === to
 }
 
 function filterItem(item: SidebarItem, q: string): boolean {
