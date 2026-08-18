@@ -126,16 +126,25 @@ pub(crate) fn prompt_remote_cwd(
     target: &RemoteTarget,
     auth: Option<&SshAuth>,
 ) -> Result<Option<String>> {
-    use std::sync::mpsc;
-    use std::time::Duration;
+    use std::io::Stdout;
+    use std::sync::mpsc::{self, Receiver};
+    use std::time::{Duration, Instant};
 
     use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-    use ratatui::layout::{Constraint, Direction, Layout};
+    use ratatui::layout::{Alignment, Constraint, Direction, Layout};
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::{Line, Span};
     use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+    use ratatui::{backend::CrosstermBackend, Terminal};
 
     const LIST_TIMEOUT: Duration = Duration::from_secs(4);
+    const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-    fn load_dirs(target: &RemoteTarget, path: &str, password: Option<&str>) -> Result<Vec<String>> {
+    fn load_dirs(
+        target: &RemoteTarget,
+        path: &str,
+        password: Option<&str>,
+    ) -> Receiver<Result<Vec<String>>> {
         let target = target.clone();
         let path = path.to_string();
         let password = password.map(str::to_string);
@@ -151,24 +160,91 @@ pub(crate) fn prompt_remote_cwd(
             };
             let _ = tx.send(result);
         });
-        rx.recv_timeout(LIST_TIMEOUT)
-            .map_err(|_| anyhow::anyhow!("remote directory listing timed out"))?
+        rx
+    }
+
+    fn wait_dirs(
+        terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+        rx: Receiver<Result<Vec<String>>>,
+        path: &str,
+        palette: &crate::view::theme::Palette,
+        spinner: &mut u64,
+    ) -> Result<Vec<String>> {
+        let started = Instant::now();
+        loop {
+            if let Ok(result) = rx.recv_timeout(Duration::from_millis(100)) {
+                return result;
+            }
+            if started.elapsed() >= LIST_TIMEOUT {
+                anyhow::bail!("remote directory listing timed out");
+            }
+            terminal.draw(|frame| {
+                crate::view::clear_and_fill(frame, frame.area(), palette.bg);
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Percentage(35),
+                        Constraint::Length(1),
+                        Constraint::Length(1),
+                        Constraint::Min(0),
+                    ])
+                    .split(frame.area());
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        "remote directory",
+                        Style::default().fg(palette.fg).bg(palette.bg),
+                    )))
+                    .alignment(Alignment::Center),
+                    chunks[1],
+                );
+                frame.render_widget(
+                    Paragraph::new(Line::from(vec![
+                        Span::styled(
+                            SPINNER[(*spinner % SPINNER.len() as u64) as usize],
+                            Style::default().fg(palette.accent).bg(palette.bg),
+                        ),
+                        Span::styled(
+                            format!("  listing {path}"),
+                            Style::default().fg(palette.dim).bg(palette.bg),
+                        ),
+                    ]))
+                    .alignment(Alignment::Center),
+                    chunks[2],
+                );
+            })?;
+            *spinner = spinner.wrapping_add(1);
+        }
     }
 
     let _guard = TerminalGuard::enter()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
+    let palette = crate::view::theme::palette(&crate::model::app_config::AppConfig::load());
     let password = auth.map(|a| a.password().to_string());
+    let mut spinner = 0;
     let mut path = "/".to_string();
     let mut loaded_path = path.clone();
     let mut selected = 0usize;
-    let mut status = String::from("Enter opens a directory; Ctrl+Enter selects this path");
-    let mut dirs = load_dirs(target, &path, password.as_deref()).unwrap_or_else(|error| {
-        status = format!("Unable to list {path}: {error:#}");
-        Vec::new()
-    });
+    let mut status = String::from("Enter opens a directory · Ctrl+Enter selects · Esc cancels");
+    let mut dirs = match wait_dirs(
+        &mut terminal,
+        load_dirs(target, &path, password.as_deref()),
+        &path,
+        &palette,
+        &mut spinner,
+    ) {
+        Ok(dirs) => dirs,
+        Err(error) => {
+            status = format!("Unable to list {path}: {error:#}");
+            Vec::new()
+        }
+    };
 
     loop {
         terminal.draw(|frame| {
+            // This picker owns the complete terminal frame.  In particular, do not leave
+            // the chat/session view underneath it: that made the remote flow look like a
+            // modal belonging to the wrong client.
+            crate::view::clear_and_fill(frame, frame.area(), palette.bg);
             let areas = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
@@ -177,29 +253,69 @@ pub(crate) fn prompt_remote_cwd(
                     Constraint::Length(2),
                 ])
                 .split(frame.area());
+            let title_style = Style::default()
+                .fg(palette.accent)
+                .bg(palette.bg)
+                .add_modifier(Modifier::BOLD);
+            let border_style = Style::default().fg(palette.dim).bg(palette.bg);
             frame.render_widget(
-                Paragraph::new(path.as_str()).block(
+                Paragraph::new(Line::from(Span::styled(
+                    format!(" Remote working directory · {path}"),
+                    title_style,
+                )))
+                .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title("Remote directory"),
+                        .border_style(border_style),
                 ),
                 areas[0],
             );
             let items = dirs.iter().enumerate().map(|(index, dir)| {
                 let label = dir.strip_prefix(&format!("{path}/")).unwrap_or(dir);
-                ListItem::new(format!(
-                    "{}{}",
-                    if index == selected { "> " } else { "  " },
-                    label
-                ))
+                let style = if index == selected {
+                    Style::default()
+                        .fg(palette.sel_fg)
+                        .bg(palette.sel_bg)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(palette.fg).bg(palette.bg)
+                };
+                ListItem::new(Line::from(Span::styled(
+                    format!("{}{}", if index == selected { "› " } else { "  " }, label),
+                    style,
+                )))
             });
+            let list_title = if dirs.is_empty() {
+                "Directories (empty)"
+            } else {
+                "Directories"
+            };
             frame.render_widget(
                 List::new(items)
-                    .block(Block::default().borders(Borders::ALL).title("Directories"))
-                    .highlight_symbol("> "),
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(list_title)
+                            .border_style(border_style),
+                    )
+                    .highlight_style(Style::default().fg(palette.sel_fg).bg(palette.sel_bg)),
                 areas[1],
             );
-            frame.render_widget(Paragraph::new(status.as_str()), areas[2]);
+            let status_style = if status.starts_with("Unable") {
+                Style::default().fg(palette.error).bg(palette.bg)
+            } else if dirs.is_empty() {
+                Style::default().fg(palette.dim).bg(palette.bg)
+            } else {
+                Style::default().fg(palette.info).bg(palette.bg)
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(status.as_str(), status_style))).block(
+                    Block::default()
+                        .borders(Borders::TOP)
+                        .border_style(border_style),
+                ),
+                areas[2],
+            );
         })?;
 
         if !event::poll(Duration::from_millis(50))? {
@@ -226,7 +342,13 @@ pub(crate) fn prompt_remote_cwd(
                         path.push('/');
                     }
                     selected = 0;
-                    match load_dirs(target, &path, password.as_deref()) {
+                    match wait_dirs(
+                        &mut terminal,
+                        load_dirs(target, &path, password.as_deref()),
+                        &path,
+                        &palette,
+                        &mut spinner,
+                    ) {
                         Ok(next) => {
                             dirs = next;
                             loaded_path = path.clone();
@@ -259,7 +381,13 @@ pub(crate) fn prompt_remote_cwd(
             KeyCode::Enter => {
                 if path != loaded_path {
                     selected = 0;
-                    match load_dirs(target, &path, password.as_deref()) {
+                    match wait_dirs(
+                        &mut terminal,
+                        load_dirs(target, &path, password.as_deref()),
+                        &path,
+                        &palette,
+                        &mut spinner,
+                    ) {
                         Ok(next_dirs) => {
                             dirs = next_dirs;
                             loaded_path = path.clone();
@@ -272,7 +400,13 @@ pub(crate) fn prompt_remote_cwd(
                 } else if let Some(next) = dirs.get(selected).cloned() {
                     path = next;
                     selected = 0;
-                    match load_dirs(target, &path, password.as_deref()) {
+                    match wait_dirs(
+                        &mut terminal,
+                        load_dirs(target, &path, password.as_deref()),
+                        &path,
+                        &palette,
+                        &mut spinner,
+                    ) {
                         Ok(next_dirs) => {
                             dirs = next_dirs;
                             loaded_path = path.clone();

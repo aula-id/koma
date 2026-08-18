@@ -1403,6 +1403,18 @@ fn remote_attach(
     eprintln!("Checking remote Koma version...");
     let _ = crate::remote::bootstrap::ensure_koma_compatible(&target, auth_ref)?;
 
+    if !new_session && session_id.is_none() {
+        return Ok(crate::remote::client::RemoteExit::Resume {
+            context: crate::remote::client::RemoteContext {
+                target,
+                key_hint: key.map(str::to_string),
+                password: retained_password,
+                session_id: None,
+                cwd: None,
+            },
+        });
+    }
+
     let mut requested_session_id = session_id.map(str::to_string);
     loop {
         match crate::remote::client::run_remote_client_with_cwd(
