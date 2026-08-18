@@ -126,18 +126,169 @@ pub(crate) fn prompt_remote_cwd(
     target: &RemoteTarget,
     auth: Option<&SshAuth>,
 ) -> Result<Option<String>> {
-    use std::io::{self, Write};
-    print!("Remote working directory (empty to cancel): ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let input = input.trim();
-    if input.is_empty() {
-        return Ok(None);
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+    use ratatui::layout::{Constraint, Direction, Layout};
+    use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+
+    const LIST_TIMEOUT: Duration = Duration::from_secs(4);
+
+    fn load_dirs(target: &RemoteTarget, path: &str, password: Option<&str>) -> Result<Vec<String>> {
+        let target = target.clone();
+        let path = path.to_string();
+        let password = password.map(str::to_string);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let auth = password
+                .map(SshAuth::new)
+                .transpose()
+                .map_err(anyhow::Error::from);
+            let result = match auth {
+                Ok(auth) => ssh::list_dirs(&target, &path, auth.as_ref()),
+                Err(error) => Err(error),
+            };
+            let _ = tx.send(result);
+        });
+        rx.recv_timeout(LIST_TIMEOUT)
+            .map_err(|_| anyhow::anyhow!("remote directory listing timed out"))?
     }
-    let path = ssh::validate_remote_path(input)?;
-    let _dirs = ssh::list_dirs(target, path, auth)?;
-    Ok(Some(path.to_string()))
+
+    let _guard = TerminalGuard::enter()?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
+    let password = auth.map(|a| a.password().to_string());
+    let mut path = "/".to_string();
+    let mut loaded_path = path.clone();
+    let mut selected = 0usize;
+    let mut status = String::from("Enter opens a directory; Ctrl+Enter selects this path");
+    let mut dirs = load_dirs(target, &path, password.as_deref()).unwrap_or_else(|error| {
+        status = format!("Unable to list {path}: {error:#}");
+        Vec::new()
+    });
+
+    loop {
+        terminal.draw(|frame| {
+            let areas = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Min(1),
+                    Constraint::Length(2),
+                ])
+                .split(frame.area());
+            frame.render_widget(
+                Paragraph::new(path.as_str()).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Remote directory"),
+                ),
+                areas[0],
+            );
+            let items = dirs.iter().enumerate().map(|(index, dir)| {
+                let label = dir.strip_prefix(&format!("{path}/")).unwrap_or(dir);
+                ListItem::new(format!(
+                    "{}{}",
+                    if index == selected { "> " } else { "  " },
+                    label
+                ))
+            });
+            frame.render_widget(
+                List::new(items)
+                    .block(Block::default().borders(Borders::ALL).title("Directories"))
+                    .highlight_symbol("> "),
+                areas[1],
+            );
+            frame.render_widget(Paragraph::new(status.as_str()), areas[2]);
+        })?;
+
+        if !event::poll(Duration::from_millis(50))? {
+            continue;
+        }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        match key.code {
+            KeyCode::Esc => return Ok(None),
+            KeyCode::Up | KeyCode::Char('k') => {
+                selected = selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                selected = selected.saturating_add(1).min(dirs.len().saturating_sub(1));
+            }
+            KeyCode::Backspace => {
+                if path != "/" {
+                    path.pop();
+                    if path.is_empty() {
+                        path.push('/');
+                    }
+                    selected = 0;
+                    match load_dirs(target, &path, password.as_deref()) {
+                        Ok(next) => {
+                            dirs = next;
+                            loaded_path = path.clone();
+                            status = String::from(
+                                "Enter opens a directory; Ctrl+Enter selects this path",
+                            );
+                        }
+                        Err(error) => status = format!("Unable to list {path}: {error:#}"),
+                    }
+                }
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if c == '/' && path.ends_with('/') {
+                    continue;
+                }
+                if path == "/" {
+                    path.push(c);
+                } else {
+                    path.push(c);
+                }
+                selected = 0;
+            }
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if path == loaded_path {
+                    return Ok(Some(path));
+                }
+                status = String::from("Press Enter to inspect this path before selecting it");
+            }
+            KeyCode::Char('s') if path == loaded_path => return Ok(Some(path)),
+            KeyCode::Enter => {
+                if path != loaded_path {
+                    selected = 0;
+                    match load_dirs(target, &path, password.as_deref()) {
+                        Ok(next_dirs) => {
+                            dirs = next_dirs;
+                            loaded_path = path.clone();
+                            status = String::from(
+                                "Enter opens a directory; Ctrl+Enter selects this path",
+                            );
+                        }
+                        Err(error) => status = format!("Unable to list {path}: {error:#}"),
+                    }
+                } else if let Some(next) = dirs.get(selected).cloned() {
+                    path = next;
+                    selected = 0;
+                    match load_dirs(target, &path, password.as_deref()) {
+                        Ok(next_dirs) => {
+                            dirs = next_dirs;
+                            loaded_path = path.clone();
+                            status = String::from(
+                                "Enter opens a directory; Ctrl+Enter selects this path",
+                            );
+                        }
+                        Err(error) => status = format!("Unable to list {path}: {error:#}"),
+                    }
+                } else {
+                    status = String::from("No directory selected; Ctrl+Enter selects this path");
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 ///
@@ -196,6 +347,18 @@ pub(crate) fn run_remote_client_target(
         eprintln!("Remote Koma installed or upgraded successfully.");
     } else {
         eprintln!("Remote Koma version matches.");
+    }
+
+    if !new_session && session_id.is_none() {
+        return Ok(RemoteExit::Resume {
+            context: RemoteContext {
+                target,
+                key_hint: key.map(str::to_string),
+                password: retained_password,
+                session_id: None,
+                cwd: None,
+            },
+        });
     }
 
     let mut requested_session_id = session_id.map(str::to_string);
