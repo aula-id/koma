@@ -809,6 +809,9 @@ export type Tab =
   // Coding panel file editor tab. `root` is the absolute workspace root;
   // `path` is relative to root. Stable id `coding:${root}:${path}`.
   | { id: string; kind: 'codingFile'; root: string; path: string; title: string }
+  // Interactive terminal tab. `terminalId` is the PTY session id (host-minted);
+  // content is an xterm.js instance reading from TerminalOutput push envelopes.
+  | { id: string; kind: 'terminal'; terminalId: string; title: string }
 
 export type PushEnvelope =
   | {
@@ -1393,6 +1396,17 @@ export type PushEnvelope =
       path?: string | null
       dirs?: string[]
       error?: string | null
+    }
+  // ─── GUI terminal view ──────────────────────────────────────────────
+  | {
+      k: 'TerminalOutput'
+      id: string
+      data: string
+    }
+  | {
+      k: 'TerminalExit'
+      id: string
+      code: number | null
     }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
@@ -2286,6 +2300,11 @@ type KomaState = {
   // `sa:`/`bash:` id), activate it, and sync the stream view so the host starts streaming
   // THAT target's transcript / output tail.
   openStreamTab: (kind: 'subagent' | 'bash', targetId: number, title: string) => void
+  // Open (or focus) an interactive terminal tab: if a terminal tab with this
+  // terminalId already exists, just focus it; otherwise create a new tab and
+  // send TerminalCreate to the host. `title` defaults to "Terminal" for the
+  // first, "Terminal N" for subsequent ones.
+  openTerminalTab: (terminalId: string, title: string) => void
   // Stream-view chokepoint: derive {subagent, bash} from the CURRENTLY-ACTIVE tab (a
   // stream tab → its target; anything else → both null) and send SetStreamView, so
   // exactly ONE stream view is ever active (the active stream tab, else none). Called
@@ -2756,7 +2775,7 @@ export const useKoma = create<KomaState>((set, get) => ({
               // the new session's view (the host will push a fresh `Loading`
               // for the new session if it's cold too).
               ...(switched
-                ? { tabs: [makeChatTab()], activeTabId: 'chat', loading: null, loadingDismissed: false }
+                ? { tabs: [makeChatTab(), ...get().ui.tabs.filter((t) => t.kind === 'terminal')], activeTabId: 'chat', loading: null, loadingDismissed: false }
                 : {}),
             },
             // A genuine switch also drops the OLD session's git/graph/activity
@@ -4095,6 +4114,21 @@ export const useKoma = create<KomaState>((set, get) => ({
           },
         }))
         break
+      case 'TerminalOutput':
+        // Route PTY output to the xterm.js instance via the global write callback.
+        // The TerminalTab component registers its write function on mount.
+        {
+          const writer = (globalThis as any).__terminalWriters?.[env.id]
+          if (writer) writer(env.data)
+        }
+        break
+      case 'TerminalExit':
+        // Mark the terminal as exited via the global exit callback.
+        {
+          const handler = (globalThis as any).__terminalExitHandlers?.[env.id]
+          if (handler) handler(env.code)
+        }
+        break
     }
   },
 
@@ -4864,8 +4898,33 @@ export const useKoma = create<KomaState>((set, get) => ({
     // the daemon needs the session to disambiguate (agent 0 / bash 1 exist in every session).
     get().req({ r: 'SetStreamView', subagent, bash, session: get().session.id })
   },
+  openTerminalTab: (terminalId, title) => {
+    const id = `term:${terminalId}`
+    set((s) => {
+      const exists = s.ui.tabs.some((t) => t.id === id)
+      const tab: Tab = { id, kind: 'terminal', terminalId, title }
+      const tabs: Tab[] = exists ? s.ui.tabs : [...s.ui.tabs, tab]
+      return { ui: { ...s.ui, tabs, activeTabId: id } }
+    })
+    // Send TerminalCreate to the host if this PTY hasn't been created yet.
+    const created = (globalThis as any).__terminalsCreated ?? new Set<string>()
+    if (!created.has(terminalId)) {
+      created.add(terminalId)
+      ;(globalThis as any).__terminalsCreated = created
+      get().req({ r: 'TerminalCreate', id: terminalId })
+    }
+  },
   closeTab: (id, opts) => {
     if (id === 'chat') return
+    // When closing a terminal tab, tell the host to kill the PTY.
+    {
+      const closing = get().ui.tabs.find((t) => t.id === id)
+      if (closing && closing.kind === 'terminal') {
+        get().req({ r: 'TerminalKill', id: closing.terminalId })
+        const created = (globalThis as any).__terminalsCreated as Set<string> | undefined
+        created?.delete(closing.terminalId)
+      }
+    }
     // Dirty codingFile tabs confirm before discard unless the caller already
     // collected an explicit force (floating dirty-close popover).
     {
@@ -5010,11 +5069,8 @@ export const useKoma = create<KomaState>((set, get) => ({
       session: { ...initialSession },
       ui: {
         ...s.ui,
-        tabs: [makeChatTab()],
+        tabs: [makeChatTab(), ...s.ui.tabs.filter((t) => t.kind === 'terminal')],
         activeTabId: 'chat',
-        // Defensive: clear a stuck switching overlay too, in case one was
-        // mid-flight (only Snapshot/Hub normally clear it, neither of which
-        // is guaranteed to arrive promptly on a self-kill).
         switchingTo: null,
         // Defensive: also drop any stale startup splash — it described the
         // now-dead session's warm-up and must not linger over StartScreen.

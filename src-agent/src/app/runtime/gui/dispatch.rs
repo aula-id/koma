@@ -1013,6 +1013,24 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::ImportGraphReindex { request_id } => {
             let _ = ctx.ctl.send(HostCtl::ImportGraphReindex { request_id });
         }
+
+        // ─── GUI terminal view (host-local PTY management) ──────────────
+        // Terminal sessions are managed entirely host-side — the host process
+        // owns the PTY lifecycle, streams output back as PushEnvelope
+        // TerminalOutput/TerminalExit, and accepts input via TerminalInput.
+        // These are always routed to the host-relay thread via HostCtl.
+        GuiReq::TerminalCreate { id, cwd } => {
+            let _ = ctx.ctl.send(HostCtl::TerminalCreate { id, cwd });
+        }
+        GuiReq::TerminalInput { id, data } => {
+            let _ = ctx.ctl.send(HostCtl::TerminalInput { id, data });
+        }
+        GuiReq::TerminalResize { id, cols, rows } => {
+            let _ = ctx.ctl.send(HostCtl::TerminalResize { id, cols, rows });
+        }
+        GuiReq::TerminalKill { id } => {
+            let _ = ctx.ctl.send(HostCtl::TerminalKill { id });
+        }
     }
 }
 

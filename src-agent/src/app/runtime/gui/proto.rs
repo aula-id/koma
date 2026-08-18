@@ -1035,4 +1035,34 @@ pub(super) enum GuiReq {
         #[serde(default, rename = "requestId")]
         request_id: Option<String>,
     },
+
+    // ─── GUI terminal view ──────────────────────────────────────────────
+    /// Create a new interactive terminal session (PTY) at the given working
+    /// directory. The host manages the PTY lifecycle and streams output back
+    /// as TerminalOutput/TerminalExit push envelopes. `id` is a client-minted
+    /// stable identifier (the tab's terminal ID); `cwd` is the starting
+    /// directory (defaults to the session's workdir when absent).
+    TerminalCreate {
+        id: String,
+        #[serde(default, rename = "cwd")]
+        cwd: Option<String>,
+    },
+    /// Forward keystroke data from xterm.js to the PTY's stdin. `id` is the
+    /// terminal session id from TerminalCreate.
+    TerminalInput {
+        id: String,
+        data: String,
+    },
+    /// Resize the PTY's viewport. Sent by xterm.js's fit addon when the
+    /// terminal container changes size. `id` is the terminal session id.
+    TerminalResize {
+        id: String,
+        cols: u16,
+        rows: u16,
+    },
+    /// Kill a terminal session's PTY and clean up. `id` is the terminal
+    /// session id.
+    TerminalKill {
+        id: String,
+    },
 }
