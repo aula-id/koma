@@ -55,7 +55,7 @@
           webguiNpmDeps = pkgs.fetchNpmDeps {
             name = "koma-webgui-npm-deps";
             src = ./src-webgui;
-            hash = "sha256-2xnVtDzf0csUfrjgKecGOc7HtVg7GL9QD3fuCIIgnHo=";
+            hash = "sha256-imlj4GAdWKUNIzB8qQfv3s/PDvMzk+AkC57RfYag54g=";
           };
 
           # `useSystemOpenssl = true` links the system OpenSSL instead of compiling

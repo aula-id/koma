@@ -42,9 +42,12 @@ struct TerminalSession {
     /// The PTY master -- kept alive so the reader thread can drain it. Dropping
     /// this closes the master end, which signals EOF to the reader and (on most
     /// Unix platforms) SIGHUP to the child.
-    master: Box<dyn MasterPty>,
+    ///
+    /// `+ Send` matches [`portable_pty::PtyPair::master`] so `TerminalManager`
+    /// is `Send` and can live in an `Arc<Mutex<_>>` shared across host states.
+    master: Box<dyn MasterPty + Send>,
     /// The child process. Used for `kill`.
-    child: Box<dyn portable_pty::Child>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
     /// Writer end of the PTY for forwarding keystrokes from the webview.
     writer: Box<dyn Write + Send>,
 }
