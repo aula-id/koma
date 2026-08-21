@@ -1,5 +1,5 @@
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
-import { lazy, Suspense, useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ChatView } from '../components/ChatView'
 import { TabBar } from '../components/TabBar'
 import { StartScreen } from '../components/StartScreen'
@@ -69,6 +69,9 @@ function RootLayout() {
   const req = useKoma((s) => s.req)
   const openSettingsTab = useKoma((s) => s.openSettingsTab)
   const openHelpTab = useKoma((s) => s.openHelpTab)
+  const openTerminalTab = useKoma((s) => s.openTerminalTab)
+  // Counter for generating unique terminal IDs.
+  const terminalCountRef = useRef(0)
   const needsOnboarding = useNeedsOnboarding()
   // Cross-tree signal from the UsageFooter PLAN badge click (see koma.ts's
   // `focusPlanTick`): switch the sidebar to the Explore view and ensure it's
@@ -79,6 +82,15 @@ function RootLayout() {
     setActiveView('explore')
     setSidebarOpen(true)
   }, [focusPlanTick])
+
+  // Terminal button handler: each click creates a new terminal tab with a unique ID.
+  const handleTerminal = () => {
+    terminalCountRef.current += 1
+    const n = terminalCountRef.current
+    const title = n === 1 ? 'Terminal' : `Terminal ${n}`
+    const id = `t${Date.now()}`
+    openTerminalTab(id, title)
+  }
 
   // Wire the JS <-> Rust bridge: expose window.__komaClient.push so the host
   // can feed the koma store, then announce readiness so it sends the first
@@ -212,7 +224,7 @@ function RootLayout() {
   if (needsOnboarding) {
     return (
       <div id="app" className={`os-${platform}`}>
-        <Titlebar onSearch={() => {}} onRename={() => {}} overlayOpen />
+        <Titlebar onSearch={() => {}} onRename={() => {}} onTerminal={handleTerminal} overlayOpen />
         <div className="absolute inset-x-0 top-8 bottom-0 overflow-hidden">
           <Onboarding />
         </div>
@@ -227,6 +239,7 @@ function RootLayout() {
       <Titlebar
         onSearch={() => setOverlay('resume')}
         onRename={() => setOverlay('rename')}
+        onTerminal={handleTerminal}
         overlayOpen={overlay !== 'none'}
       />
       <div className="absolute inset-x-0 top-8 bottom-0 flex overflow-hidden">
@@ -321,6 +334,10 @@ const InstalledExtensionTab = lazy(() => import('../components/InstalledExtensio
 
 // Coding panel Monaco editor — lazy so its chunk only loads when a file is opened.
 const CodeEditorTab = lazy(() => import('../components/CodeEditorTab'))
+
+// Interactive terminal tab — lazy so its chunk (xterm.js) only loads when the
+// first terminal is opened from the Titlebar.
+const TerminalTab = lazy(() => import('../components/TerminalTab').then(m => ({ default: m.TerminalTab })))
 
 function DiffFallback() {
   return (
@@ -419,6 +436,12 @@ function TabbedMain() {
             <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
               <Suspense fallback={<DiffFallback />}>
                 <CodeEditorTab tab={t} />
+              </Suspense>
+            </div>
+          ) : t.kind === 'terminal' ? (
+            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
+              <Suspense fallback={<DiffFallback />}>
+                <TerminalTab tab={t} />
               </Suspense>
             </div>
           ) : null,

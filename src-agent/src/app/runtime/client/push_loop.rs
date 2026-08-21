@@ -145,6 +145,7 @@ pub(super) fn push_loop(
     current_session: Option<&str>,
     live_marks: &std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
     live_view: &std::sync::Arc<std::sync::Mutex<super::StreamView>>,
+    terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
 ) -> HostTransition {
     use std::sync::mpsc::TryRecvError;
 
@@ -1049,6 +1050,35 @@ pub(super) fn push_loop(
                 }
                 Ok(super::HostCtl::SubmitRemotePassword { password }) => {
                     remote_shared.submit_password(password);
+                }
+                // ─── GUI terminal view (host-local PTY lifecycle) ─────
+                // Terminal sessions are managed host-side via the shared
+                // TerminalManager. These routes delegate to it; the reader
+                // threads spawned by `create` push output/exit envelopes.
+                Ok(super::HostCtl::TerminalCreate { id, cwd }) => {
+                    if let Ok(mut mgr) = terminal_manager.lock() {
+                        if let Err(e) = mgr.create(id, cwd) {
+                            crate::model::store::append_global_error_log(
+                                "terminal",
+                                &format!("terminal create failed: {e}"),
+                            );
+                        }
+                    }
+                }
+                Ok(super::HostCtl::TerminalInput { id, data }) => {
+                    if let Ok(mut mgr) = terminal_manager.lock() {
+                        mgr.input(&id, &data);
+                    }
+                }
+                Ok(super::HostCtl::TerminalResize { id, cols, rows }) => {
+                    if let Ok(mut mgr) = terminal_manager.lock() {
+                        mgr.resize(&id, cols, rows);
+                    }
+                }
+                Ok(super::HostCtl::TerminalKill { id }) => {
+                    if let Ok(mut mgr) = terminal_manager.lock() {
+                        mgr.kill(&id);
+                    }
                 }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.

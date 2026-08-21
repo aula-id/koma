@@ -132,7 +132,7 @@ fn attach_session_headless(
 /// nav) are W1 — the client-side keyboard swapper is not driven here.
 pub(in crate::app::runtime) fn run_host_relay(
     opts: crate::cli::Opts,
-    push: impl Fn(String) + Clone + Send + 'static,
+    push: impl Fn(String) + Clone + Send + Sync + 'static,
     ctl_tx: std::sync::mpsc::Sender<HostCtl>,
     ctl_rx: std::sync::mpsc::Receiver<HostCtl>,
     live_req: std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
@@ -162,6 +162,13 @@ pub(in crate::app::runtime) fn run_host_relay(
     // came from as `is_foreground` and a `ToSwapper` fallback remembers it.
     let mut current_session_id: Option<String> = None;
 
+    // Host-side PTY manager for the GUI terminal view. Shared between the
+    // swapper and attached control loops so terminal sessions survive state
+    // transitions (the React side drives create/kill explicitly).
+    let terminal_manager = std::sync::Arc::new(std::sync::Mutex::new(
+        super::terminal_host::TerminalManager::new(push.clone()),
+    ));
+
     // Startup: attach directly to `--session`, else open cold into the swapper.
     let mut step = match opts.session.clone() {
         Some(id) => HostStep::Attach { id, workdir: None },
@@ -178,6 +185,7 @@ pub(in crate::app::runtime) fn run_host_relay(
                 &ctl_rx,
                 &mut push_state,
                 current_session_id.as_deref(),
+                &terminal_manager,
             ),
             HostStep::Remote { active, session_id } => host_remote(
                 &handle,
@@ -191,6 +199,7 @@ pub(in crate::app::runtime) fn run_host_relay(
                 &mut current_session_id,
                 *active,
                 session_id,
+                &terminal_manager,
             ),
             HostStep::Attach { id, workdir } => host_attached(
                 &handle,
@@ -204,8 +213,15 @@ pub(in crate::app::runtime) fn run_host_relay(
                 &mut current_session_id,
                 id,
                 workdir,
+                &terminal_manager,
             ),
         };
+    }
+
+    // Kill any remaining terminal sessions before exiting. Must happen before
+    // the runtime drop since reader threads hold Arc clones of the push sink.
+    {
+        let _ = terminal_manager.lock().map(|mut mgr| mgr.cleanup_all());
     }
 
     // Drop the runtime LAST so the active connection's reader task is cancelled after
@@ -296,6 +312,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
     ctl_rx: &std::sync::mpsc::Receiver<HostCtl>,
     push_state: &mut push_loop::PushState,
     current: Option<&str>,
+    terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
 ) -> HostStep {
     // Build + push the hub (discovery blocks briefly; fine — nothing renders here).
     let hub = build_local_hub(current);
@@ -1114,6 +1131,35 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     push(json);
                 }
             }
+            // ─── GUI terminal view (host-local PTY lifecycle) ───────────
+            // Terminal sessions are managed host-side via the shared
+            // TerminalManager. These routes delegate to it; the reader
+            // threads spawned by `create` push output/exit envelopes.
+            Ok(HostCtl::TerminalCreate { id, cwd }) => {
+                if let Ok(mut mgr) = terminal_manager.lock() {
+                    if let Err(e) = mgr.create(id, cwd) {
+                        crate::model::store::append_global_error_log(
+                            "terminal",
+                            &format!("terminal create failed: {e}"),
+                        );
+                    }
+                }
+            }
+            Ok(HostCtl::TerminalInput { id, data }) => {
+                if let Ok(mut mgr) = terminal_manager.lock() {
+                    mgr.input(&id, &data);
+                }
+            }
+            Ok(HostCtl::TerminalResize { id, cols, rows }) => {
+                if let Ok(mut mgr) = terminal_manager.lock() {
+                    mgr.resize(&id, cols, rows);
+                }
+            }
+            Ok(HostCtl::TerminalKill { id }) => {
+                if let Ok(mut mgr) = terminal_manager.lock() {
+                    mgr.kill(&id);
+                }
+            }
             // The ipc side hung up (window gone) — leave the host.
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return HostStep::Done,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
@@ -1138,6 +1184,7 @@ fn host_attached(
     current: &mut Option<String>,
     id: String,
     workdir: Option<std::path::PathBuf>,
+    terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
 ) -> HostStep {
     let mut conn = match attach_session_headless(handle, &id, workdir.as_deref()) {
         Ok(c) => c,
@@ -1176,6 +1223,7 @@ fn host_attached(
             current.as_deref(),
             live_marks,
             live_view,
+            terminal_manager,
         )
     };
 
@@ -1226,6 +1274,7 @@ fn host_remote(
     current: &mut Option<String>,
     mut active: super::remote_ctl::ActiveRemote,
     session_id: String,
+    terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
 ) -> HostStep {
     *current = Some(session_id);
     if let Ok(mut g) = live_req.lock() {
@@ -1246,6 +1295,7 @@ fn host_remote(
             current.as_deref(),
             live_marks,
             live_view,
+            terminal_manager,
         )
     };
     if let Ok(mut g) = live_req.lock() {

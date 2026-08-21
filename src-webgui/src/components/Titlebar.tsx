@@ -1,6 +1,6 @@
 import type { MouseEvent } from 'react'
 import { motion } from 'framer-motion'
-import { Terminal, PenLine, FoldVertical } from 'lucide-react'
+import { Terminal, PenLine, FoldVertical, SquareTerminal } from 'lucide-react'
 import { useKoma } from '../store/koma'
 
 export type Platform = 'macos' | 'linux' | 'windows'
@@ -26,6 +26,7 @@ function post(msg: unknown) {
 type TitlebarProps = {
   onSearch: () => void
   onRename: () => void
+  onTerminal: () => void
   overlayOpen: boolean
 }
 
@@ -35,7 +36,7 @@ type TitlebarProps = {
 // is pointer-events-none so empty areas still drag the window; only the buttons
 // capture clicks. Button contents use layout="position" so the shared-layout
 // morph repositions them without scale-stretching the icon/text.
-export function Titlebar({ onSearch, onRename, overlayOpen }: TitlebarProps) {
+export function Titlebar({ onSearch, onRename, onTerminal, overlayOpen }: TitlebarProps) {
   const req = useKoma((s) => s.req)
   const working = useKoma((s) => s.session.working)
   // null on the welcome/start screen (no session attached) — rename/compact
@@ -63,6 +64,16 @@ export function Titlebar({ onSearch, onRename, overlayOpen }: TitlebarProps) {
           id="cmdbar"
           className="pointer-events-none absolute inset-x-0 top-0 flex h-full items-center justify-center"
         >
+          {/* Terminal button — always visible, left of the session pill.
+              Creates a new interactive terminal tab on each click. */}
+          <button
+            onClick={onTerminal}
+            title="New Terminal"
+            aria-label="New Terminal"
+            className="pointer-events-auto mr-2 flex h-[22px] items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-2 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+          >
+            <SquareTerminal size={13} className="flex-none" />
+          </button>
           <motion.button
             layoutId="cmd-search"
             transition={CMD_SEARCH_SPRING}

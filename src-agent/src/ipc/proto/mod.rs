@@ -598,6 +598,13 @@ pub enum ClientRequest {
     ConnectFailed {
         error: String,
     },
+
+    // ─── GUI terminal view (host-local, never crosses daemon socket) ────
+    /// Forwarded from GuiReq::TerminalCreate — PTY creation is host-local.
+    TerminalCreate { id: String, cwd: Option<String> },
+    TerminalInput { id: String, data: String },
+    TerminalResize { id: String, cols: u16, rows: u16 },
+    TerminalKill { id: String },
 }
 
 // ─── daemon -> client ────────────────────────────────────────────────────────

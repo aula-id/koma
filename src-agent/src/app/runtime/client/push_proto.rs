@@ -710,6 +710,24 @@ pub(super) enum PushEnvelope {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         sessions: Vec<serde_json::Value>,
     },
+
+    // ─── GUI terminal view ──────────────────────────────────────────────
+    /// Streaming PTY output for a terminal session. `id` is the terminal
+    /// session id from TerminalCreate; `data` is raw PTY output bytes
+    /// (UTF-8 decoded) to be written to xterm.js.
+    #[serde(rename_all = "camelCase")]
+    TerminalOutput {
+        id: String,
+        data: String,
+    },
+    /// A terminal session's PTY process has exited. `id` is the terminal
+    /// session id; `code` is the process exit code (None if terminated
+    /// by signal).
+    #[serde(rename_all = "camelCase")]
+    TerminalExit {
+        id: String,
+        code: Option<i32>,
+    },
 }
 
 /// Push a swap-START [`PushEnvelope::Switching`] for target session `to`. Called at every
@@ -1041,6 +1059,28 @@ pub(super) fn push_remote_state(
             session_id: session_id.map(str::to_string),
             error: error.map(str::to_string),
             sessions: sessions.to_vec(),
+        },
+    );
+}
+
+/// Emit a one-shot `TerminalOutput` envelope for the GUI terminal view.
+pub(super) fn push_terminal_output(push: &dyn Fn(String), id: &str, data: &str) {
+    super::render::emit(
+        push,
+        &PushEnvelope::TerminalOutput {
+            id: id.to_string(),
+            data: data.to_string(),
+        },
+    );
+}
+
+/// Emit a one-shot `TerminalExit` envelope for the GUI terminal view.
+pub(super) fn push_terminal_exit(push: &dyn Fn(String), id: &str, code: Option<i32>) {
+    super::render::emit(
+        push,
+        &PushEnvelope::TerminalExit {
+            id: id.to_string(),
+            code,
         },
     );
 }
