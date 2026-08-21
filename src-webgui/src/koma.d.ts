@@ -564,6 +564,12 @@ declare global {
   // echoed back so the store can correlate and reject stale replies.
   | { r: 'ImportGraphReindex'; requestId?: string | null }
 
+  // ─── GUI terminal view ──────────────────────────────────────────────────
+  | { r: 'TerminalCreate'; id: string; cwd?: string }
+  | { r: 'TerminalInput'; id: string; data: string }
+  | { r: 'TerminalResize'; id: string; cols: number; rows: number }
+  | { r: 'TerminalKill'; id: string }
+
   // ─── Coding push envelope shapes (Rust → JS) ────────────────────────────
   // Every reply echoes the relevant root/path/requestId for stale-reply rejection.
   type FileTreeEntry = {

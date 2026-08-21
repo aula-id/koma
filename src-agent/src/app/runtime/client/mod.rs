@@ -81,6 +81,7 @@ mod shadow;
 mod store_host;
 mod swapper;
 mod swapper_keys;
+mod terminal_host;
 
 #[cfg(test)]
 #[path = "analytics_test.rs"]
@@ -796,6 +797,12 @@ pub(super) enum HostCtl {
     },
     /// Cancel an in-progress remote connect attempt.
     CancelRemoteConnect,
+
+    // ─── GUI terminal view ──────────────────────────────────────────────
+    TerminalCreate { id: String, cwd: Option<String> },
+    TerminalInput { id: String, data: String },
+    TerminalResize { id: String, cols: u16, rows: u16 },
+    TerminalKill { id: String },
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.
