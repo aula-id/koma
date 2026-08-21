@@ -176,30 +176,32 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
             transition={{ duration: 0.16, ease: 'easeOut', delay: 0.02 }}
             className="max-h-[50vh] overflow-auto border-t border-koma-border py-1"
           >
-            {multi.hasSelection && (
+            {multi.hasSelection ? (
               <SessionBulkBar
                 cookingIds={bulkCooking}
                 historyIds={bulkHistory}
                 foregroundCookingIds={fgCooking}
                 onDone={() => multi.clear()}
                 onClear={() => multi.clear()}
+                className="px-3 pb-1 pt-2"
               />
+            ) : (
+              <div className="flex items-center justify-between px-3 pb-1 pt-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-40">
+                  Cooking
+                </span>
+                <span className="flex items-center">
+                  <button
+                    onClick={newSession}
+                    className="flex items-center gap-1 text-[11px] text-koma-fg opacity-70 transition-colors hover:opacity-100"
+                  >
+                    <Plus size={12} className="flex-none" />
+                    New session
+                  </button>
+                  <NewSessionMenu afterPick={onClose} />
+                </span>
+              </div>
             )}
-            <div className="flex items-center justify-between px-3 pb-1 pt-2">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-40">
-                Cooking
-              </span>
-              <span className="flex items-center">
-                <button
-                  onClick={newSession}
-                  className="flex items-center gap-1 text-[11px] text-koma-fg opacity-70 transition-colors hover:opacity-100"
-                >
-                  <Plus size={12} className="flex-none" />
-                  New session
-                </button>
-                <NewSessionMenu afterPick={onClose} />
-              </span>
-            </div>
             {filteredCooking.length === 0 ? (
               <Empty>{q === '' ? 'No live sessions' : 'No matches'}</Empty>
             ) : (

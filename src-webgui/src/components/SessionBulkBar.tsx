@@ -12,10 +12,14 @@ type Props = {
   className?: string
 }
 
-// Compact bulk action strip shown above a session list when multi-select is
-// non-empty. Kill applies only to cooking ids; Delete forever only to history.
-// Confirm is a full-width danger strip (same visual language as
-// SessionRowConfirmStrip) so bulk destructive ops never one-click-fire.
+// Compact bulk action strip swapped into an existing session-list header when
+// multi-select is non-empty (never inserted as an extra band above the list —
+// that shoved rows down on first click). Kill applies only to cooking ids;
+// Delete forever only to history. Confirm reuses this same slot (same visual
+// language as SessionRowConfirmStrip) so bulk destructive ops never one-click-fire.
+//
+// Callers own outer padding so height matches the idle header they replace
+// (overlay Cooking: `px-3 pb-1 pt-2`; welcome Recent: parent `px-4 pt-4` + `mb-2`).
 export function SessionBulkBar({
   cookingIds,
   historyIds,
@@ -64,7 +68,7 @@ export function SessionBulkBar({
   if (pending === 'kill') {
     return (
       <div
-        className={`flex w-full items-center justify-between px-3 py-1.5 text-[12px] font-medium ${className}`}
+        className={`flex w-full items-center justify-between text-[12px] font-medium ${className}`}
         style={{ color: errorTint, backgroundColor: `color-mix(in srgb, ${errorTint} 16%, transparent)` }}
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
@@ -99,7 +103,7 @@ export function SessionBulkBar({
   if (pending === 'delete') {
     return (
       <div
-        className={`flex w-full items-center justify-between px-3 py-1.5 text-[12px] font-medium ${className}`}
+        className={`flex w-full items-center justify-between text-[12px] font-medium ${className}`}
         style={{ color: errorTint, backgroundColor: `color-mix(in srgb, ${errorTint} 16%, transparent)` }}
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
@@ -154,7 +158,7 @@ export function SessionBulkBar({
 
   return (
     <div
-      className={`flex w-full items-center gap-2 border-b border-koma-border bg-koma-panel2 px-3 py-1.5 text-[11.5px] text-koma-fg ${className}`}
+      className={`flex w-full items-center gap-2 text-[11px] text-koma-fg ${className}`}
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >

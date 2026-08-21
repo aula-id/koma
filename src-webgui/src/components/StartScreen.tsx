@@ -158,17 +158,19 @@ export function StartScreen() {
 
       <Card className="!p-0 overflow-hidden">
         <div className="px-4 pt-4">
-          <SectionLabel icon={Clock}>Recent</SectionLabel>
+          {multi.hasSelection ? (
+            <SessionBulkBar
+              cookingIds={bulkCooking}
+              historyIds={bulkHistory}
+              foregroundCookingIds={fgCooking}
+              onDone={() => multi.clear()}
+              onClear={() => multi.clear()}
+              className="mb-2"
+            />
+          ) : (
+            <SectionLabel icon={Clock}>Recent</SectionLabel>
+          )}
         </div>
-        {multi.hasSelection && (
-          <SessionBulkBar
-            cookingIds={bulkCooking}
-            historyIds={bulkHistory}
-            foregroundCookingIds={fgCooking}
-            onDone={() => multi.clear()}
-            onClear={() => multi.clear()}
-          />
-        )}
         {!hasRecent ? (
           <div className="px-5 pb-4 pt-2 text-[12px] text-koma-fg opacity-35">No sessions yet — start a new one.</div>
         ) : (
