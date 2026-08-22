@@ -249,7 +249,17 @@ pub(crate) fn prompt_remote_cwd(
     let mut path = "/".to_string();
     let mut loaded_path = path.clone();
     let mut selected = 0usize;
-    let mut status = String::from("Enter opens a directory · Ctrl+Enter selects · Esc cancels");
+    // Focus toggles with Tab between the path/list (browse) and the physical
+    // [Select folder] button. Enter on the button confirms cwd; Enter on the
+    // list opens/lists. Replaces the old Ctrl+Enter select gesture.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Focus {
+        Path,
+        Select,
+    }
+    let mut focus = Focus::Path;
+    const HINT: &str = "Tab switches · Enter opens dir · Enter on [Select folder] confirms · Esc cancels";
+    let mut status = String::from(HINT);
     let mut dirs = match wait_dirs(
         &mut terminal,
         load_dirs(target, &path, password.as_deref()),
@@ -275,29 +285,48 @@ pub(crate) fn prompt_remote_cwd(
                 .constraints([
                     Constraint::Length(3),
                     Constraint::Min(1),
-                    Constraint::Length(2),
+                    Constraint::Length(3),
                 ])
                 .split(frame.area());
-            let title_style = Style::default()
-                .fg(palette.accent)
-                .bg(palette.bg)
-                .add_modifier(Modifier::BOLD);
+            let path_focused = focus == Focus::Path;
+            let select_focused = focus == Focus::Select;
+            let title_style = if path_focused {
+                Style::default()
+                    .fg(palette.sel_fg)
+                    .bg(palette.sel_bg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+                    .fg(palette.accent)
+                    .bg(palette.bg)
+                    .add_modifier(Modifier::BOLD)
+            };
             let border_style = Style::default().fg(palette.dim).bg(palette.bg);
+            let path_border = if path_focused {
+                Style::default().fg(palette.accent).bg(palette.bg)
+            } else {
+                border_style
+            };
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
-                    format!(" Remote working directory · {path}"),
+                    format!(" path  {path}"),
                     title_style,
                 )))
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_style(border_style),
+                        .title(if path_focused {
+                            " Remote working directory (focused) "
+                        } else {
+                            " Remote working directory "
+                        })
+                        .border_style(path_border),
                 ),
                 areas[0],
             );
             let items = dirs.iter().enumerate().map(|(index, dir)| {
                 let label = dir.strip_prefix(&format!("{path}/")).unwrap_or(dir);
-                let style = if index == selected {
+                let style = if path_focused && index == selected {
                     Style::default()
                         .fg(palette.sel_fg)
                         .bg(palette.sel_bg)
@@ -306,7 +335,15 @@ pub(crate) fn prompt_remote_cwd(
                     Style::default().fg(palette.fg).bg(palette.bg)
                 };
                 ListItem::new(Line::from(Span::styled(
-                    format!("{}{}", if index == selected { "› " } else { "  " }, label),
+                    format!(
+                        "{}{}",
+                        if path_focused && index == selected {
+                            "› "
+                        } else {
+                            "  "
+                        },
+                        label
+                    ),
                     style,
                 )))
             });
@@ -326,20 +363,56 @@ pub(crate) fn prompt_remote_cwd(
                     .highlight_style(Style::default().fg(palette.sel_fg).bg(palette.sel_bg)),
                 areas[1],
             );
+
+            // Footer: status + physical [Select folder] button (Tab target).
+            let footer = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Min(10), Constraint::Length(20)])
+                .split(areas[2]);
             let status_style = if status.starts_with("Unable") {
                 Style::default().fg(palette.error).bg(palette.bg)
-            } else if dirs.is_empty() {
-                Style::default().fg(palette.dim).bg(palette.bg)
             } else {
-                Style::default().fg(palette.info).bg(palette.bg)
+                Style::default().fg(palette.dim).bg(palette.bg)
             };
             frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(status.as_str(), status_style))).block(
+                Paragraph::new(Line::from(Span::styled(
+                    format!(" {status}"),
+                    status_style,
+                )))
+                .block(
                     Block::default()
-                        .borders(Borders::TOP)
+                        .borders(Borders::TOP | Borders::LEFT | Borders::BOTTOM)
                         .border_style(border_style),
                 ),
-                areas[2],
+                footer[0],
+            );
+            let btn_label = if select_focused {
+                "▸ [ Select folder ]"
+            } else {
+                "  [ Select folder ]"
+            };
+            let btn_style = if select_focused {
+                Style::default()
+                    .fg(palette.sel_fg)
+                    .bg(palette.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(palette.fg).bg(palette.bg)
+            };
+            let btn_border = if select_focused {
+                Style::default().fg(palette.accent).bg(palette.bg)
+            } else {
+                border_style
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(btn_label, btn_style)))
+                    .alignment(Alignment::Center)
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .border_style(btn_border),
+                    ),
+                footer[1],
             );
         })?;
 
@@ -354,13 +427,34 @@ pub(crate) fn prompt_remote_cwd(
         }
         match key.code {
             KeyCode::Esc => return Ok(None),
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Tab => {
+                focus = match focus {
+                    Focus::Path => Focus::Select,
+                    Focus::Select => Focus::Path,
+                };
+                status = String::from(HINT);
+            }
+            // Arrow keys always move the dir highlight (even with Select focused,
+            // so users can peek without Tab-ing back). j/k only when Path-focused
+            // so typing a path containing those letters still works… wait, j/k as
+            // vim nav conflicts with typing — same as the old picker; keep parity.
+            KeyCode::Up => {
                 selected = selected.saturating_sub(1);
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 selected = selected.saturating_add(1).min(dirs.len().saturating_sub(1));
             }
-            KeyCode::Backspace => {
+            KeyCode::Char('k')
+                if focus == Focus::Path && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                selected = selected.saturating_sub(1);
+            }
+            KeyCode::Char('j')
+                if focus == Focus::Path && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                selected = selected.saturating_add(1).min(dirs.len().saturating_sub(1));
+            }
+            KeyCode::Backspace if focus == Focus::Path => {
                 if path != "/" {
                     path.pop();
                     if path.is_empty() {
@@ -377,29 +471,31 @@ pub(crate) fn prompt_remote_cwd(
                         Ok(next) => {
                             dirs = next;
                             loaded_path = path.clone();
-                            status = String::from(
-                                "Enter opens a directory; Ctrl+Enter selects this path",
-                            );
+                            status = String::from(HINT);
                         }
                         Err(error) => status = format!("Unable to list {path}: {error:#}"),
                     }
                 }
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char(c)
+                if focus == Focus::Path && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
                 if c == '/' && path.ends_with('/') {
                     continue;
                 }
                 path.push(c);
                 selected = 0;
             }
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Enter on the Select-folder button confirms the current listed path.
+            KeyCode::Enter if focus == Focus::Select => {
                 if path == loaded_path {
                     return Ok(Some(path));
                 }
-                status = String::from("Press Enter to inspect this path before selecting it");
+                status = String::from("Press Enter on the path to inspect it before selecting");
+                focus = Focus::Path;
             }
-            KeyCode::Char('s') if path == loaded_path => return Ok(Some(path)),
-            KeyCode::Enter => {
+            // Enter on the path/list: list typed path, or open highlighted child.
+            KeyCode::Enter if focus == Focus::Path => {
                 if path != loaded_path {
                     selected = 0;
                     match wait_dirs(
@@ -412,9 +508,7 @@ pub(crate) fn prompt_remote_cwd(
                         Ok(next_dirs) => {
                             dirs = next_dirs;
                             loaded_path = path.clone();
-                            status = String::from(
-                                "Enter opens a directory; Ctrl+Enter selects this path",
-                            );
+                            status = String::from(HINT);
                         }
                         Err(error) => status = format!("Unable to list {path}: {error:#}"),
                     }
@@ -431,14 +525,14 @@ pub(crate) fn prompt_remote_cwd(
                         Ok(next_dirs) => {
                             dirs = next_dirs;
                             loaded_path = path.clone();
-                            status = String::from(
-                                "Enter opens a directory; Ctrl+Enter selects this path",
-                            );
+                            status = String::from(HINT);
                         }
                         Err(error) => status = format!("Unable to list {path}: {error:#}"),
                     }
                 } else {
-                    status = String::from("No directory selected; Ctrl+Enter selects this path");
+                    // Empty listing — jump focus to Select folder so Enter confirms.
+                    focus = Focus::Select;
+                    status = String::from("No subfolders — Enter confirms this path");
                 }
             }
             _ => {}
