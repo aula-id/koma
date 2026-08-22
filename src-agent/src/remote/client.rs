@@ -4,7 +4,7 @@ use anyhow::Result;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use super::auth::{self, AuthProbe, SshAuth};
+use super::auth::{self, SshAuth};
 use super::{bootstrap, ssh, RemoteTarget};
 
 /// Cloneable remote handoff state. `SshAuth` is reconstructed only when an
@@ -418,18 +418,41 @@ pub(crate) fn prompt_remote_cwd(
     }
 }
 
+/// Run a remote thin-client session against `user@host[:port]`.
 ///
 /// Auth flow mirrors VS Code Remote-SSH:
 /// 1. Try key-based auth first (fast, silent).
-/// 2. If that fails, prompt for password and use SSH_ASKPASS.
-/// 3. The password is cached for the session (bootstrap + connect).
-pub(crate) fn run_remote_client_target(
-    target_str: &str,
-    key: Option<&str>,
-    port: Option<u16>,
-    new_session: bool,
-    session_id: Option<&str>,
-) -> Result<RemoteExit> {
+/// 2. If that fails, try encrypted store, then interactive (TUI modal preferred).
+/// 3. The password is cached for the session (bootstrap + connect) and
+///    persisted per host_id after a successful bootstrap.
+///
+/// Arguments for [`run_remote_client_target`].
+pub(crate) struct RemoteClientTarget<'a> {
+    pub target_str: &'a str,
+    pub key: Option<&'a str>,
+    pub port: Option<u16>,
+    pub new_session: bool,
+    pub session_id: Option<&'a str>,
+    pub host_id: Option<&'a str>,
+    pub pre_resolved: Option<auth::ResolvedAuth>,
+    pub interactive: auth::InteractivePassword,
+}
+
+/// Callers that still own the TUI alt-screen should resolve auth first via
+/// [`auth::resolve_ssh_auth`] with [`auth::InteractivePassword::TuiModal`], then
+/// pass the result as `pre_resolved` after dropping their terminal guard.
+pub(crate) fn run_remote_client_target(args: RemoteClientTarget<'_>) -> Result<RemoteExit> {
+    let RemoteClientTarget {
+        target_str,
+        key,
+        port,
+        new_session,
+        session_id,
+        host_id,
+        pre_resolved,
+        interactive,
+    } = args;
+
     let mut target = super::parse_target(target_str)?;
     if let Some(k) = key {
         target.key = Some(k.to_string());
@@ -438,21 +461,21 @@ pub(crate) fn run_remote_client_target(
         target.port = Some(p);
     }
 
-    // Probe whether key-based auth works.
-    eprintln!("Connecting to {}@{}...", target.user, target.host);
-    let ssh_auth = match auth::probe_key_auth(&target) {
-        AuthProbe::KeyReady => None,
-        AuthProbe::PasswordRequired => {
-            eprintln!("Key-based authentication failed. Password required.");
-            let password = auth::prompt_password(&target.user, &target.host)?;
-            Some(SshAuth::new(password)?)
-        }
+    let resolved = match pre_resolved {
+        Some(r) => r,
+        None => auth::resolve_ssh_auth(&target, host_id, None, interactive)?,
     };
+    let auth_ref = resolved.auth.as_ref();
+    let retained_password = resolved.password.clone();
 
-    let auth_ref = ssh_auth.as_ref();
-    let retained_password = auth_ref.map(|a| a.password().to_string());
     let cwd = if new_session {
-        prompt_remote_cwd(&target, auth_ref)?
+        match prompt_remote_cwd(&target, auth_ref) {
+            Ok(c) => c,
+            Err(e) => {
+                auth::forget_stored_password(&resolved);
+                return Err(e);
+            }
+        }
     } else {
         None
     };
@@ -470,12 +493,68 @@ pub(crate) fn run_remote_client_target(
 
     // Bootstrap: validate/install/upgrade koma on remote (uses same auth).
     eprintln!("Checking remote Koma version...");
-    if bootstrap::ensure_koma_compatible(&target, auth_ref)? {
-        eprintln!("Remote Koma installed or upgraded successfully.");
-    } else {
-        eprintln!("Remote Koma version matches.");
+    match bootstrap::ensure_koma_compatible(&target, auth_ref) {
+        Ok(upgraded) => {
+            if upgraded {
+                eprintln!("Remote Koma installed or upgraded successfully.");
+            } else {
+                eprintln!("Remote Koma version matches.");
+            }
+            auth::remember_password(&resolved);
+        }
+        Err(e) => {
+            auth::forget_stored_password(&resolved);
+            // One retry with fresh interactive password if store was the source.
+            if resolved.from_store {
+                let retry = auth::resolve_ssh_auth(
+                    &target,
+                    resolved.host_id.as_deref(),
+                    None,
+                    interactive,
+                )?;
+                match bootstrap::ensure_koma_compatible(&target, retry.auth.as_ref()) {
+                    Ok(_) => {
+                        auth::remember_password(&retry);
+                        return finish_remote_after_auth(
+                            target,
+                            key,
+                            retry.password.clone(),
+                            retry.auth.as_ref(),
+                            new_session,
+                            session_id,
+                            cwd,
+                        );
+                    }
+                    Err(e2) => {
+                        auth::forget_stored_password(&retry);
+                        return Err(e2);
+                    }
+                }
+            }
+            return Err(e);
+        }
     }
 
+    finish_remote_after_auth(
+        target,
+        key,
+        retained_password,
+        auth_ref,
+        new_session,
+        session_id,
+        cwd,
+    )
+}
+
+fn finish_remote_after_auth(
+    target: RemoteTarget,
+    key: Option<&str>,
+    retained_password: Option<String>,
+    auth_ref: Option<&SshAuth>,
+    new_session: bool,
+    session_id: Option<&str>,
+    cwd: Option<String>,
+) -> Result<RemoteExit> {
     if !new_session && session_id.is_none() {
         return Ok(RemoteExit::Resume {
             context: RemoteContext {

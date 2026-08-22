@@ -132,9 +132,9 @@ fn walk_nested_gomods(root: &Path, config: &mut GoModuleConfig, depth: u32) {
             let sub_mod = sub.join("go.mod");
             if sub_mod.exists() {
                 let sub_s = normalize_lexical(&sub.to_string_lossy().replace('\\', "/"));
-                if !config.mods.contains_key(&sub_s) {
+                if let std::collections::hash_map::Entry::Vacant(e) = config.mods.entry(sub_s) {
                     if let Some(mod_cfg) = parse_go_mod(&sub_mod) {
-                        config.mods.insert(sub_s, mod_cfg);
+                        e.insert(mod_cfg);
                     }
                 }
             }

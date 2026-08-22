@@ -44,11 +44,8 @@ fn parse_swift_import(text: &str) -> Option<String> {
     // Strip leading attributes: `@_exported`, `@testable`, etc.
     let mut rest = text;
     while rest.starts_with('@') {
-        if let Some(space_idx) = rest.find(' ') {
-            rest = rest[space_idx + 1..].trim_start();
-        } else {
-            return None;
-        }
+        let space_idx = rest.find(' ')?;
+        rest = rest[space_idx + 1..].trim_start();
     }
     // Strip `import` keyword.
     let rest = rest.strip_prefix("import")?.trim_start();

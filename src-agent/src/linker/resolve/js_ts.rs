@@ -484,9 +484,8 @@ fn resolve_with_path_candidates(
 /// `lodash` → `lodash`
 /// `@scope/pkg` → `@scope/pkg`
 fn extract_package_name(specifier: &str) -> String {
-    if specifier.starts_with('@') {
+    if let Some(rest) = specifier.strip_prefix('@') {
         // Scoped package: @scope/pkg[/subpath...]
-        let rest = &specifier[1..];
         if let Some(first_slash) = rest.find('/') {
             // Check for a second slash (subpackage path).
             let after_pkg = &rest[first_slash + 1..];

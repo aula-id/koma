@@ -42,7 +42,7 @@ pub fn build_python_config(root: &str) -> PythonConfig {
     let pyproject_path = root_path.join("pyproject.toml");
     if let Some(cfg) = parse_pyproject_toml(&pyproject_path) {
         // package-dir entries add their values as search roots.
-        for (_, dir) in &cfg.package_dir {
+        for dir in cfg.package_dir.values() {
             let full = root_path.join(dir);
             if full.is_dir() {
                 search_roots.push(normalize_lexical(
@@ -64,7 +64,7 @@ pub fn build_python_config(root: &str) -> PythonConfig {
         // No pyproject.toml results or only default roots.
         let setup_cfg_path = root_path.join("setup.cfg");
         if let Some(cfg) = parse_setup_cfg(&setup_cfg_path) {
-            for (_, dir) in &cfg.package_dir {
+            for dir in cfg.package_dir.values() {
                 let full = root_path.join(dir);
                 if full.is_dir() {
                     search_roots.push(normalize_lexical(
@@ -255,18 +255,14 @@ fn parse_setup_cfg(path: &Path) -> Option<SetupCfgParsed> {
             let key = trimmed[..eq_pos].trim().to_string();
             let value = trimmed[eq_pos + 1..].trim();
 
-            if current_section == "options" && key == "package_dir" {
+            if current_section == "options" && key == "package_dir" && !value.is_empty() {
                 // INI multi-line or single: root = src
-                if !value.is_empty() {
-                    parse_ini_mapping(value, &mut result.package_dir);
-                }
-            } else if current_section == "options" && key == "packages" {
-                if !value.is_empty() {
-                    for pkg in value.split_whitespace() {
-                        let pkg = pkg.trim().trim_matches('"').trim_matches('\'');
-                        if !pkg.is_empty() {
-                            result.packages.push(pkg.to_string());
-                        }
+                parse_ini_mapping(value, &mut result.package_dir);
+            } else if current_section == "options" && key == "packages" && !value.is_empty() {
+                for pkg in value.split_whitespace() {
+                    let pkg = pkg.trim().trim_matches('"').trim_matches('\'');
+                    if !pkg.is_empty() {
+                        result.packages.push(pkg.to_string());
                     }
                 }
             }

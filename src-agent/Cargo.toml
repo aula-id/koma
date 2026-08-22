@@ -32,6 +32,8 @@ regex = "1"
 globset = "0.4"
 infer = "0.16"
 base64 = "0.22"
+aes-gcm = "0.10"
+rand = "0.8"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 ed25519-dalek = "2"
 koma-extension = { path = "../src-extension" }
