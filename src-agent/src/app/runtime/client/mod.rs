@@ -882,8 +882,8 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
             None,
             crate::remote::auth::InteractivePassword::TuiModal,
         )?;
-        drop(terminal);
-        drop(_guard);
+        // Keep the alt-screen through bootstrap (braille timeline); drop only when
+        // the remote session takes full terminal ownership.
         let result = crate::remote::client::run_remote_client_target(
             crate::remote::client::RemoteClientTarget {
                 target_str: target,
@@ -894,8 +894,11 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                 host_id: host_id.as_deref(),
                 pre_resolved: Some(pre_resolved),
                 interactive: crate::remote::auth::InteractivePassword::TuiModal,
+                terminal: Some(&mut terminal),
             },
         )?;
+        drop(terminal);
+        drop(_guard);
         _guard = TerminalGuard::enter()?;
         crate::app::runtime::actions::apply_mouse_capture(
             crate::model::settings::MouseCapture::Auto,
@@ -1071,10 +1074,8 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                 ClientState::Swapper(build_local_hub(prev_session.as_deref()))
                             }
                             Ok(pre_resolved) => {
-                                // Drop the terminal + guard so the remote client can own it.
-                                drop(terminal);
-                                drop(_guard);
-
+                                // Keep alt-screen for bootstrap timeline; the remote
+                                // session client re-enters its own guard afterward.
                                 let result = crate::remote::client::run_remote_client_target(
                                     crate::remote::client::RemoteClientTarget {
                                         target_str: &req.target,
@@ -1085,6 +1086,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                         host_id: req.host_id.as_deref(),
                                         pre_resolved: Some(pre_resolved),
                                         interactive: crate::remote::auth::InteractivePassword::TuiModal,
+                                        terminal: Some(&mut terminal),
                                     },
                                 );
 
@@ -1107,6 +1109,8 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
 
                                 teardown_connection(&handle, conn);
 
+                                drop(terminal);
+                                drop(_guard);
                                 _guard = TerminalGuard::enter()?;
                                 crate::app::runtime::actions::apply_mouse_capture(
                                     crate::model::settings::MouseCapture::Auto,
@@ -1223,10 +1227,8 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                     ClientState::Swapper(hub)
                                 }
                                 Ok(prefilled) => {
-                            drop(terminal);
-                            drop(_guard);
-
                             let result = remote_attach(
+                                &mut terminal,
                                 &attach_target,
                                 attach_key.as_deref(),
                                 prefilled.as_deref(),
@@ -1238,7 +1240,10 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                 },
                             );
 
-                            // Re-enter the terminal for the local swapper/attach loop.
+                            // Re-own terminal after remote session (remote may have
+                            // joined our alt-screen; refresh guard cleanly).
+                            drop(terminal);
+                            drop(_guard);
                             _guard = TerminalGuard::enter()?;
                             crate::app::runtime::actions::apply_mouse_capture(
                                 crate::model::settings::MouseCapture::Auto,
@@ -1392,15 +1397,16 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                     }
                                 }
                             };
-                            drop(terminal);
-                            drop(_guard);
                             let result = remote_attach(
+                                &mut terminal,
                                 &address,
                                 target.key.as_deref(),
                                 prefilled.as_deref(),
                                 false,
                                 session_id.as_deref(),
                             );
+                            drop(terminal);
+                            drop(_guard);
                             _guard = TerminalGuard::enter()?;
                             crate::app::runtime::actions::apply_mouse_capture(
                                 crate::model::settings::MouseCapture::Auto,
@@ -1470,6 +1476,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
 /// is managed internally by [`crate::remote::client::run_remote_client`]. The
 /// remote session owns its own terminal, render loop, and cleanup.
 fn remote_attach(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     target_str: &str,
     key: Option<&str>,
     password: Option<&str>,
@@ -1522,9 +1529,17 @@ fn remote_attach(
         });
     }
 
-    // Bootstrap koma on the remote host (ensures compatibility).
-    eprintln!("Checking remote Koma version...");
-    match crate::remote::bootstrap::ensure_koma_compatible(&target, auth_ref) {
+    // Bootstrap under the caller's alt-screen (braille timeline).
+    let host_label = match target.port {
+        Some(22) | None => format!("{}@{}", target.user, target.host),
+        Some(port) => format!("{}@{}:{}", target.user, target.host, port),
+    };
+    match crate::remote::bootstrap::ensure_koma_compatible_animated(
+        terminal,
+        &target,
+        auth_ref,
+        &host_label,
+    ) {
         Ok(_) => {
             crate::remote::auth::remember_password(&resolved);
         }
@@ -1537,8 +1552,12 @@ fn remote_attach(
                     None,
                     crate::remote::auth::InteractivePassword::TuiModal,
                 )?;
-                match crate::remote::bootstrap::ensure_koma_compatible(&target, retry.auth.as_ref())
-                {
+                match crate::remote::bootstrap::ensure_koma_compatible_animated(
+                    terminal,
+                    &target,
+                    retry.auth.as_ref(),
+                    &host_label,
+                ) {
                     Ok(_) => {
                         crate::remote::auth::remember_password(&retry);
                         return remote_attach_finish(
