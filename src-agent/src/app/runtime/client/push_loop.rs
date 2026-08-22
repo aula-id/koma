@@ -1167,9 +1167,13 @@ pub(super) fn push_loop(
                 }
                 Ok(super::HostCtl::DisconnectRemote) | Ok(super::HostCtl::CancelRemoteConnect) => {
                     // During connect/auth, dropping the password sender releases the
-                    // worker. Once connected, push_loop has already transitioned to
-                    // the remote transport; its normal detach path handles cleanup.
+                    // worker. Once a remote session is live, we must leave the attach
+                    // entirely — otherwise the GUI keeps a stale session.id and stays
+                    // stuck on ChatView over a dead SSH bridge.
                     remote_shared.cancel();
+                    if remote_ctx.is_some() {
+                        return HostTransition::DisconnectRemote;
+                    }
                     push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
                 }
                 Ok(super::HostCtl::SubmitRemotePassword { password }) => {
