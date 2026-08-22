@@ -962,6 +962,14 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::CancelRemotePath => {
             let _ = ctx.ctl.send(HostCtl::CancelRemotePath);
         }
+        GuiReq::OpenSecondWindow {
+            session_id,
+            host_id,
+        } => {
+            // Detached second process — multi-window multi-attach for remote
+            // (and local when host_id is None). Best-effort; toast on failure.
+            spawn_second_gui_window(session_id, host_id);
+        }
         // Import graph visualization: always routed to the host-relay thread via
         // HostCtl::ImportGraph (linker daemon call, like FileDiff — never the session daemon).
         #[cfg(feature = "linker")]
@@ -1037,3 +1045,68 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
 // `write_attach_scratch`, `forward_paste`, `forward_config_req`, and `forward_or_host`
 // moved to the sibling `dispatch_forward` module (file size) — see the `use
 // super::dispatch_forward::{...}` import above.
+
+/// Spawn a detached second GUI process for multi-window multi-attach.
+///
+/// - Remote: `koma gui remote user@host --session <id> [--key …] [--port …]`
+/// - Local:  `koma gui --session <id>`
+///
+/// Best-effort: failures are logged; the first window is unaffected.
+fn spawn_second_gui_window(session_id: String, host_id: Option<String>) {
+    std::thread::spawn(move || {
+        let Ok(exe) = std::env::current_exe() else {
+            crate::model::store::append_global_error_log(
+                "gui",
+                "OpenSecondWindow: cannot resolve current executable",
+            );
+            return;
+        };
+        let mut cmd = std::process::Command::new(exe);
+        cmd.arg("gui");
+        if let Some(hid) = host_id.as_deref() {
+            let hosts = crate::remote::hosts::load_hosts();
+            if let Some(h) = crate::remote::hosts::host_by_id(&hosts, hid) {
+                let target = if h.port == 22 {
+                    format!("{}@{}", h.user, h.host)
+                } else {
+                    format!("{}@{}:{}", h.user, h.host, h.port)
+                };
+                cmd.arg("remote").arg(&target);
+                if let Some(ref key) = h.key_path {
+                    cmd.arg("--key").arg(key);
+                }
+                if h.port != 22 {
+                    cmd.arg("--port").arg(h.port.to_string());
+                }
+            } else {
+                crate::model::store::append_global_error_log(
+                    "gui",
+                    &format!("OpenSecondWindow: unknown host id {hid}"),
+                );
+                return;
+            }
+        }
+        cmd.arg("--session").arg(&session_id);
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(unix)]
+        {
+            // Detach from the parent process group so closing the first window
+            // does not SIGHUP the second.
+            use std::os::unix::process::CommandExt;
+            unsafe {
+                cmd.pre_exec(|| {
+                    libc::setsid();
+                    Ok(())
+                });
+            }
+        }
+        if let Err(e) = cmd.spawn() {
+            crate::model::store::append_global_error_log(
+                "gui",
+                &format!("OpenSecondWindow spawn failed: {e}"),
+            );
+        }
+    });
+}

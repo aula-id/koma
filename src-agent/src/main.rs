@@ -268,6 +268,22 @@ fn main() -> anyhow::Result<()> {
         return app::run_linker_daemon(opts);
     }
 
+    // --- desktop GUI path: feature-gated wry + xterm.js client ---
+    // `koma gui` and `koma gui remote user@host --session <id>` both land here.
+    // Checked BEFORE bare `remote` so a second-window GUI attach is not diverted
+    // into the TUI remote client.
+    #[cfg(feature = "gui")]
+    if opts.gui {
+        return app::run_gui(opts);
+    }
+    #[cfg(not(feature = "gui"))]
+    if opts.gui {
+        eprintln!(
+            "koma was built without the `gui` feature. Rebuild with: cargo build --features gui"
+        );
+        std::process::exit(1);
+    }
+
     // --- remote development: saved-host picker or direct target ---
     if opts.remote_picker {
         return app::run(opts);
@@ -288,20 +304,6 @@ fn main() -> anyhow::Result<()> {
     // `--attach`. Stays in this branch (loops forever) until QuitDaemon / Ctrl-C.
     if opts.daemon {
         return app::run_daemon(opts);
-    }
-
-    // --- desktop GUI path: feature-gated wry + xterm.js client (spawns the real
-    // koma terminal client in a PTY). Default builds omit the `gui` feature. ---
-    #[cfg(feature = "gui")]
-    if opts.gui {
-        return app::run_gui(opts);
-    }
-    #[cfg(not(feature = "gui"))]
-    if opts.gui {
-        eprintln!(
-            "koma was built without the `gui` feature. Rebuild with: cargo build --features gui"
-        );
-        std::process::exit(1);
     }
 
     // --- explicit thin-client path: attach to an ALREADY-running daemon ---
