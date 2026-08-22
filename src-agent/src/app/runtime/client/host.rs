@@ -504,15 +504,17 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 let resolved_session = session_id.or_else(|| current.map(str::to_string));
                 super::import_graph::spawn_import_graph(
                     P::clone(push),
-                    path,
-                    depth,
-                    direction,
-                    filter_roots,
-                    filter_languages,
-                    configured_roots,
-                    configured_root_map,
-                    resolved_session,
-                    request_id,
+                    super::import_graph::ImportGraphJob {
+                        path,
+                        depth,
+                        direction,
+                        filter_roots,
+                        filter_languages,
+                        configured_roots,
+                        configured_root_map,
+                        session_id: resolved_session,
+                        request_id,
+                    },
                 );
             }
             #[cfg(feature = "linker")]

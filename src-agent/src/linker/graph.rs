@@ -12,6 +12,14 @@ use crate::ipc::linker_proto::{
 };
 use crate::linker::reference::{ImportKind, SourceRefs};
 
+/// Shared caps + filter knobs for focused graph views.
+struct ViewCaps<'a> {
+    max_nodes: usize,
+    max_edges: usize,
+    filter_roots: &'a Option<Vec<String>>,
+    filter_languages: &'a Option<Vec<String>>,
+}
+
 /// Supported source languages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Lang {
@@ -671,27 +679,16 @@ impl ImportGraph {
                     let key = key.to_string();
                     // For depth==1, use the dedicated direct-star builder
                     // (strict immediate neighborhood, no neighbor-neighbor leakage).
+                    let caps = ViewCaps {
+                        max_nodes,
+                        max_edges,
+                        filter_roots: &filter_roots,
+                        filter_languages: &filter_languages,
+                    };
                     if depth == 1 {
-                        self.direct_star_view(
-                            base,
-                            &key,
-                            &req.direction,
-                            max_nodes,
-                            max_edges,
-                            &filter_roots,
-                            &filter_languages,
-                        )
+                        self.direct_star_view(base, &key, &req.direction, caps)
                     } else {
-                        self.focus_view(
-                            base,
-                            &key,
-                            &req.direction,
-                            depth,
-                            max_nodes,
-                            max_edges,
-                            &filter_roots,
-                            &filter_languages,
-                        )
+                        self.focus_view(base, &key, &req.direction, depth, caps)
                     }
                 }
             },
@@ -862,11 +859,14 @@ impl ImportGraph {
         base: GraphViewResult,
         key: &str,
         direction: &GraphDirection,
-        max_nodes: usize,
-        max_edges: usize,
-        filter_roots: &Option<Vec<String>>,
-        filter_languages: &Option<Vec<String>>,
+        caps: ViewCaps<'_>,
     ) -> GraphViewResult {
+        let ViewCaps {
+            max_nodes,
+            max_edges,
+            filter_roots,
+            filter_languages,
+        } = caps;
         // Collect direct outgoing targets (dependencies) that pass filters.
         let mut outgoing: Vec<String> = Vec::new();
         if matches!(
@@ -1047,11 +1047,14 @@ impl ImportGraph {
         key: &str,
         direction: &GraphDirection,
         depth: u32,
-        max_nodes: usize,
-        max_edges: usize,
-        filter_roots: &Option<Vec<String>>,
-        filter_languages: &Option<Vec<String>>,
+        caps: ViewCaps<'_>,
     ) -> GraphViewResult {
+        let ViewCaps {
+            max_nodes,
+            max_edges,
+            filter_roots,
+            filter_languages,
+        } = caps;
         // BFS to discover nodes + edges within the view.
         let mut visited: HashSet<String> = HashSet::new();
         let mut queue: VecDeque<(String, u32)> = VecDeque::new();
