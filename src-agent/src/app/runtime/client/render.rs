@@ -70,6 +70,7 @@ pub(crate) enum ClientTransition {
         key: Option<String>,
         new_session: bool,
         session_id: Option<String>,
+        host_id: Option<String>,
     },
 }
 
@@ -155,7 +156,7 @@ pub(super) fn render_loop(
         let mut select_requested = false;
         let mut open_swapper_requested = false;
         let mut new_session_requested: Option<bool> = None;
-        let mut connect_remote_requested: Option<(String, Option<String>, bool, Option<String>)> =
+        let mut connect_remote_requested: Option<(String, Option<String>, bool, Option<String>, Option<String>)> =
             None;
         for frame in prebuffered {
             apply_frame(
@@ -195,7 +196,7 @@ pub(super) fn render_loop(
         // hand-off): the daemon asked this client to connect to a remote host via SSH.
         // Checked AFTER the drain, where we return `ConnectRemote` so `client_run`
         // tears down the local connection and runs the remote client.
-        let mut connect_remote_requested: Option<(String, Option<String>, bool, Option<String>)> =
+        let mut connect_remote_requested: Option<(String, Option<String>, bool, Option<String>, Option<String>)> =
             None;
 
         // --- (a) drain every queued incoming frame (NON-BLOCKING) ---
@@ -278,12 +279,13 @@ pub(super) fn render_loop(
         // pass. Hand control back to `client_run` so it tears down the local connection
         // (leaving the daemon cooking) and runs `run_remote_client_target`. Like
         // `OpenSwapper`/`NewSession`, returned BEFORE any further work this frame.
-        if let Some((target, key, new_session, session_id)) = connect_remote_requested {
+        if let Some((target, key, new_session, session_id, host_id)) = connect_remote_requested {
             return Ok(ClientTransition::ConnectRemote {
                 target,
                 key,
                 new_session,
                 session_id,
+                host_id,
             });
         }
 

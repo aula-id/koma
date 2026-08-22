@@ -326,7 +326,7 @@ pub(super) fn push_loop(
         let mut select_requested = false;
         let mut open_swapper_requested = false;
         let mut new_session_requested: Option<bool> = None;
-        let mut connect_remote_requested: Option<(String, Option<String>, bool, Option<String>)> =
+        let mut connect_remote_requested: Option<(String, Option<String>, bool, Option<String>, Option<String>)> =
             None;
         for frame in prebuffered {
             // Cache the config off any prebuffered full snapshot (normally none — Hello
@@ -1003,7 +1003,11 @@ pub(super) fn push_loop(
                             }
                         }
                         super::HostCtl::DeleteRemoteHost { id } => {
-                            crate::remote::hosts::delete_host(&mut hosts, &id)
+                            let deleted = crate::remote::hosts::delete_host(&mut hosts, &id);
+                            if deleted {
+                                let _ = crate::remote::secrets::delete_remote_password(&id);
+                            }
+                            deleted
                         }
                         _ => false, // GetRemoteHosts — read-only
                     };
@@ -1104,7 +1108,7 @@ pub(super) fn push_loop(
         let mut select_requested = false;
         let mut open_swapper_requested = false;
         let mut new_session_requested: Option<bool> = None;
-        let mut connect_remote_requested: Option<(String, Option<String>, bool, Option<String>)> =
+        let mut connect_remote_requested: Option<(String, Option<String>, bool, Option<String>, Option<String>)> =
             None;
         loop {
             match frame_rx.try_recv() {

@@ -40,6 +40,8 @@ pub struct RemoteConnectRequest {
     pub key: Option<String>,
     pub new_session: bool,
     pub session_id: Option<String>,
+    /// Saved host UUID for encrypted password lookup/store. Never carries a password.
+    pub host_id: Option<String>,
 }
 
 pub struct AppStateRest {

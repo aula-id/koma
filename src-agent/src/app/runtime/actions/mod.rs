@@ -493,6 +493,7 @@ pub(in crate::app::runtime) fn apply_action(
             let mut hosts = crate::remote::hosts::load_hosts();
             crate::remote::hosts::delete_host(&mut hosts, &id);
             let _ = crate::remote::hosts::save_hosts(&hosts);
+            let _ = crate::remote::secrets::delete_remote_password(&id);
             *state.mode_mut() = crate::app::mode::Mode::Remote(Box::new(
                 crate::app::mode::RemoteState::new(hosts.hosts),
             ));
@@ -512,6 +513,7 @@ pub(in crate::app::runtime) fn apply_action(
                     key: host.key_path.clone(),
                     new_session,
                     session_id: None,
+                    host_id: Some(host_id),
                 };
                 *state.mode_mut() = crate::app::mode::Mode::Chat;
                 state.rest.connect_remote_pending = Some(request.clone());
@@ -549,6 +551,7 @@ pub(in crate::app::runtime) fn apply_action(
                     key: host.key_path.clone(),
                     new_session: false,
                     session_id: Some(session_id),
+                    host_id: Some(host_id),
                 };
                 *state.mode_mut() = crate::app::mode::Mode::Chat;
                 state.rest.connect_remote_pending = Some(request.clone());
