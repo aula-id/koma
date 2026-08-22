@@ -1379,7 +1379,7 @@ export type PushEnvelope =
 
   // Remote connection state pushed to React. State transitions during the
   // SSH connect sequence: disconnected → resolving → auth_required |
-  // bootstrapping → connecting → connected | error.
+  // bootstrapping → ready (host live, remote hub) → connecting → connected | error.
   | {
       k: 'RemoteState'
       state: string
@@ -1388,7 +1388,13 @@ export type PushEnvelope =
       host?: string | null
       sessionId?: string | null
       error?: string | null
-      sessions?: Array<{ sessionId: string; name: string; working: boolean; isForeground: boolean }>
+      sessions?: Array<{
+        sessionId: string
+        name: string
+        pwd?: string
+        working: boolean
+        isForeground: boolean
+      }>
     }
   | {
       k: 'RemotePathPicker'
@@ -1995,7 +2001,13 @@ type KomaState = {
     host: string | null
     sessionId: string | null
     error: string | null
-    sessions: Array<{ sessionId: string; name: string; working: boolean; isForeground: boolean }>
+    sessions: Array<{
+      sessionId: string
+      name: string
+      pwd?: string
+      working: boolean
+      isForeground: boolean
+    }>
   }
   remotePath: {
     state: 'idle' | 'listing' | 'ready' | 'error' | 'cancelled'
@@ -4085,7 +4097,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             error: env.error ?? null,
             sessions: env.sessions ?? [],
           }
-          if (env.state === 'connected' || env.state === 'disconnected') {
+          if (env.state === 'connected' || env.state === 'disconnected' || env.state === 'ready') {
             return { remoteState, ui: { ...s.ui, switchingTo: null } }
           }
           if (env.state === 'error') {

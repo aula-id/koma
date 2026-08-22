@@ -106,14 +106,28 @@ pub(super) enum HostTransition {
     /// Detach and show the local session swapper (the daemon's socket closed, or it
     /// signalled `OpenSwapper`). `run_host_relay` rebuilds the hub from discovery.
     ToSwapper,
+    /// Host is authenticated/bootstrapped; show the remote hub (no SSH session child).
+    ToRemoteHub {
+        ctx: Box<super::remote_ctl::RemoteCtx>,
+    },
+    /// SSH-attach a specific remote session (existing id, or a freshly minted one with cwd).
+    RemoteAttach {
+        ctx: Box<super::remote_ctl::RemoteCtx>,
+        session_id: String,
+        cwd: Option<String>,
+    },
+    /// Live SSH-bridged remote session (after session attach succeeded).
     Remote {
         connection: Box<super::remote_ctl::ActiveRemote>,
         session_id: String,
     },
+    /// Drop remote context and return to the local swapper.
+    DisconnectRemote,
     /// Attach to this local session UUID (a hub `SelectSession`/`NewSession`, or a daemon
     /// `NewSession` hand-off). A minted uuid for a new session; an existing id otherwise.
     /// `workdir` is the folder a GUI `[+ new session]` native picker chose (the new
     /// session's working dir); `None` for every other attach inherits the host's cwd.
+    /// Local-only — never used while a remote ctx is live.
     Attach {
         id: String,
         workdir: Option<std::path::PathBuf>,
@@ -296,13 +310,13 @@ pub(super) fn push_loop(
 
     // --- REMOTE HOST CONNECT/DISCONNECT ---
     // Worker thread pushes state transitions (resolving → auth_required →
-    // connecting → connected, etc.) over this channel; the loop drains and
-    // pushes them as `RemoteState` envelopes. Shared state holds the password
-    // and disconnect senders for in-flight operations.
+    // bootstrapping → ready, etc.) over this channel; the loop drains and
+    // pushes them as `RemoteState` envelopes. Host connect stops at ready
+    // (no SSH session child); session attach is a separate HostStep.
     let (remote_state_tx, remote_state_rx) =
         std::sync::mpsc::channel::<super::remote_ctl::RemoteStateUpdate>();
-    let (remote_connected_tx, remote_connected_rx) =
-        std::sync::mpsc::channel::<super::remote_ctl::ActiveRemote>();
+    let (remote_ready_tx, remote_ready_rx) =
+        std::sync::mpsc::channel::<super::remote_ctl::ReadyRemote>();
     let remote_shared = std::sync::Arc::new(super::remote_ctl::RemoteSessionShared::new());
 
     // Fold the handshake's prebuffered frames first, through the SAME `apply_frame`
@@ -1003,7 +1017,7 @@ pub(super) fn push_loop(
                             serde_json::json!({
                                 "id": h.id, "name": h.name, "user": h.user, "host": h.host,
                                 "port": h.port, "keyPath": h.key_path,
-                                "connected": h.last_connected.is_some(),
+                                "connected": false,
                                 "lastConnected": h.last_connected,
                                 "tags": h.tags,
                             })
@@ -1017,7 +1031,7 @@ pub(super) fn push_loop(
                 // ─── Remote host connect/disconnect ────────────────────────
                 Ok(super::HostCtl::ConnectRemote { host_id }) => {
                     // Create a password exchange channel. The worker returns the
-                    // established remote transport through `remote_connected_tx`.
+                    // ready host context through `remote_ready_tx` (no session yet).
                     let (pw_tx, pw_rx) = std::sync::mpsc::channel::<String>();
                     let (attempt_id, cancelled) = remote_shared.begin(pw_tx);
                     push_remote_state(
@@ -1034,7 +1048,7 @@ pub(super) fn push_loop(
                         attempt_id,
                         host_id,
                         remote_state_tx.clone(),
-                        remote_connected_tx.clone(),
+                        remote_ready_tx.clone(),
                         pw_rx,
                         cancelled,
                         std::sync::Arc::clone(&remote_shared),
@@ -1230,7 +1244,7 @@ pub(super) fn push_loop(
             super::push_proto::push_installed_ext_detail(push, id, detail, error);
         }
 
-        // --- REMOTE HOST CONNECT: push state transitions, then open the transport ---
+        // --- REMOTE HOST CONNECT: push state transitions, then hand off to remote hub ---
         while let Ok(update) = remote_state_rx.try_recv() {
             if !remote_shared.is_current(update.attempt_id) {
                 continue;
@@ -1246,19 +1260,23 @@ pub(super) fn push_loop(
                 &update.sessions,
             );
         }
-        while let Ok(mut active) = remote_connected_rx.try_recv() {
-            if !remote_shared.is_current(active.attempt_id) {
-                let _ = tokio::runtime::Handle::current()
-                    .block_on(async { active.ssh_child.kill().await });
+        while let Ok(ready) = remote_ready_rx.try_recv() {
+            if !remote_shared.is_current(ready.attempt_id) {
                 continue;
             }
-            let session_id = match &active.connection.transport {
-                super::connect::TransportKind::Remote { session_id, .. } => session_id.clone(),
-                super::connect::TransportKind::Local { session_id } => session_id.clone(),
-            };
-            return HostTransition::Remote {
-                connection: Box::new(active),
-                session_id,
+            push_remote_state(
+                push,
+                "ready",
+                Some(&ready.ctx.host_id),
+                Some(&ready.ctx.target.user),
+                Some(&ready.ctx.target.host),
+                None,
+                None,
+                &ready.sessions,
+            );
+            // Leave the current (local) session and enter the remote hub.
+            return HostTransition::ToRemoteHub {
+                ctx: Box::new(ready.ctx),
             };
         }
 

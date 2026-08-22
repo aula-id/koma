@@ -1,12 +1,52 @@
 //! Remote host connect/disconnect worker for the GUI host-relay bridge.
 //!
-//! Blocking SSH/auth work runs on a dedicated thread. Every attempt has a fresh
-//! cancellation token and monotonically increasing id so late worker results
-//! cannot replace a newer transport.
+//! Blocking SSH/auth work runs on a dedicated thread. Host connect and session
+//! attach are separate: connect stops at `ready` with a retained [`RemoteCtx`];
+//! session attach SSHes `koma server` only after the user picks a session or
+//! folder. Every attempt has a fresh cancellation token and monotonically
+//! increasing id so late worker results cannot replace a newer transport.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
+
+use crate::remote::auth::SshAuth;
+use crate::remote::RemoteTarget;
+
+/// Retained remote-host context after auth+bootstrap succeed and before/while a
+/// session is attached. Lives only on the host-relay thread — never serialised
+/// into a PushEnvelope (password must not leave process memory as wire JSON).
+///
+/// Password is stored as a plain string (same as TUI `RemoteContext`) so the
+/// ctx can be cloned across hub ↔ attach transitions; each SSH op rebuilds a
+/// short-lived [`SshAuth`] askpass file.
+#[derive(Clone)]
+pub(super) struct RemoteCtx {
+    pub host_id: String,
+    pub target: RemoteTarget,
+    pub password: Option<String>,
+    pub koma_path: String,
+}
+
+impl RemoteCtx {
+    /// Password string for off-thread SSH helpers that must rebuild [`SshAuth`]
+    /// (askpass files are single-owner). `None` when key auth is in use.
+    pub fn password(&self) -> Option<&str> {
+        self.password.as_deref()
+    }
+
+    /// Build a short-lived askpass context for one SSH operation.
+    pub fn make_auth(&self) -> anyhow::Result<Option<SshAuth>> {
+        match self.password.as_ref() {
+            Some(pw) => Ok(Some(SshAuth::from_password(pw.clone())?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn host_label(&self) -> String {
+        format!("{}@{}", self.target.user, self.target.host)
+    }
+}
 
 pub(super) struct RemoteSessionShared {
     password_tx: Mutex<Option<(u64, Sender<String>)>>,
@@ -103,10 +143,21 @@ pub(super) struct RemoteStateUpdate {
     pub sessions: Vec<serde_json::Value>,
 }
 
+/// Live SSH-bridged remote session (after the user picked a session/folder).
 pub(super) struct ActiveRemote {
     pub attempt_id: u64,
     pub connection: super::connect::Connection,
     pub ssh_child: tokio::process::Child,
+    /// Host context retained across session teardown so `/resume` can return to
+    /// the remote hub without re-authing.
+    pub ctx: RemoteCtx,
+}
+
+/// Outcome of the host-connect worker: host is ready, no session attached yet.
+pub(super) struct ReadyRemote {
+    pub attempt_id: u64,
+    pub ctx: RemoteCtx,
+    pub sessions: Vec<serde_json::Value>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -114,7 +165,7 @@ pub(super) fn spawn_connect_worker(
     attempt_id: u64,
     host_id: String,
     state_tx: Sender<RemoteStateUpdate>,
-    connected_tx: Sender<ActiveRemote>,
+    ready_tx: Sender<ReadyRemote>,
     pw_rx: Receiver<String>,
     cancelled: Arc<AtomicBool>,
     shared: Arc<RemoteSessionShared>,
@@ -125,7 +176,7 @@ pub(super) fn spawn_connect_worker(
             attempt_id,
             host_id,
             state_tx,
-            connected_tx,
+            ready_tx,
             pw_rx,
             cancelled,
             shared,
@@ -134,19 +185,64 @@ pub(super) fn spawn_connect_worker(
     });
 }
 
+/// Attach (or create) a remote session over SSH using a retained [`RemoteCtx`].
+#[allow(clippy::too_many_arguments)]
+pub(super) fn spawn_session_worker(
+    attempt_id: u64,
+    ctx: RemoteCtx,
+    session_id: String,
+    cwd: Option<String>,
+    state_tx: Sender<RemoteStateUpdate>,
+    connected_tx: Sender<ActiveRemote>,
+    cancelled: Arc<AtomicBool>,
+    shared: Arc<RemoteSessionShared>,
+    handle: tokio::runtime::Handle,
+) {
+    std::thread::spawn(move || {
+        remote_session_worker(
+            attempt_id,
+            ctx,
+            session_id,
+            cwd,
+            state_tx,
+            connected_tx,
+            cancelled,
+            shared,
+            handle,
+        );
+    });
+}
+
+fn sessions_to_json(
+    sessions: &[crate::remote::sessions::DiscoveredSession],
+) -> Vec<serde_json::Value> {
+    sessions
+        .iter()
+        .map(|session| {
+            serde_json::json!({
+                "sessionId": session.session_id,
+                "name": session.name,
+                "pwd": session.pwd,
+                "working": session.working,
+                "isForeground": session.is_foreground
+            })
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn remote_connect_worker(
     attempt_id: u64,
     host_id: String,
     state_tx: Sender<RemoteStateUpdate>,
-    connected_tx: Sender<ActiveRemote>,
+    ready_tx: Sender<ReadyRemote>,
     pw_rx: Receiver<String>,
     cancelled: Arc<AtomicBool>,
     shared: Arc<RemoteSessionShared>,
-    handle: tokio::runtime::Handle,
+    _handle: tokio::runtime::Handle,
 ) {
-    use crate::remote::auth::{self, AuthProbe, SshAuth};
-    use crate::remote::{bootstrap, ssh, RemoteTarget};
+    use crate::remote::auth::{self, AuthProbe};
+    use crate::remote::{bootstrap, ssh};
 
     let is_cancelled = || cancelled.load(Ordering::Acquire) || !shared.is_current(attempt_id);
     let push_state = {
@@ -215,7 +311,7 @@ fn remote_connect_worker(
         return;
     }
 
-    let auth = match auth::probe_key_auth(&target) {
+    let password = match auth::probe_key_auth(&target) {
         AuthProbe::KeyReady => {
             shared.clear_password(attempt_id);
             None
@@ -241,21 +337,28 @@ fn remote_connect_worker(
                 }
             };
             shared.clear_password(attempt_id);
-            match SshAuth::from_password(password) {
-                Ok(auth) => Some(auth),
-                Err(error) => {
-                    push_state(
-                        "error",
-                        Some(&user_str),
-                        Some(&host_str),
-                        None,
-                        Some(&format!("auth setup failed: {error:#}")),
-                        Vec::new(),
-                    );
-                    shared.finish(attempt_id);
-                    return;
-                }
-            }
+            Some(password)
+        }
+    };
+
+    // Short-lived askpass for bootstrap + find_koma + session list.
+    let auth = match password
+        .as_ref()
+        .map(|p| SshAuth::from_password(p.clone()))
+        .transpose()
+    {
+        Ok(auth) => auth,
+        Err(error) => {
+            push_state(
+                "error",
+                Some(&user_str),
+                Some(&host_str),
+                None,
+                Some(&format!("auth setup failed: {error:#}")),
+                Vec::new(),
+            );
+            shared.finish(attempt_id);
+            return;
         }
     };
 
@@ -289,19 +392,6 @@ fn remote_connect_worker(
         return;
     }
 
-    let session_id = uuid::Uuid::new_v4().to_string();
-    push_state(
-        "connecting",
-        Some(&user_str),
-        Some(&host_str),
-        None,
-        None,
-        Vec::new(),
-    );
-    if is_cancelled() {
-        shared.finish(attempt_id);
-        return;
-    }
     let koma_path = match ssh::find_koma(&target, auth_ref) {
         Ok(path) => path,
         Err(error) => {
@@ -317,18 +407,147 @@ fn remote_connect_worker(
             return;
         }
     };
+    if is_cancelled() {
+        shared.finish(attempt_id);
+        return;
+    }
+
+    let sessions = crate::remote::sessions::list_sessions_over_ssh(&target, auth_ref)
+        .map(|s| sessions_to_json(&s))
+        .unwrap_or_default();
+    // Drop askpass before retaining the password-only ctx.
+    drop(auth);
+    if is_cancelled() {
+        shared.finish(attempt_id);
+        return;
+    }
+
+    // Host is live — no session UUID, no `ssh::connect`. Session attach is a
+    // separate user action (pick existing id or open a remote folder).
+    push_state(
+        "ready",
+        Some(&user_str),
+        Some(&host_str),
+        None,
+        None,
+        sessions.clone(),
+    );
+
+    if is_cancelled() {
+        shared.finish(attempt_id);
+        return;
+    }
+    let mut hosts = crate::remote::hosts::load_hosts();
+    if let Some(host) = hosts.hosts.iter_mut().find(|host| host.id == host_id) {
+        host.touch_last_connected();
+        let _ = crate::remote::hosts::save_hosts(&hosts);
+    }
+    if is_cancelled() {
+        shared.finish(attempt_id);
+        return;
+    }
+    shared.finish(attempt_id);
+    let _ = ready_tx.send(ReadyRemote {
+        attempt_id,
+        ctx: RemoteCtx {
+            host_id,
+            target,
+            password,
+            koma_path,
+        },
+        sessions,
+    });
+}
+
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+fn remote_session_worker(
+    attempt_id: u64,
+    ctx: RemoteCtx,
+    session_id: String,
+    cwd: Option<String>,
+    state_tx: Sender<RemoteStateUpdate>,
+    connected_tx: Sender<ActiveRemote>,
+    cancelled: Arc<AtomicBool>,
+    shared: Arc<RemoteSessionShared>,
+    handle: tokio::runtime::Handle,
+) {
+    use crate::remote::ssh;
+
+    let is_cancelled = || cancelled.load(Ordering::Acquire) || !shared.is_current(attempt_id);
+    let user_str = ctx.target.user.clone();
+    let host_str = ctx.target.host.clone();
+    let host_id = ctx.host_id.clone();
+    let push_state = {
+        let host_id = host_id.clone();
+        let state_tx = state_tx.clone();
+        move |state: &str,
+              user: Option<&str>,
+              host: Option<&str>,
+              session_id: Option<&str>,
+              error: Option<&str>,
+              sessions: Vec<serde_json::Value>| {
+            if !is_cancelled() {
+                let _ = state_tx.send(RemoteStateUpdate {
+                    attempt_id,
+                    state: state.to_string(),
+                    host_id: Some(host_id.clone()),
+                    user: user.map(str::to_string),
+                    host: host.map(str::to_string),
+                    session_id: session_id.map(str::to_string),
+                    error: error.map(str::to_string),
+                    sessions,
+                });
+            }
+        }
+    };
+
+    push_state(
+        "connecting",
+        Some(&user_str),
+        Some(&host_str),
+        Some(&session_id),
+        None,
+        Vec::new(),
+    );
+    if is_cancelled() {
+        shared.finish(attempt_id);
+        return;
+    }
+
+    let auth = match ctx.make_auth() {
+        Ok(auth) => auth,
+        Err(error) => {
+            push_state(
+                "error",
+                Some(&user_str),
+                Some(&host_str),
+                Some(&session_id),
+                Some(&format!("auth setup failed: {error:#}")),
+                Vec::new(),
+            );
+            shared.finish(attempt_id);
+            return;
+        }
+    };
+    let auth_ref = auth.as_ref();
     // `ssh::connect` uses tokio::process::Command::spawn synchronously, so the
     // worker thread must have an entered runtime while spawning SSH.
     let ssh_session = {
         let _rt_ctx = handle.enter();
-        match ssh::connect(&target, &session_id, auth_ref, None, &koma_path) {
+        match ssh::connect(
+            &ctx.target,
+            &session_id,
+            auth_ref,
+            cwd.as_deref(),
+            &ctx.koma_path,
+        ) {
             Ok(session) => session,
             Err(error) => {
                 push_state(
                     "error",
                     Some(&user_str),
                     Some(&host_str),
-                    None,
+                    Some(&session_id),
                     Some(&format!("ssh connect failed: {error:#}")),
                     Vec::new(),
                 );
@@ -361,7 +580,7 @@ fn remote_connect_worker(
                 "error",
                 Some(&user_str),
                 Some(&host_str),
-                None,
+                Some(&session_id),
                 Some(&format!("bridge failed: {error:#}")),
                 Vec::new(),
             );
@@ -375,21 +594,8 @@ fn remote_connect_worker(
         return;
     }
 
-    let sessions = crate::remote::sessions::list_sessions_over_ssh(&target, auth_ref)
-        .map(|sessions| {
-            sessions
-                .iter()
-                .map(|session| {
-                    serde_json::json!({
-                        "sessionId": session.session_id,
-                        "name": session.name,
-                        "pwd": session.pwd,
-                        "working": session.working,
-                        "isForeground": session.is_foreground
-                    })
-                })
-                .collect()
-        })
+    let sessions = crate::remote::sessions::list_sessions_over_ssh(&ctx.target, auth_ref)
+        .map(|s| sessions_to_json(&s))
         .unwrap_or_default();
     if is_cancelled() {
         let _ = handle.block_on(async { child.kill().await });
@@ -410,21 +616,12 @@ fn remote_connect_worker(
         shared.finish(attempt_id);
         return;
     }
-    let mut hosts = crate::remote::hosts::load_hosts();
-    if let Some(host) = hosts.hosts.iter_mut().find(|host| host.id == host_id) {
-        host.touch_last_connected();
-        let _ = crate::remote::hosts::save_hosts(&hosts);
-    }
-    if is_cancelled() {
-        let _ = handle.block_on(async { child.kill().await });
-        shared.finish(attempt_id);
-        return;
-    }
     shared.finish(attempt_id);
     if let Err(error) = connected_tx.send(ActiveRemote {
         attempt_id,
         connection,
         ssh_child: child,
+        ctx,
     }) {
         let mut active = error.0;
         let _ = handle.block_on(async { active.ssh_child.kill().await });
