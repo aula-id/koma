@@ -23,8 +23,10 @@ const emptyDraft = (): RemoteHostDraft => ({
   keyPath: '',
 })
 
-/** States where the connection is in-progress (not idle). */
+/** States where the connection is in-progress (not idle, not ready hub). */
 const ACTIVE_STATES = ['resolving', 'auth_required', 'bootstrapping', 'connecting']
+/** Host is live (ctx retained) — green dot / disconnect available. */
+const LIVE_STATES = ['ready', 'connecting', 'connected']
 
 export function RemotePanel() {
   const remoteHosts = useKoma((s) => s.remoteHosts)
@@ -69,9 +71,14 @@ export function RemotePanel() {
     })
   }
   const isBusy = ACTIVE_STATES.includes(remoteState.state)
+  const isHostLive = (hostId: string) =>
+    remoteState.hostId === hostId && LIVE_STATES.includes(remoteState.state)
   const handleConnect = (hostId: string) => {
-    if (isBusy) return
+    if (isBusy || remoteState.state === 'ready' || remoteState.state === 'connected') return
     push({ r: 'ConnectRemoteHost', hostId })
+  }
+  const handleDisconnect = () => {
+    push({ r: 'DisconnectRemoteHost', hostId: remoteState.hostId ?? '' })
   }
   const confirmDelete = (hostId: string) => {
     push({ r: 'DeleteRemoteHost', id: hostId })
@@ -268,13 +275,21 @@ export function RemotePanel() {
               <div className="flex items-center gap-2 min-w-0">
                 <span
                   className={`inline-block h-2.5 w-2.5 flex-none rounded-full ${
-                    host.connected
+                    isHostLive(host.id) || host.connected
                       ? 'bg-koma-success'
                       : host.lastConnected
                         ? 'bg-koma-warn'
                         : 'bg-koma-dim'
                   }`}
-                  title={formatLastSeen(host.lastConnected)}
+                  title={
+                    isHostLive(host.id)
+                      ? remoteState.state === 'ready'
+                        ? 'Host ready'
+                        : remoteState.state === 'connected'
+                          ? 'Session attached'
+                          : 'Connecting…'
+                      : formatLastSeen(host.lastConnected)
+                  }
                 />
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
@@ -286,14 +301,24 @@ export function RemotePanel() {
                 </div>
               </div>
               <div className="flex items-center gap-1">
-                <button
-                  disabled={isBusy}
-                  className="p-1 text-koma-accent hover:text-koma-fg disabled:cursor-not-allowed disabled:opacity-40"
-                  title="Connect"
-                  onClick={() => handleConnect(host.id)}
-                >
-                  <Link2 size={14} />
-                </button>
+                {isHostLive(host.id) ? (
+                  <button
+                    className="rounded border border-koma-border px-2 py-0.5 text-[11px] text-koma-fg opacity-80 hover:bg-koma-hover hover:opacity-100"
+                    title="Disconnect"
+                    onClick={handleDisconnect}
+                  >
+                    Disconnect
+                  </button>
+                ) : (
+                  <button
+                    disabled={isBusy || remoteState.state === 'ready' || remoteState.state === 'connected'}
+                    className="p-1 text-koma-accent hover:text-koma-fg disabled:cursor-not-allowed disabled:opacity-40"
+                    title="Connect"
+                    onClick={() => handleConnect(host.id)}
+                  >
+                    <Link2 size={14} />
+                  </button>
+                )}
                 <button
                   disabled={isBusy}
                   className="p-1 text-koma-dim hover:text-koma-fg disabled:cursor-not-allowed disabled:opacity-40"

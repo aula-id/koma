@@ -691,9 +691,11 @@ pub(super) enum PushEnvelope {
     // ─── Remote host connect/disconnect ──────────────────────────────────────
     /// Remote connection state pushed to React. `state` is one of:
     /// `"disconnected"`, `"resolving"`, `"auth_required"`, `"bootstrapping"`,
-    /// `"connecting"`, `"connected"`, `"error"`. Carries host identity + optional
-    /// `sessionId` (set once connected) + optional `error` (set on `"error"`) +
-    /// optional `sessions` (list of live remote sessions).
+    /// `"ready"`, `"connecting"`, `"connected"`, `"error"`.
+    /// `ready` = host authenticated, no session attached yet (remote hub).
+    /// `connected` = SSH session child live. Carries host identity + optional
+    /// `sessionId` (set once a session is attached) + optional `error` (set on
+    /// `"error"`) + optional `sessions` (list of live remote sessions).
     #[serde(rename_all = "camelCase")]
     RemoteState {
         state: String,
@@ -1037,7 +1039,7 @@ pub(super) fn push_oauth_state(
 
 /// Emit a one-shot `RemoteState` envelope for the GUI remote-host panel.
 /// `state` is one of: `"disconnected"`, `"resolving"`, `"auth_required"`,
-/// `"bootstrapping"`, `"connecting"`, `"connected"`, `"error"`.
+/// `"bootstrapping"`, `"ready"`, `"connecting"`, `"connected"`, `"error"`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn push_remote_state(
     push: &dyn Fn(String),
