@@ -3,7 +3,11 @@ use std::collections::VecDeque;
 
 use super::*;
 
-fn run_bootstrap(outputs: &[&str], installs: &Cell<usize>) -> Result<bool> {
+fn run_bootstrap(
+    outputs: &[&str],
+    installs: &Cell<usize>,
+    confirm: impl FnMut(&str) -> Result<bool>,
+) -> Result<bool> {
     let mut outputs: VecDeque<String> =
         outputs.iter().map(|value| (*value).to_string()).collect();
     ensure_compatible_with(
@@ -18,34 +22,59 @@ fn run_bootstrap(outputs: &[&str], installs: &Cell<usize>) -> Result<bool> {
             Ok(())
         },
         |_| {},
+        confirm,
     )
 }
 
 #[test]
 fn matching_version_skips_install() {
     let installs = Cell::new(0);
-    assert!(!run_bootstrap(&["koma 0.3.16"], &installs).unwrap());
+    assert!(!run_bootstrap(&["koma 0.3.16"], &installs, |_| Ok(true)).unwrap());
     assert_eq!(installs.get(), 0);
 }
 
 #[test]
-fn missing_koma_installs() {
+fn missing_koma_installs_without_confirm() {
     let installs = Cell::new(0);
-    assert!(run_bootstrap(&["MISSING", "koma 0.3.16"], &installs).unwrap());
+    let confirmed = Cell::new(0);
+    assert!(run_bootstrap(&["MISSING", "koma 0.3.16"], &installs, |_| {
+        confirmed.set(confirmed.get() + 1);
+        Ok(true)
+    })
+    .unwrap());
     assert_eq!(installs.get(), 1);
+    assert_eq!(confirmed.get(), 0, "missing install must not prompt");
 }
 
 #[test]
-fn mismatched_version_installs() {
+fn mismatched_version_installs_when_confirmed() {
     let installs = Cell::new(0);
-    assert!(run_bootstrap(&["koma 0.3.15", "koma 0.3.16"], &installs).unwrap());
+    let confirmed = Cell::new(0);
+    assert!(run_bootstrap(&["koma 0.3.15", "koma 0.3.16"], &installs, |obs| {
+        assert_eq!(obs, "0.3.15");
+        confirmed.set(confirmed.get() + 1);
+        Ok(true)
+    })
+    .unwrap());
     assert_eq!(installs.get(), 1);
+    assert_eq!(confirmed.get(), 1);
+}
+
+#[test]
+fn mismatched_version_declined_skips_install() {
+    let installs = Cell::new(0);
+    let err = run_bootstrap(&["koma 0.3.15"], &installs, |_| Ok(false))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(installs.get(), 0);
+    assert!(err.contains("update declined"));
+    assert!(err.contains("0.3.15"));
 }
 
 #[test]
 fn post_install_mismatch_errors() {
     let installs = Cell::new(0);
-    let error = run_bootstrap(&["koma 0.3.15", "koma 0.3.14"], &installs)
+    let error = run_bootstrap(&["koma 0.3.15", "koma 0.3.14"], &installs, |_| Ok(true))
         .unwrap_err()
         .to_string();
     assert_eq!(installs.get(), 1);
@@ -75,6 +104,7 @@ fn query_error_treated_as_missing_triggers_install() {
             Ok(())
         },
         |_| {},
+        |_| Ok(true),
     );
     assert!(result.unwrap());
     assert_eq!(installs.get(), 1);
@@ -100,6 +130,7 @@ fn query_error_post_install_also_errors_propagates() {
             Ok(())
         },
         |_| {},
+        |_| Ok(true),
     );
     let err = result.unwrap_err().to_string();
     assert!(err.contains("version mismatch after install"));
