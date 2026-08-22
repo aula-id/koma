@@ -69,6 +69,16 @@ impl fmt::Display for RemoteVersion {
     }
 }
 
+/// Result of the remote version probe (before any install).
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CheckOutcome {
+    Compatible,
+    /// Remote binary missing / unreadable — install without asking.
+    NeedsInstallMissing,
+    /// Remote version differs from local — ask before overwriting.
+    NeedsUpdate { observed: String },
+}
+
 fn parse_semantic_version(value: &str) -> Option<SemanticVersion> {
     let (without_build, build) = value
         .split_once('+')
@@ -141,12 +151,31 @@ fn parse_version_output(output: &str) -> RemoteVersion {
     )
 }
 
-fn ensure_compatible_with<Q, I, P>(
-    local: &str,
-    mut query: Q,
-    mut install: I,
-    mut progress: P,
-) -> Result<bool>
+fn check_remote_version<Q>(local: &str, mut query: Q) -> Result<CheckOutcome>
+where
+    Q: FnMut() -> Result<String>,
+{
+    let expected = parse_semantic_version(local).ok_or_else(|| {
+        anyhow::anyhow!("local Koma version is not valid semantic version: {local:?}")
+    })?;
+
+    // Treat a probe failure (SSH error, broken binary, QEMU/binfmt, etc.) as
+    // "missing" so we fall through to the install path instead of aborting.
+    let observed = match query() {
+        Ok(output) => parse_version_output(&output),
+        Err(_) => RemoteVersion::Missing,
+    };
+
+    match observed {
+        RemoteVersion::Version(v) if v == expected => Ok(CheckOutcome::Compatible),
+        RemoteVersion::Missing => Ok(CheckOutcome::NeedsInstallMissing),
+        other => Ok(CheckOutcome::NeedsUpdate {
+            observed: other.to_string(),
+        }),
+    }
+}
+
+fn install_and_verify<Q, I, P>(local: &str, mut query: Q, mut install: I, mut progress: P) -> Result<()>
 where
     Q: FnMut() -> Result<String>,
     I: FnMut() -> Result<()>,
@@ -155,19 +184,6 @@ where
     let expected = parse_semantic_version(local).ok_or_else(|| {
         anyhow::anyhow!("local Koma version is not valid semantic version: {local:?}")
     })?;
-
-    progress(BootstrapStage::Checking);
-
-    // Treat a probe failure (SSH error, broken binary, QEMU/binfmt, etc.) as
-    // "missing" so we fall through to the install path instead of aborting.
-    let observed = match query() {
-        Ok(output) => parse_version_output(&output),
-        Err(_) => RemoteVersion::Missing,
-    };
-    if observed == RemoteVersion::Version(expected.clone()) {
-        progress(BootstrapStage::Ready);
-        return Ok(false);
-    }
 
     progress(BootstrapStage::Installing);
     install()?;
@@ -183,13 +199,53 @@ where
         );
     }
     progress(BootstrapStage::Ready);
-    Ok(true)
+    Ok(())
+}
+
+/// Core bootstrap: check → optional confirm on mismatch → install → verify.
+///
+/// `confirm_update(observed)` is only called when a remote binary exists but
+/// does not match `local`. Return `Ok(true)` to force-install, `Ok(false)` to
+/// abort cleanly, or `Err` for a hard failure.
+fn ensure_compatible_with<Q, I, P, C>(
+    local: &str,
+    mut query: Q,
+    install: I,
+    mut progress: P,
+    mut confirm_update: C,
+) -> Result<bool>
+where
+    Q: FnMut() -> Result<String>,
+    I: FnMut() -> Result<()>,
+    P: FnMut(BootstrapStage),
+    C: FnMut(&str) -> Result<bool>,
+{
+    progress(BootstrapStage::Checking);
+    match check_remote_version(local, &mut query)? {
+        CheckOutcome::Compatible => {
+            progress(BootstrapStage::Ready);
+            Ok(false)
+        }
+        CheckOutcome::NeedsInstallMissing => {
+            install_and_verify(local, query, install, progress)?;
+            Ok(true)
+        }
+        CheckOutcome::NeedsUpdate { observed } => {
+            if !confirm_update(&observed)? {
+                anyhow::bail!(
+                    "remote update declined (local {local}, remote {observed})"
+                );
+            }
+            install_and_verify(local, query, install, progress)?;
+            Ok(true)
+        }
+    }
 }
 
 /// Ensure the remote Koma is installed and exactly matches this running client.
 ///
-/// Returns `true` when the installer was run and `false` when the existing
-/// remote version was already compatible.
+/// Headless / GUI path: version mismatch auto-accepts the force update (no TUI).
+/// Returns `true` when the installer was run and `false` when already compatible.
 pub(crate) fn ensure_koma_compatible(
     target: &RemoteTarget,
     auth: Option<&SshAuth>,
@@ -199,24 +255,75 @@ pub(crate) fn ensure_koma_compatible(
         || query_remote_version(target, auth),
         || install_koma(target, auth),
         |_| {},
+        |_| Ok(true),
     )
 }
 
 /// Same as [`ensure_koma_compatible`], but spins a braille timeline on `terminal`
-/// while the SSH probe / install runs on a worker thread (keeps the alt-screen).
+/// and prompts **update remote? [y/n]** when the remote version differs.
 pub(crate) fn ensure_koma_compatible_animated(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     target: &RemoteTarget,
     auth: Option<&SshAuth>,
     host_label: &str,
 ) -> Result<bool> {
+    let local = env!("CARGO_PKG_VERSION");
+    let cfg = crate::model::app_config::AppConfig::load();
+    let palette = crate::view::theme::palette(&cfg);
+
+    // --- Phase 1: version check (worker + spinner) ---
+    let check = run_stage_worker(terminal, host_label, &palette, BootstrapStage::Checking, {
+        let target = target.clone();
+        let password = auth.map(|a| a.password().to_string());
+        move || {
+            let auth = password.map(SshAuth::new).transpose()?;
+            check_remote_version(local, || query_remote_version(&target, auth.as_ref()))
+        }
+    })?;
+
+    match check {
+        CheckOutcome::Compatible => {
+            paint_stage(
+                terminal,
+                host_label,
+                &palette,
+                BootstrapStage::Ready,
+                Instant::now(),
+                0,
+            );
+            Ok(false)
+        }
+        CheckOutcome::NeedsInstallMissing => {
+            run_install_phase(terminal, target, auth, host_label, &palette, local)?;
+            Ok(true)
+        }
+        CheckOutcome::NeedsUpdate { observed } => {
+            let accepted = prompt_update_remote(terminal, host_label, local, &observed)?;
+            if !accepted {
+                anyhow::bail!("remote update declined (local {local}, remote {observed})");
+            }
+            run_install_phase(terminal, target, auth, host_label, &palette, local)?;
+            Ok(true)
+        }
+    }
+}
+
+fn run_install_phase(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    target: &RemoteTarget,
+    auth: Option<&SshAuth>,
+    host_label: &str,
+    palette: &crate::view::theme::Palette,
+    local: &str,
+) -> Result<()> {
+    let (tx, rx) = mpsc::channel::<BootstrapStage>();
     let target = target.clone();
     let password = auth.map(|a| a.password().to_string());
-    let (tx, rx) = mpsc::channel::<BootstrapStage>();
+    let local = local.to_string();
     let worker = std::thread::spawn(move || {
         let auth = password.map(SshAuth::new).transpose()?;
-        ensure_compatible_with(
-            env!("CARGO_PKG_VERSION"),
+        install_and_verify(
+            &local,
             || query_remote_version(&target, auth.as_ref()),
             || install_koma(&target, auth.as_ref()),
             |stage| {
@@ -225,11 +332,46 @@ pub(crate) fn ensure_koma_compatible_animated(
         )
     });
 
-    let cfg = crate::model::app_config::AppConfig::load();
-    let palette = crate::view::theme::palette(&cfg);
-    let mut frame: u64 = 0;
-    let mut stage = BootstrapStage::Checking;
+    spin_until_done(terminal, host_label, palette, BootstrapStage::Installing, &rx, &worker)?;
+    match worker.join() {
+        Ok(res) => res,
+        Err(_) => Err(anyhow::anyhow!("remote bootstrap thread panicked")),
+    }
+}
+
+fn run_stage_worker<T, F>(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    host_label: &str,
+    palette: &crate::view::theme::Palette,
+    initial: BootstrapStage,
+    work: F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel::<BootstrapStage>();
+    let worker = std::thread::spawn(move || {
+        let _ = tx.send(initial);
+        work()
+    });
+    spin_until_done(terminal, host_label, palette, initial, &rx, &worker)?;
+    match worker.join() {
+        Ok(res) => res,
+        Err(_) => Err(anyhow::anyhow!("remote bootstrap thread panicked")),
+    }
+}
+
+fn spin_until_done<T>(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    host_label: &str,
+    palette: &crate::view::theme::Palette,
+    mut stage: BootstrapStage,
+    rx: &mpsc::Receiver<BootstrapStage>,
+    worker: &std::thread::JoinHandle<T>,
+) -> Result<()> {
     let started = Instant::now();
+    let mut frame: u64 = 0;
     const FRAME: Duration = Duration::from_millis(80);
 
     while !worker.is_finished() {
@@ -237,40 +379,135 @@ pub(crate) fn ensure_koma_compatible_animated(
         while let Ok(next) = rx.try_recv() {
             stage = next;
         }
-        let _ = terminal.draw(|f| {
-            crate::view::loading::draw_remote_bootstrap(
-                f,
-                frame,
-                &palette,
-                host_label,
-                stage.label(),
-                started.elapsed(),
-            )
-        });
+        paint_stage(terminal, host_label, palette, stage, started, frame);
         frame = frame.wrapping_add(1);
         if let Some(rem) = FRAME.checked_sub(tick.elapsed()) {
             std::thread::sleep(rem);
         }
     }
-
-    // Drain any late stage updates before joining.
     while let Ok(next) = rx.try_recv() {
         stage = next;
     }
+    paint_stage(terminal, host_label, palette, stage, started, frame);
+    Ok(())
+}
+
+fn paint_stage(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    host_label: &str,
+    palette: &crate::view::theme::Palette,
+    stage: BootstrapStage,
+    started: Instant,
+    frame: u64,
+) {
     let _ = terminal.draw(|f| {
         crate::view::loading::draw_remote_bootstrap(
             f,
             frame,
-            &palette,
+            palette,
             host_label,
             stage.label(),
             started.elapsed(),
         )
     });
+}
 
-    match worker.join() {
-        Ok(res) => res,
-        Err(_) => Err(anyhow::anyhow!("remote bootstrap thread panicked")),
+/// In-TUI yes/no: force-update the remote binary to match this client.
+fn prompt_update_remote(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    host_label: &str,
+    local: &str,
+    observed: &str,
+) -> Result<bool> {
+    use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+    use ratatui::layout::{Alignment, Constraint, Direction, Layout};
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::Paragraph;
+
+    let palette = crate::view::theme::palette(&crate::model::app_config::AppConfig::load());
+    let detail = format!("local {local}  ·  remote {observed}");
+
+    loop {
+        terminal.draw(|frame| {
+            let area = frame.area();
+            crate::view::clear_and_fill(frame, area, palette.bg);
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Percentage(30),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Min(0),
+                ])
+                .split(area);
+
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "koma remote",
+                    Style::default()
+                        .fg(palette.accent)
+                        .bg(palette.bg)
+                        .add_modifier(Modifier::BOLD),
+                )))
+                .alignment(Alignment::Center),
+                chunks[1],
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    host_label,
+                    Style::default().fg(palette.dim).bg(palette.bg),
+                )))
+                .alignment(Alignment::Center),
+                chunks[2],
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "remote version does not match this client",
+                    Style::default().fg(palette.fg).bg(palette.bg),
+                )))
+                .alignment(Alignment::Center),
+                chunks[3],
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    detail.clone(),
+                    Style::default().fg(palette.dim).bg(palette.bg),
+                )))
+                .alignment(Alignment::Center),
+                chunks[4],
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "update remote?  [y] yes   [n] no",
+                    Style::default().fg(palette.accent).bg(palette.bg),
+                )))
+                .alignment(Alignment::Center),
+                chunks[6],
+            );
+        })?;
+
+        if !event::poll(Duration::from_millis(100))? {
+            continue;
+        }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        match key.code {
+            KeyCode::Char('y' | 'Y') | KeyCode::Enter => return Ok(true),
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => return Ok(false),
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return Ok(false);
+            }
+            _ => {}
+        }
     }
 }
 
