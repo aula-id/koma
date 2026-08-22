@@ -67,7 +67,7 @@ function Picker({
 }) {
   return (
     <>
-      <div className="flex-1 overflow-auto p-3">
+      <div className="flex-1 overflow-auto p-3" data-tour="oauth-picker">
         <div className="mb-2 text-[11px] text-koma-fg opacity-50">Choose a provider to connect</div>
         {providers.length === 0 ? (
           <div className="px-1 py-2 text-[12px] text-koma-fg opacity-35">No OAuth providers available</div>
@@ -76,6 +76,7 @@ function Picker({
             {providers.map((p) => (
               <button
                 key={p.id}
+                data-tour={`oauth-provider-${p.id}`}
                 onClick={() => onPick(p.id)}
                 className="flex items-center justify-between rounded border border-koma-border px-3 py-2 text-[13px] text-koma-fg transition-colors hover:bg-koma-hover"
               >
@@ -198,7 +199,10 @@ export function OAuthConnect({ onDone }: Props) {
 
   if (oauth.phase === 'starting') {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+      <div
+        className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center"
+        data-tour="oauth-starting"
+      >
         <BrailleSpinner size={20} className="text-koma-accent" />
         <span className="text-[12px] text-koma-fg opacity-60">starting…</span>
       </div>
@@ -210,7 +214,7 @@ export function OAuthConnect({ onDone }: Props) {
   if (oauth.phase === 'waiting_url') {
     return (
       <>
-        <div className="flex-1 overflow-auto p-3">
+        <div className="flex-1 overflow-auto p-3" data-tour="oauth-waiting-url">
           <p className="mb-3 text-[12px] text-koma-fg opacity-70">
             Your browser should have opened. If it didn't, open this URL:
           </p>

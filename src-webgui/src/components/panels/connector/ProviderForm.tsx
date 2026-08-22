@@ -62,7 +62,7 @@ export function ProviderForm({
 
   if (step === 'pick') {
     return (
-      <div className="flex-1 overflow-auto py-1">
+      <div className="flex-1 overflow-auto py-1" data-tour="provider-form-pick">
         <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-50">
           Choose a provider
         </div>
@@ -71,6 +71,7 @@ export function ProviderForm({
             <button
               key={p.name}
               type="button"
+              data-tour={`provider-preset-${p.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
               onClick={() => pickPreset(p.name, p.endpoint)}
               className="flex items-center gap-2 rounded px-2 py-1.5 text-left transition-colors hover:bg-koma-hover"
             >
@@ -84,6 +85,7 @@ export function ProviderForm({
           ))}
           <button
             type="button"
+            data-tour="provider-preset-custom"
             onClick={() => setStep('form')}
             className="mt-1 flex items-center gap-2 rounded border border-dashed border-koma-border px-2 py-1.5 text-left transition-colors hover:bg-koma-hover"
           >
@@ -101,15 +103,32 @@ export function ProviderForm({
 
   return (
     <>
-      <div className="flex-1 overflow-auto py-1">
+      <div className="flex-1 overflow-auto py-1" data-tour="provider-form">
         <Field label="Name">
-          <TextInput value={d.name} autoFocus placeholder="e.g. OpenRouter" onChange={(e) => patch({ name: e.target.value })} />
+          <TextInput
+            data-tour="provider-name"
+            value={d.name}
+            autoFocus
+            placeholder="e.g. OpenRouter"
+            onChange={(e) => patch({ name: e.target.value })}
+          />
         </Field>
         <Field label="Endpoint (base URL)">
-          <TextInput value={d.endpoint} placeholder="https://…/v1" onChange={(e) => patch({ endpoint: e.target.value })} />
+          <TextInput
+            data-tour="provider-endpoint"
+            value={d.endpoint}
+            placeholder="https://…/v1"
+            onChange={(e) => patch({ endpoint: e.target.value })}
+          />
         </Field>
         <Field label="API key">
-          <TextInput value={apiKey} type="password" placeholder={keyPlaceholder} onChange={(e) => setApiKey(e.target.value)} />
+          <TextInput
+            data-tour="provider-api-key"
+            value={apiKey}
+            type="password"
+            placeholder={keyPlaceholder}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
         </Field>
       </div>
       <FormActions

@@ -139,25 +139,29 @@ export function ModelForm({
 
   return (
     <>
-      <div className="flex-1 overflow-auto py-1">
+      <div className="flex-1 overflow-auto py-1" data-tour="model-form">
         <Field label="Name">
-          <TextInput value={d.name} autoFocus placeholder="e.g. Opus main" onChange={(e) => patch({ name: e.target.value })} />
+          <TextInput data-tour="model-name" value={d.name} autoFocus placeholder="e.g. Opus main" onChange={(e) => patch({ name: e.target.value })} />
         </Field>
         <Field label="Provider">
+          <div data-tour="model-provider">
           <Select
             value={d.provider}
             options={providerOptions}
             onChange={(v) => patch({ provider: v })}
             placeholder={providerOptions.length ? 'Choose a provider' : 'Add a provider first'}
           />
+          </div>
         </Field>
         <Field label="Model id">
+          <div data-tour="model-id">
           <Combobox
             value={d.modelId}
             onChange={(v) => patch({ modelId: v })}
             options={modelList}
             placeholder="Search or type a model id…"
           />
+          </div>
         </Field>
         {showRoute && (
           <Field label="Route">
