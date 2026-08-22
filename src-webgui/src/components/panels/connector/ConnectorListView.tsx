@@ -123,12 +123,15 @@ export function ConnectorListView({
   const realModels = models.filter((m) => !m.free)
 
   return (
-    <div className="absolute inset-0 flex min-h-0 flex-col overflow-hidden bg-koma-panel">
+    <div
+      className="absolute inset-0 flex min-h-0 flex-col overflow-hidden bg-koma-panel"
+      data-tour="connector-list"
+    >
       <AccordionSection
         title="Providers"
         open={open.providers}
         onToggle={() => setOpen((s) => ({ ...s, providers: !s.providers }))}
-        action={<AddBtn label="Add provider" onClick={onAddProvider} />}
+        action={<AddBtn label="Add provider" tourId="connector-add-provider" onClick={onAddProvider} />}
       >
         {realProviders.length === 0 && <Empty>No providers</Empty>}
         {realProviders.map((p) => (
@@ -151,7 +154,7 @@ export function ConnectorListView({
         title="OAuth"
         open={open.oauth}
         onToggle={() => setOpen((s) => ({ ...s, oauth: !s.oauth }))}
-        action={<AddBtn label="Connect account" onClick={onConnectOAuth} />}
+        action={<AddBtn label="Connect account" tourId="connector-add-oauth" onClick={onConnectOAuth} />}
       >
         {conns.length === 0 && <Empty>No connections</Empty>}
         {conns.map((c) => (
@@ -171,7 +174,7 @@ export function ConnectorListView({
         title="Models"
         open={open.models}
         onToggle={() => setOpen((s) => ({ ...s, models: !s.models }))}
-        action={<AddBtn label="Add model" onClick={onAddModel} />}
+        action={<AddBtn label="Add model" tourId="connector-add-model" onClick={onAddModel} />}
       >
         {realModels.length === 0 && <Empty>No models</Empty>}
         {realModels.map((m) => (
