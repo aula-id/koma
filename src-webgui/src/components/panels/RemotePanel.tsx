@@ -32,6 +32,7 @@ export function RemotePanel() {
   const remoteHosts = useKoma((s) => s.remoteHosts)
   const remoteState = useKoma((s) => s.remoteState)
   const push = useKoma((s) => s.req)
+  const detachSession = useKoma((s) => s.detachSession)
   const [view, setView] = useState<RemotePanelView>({ kind: 'list' })
   const [query, setQuery] = useState('')
   const [editId, setEditId] = useState<string | null>(null)
@@ -78,6 +79,9 @@ export function RemotePanel() {
     push({ r: 'ConnectRemoteHost', hostId })
   }
   const handleDisconnect = () => {
+    // Optimistic: drop the dead session view immediately so StartScreen shows
+    // while the host tears down the SSH bridge (RemoteState also detaches).
+    if (useKoma.getState().session.id != null) detachSession()
     push({ r: 'DisconnectRemoteHost', hostId: remoteState.hostId ?? '' })
   }
   const confirmDelete = (hostId: string) => {
