@@ -4217,11 +4217,18 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         break
       case 'RemotePathPicker':
-        set(() => ({
+        // Keep the previous dir list while state=listing (host sends dirs:[] on
+        // navigate). Clearing would collapse the picker height and blink.
+        set((s) => ({
           remotePath: {
             state: env.state,
-            path: env.path ?? '',
-            dirs: env.dirs ?? [],
+            path: env.path ?? s.remotePath.path,
+            dirs:
+              env.dirs != null && env.dirs.length > 0
+                ? env.dirs
+                : env.state === 'listing'
+                  ? s.remotePath.dirs
+                  : (env.dirs ?? []),
             error: env.error ?? null,
           },
         }))
@@ -5057,11 +5064,14 @@ export const useKoma = create<KomaState>((set, get) => ({
       return { ui: { ...s.ui, tabs, activeTabId: id } }
     })
     // Send TerminalCreate to the host if this PTY hasn't been created yet.
+    // When a session is attached, pass its primary workdir so remote shells
+    // open there (local shells use it as the PTY cwd too).
     const created = (globalThis as any).__terminalsCreated ?? new Set<string>()
     if (!created.has(terminalId)) {
       created.add(terminalId)
       ;(globalThis as any).__terminalsCreated = created
-      get().req({ r: 'TerminalCreate', id: terminalId })
+      const cwd = get().settingsValues?.workdir?.[0] ?? undefined
+      get().req({ r: 'TerminalCreate', id: terminalId, cwd })
     }
   },
   closeTab: (id, opts) => {
