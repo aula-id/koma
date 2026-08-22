@@ -236,6 +236,7 @@ html, body, #root {
   color: var(--koma-fg, #c8d3f5);
   background: var(--koma-bg, #0b0e14);
   z-index: 10;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 #title { opacity: 0.75; pointer-events: none; }
 #winctl { display: flex; gap: 2px; }
@@ -247,6 +248,32 @@ html, body, #root {
 }
 .win-btn:hover { background: rgba(255,255,255,0.12); }
 .win-close:hover { background: #e81123; color: #fff; }
+
+/* Remote session: paint the drag chrome with the theme accent so LOCAL vs
+   REMOTE is obvious at a glance. Text uses --koma-bg (the canvas) for contrast
+   against typical bright accents (green/cyan/etc on light or dark themes).
+   Cmdbar pills keep their panel fill so they stay readable chips on the bar.
+   macOS traffic lights keep their fixed OS colors — especially #btn-max green
+   must NOT pick up the accent fill or it collides with the expand button. */
+#titlebar.is-remote {
+  background: var(--koma-accent, #39ff14);
+  color: var(--koma-bg, #0b0e14);
+}
+#titlebar.is-remote #title {
+  opacity: 1;
+  color: var(--koma-bg, #0b0e14);
+  font-weight: 700;
+}
+#titlebar.is-remote .win-btn {
+  color: var(--koma-bg, #0b0e14);
+}
+#titlebar.is-remote .win-btn:hover {
+  background: color-mix(in srgb, var(--koma-bg, #0b0e14) 16%, transparent);
+}
+#titlebar.is-remote .win-close:hover {
+  background: #e81123;
+  color: #fff;
+}
 
 
 /* Custom edge/corner resize handles — the window is undecorated, so these
@@ -278,6 +305,21 @@ html, body, #root {
 .os-macos #btn-max   { background: #28c840; order: 2; }
 .os-macos .win-btn:hover { font-size: 9px; }
 .os-macos .win-close:hover { background: #ff5f57; color: rgba(0,0,0,0.55); }
+/* Remote accent bar must not restyle mac traffic-light discs (max is green). */
+.os-macos #titlebar.is-remote .win-btn {
+  color: rgba(0, 0, 0, 0.55);
+}
+.os-macos #titlebar.is-remote #btn-close { background: #ff5f57; }
+.os-macos #titlebar.is-remote #btn-min   { background: #febc2e; }
+.os-macos #titlebar.is-remote #btn-max   { background: #28c840; }
+.os-macos #titlebar.is-remote .win-btn:hover {
+  background: inherit;
+  font-size: 9px;
+}
+.os-macos #titlebar.is-remote .win-close:hover {
+  background: #ff5f57;
+  color: rgba(0, 0, 0, 0.55);
+}
 
 @font-face {
   font-family: 'KomaMono';
