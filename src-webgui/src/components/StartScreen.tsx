@@ -56,6 +56,7 @@ export function StartScreen() {
   const req = useKoma((s) => s.req)
   const startSwitching = useKoma((s) => s.startSwitching)
   const dyingSessions = useKoma((s) => s.dyingSessions)
+  const remoteState = useKoma((s) => s.remoteState)
   const [ref, width] = useContainerWidth<HTMLDivElement>()
   const wide = width >= 760
   // The single armed row (kill/delete confirm pill) across BOTH lists — arming
@@ -106,9 +107,16 @@ export function StartScreen() {
     startSwitching(name)
     req({ r: 'SelectSession', id })
   }
-  // No optimistic loader: the host opens a native folder picker first and only
+  // No optimistic loader: the host opens a folder picker first and only
   // attaches once a folder is confirmed (cancel would strand the loader).
-  const newSession = () => req({ r: 'NewSession' })
+  // Remote hub uses the SSH path picker instead of the local native dialog.
+  const newSession = () => {
+    if (remoteState.state === 'ready' || remoteState.state === 'connected') {
+      req({ r: 'RequestRemotePath' })
+      return
+    }
+    req({ r: 'NewSession' })
+  }
 
   const armRow = (row: ArmedRow) => {
     multi.clear()

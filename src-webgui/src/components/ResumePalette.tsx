@@ -38,6 +38,7 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
   const req = useKoma((s) => s.req)
   const startSwitching = useKoma((s) => s.startSwitching)
   const dyingSessions = useKoma((s) => s.dyingSessions)
+  const remoteState = useKoma((s) => s.remoteState)
   const [query, setQuery] = useState('')
   // The single armed row (kill/delete confirm pill) across BOTH lists — arming
   // a different row disarms whichever was armed before.
@@ -97,6 +98,12 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
   }
 
   const newSession = () => {
+    // Remote hub / attached remote: open remote path picker (not local folder dialog).
+    if (remoteState.state === 'ready' || remoteState.state === 'connected') {
+      req({ r: 'RequestRemotePath' })
+      onClose()
+      return
+    }
     // No optimistic startSwitching here: the host now opens a native folder
     // picker first (NewSession req), and only pushes switching/attaches once
     // a folder is actually confirmed. Starting the full-screen loader here

@@ -49,6 +49,9 @@ fn bootstrap_remote_attach_step(
     port: Option<u16>,
     cwd: Option<String>,
 ) -> anyhow::Result<HostStep> {
+    if session_id.is_empty() || session_id.contains('\0') {
+        anyhow::bail!("invalid session id");
+    }
     let mut target = crate::remote::parse_target(target_str)?;
     if let Some(p) = port {
         target.port = Some(p);
@@ -56,31 +59,39 @@ fn bootstrap_remote_attach_step(
     if let Some(k) = key {
         target.key = Some(k.to_string());
     }
-    // Prefer saved-host metadata (key path) when the address matches.
+    // Prefer saved-host metadata (key path + stable id for password vault).
     let hosts = crate::remote::hosts::load_hosts();
-    let host_id = hosts
-        .hosts
-        .iter()
-        .find(|h| h.address() == target_str || format!("{}@{}", h.user, h.host) == target_str)
-        .map(|h| {
-            if target.key.is_none() {
-                target.key = h.key_path.clone();
-            }
-            if target.port.is_none() && h.port != 22 {
-                target.port = Some(h.port);
-            }
-            h.id.clone()
-        })
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let matched = hosts.hosts.iter().find(|h| {
+        h.address() == target_str
+            || format!("{}@{}", h.user, h.host) == target_str
+            || (h.user == target.user
+                && h.host == target.host
+                && h.port == target.port.unwrap_or(22))
+    });
+    let host_id = if let Some(h) = matched {
+        if target.key.is_none() {
+            target.key = h.key_path.clone();
+        }
+        if target.port.is_none() && h.port != 22 {
+            target.port = Some(h.port);
+        }
+        h.id.clone()
+    } else {
+        // Fall back to address-keyed secrets lookup; do NOT mint a random id
+        // (that would never hit the password vault).
+        crate::remote::secrets::host_id_for_address(&target.user, &target.host, target.port)
+            .unwrap_or_else(|| format!("{}@{}", target.user, target.host))
+    };
 
     let password = crate::remote::secrets::get_remote_password(&host_id);
     let auth = match password.as_ref() {
         Some(pw) => Some(crate::remote::auth::SshAuth::from_password(pw.clone())?),
         None => None,
     };
-    // Ensure remote binary is present (best-effort; attach will fail clearly if not).
-    let _ = crate::remote::bootstrap::ensure_koma_compatible(&target, auth.as_ref());
-    let koma_path = crate::remote::ssh::find_koma(&target, auth.as_ref())?;
+    crate::remote::bootstrap::ensure_koma_compatible(&target, auth.as_ref())
+        .map_err(|e| anyhow::anyhow!("remote bootstrap failed: {e:#}"))?;
+    let koma_path = crate::remote::ssh::find_koma(&target, auth.as_ref())
+        .map_err(|e| anyhow::anyhow!("cannot find remote koma: {e:#}"))?;
     Ok(HostStep::RemoteAttach {
         ctx: Box::new(super::remote_ctl::RemoteCtx {
             host_id,
@@ -248,6 +259,15 @@ pub(in crate::app::runtime) fn run_host_relay(
                     "gui",
                     &format!("remote --session boot failed: {e:#}"),
                 );
+                // Surface to the webview so the second window is not a silent local hub.
+                let envelope = serde_json::json!({
+                    "k": "RemoteState",
+                    "state": "error",
+                    "error": format!("remote attach failed: {e:#}"),
+                });
+                if let Ok(json) = serde_json::to_string(&envelope) {
+                    push(json);
+                }
                 HostStep::Swapper
             }
         }
@@ -383,6 +403,33 @@ pub(super) fn spawn_remote_kill_and_refresh(
 /// Result of one off-thread remote path listing: (attempt, Ok((path, dirs)) | Err).
 type PathListReply = (u64, Result<(String, Vec<String>), String>);
 
+/// Expand `~` / `~/…` against remote `$HOME`. Absolute paths pass through.
+fn expand_remote_home(
+    target: &crate::remote::RemoteTarget,
+    auth: Option<&crate::remote::auth::SshAuth>,
+    path: &str,
+) -> String {
+    let path = path.trim();
+    if path.is_empty() || path == "~" {
+        return match crate::remote::ssh::exec_remote(target, "printf '%s' \"$HOME\"", auth) {
+            Ok(home) if !home.is_empty() => home,
+            _ => "/".to_string(),
+        };
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        let home = match crate::remote::ssh::exec_remote(target, "printf '%s' \"$HOME\"", auth) {
+            Ok(home) if !home.is_empty() => home,
+            _ => return format!("/{rest}"),
+        };
+        return format!(
+            "{}/{}",
+            home.trim_end_matches('/'),
+            rest.trim_start_matches('/')
+        );
+    }
+    path.to_string()
+}
+
 /// Off-thread `list_dirs` for the remote path picker.
 fn spawn_remote_path_list(
     tx: std::sync::mpsc::Sender<PathListReply>,
@@ -398,15 +445,7 @@ fn spawn_remote_path_list(
             .transpose()
             .ok()
             .flatten();
-        // Expand bare `~` to remote $HOME so find_koma-style paths work.
-        let list_path = if path == "~" || path.is_empty() {
-            match crate::remote::ssh::exec_remote(&target, "printf '%s' \"$HOME\"", auth.as_ref()) {
-                Ok(home) if !home.is_empty() => home,
-                Ok(_) | Err(_) => "/".to_string(),
-            }
-        } else {
-            path
-        };
+        let list_path = expand_remote_home(&target, auth.as_ref(), &path);
         let result = crate::remote::ssh::list_dirs(&target, &list_path, auth.as_ref())
             .map(|dirs| (list_path.clone(), dirs))
             .map_err(|e| format!("{e:#}"));
@@ -1679,13 +1718,15 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                 );
             }
             Ok(HostCtl::ConfirmRemotePath { path }) => {
-                // Mint a new remote session in the chosen folder.
+                // Expand ~ before attach so the remote daemon gets an absolute cwd.
+                let auth = ctx.make_auth().ok().flatten();
+                let cwd = expand_remote_home(&ctx.target, auth.as_ref(), &path);
                 let new_id = uuid::Uuid::new_v4().to_string();
                 push_switching(push, &new_id);
                 return HostStep::RemoteAttach {
                     ctx: Box::new(ctx),
                     session_id: new_id,
-                    cwd: Some(path),
+                    cwd: Some(cwd),
                 };
             }
             Ok(HostCtl::CancelRemotePath) => {
