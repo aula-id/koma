@@ -1,4 +1,4 @@
 {
-  "version": "0.3.23",
+  "version": "0.3.24",
   "message": "fix: hard-warn + error.log when Main auto-routes to koma/apple"
 }
