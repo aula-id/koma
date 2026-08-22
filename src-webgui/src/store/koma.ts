@@ -4167,6 +4167,26 @@ export const useKoma = create<KomaState>((set, get) => ({
         set(() => ({ remoteHosts: env.hosts }))
         break
       case 'RemoteState':
+        // Leaving a remote attach (disconnect / back to hub / connect bounce) must
+        // clear session.id so routes flip StartScreen — same job as detachSession
+        // after kill. Host no longer owns this GUI session once RemoteState says
+        // ready (hub, no session) or disconnected after a live remote.
+        {
+          const prev = get().remoteState
+          const hadLiveRemote =
+            prev.state === 'ready' ||
+            prev.state === 'connected' ||
+            prev.state === 'connecting' ||
+            prev.state === 'auth_required' ||
+            prev.state === 'bootstrapping' ||
+            prev.state === 'resolving'
+          const leaveToHub = env.state === 'ready' && get().session.id != null
+          const leaveToLocal =
+            env.state === 'disconnected' && hadLiveRemote && get().session.id != null
+          if (leaveToHub || leaveToLocal) {
+            get().detachSession()
+          }
+        }
         set((s) => {
           const remoteState = {
             state: env.state,

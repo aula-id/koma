@@ -84,7 +84,7 @@ export function Titlebar({ onSearch, onRename, onTerminal, overlayOpen }: Titleb
             onClick={onTerminal}
             title="New Terminal"
             aria-label="New Terminal"
-            className="pointer-events-auto mr-2 flex h-[22px] items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-2 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+            className="pointer-events-auto mr-2 flex h-[22px] items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-2 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
           >
             <SquareTerminal size={13} className="flex-none" />
           </button>
@@ -93,7 +93,7 @@ export function Titlebar({ onSearch, onRename, onTerminal, overlayOpen }: Titleb
             transition={CMD_SEARCH_SPRING}
             onClick={onSearch}
             title="Change session"
-            className={`pointer-events-auto flex h-[22px] ${CMD_SEARCH_WIDTH} items-center justify-start gap-2 rounded-md border border-koma-border bg-koma-panel px-2.5 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100`}
+            className={`pointer-events-auto flex h-[22px] ${CMD_SEARCH_WIDTH} items-center justify-start gap-2 rounded-md border border-koma-border bg-koma-panel px-2.5 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover`}
           >
             <motion.span layout="position" className="flex items-center gap-2">
               <Terminal size={13} className="flex-none" />
@@ -119,7 +119,7 @@ export function Titlebar({ onSearch, onRename, onTerminal, overlayOpen }: Titleb
                 onClick={onRename}
                 title="Rename session"
                 aria-label="Rename session"
-                className="pointer-events-auto flex h-[22px] items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-2.5 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+                className="pointer-events-auto flex h-[22px] items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-2.5 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
               >
                 <motion.span layout="position" className="flex items-center gap-1.5">
                   <PenLine size={13} className="flex-none" />
@@ -134,7 +134,7 @@ export function Titlebar({ onSearch, onRename, onTerminal, overlayOpen }: Titleb
                 className={`pointer-events-auto flex h-[22px] items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-2.5 text-[12px] transition-colors ${
                   working
                     ? 'text-koma-dim opacity-40'
-                    : 'text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100'
+                    : 'text-koma-fg hover:bg-koma-hover'
                 }`}
               >
                 <FoldVertical size={13} className="flex-none" />
