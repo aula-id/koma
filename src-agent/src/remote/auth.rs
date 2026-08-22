@@ -137,6 +137,16 @@ impl SshAuth {
             cmd.env("DISPLAY", ":0");
         }
     }
+
+    /// Apply SSH_ASKPASS env vars to a `portable_pty::CommandBuilder` (GUI remote
+    /// terminal PTY child). Same vars as the std/tokio helpers.
+    pub fn apply_to_command_builder(&self, cmd: &mut portable_pty::CommandBuilder) {
+        if let Some(ref path) = self.askpass_path {
+            cmd.env("SSH_ASKPASS", path);
+            cmd.env("SSH_ASKPASS_REQUIRE", "force");
+            cmd.env("DISPLAY", ":0");
+        }
+    }
 }
 
 impl std::fmt::Debug for SshAuth {

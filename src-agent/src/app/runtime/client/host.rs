@@ -1779,8 +1779,12 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                 push_remote_hosts_list(push, Some(&ctx.host_id));
             }
             Ok(HostCtl::TerminalCreate { id, cwd }) => {
+                // Remote hub: always open a shell on the live remote host, never
+                // the local machine the GUI is running on.
                 if let Ok(mut mgr) = terminal_manager.lock() {
-                    if let Err(e) = mgr.create(id, cwd) {
+                    if let Err(e) =
+                        mgr.create_remote(id, &ctx.target, ctx.password(), cwd.as_deref())
+                    {
                         crate::model::store::append_global_error_log(
                             "terminal",
                             &format!("terminal create failed: {e}"),
