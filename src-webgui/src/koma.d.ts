@@ -525,6 +525,9 @@ declare global {
     | { r: 'ConnectRemoteHost'; hostId: string }
     // Disconnect from a remote host.
     | { r: 'DisconnectRemoteHost'; hostId: string }
+    // Open a second GUI process on the same session (multi-window multi-attach).
+    // For remote sessions pass hostId so the child boots `gui remote user@host --session`.
+    | { r: 'OpenSecondWindow'; sessionId: string; hostId?: string }
     // Submit a password for remote host authentication.
     | { r: 'SubmitRemotePassword'; password: string }
     // Cancel an in-progress remote connection.

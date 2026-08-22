@@ -53,7 +53,7 @@
 pub enum DaemonSub {
     /// `koma daemon status` — report whether a daemon is live (+ PID / socket / session count).
     Status,
-    /// `koma daemon kill` — gracefully stop a running daemon (escalating to signals if it won't die).
+    /// `koma daemon kill` — stop every live session-daemon (or one id when `--session` is set).
     Kill,
     /// `koma daemon restart` — kill then spawn a fresh detached daemon, reporting the new PID.
     Restart,
@@ -325,7 +325,28 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
         Some("agents") => opts.resume = true,
         Some("alone") => opts.local = true,
         Some("update") => opts.update = true,
-        Some("gui") => opts.gui = true,
+        Some("gui") => {
+            opts.gui = true;
+            // `gui remote user@host` — second-window remote attach (with --session).
+            // Scan remaining positionals for optional `remote <target>`.
+            if let Some(next) = positional.next() {
+                if next == "remote" {
+                    if let Some(target) = positional.next() {
+                        opts.remote_target = Some(target.clone());
+                    }
+                }
+            }
+            for pair in all.windows(2) {
+                if pair[0] == "--key" {
+                    opts.remote_key = Some(pair[1].clone());
+                }
+                if pair[0] == "--port" {
+                    if let Ok(p) = pair[1].parse::<u16>() {
+                        opts.remote_port = Some(p);
+                    }
+                }
+            }
+        }
         Some("server") => opts.server = true,
         Some("sessions") => opts.sessions = true,
         Some("remote") => {

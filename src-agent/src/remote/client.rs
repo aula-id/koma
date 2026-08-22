@@ -1,4 +1,7 @@
-//! Remote client: connects to a remote `koma server` and runs the local TUI.
+//! Remote client: SSH-attaches via `koma server` (stdio bridge) and runs the local TUI.
+//!
+//! The remote peer is a thin bridge that dials the durable session-daemon. Detach
+//! and SSH drop leave the daemon cooking; QuitDaemon stops it.
 
 use anyhow::Result;
 use ratatui::backend::CrosstermBackend;
@@ -54,7 +57,7 @@ pub(crate) fn run_remote_client_with_cwd(
 
     let rt = tokio::runtime::Runtime::new()?;
 
-    // SSH connect and exec `koma server`; tokio::process::Command::spawn
+    // SSH connect and exec `koma server` (bridge); tokio::process::Command::spawn
     // requires an entered runtime even though connect itself is synchronous.
     let koma_path = ssh::find_koma(target, auth)?;
     let mut session = {
@@ -122,9 +125,19 @@ pub(crate) fn run_remote_client_with_cwd(
         _ => RemoteExit::Exit,
     };
 
-    // Clean up the SSH child process — always kill on exit (the session is
-    // ephemeral to the remote client; the daemon owns the real lifecycle).
-    let _ = rt.block_on(async { session.child.kill().await });
+    // Reap the SSH *bridge* child only. The remote session-daemon keeps cooking
+    // unless the client already flushed QuitDaemon (e.g. `/new kill` / hub [k]).
+    // Order: connection teardown already flushed Detach/QuitDaemon before we
+    // get here; wait briefly, kill only if the bridge is wedged.
+    rt.block_on(async {
+        crate::app::runtime::stdio_bridge::reap_bridge_child(&mut session.child).await;
+    });
+
+    // Full remote quit leaves the host — close ControlMaster. Resume/NewSession
+    // stay on the host and keep the mux for hub list / next bridge.
+    if matches!(outcome, RemoteExit::Exit) {
+        super::ssh::exit_multiplex(target);
+    }
 
     Ok(outcome)
 }
@@ -620,9 +633,10 @@ fn finish_remote_after_auth(
             cwd.as_deref(),
         )? {
             // `/new` is a remote lifecycle operation, not an exit to the local
-            // session picker. The next remote server gets a fresh id but keeps cwd/auth.
-            RemoteExit::NewSession { kill } => {
-                let _ = kill;
+            // session picker. The next remote bridge gets a fresh id but keeps
+            // cwd/auth. `kill: true` already queued QuitDaemon inside
+            // `run_remote_render_loop` before the previous bridge was reaped.
+            RemoteExit::NewSession { kill: _ } => {
                 requested_session_id = None;
             }
             outcome => return Ok(outcome),

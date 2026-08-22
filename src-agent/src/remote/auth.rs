@@ -180,6 +180,11 @@ pub(crate) fn probe_key_auth(target: &RemoteTarget) -> AuthProbe {
         .arg("ConnectTimeout=5")
         .arg("-o")
         .arg("StrictHostKeyChecking=accept-new");
+    // Share ControlMaster with the rest of the remote stack when available so a
+    // later bootstrap/list reuses this handshake.
+    for opt in super::ssh::multiplex_opts() {
+        cmd.arg(opt);
+    }
 
     if let Some(port) = target.port {
         cmd.arg("-p").arg(port.to_string());

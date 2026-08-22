@@ -2,9 +2,13 @@
 //!
 //! Blocking SSH/auth work runs on a dedicated thread. Host connect and session
 //! attach are separate: connect stops at `ready` with a retained [`RemoteCtx`];
-//! session attach SSHes `koma server` only after the user picks a session or
-//! folder. Every attempt has a fresh cancellation token and monotonically
-//! increasing id so late worker results cannot replace a newer transport.
+//! session attach SSHes `koma server` (stdio↔sock **bridge**, not the agent)
+//! only after the user picks a session or folder. Every attempt has a fresh
+//! cancellation token and monotonically increasing id so late worker results
+//! cannot replace a newer transport.
+//!
+//! Cancel/error paths kill the SSH bridge child only. That does **not** delete
+//! the remote session-daemon — QuitDaemon (hub kill / `/new kill`) does.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
@@ -652,6 +656,7 @@ fn remote_session_worker(
         stdin,
         stdout,
     } = ssh_session;
+    // Cancel after SSH spawn: kill the bridge only (session-daemon keeps cooking).
     if is_cancelled() {
         let _ = handle.block_on(async { child.kill().await });
         shared.finish(attempt_id);
@@ -666,6 +671,7 @@ fn remote_session_worker(
     ) {
         Ok(connection) => connection,
         Err(error) => {
+            // Bridge process only — not session delete.
             let _ = handle.block_on(async { child.kill().await });
             push_state(
                 "error",
@@ -714,6 +720,7 @@ fn remote_session_worker(
         ssh_child: child,
         ctx,
     }) {
+        // Receiver gone: drop the unused bridge child only.
         let mut active = error.0;
         let _ = handle.block_on(async { active.ssh_child.kill().await });
     }

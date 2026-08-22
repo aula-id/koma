@@ -23,7 +23,7 @@ use crate::cli::DaemonSub;
 pub fn run_update() -> Result<()> {
     // 1. Stop the daemon — same logic as the unix path.
     println!("koma update: stopping daemon…");
-    let _ = super::run_daemon_subcommand(DaemonSub::Kill);
+    let _ = super::run_daemon_subcommand(DaemonSub::Kill, None);
 
     // 2. Fetch + run the PowerShell installer via two URL candidates.
     println!("koma update: fetching latest installer…");
@@ -91,7 +91,7 @@ pub fn run_update() -> Result<()> {
     // Ignore an Err from kill (e.g. unexpected socket I/O failure): the update
     // should proceed regardless — worst case the installer overwrites the binary
     // while the daemon is still running from its in-memory image.
-    let _ = super::run_daemon_subcommand(DaemonSub::Kill);
+    let _ = super::run_daemon_subcommand(DaemonSub::Kill, None);
 
     // 2. Fetch + run the installer.
     println!("koma update: fetching latest installer…");

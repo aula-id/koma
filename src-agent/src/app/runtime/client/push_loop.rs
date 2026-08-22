@@ -160,6 +160,9 @@ pub(super) fn push_loop(
     live_marks: &std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
     live_view: &std::sync::Arc<std::sync::Mutex<super::StreamView>>,
     terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
+    // When set, this fold is an SSH-bridged remote session: leave/kill returns to
+    // the remote hub (not the local swapper), and KillSession uses remote SSH kill.
+    remote_ctx: Option<&super::remote_ctl::RemoteCtx>,
 ) -> HostTransition {
     use std::sync::mpsc::TryRecvError;
 
@@ -361,8 +364,19 @@ pub(super) fn push_loop(
                 // loader BEFORE this attached push_loop returns + the connection is torn
                 // down — the ONLY seam still holding a live socket), then hand back to the
                 // state machine to detach + attach the chosen (or freshly minted) session.
+                //
+                // While remote-attached, Select/New MUST stay on the remote host
+                // (RemoteAttach) — never fall through to a local Attach, which would
+                // target a local socket for a remote session id.
                 Ok(super::HostCtl::Select(id)) => {
                     push_switching(push, &id);
+                    if let Some(ctx) = remote_ctx {
+                        return HostTransition::RemoteAttach {
+                            ctx: Box::new(ctx.clone()),
+                            session_id: id,
+                            cwd: None,
+                        };
+                    }
                     return HostTransition::Attach { id, workdir: None };
                 }
                 // `[+ new session]` while attached: the GUI picker already confirmed a
@@ -372,7 +386,30 @@ pub(super) fn push_loop(
                 // TUI `/new kill`) and ensure its death OFF-thread so the fresh attach never
                 // waits on the old daemon's corpse. `kill: false` leaves the old daemon
                 // cooking (resumable), exactly as before.
+                //
+                // Remote: open the remote path picker instead of a local folder dialog —
+                // ConfirmRemotePath mints the id + cwd and returns RemoteAttach.
                 Ok(super::HostCtl::New { workdir, kill }) => {
+                    if let Some(ctx) = remote_ctx {
+                        if kill {
+                            if let Some(old) = current_owned.clone() {
+                                let _ = req_tx.send(ClientRequest::QuitDaemon);
+                                super::host::spawn_remote_kill_and_refresh(
+                                    ctl_tx.clone(),
+                                    ctx.target.clone(),
+                                    ctx.password.clone(),
+                                    old,
+                                );
+                            }
+                        }
+                        // Local `workdir` from a native picker is meaningless remotely.
+                        let _ = workdir;
+                        // Open the path picker as soon as the remote hub loop starts.
+                        let _ = ctl_tx.send(super::HostCtl::RequestRemotePath);
+                        return HostTransition::ToRemoteHub {
+                            ctx: Box::new(ctx.clone()),
+                        };
+                    }
                     if kill {
                         if let Some(old) = current_owned.clone() {
                             let _ = req_tx.send(ClientRequest::QuitDaemon);
@@ -386,13 +423,17 @@ pub(super) fn push_loop(
                         workdir,
                     };
                 }
-                // Remote path controls are handled by the remote host state. A local
-                // attached daemon cannot service them, so return structured state rather
-                // than touching the local filesystem or opening rfd.
-                Ok(super::HostCtl::RequestRemotePath)
-                | Ok(super::HostCtl::ListRemotePath { .. })
-                | Ok(super::HostCtl::ConfirmRemotePath { .. })
-                | Ok(super::HostCtl::CancelRemotePath) => {
+                // Remote path controls: while remote-attached, leave to the remote hub so
+                // the path picker can run there (hub owns list_dirs over SSH).
+                // Re-queue RequestRemotePath so the hub opens the picker immediately
+                // (same pattern as HostCtl::New above).
+                Ok(super::HostCtl::RequestRemotePath) => {
+                    if let Some(ctx) = remote_ctx {
+                        let _ = ctl_tx.send(super::HostCtl::RequestRemotePath);
+                        return HostTransition::ToRemoteHub {
+                            ctx: Box::new(ctx.clone()),
+                        };
+                    }
                     let envelope = serde_json::json!({
                         "k": "RemotePathPicker",
                         "state": "error",
@@ -402,21 +443,52 @@ pub(super) fn push_loop(
                         push(json);
                     }
                 }
+                Ok(super::HostCtl::ListRemotePath { .. })
+                | Ok(super::HostCtl::ConfirmRemotePath { .. })
+                | Ok(super::HostCtl::CancelRemotePath) => {
+                    let envelope = serde_json::json!({
+                        "k": "RemotePathPicker",
+                        "state": "error",
+                        "error": if remote_ctx.is_some() {
+                            "return to remote hub to pick a folder"
+                        } else {
+                            "active session is not remote"
+                        }
+                    });
+                    if let Ok(json) = serde_json::to_string(&envelope) {
+                        push(json);
+                    }
+                }
                 // KILL the daemon `id`. Killing the CURRENTLY-ATTACHED session: queue a
                 // graceful QuitDaemon on the live conn (flushed by teardown), ensure its death
                 // OFF-thread — a harmless double-QuitDaemon that ALSO fires a follow-up
-                // RefreshHub so the swapper we're about to land in drops the row the instant
-                // it is gone (its entry push may briefly show it for <1s) — then hand back to
-                // the swapper (the same path `ToSwapper` takes). A BACKGROUND kill just
-                // escalates OFF-thread and refreshes the hub once the daemon is confirmed dead
-                // (the off-thread sweep drained at (b-bis) pushes the rebuilt hub).
+                // RefreshHub so the hub we're about to land in drops the row the instant
+                // it is gone — then hand back to the hub. Remote attach returns to the
+                // remote hub; local returns to the local swapper. A BACKGROUND kill just
+                // escalates OFF-thread and refreshes the hub once the daemon is confirmed dead.
                 Ok(super::HostCtl::KillSession(id)) => {
-                    if current_owned.as_deref() == Some(id.as_str()) {
+                    let leave_current = current_owned.as_deref() == Some(id.as_str());
+                    if leave_current {
                         let _ = req_tx.send(ClientRequest::QuitDaemon);
-                        super::host::spawn_kill_and_refresh(ctl_tx.clone(), id);
-                        return HostTransition::ToSwapper;
                     }
-                    super::host::spawn_kill_and_refresh(ctl_tx.clone(), id);
+                    if let Some(ctx) = remote_ctx {
+                        super::host::spawn_remote_kill_and_refresh(
+                            ctl_tx.clone(),
+                            ctx.target.clone(),
+                            ctx.password.clone(),
+                            id,
+                        );
+                        if leave_current {
+                            return HostTransition::ToRemoteHub {
+                                ctx: Box::new(ctx.clone()),
+                            };
+                        }
+                    } else {
+                        super::host::spawn_kill_and_refresh(ctl_tx.clone(), id);
+                        if leave_current {
+                            return HostTransition::ToSwapper;
+                        }
+                    }
                 }
                 // Physically DELETE a history session OFF-thread (guarded host-side against
                 // deleting a live/locked session), then RefreshHub. A history row is never the
@@ -425,9 +497,18 @@ pub(super) fn push_loop(
                     super::host::spawn_delete_and_refresh(ctl_tx.clone(), id);
                 }
                 // Cancel-switch (best-effort): the swap in flight can't be interrupted, so
-                // this simply drops to the hub AFTER the current/queued attach resolves —
-                // `host_swapper` then pushes a fresh `Hub`, and the loader clears on it.
-                Ok(super::HostCtl::ToSwapper) => return HostTransition::ToSwapper,
+                // this simply drops to the hub AFTER the current/queued attach resolves.
+                // While remote-attached, cancel returns to the *remote* hub (keep
+                // ControlMaster + host ctx) — never full host disconnect.
+                Ok(super::HostCtl::ToSwapper) => {
+                    return if let Some(ctx) = remote_ctx {
+                        HostTransition::ToRemoteHub {
+                            ctx: Box::new(ctx.clone()),
+                        }
+                    } else {
+                        HostTransition::ToSwapper
+                    };
+                }
                 // The ResumePalette opened: kick a hub refresh OFF this thread (the
                 // discovery sweep blocks). Coalesced by `refresh_inflight` so a burst of
                 // RefreshHubs while the palette stays open runs at most one sweep; the
@@ -437,10 +518,23 @@ pub(super) fn push_loop(
                         refresh_inflight = true;
                         let tx = hub_tx.clone();
                         let cur = current_owned.clone();
-                        std::thread::spawn(move || {
-                            let hub = super::build_local_hub(cur.as_deref());
-                            let _ = tx.send(hub);
-                        });
+                        if let Some(ctx) = remote_ctx {
+                            let target = ctx.target.clone();
+                            let password = ctx.password.clone();
+                            std::thread::spawn(move || {
+                                let hub = super::swapper::build_remote_hub(
+                                    &target,
+                                    password.as_deref(),
+                                    cur.as_deref(),
+                                );
+                                let _ = tx.send(hub);
+                            });
+                        } else {
+                            std::thread::spawn(move || {
+                                let hub = super::swapper::build_local_hub(cur.as_deref());
+                                let _ = tx.send(hub);
+                            });
+                        }
                     }
                 }
                 // A config mutation raced in while attached (the ipc handler normally
@@ -1141,19 +1235,38 @@ pub(super) fn push_loop(
                 }
                 Err(TryRecvError::Empty) => break,
                 // The reader task dropped its sender: the daemon's socket closed. Fall
-                // back to the swapper so the user can pick another session.
-                Err(TryRecvError::Disconnected) => return HostTransition::ToSwapper,
+                // back to the hub so the user can pick another session.
+                Err(TryRecvError::Disconnected) => {
+                    return if let Some(ctx) = remote_ctx {
+                        HostTransition::ToRemoteHub {
+                            ctx: Box::new(ctx.clone()),
+                        }
+                    } else {
+                        HostTransition::ToSwapper
+                    };
+                }
             }
         }
 
-        // `/resume` hand-off from the daemon: detach + show the swapper.
+        // `/resume` hand-off from the daemon: detach + show the hub.
         if open_swapper_requested {
-            return HostTransition::ToSwapper;
+            return if let Some(ctx) = remote_ctx {
+                HostTransition::ToRemoteHub {
+                    ctx: Box::new(ctx.clone()),
+                }
+            } else {
+                HostTransition::ToSwapper
+            };
         }
-        // `/new` hand-off from the daemon: attach a freshly minted session. (The `kill`
-        // flag is a daemon-side reap the headless host does not drive in W0; a plain
-        // detach-then-attach is fine — the old daemon keeps cooking, resumable.)
+        // `/new` hand-off from the daemon. Local: mint id + Attach. Remote: return to
+        // the remote hub and open the path picker (never local Attach for a remote id).
         if new_session_requested.is_some() {
+            if let Some(ctx) = remote_ctx {
+                let _ = ctl_tx.send(super::HostCtl::RequestRemotePath);
+                return HostTransition::ToRemoteHub {
+                    ctx: Box::new(ctx.clone()),
+                };
+            }
             let new_id = uuid::Uuid::new_v4().to_string();
             // Same swap-START loader signal as a hub `New` — this is a daemon-driven attach
             // gap, equally frozen until the new session's first Snapshot.

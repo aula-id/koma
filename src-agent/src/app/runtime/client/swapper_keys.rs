@@ -40,13 +40,14 @@ pub(super) fn handle_swapper_key(
     hub: &mut SessionHub,
     key: &KeyEvent,
     snap_tx: &mpsc::Sender<Vec<SessionStatus>>,
+    source: &super::swapper::DiscoverySource,
 ) -> Option<SwapperOutcome> {
     // --- Ctrl+X: two-step kill (arm → confirm) on the focused live session ---
     // koma's kill convention (matches /bash, the sub-agent abort, the daemon-side hub).
     // Checked FIRST because `is_ctrl` inspects modifiers, and because a confirming second
     // Ctrl+X must NOT be treated as a disarm below.
     if is_ctrl(key, 'x') {
-        return handle_ctrl_x_nuke(hub, snap_tx);
+        return handle_ctrl_x_nuke(hub, snap_tx, source);
     }
 
     // --- disarm: any key OTHER than a confirming Ctrl+X cancels a pending kill ---
@@ -131,9 +132,10 @@ pub(super) fn handle_swapper_key(
 fn handle_ctrl_x_nuke(
     hub: &mut SessionHub,
     snap_tx: &mpsc::Sender<Vec<SessionStatus>>,
+    source: &super::swapper::DiscoverySource,
 ) -> Option<SwapperOutcome> {
     match hub.focus {
-        HubPane::Cooking => handle_ctrl_x_cooking_nuke(hub, snap_tx),
+        HubPane::Cooking => handle_ctrl_x_cooking_nuke(hub, snap_tx, source),
         HubPane::History => {
             handle_ctrl_x_history_delete(hub);
             None
@@ -150,24 +152,20 @@ fn handle_ctrl_x_nuke(
 ///
 /// Two-step (mirrors the daemon-side hub's arm→confirm):
 ///   - not yet armed on THIS row → arm: set `pending_kill` to the focused cooking
-///     index and stay in the picker (the confirm bar renders from `pending_kill`);
-///   - already armed AND still aimed at the same session UUID → CONFIRM = kill: clear the
-///     arm and reap that session's daemon OFF this thread. The escalating
-///     [`manage::kill_session_daemon`] (a SILENT graceful→SIGTERM→SIGKILL kill, alt-screen
-///     safe — unlike `stop_session_daemon`, which prints) BLOCKS until the daemon is actually
-///     dead, and the follow-up [`manage::list_live_sessions`] sweep round-trips every live
-///     socket — so BOTH run on a spawned worker that ships the fresh snapshot back through
-///     `snap_tx` (the SAME channel the periodic probe feeds). The main loop drains it and
-///     merges via `apply_snapshot` (in the sibling `swapper` module), so the killed row
-///     simply disappears on the next snapshot push while the picker keeps repainting /
-///     navigating throughout — never freezing for the multi-second kill (mirrors this
-///     module's off-thread probe design; a wedged daemon is still force-killed, just
-///     asynchronously).
+///     session UUID and stay in the picker;
+///   - already armed AND still aimed at the same session UUID → CONFIRM = kill.
+///
+/// Local rows call [`manage::kill_session_daemon`]. Remote rows (tagged
+/// `remote_host`) call [`crate::remote::sessions::kill_session_over_ssh`] using
+/// credentials from [`super::swapper::DiscoverySource::Remote`] so Ctrl+X never
+/// probes the *local* socket for a remote id. Both paths run OFF-thread and
+/// ship a fresh snapshot through `snap_tx`.
 ///
 /// Always returns `None` — a kill never resolves the swapper; the user keeps picking.
 fn handle_ctrl_x_cooking_nuke(
     hub: &mut SessionHub,
     snap_tx: &mpsc::Sender<Vec<SessionStatus>>,
+    source: &super::swapper::DiscoverySource,
 ) -> Option<SwapperOutcome> {
     // Resolve the focused row + its session id; bail (arm nothing) on the synthetic
     // new-session row or any row without an id.
@@ -188,22 +186,44 @@ fn handle_ctrl_x_cooking_nuke(
     }
 
     // Second press on the same row → CONFIRM = KILL.
-    // Clear the arm now (the confirm bar drops on this repaint), then reap the daemon OFF
-    // this thread. The escalating kill (graceful QuitDaemon → SIGTERM → SIGKILL, alt-screen
-    // safe) BLOCKS up to the grace budget (KILL_GRACE + two SIGNAL_GRACE windows), and the
-    // follow-up list_live_sessions() sweep round-trips every live socket on top — running
-    // EITHER inline would freeze the single input/render thread (no repaint / Esc / nav) for
-    // seconds, contradicting this module's off-thread probe design. So the worker kills,
-    // re-sweeps discovery ITSELF, and ships the result through the SAME snapshot channel the
-    // periodic probe feeds; the main loop drains it and merges via `apply_snapshot`
-    // (preserving cursor/focus/query + the is_foreground flag). The killed row disappears on
-    // that next snapshot push — the loop keeps repainting throughout. There is no existing
-    // per-row "dying" state to set, so the row simply vanishes on the refresh (acceptable).
     hub.pending_kill = None;
     let snap_tx = snap_tx.clone();
+    let source = source.clone();
     std::thread::spawn(move || {
-        manage::kill_session_daemon(&target_id); // blocks until dead (or the budget is spent)
-        let _ = snap_tx.send(manage::list_live_sessions());
+        match source {
+            super::swapper::DiscoverySource::Local => {
+                manage::kill_session_daemon(&target_id);
+                let _ = snap_tx.send(manage::list_live_sessions());
+            }
+            super::swapper::DiscoverySource::Remote { target, password } => {
+                let auth = password
+                    .as_deref()
+                    .map(|p| crate::remote::auth::SshAuth::new(p.to_string()))
+                    .transpose()
+                    .ok()
+                    .flatten();
+                let _ = crate::remote::sessions::kill_session_over_ssh(
+                    &target,
+                    auth.as_ref(),
+                    &target_id,
+                );
+                // Re-list over SSH so the killed row drops from COOKING.
+                let live = crate::remote::sessions::list_sessions_over_ssh(&target, auth.as_ref())
+                    .map(|discovered| {
+                        discovered
+                            .into_iter()
+                            .map(|d| SessionStatus {
+                                session_id: d.session_id,
+                                name: d.name,
+                                pwd: d.pwd,
+                                working: d.working,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let _ = snap_tx.send(live);
+            }
+        }
     });
 
     None

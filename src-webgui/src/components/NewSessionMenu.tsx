@@ -71,12 +71,25 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
   // Always render the chevron button so the dropdown is always available.
 
   const pick = (kill: boolean) => {
+    if (remoteState.state === 'ready' || remoteState.state === 'connected') {
+      // Remote hub: open the remote path picker instead of a local session.
+      req({ r: 'RequestRemotePath' })
+      setOpen(false)
+      afterPick?.()
+      return
+    }
     req(kill ? { r: 'NewSession', kill: true } : { r: 'NewSession' })
     setOpen(false)
     afterPick?.()
   }
 
   const openFolder = () => {
+    if (remoteState.state === 'ready' || remoteState.state === 'connected') {
+      req({ r: 'RequestRemotePath' })
+      setOpen(false)
+      afterPick?.()
+      return
+    }
     req({ r: 'NewSession', folder: true })
     setOpen(false)
     afterPick?.()

@@ -36,6 +36,7 @@ mod oauth_daemon;
 mod server;
 mod session_mgmt;
 mod signals;
+pub(crate) mod stdio_bridge;
 // Wave-5: persist + restore the per-session bg-bash / sub-agent records (#25).
 pub(crate) mod bg_persist;
 #[cfg(feature = "gui")]

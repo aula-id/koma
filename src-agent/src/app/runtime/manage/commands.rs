@@ -22,10 +22,11 @@ pub fn print_daemon_usage() -> i32 {
     eprintln!(
         "usage: koma daemon <status|kill|restart|clean>\n\
          \n\
-         \x20 status   show whether the koma daemon is running (PID, socket, sessions)\n\
-         \x20 kill     gracefully stop the running daemon (escalates to signals if needed)\n\
-         \x20 restart  stop the daemon (if any) then start a fresh one\n\
-         \x20 clean    remove a stale socket/pidfile when NO daemon is running"
+         \x20 status              show whether the koma daemon is running (PID, socket, sessions)\n\
+         \x20 kill                stop every live session-daemon (escalates to signals if needed)\n\
+         \x20 kill --session <id> stop only the session-daemon for <id>\n\
+         \x20 restart             stop the daemon (if any) then start a fresh one\n\
+         \x20 clean               remove a stale socket/pidfile when NO daemon is running"
     );
     2
 }
@@ -132,7 +133,17 @@ fn daemon_session_count(sock: &Path) -> Result<usize> {
 /// a still-running daemon, or a daemon spawned by an older/different-path binary). That
 /// keeps "no daemons running" honest and makes `kill` reliably clear the way for a
 /// reinstall (a lingering orphan otherwise holds the binary, causing "Text file busy").
-pub(super) fn cmd_kill() -> Result<()> {
+pub(super) fn cmd_kill(session: Option<&str>) -> Result<()> {
+    // `koma daemon kill --session <id>`: stop exactly one session-daemon (remote hub
+    // kill over SSH uses this). Leave MCP/OAuth/linker alone — those are host-global.
+    if let Some(id) = session {
+        if id.is_empty() || id.contains('\0') {
+            anyhow::bail!("invalid session id");
+        }
+        let _ = super::stop_session_daemon(id, false);
+        return Ok(());
+    }
+
     let live = super::live_session_sockets()?;
     let mcp_live = super::mcp::mcp_daemon_alive();
 
