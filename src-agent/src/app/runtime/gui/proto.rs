@@ -999,6 +999,15 @@ pub(super) enum GuiReq {
     /// Cancel the remote working-directory picker.
     CancelRemotePath,
 
+    /// Open a second GUI process on the same remote session (multi-window attach).
+    /// Spawns `koma gui remote user@host --session <id>` detached.
+    OpenSecondWindow {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(default, rename = "hostId")]
+        host_id: Option<String>,
+    },
+
     /// Import-graph visualization request. `path` is the focal file (None = overview);
     /// `depth` is traversal depth (1–3, clamped); `direction` is
     /// `"dependencies"`/`"dependents"`/`"both"`.
