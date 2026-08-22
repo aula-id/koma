@@ -39,6 +39,71 @@ use super::store_host;
 use super::swapper::build_local_hub;
 use super::{push_loop, render, HostCtl, StreamView};
 
+/// Resolve a saved/ad-hoc remote target + session into [`HostStep::RemoteAttach`].
+/// Used by `koma gui --session <id> remote user@host` for a second window on the
+/// same remote session (multi-attach via a second process + ControlMaster).
+fn bootstrap_remote_attach_step(
+    target_str: &str,
+    session_id: &str,
+    key: Option<&str>,
+    port: Option<u16>,
+    cwd: Option<String>,
+) -> anyhow::Result<HostStep> {
+    if session_id.is_empty() || session_id.contains('\0') {
+        anyhow::bail!("invalid session id");
+    }
+    let mut target = crate::remote::parse_target(target_str)?;
+    if let Some(p) = port {
+        target.port = Some(p);
+    }
+    if let Some(k) = key {
+        target.key = Some(k.to_string());
+    }
+    // Prefer saved-host metadata (key path + stable id for password vault).
+    let hosts = crate::remote::hosts::load_hosts();
+    let matched = hosts.hosts.iter().find(|h| {
+        h.address() == target_str
+            || format!("{}@{}", h.user, h.host) == target_str
+            || (h.user == target.user
+                && h.host == target.host
+                && h.port == target.port.unwrap_or(22))
+    });
+    let host_id = if let Some(h) = matched {
+        if target.key.is_none() {
+            target.key = h.key_path.clone();
+        }
+        if target.port.is_none() && h.port != 22 {
+            target.port = Some(h.port);
+        }
+        h.id.clone()
+    } else {
+        // Fall back to address-keyed secrets lookup; do NOT mint a random id
+        // (that would never hit the password vault).
+        crate::remote::secrets::host_id_for_address(&target.user, &target.host, target.port)
+            .unwrap_or_else(|| format!("{}@{}", target.user, target.host))
+    };
+
+    let password = crate::remote::secrets::get_remote_password(&host_id);
+    let auth = match password.as_ref() {
+        Some(pw) => Some(crate::remote::auth::SshAuth::from_password(pw.clone())?),
+        None => None,
+    };
+    crate::remote::bootstrap::ensure_koma_compatible(&target, auth.as_ref())
+        .map_err(|e| anyhow::anyhow!("remote bootstrap failed: {e:#}"))?;
+    let koma_path = crate::remote::ssh::find_koma(&target, auth.as_ref())
+        .map_err(|e| anyhow::anyhow!("cannot find remote koma: {e:#}"))?;
+    Ok(HostStep::RemoteAttach {
+        ctx: Box::new(super::remote_ctl::RemoteCtx {
+            host_id,
+            target,
+            password,
+            koma_path,
+        }),
+        session_id: session_id.to_string(),
+        cwd,
+    })
+}
+
 /// The host-relay run-loop's next step, mirroring [`super::ClientState`] for the headless
 /// GUI host: show the swapper, attach a session, or leave.
 enum HostStep {
@@ -182,9 +247,34 @@ pub(in crate::app::runtime) fn run_host_relay(
     ));
 
     // Startup: attach directly to `--session`, else open cold into the swapper.
-    let mut step = match opts.session.clone() {
-        Some(id) => HostStep::Attach { id, workdir: None },
-        None => HostStep::Swapper,
+    // With `remote_target` + `session`, open a second-window remote attach
+    // (multi-attach the same remote session from another GUI process).
+    let mut step = if let (Some(session_id), Some(target_str)) =
+        (opts.session.clone(), opts.remote_target.clone())
+    {
+        match bootstrap_remote_attach_step(&target_str, &session_id, opts.remote_key.as_deref(), opts.remote_port, opts.cwd.clone()) {
+            Ok(step) => step,
+            Err(e) => {
+                crate::model::store::append_global_error_log(
+                    "gui",
+                    &format!("remote --session boot failed: {e:#}"),
+                );
+                // Surface to the webview so the second window is not a silent local hub.
+                let envelope = serde_json::json!({
+                    "k": "RemoteState",
+                    "state": "error",
+                    "error": format!("remote attach failed: {e:#}"),
+                });
+                if let Ok(json) = serde_json::to_string(&envelope) {
+                    push(json);
+                }
+                HostStep::Swapper
+            }
+        }
+    } else if let Some(id) = opts.session.clone() {
+        HostStep::Attach { id, workdir: None }
+    } else {
+        HostStep::Swapper
     };
 
     loop {
@@ -284,6 +374,82 @@ pub(super) fn spawn_kill_and_refresh(ctl_tx: std::sync::mpsc::Sender<HostCtl>, i
     std::thread::spawn(move || {
         crate::app::runtime::manage::kill_session_daemon(&id); // blocks until dead (or the budget is spent)
         let _ = ctl_tx.send(HostCtl::RefreshHub);
+    });
+}
+
+/// Spawn an OFF-THREAD kill of a **remote** session-daemon over SSH, then refresh the hub.
+///
+/// Uses [`crate::remote::sessions::kill_session_over_ssh`] (`koma daemon kill --session`)
+/// so the remote hub Kill button never probes a local socket. Disconnect-from-host is a
+/// separate control (`DisconnectRemote`) and must not call this.
+pub(super) fn spawn_remote_kill_and_refresh(
+    ctl_tx: std::sync::mpsc::Sender<HostCtl>,
+    target: crate::remote::RemoteTarget,
+    password: Option<String>,
+    id: String,
+) {
+    std::thread::spawn(move || {
+        let auth = password
+            .as_deref()
+            .map(|p| crate::remote::auth::SshAuth::new(p.to_string()))
+            .transpose()
+            .ok()
+            .flatten();
+        let _ = crate::remote::sessions::kill_session_over_ssh(&target, auth.as_ref(), &id);
+        let _ = ctl_tx.send(HostCtl::RefreshHub);
+    });
+}
+
+/// Result of one off-thread remote path listing: (attempt, Ok((path, dirs)) | Err).
+type PathListReply = (u64, Result<(String, Vec<String>), String>);
+
+/// Expand `~` / `~/…` against remote `$HOME`. Absolute paths pass through.
+fn expand_remote_home(
+    target: &crate::remote::RemoteTarget,
+    auth: Option<&crate::remote::auth::SshAuth>,
+    path: &str,
+) -> String {
+    let path = path.trim();
+    if path.is_empty() || path == "~" {
+        return match crate::remote::ssh::exec_remote(target, "printf '%s' \"$HOME\"", auth) {
+            Ok(home) if !home.is_empty() => home,
+            _ => "/".to_string(),
+        };
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        let home = match crate::remote::ssh::exec_remote(target, "printf '%s' \"$HOME\"", auth) {
+            Ok(home) if !home.is_empty() => home,
+            _ => return format!("/{rest}"),
+        };
+        return format!(
+            "{}/{}",
+            home.trim_end_matches('/'),
+            rest.trim_start_matches('/')
+        );
+    }
+    path.to_string()
+}
+
+/// Off-thread `list_dirs` for the remote path picker.
+fn spawn_remote_path_list(
+    tx: std::sync::mpsc::Sender<PathListReply>,
+    attempt: u64,
+    target: crate::remote::RemoteTarget,
+    password: Option<String>,
+    path: String,
+) {
+    std::thread::spawn(move || {
+        let auth = password
+            .as_deref()
+            .map(|p| crate::remote::auth::SshAuth::new(p.to_string()))
+            .transpose()
+            .ok()
+            .flatten();
+        let list_path = expand_remote_home(&target, auth.as_ref(), &path);
+        let result = crate::remote::ssh::list_dirs(&target, &list_path, auth.as_ref())
+            .map(|dirs| (list_path.clone(), dirs))
+            .map_err(|e| format!("{e:#}"));
+        let _ = tx.send((attempt, result));
     });
 }
 
@@ -1277,6 +1443,7 @@ fn host_attached(
             live_marks,
             live_view,
             terminal_manager,
+            None, // local attach
         )
     };
 
@@ -1351,7 +1518,9 @@ fn push_remote_hosts_list(push: &dyn Fn(String), live_host_id: Option<&str>) {
 }
 
 /// Detached remote hub: host is authenticated, no session SSH child yet.
-/// User picks an existing remote session or opens a folder (path picker — Phase 2).
+/// User picks an existing remote session or opens a folder (path picker).
+/// Pass `open_path_picker` when arriving from an attached "new session" so the
+/// folder dialog opens immediately.
 #[allow(clippy::too_many_arguments)]
 fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
     handle: &tokio::runtime::Handle,
@@ -1377,7 +1546,10 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
     // Session attach from hub is handled by returning RemoteAttach; no connected_rx here.
     let remote_shared = std::sync::Arc::new(super::remote_ctl::RemoteSessionShared::new());
     let oauth_task: Option<tokio::task::AbortHandle> = None;
-    let _ = (remote_state_tx, ctl_tx); // reserved for phase-2 path workers / parity
+    // Off-thread path-list replies (attempt id ignores races with cancel).
+    let (path_tx, path_rx) = std::sync::mpsc::channel::<PathListReply>();
+    let mut path_attempt: u64 = 0;
+    let _ = remote_state_tx;
 
     loop {
         while let Ok(update) = remote_state_rx.try_recv() {
@@ -1394,6 +1566,36 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                 update.error.as_deref(),
                 &update.sessions,
             );
+        }
+
+        // Drain remote path listings.
+        while let Ok((attempt, result)) = path_rx.try_recv() {
+            if attempt != path_attempt {
+                continue;
+            }
+            match result {
+                Ok((path, dirs)) => {
+                    let envelope = serde_json::json!({
+                        "k": "RemotePathPicker",
+                        "state": "ready",
+                        "path": path,
+                        "dirs": dirs,
+                    });
+                    if let Ok(json) = serde_json::to_string(&envelope) {
+                        push(json);
+                    }
+                }
+                Err(error) => {
+                    let envelope = serde_json::json!({
+                        "k": "RemotePathPicker",
+                        "state": "error",
+                        "error": error,
+                    });
+                    if let Ok(json) = serde_json::to_string(&envelope) {
+                        push(json);
+                    }
+                }
+            }
         }
 
         match ctl_rx.recv_timeout(std::time::Duration::from_millis(16)) {
@@ -1423,20 +1625,34 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                     cwd: None,
                 };
             }
-            Ok(HostCtl::New { .. }) => {
-                // Phase 2 wires RequestRemotePath; for now surface the path-picker error
-                // path so the UI does not fall into a local new-session.
+            Ok(HostCtl::New { kill, .. }) => {
+                // Open the remote path picker (same as RequestRemotePath).
+                // kill is for attached /new kill; on the hub there is no live session.
+                let _ = kill;
+                path_attempt = path_attempt.wrapping_add(1);
+                let attempt = path_attempt;
                 let envelope = serde_json::json!({
                     "k": "RemotePathPicker",
-                    "state": "error",
-                    "error": "open a remote folder (path picker not yet wired)"
+                    "state": "listing",
+                    "path": "~",
+                    "dirs": [],
                 });
                 if let Ok(json) = serde_json::to_string(&envelope) {
                     push(json);
                 }
+                spawn_remote_path_list(
+                    path_tx.clone(),
+                    attempt,
+                    ctx.target.clone(),
+                    ctx.password.clone(),
+                    "~".into(),
+                );
             }
             Ok(HostCtl::DisconnectRemote) | Ok(HostCtl::CancelRemoteConnect) => {
                 remote_shared.cancel();
+                // Full host leave — tear down ControlMaster so credentials/sockets
+                // don't linger after the user disconnects.
+                crate::remote::ssh::exit_multiplex(&ctx.target);
                 push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
                 push_remote_hosts_list(push, None);
                 return HostStep::Swapper;
@@ -1451,6 +1667,7 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                     push_hub(&hub, push, push_state);
                     continue;
                 }
+                crate::remote::ssh::exit_multiplex(&ctx.target);
                 push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
                 push_remote_hosts_list(push, None);
                 // Re-queue the connect so host_swapper picks it up.
@@ -1460,15 +1677,63 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::SubmitRemotePassword { .. }) => {
                 // No in-flight password wait on the hub.
             }
-            Ok(HostCtl::RequestRemotePath)
-            | Ok(HostCtl::ListRemotePath { .. })
-            | Ok(HostCtl::ConfirmRemotePath { .. })
-            | Ok(HostCtl::CancelRemotePath) => {
-                // Phase 2 implements these against ctx.
+            Ok(HostCtl::RequestRemotePath) => {
+                path_attempt = path_attempt.wrapping_add(1);
+                let attempt = path_attempt;
                 let envelope = serde_json::json!({
                     "k": "RemotePathPicker",
-                    "state": "error",
-                    "error": "path picker not yet wired"
+                    "state": "listing",
+                    "path": "~",
+                    "dirs": [],
+                });
+                if let Ok(json) = serde_json::to_string(&envelope) {
+                    push(json);
+                }
+                spawn_remote_path_list(
+                    path_tx.clone(),
+                    attempt,
+                    ctx.target.clone(),
+                    ctx.password.clone(),
+                    "~".into(),
+                );
+            }
+            Ok(HostCtl::ListRemotePath { path }) => {
+                path_attempt = path_attempt.wrapping_add(1);
+                let attempt = path_attempt;
+                let envelope = serde_json::json!({
+                    "k": "RemotePathPicker",
+                    "state": "listing",
+                    "path": path,
+                    "dirs": [],
+                });
+                if let Ok(json) = serde_json::to_string(&envelope) {
+                    push(json);
+                }
+                spawn_remote_path_list(
+                    path_tx.clone(),
+                    attempt,
+                    ctx.target.clone(),
+                    ctx.password.clone(),
+                    path,
+                );
+            }
+            Ok(HostCtl::ConfirmRemotePath { path }) => {
+                // Expand ~ before attach so the remote daemon gets an absolute cwd.
+                let auth = ctx.make_auth().ok().flatten();
+                let cwd = expand_remote_home(&ctx.target, auth.as_ref(), &path);
+                let new_id = uuid::Uuid::new_v4().to_string();
+                push_switching(push, &new_id);
+                return HostStep::RemoteAttach {
+                    ctx: Box::new(ctx),
+                    session_id: new_id,
+                    cwd: Some(cwd),
+                };
+            }
+            Ok(HostCtl::CancelRemotePath) => {
+                path_attempt = path_attempt.wrapping_add(1);
+                let envelope = serde_json::json!({
+                    "k": "RemotePathPicker",
+                    "state": "cancelled",
                 });
                 if let Ok(json) = serde_json::to_string(&envelope) {
                     push(json);
@@ -1523,6 +1788,16 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                 if let Ok(mut mgr) = terminal_manager.lock() {
                     mgr.kill(&id);
                 }
+            }
+            Ok(HostCtl::KillSession(id)) => {
+                // Kill the remote session-daemon; stay on this host hub.
+                // Distinct from DisconnectRemote (leave host, daemons keep cooking).
+                spawn_remote_kill_and_refresh(
+                    ctl_tx.clone(),
+                    ctx.target.clone(),
+                    ctx.password.clone(),
+                    id,
+                );
             }
             // Everything else is no-op on the detached remote hub (local git/store/
             // coding/oauth ctls don't apply until a session is attached).
@@ -1623,7 +1898,11 @@ fn host_remote_attach(
         }
         while let Ok(mut active) = remote_connected_rx.try_recv() {
             if !remote_shared.is_current(active.attempt_id) {
-                let _ = handle.block_on(async { active.ssh_child.kill().await });
+                // Stale attach race: drop the bridge only (daemon stays up).
+                handle.block_on(async {
+                    crate::app::runtime::stdio_bridge::reap_bridge_child(&mut active.ssh_child)
+                        .await;
+                });
                 continue;
             }
             let sid = match &active.connection.transport {
@@ -1710,6 +1989,7 @@ fn host_remote(
             live_marks,
             live_view,
             terminal_manager,
+            Some(&active.ctx),
         )
     };
     if let Ok(mut g) = live_req.lock() {
@@ -1721,8 +2001,13 @@ fn host_remote(
     if let Ok(mut v) = live_view.lock() {
         *v = StreamView::default();
     }
+    // Flush Detach/QuitDaemon first, then reap the SSH bridge (not the
+    // remote session-daemon). Kill the bridge child only if it does not
+    // exit after the stdio close — never treat bridge death as session delete.
     super::teardown_connection(handle, active.connection);
-    let _ = handle.block_on(async { active.ssh_child.kill().await });
+    handle.block_on(async {
+        crate::app::runtime::stdio_bridge::reap_bridge_child(&mut active.ssh_child).await;
+    });
 
     // Keep RemoteCtx unless the transition is a full disconnect / local swapper / exit.
     match transition {
@@ -1770,7 +2055,8 @@ fn host_remote(
         | push_loop::HostTransition::ToSwapper
         | push_loop::HostTransition::Exit
         | push_loop::HostTransition::Attach { .. } => {
-            // Full leave remote: drop ctx, clear state.
+            // Full leave remote: close ControlMaster, drop ctx, clear state.
+            crate::remote::ssh::exit_multiplex(&active.ctx.target);
             drop(active.ctx);
             push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
             *current = None;

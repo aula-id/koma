@@ -156,10 +156,10 @@ pub fn restart_daemon(session_id: &str, quiet: bool) -> Result<()> {
 /// outcome and returns `Ok(())` on success; an `Err` is surfaced by `main` as a
 /// `error: …` line + non-zero exit. None of these touch the terminal, so they work
 /// even when the TUI can't start.
-pub fn run_daemon_subcommand(sub: DaemonSub) -> Result<()> {
+pub fn run_daemon_subcommand(sub: DaemonSub, session: Option<&str>) -> Result<()> {
     match sub {
         DaemonSub::Status => commands::cmd_status(),
-        DaemonSub::Kill => commands::cmd_kill(),
+        DaemonSub::Kill => commands::cmd_kill(session),
         DaemonSub::Restart => commands::cmd_restart(),
         DaemonSub::Clean => commands::cmd_clean(),
     }

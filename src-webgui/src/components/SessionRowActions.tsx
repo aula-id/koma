@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Check, Power, Trash2, X } from 'lucide-react'
+import { Check, ExternalLink, Power, Trash2, X } from 'lucide-react'
 import { useKoma, isDying } from '../store/koma'
 import { BrailleSpinner } from './BrailleSpinner'
 
@@ -15,6 +15,8 @@ type SessionRowActionsProps = {
   kind: 'session' | 'history'
   armed: ArmedRow
   onArm: (row: ArmedRow) => void
+  /** When set, show "open in new window" for multi-window multi-attach. */
+  remoteHostId?: string | null
 }
 
 // Trailing ghost icon on a Cooking/History row. Meant to be rendered INSIDE a
@@ -29,18 +31,19 @@ type SessionRowActionsProps = {
 // (non-interactive) instead while `dyingSessions` carries a kind-matching
 // mark for this id — cleared automatically the moment a fresh Hub push
 // confirms the kill/delete landed (see koma.ts's Hub push handler).
-export function SessionRowActions({ id, kind, armed, onArm }: SessionRowActionsProps) {
+export function SessionRowActions({ id, kind, armed, onArm, remoteHostId }: SessionRowActionsProps) {
   const dying = useKoma((s) => isDying(s.dyingSessions, id, kind))
   const theme = useKoma((s) => s.config.theme)
   const palettes = useKoma((s) => s.config.palettes)
+  const req = useKoma((s) => s.req)
+  const remoteState = useKoma((s) => s.remoteState)
 
-  // Danger/error palette role tint — same lookup ToastContainer uses for its
-  // error icon (index 9 of the 11-role `PaletteInfo.colors` array). Never a
-  // hardcoded red/orange. Memoized like ToastContainer's roleColor.
-  const errorTint = useMemo(() => {
+  // Reserved for future row-action tints (confirm strip uses its own lookup).
+  const _errorTint = useMemo(() => {
     const active = palettes.find((p) => p.name === theme)
     return active?.colors?.[9] || 'var(--koma-fg)'
   }, [palettes, theme])
+  void _errorTint
 
   if (dying) {
     return <BrailleSpinner size={13} />
@@ -50,18 +53,43 @@ export function SessionRowActions({ id, kind, armed, onArm }: SessionRowActionsP
   // in place of the row's normal content instead of this trailing slot.
   if (armed?.id === id && armed.kind === kind) return null
 
+  const hostId =
+    remoteHostId ??
+    (remoteState.state === 'ready' || remoteState.state === 'connected'
+      ? remoteState.hostId
+      : null)
+
   const Icon = kind === 'session' ? Power : Trash2
   return (
-    <button
-      onClick={(e) => {
-        e.stopPropagation()
-        onArm({ id, kind })
-      }}
-      aria-label={kind === 'session' ? 'Kill session' : 'Delete session'}
-      className="flex h-full w-full flex-none items-center justify-center text-koma-fg opacity-0 transition-opacity group-hover:opacity-40 hover:!opacity-100 focus-visible:opacity-100"
-    >
-      <Icon size={13} className="flex-none" />
-    </button>
+    <span className="flex h-full w-full flex-none items-center justify-end gap-0.5">
+      {kind === 'session' && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            req({
+              r: 'OpenSecondWindow',
+              sessionId: id,
+              ...(hostId ? { hostId } : {}),
+            })
+          }}
+          aria-label="Open in new window"
+          title="Open in new window"
+          className="flex h-full w-6 flex-none items-center justify-center text-koma-fg opacity-0 transition-opacity group-hover:opacity-40 hover:!opacity-100 focus-visible:opacity-100"
+        >
+          <ExternalLink size={12} className="flex-none" />
+        </button>
+      )}
+      <button
+        onClick={(e) => {
+          e.stopPropagation()
+          onArm({ id, kind })
+        }}
+        aria-label={kind === 'session' ? 'Kill session' : 'Delete session'}
+        className="flex h-full w-6 flex-none items-center justify-center text-koma-fg opacity-0 transition-opacity group-hover:opacity-40 hover:!opacity-100 focus-visible:opacity-100"
+      >
+        <Icon size={13} className="flex-none" />
+      </button>
+    </span>
   )
 }
 

@@ -1293,6 +1293,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                 Ok(crate::remote::client::RemoteExit::Exit) => {
                                     // Ordinary remote QUIT means detach and return to the local
                                     // client; it must never reopen the remote hub.
+                                    // ControlMaster already closed in run_remote_client_with_cwd.
                                     remote_resume = None;
                                     match prev_session.take() {
                                         Some(previous) => {
@@ -1432,6 +1433,10 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                 }
                             }
                         } else {
+                            // Leaving the remote hub for local — close ControlMaster.
+                            if let Some((target, _, _, _)) = remote_resume.take() {
+                                crate::remote::ssh::exit_multiplex(&target);
+                            }
                             match prev_session.take() {
                                 Some(prev) => match attach_session(&mut terminal, &handle, &prev) {
                                     Ok(conn) => {

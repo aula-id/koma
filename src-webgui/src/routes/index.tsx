@@ -13,6 +13,7 @@ import { RenameOverlay } from '../components/RenameOverlay'
 import { OmniSearchPalette } from '../components/OmniSearchPalette'
 import { SwitchingOverlay } from '../components/SwitchingOverlay'
 import { RemotePasswordPrompt } from '../components/RemotePasswordPrompt'
+import { RemotePathPicker } from '../components/RemotePathPicker'
 import { ToastContainer } from '../components/ToastContainer'
 import { UsageFooter } from '../components/UsageFooter'
 import { useKoma } from '../store/koma'
@@ -291,6 +292,7 @@ function RootLayout() {
           }
         }}
       />
+      <RemotePathPicker />
       <ToastContainer />
       <ResizeHandles />
       <GlobalContextMenu onResume={() => setOverlay('resume')} />

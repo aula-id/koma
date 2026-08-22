@@ -573,7 +573,7 @@ pub(super) fn run_swapper(
             // `handle_swapper_key` on Windows. No-op on unix.
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
-                    if let Some(outcome) = handle_swapper_key(hub, &key, &kill_snap_tx) {
+                    if let Some(outcome) = handle_swapper_key(hub, &key, &kill_snap_tx, &source) {
                         return Ok(outcome);
                     }
                 }

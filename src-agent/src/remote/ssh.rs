@@ -1,5 +1,20 @@
 //! SSH client via shell-out to system `ssh` binary.
+//!
+//! Remote argv is always `koma server --session <id> [--cwd <path>]`. That
+//! process is a stdio↔sock **bridge** (see [`crate::app::runtime::server`]): it
+//! ensures the remote session-daemon and proxies IPC frames. It is not the agent.
+//!
+//! # Connection multiplexing (unix)
+//!
+//! Every `ssh` invocation for a given `user@host:port` shares one ControlMaster
+//! via `ControlMaster=auto` + `ControlPath=~/.koma/ssh-mux/%C` +
+//! `ControlPersist=300`. The first connection pays the handshake; hub list /
+//! kill / bootstrap one-shots and the long-lived bridge reuse it.
+//!
+//! Call [`exit_multiplex`] only when leaving the **host** entirely (disconnect),
+//! not when detaching a session back to the remote hub.
 
+use std::path::PathBuf;
 use std::process::{Command as StdCommand, Stdio};
 
 use anyhow::Result;
@@ -59,6 +74,111 @@ pub(crate) fn remote_command(program: &str, args: &[&str]) -> Result<String> {
     Ok(command)
 }
 
+/// Directory + ControlPath template for OpenSSH multiplexing (`%C` = hash of
+/// local/host/port/user). Unix only — Windows OpenSSH lacks reliable mux sockets.
+#[cfg(unix)]
+fn control_path_template() -> Result<PathBuf> {
+    let dir = crate::model::store::base_dir()?.join("ssh-mux");
+    std::fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    Ok(dir.join("%C"))
+}
+
+/// OpenSSH mux options shared by every remote SSH invocation on unix.
+/// Empty on windows / if the path can't be prepared (callers still work unmuxed).
+pub(crate) fn multiplex_opts() -> Vec<String> {
+    #[cfg(unix)]
+    {
+        if let Ok(path) = control_path_template() {
+            return vec![
+                "-o".into(),
+                "ControlMaster=auto".into(),
+                "-o".into(),
+                format!("ControlPath={}", path.display()),
+                "-o".into(),
+                // Keep the master up 5 minutes after the last session exits so hub
+                // refreshes and a quick re-attach skip the handshake. Host disconnect
+                // calls [`exit_multiplex`] to tear it down immediately.
+                "ControlPersist=300".into(),
+            ];
+        }
+    }
+    Vec::new()
+}
+
+/// Apply shared host-key / timeout / mux / port / key / auth options to a std `ssh`.
+fn apply_std_ssh_base(cmd: &mut StdCommand, target: &RemoteTarget, auth: Option<&SshAuth>) {
+    cmd.arg("-o").arg("StrictHostKeyChecking=accept-new");
+    cmd.arg("-o").arg("ConnectTimeout=10");
+    for opt in multiplex_opts() {
+        cmd.arg(opt);
+    }
+    if auth.is_none() {
+        cmd.arg("-o").arg("BatchMode=yes");
+    }
+    if let Some(port) = target.port {
+        cmd.arg("-p").arg(port.to_string());
+    }
+    if let Some(ref key) = target.key {
+        cmd.arg("-i").arg(key);
+    }
+    if let Some(a) = auth {
+        a.apply_to_std_command(cmd);
+    }
+}
+
+/// Apply shared options to a tokio `ssh` (long-lived bridge).
+fn apply_tokio_ssh_base(cmd: &mut Command, target: &RemoteTarget, auth: Option<&SshAuth>) {
+    cmd.arg("-o").arg("StrictHostKeyChecking=accept-new");
+    cmd.arg("-o").arg("ConnectTimeout=10");
+    for opt in multiplex_opts() {
+        cmd.arg(opt);
+    }
+    if auth.is_none() {
+        cmd.arg("-o").arg("BatchMode=yes");
+    }
+    if let Some(port) = target.port {
+        cmd.arg("-p").arg(port.to_string());
+    }
+    if let Some(ref key) = target.key {
+        cmd.arg("-i").arg(key);
+    }
+    if let Some(a) = auth {
+        a.apply_to_tokio_command(cmd);
+    }
+}
+
+/// Close the ControlMaster for `target` if one is up.
+///
+/// Best-effort: no master / non-unix / ssh missing → silent no-op. Call only on
+/// full host disconnect, not on session detach.
+pub(crate) fn exit_multiplex(target: &RemoteTarget) {
+    #[cfg(unix)]
+    {
+        let Ok(path) = control_path_template() else {
+            return;
+        };
+        let mut cmd = StdCommand::new("ssh");
+        cmd.arg("-o")
+            .arg(format!("ControlPath={}", path.display()))
+            .arg("-O")
+            .arg("exit");
+        if let Some(port) = target.port {
+            cmd.arg("-p").arg(port.to_string());
+        }
+        cmd.arg(format!("{}@{}", target.user, target.host));
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let _ = cmd.status();
+    }
+    let _ = target; // silence unused on windows
+}
+
 /// Locate the installed remote Koma binary without relying on interactive shell startup files.
 pub(crate) fn find_koma(target: &RemoteTarget, auth: Option<&SshAuth>) -> Result<String> {
     let output = exec_remote(
@@ -75,6 +195,7 @@ pub(crate) fn find_koma(target: &RemoteTarget, auth: Option<&SshAuth>) -> Result
     }
     Ok(output)
 }
+
 pub(crate) fn connect(
     target: &RemoteTarget,
     session_id: &str,
@@ -86,22 +207,7 @@ pub(crate) fn connect(
         anyhow::bail!("invalid remote Koma executable path");
     }
     let mut cmd = Command::new("ssh");
-    cmd.arg("-o")
-        .arg("StrictHostKeyChecking=accept-new")
-        .arg("-o")
-        .arg("ConnectTimeout=10");
-    if auth.is_none() {
-        cmd.arg("-o").arg("BatchMode=yes");
-    }
-    if let Some(port) = target.port {
-        cmd.arg("-p").arg(port.to_string());
-    }
-    if let Some(ref key) = target.key {
-        cmd.arg("-i").arg(key);
-    }
-    if let Some(a) = auth {
-        a.apply_to_tokio_command(&mut cmd);
-    }
+    apply_tokio_ssh_base(&mut cmd, target, auth);
     let remote_args = server_args(session_id, cwd)?;
     let remote_arg_refs: Vec<&str> = remote_args.iter().map(String::as_str).collect();
     let remote_command = remote_command(koma_path, &remote_arg_refs)?;
@@ -168,22 +274,7 @@ pub(crate) fn exec_remote(
     auth: Option<&SshAuth>,
 ) -> Result<String> {
     let mut cmd = StdCommand::new("ssh");
-    cmd.arg("-o")
-        .arg("StrictHostKeyChecking=accept-new")
-        .arg("-o")
-        .arg("ConnectTimeout=10");
-    if auth.is_none() {
-        cmd.arg("-o").arg("BatchMode=yes");
-    }
-    if let Some(port) = target.port {
-        cmd.arg("-p").arg(port.to_string());
-    }
-    if let Some(ref key) = target.key {
-        cmd.arg("-i").arg(key);
-    }
-    if let Some(a) = auth {
-        a.apply_to_std_command(&mut cmd);
-    }
+    apply_std_ssh_base(&mut cmd, target, auth);
     let output = cmd
         .arg(format!("{}@{}", target.user, target.host))
         .arg(command)
