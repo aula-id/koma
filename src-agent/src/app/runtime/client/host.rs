@@ -1623,7 +1623,11 @@ fn host_remote_attach(
         }
         while let Ok(mut active) = remote_connected_rx.try_recv() {
             if !remote_shared.is_current(active.attempt_id) {
-                let _ = handle.block_on(async { active.ssh_child.kill().await });
+                // Stale attach race: drop the bridge only (daemon stays up).
+                handle.block_on(async {
+                    crate::app::runtime::stdio_bridge::reap_bridge_child(&mut active.ssh_child)
+                        .await;
+                });
                 continue;
             }
             let sid = match &active.connection.transport {
@@ -1721,8 +1725,13 @@ fn host_remote(
     if let Ok(mut v) = live_view.lock() {
         *v = StreamView::default();
     }
+    // Flush Detach/QuitDaemon first, then reap the SSH bridge (not the
+    // remote session-daemon). Kill the bridge child only if it does not
+    // exit after the stdio close — never treat bridge death as session delete.
     super::teardown_connection(handle, active.connection);
-    let _ = handle.block_on(async { active.ssh_child.kill().await });
+    handle.block_on(async {
+        crate::app::runtime::stdio_bridge::reap_bridge_child(&mut active.ssh_child).await;
+    });
 
     // Keep RemoteCtx unless the transition is a full disconnect / local swapper / exit.
     match transition {

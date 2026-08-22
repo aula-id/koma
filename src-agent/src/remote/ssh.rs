@@ -1,4 +1,8 @@
 //! SSH client via shell-out to system `ssh` binary.
+//!
+//! Remote argv is always `koma server --session <id> [--cwd <path>]`. That
+//! process is a stdio↔sock **bridge** (see [`crate::app::runtime::server`]): it
+//! ensures the remote session-daemon and proxies IPC frames. It is not the agent.
 
 use std::process::{Command as StdCommand, Stdio};
 

@@ -1,8 +1,9 @@
 //! Client bridge for remote `koma server` connections.
 //!
 //! Similar to [`super::connect`] + [`super::bridge`] but works over generic
-//! `AsyncRead + AsyncWrite` streams (e.g., SSH channel stdin/stdout) instead
-//! of a unix socket.
+//! `AsyncRead + AsyncWrite` streams (SSH channel stdin/stdout) instead of a
+//! unix socket. The remote peer is the stdio bridge (`koma server`), which
+//! proxies frames to the durable session-daemon on `run/<id>.sock`.
 
 use anyhow::Result;
 use tokio::io::{AsyncRead, AsyncWrite, BufReader};
