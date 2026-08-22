@@ -453,16 +453,13 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::ListRemotePath { .. })
                 | Ok(super::HostCtl::ConfirmRemotePath { .. })
                 | Ok(super::HostCtl::CancelRemotePath) => {
-                    let envelope = serde_json::json!({
+                    // Dismiss the picker. Do NOT leave state=error — that keeps
+                    // the overlay open and freezes chrome under a dead dialog.
+                    let close = serde_json::json!({
                         "k": "RemotePathPicker",
-                        "state": "error",
-                        "error": if remote_ctx.is_some() {
-                            "return to remote hub to pick a folder"
-                        } else {
-                            "active session is not remote"
-                        }
+                        "state": "cancelled",
                     });
-                    if let Ok(json) = serde_json::to_string(&envelope) {
+                    if let Ok(json) = serde_json::to_string(&close) {
                         push(json);
                     }
                 }
