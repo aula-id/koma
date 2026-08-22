@@ -695,18 +695,7 @@ fn spawn_functions_compile_attached() {
     // Verify the function signatures are compatible. We can't easily
     // test actual IPC in a unit test, but we can at least confirm the
     // types line up at compile time.
-    let _: fn(
-        Sender<ImportGraphResult>,
-        Option<String>,
-        u32,
-        GraphDirection,
-        Option<Vec<String>>,
-        Option<Vec<String>>,
-        Vec<String>,
-        HashMap<String, String>,
-        Option<String>,
-        Option<String>,
-    ) = spawn_import_graph_attached;
+    let _: fn(Sender<ImportGraphResult>, ImportGraphJob) = spawn_import_graph_attached;
 }
 
 #[test]

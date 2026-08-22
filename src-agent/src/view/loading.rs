@@ -93,6 +93,77 @@ fn step_line<'a>(
 /// blocking restart shows motion instead of a frozen frame. Standalone (no daemon
 /// snapshot needed) — mirrors this module's `draw` layout but with a single line.
 pub fn draw_reopening(frame: &mut Frame, spinner_frame: u64, palette: &Palette) {
+    draw_spinner_line(frame, spinner_frame, palette, "reopening");
+}
+
+/// Remote-connect bootstrap timeline (password already collected). Keeps the
+/// alt-screen alive with a braille spinner + stage label while SSH work runs
+/// off-thread.
+pub fn draw_remote_bootstrap(
+    frame: &mut Frame,
+    spinner_frame: u64,
+    palette: &Palette,
+    host_label: &str,
+    stage_label: &str,
+    elapsed: std::time::Duration,
+) {
+    let area = frame.area();
+    crate::view::clear_and_fill(frame, area, palette.bg);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(32),
+            Constraint::Length(1), // title
+            Constraint::Length(1), // host
+            Constraint::Length(1), // gap
+            Constraint::Length(1), // spinner + stage
+            Constraint::Length(1), // gap
+            Constraint::Length(1), // elapsed
+            Constraint::Min(0),
+        ])
+        .split(area);
+
+    let title = Paragraph::new(Line::from(Span::styled(
+        "koma remote",
+        Style::default().fg(palette.accent).bg(palette.bg),
+    )))
+    .style(Style::default().bg(palette.bg))
+    .alignment(Alignment::Center);
+    frame.render_widget(title, chunks[1]);
+
+    let host = Paragraph::new(Line::from(Span::styled(
+        host_label,
+        Style::default().fg(palette.dim).bg(palette.bg),
+    )))
+    .style(Style::default().bg(palette.bg))
+    .alignment(Alignment::Center);
+    frame.render_widget(host, chunks[2]);
+
+    let glyph = SPINNER[(spinner_frame % 10) as usize];
+    let line = Line::from(vec![
+        Span::styled(glyph, Style::default().fg(palette.accent).bg(palette.bg)),
+        Span::styled(
+            format!("  {stage_label}"),
+            Style::default().fg(palette.fg).bg(palette.bg),
+        ),
+    ]);
+    frame.render_widget(
+        Paragraph::new(line)
+            .style(Style::default().bg(palette.bg))
+            .alignment(Alignment::Center),
+        chunks[4],
+    );
+
+    let footer = Paragraph::new(Line::from(Span::styled(
+        format!("connecting · {:.1}s", elapsed.as_secs_f64()),
+        Style::default().fg(palette.dim).bg(palette.bg),
+    )))
+    .style(Style::default().bg(palette.bg))
+    .alignment(Alignment::Center);
+    frame.render_widget(footer, chunks[6]);
+}
+
+fn draw_spinner_line(frame: &mut Frame, spinner_frame: u64, palette: &Palette, label: &str) {
     let area = frame.area();
     crate::view::clear_and_fill(frame, area, palette.bg);
     let chunks = Layout::default()
@@ -118,7 +189,7 @@ pub fn draw_reopening(frame: &mut Frame, spinner_frame: u64, palette: &Palette) 
     let line = Line::from(vec![
         Span::styled(glyph, Style::default().fg(palette.accent).bg(palette.bg)),
         Span::styled(
-            "  reopening",
+            format!("  {label}"),
             Style::default().fg(palette.fg).bg(palette.bg),
         ),
     ]);
