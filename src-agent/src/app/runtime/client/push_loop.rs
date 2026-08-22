@@ -160,6 +160,9 @@ pub(super) fn push_loop(
     live_marks: &std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
     live_view: &std::sync::Arc<std::sync::Mutex<super::StreamView>>,
     terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
+    // When set, this fold is an SSH-bridged remote session: leave/kill returns to
+    // the remote hub (not the local swapper), and KillSession uses remote SSH kill.
+    remote_ctx: Option<&super::remote_ctl::RemoteCtx>,
 ) -> HostTransition {
     use std::sync::mpsc::TryRecvError;
 
@@ -405,18 +408,33 @@ pub(super) fn push_loop(
                 // KILL the daemon `id`. Killing the CURRENTLY-ATTACHED session: queue a
                 // graceful QuitDaemon on the live conn (flushed by teardown), ensure its death
                 // OFF-thread — a harmless double-QuitDaemon that ALSO fires a follow-up
-                // RefreshHub so the swapper we're about to land in drops the row the instant
-                // it is gone (its entry push may briefly show it for <1s) — then hand back to
-                // the swapper (the same path `ToSwapper` takes). A BACKGROUND kill just
-                // escalates OFF-thread and refreshes the hub once the daemon is confirmed dead
-                // (the off-thread sweep drained at (b-bis) pushes the rebuilt hub).
+                // RefreshHub so the hub we're about to land in drops the row the instant
+                // it is gone — then hand back to the hub. Remote attach returns to the
+                // remote hub; local returns to the local swapper. A BACKGROUND kill just
+                // escalates OFF-thread and refreshes the hub once the daemon is confirmed dead.
                 Ok(super::HostCtl::KillSession(id)) => {
-                    if current_owned.as_deref() == Some(id.as_str()) {
+                    let leave_current = current_owned.as_deref() == Some(id.as_str());
+                    if leave_current {
                         let _ = req_tx.send(ClientRequest::QuitDaemon);
-                        super::host::spawn_kill_and_refresh(ctl_tx.clone(), id);
-                        return HostTransition::ToSwapper;
                     }
-                    super::host::spawn_kill_and_refresh(ctl_tx.clone(), id);
+                    if let Some(ctx) = remote_ctx {
+                        super::host::spawn_remote_kill_and_refresh(
+                            ctl_tx.clone(),
+                            ctx.target.clone(),
+                            ctx.password.clone(),
+                            id,
+                        );
+                        if leave_current {
+                            return HostTransition::ToRemoteHub {
+                                ctx: Box::new(ctx.clone()),
+                            };
+                        }
+                    } else {
+                        super::host::spawn_kill_and_refresh(ctl_tx.clone(), id);
+                        if leave_current {
+                            return HostTransition::ToSwapper;
+                        }
+                    }
                 }
                 // Physically DELETE a history session OFF-thread (guarded host-side against
                 // deleting a live/locked session), then RefreshHub. A history row is never the
@@ -1141,14 +1159,28 @@ pub(super) fn push_loop(
                 }
                 Err(TryRecvError::Empty) => break,
                 // The reader task dropped its sender: the daemon's socket closed. Fall
-                // back to the swapper so the user can pick another session.
-                Err(TryRecvError::Disconnected) => return HostTransition::ToSwapper,
+                // back to the hub so the user can pick another session.
+                Err(TryRecvError::Disconnected) => {
+                    return if let Some(ctx) = remote_ctx {
+                        HostTransition::ToRemoteHub {
+                            ctx: Box::new(ctx.clone()),
+                        }
+                    } else {
+                        HostTransition::ToSwapper
+                    };
+                }
             }
         }
 
-        // `/resume` hand-off from the daemon: detach + show the swapper.
+        // `/resume` hand-off from the daemon: detach + show the hub.
         if open_swapper_requested {
-            return HostTransition::ToSwapper;
+            return if let Some(ctx) = remote_ctx {
+                HostTransition::ToRemoteHub {
+                    ctx: Box::new(ctx.clone()),
+                }
+            } else {
+                HostTransition::ToSwapper
+            };
         }
         // `/new` hand-off from the daemon: attach a freshly minted session. (The `kill`
         // flag is a daemon-side reap the headless host does not drive in W0; a plain

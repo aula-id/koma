@@ -287,6 +287,29 @@ pub(super) fn spawn_kill_and_refresh(ctl_tx: std::sync::mpsc::Sender<HostCtl>, i
     });
 }
 
+/// Spawn an OFF-THREAD kill of a **remote** session-daemon over SSH, then refresh the hub.
+///
+/// Uses [`crate::remote::sessions::kill_session_over_ssh`] (`koma daemon kill --session`)
+/// so the remote hub Kill button never probes a local socket. Disconnect-from-host is a
+/// separate control (`DisconnectRemote`) and must not call this.
+pub(super) fn spawn_remote_kill_and_refresh(
+    ctl_tx: std::sync::mpsc::Sender<HostCtl>,
+    target: crate::remote::RemoteTarget,
+    password: Option<String>,
+    id: String,
+) {
+    std::thread::spawn(move || {
+        let auth = password
+            .as_deref()
+            .map(|p| crate::remote::auth::SshAuth::new(p.to_string()))
+            .transpose()
+            .ok()
+            .flatten();
+        let _ = crate::remote::sessions::kill_session_over_ssh(&target, auth.as_ref(), &id);
+        let _ = ctl_tx.send(HostCtl::RefreshHub);
+    });
+}
+
 /// Spawn an OFF-THREAD escalating ensure-death of the session-daemon `id`, with NO follow-up
 /// refresh. Used by the `New { kill: true }` switch: the OLD daemon is reaped WHILE the host
 /// attaches a BRAND-NEW session, so the new attach must not wait on the old daemon's corpse
@@ -1277,6 +1300,7 @@ fn host_attached(
             live_marks,
             live_view,
             terminal_manager,
+            None, // local attach
         )
     };
 
@@ -1524,6 +1548,16 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                     mgr.kill(&id);
                 }
             }
+            Ok(HostCtl::KillSession(id)) => {
+                // Kill the remote session-daemon; stay on this host hub.
+                // Distinct from DisconnectRemote (leave host, daemons keep cooking).
+                spawn_remote_kill_and_refresh(
+                    ctl_tx.clone(),
+                    ctx.target.clone(),
+                    ctx.password.clone(),
+                    id,
+                );
+            }
             // Everything else is no-op on the detached remote hub (local git/store/
             // coding/oauth ctls don't apply until a session is attached).
             Ok(_) => {}
@@ -1714,6 +1748,7 @@ fn host_remote(
             live_marks,
             live_view,
             terminal_manager,
+            Some(&active.ctx),
         )
     };
     if let Ok(mut g) = live_req.lock() {
