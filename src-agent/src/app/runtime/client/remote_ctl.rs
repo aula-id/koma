@@ -104,6 +104,19 @@ impl RemoteSessionShared {
         }
     }
 
+    /// Replace the password oneshot for an in-flight attempt (stale-store retry).
+    /// Returns the new receiver, or `None` if the attempt is no longer current.
+    pub fn rearm_password(&self, attempt_id: u64) -> Option<Receiver<String>> {
+        if !self.is_current(attempt_id) {
+            return None;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        if let Ok(mut slot) = self.password_tx.lock() {
+            *slot = Some((attempt_id, tx));
+        }
+        Some(rx)
+    }
+
     pub fn finish(&self, attempt_id: u64) {
         self.clear_password(attempt_id);
         if let Ok(mut slot) = self.cancellation.lock() {
@@ -312,7 +325,7 @@ fn remote_connect_worker(
     }
 
     let mut password_from_store = false;
-    let password = match auth::probe_key_auth(&target) {
+    let mut password = match auth::probe_key_auth(&target) {
         AuthProbe::KeyReady => {
             shared.clear_password(attempt_id);
             None
@@ -351,7 +364,7 @@ fn remote_connect_worker(
     };
 
     // Short-lived askpass for bootstrap + find_koma + session list.
-    let auth = match password
+    let mut auth = match password
         .as_ref()
         .map(|p| SshAuth::from_password(p.clone()))
         .transpose()
@@ -383,26 +396,88 @@ fn remote_connect_worker(
         None,
         Vec::new(),
     );
-    let auth_ref = auth.as_ref();
-    if let Err(error) = bootstrap::ensure_koma_compatible(&target, auth_ref) {
+    if let Err(error) = bootstrap::ensure_koma_compatible(&target, auth.as_ref()) {
+        // Stale store password: wipe, re-open UI prompt once, retry bootstrap.
         if password_from_store {
             let _ = crate::remote::secrets::delete_remote_password(&host_id);
+            if is_cancelled() {
+                shared.finish(attempt_id);
+                return;
+            }
+            let Some(retry_rx) = shared.rearm_password(attempt_id) else {
+                shared.finish(attempt_id);
+                return;
+            };
+            push_state(
+                "auth_required",
+                Some(&user_str),
+                Some(&host_str),
+                None,
+                None,
+                Vec::new(),
+            );
+            let retry_password = match retry_rx.recv() {
+                Ok(password) if !is_cancelled() => password,
+                _ => {
+                    shared.finish(attempt_id);
+                    return;
+                }
+            };
+            shared.clear_password(attempt_id);
+            password = Some(retry_password.clone());
+            auth = match SshAuth::from_password(retry_password) {
+                Ok(a) => Some(a),
+                Err(error) => {
+                    push_state(
+                        "error",
+                        Some(&user_str),
+                        Some(&host_str),
+                        None,
+                        Some(&format!("auth setup failed: {error:#}")),
+                        Vec::new(),
+                    );
+                    shared.finish(attempt_id);
+                    return;
+                }
+            };
+            push_state(
+                "bootstrapping",
+                Some(&user_str),
+                Some(&host_str),
+                None,
+                None,
+                Vec::new(),
+            );
+            if let Err(error) = bootstrap::ensure_koma_compatible(&target, auth.as_ref()) {
+                push_state(
+                    "error",
+                    Some(&user_str),
+                    Some(&host_str),
+                    None,
+                    Some(&format!("remote bootstrap failed: {error:#}")),
+                    Vec::new(),
+                );
+                shared.finish(attempt_id);
+                return;
+            }
+        } else {
+            push_state(
+                "error",
+                Some(&user_str),
+                Some(&host_str),
+                None,
+                Some(&format!("remote bootstrap failed: {error:#}")),
+                Vec::new(),
+            );
+            shared.finish(attempt_id);
+            return;
         }
-        push_state(
-            "error",
-            Some(&user_str),
-            Some(&host_str),
-            None,
-            Some(&format!("remote bootstrap failed: {error:#}")),
-            Vec::new(),
-        );
-        shared.finish(attempt_id);
-        return;
     }
     // Persist password after successful bootstrap (shared with TUI).
     if let Some(ref pw) = password {
         let _ = crate::remote::secrets::set_remote_password(&host_id, pw);
     }
+    let auth_ref = auth.as_ref();
     if is_cancelled() {
         shared.finish(attempt_id);
         return;
