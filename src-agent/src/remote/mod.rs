@@ -1,7 +1,20 @@
 //! Remote development over SSH (`koma remote user@host`).
 //!
-//! SSH-connects to a remote machine, auto-provisions koma if needed,
-//! execs `koma server`, and bridges the SSH channel to a local TUI client.
+//! SSH-connects to a remote machine, auto-provisions koma if needed, execs
+//! `koma server` (a **thin bridge**), and attaches a local TUI/GUI client.
+//!
+//! Architecture:
+//!
+//! ```text
+//! local thin-client ──SSH stdio──► koma server (bridge)
+//!                                     │ ensure + dial
+//!                                     ▼
+//!                               remote session-daemon
+//!                               ~/.koma/run/<id>.sock
+//! ```
+//!
+//! The durable agent is the remote session-daemon. Closing SSH / detaching
+//! only drops the bridge; QuitDaemon (hub kill / `/new kill`) stops the daemon.
 
 pub(crate) mod auth;
 pub(crate) mod bootstrap;
