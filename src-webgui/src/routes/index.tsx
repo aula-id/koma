@@ -118,6 +118,10 @@ function RootLayout() {
     // indicator has data on load, without requiring the Source Control panel
     // to ever be opened.
     useKoma.getState().req({ r: 'GitStatus' })
+    // Prefetch saved remote hosts so NewSessionMenu / hub remote entries are
+    // populated on first paint — same host-local read as RemotePanel's mount
+    // fetch, without requiring the Remote sidebar to be opened first.
+    useKoma.getState().req({ r: 'GetRemoteHosts' })
     // Also refresh installed extensions so the sidebar is populated without
     // requiring the Store panel to ever be opened.
     useKoma.getState().refreshInstalled()
