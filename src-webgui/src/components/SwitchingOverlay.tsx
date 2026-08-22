@@ -136,7 +136,9 @@ function LoadingSplash({ workspace, awareness }: { workspace: LoadPhase; awarene
 export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
   const to = useKoma((s) => s.ui.switchingTo)
   const remoteState = useKoma((s) => s.remoteState)
-  const remoteConnecting = !!to?.startsWith('remote ') && !['connected', 'error', 'disconnected'].includes(remoteState.state)
+  const remoteConnecting =
+    !!to?.startsWith('remote ') &&
+    !['ready', 'connected', 'error', 'disconnected'].includes(remoteState.state)
   const loading = useKoma((s) => s.ui.loading)
   const loadingDismissed = useKoma((s) => s.ui.loadingDismissed)
   const dismissLoading = useKoma((s) => s.dismissLoading)
