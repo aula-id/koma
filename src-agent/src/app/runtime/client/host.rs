@@ -1461,6 +1461,9 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
             }
             Ok(HostCtl::DisconnectRemote) | Ok(HostCtl::CancelRemoteConnect) => {
                 remote_shared.cancel();
+                // Full host leave — tear down ControlMaster so credentials/sockets
+                // don't linger after the user disconnects.
+                crate::remote::ssh::exit_multiplex(&ctx.target);
                 push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
                 push_remote_hosts_list(push, None);
                 return HostStep::Swapper;
@@ -1475,6 +1478,7 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                     push_hub(&hub, push, push_state);
                     continue;
                 }
+                crate::remote::ssh::exit_multiplex(&ctx.target);
                 push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
                 push_remote_hosts_list(push, None);
                 // Re-queue the connect so host_swapper picks it up.
@@ -1814,7 +1818,8 @@ fn host_remote(
         | push_loop::HostTransition::ToSwapper
         | push_loop::HostTransition::Exit
         | push_loop::HostTransition::Attach { .. } => {
-            // Full leave remote: drop ctx, clear state.
+            // Full leave remote: close ControlMaster, drop ctx, clear state.
+            crate::remote::ssh::exit_multiplex(&active.ctx.target);
             drop(active.ctx);
             push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
             *current = None;
