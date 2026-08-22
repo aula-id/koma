@@ -1181,11 +1181,18 @@ pub(super) fn push_loop(
                 }
                 // ─── GUI terminal view (host-local PTY lifecycle) ─────
                 // Terminal sessions are managed host-side via the shared
-                // TerminalManager. These routes delegate to it; the reader
-                // threads spawned by `create` push output/exit envelopes.
+                // TerminalManager. On a live remote attach, spawn ssh -t into
+                // the remote host (same mux/auth as the agent bridge).
                 Ok(super::HostCtl::TerminalCreate { id, cwd }) => {
                     if let Ok(mut mgr) = terminal_manager.lock() {
-                        if let Err(e) = mgr.create(id, cwd) {
+                        let result = if let Some(ctx) = remote_ctx {
+                            // Prefer explicit cwd from the UI; else session workdir
+                            // is unknown here — remote $HOME via interactive shell.
+                            mgr.create_remote(id, &ctx.target, ctx.password(), cwd.as_deref())
+                        } else {
+                            mgr.create(id, cwd)
+                        };
+                        if let Err(e) = result {
                             crate::model::store::append_global_error_log(
                                 "terminal",
                                 &format!("terminal create failed: {e}"),

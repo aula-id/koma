@@ -110,6 +110,60 @@ pub(crate) fn multiplex_opts() -> Vec<String> {
     Vec::new()
 }
 
+/// Build a `portable_pty::CommandBuilder` that runs an interactive login shell
+/// on `target` via `ssh -t` (reuses ControlMaster when available).
+///
+/// The local child is `ssh`; the remote side gets a real TTY so resize/signals
+/// work. Used by the GUI terminal view when a remote host ctx is live.
+///
+/// `auth` must outlive the spawned child (askpass script is deleted on drop) —
+/// callers store it on the terminal session.
+pub(crate) fn interactive_shell_command(
+    target: &RemoteTarget,
+    auth: Option<&SshAuth>,
+    cwd: Option<&str>,
+) -> Result<portable_pty::CommandBuilder> {
+    let mut cmd = portable_pty::CommandBuilder::new("ssh");
+    // Force a remote TTY even though ssh's stdin is already a local PTY slave —
+    // some OpenSSH builds still need -t for remote job control / full-screen apps.
+    // CommandBuilder::arg returns () — no chaining.
+    cmd.arg("-t");
+    cmd.arg("-o");
+    cmd.arg("StrictHostKeyChecking=accept-new");
+    cmd.arg("-o");
+    cmd.arg("ConnectTimeout=10");
+    for opt in multiplex_opts() {
+        cmd.arg(opt);
+    }
+    if auth.is_none() {
+        cmd.arg("-o");
+        cmd.arg("BatchMode=yes");
+    }
+    if let Some(port) = target.port {
+        cmd.arg("-p");
+        cmd.arg(port.to_string());
+    }
+    if let Some(ref key) = target.key {
+        cmd.arg("-i");
+        cmd.arg(key);
+    }
+    if let Some(a) = auth {
+        a.apply_to_command_builder(&mut cmd);
+    }
+    cmd.arg(format!("{}@{}", target.user, target.host));
+    // Single remote argv — ssh runs it under the login shell. Quote cwd so a
+    // hostile path can't break out of the cd.
+    let remote = match cwd.map(str::trim).filter(|c| !c.is_empty()) {
+        Some(dir) => {
+            let q = shell_quote(dir);
+            format!("cd {q} 2>/dev/null || true; exec \"${{SHELL:-/bin/bash}}\" -l")
+        }
+        None => "exec \"${SHELL:-/bin/bash}\" -l".to_string(),
+    };
+    cmd.arg(remote);
+    Ok(cmd)
+}
+
 /// Apply shared host-key / timeout / mux / port / key / auth options to a std `ssh`.
 fn apply_std_ssh_base(cmd: &mut StdCommand, target: &RemoteTarget, auth: Option<&SshAuth>) {
     cmd.arg("-o").arg("StrictHostKeyChecking=accept-new");

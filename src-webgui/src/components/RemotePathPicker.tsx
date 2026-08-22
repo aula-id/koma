@@ -14,6 +14,11 @@ const IDLE_PATH = {
   error: null as string | null,
 }
 
+// Fixed list viewport — 15 rows so navigate/listing never resizes the shell
+// (host clears dirs on listing; even with stale dirs kept, counts differ).
+const LIST_ROWS = 15
+const ROW_PX = 28
+
 /**
  * Remote folder picker overlay. Driven by host `RemotePathPicker` pushes
  * (listing / ready / error / cancelled). Confirm mints a new remote session
@@ -276,13 +281,16 @@ export function RemotePathPicker() {
                 {remotePath.error}
               </div>
             )}
-            <div className="max-h-[50vh] overflow-auto py-1">
+            <div
+              className="overflow-auto py-1"
+              style={{ height: LIST_ROWS * ROW_PX }}
+            >
               {parentPath && (
                 <button
                   type="button"
                   tabIndex={-1}
                   onClick={() => enter(parentPath)}
-                  className="flex w-full items-center gap-1.5 px-2.5 py-1 text-left text-[12px] text-koma-fg opacity-50 hover:bg-koma-hover hover:opacity-100"
+                  className="flex h-7 w-full items-center gap-1.5 px-2.5 text-left text-[12px] text-koma-fg opacity-50 hover:bg-koma-hover hover:opacity-100"
                 >
                   <ChevronRight size={11} className="rotate-180" />
                   ..
@@ -303,7 +311,7 @@ export function RemotePathPicker() {
                     tabIndex={-1}
                     onClick={() => enter(dir)}
                     onMouseEnter={() => setHighlight(i)}
-                    className={`flex w-full items-center gap-1.5 px-2.5 py-1 text-left text-[12px] ${
+                    className={`flex h-7 w-full items-center gap-1.5 px-2.5 text-left text-[12px] ${
                       activeRow
                         ? 'bg-koma-hover text-koma-fg'
                         : 'text-koma-fg opacity-80 hover:bg-koma-hover hover:opacity-100'

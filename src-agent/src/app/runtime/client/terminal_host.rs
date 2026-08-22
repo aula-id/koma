@@ -2,9 +2,16 @@
 //!
 //! Each terminal tab in the React UI is backed by a real pseudo-terminal spawned
 //! via [`portable_pty`]. The [`TerminalManager`] owns every live session and
-//! exposes thin `create`/`input`/`resize`/`kill`/`cleanup_all` operations that
-//! the host-relay control loop calls when it receives [`super::HostCtl`]
-//! terminal messages.
+//! exposes thin `create`/`create_remote`/`input`/`resize`/`kill`/`cleanup_all`
+//! operations that the host-relay control loop calls when it receives
+//! [`super::HostCtl`] terminal messages.
+//!
+//! ## Local vs remote
+//!
+//! - **Local** — spawn the host `$SHELL` (or COMSPEC) in a PTY.
+//! - **Remote** — spawn `ssh -t user@host '…login shell…'` in a local PTY, reusing
+//!   the same ControlMaster / askpass path as the remote agent bridge. Input /
+//!   resize / output protocol is identical; only the child argv changes.
 //!
 //! ## Threading model
 //!
@@ -21,10 +28,14 @@
 //! the child dies and emits the exit notification.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::sync::Arc;
 
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
+
+use crate::remote::auth::SshAuth;
+use crate::remote::ssh;
+use crate::remote::RemoteTarget;
 
 use super::push_proto::{push_terminal_exit, push_terminal_output};
 
@@ -50,6 +61,9 @@ struct TerminalSession {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     /// Writer end of the PTY for forwarding keystrokes from the webview.
     writer: Box<dyn Write + Send>,
+    /// Keeps the askpass script alive for password-auth remote shells. Dropped
+    /// only when the session is killed (SshAuth::Drop deletes the temp file).
+    _auth: Option<SshAuth>,
 }
 
 /// Manages all live terminal sessions for the host-relay. Shared between the
@@ -71,9 +85,9 @@ impl TerminalManager {
         }
     }
 
-    /// Spawn a new PTY session. `id` is a stable identifier from the React
-    /// side; `cwd` is the working directory (falls back to the process cwd if
-    /// `None`). Returns `Ok(())` on success.
+    /// Spawn a new **local** PTY session. `id` is a stable identifier from the
+    /// React side; `cwd` is the working directory (falls back to the process cwd
+    /// if `None`).
     pub fn create(&mut self, id: String, cwd: Option<String>) -> anyhow::Result<()> {
         let shell = platform_shell();
 
@@ -85,6 +99,35 @@ impl TerminalManager {
             cmd.cwd(dir);
         }
 
+        self.spawn_cmd(id, cmd, None)
+    }
+
+    /// Spawn a PTY whose child is `ssh -t` into `target` (interactive remote
+    /// login shell). Reuses ControlMaster mux + askpass from the remote stack.
+    ///
+    /// `password` rebuilds a short-lived [`SshAuth`] kept on the session for the
+    /// life of the PTY. `cwd` is an optional remote path to `cd` into first.
+    pub fn create_remote(
+        &mut self,
+        id: String,
+        target: &RemoteTarget,
+        password: Option<&str>,
+        cwd: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let auth = match password {
+            Some(pw) => Some(SshAuth::from_password(pw.to_string())?),
+            None => None,
+        };
+        let cmd = ssh::interactive_shell_command(target, auth.as_ref(), cwd)?;
+        self.spawn_cmd(id, cmd, auth)
+    }
+
+    fn spawn_cmd(
+        &mut self,
+        id: String,
+        cmd: CommandBuilder,
+        auth: Option<SshAuth>,
+    ) -> anyhow::Result<()> {
         let pty_size = PtySize {
             rows: 24,
             cols: 80,
@@ -97,7 +140,7 @@ impl TerminalManager {
         let child = pair
             .slave
             .spawn_command(cmd)
-            .map_err(|e| anyhow::anyhow!("failed to spawn shell: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("failed to spawn terminal: {e}"))?;
 
         let mut writer = pair.master.take_writer()?;
         writer.flush()?;
@@ -108,6 +151,7 @@ impl TerminalManager {
             master: pair.master,
             child,
             writer,
+            _auth: auth,
         };
         self.sessions.insert(id.clone(), session);
 
@@ -160,6 +204,7 @@ impl TerminalManager {
             let _ = session.child.kill();
             drop(session.master);
             drop(session.writer);
+            drop(session._auth);
             push_terminal_exit(&*self.push, id, None);
         }
     }
@@ -169,6 +214,7 @@ impl TerminalManager {
         for (_, mut session) in self.sessions.drain() {
             let _ = session.child.kill();
             drop(session.master);
+            drop(session._auth);
         }
     }
 }
