@@ -72,7 +72,7 @@ export function Titlebar({ onSearch, onRename, onTerminal, overlayOpen }: Titleb
       title={remoteTarget ? `Remote: ${remoteTarget}` : undefined}
       onMouseDown={handleMouseDown}
     >
-      <span id="title">{remoteLive ? 'koma · remote' : 'koma'}</span>
+      <span id="title">koma</span>
       {!overlayOpen && (
         <div
           id="cmdbar"

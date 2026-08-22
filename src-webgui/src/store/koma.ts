@@ -5064,11 +5064,14 @@ export const useKoma = create<KomaState>((set, get) => ({
       return { ui: { ...s.ui, tabs, activeTabId: id } }
     })
     // Send TerminalCreate to the host if this PTY hasn't been created yet.
+    // When a session is attached, pass its primary workdir so remote shells
+    // open there (local shells use it as the PTY cwd too).
     const created = (globalThis as any).__terminalsCreated ?? new Set<string>()
     if (!created.has(terminalId)) {
       created.add(terminalId)
       ;(globalThis as any).__terminalsCreated = created
-      get().req({ r: 'TerminalCreate', id: terminalId })
+      const cwd = get().settingsValues?.workdir?.[0] ?? undefined
+      get().req({ r: 'TerminalCreate', id: terminalId, cwd })
     }
   },
   closeTab: (id, opts) => {

@@ -91,10 +91,21 @@ function RootLayout() {
   }, [focusPlanTick])
 
   // Terminal button handler: each click creates a new terminal tab with a unique ID.
+  // Host opens a remote shell (ssh -t) when remote hub/session is live; local otherwise.
   const handleTerminal = () => {
     terminalCountRef.current += 1
     const n = terminalCountRef.current
-    const title = n === 1 ? 'Terminal' : `Terminal ${n}`
+    const rs = useKoma.getState().remoteState
+    const remoteLive = rs.state === 'ready' || rs.state === 'connected'
+    const hostLabel =
+      remoteLive && rs.user && rs.host ? `${rs.user}@${rs.host}` : null
+    const title = hostLabel
+      ? n === 1
+        ? hostLabel
+        : `${hostLabel} ${n}`
+      : n === 1
+        ? 'Terminal'
+        : `Terminal ${n}`
     const id = `t${Date.now()}`
     openTerminalTab(id, title)
   }
