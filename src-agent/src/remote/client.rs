@@ -133,6 +133,12 @@ pub(crate) fn run_remote_client_with_cwd(
         crate::app::runtime::stdio_bridge::reap_bridge_child(&mut session.child).await;
     });
 
+    // Full remote quit leaves the host — close ControlMaster. Resume/NewSession
+    // stay on the host and keep the mux for hub list / next bridge.
+    if matches!(outcome, RemoteExit::Exit) {
+        super::ssh::exit_multiplex(target);
+    }
+
     Ok(outcome)
 }
 

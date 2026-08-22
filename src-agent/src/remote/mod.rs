@@ -15,6 +15,10 @@
 //!
 //! The durable agent is the remote session-daemon. Closing SSH / detaching
 //! only drops the bridge; QuitDaemon (hub kill / `/new kill`) stops the daemon.
+//!
+//! OpenSSH **ControlMaster** multiplexes every `ssh` for a given host
+//! (`~/.koma/ssh-mux/%C`, ControlPersist=300). Host disconnect calls
+//! `ssh::exit_multiplex`; session detach does not.
 
 pub(crate) mod auth;
 pub(crate) mod bootstrap;
