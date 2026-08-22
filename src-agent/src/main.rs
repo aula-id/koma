@@ -124,7 +124,7 @@ fn main() -> anyhow::Result<()> {
     if let Some(sub) = opts.subcommand {
         match sub {
             cli::DaemonCli::Run(verb) => {
-                return match app::run_daemon_subcommand(verb) {
+                return match app::run_daemon_subcommand(verb, opts.session.as_deref()) {
                     Ok(()) => Ok(()),
                     Err(e) => {
                         eprintln!("error: {e:#}");
