@@ -101,12 +101,22 @@ export function ScopePill({ scope }: { scope: 'global' | 'local' }) {
   )
 }
 
-export function AddBtn({ onClick, label }: { onClick: () => void; label: string }) {
+export function AddBtn({
+  onClick,
+  label,
+  tourId,
+}: {
+  onClick: () => void
+  label: string
+  /** Stable driver.js / tutorial target (always discoverable; not hover-gated). */
+  tourId?: string
+}) {
   return (
     <button
       onClick={onClick}
       title={label}
       aria-label={label}
+      data-tour={tourId}
       className="flex h-5 w-5 items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
     >
       <Plus size={14} />
@@ -116,10 +126,14 @@ export function AddBtn({ onClick, label }: { onClick: () => void; label: string 
 
 export function DetailHeader({ onBack, title }: { onBack: () => void; title: string }) {
   return (
-    <div className="flex h-8 flex-none items-center gap-1 border-b border-koma-border px-2">
+    <div
+      className="flex h-8 flex-none items-center gap-1 border-b border-koma-border px-2"
+      data-tour="connector-detail-header"
+    >
       <button
         onClick={onBack}
         aria-label="Back"
+        data-tour="connector-back"
         className="flex h-6 w-6 items-center justify-center rounded text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
       >
         <ChevronLeft size={16} />
@@ -131,9 +145,13 @@ export function DetailHeader({ onBack, title }: { onBack: () => void; title: str
 
 export function FormActions({ onCancel, onSave, saveDisabled }: { onCancel: () => void; onSave: () => void; saveDisabled?: boolean }) {
   return (
-    <div className="flex flex-none items-center justify-end gap-2 border-t border-koma-border px-3 py-2">
+    <div
+      className="flex flex-none items-center justify-end gap-2 border-t border-koma-border px-3 py-2"
+      data-tour="form-actions"
+    >
       <button
         onClick={onCancel}
+        data-tour="form-cancel"
         className="rounded px-2.5 py-1 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
       >
         Cancel
@@ -141,6 +159,7 @@ export function FormActions({ onCancel, onSave, saveDisabled }: { onCancel: () =
       <button
         onClick={onSave}
         disabled={saveDisabled}
+        data-tour="form-save"
         className="rounded border border-koma-border px-2.5 py-1 text-[12px] text-koma-fg transition-colors enabled:hover:bg-koma-hover disabled:opacity-40"
       >
         Save
