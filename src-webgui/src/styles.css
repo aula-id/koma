@@ -334,48 +334,49 @@ svg.animate-spin {
 *::-webkit-scrollbar-thumb:hover { background: var(--color-koma-fg, #aaa); }
 *::-webkit-scrollbar-corner { background: transparent; }
 
-/* driver.js popover themed to koma palette (Tutorial tours). */
+/* driver.js popover themed to koma palette (Tutorial tours).
+   Colors/fonts only — do NOT override position/transform/arrow geometry. */
 .koma-driver-theme {
-  background: var(--koma-bg, #0b0e14) !important;
-  color: var(--koma-fg, #c8d3f5) !important;
-  border: 1px solid color-mix(in srgb, var(--koma-fg, #c8d3f5) 12%, var(--koma-bg, #0b0e14)) !important;
-  border-radius: 8px !important;
-  box-shadow: 0 8px 28px color-mix(in srgb, #000 45%, transparent) !important;
+  background-color: var(--koma-bg, #0b0e14);
+  color: var(--koma-fg, #c8d3f5);
+  border: 1px solid color-mix(in srgb, var(--koma-fg, #c8d3f5) 12%, var(--koma-bg, #0b0e14));
+  border-radius: 8px;
+  box-shadow: 0 8px 28px color-mix(in srgb, #000 45%, transparent);
 }
 .koma-driver-theme .driver-popover-title {
-  color: var(--koma-fg, #c8d3f5) !important;
-  font-size: 13px !important;
-  font-weight: 600 !important;
+  color: var(--koma-fg, #c8d3f5);
+  font-size: 13px;
+  font-weight: 600;
 }
 .koma-driver-theme .driver-popover-description {
-  color: color-mix(in srgb, var(--koma-fg, #c8d3f5) 70%, transparent) !important;
-  font-size: 12px !important;
-  line-height: 1.5 !important;
+  color: color-mix(in srgb, var(--koma-fg, #c8d3f5) 72%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
 }
 .koma-driver-theme .driver-popover-progress-text {
-  color: var(--koma-dim, #adadad) !important;
-  font-size: 11px !important;
+  color: var(--koma-dim, #adadad);
+  font-size: 11px;
+}
+.koma-driver-theme button {
+  text-shadow: none;
+  font-family: inherit;
 }
 .koma-driver-theme .driver-popover-prev-btn,
-.koma-driver-theme .driver-popover-next-btn,
 .koma-driver-theme .driver-popover-close-btn {
-  background: color-mix(in srgb, var(--koma-fg, #c8d3f5) 8%, var(--koma-bg, #0b0e14)) !important;
-  color: var(--koma-fg, #c8d3f5) !important;
-  border: 1px solid color-mix(in srgb, var(--koma-fg, #c8d3f5) 14%, var(--koma-bg, #0b0e14)) !important;
-  text-shadow: none !important;
-  border-radius: 6px !important;
+  background-color: color-mix(in srgb, var(--koma-fg, #c8d3f5) 8%, var(--koma-bg, #0b0e14));
+  color: var(--koma-fg, #c8d3f5);
+  border: 1px solid color-mix(in srgb, var(--koma-fg, #c8d3f5) 14%, var(--koma-bg, #0b0e14));
+  border-radius: 6px;
+  text-shadow: none;
 }
 .koma-driver-theme .driver-popover-next-btn {
-  background: var(--koma-accent, #39ff14) !important;
-  color: var(--koma-bg, #0b0e14) !important;
-  border-color: transparent !important;
+  background-color: var(--koma-accent, #39ff14);
+  color: var(--koma-bg, #0b0e14);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  text-shadow: none;
 }
-.koma-driver-theme .driver-popover-arrow-side-left,
-.koma-driver-theme .driver-popover-arrow-side-right,
-.koma-driver-theme .driver-popover-arrow-side-top,
-.koma-driver-theme .driver-popover-arrow-side-bottom {
-  border-color: var(--koma-bg, #0b0e14) !important;
-}
+/* Soften default black overlay toward theme */
 .driver-overlay {
-  background-color: color-mix(in srgb, #000 55%, transparent) !important;
+  /* driver paints via SVG; color comes from config.overlayColor — leave alone */
 }
