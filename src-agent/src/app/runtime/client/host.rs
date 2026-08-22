@@ -1105,7 +1105,11 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                         }
                     }
                     HostCtl::DeleteRemoteHost { id } => {
-                        crate::remote::hosts::delete_host(&mut hosts, &id)
+                        let deleted = crate::remote::hosts::delete_host(&mut hosts, &id);
+                        if deleted {
+                            let _ = crate::remote::secrets::delete_remote_password(&id);
+                        }
+                        deleted
                     }
                     _ => false, // GetRemoteHosts — read-only
                 };

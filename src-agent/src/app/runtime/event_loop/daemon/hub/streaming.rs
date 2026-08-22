@@ -139,6 +139,7 @@ impl DaemonHub {
                 key: request.key,
                 new_session: request.new_session,
                 session_id: request.session_id,
+                host_id: request.host_id,
             });
         }
     }

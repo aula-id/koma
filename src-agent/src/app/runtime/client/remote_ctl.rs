@@ -311,6 +311,7 @@ fn remote_connect_worker(
         return;
     }
 
+    let mut password_from_store = false;
     let password = match auth::probe_key_auth(&target) {
         AuthProbe::KeyReady => {
             shared.clear_password(attempt_id);
@@ -321,19 +322,27 @@ fn remote_connect_worker(
                 shared.finish(attempt_id);
                 return;
             }
-            push_state(
-                "auth_required",
-                Some(&user_str),
-                Some(&host_str),
-                None,
-                None,
-                Vec::new(),
-            );
-            let password = match pw_rx.recv() {
-                Ok(password) if !is_cancelled() => password,
-                _ => {
-                    shared.finish(attempt_id);
-                    return;
+            // Prefer encrypted store (shared with TUI) before prompting the UI.
+            let password = if let Some(password) =
+                crate::remote::secrets::get_remote_password(&host_id)
+            {
+                password_from_store = true;
+                password
+            } else {
+                push_state(
+                    "auth_required",
+                    Some(&user_str),
+                    Some(&host_str),
+                    None,
+                    None,
+                    Vec::new(),
+                );
+                match pw_rx.recv() {
+                    Ok(password) if !is_cancelled() => password,
+                    _ => {
+                        shared.finish(attempt_id);
+                        return;
+                    }
                 }
             };
             shared.clear_password(attempt_id);
@@ -376,6 +385,9 @@ fn remote_connect_worker(
     );
     let auth_ref = auth.as_ref();
     if let Err(error) = bootstrap::ensure_koma_compatible(&target, auth_ref) {
+        if password_from_store {
+            let _ = crate::remote::secrets::delete_remote_password(&host_id);
+        }
         push_state(
             "error",
             Some(&user_str),
@@ -386,6 +398,10 @@ fn remote_connect_worker(
         );
         shared.finish(attempt_id);
         return;
+    }
+    // Persist password after successful bootstrap (shared with TUI).
+    if let Some(ref pw) = password {
+        let _ = crate::remote::secrets::set_remote_password(&host_id, pw);
     }
     if is_cancelled() {
         shared.finish(attempt_id);
