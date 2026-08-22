@@ -1,4 +1,4 @@
-import { Activity, FoldVertical } from 'lucide-react'
+import { Activity, FoldVertical, Server } from 'lucide-react'
 import { useKoma, visiblePlanTodos } from '../store/koma'
 import { BranchSwitcher } from './BranchSwitcher'
 
@@ -35,6 +35,14 @@ export function UsageFooter() {
   const gitBranch = useKoma((s) => s.git.branch)
   const gitDetached = useKoma((s) => s.git.detached)
   const gitError = useKoma((s) => s.git.error)
+  const remoteState = useKoma((s) => s.remoteState)
+  // Live remote target for the statusline chip (hub-ready OR attached-connected).
+  const remoteTarget =
+    (remoteState.state === 'ready' || remoteState.state === 'connected') &&
+    remoteState.user &&
+    remoteState.host
+      ? `${remoteState.user}@${remoteState.host}`
+      : null
 
   // Awareness pulse: anything currently running in the Explore BASH/AGENTS
   // sidepanel lists — same "running" state token those panels key off.
@@ -63,6 +71,18 @@ export function UsageFooter() {
         </button>
       ) : (
         <span className="lowercase opacity-80">{mode}</span>
+      )}
+
+      {/* Remote host chip — visible across welcome/session whenever the GUI is
+          bound to an SSH target (remote hub ready, or live remote session). */}
+      {remoteTarget && (
+        <span
+          title={`Remote: ${remoteTarget}`}
+          className="flex min-w-0 max-w-[40%] items-center gap-1 truncate rounded bg-koma-accent/10 px-1 text-koma-accent"
+        >
+          <Server size={10} className="flex-none opacity-80" />
+          <span className="truncate">{remoteTarget}</span>
+        </span>
       )}
 
       {/* Activity pulse — non-interactive, hidden when nothing runs */}

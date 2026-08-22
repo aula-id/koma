@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { ArrowRight, Clock, FolderPlus, Info, Sparkles, Zap } from 'lucide-react'
+import { ArrowRight, Clock, FolderPlus, Info, Server, Sparkles, Zap } from 'lucide-react'
 import { NewSessionMenu } from './NewSessionMenu'
 import { SessionRowActions, SessionRowConfirmStrip, type ArmedRow } from './SessionRowActions'
 import { SessionBulkBar } from './SessionBulkBar'
@@ -137,14 +137,31 @@ export function StartScreen() {
   const bulkCooking = multi.selectedIds('session')
   const bulkHistory = multi.selectedIds('history')
   const fgCooking = liveSessions.filter((c) => c.foreground && c.id).map((c) => c.id as string)
+  const remoteLive =
+    remoteState.state === 'ready' || remoteState.state === 'connected'
+  const remoteTarget =
+    remoteLive && remoteState.user && remoteState.host
+      ? `${remoteState.user}@${remoteState.host}`
+      : null
 
   const actions = (
     <div className="flex min-w-0 flex-1 flex-col gap-4">
       <div>
         <div className="mb-1 flex items-baseline gap-2">
           <span className="text-[22px] font-bold text-koma-fg">koma</span>
-          <span className="text-[12px] text-koma-fg opacity-45">start a session</span>
+          <span className="text-[12px] text-koma-fg opacity-45">
+            {remoteTarget ? 'remote session' : 'start a session'}
+          </span>
         </div>
+        {remoteTarget && (
+          <div
+            title={`Connected to ${remoteTarget}`}
+            className="mt-1 inline-flex max-w-full items-center gap-1.5 rounded-md bg-koma-accent/10 px-2 py-0.5 text-[11px] text-koma-accent"
+          >
+            <Server size={11} className="flex-none opacity-80" />
+            <span className="truncate">{remoteTarget}</span>
+          </div>
+        )}
       </div>
 
       <div className="group flex items-center rounded-xl border border-koma-border bg-koma-panel transition-colors hover:border-koma-accent/60 hover:bg-koma-hover">
@@ -157,7 +174,11 @@ export function StartScreen() {
           </span>
           <span className="min-w-0 flex-1">
             <span className="block text-[13px] font-semibold text-koma-fg">New session</span>
-            <span className="block text-[11px] text-koma-fg opacity-45">Start working in your default directory</span>
+            <span className="block text-[11px] text-koma-fg opacity-45">
+              {remoteTarget
+                ? `Pick a folder on ${remoteTarget}`
+                : 'Start working in your default directory'}
+            </span>
           </span>
           <ArrowRight size={16} className="flex-none text-koma-fg opacity-30 transition group-hover:translate-x-0.5 group-hover:opacity-70" />
         </button>
