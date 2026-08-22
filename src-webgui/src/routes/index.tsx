@@ -67,6 +67,11 @@ function RootLayout() {
   const closeOmniSearch = useKoma((s) => s.closeOmniSearch)
   const cancelSwitching = useKoma((s) => s.cancelSwitching)
   const remoteState = useKoma((s) => s.remoteState)
+  const remotePathState = useKoma((s) => s.remotePath.state)
+  const remotePathOpen =
+    remotePathState === 'listing' ||
+    remotePathState === 'ready' ||
+    remotePathState === 'error'
   const req = useKoma((s) => s.req)
   const openSettingsTab = useKoma((s) => s.openSettingsTab)
   const openHelpTab = useKoma((s) => s.openHelpTab)
@@ -301,7 +306,12 @@ function RootLayout() {
       <RemotePathPicker />
       <ToastContainer />
       <ResizeHandles />
-      <GlobalContextMenu onResume={() => setOverlay('resume')} />
+      {/* Hide while remote cwd picker is open — Ctrl+Enter / right-click must
+          not surface the global copy/paste/resume menu over the path dialog. */}
+      <GlobalContextMenu
+        onResume={() => setOverlay('resume')}
+        hidden={needsOnboarding || remotePathOpen}
+      />
     </div>
   )
 }

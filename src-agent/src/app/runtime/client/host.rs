@@ -1726,6 +1726,16 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                 let auth = ctx.make_auth().ok().flatten();
                 let cwd = expand_remote_home(&ctx.target, auth.as_ref(), &path);
                 let new_id = uuid::Uuid::new_v4().to_string();
+                // Close the picker BEFORE Switching — without this the GUI keeps
+                // remotePath.state at ready/listing (z-70) over the switcher (z-60)
+                // and freezes the whole chrome until something else clears it.
+                let close = serde_json::json!({
+                    "k": "RemotePathPicker",
+                    "state": "cancelled",
+                });
+                if let Ok(json) = serde_json::to_string(&close) {
+                    push(json);
+                }
                 push_switching(push, &new_id);
                 return HostStep::RemoteAttach {
                     ctx: Box::new(ctx),
