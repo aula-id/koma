@@ -299,6 +299,13 @@ declare global {
     // host-local side effect (spawns the OS opener, fire-and-forget): no
     // session/attach needed, no reply, no push.
     | { r: 'OpenExternal'; url: string }
+    // GUI Tutorial tab: one chat turn via host-proxied koma-free (no daemon).
+    // Reply lands as TutorialChatDone (id echoed).
+    | {
+        r: 'TutorialChat'
+        id: string
+        messages: { role: string; content: string }[]
+      }
     // Extension STORE (koma.run marketplace). Browse/detail hit the PUBLIC store
     // endpoints; install/uninstall mutate the live daemon (managers + config), so
     // the whole family is forwarded to the attached daemon. Replies land as the

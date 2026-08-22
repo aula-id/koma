@@ -54,6 +54,13 @@ pub(super) enum ClientMsg {
     Req(GuiReq),
 }
 
+/// One message in a GUI Tutorial chat turn (`GuiReq::TutorialChat`).
+#[derive(Debug, serde::Deserialize)]
+pub(super) struct TutorialChatMsg {
+    pub role: String,
+    pub content: String,
+}
+
 /// The native-React client -> host request, carried inside [`ClientMsg::Req`] and
 /// internally tagged on `r`. Mirrors the JS→Rust half of the host-relay bridge
 /// contract exactly:
@@ -744,6 +751,16 @@ pub(super) enum GuiReq {
     /// no push.
     OpenExternal {
         url: String,
+    },
+
+    /// GUI Tutorial tab: one chat turn against the keyless koma-free endpoint.
+    /// HOST-LOCAL (no daemon, works pre-session). `id` is a client-generated turn
+    /// id echoed on `TutorialChatDone`. `messages` is the rolling transcript
+    /// (user/assistant only — system prompt is host-owned).
+    #[serde(rename_all = "camelCase")]
+    TutorialChat {
+        id: String,
+        messages: Vec<TutorialChatMsg>,
     },
 
     // ─── GUI extension STORE surface (browse / install / uninstall) ──────────────

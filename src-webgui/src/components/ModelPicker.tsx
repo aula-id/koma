@@ -104,7 +104,7 @@ export function ModelPicker() {
   }
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative" data-tour="model-picker">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}

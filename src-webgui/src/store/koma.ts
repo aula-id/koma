@@ -717,6 +717,8 @@ export type Tab =
   // (?) button, directly above Settings. Deduped by the fixed id 'help';
   // closeable like a diff tab. Mirrors the Settings tab's plumbing exactly.
   | { id: 'help'; kind: 'help' }
+  // Singleton Tutorial coach tab (NLP + driver.js). ActivityBar above Help.
+  | { id: 'tutorial'; kind: 'tutorial' }
   | {
       // Stable id — `diff:${path}` for a File-changed diff (find-by-path is
       // trivial), or `gitdiff:${staged ? 'staged' : 'unstaged'}:${path}` for a
@@ -1092,6 +1094,14 @@ export type PushEnvelope =
   // spinner). On success the authoritative registry reply is the following
   // InstalledExtensions push; `ok:false` + `error` surfaces a failure.
   | { k: 'ExtensionOpResult'; id: string; ok: boolean; error: string | null }
+  // Reply to TutorialChat — coach text + optional tour id (host strips TOUR: trailer).
+  | {
+      k: 'TutorialChatDone'
+      id: string
+      text: string
+      tour: string | null
+      error: string | null
+    }
   // Out-of-band reply to a GuiReq ExtPanelMsg (W9 panel bridge) — the
   // extension's `panel.msg` invoke outcome, re-pushed by the host from the
   // daemon's ExtPanelReply. Routed straight to the matching panel iframe via
@@ -1519,6 +1529,24 @@ type OAuthSlice = {
 // the InstalledExtensions push after every install/uninstall). `busy` covers a
 // browse/detail fetch OR an in-flight install/uninstall (the grid/detail show a
 // spinner); `error` is the last store/op error string (null when clear).
+// GUI Tutorial tab local transcript + in-flight turn. Not a real session —
+// host-proxied koma-free only. Transcript stays in memory for the window life.
+type TutorialMsg = {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  tour?: string | null
+}
+type TutorialSlice = {
+  messages: TutorialMsg[]
+  busy: boolean
+  error: string | null
+  // Client turn id awaiting TutorialChatDone (stale-drop).
+  pendingId: string | null
+  // Latest offered tour id from the coach (also mirrored on the assistant msg).
+  pendingTour: string | null
+}
+
 type StoreSlice = {
   catalogue: StoreItem[]
   detail: StoreDetail | null
@@ -1858,6 +1886,7 @@ type KomaState = {
   config: ConfigSlice
   oauth: OAuthSlice
   store: StoreSlice
+  tutorial: TutorialSlice
   // Persisted ActivityBar order/visibility layout (see `ActivityBarLayout`).
   activityBar: ActivityBarLayout
   // Live per-provider model-id catalogue, keyed by the most recent
@@ -2162,6 +2191,13 @@ type KomaState = {
   // Open (or focus) the singleton Help tab (id 'help'): find-or-create, activate
   // it. No wire request — the Help tab is static content, unlike Settings.
   openHelpTab: () => void
+  // Open (or focus) the singleton Tutorial tab (id 'tutorial').
+  openTutorialTab: () => void
+  // Send one Tutorial coach turn (host koma-free). Appends the user message
+  // optimistically; assistant lands on TutorialChatDone.
+  sendTutorialChat: (text: string) => void
+  clearTutorialPendingTour: () => void
+  clearTutorialError: () => void
   // ActivityBar drag-reorder: replace the persisted order wholesale (the caller
   // — ActivityBar's drop handler — computes the full reordered id list) and
   // write it through to localStorage.
@@ -2498,6 +2534,14 @@ const initialStore: StoreSlice = {
   opResult: null,
 }
 
+const initialTutorial: TutorialSlice = {
+  messages: [],
+  busy: false,
+  error: null,
+  pendingId: null,
+  pendingTour: null,
+}
+
 // Read once at module load (mirrors how `initialSession`/`initialUi` etc. seed
 // the store) — persisted ActivityBar layout, or an empty pair on a fresh
 // install / storage failure.
@@ -2685,6 +2729,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   config: initialConfig,
   oauth: initialOAuth,
   store: initialStore,
+  tutorial: initialTutorial,
   activityBar: initialActivityBar,
   modelList: initialModelList,
   routeList: initialRouteList,
@@ -3262,6 +3307,41 @@ export const useKoma = create<KomaState>((set, get) => ({
           store: { ...s.store, catalogue: env.items, busy: false, error: env.error },
         }))
         break
+      case 'TutorialChatDone': {
+        // Stale-drop if a newer turn is in flight.
+        const pending = get().tutorial.pendingId
+        if (pending && env.id !== pending) break
+        set((s) => {
+          const msgs = [...s.tutorial.messages]
+          if (env.error) {
+            return {
+              tutorial: {
+                ...s.tutorial,
+                busy: false,
+                pendingId: null,
+                error: env.error,
+              },
+            }
+          }
+          msgs.push({
+            id: env.id,
+            role: 'assistant',
+            content: env.text || '(no reply)',
+            tour: env.tour,
+          })
+          return {
+            tutorial: {
+              ...s.tutorial,
+              messages: msgs,
+              busy: false,
+              pendingId: null,
+              pendingTour: env.tour,
+              error: null,
+            },
+          }
+        })
+        break
+      }
       // Store detail reply: fill `detail` (null on error) + clear busy. A failed
       // fetch surfaces `error` and leaves the detail null (the tab shows the
       // error), so the grid's own error isn't clobbered by a later detail error
@@ -4221,6 +4301,44 @@ export const useKoma = create<KomaState>((set, get) => ({
       const tabs: Tab[] = exists ? s.ui.tabs : [...s.ui.tabs, { id: 'help', kind: 'help' }]
       return { ui: { ...s.ui, tabs, activeTabId: 'help' } }
     })
+  },
+  openTutorialTab: () => {
+    set((s) => {
+      const exists = s.ui.tabs.some((t) => t.id === 'tutorial')
+      const tabs: Tab[] =
+        exists ? s.ui.tabs : [...s.ui.tabs, { id: 'tutorial', kind: 'tutorial' }]
+      return { ui: { ...s.ui, tabs, activeTabId: 'tutorial' } }
+    })
+  },
+  sendTutorialChat: (text) => {
+    const content = text.trim()
+    if (!content) return
+    const id =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const userMsg: TutorialMsg = { id: `${id}-u`, role: 'user', content }
+    set((s) => ({
+      tutorial: {
+        ...s.tutorial,
+        messages: [...s.tutorial.messages, userMsg],
+        busy: true,
+        error: null,
+        pendingId: id,
+        pendingTour: null,
+      },
+    }))
+    // Rolling transcript for the host (user/assistant only).
+    const wire = get().tutorial.messages
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m) => ({ role: m.role, content: m.content }))
+    get().req({ r: 'TutorialChat', id, messages: wire })
+  },
+  clearTutorialPendingTour: () => {
+    set((s) => ({ tutorial: { ...s.tutorial, pendingTour: null } }))
+  },
+  clearTutorialError: () => {
+    set((s) => ({ tutorial: { ...s.tutorial, error: null } }))
   },
   setActivityBarOrder: (order) => {
     set((s) => {

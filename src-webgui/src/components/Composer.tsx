@@ -529,7 +529,7 @@ export function Composer() {
     // claude.ai-style composer pinned at the bottom: a single rounded card
     // (textarea on top, an action bar below) that grows with its content. Drag
     // a file anywhere over the card to attach; the card rings on drag-over.
-    <div className="px-2 pb-3 pt-1">
+    <div className="px-2 pb-3 pt-1" data-tour="composer">
       {/* Pending-steer queue: submits made while the turn is cooking are queued
           daemon-side (cap 5) rather than starting a new turn. Show the queued
           previews above the composer so the user knows they're stacked up. */}
