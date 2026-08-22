@@ -43,6 +43,15 @@ export function Titlebar({ onSearch, onRename, onTerminal, overlayOpen }: Titleb
   // don't apply there, so the whole group hides; the "change session" pill
   // stays visible regardless.
   const sessionId = useKoma((s) => s.session.id)
+  const remoteState = useKoma((s) => s.remoteState)
+  // Accent-tint the drag chrome whenever the GUI is bound to an SSH target
+  // (hub ready OR live remote session) — clear "not LOCAL" signal at a glance.
+  const remoteLive =
+    remoteState.state === 'ready' || remoteState.state === 'connected'
+  const remoteTarget =
+    remoteLive && remoteState.user && remoteState.host
+      ? `${remoteState.user}@${remoteState.host}`
+      : null
 
   function handleMouseDown(e: MouseEvent<HTMLDivElement>) {
     if (e.button !== 0) return
@@ -57,8 +66,13 @@ export function Titlebar({ onSearch, onRename, onTerminal, overlayOpen }: Titleb
   }
 
   return (
-    <div id="titlebar" onMouseDown={handleMouseDown}>
-      <span id="title">koma</span>
+    <div
+      id="titlebar"
+      className={remoteLive ? 'is-remote' : undefined}
+      title={remoteTarget ? `Remote: ${remoteTarget}` : undefined}
+      onMouseDown={handleMouseDown}
+    >
+      <span id="title">{remoteLive ? 'koma · remote' : 'koma'}</span>
       {!overlayOpen && (
         <div
           id="cmdbar"
