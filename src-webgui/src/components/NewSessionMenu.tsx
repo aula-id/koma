@@ -83,12 +83,34 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
   }
 
   const connectRemote = (hostId: string, name: string) => {
-    if (remoteState.state !== 'disconnected' && remoteState.state !== 'error') {
-      // Already connecting/connected — let the user know why nothing happened.
+    if (
+      remoteState.state !== 'disconnected' &&
+      remoteState.state !== 'error' &&
+      remoteState.state !== 'ready'
+    ) {
+      // Already connecting — let the user know why nothing happened.
+      // `ready` is allowed: host is live on the remote hub (Phase 1 may still
+      // block switching hosts from the menu; Disconnect first).
       const s = useKoma.getState()
       const seq = s.ui.toastSeq + 1
       useKoma.setState((prev) => ({
         ui: { ...prev.ui, toastSeq: seq, toast: { id: seq, text: `Already ${remoteState.state.replace('_', ' ')}`, kind: 'error' } },
+      }))
+      return
+    }
+    if (remoteState.state === 'ready') {
+      const s = useKoma.getState()
+      const seq = s.ui.toastSeq + 1
+      useKoma.setState((prev) => ({
+        ui: {
+          ...prev.ui,
+          toastSeq: seq,
+          toast: {
+            id: seq,
+            text: 'Already on a remote host — disconnect first',
+            kind: 'error',
+          },
+        },
       }))
       return
     }
@@ -149,11 +171,21 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
                   <MenuItem
                     key={host.id}
                     onClick={() => connectRemote(host.id, host.name)}
-                    disabled={remoteState.state !== 'disconnected' && remoteState.state !== 'error'}
+                    disabled={
+                      remoteState.state !== 'disconnected' && remoteState.state !== 'error'
+                    }
                     icon={
-                      remoteState.hostId === host.id && remoteState.state !== 'error' && remoteState.state !== 'disconnected'
-                        ? <BrailleSpinner size={13} />
-                        : <Link2 size={13} />
+                      remoteState.hostId === host.id &&
+                      ['resolving', 'auth_required', 'bootstrapping', 'connecting'].includes(
+                        remoteState.state,
+                      ) ? (
+                        <BrailleSpinner size={13} />
+                      ) : remoteState.hostId === host.id &&
+                        (remoteState.state === 'ready' || remoteState.state === 'connected') ? (
+                        <Link2 size={13} className="text-koma-success" />
+                      ) : (
+                        <Link2 size={13} />
+                      )
                     }
                   >
                     <span className="font-medium">{host.name}</span>

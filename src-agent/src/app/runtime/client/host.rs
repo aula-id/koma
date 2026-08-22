@@ -44,6 +44,11 @@ use super::{push_loop, render, HostCtl, StreamView};
 enum HostStep {
     /// Show the detached session swapper (the hub) and wait for a pick.
     Swapper,
+    /// Host is live (auth+bootstrap done); show remote hub and wait for session/folder pick.
+    /// No SSH `koma server` child yet — path listing and session attach use `ctx`.
+    RemoteHub {
+        ctx: Box<super::remote_ctl::RemoteCtx>,
+    },
     /// Attach to this session UUID and fold its frames into pushes. `workdir` is the
     /// folder a GUI `[+ new session]` native-picker chose (the new session's working
     /// dir); `None` for every other attach (existing pick, `--session` boot, daemon
@@ -52,6 +57,13 @@ enum HostStep {
         id: String,
         workdir: Option<std::path::PathBuf>,
     },
+    /// SSH-attach a remote session using a retained host context.
+    RemoteAttach {
+        ctx: Box<super::remote_ctl::RemoteCtx>,
+        session_id: String,
+        cwd: Option<String>,
+    },
+    /// Live SSH-bridged remote session.
     Remote {
         active: Box<super::remote_ctl::ActiveRemote>,
         session_id: String,
@@ -185,6 +197,35 @@ pub(in crate::app::runtime) fn run_host_relay(
                 &ctl_rx,
                 &mut push_state,
                 current_session_id.as_deref(),
+                &terminal_manager,
+            ),
+            HostStep::RemoteHub { ctx } => host_remote_hub(
+                &handle,
+                &push,
+                &ctl_tx,
+                &ctl_rx,
+                &mut push_state,
+                &mut current_session_id,
+                *ctx,
+                &terminal_manager,
+            ),
+            HostStep::RemoteAttach {
+                ctx,
+                session_id,
+                cwd,
+            } => host_remote_attach(
+                &handle,
+                &push,
+                &ctl_tx,
+                &ctl_rx,
+                &live_req,
+                &live_marks,
+                &live_view,
+                &mut push_state,
+                &mut current_session_id,
+                *ctx,
+                session_id,
+                cwd,
                 &terminal_manager,
             ),
             HostStep::Remote { active, session_id } => host_remote(
@@ -333,13 +374,13 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
     let mut oauth_task: Option<tokio::task::AbortHandle> = None;
     let (remote_state_tx, remote_state_rx) =
         std::sync::mpsc::channel::<super::remote_ctl::RemoteStateUpdate>();
-    let (remote_connected_tx, remote_connected_rx) =
-        std::sync::mpsc::channel::<super::remote_ctl::ActiveRemote>();
+    let (remote_ready_tx, remote_ready_rx) =
+        std::sync::mpsc::channel::<super::remote_ctl::ReadyRemote>();
     let remote_shared = std::sync::Arc::new(super::remote_ctl::RemoteSessionShared::new());
 
     loop {
-        // Push worker state first so `connected` clears the GUI's connection
-        // overlay before the remote Snapshot starts rendering.
+        // Push worker state first so `ready` clears the GUI's connection
+        // overlay before the remote hub starts rendering.
         while let Ok(update) = remote_state_rx.try_recv() {
             if !remote_shared.is_current(update.attempt_id) {
                 continue;
@@ -355,18 +396,23 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 &update.sessions,
             );
         }
-        while let Ok(mut active) = remote_connected_rx.try_recv() {
-            if !remote_shared.is_current(active.attempt_id) {
-                let _ = handle.block_on(async { active.ssh_child.kill().await });
+        while let Ok(ready) = remote_ready_rx.try_recv() {
+            if !remote_shared.is_current(ready.attempt_id) {
                 continue;
             }
-            let session_id = match &active.connection.transport {
-                super::connect::TransportKind::Remote { session_id, .. }
-                | super::connect::TransportKind::Local { session_id } => session_id.clone(),
-            };
-            return HostStep::Remote {
-                active: Box::new(active),
-                session_id,
+            // Re-push ready with sessions in case the last state update raced.
+            push_remote_state(
+                push,
+                "ready",
+                Some(&ready.ctx.host_id),
+                Some(&ready.ctx.target.user),
+                Some(&ready.ctx.target.host),
+                None,
+                None,
+                &ready.sessions,
+            );
+            return HostStep::RemoteHub {
+                ctx: Box::new(ready.ctx),
             };
         }
 
@@ -1070,10 +1116,11 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     .hosts
                     .iter()
                     .map(|h| {
+                        // Live = current remoteState host; historical last_connected is separate.
                         serde_json::json!({
                             "id": h.id, "name": h.name, "user": h.user, "host": h.host,
                             "port": h.port, "keyPath": h.key_path,
-                            "connected": h.last_connected.is_some(),
+                            "connected": false,
                             "lastConnected": h.last_connected,
                             "tags": h.tags,
                         })
@@ -1102,7 +1149,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     attempt_id,
                     host_id,
                     remote_state_tx.clone(),
-                    remote_connected_tx.clone(),
+                    remote_ready_tx.clone(),
                     pw_rx,
                     cancelled,
                     std::sync::Arc::clone(&remote_shared),
@@ -1249,6 +1296,16 @@ fn host_attached(
 fn transition_to_step(transition: push_loop::HostTransition) -> HostStep {
     match transition {
         push_loop::HostTransition::Attach { id, workdir } => HostStep::Attach { id, workdir },
+        push_loop::HostTransition::ToRemoteHub { ctx } => HostStep::RemoteHub { ctx },
+        push_loop::HostTransition::RemoteAttach {
+            ctx,
+            session_id,
+            cwd,
+        } => HostStep::RemoteAttach {
+            ctx,
+            session_id,
+            cwd,
+        },
         push_loop::HostTransition::Remote {
             connection,
             session_id,
@@ -1256,8 +1313,359 @@ fn transition_to_step(transition: push_loop::HostTransition) -> HostStep {
             active: connection,
             session_id,
         },
-        push_loop::HostTransition::ToSwapper => HostStep::Swapper,
+        push_loop::HostTransition::DisconnectRemote | push_loop::HostTransition::ToSwapper => {
+            HostStep::Swapper
+        }
         push_loop::HostTransition::Exit => HostStep::Done,
+    }
+}
+
+/// Wire `RemoteHosts` list. `live_host_id` marks the currently retained remote ctx
+/// (ready/connecting/connected) so the green dot means live, not historical.
+fn push_remote_hosts_list(push: &dyn Fn(String), live_host_id: Option<&str>) {
+    let hosts = crate::remote::hosts::load_hosts();
+    let wire_hosts: Vec<serde_json::Value> = hosts
+        .hosts
+        .iter()
+        .map(|h| {
+            let live = live_host_id.is_some_and(|id| id == h.id);
+            serde_json::json!({
+                "id": h.id, "name": h.name, "user": h.user, "host": h.host,
+                "port": h.port, "keyPath": h.key_path,
+                "connected": live,
+                "lastConnected": h.last_connected,
+                "tags": h.tags,
+            })
+        })
+        .collect();
+    let envelope = serde_json::json!({ "k": "RemoteHosts", "hosts": wire_hosts });
+    if let Ok(json) = serde_json::to_string(&envelope) {
+        push(json);
+    }
+}
+
+/// Detached remote hub: host is authenticated, no session SSH child yet.
+/// User picks an existing remote session or opens a folder (path picker — Phase 2).
+#[allow(clippy::too_many_arguments)]
+fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
+    handle: &tokio::runtime::Handle,
+    push: &P,
+    ctl_tx: &std::sync::mpsc::Sender<HostCtl>,
+    ctl_rx: &std::sync::mpsc::Receiver<HostCtl>,
+    push_state: &mut push_loop::PushState,
+    current: &mut Option<String>,
+    ctx: super::remote_ctl::RemoteCtx,
+    terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
+) -> HostStep {
+    *current = None;
+    push_state.reset();
+
+    // Remote hub: cooking sessions on this host, empty local history.
+    let hub = super::swapper::build_remote_hub(&ctx.target, ctx.password(), None);
+    push_hub(&hub, push, push_state);
+    push_swapper_config(push, push_state);
+    push_remote_hosts_list(push, Some(&ctx.host_id));
+
+    let (remote_state_tx, remote_state_rx) =
+        std::sync::mpsc::channel::<super::remote_ctl::RemoteStateUpdate>();
+    // Session attach from hub is handled by returning RemoteAttach; no connected_rx here.
+    let remote_shared = std::sync::Arc::new(super::remote_ctl::RemoteSessionShared::new());
+    let oauth_task: Option<tokio::task::AbortHandle> = None;
+    let _ = (remote_state_tx, ctl_tx); // reserved for phase-2 path workers / parity
+
+    loop {
+        while let Ok(update) = remote_state_rx.try_recv() {
+            if !remote_shared.is_current(update.attempt_id) {
+                continue;
+            }
+            push_remote_state(
+                push,
+                &update.state,
+                update.host_id.as_deref(),
+                update.user.as_deref(),
+                update.host.as_deref(),
+                update.session_id.as_deref(),
+                update.error.as_deref(),
+                &update.sessions,
+            );
+        }
+
+        match ctl_rx.recv_timeout(std::time::Duration::from_millis(16)) {
+            Ok(HostCtl::Ready) | Ok(HostCtl::RefreshHub) | Ok(HostCtl::ToSwapper) => {
+                let hub = super::swapper::build_remote_hub(&ctx.target, ctx.password(), None);
+                push_state.reset();
+                push_hub(&hub, push, push_state);
+                push_swapper_config(push, push_state);
+                // Keep remoteState = ready so the GUI stays in remote mode.
+                push_remote_state(
+                    push,
+                    "ready",
+                    Some(&ctx.host_id),
+                    Some(&ctx.target.user),
+                    Some(&ctx.target.host),
+                    None,
+                    None,
+                    &[],
+                );
+                push_remote_hosts_list(push, Some(&ctx.host_id));
+            }
+            Ok(HostCtl::Select(id)) => {
+                // Existing remote cooking session — attach without minting cwd.
+                return HostStep::RemoteAttach {
+                    ctx: Box::new(ctx),
+                    session_id: id,
+                    cwd: None,
+                };
+            }
+            Ok(HostCtl::New { .. }) => {
+                // Phase 2 wires RequestRemotePath; for now surface the path-picker error
+                // path so the UI does not fall into a local new-session.
+                let envelope = serde_json::json!({
+                    "k": "RemotePathPicker",
+                    "state": "error",
+                    "error": "open a remote folder (path picker not yet wired)"
+                });
+                if let Ok(json) = serde_json::to_string(&envelope) {
+                    push(json);
+                }
+            }
+            Ok(HostCtl::DisconnectRemote) | Ok(HostCtl::CancelRemoteConnect) => {
+                remote_shared.cancel();
+                push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
+                push_remote_hosts_list(push, None);
+                return HostStep::Swapper;
+            }
+            Ok(HostCtl::ConnectRemote { host_id }) => {
+                // Switch host: drop current ctx, let the local swapper start connect.
+                // (Phase 4 may disconnect-then-connect inline; Phase 1 returns to swapper
+                // after pushing disconnect so the user can reconnect.)
+                if host_id == ctx.host_id {
+                    // Already on this host — refresh hub.
+                    let hub = super::swapper::build_remote_hub(&ctx.target, ctx.password(), None);
+                    push_hub(&hub, push, push_state);
+                    continue;
+                }
+                push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
+                push_remote_hosts_list(push, None);
+                // Re-queue the connect so host_swapper picks it up.
+                let _ = ctl_tx.send(HostCtl::ConnectRemote { host_id });
+                return HostStep::Swapper;
+            }
+            Ok(HostCtl::SubmitRemotePassword { .. }) => {
+                // No in-flight password wait on the hub.
+            }
+            Ok(HostCtl::RequestRemotePath)
+            | Ok(HostCtl::ListRemotePath { .. })
+            | Ok(HostCtl::ConfirmRemotePath { .. })
+            | Ok(HostCtl::CancelRemotePath) => {
+                // Phase 2 implements these against ctx.
+                let envelope = serde_json::json!({
+                    "k": "RemotePathPicker",
+                    "state": "error",
+                    "error": "path picker not yet wired"
+                });
+                if let Ok(json) = serde_json::to_string(&envelope) {
+                    push(json);
+                }
+            }
+            Ok(HostCtl::ConfigMutate(req)) => {
+                apply_swapper_config_mutation(&req, push, push_state);
+            }
+            Ok(HostCtl::ListModels { provider }) => {
+                let push2 = P::clone(push);
+                handle.spawn(async move {
+                    let models = fetch_models_for_provider(&provider).await;
+                    push_model_list(&push2, provider, models);
+                });
+            }
+            Ok(HostCtl::ListRoutes { provider, model_id }) => {
+                let push2 = P::clone(push);
+                handle.spawn(async move {
+                    let routes = fetch_routes_for_provider(&provider, &model_id).await;
+                    push_route_list(&push2, provider, model_id, routes);
+                });
+            }
+            Ok(HostCtl::GetRemoteHosts)
+            | Ok(HostCtl::AddRemoteHost { .. })
+            | Ok(HostCtl::EditRemoteHost { .. })
+            | Ok(HostCtl::DeleteRemoteHost { .. }) => {
+                // Re-emit hosts with live connected flag for this ctx.
+                // Mutations intentionally deferred — hub stays on current host.
+                push_remote_hosts_list(push, Some(&ctx.host_id));
+            }
+            Ok(HostCtl::TerminalCreate { id, cwd }) => {
+                if let Ok(mut mgr) = terminal_manager.lock() {
+                    if let Err(e) = mgr.create(id, cwd) {
+                        crate::model::store::append_global_error_log(
+                            "terminal",
+                            &format!("terminal create failed: {e}"),
+                        );
+                    }
+                }
+            }
+            Ok(HostCtl::TerminalInput { id, data }) => {
+                if let Ok(mut mgr) = terminal_manager.lock() {
+                    mgr.input(&id, &data);
+                }
+            }
+            Ok(HostCtl::TerminalResize { id, cols, rows }) => {
+                if let Ok(mut mgr) = terminal_manager.lock() {
+                    mgr.resize(&id, cols, rows);
+                }
+            }
+            Ok(HostCtl::TerminalKill { id }) => {
+                if let Ok(mut mgr) = terminal_manager.lock() {
+                    mgr.kill(&id);
+                }
+            }
+            // Everything else is no-op on the detached remote hub (local git/store/
+            // coding/oauth ctls don't apply until a session is attached).
+            Ok(_) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return HostStep::Done,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        let _ = &oauth_task;
+    }
+}
+
+/// Spawn SSH `koma server` for a remote session and enter the attached remote fold.
+#[allow(clippy::too_many_arguments)]
+fn host_remote_attach(
+    handle: &tokio::runtime::Handle,
+    push: &dyn Fn(String),
+    ctl_tx: &std::sync::mpsc::Sender<HostCtl>,
+    ctl_rx: &std::sync::mpsc::Receiver<HostCtl>,
+    live_req: &std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
+    live_marks: &std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+    live_view: &std::sync::Arc<std::sync::Mutex<StreamView>>,
+    push_state: &mut push_loop::PushState,
+    current: &mut Option<String>,
+    ctx: super::remote_ctl::RemoteCtx,
+    session_id: String,
+    cwd: Option<String>,
+    terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
+) -> HostStep {
+    let (remote_state_tx, remote_state_rx) =
+        std::sync::mpsc::channel::<super::remote_ctl::RemoteStateUpdate>();
+    let (remote_connected_tx, remote_connected_rx) =
+        std::sync::mpsc::channel::<super::remote_ctl::ActiveRemote>();
+    let remote_shared = std::sync::Arc::new(super::remote_ctl::RemoteSessionShared::new());
+
+    // begin() needs a password channel even when unused (key auth).
+    let (pw_tx, _pw_rx) = std::sync::mpsc::channel::<String>();
+    let (attempt_id, cancelled) = remote_shared.begin(pw_tx);
+
+    push_switching(push, &session_id);
+    push_remote_state(
+        push,
+        "connecting",
+        Some(&ctx.host_id),
+        Some(&ctx.target.user),
+        Some(&ctx.target.host),
+        Some(&session_id),
+        None,
+        &[],
+    );
+
+    // Keep a clone so attach failure can return to the remote hub.
+    let hub_ctx = ctx.clone();
+    super::remote_ctl::spawn_session_worker(
+        attempt_id,
+        ctx,
+        session_id.clone(),
+        cwd,
+        remote_state_tx,
+        remote_connected_tx,
+        cancelled,
+        std::sync::Arc::clone(&remote_shared),
+        handle.clone(),
+    );
+
+    // Wait for ActiveRemote or error/cancel. Drain ctl for cancel.
+    loop {
+        while let Ok(update) = remote_state_rx.try_recv() {
+            if !remote_shared.is_current(update.attempt_id) {
+                continue;
+            }
+            push_remote_state(
+                push,
+                &update.state,
+                update.host_id.as_deref(),
+                update.user.as_deref(),
+                update.host.as_deref(),
+                update.session_id.as_deref(),
+                update.error.as_deref(),
+                &update.sessions,
+            );
+            if update.state == "error" {
+                // Stay on the remote host — user can pick another session.
+                push_remote_state(
+                    push,
+                    "ready",
+                    Some(&hub_ctx.host_id),
+                    Some(&hub_ctx.target.user),
+                    Some(&hub_ctx.target.host),
+                    None,
+                    None,
+                    &[],
+                );
+                *current = None;
+                return HostStep::RemoteHub {
+                    ctx: Box::new(hub_ctx),
+                };
+            }
+        }
+        while let Ok(mut active) = remote_connected_rx.try_recv() {
+            if !remote_shared.is_current(active.attempt_id) {
+                let _ = handle.block_on(async { active.ssh_child.kill().await });
+                continue;
+            }
+            let sid = match &active.connection.transport {
+                super::connect::TransportKind::Remote { session_id, .. }
+                | super::connect::TransportKind::Local { session_id } => session_id.clone(),
+            };
+            return host_remote(
+                handle,
+                push,
+                ctl_tx,
+                ctl_rx,
+                live_req,
+                live_marks,
+                live_view,
+                push_state,
+                current,
+                active,
+                sid,
+                terminal_manager,
+            );
+        }
+
+        match ctl_rx.recv_timeout(std::time::Duration::from_millis(16)) {
+            Ok(HostCtl::DisconnectRemote) | Ok(HostCtl::CancelRemoteConnect) => {
+                remote_shared.cancel();
+                // Cancel mid-attach: keep host ctx, return to hub.
+                push_remote_state(
+                    push,
+                    "ready",
+                    Some(&hub_ctx.host_id),
+                    Some(&hub_ctx.target.user),
+                    Some(&hub_ctx.target.host),
+                    None,
+                    None,
+                    &[],
+                );
+                *current = None;
+                return HostStep::RemoteHub {
+                    ctx: Box::new(hub_ctx),
+                };
+            }
+            Ok(HostCtl::SubmitRemotePassword { password }) => {
+                remote_shared.submit_password(password);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return HostStep::Done,
+            // Ignore other ctls while attaching.
+            Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        }
     }
 }
 
@@ -1309,7 +1717,58 @@ fn host_remote(
     }
     super::teardown_connection(handle, active.connection);
     let _ = handle.block_on(async { active.ssh_child.kill().await });
-    push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
-    *current = None;
-    transition_to_step(transition)
+
+    // Keep RemoteCtx unless the transition is a full disconnect / local swapper / exit.
+    match transition {
+        push_loop::HostTransition::ToRemoteHub { .. } => {
+            // push_loop may not yet pass ctx; reconstruct hub from active.ctx.
+            push_remote_state(
+                push,
+                "ready",
+                Some(&active.ctx.host_id),
+                Some(&active.ctx.target.user),
+                Some(&active.ctx.target.host),
+                None,
+                None,
+                &[],
+            );
+            *current = None;
+            HostStep::RemoteHub {
+                ctx: Box::new(active.ctx),
+            }
+        }
+        push_loop::HostTransition::RemoteAttach {
+            session_id,
+            cwd,
+            ..
+        } => {
+            *current = None;
+            HostStep::RemoteAttach {
+                ctx: Box::new(active.ctx),
+                session_id,
+                cwd,
+            }
+        }
+        push_loop::HostTransition::Remote {
+            connection,
+            session_id,
+        } => {
+            // Another remote attach completed inside push_loop (rare).
+            *current = None;
+            HostStep::Remote {
+                active: connection,
+                session_id,
+            }
+        }
+        push_loop::HostTransition::DisconnectRemote
+        | push_loop::HostTransition::ToSwapper
+        | push_loop::HostTransition::Exit
+        | push_loop::HostTransition::Attach { .. } => {
+            // Full leave remote: drop ctx, clear state.
+            drop(active.ctx);
+            push_remote_state(push, "disconnected", None, None, None, None, None, &[]);
+            *current = None;
+            transition_to_step(transition)
+        }
+    }
 }
