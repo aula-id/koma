@@ -105,7 +105,7 @@ export function ConnectorPanel() {
   ]
 
   return (
-    <div className="relative h-full overflow-hidden">
+    <div className="relative h-full overflow-hidden" data-tour="connector-panel">
       <AnimatePresence initial={false}>
         {view.kind === 'list' ? (
           <motion.div

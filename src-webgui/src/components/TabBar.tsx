@@ -1,4 +1,4 @@
-import { MessageSquare, FileDiff, Settings, CircleHelp, Bot, Terminal, GitGraph, BarChart3, Blocks, Puzzle, Code2, X, ChevronLeft, ChevronRight, Package, Network, SquareTerminal } from 'lucide-react'
+import { MessageSquare, FileDiff, Settings, CircleHelp, GraduationCap, Bot, Terminal, GitGraph, BarChart3, Blocks, Puzzle, Code2, X, ChevronLeft, ChevronRight, Package, Network, SquareTerminal } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { useRef, useEffect, useState, useCallback, type MouseEvent as ReactMouseEvent } from 'react'
 import { fileKey } from '../store/coding'
@@ -267,6 +267,43 @@ export function TabBar() {
                 {accent}
                 <CircleHelp size={13} className="flex-none opacity-80" />
                 <span className="truncate">Help</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closeTab(t.id)
+                  }}
+                  aria-label="Close tab"
+                  title="Close"
+                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
+                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
+                  }`}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )
+          }
+
+          // Tutorial tab: closeable singleton, graduation icon + fixed title.
+          if (t.kind === 'tutorial') {
+            return (
+              <div
+                key={t.id}
+                ref={(el) => {
+                  tabRefs.current.set(t.id, el)
+                }}
+                role="button"
+                tabIndex={0}
+                onClick={() => activateTab(t.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
+                }}
+                title="Tutorial"
+                className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
+              >
+                {accent}
+                <GraduationCap size={13} className="flex-none opacity-80" />
+                <span className="truncate">Tutorial</span>
                 <button
                   onClick={(e) => {
                     e.stopPropagation()

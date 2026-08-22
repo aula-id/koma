@@ -36,6 +36,7 @@ use super::push_proto::{
     push_remote_state, push_route_list, push_settings_values, push_switching, push_usage_preview,
 };
 use super::store_host;
+use super::tutorial_host;
 use super::swapper::build_local_hub;
 use super::{push_loop, render, HostCtl, StreamView};
 
@@ -890,6 +891,9 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // (shared with `push_loop`'s attached twin).
             Ok(HostCtl::StoreBrowse { query, category }) => {
                 store_host::spawn_store_browse(P::clone(push), query, category);
+            }
+            Ok(HostCtl::TutorialChat { id, messages }) => {
+                tutorial_host::spawn_tutorial_chat(P::clone(push), id, messages);
             }
             Ok(HostCtl::StoreDetail { id }) => {
                 store_host::spawn_store_detail(P::clone(push), id);
