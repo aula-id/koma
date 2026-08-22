@@ -251,7 +251,9 @@ function RootLayout() {
         onSearch={() => setOverlay('resume')}
         onRename={() => setOverlay('rename')}
         onTerminal={handleTerminal}
-        overlayOpen={overlay !== 'none'}
+        // Hide cmdbar pills while resume/rename OR remote cwd picker is open —
+        // same morph handoff rename uses (layoutId stays free for the overlay).
+        overlayOpen={overlay !== 'none' || remotePathOpen}
       />
       <div className="absolute inset-x-0 top-8 bottom-0 flex overflow-hidden">
         <ActivityBar
