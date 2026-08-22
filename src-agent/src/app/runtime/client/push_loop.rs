@@ -425,8 +425,11 @@ pub(super) fn push_loop(
                 }
                 // Remote path controls: while remote-attached, leave to the remote hub so
                 // the path picker can run there (hub owns list_dirs over SSH).
+                // Re-queue RequestRemotePath so the hub opens the picker immediately
+                // (same pattern as HostCtl::New above).
                 Ok(super::HostCtl::RequestRemotePath) => {
                     if let Some(ctx) = remote_ctx {
+                        let _ = ctl_tx.send(super::HostCtl::RequestRemotePath);
                         return HostTransition::ToRemoteHub {
                             ctx: Box::new(ctx.clone()),
                         };
@@ -494,9 +497,18 @@ pub(super) fn push_loop(
                     super::host::spawn_delete_and_refresh(ctl_tx.clone(), id);
                 }
                 // Cancel-switch (best-effort): the swap in flight can't be interrupted, so
-                // this simply drops to the hub AFTER the current/queued attach resolves —
-                // `host_swapper` then pushes a fresh `Hub`, and the loader clears on it.
-                Ok(super::HostCtl::ToSwapper) => return HostTransition::ToSwapper,
+                // this simply drops to the hub AFTER the current/queued attach resolves.
+                // While remote-attached, cancel returns to the *remote* hub (keep
+                // ControlMaster + host ctx) — never full host disconnect.
+                Ok(super::HostCtl::ToSwapper) => {
+                    return if let Some(ctx) = remote_ctx {
+                        HostTransition::ToRemoteHub {
+                            ctx: Box::new(ctx.clone()),
+                        }
+                    } else {
+                        HostTransition::ToSwapper
+                    };
+                }
                 // The ResumePalette opened: kick a hub refresh OFF this thread (the
                 // discovery sweep blocks). Coalesced by `refresh_inflight` so a burst of
                 // RefreshHubs while the palette stays open runs at most one sweep; the
@@ -506,10 +518,23 @@ pub(super) fn push_loop(
                         refresh_inflight = true;
                         let tx = hub_tx.clone();
                         let cur = current_owned.clone();
-                        std::thread::spawn(move || {
-                            let hub = super::build_local_hub(cur.as_deref());
-                            let _ = tx.send(hub);
-                        });
+                        if let Some(ctx) = remote_ctx {
+                            let target = ctx.target.clone();
+                            let password = ctx.password.clone();
+                            std::thread::spawn(move || {
+                                let hub = super::swapper::build_remote_hub(
+                                    &target,
+                                    password.as_deref(),
+                                    cur.as_deref(),
+                                );
+                                let _ = tx.send(hub);
+                            });
+                        } else {
+                            std::thread::spawn(move || {
+                                let hub = super::swapper::build_local_hub(cur.as_deref());
+                                let _ = tx.send(hub);
+                            });
+                        }
                     }
                 }
                 // A config mutation raced in while attached (the ipc handler normally
@@ -1233,10 +1258,15 @@ pub(super) fn push_loop(
                 HostTransition::ToSwapper
             };
         }
-        // `/new` hand-off from the daemon: attach a freshly minted session. (The `kill`
-        // flag is a daemon-side reap the headless host does not drive in W0; a plain
-        // detach-then-attach is fine — the old daemon keeps cooking, resumable.)
+        // `/new` hand-off from the daemon. Local: mint id + Attach. Remote: return to
+        // the remote hub and open the path picker (never local Attach for a remote id).
         if new_session_requested.is_some() {
+            if let Some(ctx) = remote_ctx {
+                let _ = ctl_tx.send(super::HostCtl::RequestRemotePath);
+                return HostTransition::ToRemoteHub {
+                    ctx: Box::new(ctx.clone()),
+                };
+            }
             let new_id = uuid::Uuid::new_v4().to_string();
             // Same swap-START loader signal as a hub `New` — this is a daemon-driven attach
             // gap, equally frozen until the new session's first Snapshot.

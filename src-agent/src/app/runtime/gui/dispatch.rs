@@ -1054,13 +1054,17 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
 /// Best-effort: failures are logged; the first window is unaffected.
 fn spawn_second_gui_window(session_id: String, host_id: Option<String>) {
     std::thread::spawn(move || {
+        let fail = |msg: &str| {
+            crate::model::store::append_global_error_log("gui", msg);
+        };
         let Ok(exe) = std::env::current_exe() else {
-            crate::model::store::append_global_error_log(
-                "gui",
-                "OpenSecondWindow: cannot resolve current executable",
-            );
+            fail("OpenSecondWindow: cannot resolve current executable");
             return;
         };
+        if session_id.is_empty() || session_id.contains('\0') {
+            fail("OpenSecondWindow: invalid session id");
+            return;
+        }
         let mut cmd = std::process::Command::new(exe);
         cmd.arg("gui");
         if let Some(hid) = host_id.as_deref() {
@@ -1079,10 +1083,9 @@ fn spawn_second_gui_window(session_id: String, host_id: Option<String>) {
                     cmd.arg("--port").arg(h.port.to_string());
                 }
             } else {
-                crate::model::store::append_global_error_log(
-                    "gui",
-                    &format!("OpenSecondWindow: unknown host id {hid}"),
-                );
+                fail(&format!(
+                    "OpenSecondWindow: unknown host id {hid} (save the host first)"
+                ));
                 return;
             }
         }
@@ -1103,10 +1106,7 @@ fn spawn_second_gui_window(session_id: String, host_id: Option<String>) {
             }
         }
         if let Err(e) = cmd.spawn() {
-            crate::model::store::append_global_error_log(
-                "gui",
-                &format!("OpenSecondWindow spawn failed: {e}"),
-            );
+            fail(&format!("OpenSecondWindow spawn failed: {e}"));
         }
     });
 }
