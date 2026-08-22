@@ -30,7 +30,9 @@ export function AccordionSection({ title, open, onToggle, action, children }: Ac
           />
           <span className="truncate">{title}</span>
         </button>
-        {action && <div className="flex items-center opacity-0 group-hover:opacity-100">{action}</div>}
+        {action && (
+          <div className="flex items-center opacity-70 group-hover:opacity-100">{action}</div>
+        )}
       </div>
       {open && <div className="min-h-0 flex-1 overflow-y-auto pb-1">{children}</div>}
     </div>

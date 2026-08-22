@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { GraduationCap, Play, Send, Sparkles } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import { MessageBody } from './MessageBody'
 import { TutorialPaperclip, type PaperclipMood } from './TutorialPaperclip'
 import {
   TOUR_CATALOGUE,
@@ -164,7 +165,11 @@ export default function TutorialTab() {
                         : 'border border-koma-border bg-koma-panel text-koma-fg'
                     }`}
                   >
-                    <div className="whitespace-pre-wrap">{m.content}</div>
+                    {m.role === 'assistant' ? (
+                      <MessageBody text={m.content} />
+                    ) : (
+                      <div className="whitespace-pre-wrap">{m.content}</div>
+                    )}
                     {m.tour && (
                       <button
                         type="button"
