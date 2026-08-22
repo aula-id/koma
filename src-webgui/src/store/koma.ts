@@ -4217,11 +4217,18 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         break
       case 'RemotePathPicker':
-        set(() => ({
+        // Keep the previous dir list while state=listing (host sends dirs:[] on
+        // navigate). Clearing would collapse the picker height and blink.
+        set((s) => ({
           remotePath: {
             state: env.state,
-            path: env.path ?? '',
-            dirs: env.dirs ?? [],
+            path: env.path ?? s.remotePath.path,
+            dirs:
+              env.dirs != null && env.dirs.length > 0
+                ? env.dirs
+                : env.state === 'listing'
+                  ? s.remotePath.dirs
+                  : (env.dirs ?? []),
             error: env.error ?? null,
           },
         }))
