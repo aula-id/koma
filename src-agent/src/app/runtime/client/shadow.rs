@@ -5,7 +5,7 @@ use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame, StateDelta, Sta
 
 use crate::app::runtime::client_shadow::*;
 
-use super::render::TOAST_TTL;
+use super::render::{ConnectRemoteRequest, TOAST_TTL};
 
 /// Apply one incoming [`DaemonFrame`] to the shadow, handling seq-gap recovery.
 ///
@@ -24,7 +24,7 @@ pub(super) fn apply_frame(
     select_requested: &mut bool,
     open_swapper_requested: &mut bool,
     new_session_requested: &mut Option<bool>,
-    connect_remote_requested: &mut Option<(String, Option<String>, bool, Option<String>, Option<String>)>,
+    connect_remote_requested: &mut Option<ConnectRemoteRequest>,
     req_tx: &std::sync::mpsc::Sender<ClientRequest>,
 ) -> bool {
     // --- seq-gap detection (critique #1) ---
@@ -113,7 +113,13 @@ pub(super) fn apply_frame(
             session_id,
             host_id,
         } => {
-            *connect_remote_requested = Some((target, key, new_session, session_id, host_id));
+            *connect_remote_requested = Some(ConnectRemoteRequest {
+                target,
+                key,
+                new_session,
+                session_id,
+                host_id,
+            });
             false
         }
         // Non-visual control replies. (A future refinement could toast an Error.)

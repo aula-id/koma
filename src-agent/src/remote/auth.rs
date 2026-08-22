@@ -364,7 +364,7 @@ pub(crate) fn prompt_password_tui(user: &str, host: &str) -> Result<String> {
                 chunks[1],
             );
 
-            let box_w = (area.width.saturating_sub(10)).min(48).max(24);
+            let box_w = (area.width.saturating_sub(10)).clamp(24, 48);
             let box_x = area.x + (area.width.saturating_sub(box_w)) / 2;
             let input_area = Rect {
                 x: box_x,

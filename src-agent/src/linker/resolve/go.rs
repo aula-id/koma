@@ -296,10 +296,10 @@ fn find_nearest_module<'a>(
     let mut best: Option<(&str, &crate::linker::config::go_mod::GoModConfig)> = None;
 
     for (mod_dir, mod_config) in &config.mods {
-        if importer_path.starts_with(mod_dir.as_str()) {
-            if best.map_or(true, |b| mod_dir.len() > b.0.len()) {
-                best = Some((mod_dir.as_str(), mod_config));
-            }
+        if importer_path.starts_with(mod_dir.as_str())
+            && best.is_none_or(|b: (&str, _)| mod_dir.len() > b.0.len())
+        {
+            best = Some((mod_dir.as_str(), mod_config));
         }
     }
 
@@ -312,10 +312,10 @@ fn find_module_dir(importer: &str, config: &GoModuleConfig) -> Option<String> {
     let mut best: Option<&str> = None;
 
     for mod_dir in config.mods.keys() {
-        if importer_path.starts_with(mod_dir.as_str()) {
-            if best.map_or(true, |b| mod_dir.len() > b.len()) {
-                best = Some(mod_dir.as_str());
-            }
+        if importer_path.starts_with(mod_dir.as_str())
+            && best.is_none_or(|b| mod_dir.len() > b.len())
+        {
+            best = Some(mod_dir.as_str());
         }
     }
 

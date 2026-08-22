@@ -418,6 +418,7 @@ pub(crate) fn prompt_remote_cwd(
     }
 }
 
+/// Run a remote thin-client session against `user@host[:port]`.
 ///
 /// Auth flow mirrors VS Code Remote-SSH:
 /// 1. Try key-based auth first (fast, silent).
@@ -425,19 +426,33 @@ pub(crate) fn prompt_remote_cwd(
 /// 3. The password is cached for the session (bootstrap + connect) and
 ///    persisted per host_id after a successful bootstrap.
 ///
+/// Arguments for [`run_remote_client_target`].
+pub(crate) struct RemoteClientTarget<'a> {
+    pub target_str: &'a str,
+    pub key: Option<&'a str>,
+    pub port: Option<u16>,
+    pub new_session: bool,
+    pub session_id: Option<&'a str>,
+    pub host_id: Option<&'a str>,
+    pub pre_resolved: Option<auth::ResolvedAuth>,
+    pub interactive: auth::InteractivePassword,
+}
+
 /// Callers that still own the TUI alt-screen should resolve auth first via
 /// [`auth::resolve_ssh_auth`] with [`auth::InteractivePassword::TuiModal`], then
 /// pass the result as `pre_resolved` after dropping their terminal guard.
-pub(crate) fn run_remote_client_target(
-    target_str: &str,
-    key: Option<&str>,
-    port: Option<u16>,
-    new_session: bool,
-    session_id: Option<&str>,
-    host_id: Option<&str>,
-    pre_resolved: Option<auth::ResolvedAuth>,
-    interactive: auth::InteractivePassword,
-) -> Result<RemoteExit> {
+pub(crate) fn run_remote_client_target(args: RemoteClientTarget<'_>) -> Result<RemoteExit> {
+    let RemoteClientTarget {
+        target_str,
+        key,
+        port,
+        new_session,
+        session_id,
+        host_id,
+        pre_resolved,
+        interactive,
+    } = args;
+
     let mut target = super::parse_target(target_str)?;
     if let Some(k) = key {
         target.key = Some(k.to_string());

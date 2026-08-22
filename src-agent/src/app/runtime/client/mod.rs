@@ -885,14 +885,16 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
         drop(terminal);
         drop(_guard);
         let result = crate::remote::client::run_remote_client_target(
-            target,
-            opts.remote_key.as_deref(),
-            None,
-            false,
-            None,
-            host_id.as_deref(),
-            Some(pre_resolved),
-            crate::remote::auth::InteractivePassword::TuiModal,
+            crate::remote::client::RemoteClientTarget {
+                target_str: target,
+                key: opts.remote_key.as_deref(),
+                port: None,
+                new_session: false,
+                session_id: None,
+                host_id: host_id.as_deref(),
+                pre_resolved: Some(pre_resolved),
+                interactive: crate::remote::auth::InteractivePassword::TuiModal,
+            },
         )?;
         _guard = TerminalGuard::enter()?;
         crate::app::runtime::actions::apply_mouse_capture(
@@ -1042,23 +1044,17 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                     // terminal guard before the call and re-enter after. On return, check
                     // whether the user opened the swapper inside the remote session — if so,
                     // build a remote hub so the local swapper shows remote sessions.
-                    Ok(render::ClientTransition::ConnectRemote {
-                        target,
-                        key,
-                        new_session,
-                        session_id,
-                        host_id,
-                    }) => {
+                    Ok(render::ClientTransition::ConnectRemote(req)) => {
                         // Resolve SSH password WHILE still on the alt-screen so the
                         // TUI modal / encrypted store can run without a shell jump.
                         let auth_or_fail = (|| {
-                            let mut rt = crate::remote::parse_target(&target)?;
-                            if let Some(ref k) = key {
+                            let mut rt = crate::remote::parse_target(&req.target)?;
+                            if let Some(ref k) = req.key {
                                 rt.key = Some(k.clone());
                             }
                             crate::remote::auth::resolve_ssh_auth(
                                 &rt,
-                                host_id.as_deref(),
+                                req.host_id.as_deref(),
                                 None,
                                 crate::remote::auth::InteractivePassword::TuiModal,
                             )
@@ -1080,14 +1076,16 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                 drop(_guard);
 
                                 let result = crate::remote::client::run_remote_client_target(
-                                    &target,
-                                    key.as_deref(),
-                                    None,
-                                    new_session,
-                                    session_id.as_deref(),
-                                    host_id.as_deref(),
-                                    Some(pre_resolved),
-                                    crate::remote::auth::InteractivePassword::TuiModal,
+                                    crate::remote::client::RemoteClientTarget {
+                                        target_str: &req.target,
+                                        key: req.key.as_deref(),
+                                        port: None,
+                                        new_session: req.new_session,
+                                        session_id: req.session_id.as_deref(),
+                                        host_id: req.host_id.as_deref(),
+                                        pre_resolved: Some(pre_resolved),
+                                        interactive: crate::remote::auth::InteractivePassword::TuiModal,
+                                    },
                                 );
 
                                 let remote_context = match &result {
