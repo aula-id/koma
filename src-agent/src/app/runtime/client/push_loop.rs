@@ -24,11 +24,13 @@ use super::project_config::{push_config, ConfigProjection};
 use super::push_intercept;
 use super::push_proto::{
     push_analytics, push_ext_op_result, push_file_diff, push_installed_extensions,
-    push_remote_state, push_store_catalogue, push_store_detail, push_switching, push_usage_preview,
+    push_remote_state, push_store_catalogue, push_store_detail, push_switching, push_tutorial_chat_done,
+    push_usage_preview,
 };
 use super::render::{advance_local_animations, ConnectRemoteRequest, FRAME_BUDGET};
 use super::shadow::apply_frame;
 use super::store_host;
+use super::tutorial_host;
 
 /// Snapshot of the full `Status` envelope payload.
 /// `(working, toast, toast_kind, tokens_in, tokens_cached, tokens_out, cost, mode)`.
@@ -310,6 +312,11 @@ pub(super) fn push_loop(
         Option<crate::ipc::proto::InstalledExtensionDetailWire>,
         Option<String>,
     )>();
+
+    // --- GUI Tutorial chat (TutorialChat) ---
+    // Blocking koma-free HTTP; host-local regardless of attach state.
+    let (tutorial_chat_tx, tutorial_chat_rx) =
+        std::sync::mpsc::channel::<tutorial_host::TutorialChatResult>();
 
     // --- REMOTE HOST CONNECT/DISCONNECT ---
     // Worker thread pushes state transitions (resolving → auth_required →
@@ -923,6 +930,13 @@ pub(super) fn push_loop(
                         category,
                     );
                 }
+                Ok(super::HostCtl::TutorialChat { id, messages }) => {
+                    tutorial_host::spawn_tutorial_chat_attached(
+                        tutorial_chat_tx.clone(),
+                        id,
+                        messages,
+                    );
+                }
                 Ok(super::HostCtl::StoreDetail { id }) => {
                     store_host::spawn_store_detail_attached(store_detail_tx.clone(), id);
                 }
@@ -1359,6 +1373,10 @@ pub(super) fn push_loop(
         }
         while let Ok((id, detail, error)) = installed_detail_rx.try_recv() {
             super::push_proto::push_installed_ext_detail(push, id, detail, error);
+        }
+
+        while let Ok(result) = tutorial_chat_rx.try_recv() {
+            push_tutorial_chat_done(push, result.id, result.text, result.tour, result.error);
         }
 
         // --- REMOTE HOST CONNECT: push state transitions, then hand off to remote hub ---

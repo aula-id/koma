@@ -344,7 +344,7 @@ export function StartScreen() {
   )
 
   return (
-    <div ref={ref} className="h-full w-full overflow-y-auto">
+    <div ref={ref} className="h-full w-full overflow-y-auto" data-tour="start-screen">
       <div className="mx-auto w-full max-w-[980px] px-6 py-10">
         <div className={`flex gap-6 ${wide ? 'flex-row items-start' : 'flex-col'}`}>
           {actions}

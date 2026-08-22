@@ -29,6 +29,7 @@
 //! | `git_host`  | off-thread GIT/key `HostCtl` bodies shared by `host` + `push_loop` |
 //! | `git_host_mut` | `git_host`'s G5b destructive spawn flavors, split out for size |
 //! | `store_host` | off-thread extension-STORE browse/detail/installed-list `HostCtl` bodies shared by `host` + `push_loop` |
+//! | `tutorial_host` | off-thread GUI Tutorial koma-free chat `HostCtl` body shared by `host` + `push_loop` |
 //! | `host`      | GUI host-relay layer (`run_host_relay`, the swapper/attached FSM) |
 //! | `host_catalogue` | un-attached model/route/agents/oauth catalogue builders for `host` |
 //! | `host_config` | Pre-session (swapper) config-apply helpers for `host`           |
@@ -79,6 +80,7 @@ mod remote_ctl;
 mod render;
 mod shadow;
 mod store_host;
+pub(crate) mod tutorial_host;
 mod swapper;
 mod swapper_keys;
 mod terminal_host;
@@ -619,6 +621,12 @@ pub(super) enum HostCtl {
     GitActivity {
         path: Option<String>,
         limit: u32,
+    },
+    /// GUI Tutorial tab chat turn: thin host-local koma-free completion (no daemon,
+    /// no session). See `tutorial_host`. `id` is a client turn id echoed on the reply.
+    TutorialChat {
+        id: String,
+        messages: Vec<tutorial_host::TutorialMsg>,
     },
     /// Extension-STORE browse (Store tab search/filter, or a mount-time fetch on the
     /// home screen): fetch the koma.run catalogue. NEVER touches the daemon regardless
