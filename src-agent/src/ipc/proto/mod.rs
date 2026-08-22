@@ -676,6 +676,8 @@ pub enum DaemonEvent {
         new_session: bool,
         /// Existing remote session to resume, when selected from the remote hub.
         session_id: Option<String>,
+        /// Saved host UUID for client-side password store lookup (never a password).
+        host_id: Option<String>,
     },
     /// One-shot reply to a [`ClientRequest::Status`] discovery probe: this daemon's
     /// single owned session's metadata. Sent WITHOUT attaching the client or streaming

@@ -26,7 +26,7 @@ use super::push_proto::{
     push_analytics, push_ext_op_result, push_file_diff, push_installed_extensions,
     push_remote_state, push_store_catalogue, push_store_detail, push_switching, push_usage_preview,
 };
-use super::render::{advance_local_animations, FRAME_BUDGET};
+use super::render::{advance_local_animations, ConnectRemoteRequest, FRAME_BUDGET};
 use super::shadow::apply_frame;
 use super::store_host;
 
@@ -326,8 +326,7 @@ pub(super) fn push_loop(
         let mut select_requested = false;
         let mut open_swapper_requested = false;
         let mut new_session_requested: Option<bool> = None;
-        let mut connect_remote_requested: Option<(String, Option<String>, bool, Option<String>)> =
-            None;
+        let mut connect_remote_requested: Option<ConnectRemoteRequest> = None;
         for frame in prebuffered {
             // Cache the config off any prebuffered full snapshot (normally none — Hello
             // is first, so the attach Snapshot lands in the live drain — but stay safe).
@@ -889,15 +888,17 @@ pub(super) fn push_loop(
                     let resolved_session = session_id.or_else(|| current_owned.clone());
                     super::import_graph::spawn_import_graph_attached(
                         import_graph_tx.clone(),
-                        path,
-                        depth,
-                        direction,
-                        filter_roots,
-                        filter_languages,
-                        configured_roots,
-                        configured_root_map,
-                        resolved_session,
-                        request_id,
+                        super::import_graph::ImportGraphJob {
+                            path,
+                            depth,
+                            direction,
+                            filter_roots,
+                            filter_languages,
+                            configured_roots,
+                            configured_root_map,
+                            session_id: resolved_session,
+                            request_id,
+                        },
                     );
                 }
                 #[cfg(feature = "linker")]
@@ -1003,7 +1004,11 @@ pub(super) fn push_loop(
                             }
                         }
                         super::HostCtl::DeleteRemoteHost { id } => {
-                            crate::remote::hosts::delete_host(&mut hosts, &id)
+                            let deleted = crate::remote::hosts::delete_host(&mut hosts, &id);
+                            if deleted {
+                                let _ = crate::remote::secrets::delete_remote_password(&id);
+                            }
+                            deleted
                         }
                         _ => false, // GetRemoteHosts — read-only
                     };
@@ -1104,8 +1109,7 @@ pub(super) fn push_loop(
         let mut select_requested = false;
         let mut open_swapper_requested = false;
         let mut new_session_requested: Option<bool> = None;
-        let mut connect_remote_requested: Option<(String, Option<String>, bool, Option<String>)> =
-            None;
+        let mut connect_remote_requested: Option<ConnectRemoteRequest> = None;
         loop {
             match frame_rx.try_recv() {
                 Ok(frame) => {

@@ -95,9 +95,8 @@ fn handle_koma_request(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>
     // inline rendering in the React transcript. The path is URL-encoded to
     // handle spaces/special chars. Only image extensions are served; the
     // path must be absolute and exist on disk.
-    if url_path.starts_with("image/") {
+    if let Some(encoded) = url_path.strip_prefix("image/") {
         use percent_encoding::percent_decode_str;
-        let encoded = &url_path["image/".len()..];
         if let Ok(decoded) = percent_decode_str(encoded).decode_utf8() {
             let p = std::path::Path::new(decoded.as_ref());
             if p.is_absolute() && p.exists() {

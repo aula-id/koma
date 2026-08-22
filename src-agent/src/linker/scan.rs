@@ -185,7 +185,7 @@ pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
             }
             if let Some(owner) = index.file_owner(&sf.abs_path) {
                 if let Some(config) = index.root_config(owner) {
-                    for (_dir, db) in &config.compile_dbs {
+                    for db in config.compile_dbs.values() {
                         if let Some(entry) = db.lookup(&sf.abs_path) {
                             let flags = entry.extract_flags();
                             match flags.language_mode.as_deref() {
@@ -416,19 +416,16 @@ pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
                 };
 
                 // Only Resolved creates graph edges.
-                match &resolution {
-                    Resolution::Resolved(targets) => {
-                        for target in targets {
-                            edges.push(Edge {
-                                target: EdgeTarget::File(target.clone()),
-                                kind: EdgeKind::Structured {
-                                    import_kind: import_ref.kind,
-                                    condition: import_ref.condition.clone(),
-                                },
-                            });
-                        }
+                if let Resolution::Resolved(targets) = &resolution {
+                    for target in targets {
+                        edges.push(Edge {
+                            target: EdgeTarget::File(target.clone()),
+                            kind: EdgeKind::Structured {
+                                import_kind: import_ref.kind,
+                                condition: import_ref.condition.clone(),
+                            },
+                        });
                     }
-                    _ => {}
                 }
 
                 refs.push_with_meta(import_ref.clone(), resolution, meta.clone());
@@ -665,16 +662,13 @@ pub fn scan_file(
                 js_ts::resolve_js_ts_import(import_ref, &ctx)
             };
 
-            match &resolution {
-                Resolution::Resolved(targets) => {
-                    for target in targets {
-                        edges.push(Edge {
-                            target: EdgeTarget::File(target.clone()),
-                            kind: EdgeKind::Import,
-                        });
-                    }
+            if let Resolution::Resolved(targets) = &resolution {
+                for target in targets {
+                    edges.push(Edge {
+                        target: EdgeTarget::File(target.clone()),
+                        kind: EdgeKind::Import,
+                    });
                 }
-                _ => {}
             }
 
             refs.push(import_ref.clone(), resolution);
@@ -701,19 +695,16 @@ pub fn scan_file(
                 super::resolve::go::resolve_go_import(import_ref, meta.as_ref(), &resolve_ctx)
             };
 
-            match &resolution {
-                Resolution::Resolved(targets) => {
-                    for target in targets {
-                        edges.push(Edge {
-                            target: EdgeTarget::File(target.clone()),
-                            kind: EdgeKind::Structured {
-                                import_kind: import_ref.kind,
-                                condition: import_ref.condition.clone(),
-                            },
-                        });
-                    }
+            if let Resolution::Resolved(targets) = &resolution {
+                for target in targets {
+                    edges.push(Edge {
+                        target: EdgeTarget::File(target.clone()),
+                        kind: EdgeKind::Structured {
+                            import_kind: import_ref.kind,
+                            condition: import_ref.condition.clone(),
+                        },
+                    });
                 }
-                _ => {}
             }
 
             refs.push_with_meta(import_ref.clone(), resolution, meta.clone());

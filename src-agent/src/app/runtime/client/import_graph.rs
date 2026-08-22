@@ -506,64 +506,55 @@ fn unavailable_with_ids(
 
 // ─── Off-thread visualization workers ───────────────────────────────────────
 
+/// Parameters shared by the attached / detached import-graph workers.
+pub struct ImportGraphJob {
+    pub path: Option<String>,
+    pub depth: u32,
+    pub direction: GraphDirection,
+    pub filter_roots: Option<Vec<String>>,
+    pub filter_languages: Option<Vec<String>>,
+    pub configured_roots: Vec<String>,
+    pub configured_root_map: HashMap<String, String>,
+    pub session_id: Option<String>,
+    pub request_id: Option<String>,
+}
+
 /// Spawn an off-thread `HostCtl::ImportGraph` worker (attached mode).
 /// Resolves the effective filter from the foreground session's configured
 /// workdirs, calls `fetch_graph_view` on a std::thread, scopes the result,
 /// and sends it over the channel.
-pub fn spawn_import_graph_attached(
-    tx: Sender<ImportGraphResult>,
-    path: Option<String>,
-    depth: u32,
-    direction: GraphDirection,
-    filter_roots: Option<Vec<String>>,
-    filter_languages: Option<Vec<String>>,
-    configured_roots: Vec<String>,
-    configured_root_map: HashMap<String, String>,
-    session_id: Option<String>,
-    request_id: Option<String>,
-) {
+pub fn spawn_import_graph_attached(tx: Sender<ImportGraphResult>, job: ImportGraphJob) {
     std::thread::spawn(move || {
         let mut result = scoped_fetch_and_convert(
-            path,
-            depth,
-            direction,
-            filter_roots,
-            filter_languages,
-            &configured_roots,
-            &configured_root_map,
+            job.path,
+            job.depth,
+            job.direction,
+            job.filter_roots,
+            job.filter_languages,
+            &job.configured_roots,
+            &job.configured_root_map,
         );
-        result.request_id = request_id;
-        result.session_id = session_id;
+        result.request_id = job.request_id;
+        result.session_id = job.session_id;
         let _ = tx.send(result);
     });
 }
 
 /// Spawn an off-thread `HostCtl::ImportGraph` worker (detached mode).
 /// Same scoping logic but pushes the result directly instead of via channel.
-pub fn spawn_import_graph(
-    push: impl Fn(String) + Send + 'static,
-    path: Option<String>,
-    depth: u32,
-    direction: GraphDirection,
-    filter_roots: Option<Vec<String>>,
-    filter_languages: Option<Vec<String>>,
-    configured_roots: Vec<String>,
-    configured_root_map: HashMap<String, String>,
-    session_id: Option<String>,
-    request_id: Option<String>,
-) {
+pub fn spawn_import_graph(push: impl Fn(String) + Send + 'static, job: ImportGraphJob) {
     std::thread::spawn(move || {
         let mut result = scoped_fetch_and_convert(
-            path,
-            depth,
-            direction,
-            filter_roots,
-            filter_languages,
-            &configured_roots,
-            &configured_root_map,
+            job.path,
+            job.depth,
+            job.direction,
+            job.filter_roots,
+            job.filter_languages,
+            &job.configured_roots,
+            &job.configured_root_map,
         );
-        result.request_id = request_id;
-        result.session_id = session_id;
+        result.request_id = job.request_id;
+        result.session_id = job.session_id;
         let env = super::push_proto::PushEnvelope::ImportGraph(result);
         super::render::emit(&push, &env);
     });
