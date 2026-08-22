@@ -716,6 +716,19 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::OpenExternal { url } => {
             let _ = crate::service::oauth::browser::open_in_browser(&url);
         }
+        // GUI Tutorial tab chat: HOST-LOCAL thin koma-free completion — ALWAYS
+        // routed to the host-relay thread, never the daemon, regardless of attach
+        // state (works from the hub with zero session). See `tutorial_host`.
+        GuiReq::TutorialChat { id, messages } => {
+            let messages = messages
+                .into_iter()
+                .map(|m| crate::app::runtime::client::tutorial_host::TutorialMsg {
+                    role: m.role,
+                    content: m.content,
+                })
+                .collect();
+            let _ = ctx.ctl.send(HostCtl::TutorialChat { id, messages });
+        }
         // Extension STORE browse/detail/installed-list: HOST-LOCAL — ALWAYS routed to the
         // host-relay thread, never the daemon, regardless of attach state, same reasoning
         // as `GitStatus`/`FileDiff`. koma.run browse/detail is a PUBLIC (no-auth) network

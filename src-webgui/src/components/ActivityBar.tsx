@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Files, GitBranch, Blocks, Bot, ChartColumn, CircleHelp, Settings, MoreHorizontal, Puzzle, Code2, VectorSquare, Brain, Network, Server } from 'lucide-react'
+import { Files, GitBranch, Blocks, Bot, ChartColumn, CircleHelp, Settings, MoreHorizontal, Puzzle, Code2, VectorSquare, Brain, Network, Server, GraduationCap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { SidebarView } from './Sidebar'
 import { useKoma, resolveActivityBarOrder } from '../store/koma'
@@ -10,6 +10,7 @@ type ActivityBarProps = {
   onSelect: (view: SidebarView) => void
   onSettings?: () => void
   onHelp?: () => void
+  onTutorial?: () => void
 }
 
 type ActivityBarItem = { view: SidebarView; icon: LucideIcon; label: string }
@@ -52,9 +53,10 @@ export const ACTIVITY_BAR_ITEMS: ActivityBarItem[] = [
 // Per-button footprint used for the overflow measurement below: the iconBtn's
 // h-10 (40px) plus the strip's gap-0.5 (2px) between siblings.
 const ITEM_H = 42
-// Help + Settings are fixed chrome (never reorderable/hideable/overflow-able),
-// always pinned at the bottom — reserved out of the measured height first.
-const FOOTER_H = ITEM_H * 2
+// Tutorial + Help + Settings are fixed chrome (never reorderable/hideable/
+// overflow-able), always pinned at the bottom — reserved out of the measured
+// height first.
+const FOOTER_H = ITEM_H * 3
 
 // Thin icon strip. Selecting a view switches the sidebar panel; the active
 // view shows the left indicator bar. The managed items (ACTIVITY_BAR_ITEMS)
@@ -65,7 +67,7 @@ const FOOTER_H = ITEM_H * 2
 // (both inert re: active-state — neither is a `SidebarView` — and neither is
 // part of the managed/reorderable list), Help directly above Settings, the
 // overflow button (when shown) directly above Help.
-export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onHelp }: ActivityBarProps) {
+export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onHelp, onTutorial }: ActivityBarProps) {
   const order = useKoma((s) => s.activityBar.order)
   const hidden = useKoma((s) => s.activityBar.hidden)
   const setActivityBarOrder = useKoma((s) => s.setActivityBarOrder)
@@ -219,6 +221,7 @@ export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onH
   return (
     <div
       ref={containerRef}
+      data-tour="activity-bar"
       className="flex w-12 flex-none flex-col items-center gap-0.5 border-r border-koma-border bg-koma-panel2 pt-1.5"
     >
       {barItems.map((item) => {
@@ -252,6 +255,7 @@ export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onH
             onClick={() => pickItem(item)}
             title={label}
             aria-label={label}
+            data-tour-view={item.ext ? undefined : view}
             className={`${iconBtn} ${active ? '!opacity-100' : ''} ${dragging ? 'opacity-25' : ''} ${
               dragOver ? 'ring-1 ring-inset ring-koma-accent/60' : ''
             }`}
@@ -300,8 +304,18 @@ export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onH
       )}
 
       <button
-        onClick={onHelp}
+        onClick={onTutorial}
+        data-tour-open="tutorial"
         className={`${iconBtn} ${showMenuButton ? '' : 'mt-auto'}`}
+        title="Tutorial"
+        aria-label="Tutorial"
+      >
+        <GraduationCap size={22} strokeWidth={1.6} />
+      </button>
+      <button
+        onClick={onHelp}
+        data-tour-open="help"
+        className={iconBtn}
         title="Help"
         aria-label="Help"
       >
@@ -309,6 +323,7 @@ export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onH
       </button>
       <button
         onClick={onSettings}
+        data-tour-open="settings"
         className={`${iconBtn} mb-1.5`}
         title="Settings"
         aria-label="Settings"

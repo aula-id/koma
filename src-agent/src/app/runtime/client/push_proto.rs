@@ -482,6 +482,18 @@ pub(super) enum PushEnvelope {
         ok: bool,
         error: Option<String>,
     },
+    /// One-shot reply to a GUI Tutorial tab chat turn (`GuiReq::TutorialChat`).
+    /// `id` echoes the client turn id; `text` is the coach reply with the TOUR
+    /// trailer stripped; `tour` is an optional tour id to offer; `error` is set
+    /// (and `text` empty) on network/parse failure so the tab can fall back to
+    /// static topics.
+    #[serde(rename_all = "camelCase")]
+    TutorialChatDone {
+        id: String,
+        text: String,
+        tour: Option<String>,
+        error: Option<String>,
+    },
     /// Full detail of one locally-installed extension — the reply to
     /// `GetInstalledExtensionDetail`. `detail` is `null` when the extension is not
     /// in the registry. `id` echoes the requested extension id for stale-reply protection.
@@ -953,6 +965,25 @@ pub(super) fn push_store_catalogue(
     error: Option<String>,
 ) {
     super::render::emit(push, &PushEnvelope::StoreCatalogue { items, error });
+}
+
+/// Emit a one-shot `TutorialChatDone` envelope for the GUI Tutorial tab.
+pub(super) fn push_tutorial_chat_done(
+    push: &dyn Fn(String),
+    id: String,
+    text: String,
+    tour: Option<String>,
+    error: Option<String>,
+) {
+    super::render::emit(
+        push,
+        &PushEnvelope::TutorialChatDone {
+            id,
+            text,
+            tour,
+            error,
+        },
+    );
 }
 
 /// Emit a one-shot `StoreItemDetail` envelope for the GUI Store detail pane. Shared the

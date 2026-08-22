@@ -70,6 +70,7 @@ function RootLayout() {
   const req = useKoma((s) => s.req)
   const openSettingsTab = useKoma((s) => s.openSettingsTab)
   const openHelpTab = useKoma((s) => s.openHelpTab)
+  const openTutorialTab = useKoma((s) => s.openTutorialTab)
   const openTerminalTab = useKoma((s) => s.openTerminalTab)
   // Counter for generating unique terminal IDs.
   const terminalCountRef = useRef(0)
@@ -250,6 +251,7 @@ function RootLayout() {
           onSelect={selectView}
           onSettings={openSettingsTab}
           onHelp={openHelpTab}
+          onTutorial={openTutorialTab}
         />
         {sidebarOpen && (
           <>
@@ -309,6 +311,9 @@ const SettingsTab = lazy(() => import('../components/SettingsTab'))
 
 // Help page — lazy so its chunk only loads when the (?) button is first clicked.
 const HelpTab = lazy(() => import('../components/HelpTab'))
+
+// Tutorial coach — lazy so driver.js + chat UI only load when first opened.
+const TutorialTab = lazy(() => import('../components/TutorialTab'))
 
 // Per-agent editor — lazy so its chunk only loads when the Agents panel's
 // first row (or "+ Add agent") is clicked.
@@ -386,6 +391,12 @@ function TabbedMain() {
             <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
               <Suspense fallback={<DiffFallback />}>
                 <HelpTab />
+              </Suspense>
+            </div>
+          ) : t.kind === 'tutorial' ? (
+            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
+              <Suspense fallback={<DiffFallback />}>
+                <TutorialTab />
               </Suspense>
             </div>
           ) : t.kind === 'agent' ? (
