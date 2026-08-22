@@ -17,6 +17,7 @@ fn run_bootstrap(outputs: &[&str], installs: &Cell<usize>) -> Result<bool> {
             installs.set(installs.get() + 1);
             Ok(())
         },
+        |_| {},
     )
 }
 
@@ -73,6 +74,7 @@ fn query_error_treated_as_missing_triggers_install() {
             installs.set(installs.get() + 1);
             Ok(())
         },
+        |_| {},
     );
     assert!(result.unwrap());
     assert_eq!(installs.get(), 1);
@@ -97,6 +99,7 @@ fn query_error_post_install_also_errors_propagates() {
             installs.set(installs.get() + 1);
             Ok(())
         },
+        |_| {},
     );
     let err = result.unwrap_err().to_string();
     assert!(err.contains("version mismatch after install"));

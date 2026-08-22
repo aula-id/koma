@@ -86,8 +86,15 @@ pub(crate) fn run_remote_client_with_cwd(
         }
     }
 
-    // Set up terminal for TUI rendering.
-    let _guard = TerminalGuard::enter()?;
+    // Set up terminal for TUI rendering. If the caller already owns the
+    // alt-screen (bootstrap timeline hand-off), join it instead of nesting
+    // a second TerminalGuard (which would LeaveAlternateScreen on drop).
+    let already_raw = ratatui::crossterm::terminal::is_raw_mode_enabled().unwrap_or(false);
+    let _guard = if already_raw {
+        None
+    } else {
+        Some(TerminalGuard::enter()?)
+    };
     let backend = CrosstermBackend::new(std::io::stdout());
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
@@ -213,8 +220,16 @@ pub(crate) fn prompt_remote_cwd(
         }
     }
 
-    let _guard = TerminalGuard::enter()?;
+    let already_raw = ratatui::crossterm::terminal::is_raw_mode_enabled().unwrap_or(false);
+    let _guard = if already_raw {
+        None
+    } else {
+        Some(TerminalGuard::enter()?)
+    };
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
+    if !already_raw {
+        terminal.clear()?;
+    }
     let palette = crate::view::theme::palette(&crate::model::app_config::AppConfig::load());
     let password = auth.map(|a| a.password().to_string());
     let mut spinner = 0;
@@ -436,11 +451,15 @@ pub(crate) struct RemoteClientTarget<'a> {
     pub host_id: Option<&'a str>,
     pub pre_resolved: Option<auth::ResolvedAuth>,
     pub interactive: auth::InteractivePassword,
+    /// When set, bootstrap runs under a braille timeline on this terminal
+    /// (caller still owns the alt-screen). When `None`, bootstrap is silent
+    /// on stderr (legacy / headless).
+    pub terminal: Option<&'a mut Terminal<CrosstermBackend<std::io::Stdout>>>,
 }
 
 /// Callers that still own the TUI alt-screen should resolve auth first via
 /// [`auth::resolve_ssh_auth`] with [`auth::InteractivePassword::TuiModal`], then
-/// pass the result as `pre_resolved` after dropping their terminal guard.
+/// pass `pre_resolved` + `terminal` so bootstrap stays on the alt-screen.
 pub(crate) fn run_remote_client_target(args: RemoteClientTarget<'_>) -> Result<RemoteExit> {
     let RemoteClientTarget {
         target_str,
@@ -451,6 +470,7 @@ pub(crate) fn run_remote_client_target(args: RemoteClientTarget<'_>) -> Result<R
         host_id,
         pre_resolved,
         interactive,
+        terminal,
     } = args;
 
     let mut target = super::parse_target(target_str)?;
@@ -492,13 +512,28 @@ pub(crate) fn run_remote_client_target(args: RemoteClientTarget<'_>) -> Result<R
     }
 
     // Bootstrap: validate/install/upgrade koma on remote (uses same auth).
-    eprintln!("Checking remote Koma version...");
-    match bootstrap::ensure_koma_compatible(&target, auth_ref) {
+    let host_label = match target.port {
+        Some(22) | None => format!("{}@{}", target.user, target.host),
+        Some(port) => format!("{}@{}:{}", target.user, target.host, port),
+    };
+    let mut term_opt = terminal;
+    let bootstrap_result = match &mut term_opt {
+        Some(term) => {
+            bootstrap::ensure_koma_compatible_animated(term, &target, auth_ref, &host_label)
+        }
+        None => {
+            eprintln!("Checking remote Koma version...");
+            bootstrap::ensure_koma_compatible(&target, auth_ref)
+        }
+    };
+    match bootstrap_result {
         Ok(upgraded) => {
-            if upgraded {
-                eprintln!("Remote Koma installed or upgraded successfully.");
-            } else {
-                eprintln!("Remote Koma version matches.");
+            if term_opt.is_none() {
+                if upgraded {
+                    eprintln!("Remote Koma installed or upgraded successfully.");
+                } else {
+                    eprintln!("Remote Koma version matches.");
+                }
             }
             auth::remember_password(&resolved);
         }
@@ -512,7 +547,16 @@ pub(crate) fn run_remote_client_target(args: RemoteClientTarget<'_>) -> Result<R
                     None,
                     interactive,
                 )?;
-                match bootstrap::ensure_koma_compatible(&target, retry.auth.as_ref()) {
+                let retry_result = match &mut term_opt {
+                    Some(term) => bootstrap::ensure_koma_compatible_animated(
+                        term,
+                        &target,
+                        retry.auth.as_ref(),
+                        &host_label,
+                    ),
+                    None => bootstrap::ensure_koma_compatible(&target, retry.auth.as_ref()),
+                };
+                match retry_result {
                     Ok(_) => {
                         auth::remember_password(&retry);
                         return finish_remote_after_auth(
