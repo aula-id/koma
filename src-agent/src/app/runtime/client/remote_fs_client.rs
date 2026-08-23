@@ -172,7 +172,9 @@ fn req_id_of(req: &RemoteFsReq) -> Option<String> {
         | RemoteFsReq::Rename { request_id, .. }
         | RemoteFsReq::Delete { request_id, .. }
         | RemoteFsReq::WriteBytes { request_id, .. }
-        | RemoteFsReq::DownloadBytes { request_id, .. } => Some(request_id.clone()),
+        | RemoteFsReq::DownloadBytes { request_id, .. }
+        | RemoteFsReq::ContentSearch { request_id, .. }
+        | RemoteFsReq::ContentReplace { request_id, .. } => Some(request_id.clone()),
         _ => None,
     }
 }
@@ -263,6 +265,50 @@ fn hostctl_to_req(ctl: &super::HostCtl) -> Option<RemoteFsReq> {
             path: path.clone(),
             request_id: request_id.clone(),
         }),
+        super::HostCtl::FileContentSearch {
+            root,
+            path,
+            query,
+            case_sensitive,
+            whole_word,
+            is_regex,
+            include_glob,
+            exclude_glob,
+            request_id,
+        } => Some(RemoteFsReq::ContentSearch {
+            root: root.clone(),
+            path: path.clone(),
+            query: query.clone(),
+            case_sensitive: *case_sensitive,
+            whole_word: *whole_word,
+            is_regex: *is_regex,
+            include_glob: include_glob.clone(),
+            exclude_glob: exclude_glob.clone(),
+            request_id: request_id.clone(),
+        }),
+        super::HostCtl::FileContentReplace {
+            root,
+            path,
+            query,
+            replacement,
+            case_sensitive,
+            whole_word,
+            is_regex,
+            include_glob,
+            exclude_glob,
+            request_id,
+        } => Some(RemoteFsReq::ContentReplace {
+            root: root.clone(),
+            path: path.clone(),
+            query: query.clone(),
+            replacement: replacement.clone(),
+            case_sensitive: *case_sensitive,
+            whole_word: *whole_word,
+            is_regex: *is_regex,
+            include_glob: include_glob.clone(),
+            exclude_glob: exclude_glob.clone(),
+            request_id: request_id.clone(),
+        }),
         _ => None,
     }
 }
@@ -326,6 +372,23 @@ fn push_rep(push: &dyn Fn(String), rep: RemoteFsRep) {
             size: r.size,
             too_large: r.too_large,
             error: r.error,
+        },
+        RemoteFsRep::ContentSearch(r) => PushEnvelope::FileContentSearch {
+            root: r.root,
+            path: r.path,
+            request_id: r.request_id,
+            results: r.results,
+            error: r.error,
+            truncated: r.truncated,
+        },
+        RemoteFsRep::ContentReplace(r) => PushEnvelope::FileContentReplace {
+            root: r.root,
+            path: r.path,
+            request_id: r.request_id,
+            files_changed: r.files_changed,
+            match_count: r.match_count,
+            error: r.error,
+            truncated: r.truncated,
         },
         RemoteFsRep::Error { error, request_id } => {
             // No op context — emit a FileTree-shaped error if we have a request id,

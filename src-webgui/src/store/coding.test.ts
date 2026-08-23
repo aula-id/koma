@@ -19,6 +19,7 @@ const withCaches = (partial: Partial<CodingSlice> = {}): CodingSlice => ({
   files: partial.files ?? {},
   _readReq: partial._readReq ?? {},
   _treeReq: partial._treeReq ?? {},
+  search: partial.search ?? initialCoding.search,
 })
 
 // These are the production reducers imported from ./coding (not test copies).

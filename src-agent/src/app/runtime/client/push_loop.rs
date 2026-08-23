@@ -1140,7 +1140,9 @@ pub(super) fn push_loop(
                 | Ok(ctl @ super::HostCtl::FileRename { .. })
                 | Ok(ctl @ super::HostCtl::FileDelete { .. })
                 | Ok(ctl @ super::HostCtl::FileWriteBytes { .. })
-                | Ok(ctl @ super::HostCtl::FileDownloadBytes { .. }) => {
+                | Ok(ctl @ super::HostCtl::FileDownloadBytes { .. })
+                | Ok(ctl @ super::HostCtl::FileContentSearch { .. })
+                | Ok(ctl @ super::HostCtl::FileContentReplace { .. }) => {
                     if let Some(fs) = remote_fs {
                         fs.handle_file_ctl(&ctl, push);
                     } else if remote_ctx.is_some() {
@@ -1152,12 +1154,25 @@ pub(super) fn push_loop(
                             .as_deref()
                             .and_then(super::diff::session_workdirs_for)
                             .unwrap_or_default();
-                        super::file_ops::handle_file_ctl(
-                            &ctl,
-                            push,
-                            &workdirs,
-                            current_owned.as_deref(),
-                        );
+                        match &ctl {
+                            super::HostCtl::FileContentSearch { .. }
+                            | super::HostCtl::FileContentReplace { .. } => {
+                                super::content_search::handle_content_ctl(
+                                    &ctl,
+                                    push,
+                                    &workdirs,
+                                    current_owned.as_deref(),
+                                );
+                            }
+                            _ => {
+                                super::file_ops::handle_file_ctl(
+                                    &ctl,
+                                    push,
+                                    &workdirs,
+                                    current_owned.as_deref(),
+                                );
+                            }
+                        }
                     }
                 }
                 #[cfg(feature = "linker")]
@@ -1937,6 +1952,33 @@ fn push_remote_fs_unavailable(ctl: &super::HostCtl, push: &dyn Fn(String)) {
             size: 0,
             too_large: false,
             error: Some(ERR.into()),
+        },
+        super::HostCtl::FileContentSearch {
+            root,
+            path,
+            request_id,
+            ..
+        } => PushEnvelope::FileContentSearch {
+            root: root.clone(),
+            path: path.clone(),
+            request_id: request_id.clone(),
+            results: Vec::new(),
+            error: Some(ERR.into()),
+            truncated: false,
+        },
+        super::HostCtl::FileContentReplace {
+            root,
+            path,
+            request_id,
+            ..
+        } => PushEnvelope::FileContentReplace {
+            root: root.clone(),
+            path: path.clone(),
+            request_id: request_id.clone(),
+            files_changed: 0,
+            match_count: 0,
+            error: Some(ERR.into()),
+            truncated: false,
         },
         _ => return,
     };

@@ -35,6 +35,63 @@ export type CodingSlice = {
   _readReq: Record<string, string>
   _treeReq: Record<string, string>
   _sessionGen: number // bumped on session switch
+  // VS Code-style content search pane state.
+  search: CodingSearchState
+}
+
+export type ContentSearchMatch = {
+  line: number
+  col: number
+  text: string
+}
+
+export type ContentSearchFileHit = {
+  path: string
+  matches: ContentSearchMatch[]
+}
+
+export type CodingSearchState = {
+  query: string
+  replace: string
+  replaceOpen: boolean
+  caseSensitive: boolean
+  wholeWord: boolean
+  isRegex: boolean
+  includeGlob: string
+  excludeGlob: string
+  filtersOpen: boolean
+  loading: boolean
+  error: string | null
+  truncated: boolean
+  results: ContentSearchFileHit[]
+  /** Last issued search requestId (stale-reply guard). */
+  _searchReq: string | null
+  /** Last issued replace requestId. */
+  _replaceReq: string | null
+  replacing: boolean
+  replaceError: string | null
+  lastReplaceSummary: string | null
+}
+
+export const initialCodingSearch: CodingSearchState = {
+  query: '',
+  replace: '',
+  replaceOpen: false,
+  caseSensitive: false,
+  wholeWord: false,
+  isRegex: false,
+  includeGlob: '',
+  excludeGlob: '',
+  filtersOpen: false,
+  loading: false,
+  error: null,
+  truncated: false,
+  results: [],
+  _searchReq: null,
+  _replaceReq: null,
+  replacing: false,
+  replaceError: null,
+  lastReplaceSummary: null,
 }
 
 export const initialCoding: CodingSlice = {
@@ -44,6 +101,7 @@ export const initialCoding: CodingSlice = {
   _readReq: {},
   _treeReq: {},
   _sessionGen: 0,
+  search: initialCodingSearch,
 }
 
 export function fileKey(root: string, path: string): string {
@@ -149,6 +207,27 @@ export type FileDownloadBytesPush = {
   error: string | null
 }
 
+export type FileContentSearchPush = {
+  k: 'FileContentSearch'
+  root: string
+  path: string
+  requestId: string
+  results: ContentSearchFileHit[]
+  error: string | null
+  truncated: boolean
+}
+
+export type FileContentReplacePush = {
+  k: 'FileContentReplace'
+  root: string
+  path: string
+  requestId: string
+  filesChanged: number
+  matchCount: number
+  error: string | null
+  truncated: boolean
+}
+
 export type CodingPush =
   | FileTreePush
   | FileReadPush
@@ -158,6 +237,8 @@ export type CodingPush =
   | FileDeletePush
   | FileWriteBytesPush
   | FileDownloadBytesPush
+  | FileContentSearchPush
+  | FileContentReplacePush
 
 /** Apply a FileTree push into the coding slice (stale-reply guarded). */
 export function reduceFileTree(coding: CodingSlice, env: FileTreePush): CodingSlice {
@@ -393,4 +474,44 @@ export function reduceFileDelete(coding: CodingSlice, env: FileDeletePush): Codi
 export function reduceFileWriteBytes(coding: CodingSlice, env: FileWriteBytesPush): CodingSlice {
   if (env.error) return coding
   return invalidateDir(coding, env.root, env.path)
+}
+
+/** Apply a FileContentSearch push (stale-reply guarded via `_searchReq`). */
+export function reduceFileContentSearch(
+  coding: CodingSlice,
+  env: FileContentSearchPush,
+): CodingSlice {
+  if (coding.search._searchReq && coding.search._searchReq !== env.requestId) return coding
+  return {
+    ...coding,
+    search: {
+      ...coding.search,
+      loading: false,
+      error: env.error,
+      truncated: !!env.truncated,
+      results: env.error ? [] : env.results ?? [],
+    },
+  }
+}
+
+/** Apply a FileContentReplace push. */
+export function reduceFileContentReplace(
+  coding: CodingSlice,
+  env: FileContentReplacePush,
+): CodingSlice {
+  if (coding.search._replaceReq && coding.search._replaceReq !== env.requestId) return coding
+  const summary = env.error
+    ? null
+    : env.filesChanged === 0
+      ? 'No replacements made'
+      : `Replaced ${env.matchCount} match${env.matchCount === 1 ? '' : 'es'} in ${env.filesChanged} file${env.filesChanged === 1 ? '' : 's'}${env.truncated ? ' (truncated)' : ''}`
+  return {
+    ...coding,
+    search: {
+      ...coding.search,
+      replacing: false,
+      replaceError: env.error,
+      lastReplaceSummary: summary,
+    },
+  }
 }

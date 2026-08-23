@@ -1,13 +1,14 @@
 // Cross-tab Language Servers drawer — twin of ProblemsDrawer. Sits above
 // UsageFooter and lists live LSP runtime (starting / indexing / ready / error).
 
-import { AlertCircle, CheckCircle2, ChevronDown, Loader2, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ChevronDown, X } from 'lucide-react'
 import { useKoma, type LspRuntimeServer } from '../store/koma'
+import { BrailleSpinner } from './BrailleSpinner'
 
 function PhaseIcon({ phase }: { phase: string }) {
   if (phase === 'error') return <AlertCircle size={12} className="flex-none text-koma-error" />
   if (phase === 'ready') return <CheckCircle2 size={12} className="flex-none text-koma-success" />
-  return <Loader2 size={12} className="flex-none animate-spin text-koma-accent" />
+  return <BrailleSpinner size={12} className="flex-none text-koma-accent" />
 }
 
 function phaseLabel(s: LspRuntimeServer): string {
@@ -69,7 +70,7 @@ export function LspDrawer() {
           <ul className="divide-y divide-koma-border/60">
             {installRows.map((p) => (
               <li key={`install:${p.id}`} className="flex items-start gap-2 px-3 py-1.5">
-                <Loader2 size={12} className="mt-0.5 flex-none animate-spin text-koma-accent" />
+                <BrailleSpinner size={12} className="mt-0.5 flex-none text-koma-accent" />
                 <span className="min-w-0 flex-1 truncate text-koma-fg">
                   <span className="text-koma-accent">{p.id}</span>
                   <span className="mx-1.5 text-koma-dim">·</span>

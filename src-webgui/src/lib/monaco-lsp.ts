@@ -733,7 +733,7 @@ export function ensureLspProviders(
   })
 
   // VS Code-style "N references" CodeLens above symbols.
-  // Click peeks references at the symbol (requires edcore.main contribs).
+  // Always open the peek widget (never jump / go-to), including single hits.
   const CODELENS_PEEK_REFS = 'koma.codelens.peekReferences'
   monaco.editor.registerCommand(
     CODELENS_PEEK_REFS,
@@ -748,23 +748,24 @@ export function ensureLspProviders(
         editors.find((e) => e.hasTextFocus()) ??
         editors[0]
       if (!ed) return
+      const model = ed.getModel()
+      if (!model) return
       const pos = { lineNumber: payload.line, column: payload.column }
       ed.setPosition(pos)
       ed.revealPositionInCenterIfOutsideViewport(pos)
       ed.focus()
-      // Defer one frame so the position sticks before the peek action reads it.
-      const runPeek = () => {
-        const action =
-          ed.getAction('editor.action.referenceSearch.trigger') ??
-          ed.getAction('editor.action.goToReferences')
-        if (action) {
-          void action.run()
+
+      const openPeek = () => {
+        // Prefer stock Peek References (openInPeek: true even for 1 hit).
+        // Never fall back to goToReferences — that jumps on single results.
+        const peek =
+          ed.getAction('editor.action.referenceSearch.trigger')
+        if (peek) {
+          void peek.run()
           return
         }
-        // Contribs missing — last resort: open first reference as a tab via provider.
+        // Contrib missing — build locations ourselves and force peek via goToLocations.
         void (async () => {
-          const model = ed.getModel()
-          if (!model) return
           const loc = modelToRootPath(model, getRoots())
           if (!loc) return
           const requestId = mintId('refclick')
@@ -783,22 +784,13 @@ export function ensureLspProviders(
             if (!locations.length) return
             const mapped = await materializeLocations(locations, req, getRoots)
             if (!mapped.length) return
-            // Prefer multi-reference peek path through opener when action absent.
-            const first = mapped[0]
-            const uri = first.uri.toString()
-            if (goToHook) {
-              goToHook(
-                uri,
-                first.range.startLineNumber - 1,
-                first.range.startColumn - 1,
-              )
-            }
+            await forcePeekReferences(ed, model.uri, pos, mapped)
           } catch {
             /* ignore */
           }
         })()
       }
-      window.setTimeout(runPeek, 0)
+      window.setTimeout(openPeek, 0)
     },
   )
 
@@ -837,7 +829,11 @@ export function ensureLspProviders(
 
 /**
  * Go-to-definition for cross-file targets: open a coding tab instead of
- * swapping the current editor model. Peek never calls this path.
+ * swapping the current editor model.
+ *
+ * Peek's embedded preview editor is an EmbeddedCodeEditorWidget — we must NOT
+ * hijack those opens or the peek widget never paints its preview and selection
+ * can look like a jump.
  */
 export function ensureEditorOpener(req: ReqFn, getRoots: RootsFn): void {
   if (openerReady) return
@@ -845,6 +841,11 @@ export function ensureEditorOpener(req: ReqFn, getRoots: RootsFn): void {
 
   monaco.editor.registerEditorOpener({
     openCodeEditor(source, resource, selectionOrPosition) {
+      // Peek / embedded editors handle their own navigation.
+      if (isEmbeddedEditor(source)) {
+        return false
+      }
+
       const uriStr = resource.toString()
       const abs = uriToPath(uriStr)
       if (!abs) return false
@@ -870,8 +871,6 @@ export function ensureEditorOpener(req: ReqFn, getRoots: RootsFn): void {
       // Ensure model exists (peek already did; go-to may race).
       void ensureModelForUri(uriStr, req, getRoots)
 
-      // Dynamic import avoided — store is passed via openDiagnostic in ensureLspProviders call site.
-      // Call through a global hook set by the store bootstrap.
       const open = goToHook
       if (open) {
         open(uriStr, line, character)
@@ -880,6 +879,48 @@ export function ensureEditorOpener(req: ReqFn, getRoots: RootsFn): void {
       return false
     },
   })
+}
+
+/** Detect Monaco EmbeddedCodeEditorWidget (peek preview) without importing its type. */
+function isEmbeddedEditor(ed: monaco.editor.ICodeEditor): boolean {
+  const anyEd = ed as unknown as { getParentEditor?: () => unknown }
+  return typeof anyEd.getParentEditor === 'function'
+}
+
+/**
+ * Force the references peek widget open for the given locations (even if only one).
+ * Uses Monaco's `editor.action.goToLocations` with openInPeek=true.
+ */
+async function forcePeekReferences(
+  ed: monaco.editor.ICodeEditor,
+  uri: monaco.Uri,
+  pos: { lineNumber: number; column: number },
+  locations: monaco.languages.Location[],
+): Promise<void> {
+  try {
+    const { StandaloneServices } = await import(
+      'monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js'
+    )
+    const { ICommandService } = await import(
+      'monaco-editor/esm/vs/platform/commands/common/commands.js'
+    )
+    const cmd = StandaloneServices.get(ICommandService) as {
+      executeCommand: (...args: unknown[]) => Promise<unknown>
+    }
+    await cmd.executeCommand(
+      'editor.action.goToLocations',
+      uri,
+      pos,
+      locations,
+      'peek',
+      'No references',
+      true, // openInPeek — always peek, never jump
+    )
+    ed.focus()
+  } catch {
+    // Last resort: still do not jump — run stock peek action if it appeared late.
+    void ed.getAction('editor.action.referenceSearch.trigger')?.run()
+  }
 }
 
 /** Set by the store so the editor opener can open coding tabs without a cycle. */

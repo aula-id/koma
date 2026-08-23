@@ -14,9 +14,12 @@ import {
   reduceFileRename,
   reduceFileDelete,
   reduceFileWriteBytes,
+  reduceFileContentSearch,
+  reduceFileContentReplace,
   remapPath as codingRemapPath,
   type CodingSlice,
   type FileTreeEntry,
+  type ContentSearchFileHit,
 } from './coding'
 
 import {
@@ -1467,6 +1470,25 @@ export type PushEnvelope =
       tooLarge: boolean
       error: string | null
     }
+  | {
+      k: 'FileContentSearch'
+      root: string
+      path: string
+      requestId: string
+      results: ContentSearchFileHit[]
+      error: string | null
+      truncated: boolean
+    }
+  | {
+      k: 'FileContentReplace'
+      root: string
+      path: string
+      requestId: string
+      filesChanged: number
+      matchCount: number
+      error: string | null
+      truncated: boolean
+    }
   // Reply to GuiReq ImportGraphImpact — transitive impact paths.
   | {
       k: 'ImportGraphImpact'
@@ -2577,6 +2599,17 @@ type KomaState = {
   downloadCodingFile: (root: string, path: string) => void
   refreshCodingDir: (root: string, path: string) => void
   clearCodingConflict: (root: string, path: string) => void
+  // Content search pane
+  setCodingSearchQuery: (query: string) => void
+  setCodingSearchReplace: (replace: string) => void
+  setCodingSearchFlag: (
+    flag: 'caseSensitive' | 'wholeWord' | 'isRegex' | 'replaceOpen' | 'filtersOpen',
+    value: boolean,
+  ) => void
+  setCodingSearchGlobs: (includeGlob: string, excludeGlob: string) => void
+  searchCodingContent: (root: string) => void
+  replaceCodingContentAll: (root: string) => void
+  openCodingSearchHit: (root: string, path: string, line: number, col?: number) => void
 }
 
 const initialSession: SessionSlice = {
@@ -4288,6 +4321,28 @@ export const useKoma = create<KomaState>((set, get) => ({
           })
         }
         break
+      case 'FileContentSearch':
+        set((s) => ({ coding: reduceFileContentSearch(s.coding, env) }))
+        break
+      case 'FileContentReplace':
+        set((s) => ({ coding: reduceFileContentReplace(s.coding, env) }))
+        if (!env.error && env.filesChanged > 0) {
+          // Disk changed under open buffers — force-reload open non-dirty files in this root.
+          const root = env.root
+          const open = get().ui.tabs.filter(
+            (t): t is Extract<Tab, { kind: 'codingFile' }> =>
+              t.kind === 'codingFile' && t.root === root,
+          )
+          for (const t of open) {
+            const f = get().coding.files[fileKey(root, t.path)]
+            if (f && !f.dirty) {
+              get().openCodingFile(root, t.path, { force: true })
+            }
+          }
+          // Re-run search so results reflect post-replace state.
+          queueMicrotask(() => get().searchCodingContent(root))
+        }
+        break
       case 'FileCreate':
         set((s) => {
           const coding = reduceFileCreate(s.coding, env)
@@ -4601,7 +4656,9 @@ export const useKoma = create<KomaState>((set, get) => ({
       g.r === 'FileRename' ||
       g.r === 'FileDelete' ||
       g.r === 'FileWriteBytes' ||
-      g.r === 'FileDownloadBytes'
+      g.r === 'FileDownloadBytes' ||
+      g.r === 'FileContentSearch' ||
+      g.r === 'FileContentReplace'
     const ipc = window.ipc
     if (!ipc || typeof ipc.postMessage !== 'function') {
       if (isCodingReq) {
@@ -5899,5 +5956,141 @@ export const useKoma = create<KomaState>((set, get) => ({
         },
       }
     })
+  },
+  setCodingSearchQuery: (query) => {
+    set((s) => ({
+      coding: { ...s.coding, search: { ...s.coding.search, query, lastReplaceSummary: null } },
+    }))
+  },
+  setCodingSearchReplace: (replace) => {
+    set((s) => ({
+      coding: { ...s.coding, search: { ...s.coding.search, replace } },
+    }))
+  },
+  setCodingSearchFlag: (flag, value) => {
+    set((s) => ({
+      coding: {
+        ...s.coding,
+        search: { ...s.coding.search, [flag]: value, lastReplaceSummary: null },
+      },
+    }))
+  },
+  setCodingSearchGlobs: (includeGlob, excludeGlob) => {
+    set((s) => ({
+      coding: {
+        ...s.coding,
+        search: { ...s.coding.search, includeGlob, excludeGlob, lastReplaceSummary: null },
+      },
+    }))
+  },
+  searchCodingContent: (root) => {
+    const search = get().coding.search
+    const query = search.query
+    if (!root || !query.trim()) {
+      set((s) => ({
+        coding: {
+          ...s.coding,
+          search: {
+            ...s.coding.search,
+            loading: false,
+            error: null,
+            results: [],
+            truncated: false,
+            _searchReq: null,
+          },
+        },
+      }))
+      return
+    }
+    const requestId = mintRequestId()
+    set((s) => ({
+      coding: {
+        ...s.coding,
+        search: {
+          ...s.coding.search,
+          loading: true,
+          error: null,
+          lastReplaceSummary: null,
+          _searchReq: requestId,
+        },
+      },
+    }))
+    get().req({
+      r: 'FileContentSearch',
+      root,
+      path: '',
+      query,
+      caseSensitive: search.caseSensitive,
+      wholeWord: search.wholeWord,
+      isRegex: search.isRegex,
+      includeGlob: search.includeGlob.trim() || null,
+      excludeGlob: search.excludeGlob.trim() || null,
+      requestId,
+    })
+  },
+  replaceCodingContentAll: (root) => {
+    const search = get().coding.search
+    if (!root || !search.query.trim() || search.replacing) return
+    // Skip if any open dirty buffer under this root — replace writes disk and would clobber.
+    const dirtyOpen = get().ui.tabs.some((t) => {
+      if (t.kind !== 'codingFile' || t.root !== root) return false
+      const f = get().coding.files[fileKey(root, t.path)]
+      return !!f?.dirty
+    })
+    if (dirtyOpen) {
+      set((s) => ({
+        coding: {
+          ...s.coding,
+          search: {
+            ...s.coding.search,
+            replaceError: 'Save or discard dirty editor tabs before Replace All',
+            lastReplaceSummary: null,
+          },
+        },
+      }))
+      return
+    }
+    const requestId = mintRequestId()
+    set((s) => ({
+      coding: {
+        ...s.coding,
+        search: {
+          ...s.coding.search,
+          replacing: true,
+          replaceError: null,
+          lastReplaceSummary: null,
+          _replaceReq: requestId,
+        },
+      },
+    }))
+    get().req({
+      r: 'FileContentReplace',
+      root,
+      path: '',
+      query: search.query,
+      replacement: search.replace,
+      caseSensitive: search.caseSensitive,
+      wholeWord: search.wholeWord,
+      isRegex: search.isRegex,
+      includeGlob: search.includeGlob.trim() || null,
+      excludeGlob: search.excludeGlob.trim() || null,
+      requestId,
+    })
+  },
+  openCodingSearchHit: (root, path, line, col = 1) => {
+    const targetLine = Math.max(1, line)
+    const targetCol = Math.max(1, col)
+    queueReveal(root, path, targetLine, targetCol)
+    get().openCodingFile(root, path)
+    const fire = () => {
+      window.dispatchEvent(
+        new CustomEvent('koma-reveal-line', {
+          detail: { root, path, line: targetLine, column: targetCol },
+        }),
+      )
+    }
+    fire()
+    setTimeout(fire, 80)
+    setTimeout(fire, 300)
   },
 }))

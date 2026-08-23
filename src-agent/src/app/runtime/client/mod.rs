@@ -48,6 +48,7 @@
 
 mod bridge;
 mod connect;
+pub(crate) mod content_search;
 pub(crate) mod diff;
 pub(crate) mod file_ops;
 pub(crate) mod git;
@@ -741,6 +742,31 @@ pub(super) enum HostCtl {
     FileDownloadBytes {
         root: String,
         path: String,
+        request_id: String,
+    },
+    /// Coding panel: VS Code-style content search across a workspace root.
+    FileContentSearch {
+        root: String,
+        path: String,
+        query: String,
+        case_sensitive: bool,
+        whole_word: bool,
+        is_regex: bool,
+        include_glob: Option<String>,
+        exclude_glob: Option<String>,
+        request_id: String,
+    },
+    /// Coding panel: replace-all matching content_search flags.
+    FileContentReplace {
+        root: String,
+        path: String,
+        query: String,
+        replacement: String,
+        case_sensitive: bool,
+        whole_word: bool,
+        is_regex: bool,
+        include_glob: Option<String>,
+        exclude_glob: Option<String>,
         request_id: String,
     },
     /// Settings "Language servers": resolve every catalogue server (managed /

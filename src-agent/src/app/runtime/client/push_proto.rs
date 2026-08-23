@@ -710,6 +710,27 @@ pub(super) enum PushEnvelope {
         too_large: bool,
         error: Option<String>,
     },
+    /// Coding panel: content-search reply (grouped by file).
+    #[serde(rename_all = "camelCase")]
+    FileContentSearch {
+        root: String,
+        path: String,
+        request_id: String,
+        results: Vec<super::content_search::ContentSearchFileHit>,
+        error: Option<String>,
+        truncated: bool,
+    },
+    /// Coding panel: content-replace-all reply.
+    #[serde(rename_all = "camelCase")]
+    FileContentReplace {
+        root: String,
+        path: String,
+        request_id: String,
+        files_changed: u32,
+        match_count: u32,
+        error: Option<String>,
+        truncated: bool,
+    },
     /// Settings "Language servers": full catalogue status (managed / PATH / missing).
     #[serde(rename_all = "camelCase")]
     LspStatus {

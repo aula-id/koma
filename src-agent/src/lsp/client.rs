@@ -721,13 +721,15 @@ fn spawn_server(
         .spawn(move || {
             reader_loop(
                 stdout,
-                pending_reader,
-                push_reader,
-                stdin_reader,
-                runtime_reader,
-                id_reader,
-                name_reader,
-                root_reader,
+                ReaderCtx {
+                    pending: pending_reader,
+                    push: push_reader,
+                    stdin: stdin_reader,
+                    runtime: runtime_reader,
+                    server_id: id_reader,
+                    server_name: name_reader,
+                    server_root: root_reader,
+                },
             );
         })
         .map_err(|e| format!("lsp reader spawn: {e}"))?;
@@ -806,8 +808,7 @@ fn spawn_server(
     Ok(session)
 }
 
-fn reader_loop<R: Read>(
-    stdout: R,
+struct ReaderCtx {
     pending: Arc<Mutex<HashMap<u64, Sender<PendingReply>>>>,
     push: Arc<dyn Fn(String) + Send + Sync>,
     stdin: Arc<Mutex<ChildStdin>>,
@@ -815,7 +816,18 @@ fn reader_loop<R: Read>(
     server_id: String,
     server_name: String,
     server_root: String,
-) {
+}
+
+fn reader_loop<R: Read>(stdout: R, ctx: ReaderCtx) {
+    let ReaderCtx {
+        pending,
+        push,
+        stdin,
+        runtime,
+        server_id,
+        server_name,
+        server_root,
+    } = ctx;
     let mut reader = BufReader::new(stdout);
     loop {
         let body = match read_frame(&mut reader) {

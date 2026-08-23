@@ -263,7 +263,7 @@ export default function AnalyticsTab() {
             title="Refresh"
             className="flex h-7 w-7 items-center justify-center rounded border border-koma-border text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
           >
-            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+            {loading ? <BrailleSpinner size={13} /> : <RefreshCw size={13} />}
           </button>
         </div>
       </div>

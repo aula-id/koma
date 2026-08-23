@@ -944,6 +944,54 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 request_id,
             });
         }
+        GuiReq::FileContentSearch {
+            root,
+            path,
+            query,
+            case_sensitive,
+            whole_word,
+            is_regex,
+            include_glob,
+            exclude_glob,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::FileContentSearch {
+                root,
+                path,
+                query,
+                case_sensitive,
+                whole_word,
+                is_regex,
+                include_glob,
+                exclude_glob,
+                request_id,
+            });
+        }
+        GuiReq::FileContentReplace {
+            root,
+            path,
+            query,
+            replacement,
+            case_sensitive,
+            whole_word,
+            is_regex,
+            include_glob,
+            exclude_glob,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::FileContentReplace {
+                root,
+                path,
+                query,
+                replacement,
+                case_sensitive,
+                whole_word,
+                is_regex,
+                include_glob,
+                exclude_glob,
+                request_id,
+            });
+        }
         // Language servers: host-local status/install/uninstall under ~/.koma/lsp/.
         GuiReq::LspStatus => {
             let _ = ctx.ctl.send(HostCtl::LspStatus);

@@ -14,6 +14,7 @@ use anyhow::Result;
 
 use crate::ipc::frame::{self, FrameReader};
 
+use super::client::content_search;
 use super::client::file_ops;
 use super::remote_fs_proto::{RemoteFsRep, RemoteFsReq};
 
@@ -200,6 +201,56 @@ fn handle_req(req: RemoteFsReq, roots: &mut Vec<PathBuf>) -> RemoteFsRep {
             &root,
             &path,
             &request_id,
+            roots,
+        )),
+        RemoteFsReq::ContentSearch {
+            root,
+            path,
+            query,
+            case_sensitive,
+            whole_word,
+            is_regex,
+            include_glob,
+            exclude_glob,
+            request_id,
+        } => RemoteFsRep::ContentSearch(content_search::exec_file_content_search(
+            content_search::ContentQuery {
+                root: &root,
+                path: &path,
+                query: &query,
+                case_sensitive,
+                whole_word,
+                is_regex,
+                include_glob: include_glob.as_deref(),
+                exclude_glob: exclude_glob.as_deref(),
+                request_id: &request_id,
+            },
+            roots,
+        )),
+        RemoteFsReq::ContentReplace {
+            root,
+            path,
+            query,
+            replacement,
+            case_sensitive,
+            whole_word,
+            is_regex,
+            include_glob,
+            exclude_glob,
+            request_id,
+        } => RemoteFsRep::ContentReplace(content_search::exec_file_content_replace(
+            content_search::ContentQuery {
+                root: &root,
+                path: &path,
+                query: &query,
+                case_sensitive,
+                whole_word,
+                is_regex,
+                include_glob: include_glob.as_deref(),
+                exclude_glob: exclude_glob.as_deref(),
+                request_id: &request_id,
+            },
+            &replacement,
             roots,
         )),
     }
