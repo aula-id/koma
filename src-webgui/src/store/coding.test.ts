@@ -168,7 +168,7 @@ tabs = useKoma.getState().ui.tabs
 assert.equal(tabs.some((t) => t.kind === 'codingFile' && t.root === root), false)
 assert.equal(useKoma.getState().ui.activeTabId, 'chat')
 
-// Dirty close is a no-op without force; force discards without window.confirm.
+// Dirty close is a no-op without force; force discards buffer + tab.
 {
   const id = `coding:${root}:dirty.ts`
   const key = fileKey(root, 'dirty.ts')
@@ -193,6 +193,8 @@ assert.equal(useKoma.getState().ui.activeTabId, 'chat')
   useKoma.getState().closeTab(id, { force: true })
   assert.equal(useKoma.getState().ui.tabs.some((t) => t.id === id), false)
   assert.equal(useKoma.getState().ui.activeTabId, 'chat')
+  // Buffer must be gone so reopen does not restore unsaved edits.
+  assert.equal(useKoma.getState().coding.files[key], undefined)
 }
 
 // SettingsValues carries codingAutosave through the store reducer.

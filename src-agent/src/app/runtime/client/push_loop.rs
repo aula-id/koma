@@ -1055,6 +1055,44 @@ pub(super) fn push_loop(
                     );
 
                 }
+
+                Ok(super::HostCtl::LspReferences {
+                    root,
+                    path,
+                    line,
+                    character,
+                    include_declaration,
+                    request_id,
+                }) => {
+
+                    super::lsp_host::handle_client_ctl(
+
+                        super::HostCtl::LspReferences {
+                            root,
+                            path,
+                            line,
+                            character,
+                            include_declaration,
+                            request_id,
+                        },
+
+                        std::sync::Arc::clone(lsp_manager),
+
+                    );
+
+                }
+
+                Ok(super::HostCtl::LspDocumentSymbol { root, path, request_id }) => {
+
+                    super::lsp_host::handle_client_ctl(
+
+                        super::HostCtl::LspDocumentSymbol { root, path, request_id },
+
+                        std::sync::Arc::clone(lsp_manager),
+
+                    );
+
+                }
                 // Extension STORE browse/detail/installed-list: NEVER touches the
                 // daemon (host-side only, regardless of attach state) — spawn the
                 // blocking network/config work off this thread via the shared

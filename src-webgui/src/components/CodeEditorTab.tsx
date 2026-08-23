@@ -9,6 +9,8 @@ import {
   applyDiagnosticsToMonaco,
   pathToUri,
   consumeReveal,
+  monacoUriFromPath,
+  setGoToDefinitionHandler,
 } from '../lib/monaco-lsp'
 import { useKoma, type Tab } from '../store/koma'
 import { fileKey } from '../store/coding'
@@ -45,6 +47,9 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   }, [lspServers.length, refreshLsp])
 
   useEffect(() => {
+    setGoToDefinitionHandler((uri, line, character) => {
+      useKoma.getState().openDiagnostic(uri, line, character)
+    })
     ensureLspProviders(
       (body) => useKoma.getState().req(body as never),
       () => (useKoma.getState().settingsValues?.workdir ?? []).filter(Boolean),
@@ -154,7 +159,17 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       hover: { enabled: true, delay: 300 },
       links: true,
       folding: true,
+      // Alt = multi-cursor so Ctrl/Cmd+click is free for Go to Definition (VS Code).
       multiCursorModifier: 'alt',
+      definitionLinkOpensInPeek: false,
+      codeLens: true,
+      gotoLocation: {
+        multipleDefinitions: 'goto',
+        multipleReferences: 'peek',
+        multipleDeclarations: 'goto',
+        multipleImplementations: 'peek',
+        multipleTypeDefinitions: 'goto',
+      },
     })
     monaco.editor.setTheme(theme)
     editorRef.current = editor
@@ -164,6 +179,12 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     })
     editor.addCommand(monaco.KeyCode.F12, () => {
       void editor.getAction('editor.action.revealDefinition')?.run()
+    })
+    editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.F12, () => {
+      void editor.getAction('editor.action.peekDefinition')?.run()
+    })
+    editor.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.F12, () => {
+      void editor.getAction('editor.action.referenceSearch.trigger')?.run()
     })
 
     const sub = editor.onDidChangeModelContent(() => {
@@ -205,9 +226,9 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       window.removeEventListener('koma-reveal-line', onReveal)
       sub.dispose()
       if (lspChangeTimerRef.current) clearTimeout(lspChangeTimerRef.current)
-      const model = modelRef.current
+      // Detach only — keep the file:// model alive for peek widgets / reopen.
+      editor.setModel(null)
       editor.dispose()
-      if (model) model.dispose()
       editorRef.current = null
       modelRef.current = null
       lspOpenedRef.current = false
@@ -227,19 +248,18 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     const next = fileState.content
     applyingRef.current = true
     try {
-      if (modelRef.current) {
-        if (modelRef.current.getValue() !== next) {
-          const pos = editor.getPosition()
-          modelRef.current.setValue(next)
-          if (pos) editor.setPosition(pos)
-        }
-      } else {
-        const model = monaco.editor.createModel(next, lang)
-        stampModelPath(model, tab.root, tab.path)
-        editor.setModel(model)
-        modelRef.current = model
+      const uri = monacoUriFromPath(tab.root, tab.path)
+      let model = monaco.editor.getModel(uri)
+      if (!model) {
+        model = monaco.editor.createModel(next, lang, uri)
+      } else if (model.getValue() !== next) {
+        const pos = editor.getPosition()
+        model.setValue(next)
+        if (pos) editor.setPosition(pos)
       }
-      if (modelRef.current) stampModelPath(modelRef.current, tab.root, tab.path)
+      stampModelPath(model, tab.root, tab.path)
+      if (editor.getModel() !== model) editor.setModel(model)
+      modelRef.current = model
     } finally {
       queueMicrotask(() => {
         applyingRef.current = false

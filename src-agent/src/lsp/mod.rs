@@ -3,7 +3,7 @@
 //! Host-spawned LSP side of the coding panel: catalogue, PATH/managed resolve,
 //! install/uninstall recipes, the `koma lsp` CLI, and the stdio JSON-RPC
 //! language client ([`client::LspManager`]) that drives Monaco completion /
-//! hover / definition / diagnostics.
+//! hover / definition / references / diagnostics.
 //!
 //! Layout:
 //! ```text
@@ -28,8 +28,8 @@ pub mod resolve;
 pub use catalog::{find, find_by_extension, ServerSpec, CATALOG};
 #[allow(unused_imports)]
 pub use client::{
-    language_id_for_path, LspCompletionItem, LspDiagnostic, LspHover, LspLocation, LspManager,
-    LspRange,
+    language_id_for_path, LspCompletionItem, LspDiagnostic, LspDocumentSymbol, LspHover,
+    LspLocation, LspManager, LspRange,
 };
 #[allow(unused_imports)]
 pub use install::{install_all, install_one, print_status, uninstall_one, ProgressFn};

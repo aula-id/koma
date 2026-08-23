@@ -1,7 +1,8 @@
 //! Host-spawned LSP JSON-RPC client (stdio, Content-Length framing).
 //!
 //! One process per catalogue server id, lazily started on first document open.
-//! Completions / hover / definition are request/response; diagnostics arrive as
+//! Completions / hover / definition / references / documentSymbol are
+//! request/response; diagnostics arrive as
 //! `textDocument/publishDiagnostics` notifications and are pushed to the GUI.
 //!
 //! Threading mirrors [`crate::app::runtime::client::terminal_host`]: a reader
@@ -80,12 +81,23 @@ pub struct LspRange {
     pub end_character: u32,
 }
 
-/// Go-to-definition location.
+/// Go-to-definition / references location.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LspLocation {
     pub uri: String,
     pub range: LspRange,
+}
+
+/// One document symbol (flattened; nested children expanded by the client).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LspDocumentSymbol {
+    pub name: String,
+    /// LSP SymbolKind (1..26).
+    pub kind: u32,
+    pub range: LspRange,
+    pub selection_range: LspRange,
 }
 
 /// Internal reply from the reader thread to a waiting request.
@@ -157,11 +169,16 @@ impl LspManager {
     ) -> Result<(), String> {
         let abs = abs_path(root, path)?;
         let uri = path_to_uri(&abs);
-        // Empty languageId from the GUI → derive from extension.
-        let language_id = if language_id.is_empty() {
-            language_id_for_path(path)
-        } else {
+        // Prefer extension-derived LSP languageId (tsx → typescriptreact). The
+        // GUI Monarch map uses "typescript" for highlighting and must not win
+        // for didOpen — vtsls typechecks JSX as errors under plain typescript.
+        let derived = language_id_for_path(path);
+        let language_id = if derived != "plaintext" {
+            derived
+        } else if !language_id.is_empty() {
             language_id
+        } else {
+            derived
         };
         if let Some(existing) = self.docs.get(&uri) {
             // Same language: treat as a full-document change. Language switch:
@@ -366,6 +383,47 @@ impl LspManager {
         Ok(parse_locations(&result))
     }
 
+    /// `textDocument/references`.
+    pub fn references(
+        &mut self,
+        root: &str,
+        path: &str,
+        line: u32,
+        character: u32,
+        include_declaration: bool,
+    ) -> Result<Vec<LspLocation>, String> {
+        let (uri, server_id) = self.uri_server(root, path)?;
+        let session = self
+            .servers
+            .get_mut(&server_id)
+            .ok_or_else(|| "server not running".to_string())?;
+        let params = serde_json::json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": line, "character": character },
+            "context": { "includeDeclaration": include_declaration },
+        });
+        let result = session.request("textDocument/references", params)?;
+        Ok(parse_locations(&result))
+    }
+
+    /// `textDocument/documentSymbol` — flattened list (children expanded).
+    pub fn document_symbols(
+        &mut self,
+        root: &str,
+        path: &str,
+    ) -> Result<Vec<LspDocumentSymbol>, String> {
+        let (uri, server_id) = self.uri_server(root, path)?;
+        let session = self
+            .servers
+            .get_mut(&server_id)
+            .ok_or_else(|| "server not running".to_string())?;
+        let params = serde_json::json!({
+            "textDocument": { "uri": uri },
+        });
+        let result = session.request("textDocument/documentSymbol", params)?;
+        Ok(parse_document_symbols(&result))
+    }
+
     fn uri_server(&self, root: &str, path: &str) -> Result<(String, String), String> {
         let abs = abs_path(root, path)?;
         let uri = path_to_uri(&abs);
@@ -535,6 +593,12 @@ fn spawn_server(
                 },
                 "definition": {
                     "linkSupport": false
+                },
+                "references": {
+                    "dynamicRegistration": false
+                },
+                "documentSymbol": {
+                    "hierarchicalDocumentSymbolSupport": true
                 },
                 "publishDiagnostics": {
                     "relatedInformation": false,
@@ -1011,6 +1075,60 @@ fn parse_range(v: &serde_json::Value) -> Option<LspRange> {
         end_line: end.get("line")?.as_u64()? as u32,
         end_character: end.get("character")?.as_u64()? as u32,
     })
+}
+
+fn parse_document_symbols(result: &serde_json::Value) -> Vec<LspDocumentSymbol> {
+    if result.is_null() {
+        return Vec::new();
+    }
+    let Some(arr) = result.as_array() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for item in arr {
+        collect_document_symbol(item, &mut out);
+    }
+    out
+}
+
+fn collect_document_symbol(v: &serde_json::Value, out: &mut Vec<LspDocumentSymbol>) {
+    // DocumentSymbol (hierarchical) has `range` + `selectionRange` + optional children.
+    if let (Some(name), Some(kind), Some(range), Some(sel)) = (
+        v.get("name").and_then(|x| x.as_str()),
+        v.get("kind").and_then(|x| x.as_u64()),
+        v.get("range").and_then(parse_range),
+        v.get("selectionRange")
+            .or_else(|| v.get("range"))
+            .and_then(parse_range),
+    ) {
+        out.push(LspDocumentSymbol {
+            name: name.to_string(),
+            kind: kind as u32,
+            range,
+            selection_range: sel,
+        });
+        if let Some(children) = v.get("children").and_then(|c| c.as_array()) {
+            for c in children {
+                collect_document_symbol(c, out);
+            }
+        }
+        return;
+    }
+    // SymbolInformation — flat, location.range.
+    if let (Some(name), Some(kind), Some(loc)) = (
+        v.get("name").and_then(|x| x.as_str()),
+        v.get("kind").and_then(|x| x.as_u64()),
+        v.get("location"),
+    ) {
+        if let Some(range) = loc.get("range").and_then(parse_range) {
+            out.push(LspDocumentSymbol {
+                name: name.to_string(),
+                kind: kind as u32,
+                range: range.clone(),
+                selection_range: range,
+            });
+        }
+    }
 }
 
 #[cfg(test)]
