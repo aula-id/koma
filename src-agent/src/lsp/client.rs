@@ -1302,6 +1302,7 @@ pub fn language_id_for_path(path: &str) -> &'static str {
         "scss" => "scss",
         "less" => "less",
         "sh" | "bash" | "zsh" => "shellscript",
+        "php" | "phtml" | "php3" | "php4" | "php5" | "phps" => "php",
         "toml" => "toml",
         "lua" => "lua",
         "zig" | "zon" => "zig",
@@ -1503,6 +1504,12 @@ mod tests {
     #[test]
     fn language_id_rust() {
         assert_eq!(language_id_for_path("src/main.rs"), "rust");
+    }
+
+    #[test]
+    fn language_id_php() {
+        assert_eq!(language_id_for_path("app/Http/Controllers/UserController.php"), "php");
+        assert_eq!(language_id_for_path("resources/views/welcome.phtml"), "php");
     }
 
     #[test]

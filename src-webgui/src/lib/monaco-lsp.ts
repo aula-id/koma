@@ -1008,6 +1008,13 @@ export function languageIdForPath(path: string): string {
       return 'zig'
     case 'nix':
       return 'nix'
+    case 'php':
+    case 'phtml':
+    case 'php3':
+    case 'php4':
+    case 'php5':
+    case 'phps':
+      return 'php'
     case 'md':
     case 'markdown':
       return 'markdown'

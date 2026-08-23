@@ -118,7 +118,7 @@ pub fn print_usage() -> i32 {
          \n\
          managed ids:\n\
          \x20 rust-analyzer, vtsls, basedpyright, gopls, clangd,\n\
-         \x20 vscode-langservers, bash-language-server, taplo\n\
+         \x20 vscode-langservers, bash-language-server, intelephense, taplo\n\
          \x20 (lua-language-server, zls, nil: PATH discovery only for now)"
     );
     1
