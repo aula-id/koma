@@ -100,6 +100,56 @@ pub struct LspDocumentSymbol {
     pub selection_range: LspRange,
 }
 
+/// Live runtime row for the footer Language Servers drawer.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LspRuntimeServer {
+    /// Session key (catalogue id, or `vscode-langservers:<bin>`).
+    pub id: String,
+    /// Human label for the drawer.
+    pub name: String,
+    /// Absolute workspace root this process was initialized for.
+    pub root: String,
+    /// `starting` | `ready` | `working` | `error`
+    pub phase: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percentage: Option<u8>,
+    /// Open documents currently routed to this session.
+    pub open_docs: u32,
+}
+
+/// In-flight `$/progress` work-done payload (shared with the reader thread).
+#[derive(Debug, Clone, Default)]
+struct WorkProgress {
+    title: Option<String>,
+    message: Option<String>,
+    percentage: Option<u8>,
+    /// True while a begin..end workDone sequence is open.
+    active: bool,
+}
+
+/// Mutable runtime projection shared between the control loop and reader.
+#[derive(Debug, Clone)]
+struct RuntimeState {
+    phase: String,
+    progress: WorkProgress,
+    error: Option<String>,
+}
+
+impl Default for RuntimeState {
+    fn default() -> Self {
+        Self {
+            phase: "starting".into(),
+            progress: WorkProgress::default(),
+            error: None,
+        }
+    }
+}
+
 /// Internal reply from the reader thread to a waiting request.
 enum PendingReply {
     Ok(serde_json::Value),
@@ -116,12 +166,16 @@ struct OpenDoc {
 struct ServerSession {
     /// Catalogue / spawn id (e.g. `rust-analyzer`).
     id: String,
+    /// Display name for the footer drawer.
+    name: String,
     /// Workspace root this process was initialized for (absolute).
     root: PathBuf,
     child: Child,
     stdin: Arc<Mutex<ChildStdin>>,
     next_id: AtomicU64,
     pending: Arc<Mutex<HashMap<u64, Sender<PendingReply>>>>,
+    /// Live phase + `$/progress` (reader + control loop).
+    runtime: Arc<Mutex<RuntimeState>>,
 }
 
 /// Host-owned map of live language servers + open documents.
@@ -152,6 +206,28 @@ impl LspManager {
             let _ = s.child.kill();
             let _ = s.child.wait();
         }
+        // Clear the footer Language Servers list.
+        push_runtime_snapshot(&*self.push, &[], true, &[]);
+    }
+
+    /// Push a full live-server snapshot (open-doc counts included).
+    fn emit_runtime(&self) {
+        let servers = self.runtime_rows();
+        push_runtime_snapshot(&*self.push, &servers, true, &[]);
+    }
+
+    fn runtime_rows(&self) -> Vec<LspRuntimeServer> {
+        let mut out = Vec::with_capacity(self.servers.len());
+        for (id, session) in &self.servers {
+            let open_docs = self
+                .docs
+                .values()
+                .filter(|d| d.server_id == *id)
+                .count() as u32;
+            out.push(session.to_runtime_row(open_docs));
+        }
+        out.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+        out
     }
 
     /// Clone of the GUI push sink (for request replies from worker threads).
@@ -213,14 +289,54 @@ impl LspManager {
                 ));
             }
         } else {
-            let session = spawn_server(
+            // Announce "starting" before the blocking initialize handshake so the
+            // footer can show a spinner while rust-analyzer/vtsls come up.
+            let display = display_name_for(&spawn_id, spec);
+            push_runtime_snapshot(
+                &*self.push,
+                &[LspRuntimeServer {
+                    id: spawn_id.clone(),
+                    name: display.clone(),
+                    root: root_path.to_string_lossy().into_owned(),
+                    phase: "starting".into(),
+                    title: Some("Starting".into()),
+                    message: None,
+                    percentage: None,
+                    open_docs: 0,
+                }],
+                false,
+                &[],
+            );
+            let session = match spawn_server(
                 &spawn_id,
+                display,
                 &binary,
                 &args,
                 &root_path,
                 Arc::clone(&self.push),
-            )?;
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    push_runtime_snapshot(
+                        &*self.push,
+                        &[LspRuntimeServer {
+                            id: spawn_id.clone(),
+                            name: display_name_for(&spawn_id, spec),
+                            root: root_path.to_string_lossy().into_owned(),
+                            phase: "error".into(),
+                            title: Some("Failed to start".into()),
+                            message: Some(e.clone()),
+                            percentage: None,
+                            open_docs: 0,
+                        }],
+                        false,
+                        &[],
+                    );
+                    return Err(e);
+                }
+            };
             self.servers.insert(spawn_id.clone(), session);
+            self.emit_runtime();
         }
 
         let version = 1;
@@ -248,6 +364,7 @@ impl LspManager {
                 version,
             },
         );
+        self.emit_runtime();
         Ok(())
     }
 
@@ -314,6 +431,8 @@ impl LspManager {
         }
         // Clear markers for this URI.
         push_diagnostics(&*self.push, uri, Vec::new());
+        // Keep the runtime row (server stays warm) but refresh open-doc counts.
+        self.emit_runtime();
     }
 
     /// `textDocument/completion`.
@@ -436,6 +555,46 @@ impl LspManager {
 }
 
 impl ServerSession {
+    fn to_runtime_row(&self, open_docs: u32) -> LspRuntimeServer {
+        let state = self
+            .runtime
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let (title, message, percentage) = if state.phase == "working" || state.progress.active {
+            (
+                state.progress.title.clone(),
+                state.progress.message.clone(),
+                state.progress.percentage,
+            )
+        } else if state.phase == "error" {
+            (
+                Some("Error".into()),
+                state.error.clone(),
+                None,
+            )
+        } else if state.phase == "starting" {
+            (Some("Starting".into()), None, None)
+        } else {
+            (None, None, None)
+        };
+        let phase = if state.progress.active && state.phase != "error" {
+            "working".to_string()
+        } else {
+            state.phase
+        };
+        LspRuntimeServer {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            root: self.root.to_string_lossy().into_owned(),
+            phase,
+            title,
+            message,
+            percentage,
+            open_docs,
+        }
+    }
+
     fn notify(&self, method: &str, params: serde_json::Value) -> Result<(), String> {
         let msg = serde_json::json!({
             "jsonrpc": "2.0",
@@ -494,6 +653,7 @@ fn write_message(stdin: &Arc<Mutex<ChildStdin>>, msg: &serde_json::Value) -> Res
 
 fn spawn_server(
     id: &str,
+    name: String,
     binary: &Path,
     args: &[&str],
     root: &Path,
@@ -531,9 +691,15 @@ fn spawn_server(
     let stdin = Arc::new(Mutex::new(stdin));
     let pending: Arc<Mutex<HashMap<u64, Sender<PendingReply>>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    let runtime = Arc::new(Mutex::new(RuntimeState::default()));
     let pending_reader = Arc::clone(&pending);
     let push_reader = Arc::clone(&push);
+    let stdin_reader = Arc::clone(&stdin);
+    let runtime_reader = Arc::clone(&runtime);
     let stdin_init = Arc::clone(&stdin);
+    let id_reader = id.to_string();
+    let name_reader = name.clone();
+    let root_reader = root.to_string_lossy().into_owned();
 
     // stderr drain so a chatty server never blocks.
     if let Some(stderr) = stderr {
@@ -549,21 +715,32 @@ fn spawn_server(
             .ok();
     }
 
-    // Reader thread: Content-Length frames → pending map or diagnostics push.
+    // Reader thread: Content-Length frames → pending map, diagnostics, progress.
     std::thread::Builder::new()
         .name(format!("lsp-out-{id}"))
         .spawn(move || {
-            reader_loop(stdout, pending_reader, push_reader);
+            reader_loop(
+                stdout,
+                pending_reader,
+                push_reader,
+                stdin_reader,
+                runtime_reader,
+                id_reader,
+                name_reader,
+                root_reader,
+            );
         })
         .map_err(|e| format!("lsp reader spawn: {e}"))?;
 
     let session = ServerSession {
         id: id.to_string(),
+        name,
         root: root.to_path_buf(),
         child,
         stdin: stdin_init,
         next_id: AtomicU64::new(1),
         pending,
+        runtime,
     };
 
     // initialize → initialized
@@ -605,6 +782,9 @@ fn spawn_server(
                     "versionSupport": false
                 }
             },
+            "window": {
+                "workDoneProgress": true
+            },
             "workspace": {
                 "workspaceFolders": true
             }
@@ -617,6 +797,11 @@ fn spawn_server(
     });
     let _caps = session.request("initialize", init_params)?;
     session.notify("initialized", serde_json::json!({}))?;
+    {
+        let mut st = session.runtime.lock().unwrap_or_else(|p| p.into_inner());
+        st.phase = "ready".into();
+        st.error = None;
+    }
 
     Ok(session)
 }
@@ -625,6 +810,11 @@ fn reader_loop<R: Read>(
     stdout: R,
     pending: Arc<Mutex<HashMap<u64, Sender<PendingReply>>>>,
     push: Arc<dyn Fn(String) + Send + Sync>,
+    stdin: Arc<Mutex<ChildStdin>>,
+    runtime: Arc<Mutex<RuntimeState>>,
+    server_id: String,
+    server_name: String,
+    server_root: String,
 ) {
     let mut reader = BufReader::new(stdout);
     loop {
@@ -638,17 +828,32 @@ fn reader_loop<R: Read>(
             Err(_) => continue,
         };
 
-        // Response to a request we sent.
-        if let Some(id) = msg.get("id").and_then(|v| {
-            v.as_u64()
-                .or_else(|| v.as_i64().map(|i| i as u64))
-                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-        }) {
-            // Server→client request (has method + id) — reply with empty result.
-            if msg.get("method").is_some() {
-                // Best-effort: we don't currently support server requests (applyEdit…).
+        // Response to a request we sent — OR a server→client request (method + id).
+        if let Some(id_val) = msg.get("id").cloned() {
+            if let Some(method) = msg.get("method").and_then(|m| m.as_str()) {
+                // Server→client request. Acknowledge workDoneProgress/create; ignore rest.
+                let result = if method == "window/workDoneProgress/create" {
+                    serde_json::Value::Null
+                } else {
+                    // Unsupported server request — null result is the least-bad ack.
+                    serde_json::Value::Null
+                };
+                let reply = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id_val,
+                    "result": result,
+                });
+                let _ = write_message(&stdin, &reply);
                 continue;
             }
+            let id = match id_val {
+                serde_json::Value::Number(n) => n
+                    .as_u64()
+                    .or_else(|| n.as_i64().map(|i| i as u64)),
+                serde_json::Value::String(s) => s.parse().ok(),
+                _ => None,
+            };
+            let Some(id) = id else { continue };
             let tx = {
                 let mut map = pending.lock().unwrap_or_else(|p| p.into_inner());
                 map.remove(&id)
@@ -671,12 +876,28 @@ fn reader_loop<R: Read>(
 
         // Notification from server.
         if let Some(method) = msg.get("method").and_then(|m| m.as_str()) {
-            if method == "textDocument/publishDiagnostics" {
-                if let Some(params) = msg.get("params") {
-                    handle_publish_diagnostics(params, &*push);
+            match method {
+                "textDocument/publishDiagnostics" => {
+                    if let Some(params) = msg.get("params") {
+                        handle_publish_diagnostics(params, &*push);
+                    }
+                }
+                "$/progress" => {
+                    if let Some(params) = msg.get("params") {
+                        handle_progress(
+                            params,
+                            &runtime,
+                            &*push,
+                            &server_id,
+                            &server_name,
+                            &server_root,
+                        );
+                    }
+                }
+                _ => {
+                    // window/logMessage, telemetry/event, etc. — ignore.
                 }
             }
-            // window/logMessage, $/progress, etc. — ignore for v1.
         }
     }
 
@@ -685,6 +906,120 @@ fn reader_loop<R: Read>(
     for (_, tx) in map.drain() {
         let _ = tx.send(PendingReply::Err("LSP server closed".into()));
     }
+    // Mark this server dead in the footer (control loop may still hold the slot
+    // until the next did_* call; surface the death immediately).
+    {
+        let mut st = runtime.lock().unwrap_or_else(|p| p.into_inner());
+        st.phase = "error".into();
+        st.error = Some("server closed".into());
+        st.progress = WorkProgress::default();
+    }
+    push_runtime_snapshot(
+        &*push,
+        &[LspRuntimeServer {
+            id: server_id,
+            name: server_name,
+            root: server_root,
+            phase: "error".into(),
+            title: Some("Stopped".into()),
+            message: Some("server closed".into()),
+            percentage: None,
+            open_docs: 0,
+        }],
+        false,
+        &[],
+    );
+}
+
+fn handle_progress(
+    params: &serde_json::Value,
+    runtime: &Mutex<RuntimeState>,
+    push: &dyn Fn(String),
+    server_id: &str,
+    server_name: &str,
+    server_root: &str,
+) {
+    let value = match params.get("value") {
+        Some(v) => v,
+        None => return,
+    };
+    let kind = value.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+    {
+        let mut st = runtime.lock().unwrap_or_else(|p| p.into_inner());
+        match kind {
+            "begin" => {
+                st.progress.active = true;
+                st.progress.title = value
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_string());
+                st.progress.message = value
+                    .get("message")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_string());
+                st.progress.percentage = value
+                    .get("percentage")
+                    .and_then(|p| p.as_u64())
+                    .map(|n| n.min(100) as u8);
+                if st.phase != "error" {
+                    st.phase = "working".into();
+                }
+            }
+            "report" => {
+                if let Some(m) = value.get("message").and_then(|t| t.as_str()) {
+                    st.progress.message = Some(m.to_string());
+                }
+                if let Some(p) = value.get("percentage").and_then(|p| p.as_u64()) {
+                    st.progress.percentage = Some(p.min(100) as u8);
+                }
+                if st.phase != "error" {
+                    st.progress.active = true;
+                    st.phase = "working".into();
+                }
+            }
+            "end" => {
+                if let Some(m) = value.get("message").and_then(|t| t.as_str()) {
+                    st.progress.message = Some(m.to_string());
+                }
+                st.progress.active = false;
+                st.progress.percentage = None;
+                if st.phase != "error" {
+                    st.phase = "ready".into();
+                }
+                // Keep last title briefly visible via message only.
+                st.progress.title = None;
+            }
+            _ => return,
+        }
+    }
+    let row = {
+        let st = runtime.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let phase = if st.progress.active && st.phase != "error" {
+            "working".to_string()
+        } else {
+            st.phase.clone()
+        };
+        LspRuntimeServer {
+            id: server_id.to_string(),
+            name: server_name.to_string(),
+            root: server_root.to_string(),
+            phase,
+            title: st.progress.title.clone().or_else(|| {
+                if st.phase == "error" {
+                    Some("Error".into())
+                } else {
+                    None
+                }
+            }),
+            message: st.progress.message.clone().or(st.error.clone()),
+            percentage: st.progress.percentage,
+            // Reader doesn't know open-doc count; GUI keeps previous value on merge.
+            open_docs: 0,
+        }
+    };
+    // Partial update — GUI merges by id and preserves openDocs when 0 arrives
+    // from the reader path (see store reducer).
+    push_runtime_snapshot(push, &[row], false, &[]);
 }
 
 fn read_frame<R: BufRead>(reader: &mut R) -> Result<Option<Vec<u8>>, String> {
@@ -799,6 +1134,36 @@ pub fn push_diagnostics(push: &dyn Fn(String), uri: &str, diagnostics: Vec<LspDi
     if let Ok(s) = serde_json::to_string(&env) {
         push(s);
     }
+}
+
+/// Emit a Language Servers runtime snapshot / delta for the footer drawer.
+fn push_runtime_snapshot(
+    push: &dyn Fn(String),
+    servers: &[LspRuntimeServer],
+    replace: bool,
+    removed: &[&str],
+) {
+    let env = serde_json::json!({
+        "k": "LspRuntime",
+        "servers": servers,
+        "replace": replace,
+        "removed": removed,
+    });
+    if let Ok(s) = serde_json::to_string(&env) {
+        push(s);
+    }
+}
+
+fn display_name_for(spawn_id: &str, spec: &ServerSpec) -> String {
+    if let Some(rest) = spawn_id.strip_prefix("vscode-langservers:") {
+        return match rest {
+            "vscode-html-language-server" => "HTML Language Server".into(),
+            "vscode-css-language-server" => "CSS Language Server".into(),
+            "vscode-json-language-server" => "JSON Language Server".into(),
+            other => other.to_string(),
+        };
+    }
+    spec.name.to_string()
 }
 
 // ─── Spawn resolution ────────────────────────────────────────────────────────

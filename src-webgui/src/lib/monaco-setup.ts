@@ -1,6 +1,11 @@
 // Shared Monaco initialization — worker, languages, theme, font detection, language mapping.
 // Used by both DiffTab and CodeEditorTab.
 
+// Full editor core (CodeLens, peek references/definition, hover, suggest, find…).
+// Must load BEFORE editor.api consumers create editors — lean editor.api alone
+// registers no contrib actions, so getAction('editor.action.referenceSearch.trigger')
+// is null and CodeLens clicks are no-ops.
+import 'monaco-editor/esm/vs/editor/edcore.main.js'
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker&inline'
 import { luminance } from './luminance'
@@ -107,9 +112,15 @@ function resolveVarHex(varName: string, fallback: string): string {
 export function applyKomaTheme(name = 'koma-editor'): string {
   const bg = resolveVarHex('--color-koma-bg', '#0b0e14')
   const panel = resolveVarHex('--color-koma-panel', '#151922')
+  const panel2 = resolveVarHex('--color-koma-panel2', panel)
   const fg = resolveVarHex('--color-koma-fg', '#c8d3f5')
   const dim = resolveVarHex('--color-koma-dim', '#adadad')
   const border = resolveVarHex('--color-koma-border', '#20242e')
+  const hover = resolveVarHex('--color-koma-hover', '#1a1f2a')
+  const accent = resolveVarHex('--color-koma-accent', '#39ff14')
+  const warn = resolveVarHex('--color-koma-warn', '#ffb43c')
+  const error = resolveVarHex('--color-koma-error', '#ff3c3c')
+  const info = resolveVarHex('--color-koma-info', '#50c8ff')
   const base: monaco.editor.BuiltinTheme = luminance(bg) < 0.5 ? 'vs-dark' : 'vs'
   monaco.editor.defineTheme(name, {
     base,
@@ -121,13 +132,139 @@ export function applyKomaTheme(name = 'koma-editor'): string {
       'editorLineNumber.foreground': dim,
       'editorLineNumber.activeForeground': fg,
       'editorGutter.background': bg,
+      'editorCursor.foreground': accent,
+      'editor.selectionBackground': mixHex(accent, bg, 0.28),
+      'editor.inactiveSelectionBackground': mixHex(accent, bg, 0.16),
+      'editor.lineHighlightBackground': mixHex(fg, bg, 0.05),
+      'editor.wordHighlightBackground': mixHex(accent, bg, 0.14),
+      'editor.wordHighlightStrongBackground': mixHex(accent, bg, 0.22),
+      'editor.findMatchBackground': mixHex(warn, bg, 0.35),
+      'editor.findMatchHighlightBackground': mixHex(warn, bg, 0.18),
+      'editorLink.activeForeground': accent,
       'diffEditor.diagonalFill': border,
       'editorWidget.background': panel,
+      'editorWidget.foreground': fg,
       'editorWidget.border': border,
+      'editorWidget.resizeBorder': accent,
       'editorOverviewRuler.border': border,
+      'editorHoverWidget.background': panel,
+      'editorHoverWidget.foreground': fg,
+      'editorHoverWidget.border': border,
+      'editorHoverWidget.statusBarBackground': panel2,
+      'editorSuggestWidget.background': panel,
+      'editorSuggestWidget.foreground': fg,
+      'editorSuggestWidget.border': border,
+      'editorSuggestWidget.selectedBackground': hover,
+      'editorSuggestWidget.selectedForeground': fg,
+      'editorSuggestWidget.highlightForeground': accent,
+      'editorSuggestWidget.focusHighlightForeground': accent,
+      'editorSuggestWidgetStatus.foreground': dim,
+      'editorMarkerNavigation.background': panel,
+      'editorMarkerNavigationError.background': error,
+      'editorMarkerNavigationWarning.background': warn,
+      'editorMarkerNavigationInfo.background': info,
+      'input.background': panel2,
+      'input.foreground': fg,
+      'input.border': border,
+      'input.placeholderForeground': dim,
+      'inputOption.activeBorder': accent,
+      'inputOption.activeBackground': mixHex(accent, bg, 0.18),
+      'inputValidation.errorBackground': mixHex(error, bg, 0.25),
+      'inputValidation.errorBorder': error,
+      'inputValidation.warningBackground': mixHex(warn, bg, 0.25),
+      'inputValidation.warningBorder': warn,
+      'inputValidation.infoBackground': mixHex(info, bg, 0.25),
+      'inputValidation.infoBorder': info,
+      'list.activeSelectionBackground': hover,
+      'list.activeSelectionForeground': fg,
+      'list.hoverBackground': mixHex(fg, bg, 0.06),
+      'list.focusBackground': hover,
+      'list.highlightForeground': accent,
+      'scrollbar.shadow': bg,
+      'scrollbarSlider.background': mixHex(fg, bg, 0.18),
+      'scrollbarSlider.hoverBackground': mixHex(fg, bg, 0.28),
+      'scrollbarSlider.activeBackground': mixHex(fg, bg, 0.38),
+      'widget.shadow': mixHex('#000000', bg, 0.45),
+      'focusBorder': accent,
+      'textLink.foreground': accent,
+      'textLink.activeForeground': accent,
+      'textCodeBlock.background': panel2,
+      'textBlockQuote.background': panel2,
+      'textBlockQuote.border': border,
+      'peekView.border': accent,
+      'peekViewTitle.background': panel,
+      'peekViewTitleLabel.foreground': fg,
+      'peekViewTitleDescription.foreground': dim,
+      'peekViewEditor.background': bg,
+      'peekViewEditorGutter.background': bg,
+      'peekViewEditor.matchHighlightBackground': mixHex(warn, bg, 0.28),
+      'peekViewResult.background': panel,
+      'peekViewResult.fileForeground': fg,
+      'peekViewResult.lineForeground': dim,
+      'peekViewResult.matchHighlightBackground': mixHex(warn, bg, 0.28),
+      'peekViewResult.selectionBackground': hover,
+      'peekViewResult.selectionForeground': fg,
+      'editorError.foreground': error,
+      'editorWarning.foreground': warn,
+      'editorInfo.foreground': info,
+      'editorGutter.modifiedBackground': info,
+      'editorGutter.addedBackground': resolveVarHex('--color-koma-success', '#00c853'),
+      'editorGutter.deletedBackground': error,
+      'dropdown.background': panel,
+      'dropdown.foreground': fg,
+      'dropdown.border': border,
+      'menu.background': panel,
+      'menu.foreground': fg,
+      'menu.border': border,
+      'menu.selectionBackground': hover,
+      'menu.selectionForeground': fg,
+      'menu.separatorBackground': border,
     },
   })
   return name
+}
+
+// Re-apply koma Monaco themes after a live palette change (Settings / Snapshot).
+// Safe no-op if Monaco has never been initialized in this page load.
+export function refreshKomaThemes(): void {
+  if (typeof document === 'undefined') return
+  try {
+    // defineTheme is cheap; always refresh both named themes so open editors
+    // and any floating widgets pick up the new colours on the next setTheme.
+    applyKomaTheme('koma-editor')
+    applyKomaTheme('koma-diff')
+    // Re-assert the active theme so open widgets repaint. Prefer koma-editor;
+    // DiffTab re-sets koma-diff on its own mount path.
+    monaco.editor.setTheme('koma-editor')
+  } catch {
+    /* monaco not ready */
+  }
+}
+
+// Blend `fg` over `bg` by `amount` (0..1) → hex. Used for translucent selection /
+// hover colours Monaco can't take as CSS color-mix.
+function mixHex(fg: string, bg: string, amount: number): string {
+  const a = Math.max(0, Math.min(1, amount))
+  const parse = (h: string): [number, number, number] | null => {
+    const s = h.replace('#', '').trim()
+    if (s.length === 3) {
+      return [
+        parseInt(s[0] + s[0], 16),
+        parseInt(s[1] + s[1], 16),
+        parseInt(s[2] + s[2], 16),
+      ]
+    }
+    if (s.length >= 6) {
+      return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)]
+    }
+    return null
+  }
+  const A = parse(fg)
+  const B = parse(bg)
+  if (!A || !B) return fg
+  const m = (x: number, y: number) => Math.round(x * a + y * (1 - a))
+  const to = (n: number) => n.toString(16).padStart(2, '0')
+  return `#${to(m(A[0], B[0]))}${to(m(A[1], B[1]))}${to(m(A[2], B[2]))}`
 }
 
 // The app's mono stack (KomaMono) — the same family the chat renders with.

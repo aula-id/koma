@@ -16,9 +16,9 @@ function severityRank(s: number): number {
 }
 
 function SeverityIcon({ severity }: { severity: number }) {
-  if (severity === 1) return <AlertCircle size={12} className="flex-none text-red-400" />
-  if (severity === 2) return <AlertTriangle size={12} className="flex-none text-amber-400" />
-  return <Info size={12} className="flex-none text-sky-400" />
+  if (severity === 1) return <AlertCircle size={12} className="flex-none text-koma-error" />
+  if (severity === 2) return <AlertTriangle size={12} className="flex-none text-koma-warn" />
+  return <Info size={12} className="flex-none text-koma-info" />
 }
 
 export function ProblemsDrawer() {

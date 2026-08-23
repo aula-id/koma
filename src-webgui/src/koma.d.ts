@@ -642,6 +642,17 @@ declare global {
     package: string
   }
 
+  type LspRuntimeServer = {
+    id: string
+    name: string
+    root: string
+    phase: string
+    title?: string | null
+    message?: string | null
+    percentage?: number | null
+    openDocs: number
+  }
+
   type LspPush =
     | { k: 'LspStatus'; servers: LspServerStatus[] }
     | { k: 'LspInstall'; id: string; pct: number; error: string | null }
@@ -651,6 +662,7 @@ declare global {
     | { k: 'LspDefinition'; requestId: string; locations: LspLocation[]; error: string | null }
     | { k: 'LspReferences'; requestId: string; locations: LspLocation[]; error: string | null }
     | { k: 'LspDocumentSymbol'; requestId: string; symbols: LspDocumentSymbol[]; error: string | null }
+    | { k: 'LspRuntime'; servers: LspRuntimeServer[]; replace?: boolean; removed?: string[] }
 
   type LspDiagnostic = {
     uri: string

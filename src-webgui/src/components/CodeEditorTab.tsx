@@ -11,6 +11,7 @@ import {
   consumeReveal,
   monacoUriFromPath,
   setGoToDefinitionHandler,
+  warmCodeLensCache,
 } from '../lib/monaco-lsp'
 import { useKoma, type Tab } from '../store/koma'
 import { fileKey } from '../store/coding'
@@ -203,6 +204,13 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
           path: tab.path,
           text,
         })
+        // Re-warm CodeLens counts for the new content (cache keyed by hash).
+        warmCodeLensCache(
+          (body) => useKoma.getState().req(body as never),
+          tab.root,
+          tab.path,
+          text,
+        )
       }, LSP_CHANGE_MS)
     })
 
@@ -304,6 +312,13 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       const uri = pathToUri(tab.root, tab.path)
       const diags = useKoma.getState().lspDiagnostics[uri]
       if (diags) applyDiagnosticsToMonaco(uri, diags)
+      // Eager CodeLens counts so reopen / first paint hits cache.
+      warmCodeLensCache(
+        (body) => useKoma.getState().req(body as never),
+        tab.root,
+        tab.path,
+        fileState.content,
+      )
     }
   }, [
     fileState?.content,
