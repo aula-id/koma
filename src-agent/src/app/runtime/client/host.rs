@@ -401,6 +401,30 @@ pub(super) fn spawn_remote_kill_and_refresh(
     });
 }
 
+/// Spawn an OFF-THREAD physical delete of a **remote** on-disk history session over SSH,
+/// then refresh the hub.
+///
+/// Uses [`crate::remote::sessions::delete_session_over_ssh`] (`koma daemon delete --session`).
+/// Never touches laptop disk — remote history rows use synthetic paths that must not be
+/// passed to [`store::delete_session`].
+pub(super) fn spawn_remote_delete_and_refresh(
+    ctl_tx: std::sync::mpsc::Sender<HostCtl>,
+    target: crate::remote::RemoteTarget,
+    password: Option<String>,
+    id: String,
+) {
+    std::thread::spawn(move || {
+        let auth = password
+            .as_deref()
+            .map(|p| crate::remote::auth::SshAuth::new(p.to_string()))
+            .transpose()
+            .ok()
+            .flatten();
+        let _ = crate::remote::sessions::delete_session_over_ssh(&target, auth.as_ref(), &id);
+        let _ = ctl_tx.send(HostCtl::RefreshHub);
+    });
+}
+
 /// Result of one off-thread remote path listing: (attempt, Ok((path, dirs)) | Err).
 type PathListReply = (u64, Result<(String, Vec<String>), String>);
 
@@ -1448,6 +1472,10 @@ fn host_attached(
             live_view,
             terminal_manager,
             None, // local attach
+            None, // no remote-fs
+            None, // no remote-git
+            #[cfg(feature = "linker")]
+            None, // no remote-linker
         )
     };
 
@@ -1817,6 +1845,15 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                     id,
                 );
             }
+            Ok(HostCtl::DeleteSession(id)) => {
+                // Physically delete a remote HISTORY session over SSH; stay on hub.
+                spawn_remote_delete_and_refresh(
+                    ctl_tx.clone(),
+                    ctx.target.clone(),
+                    ctx.password.clone(),
+                    id,
+                );
+            }
             // Everything else is no-op on the detached remote hub (local git/store/
             // coding/oauth ctls don't apply until a session is attached).
             Ok(_) => {}
@@ -2008,6 +2045,10 @@ fn host_remote(
             live_view,
             terminal_manager,
             Some(&active.ctx),
+            active.fs.as_ref(),
+            active.git.as_ref(),
+            #[cfg(feature = "linker")]
+            active.linker.as_ref(),
         )
     };
     if let Ok(mut g) = live_req.lock() {
@@ -2026,6 +2067,17 @@ fn host_remote(
     handle.block_on(async {
         crate::app::runtime::stdio_bridge::reap_bridge_child(&mut active.ssh_child).await;
     });
+    // Tear down panel thin clients with the same lifetime as the chat bridge.
+    if let Some(mut fs) = active.fs.take() {
+        fs.shutdown();
+    }
+    if let Some(mut git) = active.git.take() {
+        git.shutdown();
+    }
+    #[cfg(feature = "linker")]
+    if let Some(mut linker) = active.linker.take() {
+        linker.shutdown();
+    }
 
     // Keep RemoteCtx unless the transition is a full disconnect / local swapper / exit.
     match transition {

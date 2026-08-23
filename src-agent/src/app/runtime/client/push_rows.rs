@@ -415,8 +415,8 @@ pub(super) struct PushAnalyticsModel {
 }
 
 /// One entry in a Coding panel directory listing.
-#[derive(serde::Serialize)]
-pub(super) struct PushFileTreeEntry {
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct PushFileTreeEntry {
     pub name: String,
     pub path: String,
     /// Whether this entry is a directory.

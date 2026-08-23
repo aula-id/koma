@@ -162,6 +162,7 @@ pub fn run_daemon_subcommand(sub: DaemonSub, session: Option<&str>) -> Result<()
         DaemonSub::Kill => commands::cmd_kill(session),
         DaemonSub::Restart => commands::cmd_restart(),
         DaemonSub::Clean => commands::cmd_clean(),
+        DaemonSub::Delete => commands::cmd_delete(session),
     }
 }
 

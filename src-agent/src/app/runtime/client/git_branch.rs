@@ -53,9 +53,9 @@ fn op_err(op: &str, error: impl Into<String>) -> GitOpResult {
 /// `is_current` marks the SINGLE entry `git for-each-ref`'s `%(HEAD)` flags with
 /// `*` (the branch HEAD currently points at — never set for a remote or tag
 /// entry, since HEAD can only point at a local branch or be detached).
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct BranchInfo {
+pub(crate) struct BranchInfo {
     pub name: String,
     pub kind: String,
     pub is_current: bool,
@@ -67,9 +67,9 @@ pub(super) struct BranchInfo {
 /// `BranchList` envelope. `error` set means the workdir isn't a git repository
 /// (or the `for-each-ref` itself failed) — `branches` is then empty rather
 /// than the caller panicking.
-#[derive(serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct BranchListResult {
+pub(crate) struct BranchListResult {
     pub branches: Vec<BranchInfo>,
     pub error: Option<String>,
     /// Repo identity used to reject stale picker actions after an active-repo switch.
@@ -205,7 +205,7 @@ fn local_branch_exists(root: &std::path::Path, name: &str) -> Result<bool, Strin
 /// List local branches, remote-tracking branches, and tags. Worktree occupancy
 /// comes from `git worktree list --porcelain`, rather than the version-dependent
 /// `for-each-ref %(worktreepath)` atom.
-pub(super) fn git_branch_list(session: Option<&str>, request_id: Option<u64>) -> BranchListResult {
+pub(crate) fn git_branch_list(session: Option<&str>, request_id: Option<u64>) -> BranchListResult {
     let empty = |error: Option<String>| BranchListResult {
         branches: Vec::new(),
         error,
@@ -246,7 +246,7 @@ pub(super) fn git_branch_list(session: Option<&str>, request_id: Option<u64>) ->
 
 /// Safely switch to `ref_name` without force. Before checking out an existing
 /// local branch, reject it when another worktree already has it checked out.
-pub(super) fn git_checkout(
+pub(crate) fn git_checkout(
     ref_name: &str,
     expected_root: Option<&str>,
     session: Option<&str>,
@@ -291,7 +291,7 @@ pub(super) fn git_checkout(
 }
 
 /// Create branch `name`, optionally checking it out, without force.
-pub(super) fn git_create_branch(
+pub(crate) fn git_create_branch(
     name: &str,
     start: Option<&str>,
     checkout: bool,

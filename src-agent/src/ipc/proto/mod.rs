@@ -115,6 +115,25 @@ pub enum ClientRequest {
         query: String,
         limit: Option<usize>,
     },
+    /// One-shot usage panel preview (7-day sparkline) from the daemon's host ledger
+    /// (`~/.koma/usage.sqlite`). Reply: [`DaemonEvent::UsagePreview`]. Bridged so a
+    /// remote-attached GUI reads the session host's ledger rather than the laptop's.
+    /// `session` is `Some(uuid)` for the "session" scope toggle, else `None` ("all").
+    /// `scope` is echoed back for stale-reply protection (`"all"` / `"session"`).
+    UsagePreview {
+        session: Option<String>,
+        scope: String,
+    },
+    /// One-shot analytics dashboard from the daemon's host ledger. Reply:
+    /// [`DaemonEvent::Analytics`]. Same remote-ledger reasoning as [`Self::UsagePreview`].
+    /// Correlation inputs (`req_seq`/`scope`/`session`/`range`/`metric`) are echoed.
+    Analytics {
+        req_seq: u64,
+        session: Option<String>,
+        scope: String,
+        range: String,
+        metric: String,
+    },
     ApproveTool {
         approve: bool,
     },
@@ -690,6 +709,50 @@ pub enum DaemonEvent {
         query: String,
         items: Vec<FileSearchItem>,
     },
+    /// One-shot reply to a [`ClientRequest::UsagePreview`]: LAST-7-DAYS ledger
+    /// totals + sparkline + top models, computed on the daemon host so a remote
+    /// GUI sees the session machine's `~/.koma/usage.sqlite`. The GUI host
+    /// re-pushes this as a `UsagePreview` envelope via `push_intercept`.
+    UsagePreview {
+        cost: f64,
+        tokens_in: i64,
+        tokens_cached: i64,
+        tokens_out: i64,
+        calls: i64,
+        /// Exactly 7 `(local-midnight epoch, cost)` pairs, oldest first.
+        days: Vec<(i64, f64)>,
+        top_models: Vec<crate::model::usage::ModelCostRange>,
+        /// Echoed request scope (`"all"` / `"session"`).
+        scope: String,
+        /// Echoed session uuid actually queried (`None` for "all").
+        session_id: Option<String>,
+    },
+    /// One-shot reply to a [`ClientRequest::Analytics`]: full analytics dashboard
+    /// projection from the daemon host ledger. The GUI host re-pushes this as an
+    /// `Analytics` envelope via `push_intercept`.
+    Analytics {
+        req_seq: u64,
+        scope: String,
+        session_id: Option<String>,
+        range: String,
+        metric: String,
+        /// `"ok"` | `"empty"` | `"error"`.
+        status: String,
+        error: Option<String>,
+        cost: f64,
+        tokens_in: i64,
+        tokens_cached: i64,
+        tokens_out: i64,
+        calls: i64,
+        cache_rate: f64,
+        /// Zero-filled `(epoch, cost, tokens)` series for the requested range.
+        series: Vec<(i64, f64, i64)>,
+        models: Vec<AnalyticsModelRow>,
+        main_cost: f64,
+        main_calls: i64,
+        sub_cost: f64,
+        sub_calls: i64,
+    },
     /// One-shot reply to a [`ClientRequest::ListModels`]: the live model-id catalogue
     /// (`GET {endpoint}/models`) for the provider uuid echoed in `provider` (so the GUI
     /// can drop a stale/out-of-order reply). Delivered on a LATER tick than the request
@@ -908,6 +971,17 @@ pub struct McpStatusServer {
     /// Human-readable error string when the server failed to connect.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// One model row in a [`DaemonEvent::Analytics`] reply (full token breakdown).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnalyticsModelRow {
+    pub model_id: String,
+    pub cost: f64,
+    pub tokens_in: i64,
+    pub tokens_cached: i64,
+    pub tokens_out: i64,
+    pub calls: i64,
 }
 
 // ─── mode discriminant ───────────────────────────────────────────────────────

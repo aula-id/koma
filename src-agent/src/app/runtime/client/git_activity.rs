@@ -19,9 +19,9 @@ use super::git::{git_cmd, git_failure, repo_root_for};
 /// contribute `0` to both — there is no meaningful line count for them). `date` is
 /// the author date in ISO-8601 (`%aI`), left as a string for the chart to bucket
 /// itself rather than parsed host-side.
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ActivityCommit {
+pub(crate) struct ActivityCommit {
     pub sha: String,
     pub author: String,
     pub email: String,
@@ -38,9 +38,9 @@ pub(super) struct ActivityCommit {
 /// mirroring [`super::git_graph::CommitDetailResult`]'s `sha` echo — the reducer on the
 /// GUI side compares it against the currently-requested path to drop a stale reply when
 /// two `GitActivity` requests race (lock-acquisition/thread-scheduling order isn't FIFO).
-#[derive(serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ActivityResult {
+pub(crate) struct ActivityResult {
     pub commits: Vec<ActivityCommit>,
     pub path: Option<String>,
     pub error: Option<String>,
@@ -116,7 +116,7 @@ fn parse_activity(stdout: &str) -> Vec<ActivityCommit> {
 ///
 /// `limit` is floored to `1` (a `0` would ask git for its own "no commits" semantics,
 /// not "unlimited" — see [`super::git_graph::compute_git_graph`]'s identical floor).
-pub(super) fn compute_git_activity(
+pub(crate) fn compute_git_activity(
     path: Option<&str>,
     limit: u32,
     session: Option<&str>,

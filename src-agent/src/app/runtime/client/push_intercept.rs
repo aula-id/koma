@@ -12,7 +12,10 @@
 
 use crate::ipc::proto::DaemonEvent;
 
-use super::push_proto::{PushEnvelope, PushRoute};
+use super::push_proto::{
+    PushAnalyticsModel, PushAnalyticsSeriesPoint, PushEnvelope, PushRoute, PushUsageDay,
+    PushUsageModel,
+};
 
 /// Check `frame.event` against every one-shot reply variant the GUI re-pushes as its own
 /// `PushEnvelope` ahead of the fold, pushing whichever one matches (at most one — see the
@@ -304,6 +307,114 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
                 })
                 .collect(),
             global_error: global_error.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
+    // Daemon-bridged Usage panel reply: re-push as `UsagePreview` BEFORE folding
+    // (non-visual fold no-op). Field mapping mirrors host-side `push_usage_preview`.
+    if let DaemonEvent::UsagePreview {
+        cost,
+        tokens_in,
+        tokens_cached,
+        tokens_out,
+        calls,
+        days,
+        top_models,
+        scope,
+        session_id,
+    } = &frame.event
+    {
+        let env = PushEnvelope::UsagePreview {
+            cost: *cost,
+            tokens_in: (*tokens_in).max(0) as u64,
+            tokens_cached: (*tokens_cached).max(0) as u64,
+            tokens_out: (*tokens_out).max(0) as u64,
+            calls: (*calls).max(0) as u64,
+            days: days
+                .iter()
+                .map(|(epoch, c)| PushUsageDay {
+                    epoch: *epoch,
+                    cost: *c,
+                })
+                .collect(),
+            top_models: top_models
+                .iter()
+                .map(|m| PushUsageModel {
+                    model_id: m.model_id.clone(),
+                    cost: m.total_cost,
+                    calls: m.call_count.max(0) as u64,
+                })
+                .collect(),
+            scope: scope.clone(),
+            session_id: session_id.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
+    // Daemon-bridged Analytics reply: re-push as `Analytics` BEFORE folding
+    // (non-visual fold no-op). Field mapping mirrors host-side `push_analytics`.
+    if let DaemonEvent::Analytics {
+        req_seq,
+        scope,
+        session_id,
+        range,
+        metric,
+        status,
+        error,
+        cost,
+        tokens_in,
+        tokens_cached,
+        tokens_out,
+        calls,
+        cache_rate,
+        series,
+        models,
+        main_cost,
+        main_calls,
+        sub_cost,
+        sub_calls,
+    } = &frame.event
+    {
+        let env = PushEnvelope::Analytics {
+            req_seq: *req_seq,
+            scope: scope.clone(),
+            session_id: session_id.clone(),
+            range: range.clone(),
+            metric: metric.clone(),
+            status: status.clone(),
+            error: error.clone(),
+            cost: *cost,
+            tokens_in: (*tokens_in).max(0) as u64,
+            tokens_cached: (*tokens_cached).max(0) as u64,
+            tokens_out: (*tokens_out).max(0) as u64,
+            calls: (*calls).max(0) as u64,
+            cache_rate: *cache_rate,
+            series: series
+                .iter()
+                .map(|(epoch, c, tokens)| PushAnalyticsSeriesPoint {
+                    epoch: *epoch,
+                    cost: *c,
+                    tokens: *tokens,
+                })
+                .collect(),
+            models: models
+                .iter()
+                .map(|m| PushAnalyticsModel {
+                    model_id: m.model_id.clone(),
+                    cost: m.cost,
+                    tokens_in: m.tokens_in.max(0) as u64,
+                    tokens_cached: m.tokens_cached.max(0) as u64,
+                    tokens_out: m.tokens_out.max(0) as u64,
+                    calls: m.calls.max(0) as u64,
+                })
+                .collect(),
+            main_cost: *main_cost,
+            main_calls: (*main_calls).max(0) as u64,
+            sub_cost: *sub_cost,
+            sub_calls: (*sub_calls).max(0) as u64,
         };
         if let Ok(json) = serde_json::to_string(&env) {
             push(json);

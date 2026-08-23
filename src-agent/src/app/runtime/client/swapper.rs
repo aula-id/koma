@@ -78,11 +78,11 @@ pub(crate) fn build_local_hub(current_session_id: Option<&str>) -> SessionHub {
 
 /// Build a CLIENT-side [`SessionHub`] from remote session discovery over SSH.
 ///
-/// Similar to [`build_local_hub`] but discovers sessions on a remote host by running
-/// `koma sessions --json` over SSH. The COOKING pane gets the remote sessions (each
-/// tagged with `remote_host`), the HISTORY pane is empty (no on-disk sessions locally
-/// for a remote host). The synthetic `[+ new session]` row is also tagged with
-/// `remote_host` so `resolve_enter` routes the pick back through SSH.
+/// Discovers sessions on a remote host via `koma sessions --json` (`{ live, history }`).
+/// COOKING = live remote daemons (each tagged `remote_host`); HISTORY = remote disk
+/// rows minus live ids (also tagged `remote_host`, synthetic path keyed by UUID).
+/// The synthetic `[+ new session]` row is tagged so `resolve_enter` routes picks
+/// back through SSH. Never mixes in laptop-local registry rows.
 pub(crate) fn build_remote_hub(
     target: &crate::remote::RemoteTarget,
     password: Option<&str>,
@@ -96,51 +96,10 @@ pub(crate) fn build_remote_hub(
 
     let host_label = format!("{}@{}", target.user, target.host);
 
-    let remote_sessions =
+    let discovered =
         crate::remote::sessions::list_sessions_over_ssh(target, auth.as_ref()).unwrap_or_default();
 
-    let mut cooking: Vec<CookingEntry> = Vec::with_capacity(remote_sessions.len() + 1);
-    cooking.push(CookingEntry {
-        idx: usize::MAX,
-        kind: SessionKind::NewSession,
-        name: "[+ new session]".to_string(),
-        working: false,
-        is_foreground: false,
-        session_id: None,
-        dir_label: String::new(),
-        is_current_dir: false,
-        remote_host: Some(host_label.clone()),
-    });
-    for session in remote_sessions {
-        let is_foreground = current_session_id == Some(session.session_id.as_str());
-        cooking.push(CookingEntry {
-            idx: usize::MAX,
-            kind: SessionKind::Session,
-            name: session.name,
-            working: session.working,
-            is_foreground,
-            session_id: Some(session.session_id),
-            dir_label: session.pwd,
-            is_current_dir: false,
-            remote_host: Some(host_label.clone()),
-        });
-    }
-
-    // No local history for remote hubs.
-    let history: Vec<HistoryEntry> = Vec::new();
-    let history_filtered: Vec<usize> = Vec::new();
-
-    SessionHub {
-        cooking,
-        history,
-        focus: HubPane::Cooking,
-        cooking_selected: 0,
-        history_selected: 0,
-        history_query: String::new(),
-        history_filtered,
-        pending_kill: None,
-        pending_delete: None,
-    }
+    hub_from_remote_discovery(discovered, &host_label, current_session_id)
 }
 
 /// Build a client-side [`SessionHub`] from an ALREADY-GATHERED discovery snapshot.
@@ -209,6 +168,7 @@ fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>)
                 last_active: m.modified,
                 dir_label: store::dir_basename(&m.workdir),
                 is_current_dir: m.pwd_hash == cur_hash,
+                remote_host: None,
             })
             .collect(),
         Err(_) => Vec::new(),
@@ -236,13 +196,20 @@ fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>)
     }
 }
 
-/// Build a remote client-side [`SessionHub`] from an already-gathered discovery snapshot.
-fn hub_from_remote_snapshot(
-    sessions: Vec<SessionStatus>,
+/// Build a remote client-side [`SessionHub`] from a full `{ live, history }` discovery payload.
+fn hub_from_remote_discovery(
+    discovered: crate::remote::sessions::DiscoveredSessions,
     remote_host: &str,
     current_session_id: Option<&str>,
 ) -> SessionHub {
-    let cooking = std::iter::once(CookingEntry {
+    let live_ids: std::collections::HashSet<String> = discovered
+        .live
+        .iter()
+        .map(|s| s.session_id.clone())
+        .collect();
+
+    let mut cooking: Vec<CookingEntry> = Vec::with_capacity(discovered.live.len() + 1);
+    cooking.push(CookingEntry {
         idx: usize::MAX,
         kind: SessionKind::NewSession,
         name: "[+ new session]".to_string(),
@@ -252,31 +219,77 @@ fn hub_from_remote_snapshot(
         dir_label: String::new(),
         is_current_dir: false,
         remote_host: Some(remote_host.to_string()),
-    })
-    .chain(sessions.into_iter().map(|session| CookingEntry {
-        idx: usize::MAX,
-        kind: SessionKind::Session,
-        name: session.name,
-        working: session.working,
-        is_foreground: current_session_id == Some(session.session_id.as_str()),
-        session_id: Some(session.session_id),
-        dir_label: String::new(),
-        is_current_dir: false,
-        remote_host: Some(remote_host.to_string()),
-    }))
-    .collect();
+    });
+    for session in discovered.live {
+        let is_foreground = current_session_id == Some(session.session_id.as_str());
+        // Prefer registry basename when present; fall back to full pwd for older payloads.
+        let dir_label = {
+            let base = store::dir_basename(&session.pwd);
+            if base.is_empty() {
+                session.pwd
+            } else {
+                base
+            }
+        };
+        cooking.push(CookingEntry {
+            idx: usize::MAX,
+            kind: SessionKind::Session,
+            name: session.name,
+            working: session.working,
+            is_foreground,
+            session_id: Some(session.session_id),
+            dir_label,
+            is_current_dir: false,
+            remote_host: Some(remote_host.to_string()),
+        });
+    }
+
+    // HISTORY: disk rows minus live (remote already filters, but re-dedup defensively).
+    // Synthetic path keeps UUID as the final component so resolve_enter / pending_delete
+    // keep working; local delete must never run on these paths.
+    let mut history: Vec<HistoryEntry> = discovered
+        .history
+        .into_iter()
+        .filter(|h| !live_ids.contains(&h.session_id))
+        .map(|h| {
+            let dir_label = if h.dir_label.is_empty() {
+                store::dir_basename(&h.pwd)
+            } else {
+                h.dir_label
+            };
+            let last_active = std::time::SystemTime::UNIX_EPOCH
+                + std::time::Duration::from_secs(h.updated_at);
+            HistoryEntry {
+                path: std::path::PathBuf::from(format!("remote:{remote_host}/{}", h.session_id)),
+                name: h.name,
+                last_active,
+                dir_label,
+                is_current_dir: false,
+                remote_host: Some(remote_host.to_string()),
+            }
+        })
+        .collect();
+    // Newest first (no current-dir grouping remotely).
+    history.sort_by_key(|a| std::cmp::Reverse(a.last_active));
+    let history_filtered: Vec<usize> = (0..history.len()).collect();
 
     SessionHub {
         cooking,
-        history: Vec::new(),
+        history,
         focus: HubPane::Cooking,
         cooking_selected: 0,
         history_selected: 0,
         history_query: String::new(),
-        history_filtered: Vec::new(),
+        history_filtered,
         pending_kill: None,
         pending_delete: None,
     }
+}
+
+/// Probe payload: local socket sweep OR full remote `{ live, history }` discovery.
+pub(super) enum ProbeSnap {
+    Local(Vec<SessionStatus>),
+    Remote(crate::remote::sessions::DiscoveredSessions),
 }
 
 /// What [`run_swapper`] resolved to — the instruction [`super::client_run`] acts on.
@@ -301,20 +314,15 @@ pub(super) enum SwapperOutcome {
 ///
 /// Captures the focused pane, the selected item identity (by session_id for cooking, by
 /// path for history), the history query, and `pending_kill`; rebuilds the panes from
-/// `fresh` via [`hub_from_snapshot`]; then restores all of those onto the fresh hub so the
-/// working/done status and session list update silently without jumping the cursor or
-/// clearing the history search.
+/// `fresh` via [`hub_from_snapshot`] / [`hub_from_remote_discovery`]; then restores all of
+/// those onto the fresh hub so the working/done status and session list update silently
+/// without jumping the cursor or clearing the history search.
 ///
-/// `fresh` is passed IN (not discovered here) so the ~1s blocking discovery sweep runs on
+/// `fresh` is passed IN (not discovered here) so the blocking discovery sweep runs on
 /// the background probe thread, never on the input/render thread — the caller
 /// ([`run_swapper`]) hands over whatever the probe thread last produced. The SAME function
 /// backs both the live merge and the immediate post-kill refresh.
-fn apply_snapshot(
-    hub: &mut SessionHub,
-    fresh: Vec<SessionStatus>,
-    current_id: Option<&str>,
-    source: &DiscoverySource,
-) {
+fn apply_snapshot(hub: &mut SessionHub, fresh: ProbeSnap, current_id: Option<&str>, source: &DiscoverySource) {
     // Capture focus + selection identity before rebuild.
     let saved_focus = hub.focus;
     let saved_query = hub.history_query.clone();
@@ -344,10 +352,19 @@ fn apply_snapshot(
     let saved_delete_id: Option<String> = hub.pending_delete.clone();
 
     // Rebuild the panes from the handed-in snapshot (no blocking discovery on this thread).
-    let mut fresh = match source {
-        DiscoverySource::Local => hub_from_snapshot(fresh, current_id),
-        DiscoverySource::Remote { target, .. } => hub_from_remote_snapshot(
-            fresh,
+    let mut fresh = match (source, fresh) {
+        (DiscoverySource::Local, ProbeSnap::Local(live)) => hub_from_snapshot(live, current_id),
+        (DiscoverySource::Remote { target, .. }, ProbeSnap::Remote(discovered)) => {
+            hub_from_remote_discovery(
+                discovered,
+                &format!("{}@{}", target.user, target.host),
+                current_id,
+            )
+        }
+        // Mismatched source/payload (shouldn't happen) — keep hub as-is via empty rebuild.
+        (DiscoverySource::Local, ProbeSnap::Remote(_)) => hub_from_snapshot(Vec::new(), current_id),
+        (DiscoverySource::Remote { target, .. }, ProbeSnap::Local(_)) => hub_from_remote_discovery(
+            crate::remote::sessions::DiscoveredSessions::default(),
             &format!("{}@{}", target.user, target.host),
             current_id,
         ),
@@ -476,7 +493,7 @@ pub(super) fn run_swapper(
     // The thread sweeps discovery (local socket or remote SSH), sends the raw
     // result, then sleeps ~1s in `PROBE_SLEEP_STEP` increments checking `stop`.
     let stop = Arc::new(AtomicBool::new(false));
-    let (snap_tx, snap_rx) = mpsc::channel::<Vec<SessionStatus>>();
+    let (snap_tx, snap_rx) = mpsc::channel::<ProbeSnap>();
     let kill_snap_tx = snap_tx.clone();
     let probe = {
         let stop = Arc::clone(&stop);
@@ -498,31 +515,22 @@ pub(super) fn run_swapper(
                     return;
                 }
                 // The blocking sweep — done HERE, never on the input thread.
-                let live = if let Some((ref target, ref password)) = source {
+                let snap = if let Some((ref target, ref password)) = source {
                     let auth = password
                         .as_deref()
                         .map(|p| crate::remote::auth::SshAuth::new(p.to_string()))
                         .transpose()
                         .ok()
                         .flatten();
-                    crate::remote::sessions::list_sessions_over_ssh(target, auth.as_ref())
-                        .map(|discovered| {
-                            discovered
-                                .into_iter()
-                                .map(|d| SessionStatus {
-                                    session_id: d.session_id,
-                                    name: d.name,
-                                    pwd: String::new(),
-                                    working: d.working,
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default()
+                    ProbeSnap::Remote(
+                        crate::remote::sessions::list_sessions_over_ssh(target, auth.as_ref())
+                            .unwrap_or_default(),
+                    )
                 } else {
-                    manage::list_live_sessions()
+                    ProbeSnap::Local(manage::list_live_sessions())
                 };
                 // A send failure means the receiver hung up (loop returning) — stop.
-                if snap_tx.send(live).is_err() {
+                if snap_tx.send(snap).is_err() {
                     return;
                 }
                 // Interruptible sleep: wake early if a stop was requested mid-interval.
@@ -586,7 +594,7 @@ pub(super) fn run_swapper(
         // snapshot (non-blocking) and, if one arrived, merge it — updating working/done
         // flags + the session list without disturbing the user's cursor, focus, query, or
         // pending kill.
-        let mut latest: Option<Vec<SessionStatus>> = None;
+        let mut latest: Option<ProbeSnap> = None;
         while let Ok(snap) = snap_rx.try_recv() {
             latest = Some(snap);
         }

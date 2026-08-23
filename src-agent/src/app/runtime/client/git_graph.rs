@@ -23,9 +23,9 @@ use super::git::{git_cmd, git_failure, repo_root_for};
 /// remote-tracking ref, never confusable with a local branch merely NAMED like one, e.g.
 /// a local branch literally called `origin/weird`), or `"tag"` (`refs/tags/X`). `is_head`
 /// is `true` only for the `"head"` entry.
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct GitRef {
+pub(crate) struct GitRef {
     pub name: String,
     pub kind: String,
     pub is_head: bool,
@@ -34,9 +34,9 @@ pub(super) struct GitRef {
 /// One commit row in a [`GitGraphResult`], parsed off one `git log --parents -z` record.
 /// `parents` is empty for a root commit; `refs` is empty for a commit with nothing pointing
 /// at it directly (the common case — most commits carry no `%D`).
-#[derive(serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct GitCommitNode {
+pub(crate) struct GitCommitNode {
     pub sha: String,
     pub parents: Vec<String>,
     pub refs: Vec<GitRef>,
@@ -53,9 +53,9 @@ pub(super) struct GitCommitNode {
 /// malformed-record skip, so a single bad record can't under-report this) likely means more
 /// history exists past `skip + limit`, so the panel can offer a "load more" / infinite-scroll
 /// continuation without a separate count query.
-#[derive(serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct GitGraphResult {
+pub(crate) struct GitGraphResult {
     pub commits: Vec<GitCommitNode>,
     pub head: Option<String>,
     pub has_more: bool,
@@ -66,9 +66,9 @@ pub(super) struct GitGraphResult {
 /// --name-status -z` record. `status` is git's own single-letter/score token (`"M"`/`"A"`/
 /// `"D"`/`"R100"`/`"C75"`/…); `orig_path` is `Some` only for a rename/copy record (`path`
 /// is then the NEW path, `orig_path` the OLD one).
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CommitFile {
+pub(crate) struct CommitFile {
     pub status: String,
     pub path: String,
     pub orig_path: Option<String>,
@@ -80,9 +80,9 @@ pub(super) struct CommitFile {
 /// default (empty strings/lists) rather than a panic. `parents` mirrors
 /// [`GitCommitNode::parents`]; `files` is the FIRST-PARENT changed-file view (sensible for
 /// a merge commit, exact for an ordinary one).
-#[derive(serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CommitDetailResult {
+pub(crate) struct CommitDetailResult {
     pub sha: String,
     pub author: String,
     pub email: String,
@@ -103,9 +103,9 @@ pub(super) struct CommitDetailResult {
 /// valid all-added/all-removed diff). SEPARATE struct from [`super::git::GitDiffResult`]
 /// (no `staged` field — meaningless for a historical commit diff) so the GUI can route a
 /// commit-history diff to its own tab id without colliding with the working-tree/index one.
-#[derive(serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CommitDiffResult {
+pub(crate) struct CommitDiffResult {
     pub sha: String,
     pub path: String,
     pub original: String,
@@ -127,7 +127,7 @@ pub(super) struct CommitDiffResult {
 /// error, just wrong data) and any `..`/`...` substring (a valid RANGE syntax like
 /// `<root>..<HEAD>` that makes `git show`/`git diff-tree` emit multiple records and
 /// corrupts the fixed-field-count parse downstream).
-pub(super) fn valid_commit_ref(s: &str) -> bool {
+pub(crate) fn valid_commit_ref(s: &str) -> bool {
     !s.is_empty()
         && !s.starts_with('-')
         && !s.contains("..")
@@ -220,7 +220,7 @@ fn parse_refs(raw: &str) -> (Vec<GitRef>, bool) {
 /// (mirrors the pattern `git log` docs use together). ALWAYS returns a result — a non-git
 /// workdir sets `error` rather than panicking, mirroring
 /// [`super::git::compute_git_status`]'s always-reply rule.
-pub(super) fn compute_git_graph(limit: u32, skip: u32, session: Option<&str>) -> GitGraphResult {
+pub(crate) fn compute_git_graph(limit: u32, skip: u32, session: Option<&str>) -> GitGraphResult {
     let empty = |error: Option<String>| GitGraphResult {
         commits: Vec::new(),
         head: None,
@@ -385,7 +385,7 @@ fn commit_files(root: &std::path::Path, sha: &str) -> Vec<CommitFile> {
 /// body (`%b` — absent from [`compute_git_graph`]'s per-row format to keep the graph list
 /// lean), then [`commit_files`] for the changed-file list. `body` is `splitn`'d as the LAST
 /// field so an (unlikely) literal `\x1f` byte inside a multi-line body can't truncate it.
-pub(super) fn compute_commit_detail(sha: &str, session: Option<&str>) -> CommitDetailResult {
+pub(crate) fn compute_commit_detail(sha: &str, session: Option<&str>) -> CommitDetailResult {
     let empty = |error: Option<String>| CommitDetailResult {
         sha: sha.to_string(),
         author: String::new(),
@@ -453,7 +453,7 @@ pub(super) fn compute_commit_detail(sha: &str, session: Option<&str>) -> CommitD
 /// Same binary/size-cap handling as [`super::git::compute_git_diff`] (reusing its
 /// [`looks_binary`]/[`FILE_DIFF_SIZE_CAP`]) — only "invalid sha" / "not a git repository" is
 /// reported as `error`; a missing blob on either side is silently an empty side.
-pub(super) fn compute_commit_diff(
+pub(crate) fn compute_commit_diff(
     sha: &str,
     path: &str,
     session: Option<&str>,

@@ -4,6 +4,11 @@
 //! process is a stdio↔sock **bridge** (see [`crate::app::runtime::server`]): it
 //! ensures the remote session-daemon and proxies IPC frames. It is not the agent.
 //!
+//! Remote commands run under `bash -ilc` so the user's login profile **and**
+//! interactive `.bashrc` load (cargo, nvm, etc.). Plain non-interactive SSH
+//! does not source those files, which left agent tool shells with a sparse PATH.
+//! `-c` + `exec` means bash never consumes the SSH stdin pipe — the child inherits it.
+//!
 //! # Connection multiplexing (unix)
 //!
 //! Every `ssh` invocation for a given `user@host:port` shares one ControlMaster
@@ -56,6 +61,17 @@ pub(crate) fn shell_quote(value: &str) -> String {
 }
 
 /// Construct a remote command with each argument safely shell-quoted.
+///
+/// Wraps the argv as `bash -ilc 'exec <prog> <args…>'` so the remote process
+/// inherits a normal interactive-login environment (`.profile` / `.bashrc`,
+/// `~/.cargo/env`, nvm, …). OpenSSH runs the remote command via a
+/// non-interactive shell that would otherwise skip those files — which is why
+/// tools like `cargo` were missing from PATH in remote sessions.
+///
+/// We deliberately use `-i` (not only `-l`): many distro `.bashrc` files
+/// early-return unless `$-` contains `i`, and rustup/nvm hooks often sit
+/// *after* that guard. `-c` + `exec` keeps bash from reading the SSH stdin
+/// pipe (needed for the stdio bridge / thin clients).
 pub(crate) fn remote_command(program: &str, args: &[&str]) -> Result<String> {
     if program.is_empty() || program.contains('\0') || program.contains('\n') {
         anyhow::bail!("invalid remote executable path");
@@ -63,15 +79,20 @@ pub(crate) fn remote_command(program: &str, args: &[&str]) -> Result<String> {
     if !program.starts_with('/') {
         anyhow::bail!("remote executable path must be absolute");
     }
-    let mut command = shell_quote(program);
+    // Inner script runs inside bash -ilc. Source cargo env explicitly too:
+    // some setups only append it to a non-sourced file, and it's cheap/idempotent.
+    let mut inner = String::from(
+        r#"[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env" 2>/dev/null; exec "#,
+    );
+    inner.push_str(&shell_quote(program));
     for arg in args {
         if arg.contains('\0') || arg.contains('\n') {
             anyhow::bail!("invalid remote command argument");
         }
-        command.push(' ');
-        command.push_str(&shell_quote(arg));
+        inner.push(' ');
+        inner.push_str(&shell_quote(arg));
     }
-    Ok(command)
+    Ok(format!("bash -ilc {}", shell_quote(&inner)))
 }
 
 /// Directory + ControlPath template for OpenSSH multiplexing (`%C` = hash of
@@ -257,14 +278,28 @@ pub(crate) fn connect(
     cwd: Option<&str>,
     koma_path: &str,
 ) -> Result<SshSession> {
+    let remote_args = server_args(session_id, cwd)?;
+    let remote_arg_refs: Vec<&str> = remote_args.iter().map(String::as_str).collect();
+    connect_command(target, auth, koma_path, &remote_arg_refs)
+}
+
+/// Spawn a long-lived SSH child running an arbitrary remote koma argv over stdio.
+///
+/// Used by panel thin clients (`remote-fs`, `remote-git`, …) that are NOT the
+/// session-daemon bridge. Reuses the same mux / StrictHostKeyChecking / auth base
+/// as [`connect`].
+pub(crate) fn connect_command(
+    target: &RemoteTarget,
+    auth: Option<&SshAuth>,
+    koma_path: &str,
+    remote_argv: &[&str],
+) -> Result<SshSession> {
     if koma_path.is_empty() || koma_path.contains('\0') || koma_path.contains('\n') {
         anyhow::bail!("invalid remote Koma executable path");
     }
     let mut cmd = Command::new("ssh");
     apply_tokio_ssh_base(&mut cmd, target, auth);
-    let remote_args = server_args(session_id, cwd)?;
-    let remote_arg_refs: Vec<&str> = remote_args.iter().map(String::as_str).collect();
-    let remote_command = remote_command(koma_path, &remote_arg_refs)?;
+    let remote_command = remote_command(koma_path, remote_argv)?;
     cmd.arg(format!("{}@{}", target.user, target.host));
     cmd.arg(remote_command);
     let mut child = cmd
