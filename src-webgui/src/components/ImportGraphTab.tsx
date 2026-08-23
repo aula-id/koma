@@ -502,7 +502,7 @@ export default function ImportGraphTab() {
             aria-label="Reindex configured workspaces"
             className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100 disabled:cursor-default disabled:opacity-40"
           >
-            <RefreshCw size={13} className={reindexBusy ? 'animate-spin' : ''} />
+            {reindexBusy ? <BrailleSpinner size={13} /> : <RefreshCw size={13} />}
           </button>
         </div>
       </div>

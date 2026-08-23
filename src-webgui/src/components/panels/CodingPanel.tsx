@@ -25,7 +25,8 @@ import {
 } from '../../store/coding'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { Empty, IconBtn } from './helpers'
-import { Select } from './form'
+import { Segmented, Select } from './form'
+import { CodingSearchPanel } from './CodingSearchPanel'
 
 function joinPath(dir: string, name: string): string {
   if (!dir) return name
@@ -441,6 +442,7 @@ export function CodingPanel() {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']))
   const [draft, setDraft] = useState<Draft | null>(null)
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null)
+  const [sideTab, setSideTab] = useState<'files' | 'search'>('files')
   const [ctxMenu, setCtxMenu] = useState<null | {
     x: number
     y: number
@@ -679,7 +681,7 @@ export function CodingPanel() {
             disabled={!!draft}
           />
         </div>
-        {!draft ? <>
+        {sideTab === 'files' && !draft ? <>
           <IconBtn label="Refresh root" onClick={() => activeRoot && refreshCodingDir(activeRoot, '')}>
             <RefreshCw size={12} />
           </IconBtn>
@@ -692,6 +694,22 @@ export function CodingPanel() {
         </> : null}
       </div>
 
+      <div className="flex-none px-2 pb-1.5">
+        <Segmented
+          value={sideTab}
+          options={[
+            { value: 'files', label: 'Files' },
+            { value: 'search', label: 'Search' },
+          ]}
+          onChange={setSideTab}
+        />
+      </div>
+
+      {sideTab === 'search' ? (
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <CodingSearchPanel root={activeRoot} />
+        </div>
+      ) : (
       <div
         className={`min-h-0 flex-1 overflow-y-auto py-1 ${
           dropTargetPath === '' ? 'bg-koma-accent/5' : ''
@@ -759,8 +777,9 @@ export function CodingPanel() {
           </>
         )}
       </div>
+      )}
 
-      {ctxMenu && activeRoot ? (
+      {ctxMenu && activeRoot && sideTab === 'files' ? (
         <div
           className="fixed z-[80] min-w-[140px] rounded border border-koma-border bg-koma-panel py-1 shadow-lg"
           style={{ left: ctxMenu.x, top: ctxMenu.y }}

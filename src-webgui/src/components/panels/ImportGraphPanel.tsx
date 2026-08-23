@@ -352,7 +352,7 @@ export function ImportGraphPanel() {
           aria-label="Reindex configured workspaces"
           className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100 disabled:cursor-default disabled:opacity-40"
         >
-          <RefreshCw size={12} className={reindexBusy ? 'animate-spin' : ''} />
+          {reindexBusy ? <BrailleSpinner size={12} /> : <RefreshCw size={12} />}
         </button>
       </div>
 

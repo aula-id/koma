@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import {
   Bot,
   Terminal,
-  Loader2,
   Check,
   CircleX,
   CircleSlash,
@@ -38,7 +37,7 @@ function baseName(path: string): string {
 // the TUI's run-state grammar: running = live/spinning, done = settled-good,
 // error = settled-bad, killed = settled-neutral (dimmed, no color signal).
 const STATUS_ICON: Record<string, LucideIcon> = {
-  running: Loader2,
+  running: Check, // unused — StatusBadge renders BrailleSpinner for running
   done: Check,
   error: CircleX,
   killed: CircleSlash,

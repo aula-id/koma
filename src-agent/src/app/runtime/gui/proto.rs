@@ -969,6 +969,46 @@ pub(super) enum GuiReq {
         #[serde(rename = "requestId")]
         request_id: String,
     },
+    /// Coding panel: VS Code-style content search across a workspace root/subdir.
+    FileContentSearch {
+        root: String,
+        /// Subdir relative to root (empty = whole root).
+        #[serde(default)]
+        path: String,
+        query: String,
+        #[serde(default, rename = "caseSensitive")]
+        case_sensitive: bool,
+        #[serde(default, rename = "wholeWord")]
+        whole_word: bool,
+        #[serde(default, rename = "isRegex")]
+        is_regex: bool,
+        #[serde(default, rename = "includeGlob")]
+        include_glob: Option<String>,
+        #[serde(default, rename = "excludeGlob")]
+        exclude_glob: Option<String>,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    /// Coding panel: replace-all with the same flags as FileContentSearch.
+    FileContentReplace {
+        root: String,
+        #[serde(default)]
+        path: String,
+        query: String,
+        replacement: String,
+        #[serde(default, rename = "caseSensitive")]
+        case_sensitive: bool,
+        #[serde(default, rename = "wholeWord")]
+        whole_word: bool,
+        #[serde(default, rename = "isRegex")]
+        is_regex: bool,
+        #[serde(default, rename = "includeGlob")]
+        include_glob: Option<String>,
+        #[serde(default, rename = "excludeGlob")]
+        exclude_glob: Option<String>,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
 
     // ─── Language servers (Settings + editor banner) ──────────────────────────
     // Host-local only (never the daemon): resolve / install / uninstall under

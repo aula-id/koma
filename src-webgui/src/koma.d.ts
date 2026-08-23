@@ -518,6 +518,33 @@ declare global {
     | { r: 'FileWriteBytes'; root: string; path: string; bytesB64: string; overwrite?: boolean; requestId: string }
     // Read raw bytes for download / save-as. Reply: FileDownloadBytes.
     | { r: 'FileDownloadBytes'; root: string; path: string; requestId: string }
+    // VS Code-style content search. Reply: FileContentSearch.
+    | {
+        r: 'FileContentSearch'
+        root: string
+        path?: string
+        query: string
+        caseSensitive?: boolean
+        wholeWord?: boolean
+        isRegex?: boolean
+        includeGlob?: string | null
+        excludeGlob?: string | null
+        requestId: string
+      }
+    // Replace-all with the same flags. Reply: FileContentReplace.
+    | {
+        r: 'FileContentReplace'
+        root: string
+        path?: string
+        query: string
+        replacement: string
+        caseSensitive?: boolean
+        wholeWord?: boolean
+        isRegex?: boolean
+        includeGlob?: string | null
+        excludeGlob?: string | null
+        requestId: string
+      }
     // ─── Language servers (Settings + editor banner) ─────────────────────
     // Full catalogue status (managed / PATH / missing). Reply: LspStatus.
     | { r: 'LspStatus' }
@@ -628,6 +655,25 @@ declare global {
         size: number
         tooLarge: boolean
         error: string | null
+      }
+    | {
+        k: 'FileContentSearch'
+        root: string
+        path: string
+        requestId: string
+        results: { path: string; matches: { line: number; col: number; text: string }[] }[]
+        error: string | null
+        truncated: boolean
+      }
+    | {
+        k: 'FileContentReplace'
+        root: string
+        path: string
+        requestId: string
+        filesChanged: number
+        matchCount: number
+        error: string | null
+        truncated: boolean
       }
 
   type LspServerStatus = {

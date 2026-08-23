@@ -2,7 +2,6 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Bot,
   Terminal,
-  Loader2,
   Check,
   CircleX,
   CircleSlash,
@@ -26,7 +25,7 @@ type StreamTabModel = Extract<Tab, { kind: 'subagent' | 'bash' }>
 
 // status -> icon/tone, mirroring the ExplorePanel row grammar (running spins).
 const STATUS_ICON: Record<string, LucideIcon> = {
-  running: Loader2,
+  running: Check, // unused — StatusBadge renders BrailleSpinner for running
   done: Check,
   error: CircleX,
   killed: CircleSlash,

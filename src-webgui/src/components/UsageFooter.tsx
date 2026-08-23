@@ -1,6 +1,7 @@
-import { Activity, AlertCircle, AlertTriangle, FoldVertical, Loader2, Server } from 'lucide-react'
+import { Activity, AlertCircle, AlertTriangle, FoldVertical, Server } from 'lucide-react'
 import { useKoma, visiblePlanTodos } from '../store/koma'
 import { BranchSwitcher } from './BranchSwitcher'
+import { BrailleSpinner } from './BrailleSpinner'
 
 // Human-compact token count: >=10_000 collapses to "12.4k" (one decimal,
 // trailing ".0" trimmed); below that the raw integer is shown. Local helper —
@@ -166,7 +167,7 @@ export function UsageFooter() {
         }`}
       >
         {lspBusy ? (
-          <Loader2 size={11} className="animate-spin text-koma-accent" />
+          <BrailleSpinner size={11} className="text-koma-accent" />
         ) : (
           <Server size={11} className={lspError ? 'text-koma-error' : ''} />
         )}

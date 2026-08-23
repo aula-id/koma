@@ -689,14 +689,33 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             | Ok(ctl @ HostCtl::FileRename { .. })
             | Ok(ctl @ HostCtl::FileDelete { .. })
             | Ok(ctl @ HostCtl::FileWriteBytes { .. })
-            | Ok(ctl @ HostCtl::FileDownloadBytes { .. }) => {
+            | Ok(ctl @ HostCtl::FileDownloadBytes { .. })
+            | Ok(ctl @ HostCtl::FileContentSearch { .. })
+            | Ok(ctl @ HostCtl::FileContentReplace { .. }) => {
                 let push2 = P::clone(push);
                 let workdirs = current
                     .and_then(super::diff::session_workdirs_for)
                     .unwrap_or_default();
                 let session = current.map(str::to_string);
                 std::thread::spawn(move || {
-                    super::file_ops::handle_file_ctl(&ctl, &push2, &workdirs, session.as_deref());
+                    match &ctl {
+                        HostCtl::FileContentSearch { .. } | HostCtl::FileContentReplace { .. } => {
+                            super::content_search::handle_content_ctl(
+                                &ctl,
+                                &push2,
+                                &workdirs,
+                                session.as_deref(),
+                            );
+                        }
+                        _ => {
+                            super::file_ops::handle_file_ctl(
+                                &ctl,
+                                &push2,
+                                &workdirs,
+                                session.as_deref(),
+                            );
+                        }
+                    }
                 });
             }
             #[cfg(feature = "linker")]

@@ -166,11 +166,22 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       codeLens: true,
       gotoLocation: {
         multipleDefinitions: 'goto',
+        // Always prefer peek for multi-ref; CodeLens forces peek even for 1 hit.
         multipleReferences: 'peek',
         multipleDeclarations: 'goto',
         multipleImplementations: 'peek',
         multipleTypeDefinitions: 'goto',
       },
+      // Peek chrome tracks koma theme (title actions, tree focus).
+      peekWidgetDefaultFocus: 'tree',
+      renderValidationDecorations: 'on',
+      matchBrackets: 'always',
+      bracketPairColorization: { enabled: true },
+      guides: { indentation: true, bracketPairs: false },
+      stickyScroll: { enabled: true },
+      inlayHints: { enabled: 'off' },
+      // Dim CodeLens to match VS Code secondary chrome.
+      // (color comes from editorCodeLens.foreground theme token)
     })
     monaco.editor.setTheme(theme)
     editorRef.current = editor

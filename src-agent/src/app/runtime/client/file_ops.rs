@@ -778,6 +778,25 @@ fn refresh_git_status(push: &dyn Fn(String), session: Option<&str>) {
     super::push_proto_git::push_git_status(push, result);
 }
 
+/// Best-effort GIT panel refresh after a Coding-panel mutation (pub for content_search).
+pub(crate) fn refresh_git_status_pub(push: &dyn Fn(String), session: Option<&str>) {
+    refresh_git_status(push, session);
+}
+
+/// Resolve `root` + relative `path` under the workdir sandbox (pub for content_search).
+pub(crate) fn resolve_contained_pub(
+    root: &str,
+    path: &str,
+    workdirs: &[PathBuf],
+) -> Result<PathBuf, String> {
+    resolve_contained(root, path, workdirs)
+}
+
+/// Binary sniff used by content_search (NUL in first 8KiB).
+pub(crate) fn looks_binary_pub(bytes: &[u8]) -> bool {
+    looks_binary(bytes)
+}
+
 /// Resolve `root` + relative `path` to an absolute path that is contained inside
 /// one of the configured `workdirs`. Rejects absolute relative portions, `..`
 /// traversal, roots that aren't configured, and symlink escapes.
