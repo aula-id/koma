@@ -120,20 +120,6 @@ fn daemon_session_count(sock: &Path) -> Result<usize> {
     Err(anyhow!("no snapshot in reply"))
 }
 
-/// `koma daemon kill` — stop EVERY live session-daemon, escalating per session only if
-/// one won't go.
-///
-/// Daemon-per-session: enumerates the live `run/<id>.sock` daemons and calls
-/// [`super::stop_session_daemon`] on each (which prints its own per-session outcome). Each stop
-/// is best-effort — one wedged session never blocks stopping the rest. A run dir with no
-/// live daemons reports "no daemons running" (and still sweeps any stale turds).
-///
-/// Also stops the GLOBAL MCP daemon (best-effort), then
-/// runs [`super::os::kill_orphan_daemon_processes`] — a `/proc` sweep for koma daemon
-/// processes the socket scan structurally can't see (socket file removed out from under
-/// a still-running daemon, or a daemon spawned by an older/different-path binary). That
-/// keeps "no daemons running" honest and makes `kill` reliably clear the way for a
-/// reinstall (a lingering orphan otherwise holds the binary, causing "Text file busy").
 /// `koma daemon delete --session <id>` — physically delete one on-disk history session.
 ///
 /// Used by the remote hub HISTORY pane over SSH. Refuses when the session is live
@@ -155,28 +141,38 @@ pub(super) fn cmd_delete(session: Option<&str>) -> Result<()> {
     {
         anyhow::bail!("refusing to delete live session {id}");
     }
-    match store::list_all_sessions() {
-        Ok(metas) => {
-            if let Some(meta) = metas.into_iter().find(|m| m.id == id) {
-                if meta.locked {
-                    anyhow::bail!("refusing to delete locked session {id}");
-                }
-                // Final TOCTOU re-probe immediately before the remove.
-                if super::daemon_alive(id) {
-                    anyhow::bail!("refusing to delete live session {id}");
-                }
-                store::delete_session(&meta.path)?;
-                println!("koma daemon: deleted session {id}");
-            } else {
-                // Already gone — best-effort success (mirrors kill missing-id).
-                println!("koma daemon: session {id} not found (already gone)");
-            }
+    let metas = store::list_all_sessions()?;
+    if let Some(meta) = metas.into_iter().find(|m| m.id == id) {
+        if meta.locked {
+            anyhow::bail!("refusing to delete locked session {id}");
         }
-        Err(e) => return Err(e),
+        // Final TOCTOU re-probe immediately before the remove.
+        if super::daemon_alive(id) {
+            anyhow::bail!("refusing to delete live session {id}");
+        }
+        store::delete_session(&meta.path)?;
+        println!("koma daemon: deleted session {id}");
+    } else {
+        // Already gone — best-effort success (mirrors kill missing-id).
+        println!("koma daemon: session {id} not found (already gone)");
     }
     Ok(())
 }
 
+/// `koma daemon kill` — stop EVERY live session-daemon, escalating per session only if
+/// one won't go.
+///
+/// Daemon-per-session: enumerates the live `run/<id>.sock` daemons and calls
+/// [`super::stop_session_daemon`] on each (which prints its own per-session outcome). Each stop
+/// is best-effort — one wedged session never blocks stopping the rest. A run dir with no
+/// live daemons reports "no daemons running" (and still sweeps any stale turds).
+///
+/// Also stops the GLOBAL MCP daemon (best-effort), then
+/// runs [`super::os::kill_orphan_daemon_processes`] — a `/proc` sweep for koma daemon
+/// processes the socket scan structurally can't see (socket file removed out from under
+/// a still-running daemon, or a daemon spawned by an older/different-path binary). That
+/// keeps "no daemons running" honest and makes `kill` reliably clear the way for a
+/// reinstall (a lingering orphan otherwise holds the binary, causing "Text file busy").
 pub(super) fn cmd_kill(session: Option<&str>) -> Result<()> {
     // `koma daemon kill --session <id>`: stop exactly one session-daemon (remote hub
     // kill over SSH uses this). Leave MCP/OAuth/linker alone — those are host-global.

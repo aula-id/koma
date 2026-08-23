@@ -4,20 +4,21 @@ use super::{
 
 #[test]
 fn remote_command_quotes_program_and_arguments() {
-    let cmd = remote_command(
-        "/home/me/.local/bin/koma",
-        &["server", "--session", "id; echo bad"],
-    )
-    .unwrap();
+    let prog = "/home/me/.local/bin/koma";
+    let dangerous = "id; echo bad";
+    let cmd = remote_command(prog, &["server", "--session", dangerous]).unwrap();
     // Login+interactive bash so profile/bashrc (cargo, nvm) load; exec keeps
-    // stdin for the child. Argv stays single-quoted inside the -c string.
-    assert!(cmd.starts_with("bash -ilc "), "{cmd}");
-    assert!(cmd.contains("exec "), "{cmd}");
-    assert!(cmd.contains("/home/me/.local/bin/koma"), "{cmd}");
-    assert!(cmd.contains("server"), "{cmd}");
-    assert!(cmd.contains("id; echo bad"), "{cmd}");
-    // Metacharacters must not appear unquoted as a separate shell word.
-    assert!(!cmd.contains(" echo "), "{cmd}");
+    // stdin for the child. Full argv is shell-quoted inside the -c payload.
+    let expected_inner = format!(
+        r#"[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env" 2>/dev/null; exec {} {} {} {}"#,
+        shell_quote(prog),
+        shell_quote("server"),
+        shell_quote("--session"),
+        shell_quote(dangerous),
+    );
+    assert_eq!(cmd, format!("bash -ilc {}", shell_quote(&expected_inner)));
+    // Dangerous metacharacters only appear inside a single shell-quoted word.
+    assert!(expected_inner.contains(&shell_quote(dangerous)));
     assert_eq!(shell_quote("/home/a'b/koma"), "'/home/a'\\''b/koma'");
     assert!(remote_command("koma", &[]).is_err());
     assert!(remote_command("/usr/bin/koma", &["bad\narg"]).is_err());
