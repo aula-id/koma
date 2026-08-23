@@ -57,7 +57,7 @@ pub struct ServerStatus {
     pub package: String,
 }
 
-/// Resolve every first-wave server.
+/// Resolve every catalogue server.
 pub fn status_all() -> Vec<ServerStatus> {
     let manifest = Manifest::load().unwrap_or_default();
     catalog::CATALOG

@@ -25,6 +25,7 @@ import {
   resolveLspDefinition,
   resolveLspHover,
   uriToPath,
+  queueReveal,
   type LspDiagnostic,
 } from '../lib/monaco-lsp'
 
@@ -571,7 +572,7 @@ export type KeyReveal = {
   error: string | null
 }
 
-// One first-wave language server status row (LspStatus push).
+// One language server status row (LspStatus push).
 export type LspServerStatus = {
   id: string
   name: string
@@ -2440,7 +2441,7 @@ type KomaState = {
   keyDelete: (name: string) => void
   // Settings "Language servers": re-fetch catalogue status.
   refreshLsp: () => void
-  // Install one server (or all managed first-wave when `all`).
+  // Install one server (or all managed when `all`).
   lspInstall: (id: string | null, all?: boolean, force?: boolean) => void
   // Uninstall a koma-managed server (never touches PATH copies).
   lspUninstall: (id: string) => void
@@ -5313,12 +5314,19 @@ export const useKoma = create<KomaState>((set, get) => ({
   openDiagnostic: (uri, line, character) => {
     const abs = uriToPath(uri)
     if (!abs) return
-    const roots = (get().settingsValues?.workdir ?? []).filter(Boolean)
-    const sorted = [...roots].sort((a, b) => b.length - a.length)
-    let root: string | null = get().coding.activeRoot
-    let rel = abs
     const aa = abs.replace(/\\/g, '/')
-    for (const r of sorted) {
+    const roots = (get().settingsValues?.workdir ?? []).filter(Boolean)
+    const candidates = [
+      ...[...roots].sort((a, b) => b.length - a.length),
+      ...get()
+        .ui.tabs.filter((t): t is Extract<Tab, { kind: 'codingFile' }> => t.kind === 'codingFile')
+        .map((t) => t.root),
+      get().coding.activeRoot,
+    ].filter((r): r is string => !!r)
+
+    let root: string | null = null
+    let rel = ''
+    for (const r of candidates) {
       const rr = r.replace(/\\/g, '/').replace(/\/$/, '')
       if (aa === rr || aa.startsWith(rr + '/')) {
         root = r
@@ -5326,28 +5334,24 @@ export const useKoma = create<KomaState>((set, get) => ({
         break
       }
     }
-    if (!root) {
-      for (const tab of get().ui.tabs) {
-        if (tab.kind !== 'codingFile') continue
-        const rr = tab.root.replace(/\\/g, '/').replace(/\/$/, '')
-        if (aa === rr || aa.startsWith(rr + '/')) {
-          root = tab.root
-          rel = aa === rr ? '' : aa.slice(rr.length + 1)
-          break
-        }
-      }
-    }
     if (!root) return
-    get().openCodingFile(root, rel)
+
     const targetLine = line + 1
-    const targetCol = character + 1
-    setTimeout(() => {
+    const targetCol = Math.max(1, character + 1)
+    // Queue before open so a just-mounted tab can consume on first content paint.
+    queueReveal(root, rel, targetLine, targetCol)
+    get().openCodingFile(root, rel)
+    const fire = () => {
       window.dispatchEvent(
         new CustomEvent('koma-reveal-line', {
           detail: { root, path: rel, line: targetLine, column: targetCol },
         }),
       )
-    }, 80)
+    }
+    // Event path for an already-mounted tab; queued reveal covers slow FileRead.
+    fire()
+    setTimeout(fire, 80)
+    setTimeout(fire, 300)
   },
   openStreamTab: (kind, targetId, title) => {
     const id = kind === 'subagent' ? `sa:${targetId}` : `bash:${targetId}`

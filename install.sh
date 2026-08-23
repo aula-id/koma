@@ -445,11 +445,11 @@ if [ "$WITH_RESEARCH" = "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Optional: provision first-wave language servers (~/.koma/lsp/)
+# Optional: provision language servers (~/.koma/lsp/)
 # ---------------------------------------------------------------------------
 if [ "$WITH_LSP" = "1" ]; then
     echo ""
-    echo "Installing first-wave language servers under ~/.koma/lsp/ ..."
+    echo "Installing language servers under ~/.koma/lsp/ ..."
     echo "(requires network; some servers also need node/npm, python3, or go on PATH)"
     "$INSTALL_DIR/$bin_name" lsp install --all || {
         echo "WARNING: some language servers failed to install — run 'koma lsp status' later." >&2
