@@ -128,6 +128,7 @@ pub(crate) fn shadow_session_hub(h: SessionHubSnapshot) -> SessionHub {
             last_active: std::time::UNIX_EPOCH + Duration::from_secs(e.last_active_secs),
             dir_label: String::new(), // not projected over the wire; labels shown on daemon side
             is_current_dir: false,
+            remote_host: None,
         })
         .collect();
     // The projected history is already filtered → identity filter over it.

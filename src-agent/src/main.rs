@@ -13,7 +13,7 @@
 //! | `koma agents` | open the session hub (alias for `--resume`). |
 //! | `koma --resume` | open the session hub. |
 //! | `koma alone` | standalone no-daemon TUI ([`app::run`]); REFUSES if a daemon is already alive. The escape hatch (alias for `--local`). |
-//! | `koma daemon <status\|kill\|restart\|clean>` | daemon management CLI then exit. |
+//! | `koma daemon <status\|kill\|restart\|clean\|delete>` | daemon management CLI then exit. |
 //! | `koma ext install --dev <zip\|dir>` | sideload an unsigned local extension (offline, no koma.run account) then exit. |
 //! | `koma doctor [-v\|--verbose]` | flutter-doctor-style readiness report, then exit. Read-only. |
 //! | `koma gui` | feature-gated (`--features gui`) desktop client — a wry webview hosting xterm.js that renders the real koma terminal client spawned in a PTY. |
@@ -405,15 +405,25 @@ fn main() -> anyhow::Result<()> {
     app::client_run(opts)
 }
 
-/// List live remote koma sessions as JSON (machine-readable, for SSH discovery).
+/// List remote-hub sessions as JSON (machine-readable, for SSH discovery).
 ///
-/// Scans the local session registry for live daemon sockets, probes each for
-/// status, and outputs a JSON array to stdout. Diagnostics go to stderr.
+/// Emits `{ "live": [...], "history": [...] }`:
+/// - `live` — daemons currently accepting on sockets
+/// - `history` — registry rows minus live ids (cheap: no message_count)
+///
+/// Laptop clients fill the remote hub HISTORY pane from this. Host reopen stays
+/// `koma --resume` / `koma agents` (local hub already uses `list_all_sessions`).
+/// Diagnostics go to stderr.
 fn run_sessions_json() -> i32 {
     use app::runtime::list_live_sessions;
+    use model::session_registry;
+    use model::store;
 
     let statuses = list_live_sessions();
-    let sessions: Vec<serde_json::Value> = statuses
+    let live_ids: std::collections::HashSet<&str> =
+        statuses.iter().map(|s| s.session_id.as_str()).collect();
+
+    let live: Vec<serde_json::Value> = statuses
         .iter()
         .map(|s| {
             serde_json::json!({
@@ -426,7 +436,33 @@ fn run_sessions_json() -> i32 {
         })
         .collect();
 
-    match serde_json::to_string(&sessions) {
+    // Registry-only walk — skip message_count (too expensive over SSH).
+    let history: Vec<serde_json::Value> = session_registry::list_all()
+        .unwrap_or_else(|_| Vec::new())
+        .into_iter()
+        .filter(|row| !live_ids.contains(row.uuid.as_str()))
+        .map(|row| {
+            let updated_at = if row.updated_at < 0 {
+                0u64
+            } else {
+                row.updated_at as u64
+            };
+            serde_json::json!({
+                "session_id": row.uuid,
+                "name": row.name,
+                "pwd": row.workdir,
+                "updated_at": updated_at,
+                "dir_label": store::dir_basename(&row.workdir),
+            })
+        })
+        .collect();
+
+    let payload = serde_json::json!({
+        "live": live,
+        "history": history,
+    });
+
+    match serde_json::to_string(&payload) {
         Ok(json) => {
             println!("{json}");
             0

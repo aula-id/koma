@@ -292,6 +292,7 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
                 last_active: m.modified,
                 dir_label: store::dir_basename(&m.workdir),
                 is_current_dir: m.pwd_hash == cur_hash,
+                remote_host: None,
             })
             .collect(),
         // A listing failure shouldn't block the hub — show an empty history pane.
