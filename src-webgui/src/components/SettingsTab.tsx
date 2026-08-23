@@ -1011,8 +1011,8 @@ function KeyConfirmRow({
 }
 
 // ── Language servers ─────────────────────────────────────────────────────────
-// Catalogue of first-wave language servers for the coding panel. Host-local
-// under ~/.koma/lsp/; PATH copies are detected. Install never mutates system
+// Catalogue of language servers for the coding panel. Host-local under
+// ~/.koma/lsp/; PATH copies are detected. Install never mutates system
 // packages. Matches the SSH Keys host-req pattern (refresh on mount).
 
 function LspSettings() {
@@ -1039,7 +1039,7 @@ function LspSettings() {
           className="flex items-center gap-1.5 rounded border border-koma-border px-2.5 py-1 text-[12px] text-koma-fg opacity-80 hover:bg-koma-hover hover:opacity-100 disabled:opacity-40"
         >
           {anyInstalling ? <BrailleSpinner size={13} /> : <Download size={13} />}
-          Install all first-wave
+          Install all
         </button>
         <button
           type="button"

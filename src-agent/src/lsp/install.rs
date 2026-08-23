@@ -62,7 +62,7 @@ pub fn install_one(id: &str, force: bool, mut progress: Option<ProgressFn>) -> R
     }
 }
 
-/// Install every first-wave server. Continues on individual failures; returns
+/// Install every catalogue server. Continues on individual failures; returns
 /// the first error if any failed (after attempting the rest).
 pub fn install_all(force: bool, mut progress: Option<ProgressFn>) -> Result<()> {
     let mut first_err: Option<anyhow::Error> = None;
@@ -669,7 +669,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn managed_support_covers_first_wave_core() {
+    fn managed_support_covers_core_catalog() {
         for id in [
             "rust-analyzer",
             "taplo",

@@ -116,7 +116,7 @@ pub fn print_usage() -> i32 {
          servers land under ~/.koma/lsp/<id>/ (never mutates system packages).\n\
          resolution order: koma-managed → PATH → missing (Monarch-only).\n\
          \n\
-         first-wave ids:\n\
+         managed ids:\n\
          \x20 rust-analyzer, vtsls, basedpyright, gopls, clangd,\n\
          \x20 vscode-langservers, bash-language-server, taplo\n\
          \x20 (lua-language-server, zls, nil: PATH discovery only for now)"

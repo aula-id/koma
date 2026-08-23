@@ -521,7 +521,7 @@ declare global {
     // ─── Language servers (Settings + editor banner) ─────────────────────
     // Full catalogue status (managed / PATH / missing). Reply: LspStatus.
     | { r: 'LspStatus' }
-    // Install one id, or every managed first-wave server when all=true.
+    // Install one id, or every managed server when all=true.
     // Streams LspInstall progress, then a fresh LspStatus.
     | { r: 'LspInstall'; id?: string | null; all?: boolean; force?: boolean }
     // Remove a koma-managed install. Never touches PATH copies.

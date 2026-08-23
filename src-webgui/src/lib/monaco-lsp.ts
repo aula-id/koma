@@ -204,11 +204,51 @@ let providersReady = false
 type ReqFn = (body: object) => void
 type RootsFn = () => string[]
 
+type OpenLocationFn = (uri: string, line: number, character: number) => void
+
+/** Pending go-to / diagnostic reveal applied when the target tab's model is ready. */
+let pendingReveal: {
+  root: string
+  path: string
+  line: number
+  column: number
+} | null = null
+
+/** Queue a 1-based line/column reveal for a coding tab (consumed on model ready). */
+export function queueReveal(
+  root: string,
+  path: string,
+  line: number,
+  column: number,
+): void {
+  pendingReveal = { root, path, line, column }
+}
+
+/** If a reveal is queued for this tab, take it (once). */
+export function consumeReveal(
+  root: string,
+  path: string,
+): { line: number; column: number } | null {
+  const p = pendingReveal
+  if (!p) return null
+  if (p.root !== root || p.path !== path) return null
+  pendingReveal = null
+  return { line: p.line, column: p.column }
+}
+
 /**
  * Register completion / hover / definition providers for all languages.
  * Safe to call multiple times; only the first registration sticks.
+ *
+ * Go-to-definition cannot use Monaco's default file:// model service — our
+ * editors use per-tab in-memory models. `openLocation` must open a coding tab
+ * (and queue a line reveal) for cross-file targets.
  */
-export function ensureLspProviders(req: ReqFn, getRoots: RootsFn): void {
+export function ensureLspProviders(
+  req: ReqFn,
+  getRoots: RootsFn,
+  openLocation?: OpenLocationFn,
+): void {
   if (providersReady) return
   providersReady = true
 
@@ -313,29 +353,38 @@ export function ensureLspProviders(req: ReqFn, getRoots: RootsFn): void {
       try {
         const locations = await p
         if (!locations.length) return null
-        const roots = getRoots()
-        return locations.map((l) => {
-          const abs = uriToPath(l.uri)
-          // Prefer opening via coding tab when we can map to a workspace path.
-          if (abs) {
-            const split = splitRootPath(abs, roots)
-            if (split) {
-              // Side-effect open is done by the consumer via store; here we
-              // return a Monaco location. CodeEditorTab wires go-to via a
-              // custom command when the target isn't the current model.
-              void split
-            }
-          }
+        const first = locations[0]
+        // Compare absolute paths — model uses inmemory URI, LSP returns file://.
+        const targetAbs = uriToPath(first.uri)
+        const currentAbs = (() => {
+          const a = loc.path
+            ? `${loc.root.replace(/\/$/, '')}/${loc.path.replace(/^\//, '')}`
+            : loc.root
+          return a.replace(/\\/g, '/')
+        })()
+        const sameFile =
+          !!targetAbs && targetAbs.replace(/\\/g, '/') === currentAbs
+
+        // Always route through koma tabs — Monaco has no model for file:// URIs.
+        if (openLocation) {
+          openLocation(first.uri, first.range.startLine, first.range.startCharacter)
+        }
+
+        // Same file: return THIS model URI so Monaco can jump immediately.
+        if (sameFile) {
           return {
-            uri: monaco.Uri.parse(l.uri),
+            uri: model.uri,
             range: {
-              startLineNumber: l.range.startLine + 1,
-              startColumn: l.range.startCharacter + 1,
-              endLineNumber: l.range.endLine + 1,
-              endColumn: l.range.endCharacter + 1,
+              startLineNumber: first.range.startLine + 1,
+              startColumn: first.range.startCharacter + 1,
+              endLineNumber: first.range.endLine + 1,
+              endColumn: first.range.endCharacter + 1,
             },
           }
-        })
+        }
+        // Cross-file: tab open + reveal is handled by openLocation; returning a
+        // file:// Location would no-op (no matching Monaco model).
+        return null
       } catch {
         return null
       }
