@@ -37,6 +37,20 @@ mod server;
 mod session_mgmt;
 mod signals;
 pub(crate) mod stdio_bridge;
+/// Private wire types for `koma remote-fs` (Coding panel thin client).
+pub(crate) mod remote_fs_proto;
+/// `koma remote-fs` stdio service entry.
+mod remote_fs_svc;
+/// Private wire types for `koma remote-git` (Source Control thin client).
+pub(crate) mod remote_git_proto;
+/// `koma remote-git` stdio service entry.
+mod remote_git_svc;
+/// Private wire types for `koma remote-linker` (Import Graph panel thin client).
+#[cfg(feature = "linker")]
+pub(crate) mod remote_linker_proto;
+/// `koma remote-linker` stdio service entry.
+#[cfg(feature = "linker")]
+mod remote_linker_svc;
 // Wave-5: persist + restore the per-session bg-bash / sub-agent records (#25).
 pub(crate) mod bg_persist;
 #[cfg(feature = "gui")]
@@ -79,6 +93,10 @@ pub(crate) use manage::{list_live_sessions, spawn_into_session, SpawnIntoReply};
 
 // Re-export lifecycle entry points (previously free fns in this file).
 pub use lifecycle::{run, run_daemon, run_daemon_selftest};
+pub use remote_fs_svc::run_remote_fs;
+pub use remote_git_svc::run_remote_git;
+#[cfg(feature = "linker")]
+pub use remote_linker_svc::run_remote_linker;
 pub use server::run_server;
 
 // Re-export the GLOBAL MCP daemon entry so `main` can dispatch `koma --mcp-daemon`

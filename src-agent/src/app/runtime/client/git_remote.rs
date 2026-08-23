@@ -137,7 +137,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// [`super::git::compute_git_status`] to populate `GitStatusResult.key_name`
 /// (the panel's key picker's current value) and by every remote op below to
 /// decide whether to inject a `GIT_SSH_COMMAND` override.
-pub(super) fn assigned_key(root: &Path) -> Option<String> {
+pub(crate) fn assigned_key(root: &Path) -> Option<String> {
     load_map()
         .get(&root.to_string_lossy().into_owned())
         .cloned()
@@ -148,7 +148,7 @@ pub(super) fn assigned_key(root: &Path) -> Option<String> {
 /// caller (the GIT panel's key picker) always gets its follow-up `GitStatus`
 /// re-push regardless, so the UI never hangs even if the persist silently
 /// failed (the assignment just won't survive a restart).
-pub(super) fn set_assigned_key(root: &Path, name: Option<String>) {
+pub(crate) fn set_assigned_key(root: &Path, name: Option<String>) {
     let path = match git_keys_path() {
         Ok(p) => p,
         Err(e) => {
@@ -192,7 +192,7 @@ pub(super) fn set_assigned_key(root: &Path, name: Option<String>) {
 /// (`host.rs`/`push_loop.rs`) don't need to import [`repo_root_for`]
 /// themselves just for this one mutation. A `session` that isn't inside a git
 /// repository is a silent no-op (nothing to assign a key to).
-pub(super) fn set_current_key(session: Option<&str>, name: Option<String>) {
+pub(crate) fn set_current_key(session: Option<&str>, name: Option<String>) {
     if let Some(root) = repo_root_for(session) {
         set_assigned_key(&root, name);
     }
@@ -270,7 +270,7 @@ fn success_message(out: &std::process::Output) -> Option<String> {
 /// with the system default ssh. `--prune` drops remote-tracking branches whose
 /// upstream was deleted, mirroring VSCode's default fetch behaviour. Failure
 /// (auth, unreachable remote, no remote configured) surfaces git's own stderr.
-pub(super) fn git_fetch(session: Option<&str>) -> GitOpResult {
+pub(crate) fn git_fetch(session: Option<&str>) -> GitOpResult {
     const OP: &str = "fetch";
     let Some(root) = repo_root_for(session) else {
         return op_err(OP, "not a git repository");
@@ -293,7 +293,7 @@ pub(super) fn git_fetch(session: Option<&str>) -> GitOpResult {
 /// possible to fast-forward") on any divergence rather than silently creating
 /// a merge commit or leaving a half-merged/conflicted tree. Same
 /// `GIT_SSH_COMMAND` injection as [`git_fetch`].
-pub(super) fn git_pull(session: Option<&str>) -> GitOpResult {
+pub(crate) fn git_pull(session: Option<&str>) -> GitOpResult {
     const OP: &str = "pull";
     let Some(root) = repo_root_for(session) else {
         return op_err(OP, "not a git repository");
@@ -333,7 +333,7 @@ fn proofs() -> &'static Mutex<HashMap<(PathBuf, String), RebaseProof>> {
     REBASE_PROOFS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub(super) fn begin_rebase(root: &Path, branch: &str, old_tip: &str) {
+pub(crate) fn begin_rebase(root: &Path, branch: &str, old_tip: &str) {
     let mut tracker = proofs().lock().unwrap_or_else(|e| e.into_inner());
     // Starting a new GUI rewrite invalidates every older proof in this repository.
     tracker.retain(|(proof_root, _), _| proof_root != root);
@@ -346,7 +346,7 @@ pub(super) fn begin_rebase(root: &Path, branch: &str, old_tip: &str) {
     );
 }
 
-pub(super) fn finish_rebase(root: &Path, branch: &str, new_tip: &str) -> bool {
+pub(crate) fn finish_rebase(root: &Path, branch: &str, new_tip: &str) -> bool {
     let key = (root.to_path_buf(), branch.to_string());
     let mut tracker = proofs().lock().unwrap_or_else(|e| e.into_inner());
     let Some(proof) = tracker
@@ -363,21 +363,21 @@ pub(super) fn finish_rebase(root: &Path, branch: &str, new_tip: &str) -> bool {
     true
 }
 
-pub(super) fn clear_pending_rebase(root: &Path) {
+pub(crate) fn clear_pending_rebase(root: &Path) {
     proofs()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .retain(|(proof_root, _), proof| proof_root != root || !proof.new_tip.is_empty());
 }
 
-pub(super) fn invalidate_rebase_proofs(root: &Path) {
+pub(crate) fn invalidate_rebase_proofs(root: &Path) {
     proofs()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .retain(|(proof_root, _), _| proof_root != root);
 }
 
-pub(super) fn has_pending_rebase(root: &Path, branch: &str, old_tip: &str) -> bool {
+pub(crate) fn has_pending_rebase(root: &Path, branch: &str, old_tip: &str) -> bool {
     proofs()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -387,7 +387,7 @@ pub(super) fn has_pending_rebase(root: &Path, branch: &str, old_tip: &str) -> bo
 
 /// Record only GUI-initiated, successfully completed rebases.  A later automatic
 /// force push must additionally prove ancestry and an exact remote lease.
-pub(super) fn record_rebase(root: &Path, branch: &str, old_tip: &str, new_tip: &str) {
+pub(crate) fn record_rebase(root: &Path, branch: &str, old_tip: &str, new_tip: &str) {
     let key = (root.to_path_buf(), branch.to_string());
     let mut tracker = proofs().lock().unwrap_or_else(|e| e.into_inner());
     if old_tip == new_tip {
@@ -578,7 +578,7 @@ fn automatic_mode(
 
 /// Cheap local projection used by GitStatus to label the push menu. The actual
 /// push always replans under the transaction and, for force, checks the server.
-pub(super) fn push_mode_for(root: &Path) -> Option<GitPushMode> {
+pub(crate) fn push_mode_for(root: &Path) -> Option<GitPushMode> {
     with_git_transaction(|git| {
         let target = plan_target(git, root).ok()?;
         automatic_mode(git, root, &target).ok()
@@ -588,7 +588,7 @@ pub(super) fn push_mode_for(root: &Path) -> Option<GitPushMode> {
 /// Authoritative push planner/executor. Planning and execution are serialized as
 /// one transaction. Force is accepted only with GUI-rebase proof, ancestry proof,
 /// and a freshly queried exact server-side lease.
-pub(super) fn git_push(
+pub(crate) fn git_push(
     mode: Option<GitPushMode>,
     expected_root: Option<&str>,
     session: Option<&str>,

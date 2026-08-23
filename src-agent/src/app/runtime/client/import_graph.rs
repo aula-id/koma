@@ -32,7 +32,7 @@ const REINDEX_POLL_INTERVAL_MS: u64 = 200;
 /// Workspace-relative import-graph view result for the GUI.
 /// Matches the fields of `GraphViewResult` but is self-contained (no linker
 /// daemon types leak into the GUI push contract).
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportGraphResult {
     /// Status of the graph response: "ok" (successful graph data),
@@ -63,7 +63,7 @@ pub struct ImportGraphResult {
     pub session_id: Option<String>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportGraphNode {
     pub path: String,
@@ -75,14 +75,14 @@ pub struct ImportGraphNode {
     pub workspace_root: Option<String>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ImportGraphEdge {
     pub from: String,
     pub to: String,
 }
 
 /// Per-root workspace metadata for filter pickers.
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportGraphRootInfo {
     /// Canonical identity path used for requests, security, and matching.
@@ -107,7 +107,7 @@ pub struct ImportGraphRootInfo {
 }
 
 /// Language with count for per-root breakdown.
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportGraphLangCount {
     pub name: String,
@@ -519,24 +519,30 @@ pub struct ImportGraphJob {
     pub request_id: Option<String>,
 }
 
+/// Synchronous import-graph fetch + scope (shared by local spawners and
+/// `koma remote-linker`).
+pub(crate) fn exec_import_graph(job: ImportGraphJob) -> ImportGraphResult {
+    let mut result = scoped_fetch_and_convert(
+        job.path,
+        job.depth,
+        job.direction,
+        job.filter_roots,
+        job.filter_languages,
+        &job.configured_roots,
+        &job.configured_root_map,
+    );
+    result.request_id = job.request_id;
+    result.session_id = job.session_id;
+    result
+}
+
 /// Spawn an off-thread `HostCtl::ImportGraph` worker (attached mode).
 /// Resolves the effective filter from the foreground session's configured
 /// workdirs, calls `fetch_graph_view` on a std::thread, scopes the result,
 /// and sends it over the channel.
 pub fn spawn_import_graph_attached(tx: Sender<ImportGraphResult>, job: ImportGraphJob) {
     std::thread::spawn(move || {
-        let mut result = scoped_fetch_and_convert(
-            job.path,
-            job.depth,
-            job.direction,
-            job.filter_roots,
-            job.filter_languages,
-            &job.configured_roots,
-            &job.configured_root_map,
-        );
-        result.request_id = job.request_id;
-        result.session_id = job.session_id;
-        let _ = tx.send(result);
+        let _ = tx.send(exec_import_graph(job));
     });
 }
 
@@ -544,17 +550,7 @@ pub fn spawn_import_graph_attached(tx: Sender<ImportGraphResult>, job: ImportGra
 /// Same scoping logic but pushes the result directly instead of via channel.
 pub fn spawn_import_graph(push: impl Fn(String) + Send + 'static, job: ImportGraphJob) {
     std::thread::spawn(move || {
-        let mut result = scoped_fetch_and_convert(
-            job.path,
-            job.depth,
-            job.direction,
-            job.filter_roots,
-            job.filter_languages,
-            &job.configured_roots,
-            &job.configured_root_map,
-        );
-        result.request_id = job.request_id;
-        result.session_id = job.session_id;
+        let result = exec_import_graph(job);
         let env = super::push_proto::PushEnvelope::ImportGraph(result);
         super::render::emit(&push, &env);
     });
@@ -628,6 +624,26 @@ fn scoped_fetch_and_convert(
 
 // ─── Manual reindex workers ─────────────────────────────────────────────────
 
+/// Synchronous reindex + scoped fetch (shared by local spawners and
+/// `koma remote-linker`).
+pub(crate) fn exec_import_graph_reindex(
+    session_id: Option<String>,
+    request_id: Option<String>,
+    configured_roots: Vec<String>,
+    configured_root_map: HashMap<String, String>,
+    filter_roots: Option<Vec<String>>,
+    filter_languages: Option<Vec<String>>,
+) -> ImportGraphResult {
+    reindex_and_fetch(
+        session_id.as_deref(),
+        request_id.as_deref(),
+        &configured_roots,
+        &configured_root_map,
+        filter_roots,
+        filter_languages,
+    )
+}
+
 /// Spawn an off-thread reindex worker (attached mode): reconcile/register the
 /// foreground session's workdirs, issue Rescan, poll until the scan
 /// completes, then fetch + scope + send.  Every failure yields a terminal
@@ -642,11 +658,11 @@ pub fn spawn_import_graph_reindex_attached(
     request_id: Option<String>,
 ) {
     std::thread::spawn(move || {
-        let result = reindex_and_fetch(
-            Some(&session_id),
-            request_id.as_deref(),
-            &configured_roots,
-            &configured_root_map,
+        let result = exec_import_graph_reindex(
+            Some(session_id),
+            request_id,
+            configured_roots,
+            configured_root_map,
             filter_roots,
             filter_languages,
         );
@@ -666,11 +682,11 @@ pub fn spawn_import_graph_reindex(
     request_id: Option<String>,
 ) {
     std::thread::spawn(move || {
-        let result = reindex_and_fetch(
-            Some(&session_id),
-            request_id.as_deref(),
-            &configured_roots,
-            &configured_root_map,
+        let result = exec_import_graph_reindex(
+            Some(session_id),
+            request_id,
+            configured_roots,
+            configured_root_map,
             filter_roots,
             filter_languages,
         );
@@ -896,6 +912,18 @@ fn build_scoped_impact_result(
     }
 }
 
+/// Synchronous impact analysis (shared by local spawners and
+/// `koma remote-linker`).
+pub(crate) fn exec_import_graph_impact(
+    path: String,
+    depth: u32,
+    request_id: String,
+    configured_roots: Vec<String>,
+    session_id: Option<String>,
+) -> super::push_proto::ImportGraphImpactResult {
+    build_scoped_impact_result(request_id, path, depth, &configured_roots, session_id)
+}
+
 /// Spawn an off-thread `HostCtl::ImportGraphImpact` worker (attached mode).
 /// Calls `fetch_impact` on a std::thread (blocking IPC), sends the result
 /// over the channel so `push_loop` can drain + emit without blocking its
@@ -910,7 +938,7 @@ pub fn spawn_import_graph_impact_attached(
 ) {
     std::thread::spawn(move || {
         let result =
-            build_scoped_impact_result(request_id, path, depth, &configured_roots, session_id);
+            exec_import_graph_impact(path, depth, request_id, configured_roots, session_id);
         let _ = tx.send(result);
     });
 }
@@ -928,7 +956,7 @@ pub fn spawn_import_graph_impact(
 ) {
     std::thread::spawn(move || {
         let result =
-            build_scoped_impact_result(request_id, path, depth, &configured_roots, session_id);
+            exec_import_graph_impact(path, depth, request_id, configured_roots, session_id);
         let env = super::push_proto::PushEnvelope::ImportGraphImpact(result);
         super::render::emit(&push, &env);
     });

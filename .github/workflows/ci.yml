@@ -92,6 +92,11 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
+      # Fail fast with a one-line fix when package-lock.json moved but
+      # src-webgui/npm-deps-hash did not. Avoids a long FOD mismatch log.
+      - name: webgui npm-deps hash in sync with package-lock
+        run: ./scripts/update-webgui-npm-deps.sh --check
+
       # checks.default / checks.gui are the packages themselves (see flake.nix),
       # so this already builds and validates both without a separate build step.
       - name: nix flake check

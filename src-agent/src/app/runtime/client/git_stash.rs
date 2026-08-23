@@ -38,7 +38,7 @@ fn op_err(op: &str, error: impl Into<String>) -> GitOpResult {
 /// error case specially: git itself exits non-zero with "No local changes to
 /// save", which [`git_failure`] surfaces verbatim as `error` — so the toolbar
 /// toasts it rather than silently doing nothing.
-pub(super) fn git_stash(session: Option<&str>) -> GitOpResult {
+pub(crate) fn git_stash(session: Option<&str>) -> GitOpResult {
     const OP: &str = "stash";
     let Some(root) = repo_root_for(session) else {
         return op_err(OP, "not a git repository");
@@ -56,7 +56,7 @@ pub(super) fn git_stash(session: Option<&str>) -> GitOpResult {
 /// [`super::git::compute_git_status`] carries the authoritative `conflicted`
 /// state (the EXISTING G5 conflict banner), same reasoning as
 /// [`super::git_destructive::git_cherry_pick`]'s module doc.
-pub(super) fn git_stash_pop(session: Option<&str>) -> GitOpResult {
+pub(crate) fn git_stash_pop(session: Option<&str>) -> GitOpResult {
     const OP: &str = "stashPop";
     let Some(root) = repo_root_for(session) else {
         return op_err(OP, "not a git repository");
@@ -70,9 +70,9 @@ pub(super) fn git_stash_pop(session: Option<&str>) -> GitOpResult {
 
 /// One stash entry in a [`StashListResult`], parsed off one `git stash list`
 /// line (`stash@{N}: <message>`).
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct StashEntry {
+pub(crate) struct StashEntry {
     pub index: u32,
     pub message: String,
 }
@@ -81,9 +81,9 @@ pub(super) struct StashEntry {
 /// `StashList` envelope for the Source Control toolbar's stash count/indicator.
 /// `error` set means the workdir isn't a git repository (or `git stash list`
 /// itself failed) — `entries` is then empty rather than the caller panicking.
-#[derive(serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct StashListResult {
+pub(crate) struct StashListResult {
     pub entries: Vec<StashEntry>,
     pub error: Option<String>,
 }
@@ -97,7 +97,7 @@ pub(super) struct StashListResult {
 /// skipped rather than aborting the whole list. ALWAYS returns a result — a
 /// non-git workdir sets `error` rather than panicking, mirroring
 /// [`super::git_branch::git_branch_list`].
-pub(super) fn git_stash_list(session: Option<&str>) -> StashListResult {
+pub(crate) fn git_stash_list(session: Option<&str>) -> StashListResult {
     let empty = |error: Option<String>| StashListResult {
         entries: Vec::new(),
         error,

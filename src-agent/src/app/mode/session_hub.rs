@@ -84,6 +84,11 @@ pub struct CookingEntry {
 pub struct HistoryEntry {
     /// The session's on-disk directory path — the canonical identity used to load
     /// it (and to re-check its lock) when Enter opens it.
+    ///
+    /// For remote hub rows this is a **synthetic** path whose final component is
+    /// the session UUID (e.g. `remote:<host>/<uuid>`). `resolve_enter` takes the
+    /// file name as the session id; local `store::delete_session` must never run
+    /// on a synthetic path (remote delete goes over SSH instead).
     pub path: PathBuf,
     /// Display name of the session.
     pub name: String,
@@ -93,6 +98,9 @@ pub struct HistoryEntry {
     pub dir_label: String,
     /// Whether the session's working directory matches the current process's working directory.
     pub is_current_dir: bool,
+    /// If this history row lives on a remote host, its display name (`user@host`).
+    /// `None` for local hub rows. Remote resume / delete route over SSH when set.
+    pub remote_host: Option<String>,
 }
 
 /// State for the two-pane session hub.

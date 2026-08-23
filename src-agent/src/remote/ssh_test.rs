@@ -4,17 +4,34 @@ use super::{
 
 #[test]
 fn remote_command_quotes_program_and_arguments() {
-    assert_eq!(
-        remote_command(
-            "/home/me/.local/bin/koma",
-            &["server", "--session", "id; echo bad"]
-        )
-        .unwrap(),
-        "'/home/me/.local/bin/koma' 'server' '--session' 'id; echo bad'"
+    let prog = "/home/me/.local/bin/koma";
+    let dangerous = "id; echo bad";
+    let cmd = remote_command(prog, &["server", "--session", dangerous]).unwrap();
+    // Login+interactive bash so profile/bashrc (cargo, nvm) load; exec keeps
+    // stdin for the child. Full argv is shell-quoted inside the -c payload.
+    let expected_inner = format!(
+        r#"[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env" 2>/dev/null; exec {} {} {} {}"#,
+        shell_quote(prog),
+        shell_quote("server"),
+        shell_quote("--session"),
+        shell_quote(dangerous),
     );
+    assert_eq!(cmd, format!("bash -ilc {}", shell_quote(&expected_inner)));
+    // Dangerous metacharacters only appear inside a single shell-quoted word.
+    assert!(expected_inner.contains(&shell_quote(dangerous)));
     assert_eq!(shell_quote("/home/a'b/koma"), "'/home/a'\\''b/koma'");
     assert!(remote_command("koma", &[]).is_err());
     assert!(remote_command("/usr/bin/koma", &["bad\narg"]).is_err());
+}
+
+#[test]
+fn remote_command_inner_argv_is_shell_quoted() {
+    let cmd = remote_command("/usr/bin/koma", &["--version"]).unwrap();
+    let expected_inner = concat!(
+        r#"[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env" 2>/dev/null; exec "#,
+        "'/usr/bin/koma' '--version'"
+    );
+    assert_eq!(cmd, format!("bash -ilc {}", shell_quote(expected_inner)));
 }
 
 #[test]

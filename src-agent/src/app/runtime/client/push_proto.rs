@@ -22,7 +22,7 @@ pub(super) use super::push_rows::{
 };
 
 /// Impact analysis result: paths that transitively depend on a file.
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportGraphImpactResult {
     pub request_id: String,

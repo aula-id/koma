@@ -4,9 +4,9 @@
 //! [`super`] (the `client` module) for file size — pure code motion, no
 //! behaviour change.
 //!
-//! `compute_file_diff` and `compute_usage_preview` are bumped to `pub(super)`
-//! (were private) since [`super::host`]'s `host_swapper` (a sibling module)
-//! calls them; every other item here is only used within this file.
+//! `compute_file_diff` / `compute_usage_preview` / `compute_analytics` are
+//! `pub(crate)` so the daemon hub (usage/analytics bridge) and the host-side
+//! swapper can call them.
 
 /// The result of a host-side [`compute_file_diff`], pushed to the GUI as a `FileDiff`
 /// envelope (`render::push_file_diff`). `error` set means the diff could not be
@@ -266,7 +266,8 @@ pub(super) fn compute_file_diff(path: &str, current_session: Option<&str>) -> Fi
 /// `UsagePreview` envelope (`render::push_usage_preview`). `days` is EXACTLY 7 entries
 /// (oldest first, today last), zero-filled for any day with no ledger rows; `top_models`
 /// is capped at 3, ordered by cost descending.
-pub(super) struct UsagePreviewResult {
+#[derive(Debug, Clone)]
+pub(crate) struct UsagePreviewResult {
     pub cost: f64,
     pub tokens_in: i64,
     pub tokens_cached: i64,
@@ -291,7 +292,7 @@ pub(super) struct UsagePreviewResult {
 /// `now - 7*86400` — so the header totals and the top-models list describe EXACTLY the
 /// window the bars render, with no up-to-24h sliver of extra data hiding outside every
 /// bar. This window-consistency invariant holds in BOTH scopes.
-pub(super) fn compute_usage_preview(session: Option<&str>) -> UsagePreviewResult {
+pub(crate) fn compute_usage_preview(session: Option<&str>) -> UsagePreviewResult {
     use crate::model::usage::{self, BucketSize};
 
     let now = std::time::SystemTime::now()
@@ -337,7 +338,7 @@ pub(super) fn compute_usage_preview(session: Option<&str>) -> UsagePreviewResult
 
 /// One model row in a host-side Analytics dashboard reply.
 #[derive(Debug, Clone)]
-pub(super) struct AnalyticsModelRow {
+pub(crate) struct AnalyticsModelRow {
     pub model_id: String,
     pub cost: f64,
     pub tokens_in: i64,
@@ -348,7 +349,7 @@ pub(super) struct AnalyticsModelRow {
 
 /// One time-series bucket in a host-side Analytics dashboard reply.
 #[derive(Debug, Clone)]
-pub(super) struct AnalyticsSeriesPoint {
+pub(crate) struct AnalyticsSeriesPoint {
     pub epoch: i64,
     pub cost: f64,
     pub tokens: i64,
@@ -360,7 +361,7 @@ pub(super) struct AnalyticsSeriesPoint {
 /// `session_id`, `range`, `metric`) echo the request so React can drop a stale
 /// reply across rapid filter/session changes.
 #[derive(Debug, Clone)]
-pub(super) struct AnalyticsResult {
+pub(crate) struct AnalyticsResult {
     pub req_seq: u64,
     pub scope: String,
     pub session_id: Option<String>,
@@ -430,7 +431,7 @@ fn analytics_window(range: &str) -> (i64, crate::model::usage::BucketSize, usize
 /// `None` for "all". `range` is `"today"`/`"7d"`/`"30d"`/`"year"`; `metric` is
 /// `"cost"`/`"tokens"` (host-side projection is identical either way — the
 /// metric only drives which series field the chart scales against).
-pub(super) fn compute_analytics(
+pub(crate) fn compute_analytics(
     req_seq: u64,
     scope: String,
     session: Option<String>,

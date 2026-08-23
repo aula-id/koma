@@ -11,10 +11,9 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::mode::{HubPane, SessionHub, SessionKind};
 use crate::controller::input::is_ctrl;
-use crate::ipc::proto::SessionStatus;
 
 use super::super::manage;
-use super::swapper::SwapperOutcome;
+use super::swapper::{ProbeSnap, SwapperOutcome};
 
 /// Apply one key to the swapper's `hub`, returning `Some(outcome)` if it resolves the
 /// swapper (Enter/Esc/Ctrl+C) or `None` if it was a navigation/edit key (state mutated
@@ -39,7 +38,7 @@ use super::swapper::SwapperOutcome;
 pub(super) fn handle_swapper_key(
     hub: &mut SessionHub,
     key: &KeyEvent,
-    snap_tx: &mpsc::Sender<Vec<SessionStatus>>,
+    snap_tx: &mpsc::Sender<ProbeSnap>,
     source: &super::swapper::DiscoverySource,
 ) -> Option<SwapperOutcome> {
     // --- Ctrl+X: two-step kill (arm → confirm) on the focused live session ---
@@ -131,13 +130,13 @@ pub(super) fn handle_swapper_key(
 
 fn handle_ctrl_x_nuke(
     hub: &mut SessionHub,
-    snap_tx: &mpsc::Sender<Vec<SessionStatus>>,
+    snap_tx: &mpsc::Sender<ProbeSnap>,
     source: &super::swapper::DiscoverySource,
 ) -> Option<SwapperOutcome> {
     match hub.focus {
         HubPane::Cooking => handle_ctrl_x_cooking_nuke(hub, snap_tx, source),
         HubPane::History => {
-            handle_ctrl_x_history_delete(hub);
+            handle_ctrl_x_history_delete(hub, snap_tx, source);
             None
         }
     }
@@ -164,7 +163,7 @@ fn handle_ctrl_x_nuke(
 /// Always returns `None` — a kill never resolves the swapper; the user keeps picking.
 fn handle_ctrl_x_cooking_nuke(
     hub: &mut SessionHub,
-    snap_tx: &mpsc::Sender<Vec<SessionStatus>>,
+    snap_tx: &mpsc::Sender<ProbeSnap>,
     source: &super::swapper::DiscoverySource,
 ) -> Option<SwapperOutcome> {
     // Resolve the focused row + its session id; bail (arm nothing) on the synthetic
@@ -193,7 +192,7 @@ fn handle_ctrl_x_cooking_nuke(
         match source {
             super::swapper::DiscoverySource::Local => {
                 manage::kill_session_daemon(&target_id);
-                let _ = snap_tx.send(manage::list_live_sessions());
+                let _ = snap_tx.send(ProbeSnap::Local(manage::list_live_sessions()));
             }
             super::swapper::DiscoverySource::Remote { target, password } => {
                 let auth = password
@@ -207,21 +206,11 @@ fn handle_ctrl_x_cooking_nuke(
                     auth.as_ref(),
                     &target_id,
                 );
-                // Re-list over SSH so the killed row drops from COOKING.
-                let live = crate::remote::sessions::list_sessions_over_ssh(&target, auth.as_ref())
-                    .map(|discovered| {
-                        discovered
-                            .into_iter()
-                            .map(|d| SessionStatus {
-                                session_id: d.session_id,
-                                name: d.name,
-                                pwd: d.pwd,
-                                working: d.working,
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let _ = snap_tx.send(live);
+                // Re-list over SSH so the killed row drops from COOKING into HISTORY.
+                let discovered =
+                    crate::remote::sessions::list_sessions_over_ssh(&target, auth.as_ref())
+                        .unwrap_or_default();
+                let _ = snap_tx.send(ProbeSnap::Remote(discovered));
             }
         }
     });
@@ -231,19 +220,25 @@ fn handle_ctrl_x_cooking_nuke(
 
 /// Handle a `Ctrl+X` press on the HISTORY pane: two-step PHYSICAL delete of the
 /// on-disk session (arm → confirm). First press arms `pending_delete` on the
-/// focused row's session UUID; a second press on the SAME row deletes the
-/// session directory + its registry row via [`crate::model::store::delete_session`],
-/// drops it from the in-memory `history` list, and refilters so it vanishes
-/// immediately (the background probe only refreshes COOKING — history is
-/// client-owned here). Irreversible. No-op on an empty filtered view.
-fn handle_ctrl_x_history_delete(hub: &mut SessionHub) {
+/// focused row's session UUID; a second press on the SAME row deletes it.
+///
+/// Local rows call [`crate::model::store::delete_session`] on the real path.
+/// Remote rows (tagged `remote_host`, synthetic path) call
+/// [`crate::remote::sessions::delete_session_over_ssh`] and refresh via `snap_tx`
+/// — never `store::delete_session` on a synthetic remote path.
+/// Irreversible. No-op on an empty filtered view.
+fn handle_ctrl_x_history_delete(
+    hub: &mut SessionHub,
+    snap_tx: &mpsc::Sender<ProbeSnap>,
+    source: &super::swapper::DiscoverySource,
+) {
     let real = match hub.selected_history_real_idx() {
         Some(r) => r,
         None => return,
     };
-    let (path, uuid) = match hub.history.get(real) {
+    let (path, uuid, remote_host) = match hub.history.get(real) {
         Some(e) => match e.path.file_name().and_then(|n| n.to_str()) {
-            Some(id) => (e.path.clone(), id.to_string()),
+            Some(id) => (e.path.clone(), id.to_string(), e.remote_host.clone()),
             None => return,
         },
         None => return,
@@ -253,9 +248,42 @@ fn handle_ctrl_x_history_delete(hub: &mut SessionHub) {
         hub.pending_delete = Some(uuid);
         return;
     }
-    // Second press on the same row → CONFIRM = physical delete (disk + registry).
-    let _ = crate::model::store::delete_session(&path);
+    // Second press on the same row → CONFIRM = physical delete.
     hub.pending_delete = None;
+
+    // Remote history: SSH delete + full re-list. Never touch laptop disk.
+    if remote_host.is_some() {
+        if let super::swapper::DiscoverySource::Remote { target, password } = source.clone() {
+            let snap_tx = snap_tx.clone();
+            // Drop the row immediately so the UI feels snappy; probe rebuild confirms.
+            if real < hub.history.len() {
+                hub.history.remove(real);
+            }
+            hub.refilter_history();
+            std::thread::spawn(move || {
+                let auth = password
+                    .as_deref()
+                    .map(|p| crate::remote::auth::SshAuth::new(p.to_string()))
+                    .transpose()
+                    .ok()
+                    .flatten();
+                let _ = crate::remote::sessions::delete_session_over_ssh(
+                    &target,
+                    auth.as_ref(),
+                    &uuid,
+                );
+                let discovered =
+                    crate::remote::sessions::list_sessions_over_ssh(&target, auth.as_ref())
+                        .unwrap_or_default();
+                let _ = snap_tx.send(ProbeSnap::Remote(discovered));
+            });
+            return;
+        }
+        // Tagged remote but source is local (shouldn't happen) — refuse local delete.
+        return;
+    }
+
+    let _ = crate::model::store::delete_session(&path);
     if real < hub.history.len() {
         hub.history.remove(real);
     }
@@ -290,18 +318,18 @@ fn resolve_enter(hub: &SessionHub) -> Option<SwapperOutcome> {
         HubPane::History => match hub.selected_history_real_idx() {
             // A history row → derive the session UUID from the on-disk dir name (the path's
             // final component IS the session id), then `client_run` create-or-LOADs it.
-            // A path with no final component (shouldn't happen for a real session dir) →
-            // stay in the picker rather than pick a bogus id.
-            Some(real) => hub
-                .history
-                .get(real)
-                .and_then(|h| h.path.file_name())
-                .and_then(|n| n.to_str())
-                .map(|id| SwapperOutcome::Pick {
-                    session_id: id.to_string(),
-                    remote_host: None,
-                    new_session: false,
-                }),
+            // Propagate `remote_host` so remote history resumes over SSH without a laptop
+            // registry stub. A path with no final component → stay in the picker.
+            Some(real) => hub.history.get(real).and_then(|h| {
+                h.path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|id| SwapperOutcome::Pick {
+                        session_id: id.to_string(),
+                        remote_host: h.remote_host.clone(),
+                        new_session: false,
+                    })
+            }),
             // Empty filtered history (e.g. a search that matched nothing) → stay.
             None => None,
         },

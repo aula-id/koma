@@ -13,7 +13,7 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
 
-      version = "0.3.26";
+      version = "0.3.27";
 
       mkPackages = system:
         let
@@ -52,10 +52,23 @@
           # `npm install` inside build.rs has no network access in the Nix sandbox.
           # Pre-fetch the exact tarballs `package-lock.json` pins into a local cache
           # and point npm at it in offline mode so that install step still works.
+          #
+          # Hash lives in src-webgui/npm-deps-hash (NOT inlined here) so lockfile
+          # bumps don't require editing flake.nix. Refresh with:
+          #   ./scripts/update-webgui-npm-deps.sh
+          # CI runs that script with --check before `nix flake check`.
           webguiNpmDeps = pkgs.fetchNpmDeps {
             name = "koma-webgui-npm-deps";
-            src = ./src-webgui;
-            hash = "sha256-imlj4GAdWKUNIzB8qQfv3s/PDvMzk+AkC57RfYag54g=";
+            # Only the lock inputs — not the whole React tree — so source noise
+            # cannot invalidate the fixed-output hash.
+            src = lib.fileset.toSource {
+              root = ./src-webgui;
+              fileset = lib.fileset.unions [
+                ./src-webgui/package.json
+                ./src-webgui/package-lock.json
+              ];
+            };
+            hash = lib.fileContents ./src-webgui/npm-deps-hash;
           };
 
           # `useSystemOpenssl = true` links the system OpenSSL instead of compiling
