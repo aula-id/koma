@@ -808,6 +808,21 @@ pub(super) enum HostCtl {
         character: u32,
         request_id: String,
     },
+    /// `textDocument/references` — reply `LspReferences` with `request_id`.
+    LspReferences {
+        root: String,
+        path: String,
+        line: u32,
+        character: u32,
+        include_declaration: bool,
+        request_id: String,
+    },
+    /// `textDocument/documentSymbol` — reply `LspDocumentSymbol` with `request_id`.
+    LspDocumentSymbol {
+        root: String,
+        path: String,
+        request_id: String,
+    },
     /// Import-graph visualization: call the linker daemon's
     /// `Visualization` query and push the result back as an `ImportGraph` envelope.
     #[cfg(feature = "linker")]

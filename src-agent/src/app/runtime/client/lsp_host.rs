@@ -196,7 +196,10 @@ fn is_managed_installable(id: &str) -> bool {
 
 use std::sync::{Arc, Mutex};
 
-use super::push_proto::{push_lsp_completion, push_lsp_definition, push_lsp_hover};
+use super::push_proto::{
+    push_lsp_completion, push_lsp_definition, push_lsp_document_symbol, push_lsp_hover,
+    push_lsp_references,
+};
 use super::HostCtl;
 use crate::lsp::LspManager;
 
@@ -296,6 +299,39 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                 };
                 push_lsp_definition(&*push, request_id, locations, error);
             }
+            HostCtl::LspReferences {
+                root,
+                path,
+                line,
+                character,
+                include_declaration,
+                request_id,
+            } => {
+                let (locations, error) = match mgr.lock() {
+                    Ok(mut g) => {
+                        match g.references(&root, &path, line, character, include_declaration) {
+                            Ok(locs) => (locs, None),
+                            Err(e) => (Vec::new(), Some(e)),
+                        }
+                    }
+                    Err(_) => (Vec::new(), Some("lsp manager lock poisoned".into())),
+                };
+                push_lsp_references(&*push, request_id, locations, error);
+            }
+            HostCtl::LspDocumentSymbol {
+                root,
+                path,
+                request_id,
+            } => {
+                let (symbols, error) = match mgr.lock() {
+                    Ok(mut g) => match g.document_symbols(&root, &path) {
+                        Ok(syms) => (syms, None),
+                        Err(e) => (Vec::new(), Some(e)),
+                    },
+                    Err(_) => (Vec::new(), Some("lsp manager lock poisoned".into())),
+                };
+                push_lsp_document_symbol(&*push, request_id, symbols, error);
+            }
             _ => {}
         }
     });
@@ -312,5 +348,7 @@ pub(super) fn is_client_ctl(ctl: &HostCtl) -> bool {
             | HostCtl::LspCompletion { .. }
             | HostCtl::LspHover { .. }
             | HostCtl::LspDefinition { .. }
+            | HostCtl::LspReferences { .. }
+            | HostCtl::LspDocumentSymbol { .. }
     )
 }

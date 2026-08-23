@@ -1046,6 +1046,24 @@ pub(super) enum GuiReq {
         #[serde(rename = "requestId")]
         request_id: String,
     },
+    /// Monaco references / CodeLens. Reply: `LspReferences`.
+    LspReferences {
+        root: String,
+        path: String,
+        line: u32,
+        character: u32,
+        #[serde(default, rename = "includeDeclaration")]
+        include_declaration: bool,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    /// Monaco CodeLens symbol anchors. Reply: `LspDocumentSymbol`.
+    LspDocumentSymbol {
+        root: String,
+        path: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
 
     // ─── Frontend error logging ───────────────────────────────────────────────
     /// Write an error message to the global error log (`~/.koma/error.log`).

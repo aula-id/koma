@@ -2,6 +2,10 @@
 // diagnostic markers. Providers talk JSON-RPC through GuiReq; replies land as
 // PushEnvelope variants handled in the koma store, which resolves the matching
 // Promise here.
+//
+// Go-to / Peek:
+//   Models use stable file:// URIs. Peek keeps an inline widget on those models.
+//   Go-to (F12 / Ctrl+click) routes through registerEditorOpener → open coding tab.
 
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
 import { langFromPath } from './monaco-setup'
@@ -46,6 +50,23 @@ export type LspLocation = {
   }
 }
 
+export type LspDocumentSymbol = {
+  name: string
+  kind: number
+  range: {
+    startLine: number
+    startCharacter: number
+    endLine: number
+    endCharacter: number
+  }
+  selectionRange: {
+    startLine: number
+    startCharacter: number
+    endLine: number
+    endCharacter: number
+  }
+}
+
 type Pending<T> = {
   resolve: (v: T) => void
   reject: (e: Error) => void
@@ -57,6 +78,9 @@ const PENDING_MS = 12_000
 const pendingCompletion = new Map<string, Pending<LspCompletionItem[]>>()
 const pendingHover = new Map<string, Pending<LspHover | null>>()
 const pendingDefinition = new Map<string, Pending<LspLocation[]>>()
+const pendingReferences = new Map<string, Pending<LspLocation[]>>()
+const pendingDocumentSymbol = new Map<string, Pending<LspDocumentSymbol[]>>()
+const pendingFileText = new Map<string, Pending<string>>()
 
 let reqCounter = 0
 function mintId(prefix: string): string {
@@ -116,6 +140,45 @@ export function resolveLspDefinition(
   settle(pendingDefinition, requestId, locations ?? [], error)
 }
 
+export function resolveLspReferences(
+  requestId: string,
+  locations: LspLocation[],
+  error: string | null,
+): void {
+  settle(pendingReferences, requestId, locations ?? [], error)
+}
+
+export function resolveLspDocumentSymbol(
+  requestId: string,
+  symbols: LspDocumentSymbol[],
+  error: string | null,
+): void {
+  settle(pendingDocumentSymbol, requestId, symbols ?? [], error)
+}
+
+/**
+ * Resolve a FileRead that was issued for peek model materialization.
+ * Store still applies reduceFileRead; this only settles the bridge Promise.
+ */
+export function resolveLspFileText(
+  requestId: string,
+  content: string | null,
+  error: string | null,
+  binary?: boolean,
+  tooLarge?: boolean,
+): void {
+  if (!pendingFileText.has(requestId)) return
+  if (error) {
+    settle(pendingFileText, requestId, '', error)
+    return
+  }
+  if (binary || tooLarge) {
+    settle(pendingFileText, requestId, '', binary ? 'binary file' : 'file too large')
+    return
+  }
+  settle(pendingFileText, requestId, content ?? '', null)
+}
+
 // ─── URI helpers ─────────────────────────────────────────────────────────────
 
 /** file:// URI matching the host's path_to_uri. */
@@ -158,6 +221,10 @@ export function splitRootPath(
   return null
 }
 
+export function monacoUriFromPath(root: string, path: string): monaco.Uri {
+  return monaco.Uri.parse(pathToUri(root, path))
+}
+
 // ─── Markers ─────────────────────────────────────────────────────────────────
 
 const MARKER_OWNER = 'koma-lsp'
@@ -197,14 +264,7 @@ function lspSeverityToMonaco(s: number): monaco.MarkerSeverity {
   return monaco.MarkerSeverity.Hint
 }
 
-// ─── Provider registration (once) ────────────────────────────────────────────
-
-let providersReady = false
-
-type ReqFn = (body: object) => void
-type RootsFn = () => string[]
-
-type OpenLocationFn = (uri: string, line: number, character: number) => void
+// ─── Pending go-to reveal (tab open path) ────────────────────────────────────
 
 /** Pending go-to / diagnostic reveal applied when the target tab's model is ready. */
 let pendingReveal: {
@@ -236,21 +296,117 @@ export function consumeReveal(
   return { line: p.line, column: p.column }
 }
 
+// ─── Provider registration (once) ────────────────────────────────────────────
+
+let providersReady = false
+let openerReady = false
+
+type ReqFn = (body: object) => void
+type RootsFn = () => string[]
+/** Open a coding tab at 0-based line/character (go-to only; not peek). */
+type OpenLocationFn = (uri: string, line: number, character: number) => void
+
 /**
- * Register completion / hover / definition providers for all languages.
+ * Get-or-create a Monaco text model for a workspace file URI.
+ * Used by peek widgets and by the coding tab (stable file:// identity).
+ */
+export async function ensureModelForUri(
+  uriStr: string,
+  req: ReqFn,
+  getRoots: RootsFn,
+  preferText?: string | null,
+): Promise<monaco.editor.ITextModel | null> {
+  const existing = monaco.editor.getModel(monaco.Uri.parse(uriStr))
+  if (existing) {
+    if (preferText != null && existing.getValue() !== preferText) {
+      // Tab content is authoritative when provided.
+      existing.setValue(preferText)
+    }
+    return existing
+  }
+
+  const abs = uriToPath(uriStr)
+  if (!abs) return null
+  const roots = getRoots()
+  const split = splitRootPath(abs, roots)
+  if (!split) return null
+
+  let text = preferText ?? null
+  if (text == null) {
+    const requestId = mintId('ftxt')
+    const p = track(pendingFileText, requestId)
+    req({ r: 'FileRead', root: split.root, path: split.path, requestId })
+    try {
+      text = await p
+    } catch {
+      return null
+    }
+  }
+
+  const uri = monaco.Uri.parse(uriStr)
+  // Another concurrent ensure may have created it.
+  const raced = monaco.editor.getModel(uri)
+  if (raced) {
+    if (raced.getValue() !== text) raced.setValue(text)
+    stampModelPath(raced, split.root, split.path)
+    return raced
+  }
+
+  const model = monaco.editor.createModel(text, langFromPath(split.path), uri)
+  stampModelPath(model, split.root, split.path)
+  return model
+}
+
+function locationToMonaco(l: LspLocation): monaco.languages.Location {
+  return {
+    uri: monaco.Uri.parse(l.uri),
+    range: {
+      startLineNumber: l.range.startLine + 1,
+      startColumn: l.range.startCharacter + 1,
+      endLineNumber: l.range.endLine + 1,
+      endColumn: l.range.endCharacter + 1,
+    },
+  }
+}
+
+async function materializeLocations(
+  locations: LspLocation[],
+  req: ReqFn,
+  getRoots: RootsFn,
+): Promise<monaco.languages.Location[]> {
+  const out: monaco.languages.Location[] = []
+  // Dedupe URI loads.
+  const seen = new Set<string>()
+  for (const l of locations) {
+    if (!seen.has(l.uri)) {
+      seen.add(l.uri)
+      await ensureModelForUri(l.uri, req, getRoots)
+    }
+    if (monaco.editor.getModel(monaco.Uri.parse(l.uri))) {
+      out.push(locationToMonaco(l))
+    }
+  }
+  return out
+}
+
+/**
+ * Register completion / hover / definition / references / CodeLens providers.
  * Safe to call multiple times; only the first registration sticks.
  *
- * Go-to-definition cannot use Monaco's default file:// model service — our
- * editors use per-tab in-memory models. `openLocation` must open a coding tab
- * (and queue a line reveal) for cross-file targets.
+ * Definition returns real file:// Locations so Peek Definition stays inline.
+ * Go-to opens a coding tab via `registerEditorOpener` (see ensureEditorOpener).
  */
 export function ensureLspProviders(
   req: ReqFn,
   getRoots: RootsFn,
-  openLocation?: OpenLocationFn,
+  _openLocation?: OpenLocationFn,
 ): void {
   if (providersReady) return
   providersReady = true
+
+  // Ctrl/Cmd+click go-to must NOT open peek (VS Code default).
+  // multiCursorModifier is 'alt' so Ctrl/Cmd is free for definition links.
+  ensureEditorOpener(req, getRoots)
 
   const selector: monaco.languages.LanguageSelector = { language: '*' }
 
@@ -278,7 +434,6 @@ export function ensureLspProviders(
             endLineNumber: position.lineNumber,
             endColumn: position.column,
           }
-          // Expand range to word under cursor when possible.
           const word = model.getWordUntilPosition(position)
           if (word) {
             range.startColumn = word.startColumn
@@ -353,51 +508,207 @@ export function ensureLspProviders(
       try {
         const locations = await p
         if (!locations.length) return null
-        const first = locations[0]
-        // Compare absolute paths — model uses inmemory URI, LSP returns file://.
-        const targetAbs = uriToPath(first.uri)
-        const currentAbs = (() => {
-          const a = loc.path
-            ? `${loc.root.replace(/\/$/, '')}/${loc.path.replace(/^\//, '')}`
-            : loc.root
-          return a.replace(/\\/g, '/')
-        })()
-        const sameFile =
-          !!targetAbs && targetAbs.replace(/\\/g, '/') === currentAbs
-
-        // Always route through koma tabs — Monaco has no model for file:// URIs.
-        if (openLocation) {
-          openLocation(first.uri, first.range.startLine, first.range.startCharacter)
-        }
-
-        // Same file: return THIS model URI so Monaco can jump immediately.
-        if (sameFile) {
-          return {
-            uri: model.uri,
-            range: {
-              startLineNumber: first.range.startLine + 1,
-              startColumn: first.range.startCharacter + 1,
-              endLineNumber: first.range.endLine + 1,
-              endColumn: first.range.endCharacter + 1,
-            },
-          }
-        }
-        // Cross-file: tab open + reveal is handled by openLocation; returning a
-        // file:// Location would no-op (no matching Monaco model).
-        return null
+        // Materialize target models so Peek can show content inline, and so
+        // Go-to's editor opener can resolve the URI.
+        const mapped = await materializeLocations(locations, req, getRoots)
+        return mapped.length ? mapped : null
       } catch {
         return null
       }
     },
   })
+
+  monaco.languages.registerReferenceProvider(selector, {
+    provideReferences: async (model, position, context) => {
+      const loc = modelToRootPath(model, getRoots())
+      if (!loc) return null
+      const requestId = mintId('ref')
+      const p = track(pendingReferences, requestId)
+      req({
+        r: 'LspReferences',
+        root: loc.root,
+        path: loc.path,
+        line: position.lineNumber - 1,
+        character: position.column - 1,
+        includeDeclaration: !!context.includeDeclaration,
+        requestId,
+      })
+      try {
+        const locations = await p
+        if (!locations.length) return null
+        const mapped = await materializeLocations(locations, req, getRoots)
+        return mapped.length ? mapped : null
+      } catch {
+        return null
+      }
+    },
+  })
+
+  // VS Code-style "N references" CodeLens above symbols.
+  // Click sets cursor then peeks references (stock trigger uses current position).
+  const CODELENS_PEEK_REFS = 'koma.codelens.peekReferences'
+  monaco.editor.registerCommand(
+    CODELENS_PEEK_REFS,
+    (accessor, ...args: unknown[]) => {
+      void accessor
+      const payload = args[0] as
+        | { uri?: string; line?: number; column?: number }
+        | undefined
+      if (!payload?.uri || payload.line == null || payload.column == null) return
+      const editors = monaco.editor.getEditors()
+      const ed =
+        editors.find((e) => e.getModel()?.uri.toString() === payload.uri) ??
+        editors.find((e) => e.hasTextFocus()) ??
+        editors[0]
+      if (!ed) return
+      ed.setPosition({ lineNumber: payload.line, column: payload.column })
+      ed.focus()
+      void ed.getAction('editor.action.referenceSearch.trigger')?.run()
+    },
+  )
+
+  monaco.languages.registerCodeLensProvider(selector, {
+    provideCodeLenses: async (model) => {
+      const loc = modelToRootPath(model, getRoots())
+      if (!loc) return { lenses: [], dispose: () => {} }
+
+      const symId = mintId('sym')
+      const symP = track(pendingDocumentSymbol, symId)
+      req({
+        r: 'LspDocumentSymbol',
+        root: loc.root,
+        path: loc.path,
+        requestId: symId,
+      })
+
+      let symbols: LspDocumentSymbol[] = []
+      try {
+        symbols = await symP
+      } catch {
+        return { lenses: [], dispose: () => {} }
+      }
+
+      // Class, Method, Constructor, Enum, Interface, Function, Struct
+      const LENS_KINDS = new Set([5, 6, 9, 10, 11, 12, 23])
+      const candidates = symbols
+        .filter((s) => LENS_KINDS.has(s.kind))
+        .slice(0, 40)
+
+      const lenses: monaco.languages.CodeLens[] = []
+      const modelUri = model.uri.toString()
+      await Promise.all(
+        candidates.map(async (sym) => {
+          const refId = mintId('rlen')
+          const refP = track(pendingReferences, refId)
+          req({
+            r: 'LspReferences',
+            root: loc.root,
+            path: loc.path,
+            line: sym.selectionRange.startLine,
+            character: sym.selectionRange.startCharacter,
+            includeDeclaration: false,
+            requestId: refId,
+          })
+          let count = 0
+          try {
+            const refs = await refP
+            count = refs.length
+          } catch {
+            return
+          }
+          const title =
+            count === 0
+              ? '0 references'
+              : count === 1
+                ? '1 reference'
+                : `${count} references`
+          lenses.push({
+            range: {
+              startLineNumber: sym.range.startLine + 1,
+              startColumn: 1,
+              endLineNumber: sym.range.startLine + 1,
+              endColumn: 1,
+            },
+            command: {
+              id: CODELENS_PEEK_REFS,
+              title,
+              arguments: [
+                {
+                  uri: modelUri,
+                  line: sym.selectionRange.startLine + 1,
+                  column: Math.max(1, sym.selectionRange.startCharacter + 1),
+                },
+              ],
+            },
+          })
+        }),
+      )
+
+      lenses.sort((a, b) => a.range.startLineNumber - b.range.startLineNumber)
+      return { lenses, dispose: () => {} }
+    },
+  })
+}
+
+/**
+ * Go-to-definition for cross-file targets: open a coding tab instead of
+ * swapping the current editor model. Peek never calls this path.
+ */
+export function ensureEditorOpener(req: ReqFn, getRoots: RootsFn): void {
+  if (openerReady) return
+  openerReady = true
+
+  monaco.editor.registerEditorOpener({
+    openCodeEditor(source, resource, selectionOrPosition) {
+      const uriStr = resource.toString()
+      const abs = uriToPath(uriStr)
+      if (!abs) return false
+
+      // Same model already attached → let Monaco move the cursor.
+      const srcModel = source.getModel()
+      if (srcModel && srcModel.uri.toString() === uriStr) {
+        return false
+      }
+
+      let line = 0
+      let character = 0
+      if (selectionOrPosition) {
+        if ('startLineNumber' in selectionOrPosition) {
+          line = Math.max(0, selectionOrPosition.startLineNumber - 1)
+          character = Math.max(0, selectionOrPosition.startColumn - 1)
+        } else if ('lineNumber' in selectionOrPosition) {
+          line = Math.max(0, selectionOrPosition.lineNumber - 1)
+          character = Math.max(0, selectionOrPosition.column - 1)
+        }
+      }
+
+      // Ensure model exists (peek already did; go-to may race).
+      void ensureModelForUri(uriStr, req, getRoots)
+
+      // Dynamic import avoided — store is passed via openDiagnostic in ensureLspProviders call site.
+      // Call through a global hook set by the store bootstrap.
+      const open = goToHook
+      if (open) {
+        open(uriStr, line, character)
+        return true
+      }
+      return false
+    },
+  })
+}
+
+/** Set by the store so the editor opener can open coding tabs without a cycle. */
+let goToHook: OpenLocationFn | null = null
+
+export function setGoToDefinitionHandler(fn: OpenLocationFn): void {
+  goToHook = fn
 }
 
 function modelToRootPath(
   model: monaco.editor.ITextModel,
   roots: string[],
 ): { root: string; path: string } | null {
-  // Prefer metadata stamped by CodeEditorTab.
-  const meta = (model as unknown as { __komaRoot?: string; __komaPath?: string })
+  const meta = model as unknown as { __komaRoot?: string; __komaPath?: string }
   if (meta.__komaRoot && meta.__komaPath != null) {
     return { root: meta.__komaRoot, path: meta.__komaPath }
   }
