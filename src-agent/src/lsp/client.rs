@@ -169,11 +169,16 @@ impl LspManager {
     ) -> Result<(), String> {
         let abs = abs_path(root, path)?;
         let uri = path_to_uri(&abs);
-        // Empty languageId from the GUI → derive from extension.
-        let language_id = if language_id.is_empty() {
-            language_id_for_path(path)
-        } else {
+        // Prefer extension-derived LSP languageId (tsx → typescriptreact). The
+        // GUI Monarch map uses "typescript" for highlighting and must not win
+        // for didOpen — vtsls typechecks JSX as errors under plain typescript.
+        let derived = language_id_for_path(path);
+        let language_id = if derived != "plaintext" {
+            derived
+        } else if !language_id.is_empty() {
             language_id
+        } else {
+            derived
         };
         if let Some(existing) = self.docs.get(&uri) {
             // Same language: treat as a full-document change. Language switch:

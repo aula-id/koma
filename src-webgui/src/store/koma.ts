@@ -29,6 +29,7 @@ import {
   resolveLspFileText,
   uriToPath,
   queueReveal,
+  disposeCodingModel,
   type LspDiagnostic,
 } from '../lib/monaco-lsp'
 
@@ -2536,7 +2537,7 @@ type KomaState = {
   clearAgentSaving: (seq?: number) => void
   // ─── Coding panel ──────────────────────────────────────────────────────
   setActiveCodingRoot: (root: string | null) => void
-  openCodingFile: (root: string, path: string) => void
+  openCodingFile: (root: string, path: string, opts?: { force?: boolean }) => void
   saveCodingFile: (root: string, path: string) => void
   revertCodingFile: (root: string, path: string) => void
   updateCodingContent: (root: string, path: string, content: string) => void
@@ -5436,14 +5437,20 @@ export const useKoma = create<KomaState>((set, get) => ({
     }
     // Dirty codingFile tabs confirm before discard unless the caller already
     // collected an explicit force (floating dirty-close popover).
-    {
+    const closingCoding = (() => {
       const closing = get().ui.tabs.find((t) => t.id === id)
-      if (closing && closing.kind === 'codingFile' && !opts?.force) {
-        const f = get().coding.files[fileKey(closing.root, closing.path)]
-        if (f?.dirty) return
-      }
-      if (closing && closing.kind === 'codingFile') {
-        get().req({ r: 'LspDidClose', root: closing.root, path: closing.path })
+      return closing && closing.kind === 'codingFile' ? closing : null
+    })()
+    if (closingCoding && !opts?.force) {
+      const f = get().coding.files[fileKey(closingCoding.root, closingCoding.path)]
+      if (f?.dirty) return
+    }
+    if (closingCoding) {
+      get().req({ r: 'LspDidClose', root: closingCoding.root, path: closingCoding.path })
+      // Close-without-save must drop the dirty buffer + Monaco model; otherwise
+      // reopen restores unsaved edits (reduceFileRead refuses to clobber dirty).
+      if (opts?.force) {
+        disposeCodingModel(closingCoding.root, closingCoding.path)
       }
     }
     const closedAnalytics = id === 'analytics'
@@ -5455,8 +5462,18 @@ export const useKoma = create<KomaState>((set, get) => ({
       // always valid (tabs[0] is the chat tab), so this never underflows.
       const activeTabId =
         s.ui.activeTabId === id ? s.ui.tabs[idx - 1]?.id ?? 'chat' : s.ui.activeTabId
+
+      let coding = s.coding
+      if (closingCoding && opts?.force) {
+        const key = fileKey(closingCoding.root, closingCoding.path)
+        const { [key]: _dropped, ...files } = coding.files
+        const { [key]: _req, ..._readReq } = coding._readReq
+        coding = { ...coding, files, _readReq }
+      }
+
       return {
         ui: { ...s.ui, tabs, activeTabId },
+        coding,
         // Closing the Analytics tab drops its in-flight state so a later reopen
         // starts clean (filters preserved as user preference; data cleared so a
         // stale session-scoped payload can't reappear).
@@ -5628,16 +5645,35 @@ export const useKoma = create<KomaState>((set, get) => ({
     })
   },
   setActiveCodingRoot: (root) => set((s) => ({ coding: { ...s.coding, activeRoot: root } })),
-  openCodingFile: (root, path) => {
+  openCodingFile: (root, path, opts) => {
     const id = `coding:${root}:${path}`
     const key = fileKey(root, path)
     const requestId = mintRequestId()
+    const force = !!opts?.force
     set((s) => {
       const exists = s.ui.tabs.some((t) => t.id === id)
       const tabs: Tab[] = exists
         ? s.ui.tabs
         : [...s.ui.tabs, { id, kind: 'codingFile', root, path, title: codingBaseName(path) }]
       const prev = s.coding.files[key]
+      // force (Revert): clear dirty/conflict so FileRead may replace the buffer.
+      // Without this, reduceFileRead keeps local edits and Revert is a no-op.
+      const nextFile = force
+        ? emptyFileState({
+            content: prev?.savedContent ?? null,
+            savedContent: prev?.savedContent ?? null,
+            fingerprint: prev?.fingerprint ?? '',
+            dirty: false,
+            conflict: false,
+            loading: true,
+          })
+        : emptyFileState({
+            content: prev?.content ?? null,
+            savedContent: prev?.savedContent ?? null,
+            fingerprint: prev?.fingerprint ?? '',
+            dirty: prev?.dirty ?? false,
+            loading: true,
+          })
       return {
         ui: { ...s.ui, tabs, activeTabId: id },
         coding: {
@@ -5645,13 +5681,7 @@ export const useKoma = create<KomaState>((set, get) => ({
           _readReq: { ...s.coding._readReq, [key]: requestId },
           files: {
             ...s.coding.files,
-            [key]: emptyFileState({
-              content: prev?.content ?? null,
-              savedContent: prev?.savedContent ?? null,
-              fingerprint: prev?.fingerprint ?? '',
-              dirty: prev?.dirty ?? false,
-              loading: true,
-            }),
+            [key]: nextFile,
           },
         },
       }
@@ -5679,7 +5709,7 @@ export const useKoma = create<KomaState>((set, get) => ({
     })
   },
   revertCodingFile: (root, path) => {
-    get().openCodingFile(root, path)
+    get().openCodingFile(root, path, { force: true })
   },
   updateCodingContent: (root, path, content) => {
     const key = fileKey(root, path)

@@ -763,6 +763,82 @@ export function stampModelPath(
 }
 
 export function languageIdForPath(path: string): string {
-  // Prefer Monaco's mapped id; host accepts the same strings.
-  return langFromPath(path)
+  // LSP languageId (not Monaco Monarch). Must match host language_id_for_path —
+  // tsx/jsx need the React variants or vtsls typechecks them as plain TS/JS.
+  const file = path.split(/[/\\]/).pop() ?? path
+  const dot = file.lastIndexOf('.')
+  const ext = dot > 0 ? file.slice(dot + 1).toLowerCase() : ''
+  switch (ext) {
+    case 'rs':
+      return 'rust'
+    case 'ts':
+    case 'mts':
+    case 'cts':
+      return 'typescript'
+    case 'tsx':
+      return 'typescriptreact'
+    case 'js':
+    case 'mjs':
+    case 'cjs':
+      return 'javascript'
+    case 'jsx':
+      return 'javascriptreact'
+    case 'py':
+    case 'pyi':
+      return 'python'
+    case 'go':
+      return 'go'
+    case 'c':
+      return 'c'
+    case 'h':
+    case 'hpp':
+    case 'hh':
+    case 'cpp':
+    case 'cc':
+    case 'cxx':
+      return 'cpp'
+    case 'json':
+    case 'jsonc':
+      return 'json'
+    case 'html':
+    case 'htm':
+    case 'xhtml':
+      return 'html'
+    case 'css':
+      return 'css'
+    case 'scss':
+      return 'scss'
+    case 'less':
+      return 'less'
+    case 'sh':
+    case 'bash':
+    case 'zsh':
+      return 'shellscript'
+    case 'toml':
+      return 'toml'
+    case 'lua':
+      return 'lua'
+    case 'zig':
+    case 'zon':
+      return 'zig'
+    case 'nix':
+      return 'nix'
+    case 'md':
+    case 'markdown':
+      return 'markdown'
+    case 'yaml':
+    case 'yml':
+      return 'yaml'
+    default:
+      return langFromPath(path)
+  }
+}
+
+/** Drop a workspace file's Monaco model (discard / close-without-save). */
+export function disposeCodingModel(root: string, path: string): void {
+  const uri = monacoUriFromPath(root, path)
+  const model = monaco.editor.getModel(uri)
+  if (!model) return
+  monaco.editor.setModelMarkers(model, MARKER_OWNER, [])
+  model.dispose()
 }
