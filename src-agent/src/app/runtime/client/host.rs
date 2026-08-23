@@ -990,6 +990,12 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
+            Ok(HostCtl::LspCompletionResolve { root, path, item, request_id }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspCompletionResolve { root, path, item, request_id },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
             Ok(HostCtl::LspHover { root, path, line, character, request_id }) => {
                 super::lsp_host::handle_client_ctl(
                     HostCtl::LspHover { root, path, line, character, request_id },
@@ -1987,6 +1993,12 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::LspCompletion { root, path, line, character, request_id }) => {
                 super::lsp_host::handle_client_ctl(
                     HostCtl::LspCompletion { root, path, line, character, request_id },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspCompletionResolve { root, path, item, request_id }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspCompletionResolve { root, path, item, request_id },
                     std::sync::Arc::clone(lsp_manager),
                 );
             }

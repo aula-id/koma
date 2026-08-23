@@ -198,8 +198,8 @@ fn is_managed_installable(id: &str) -> bool {
 use std::sync::{Arc, Mutex};
 
 use super::push_proto::{
-    push_lsp_completion, push_lsp_definition, push_lsp_document_symbol, push_lsp_hover,
-    push_lsp_references,
+    push_lsp_completion, push_lsp_completion_resolve, push_lsp_definition,
+    push_lsp_document_symbol, push_lsp_hover, push_lsp_references,
 };
 use super::HostCtl;
 use crate::lsp::LspManager;
@@ -267,6 +267,21 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                     Err(_) => (Vec::new(), Some("lsp manager lock poisoned".into())),
                 };
                 push_lsp_completion(&*push, request_id, items, error);
+            }
+            HostCtl::LspCompletionResolve {
+                root,
+                path,
+                item,
+                request_id,
+            } => {
+                let (resolved, error) = match mgr.lock() {
+                    Ok(mut g) => match g.resolve_completion(&root, &path, *item) {
+                        Ok(it) => (Some(it), None),
+                        Err(e) => (None, Some(e)),
+                    },
+                    Err(_) => (None, Some("lsp manager lock poisoned".into())),
+                };
+                push_lsp_completion_resolve(&*push, request_id, resolved, error);
             }
             HostCtl::LspHover {
                 root,
@@ -347,6 +362,7 @@ pub(super) fn is_client_ctl(ctl: &HostCtl) -> bool {
             | HostCtl::LspDidSave { .. }
             | HostCtl::LspDidClose { .. }
             | HostCtl::LspCompletion { .. }
+            | HostCtl::LspCompletionResolve { .. }
             | HostCtl::LspHover { .. }
             | HostCtl::LspDefinition { .. }
             | HostCtl::LspReferences { .. }

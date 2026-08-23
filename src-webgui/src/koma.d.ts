@@ -559,6 +559,7 @@ declare global {
     | { r: 'LspDidSave'; root: string; path: string; text?: string | null }
     | { r: 'LspDidClose'; root: string; path: string }
     | { r: 'LspCompletion'; root: string; path: string; line: number; character: number; requestId: string }
+    | { r: 'LspCompletionResolve'; root: string; path: string; item: LspCompletionItem; requestId: string }
     | { r: 'LspHover'; root: string; path: string; line: number; character: number; requestId: string }
     | { r: 'LspDefinition'; root: string; path: string; line: number; character: number; requestId: string }
     | { r: 'LspReferences'; root: string; path: string; line: number; character: number; includeDeclaration?: boolean; requestId: string }
@@ -704,6 +705,7 @@ declare global {
     | { k: 'LspInstall'; id: string; pct: number; error: string | null }
     | { k: 'LspDiagnostics'; uri: string; diagnostics: LspDiagnostic[] }
     | { k: 'LspCompletion'; requestId: string; items: LspCompletionItem[]; error: string | null }
+    | { k: 'LspCompletionResolve'; requestId: string; item: LspCompletionItem | null; error: string | null }
     | { k: 'LspHover'; requestId: string; hover: LspHover | null; error: string | null }
     | { k: 'LspDefinition'; requestId: string; locations: LspLocation[]; error: string | null }
     | { k: 'LspReferences'; requestId: string; locations: LspLocation[]; error: string | null }
@@ -722,19 +724,31 @@ declare global {
     code?: string
   }
 
-  type LspCompletionItem = {
-    label: string
-    kind?: number
-    detail?: string
-    insertText?: string
-    documentation?: string
-  }
-
   type LspRange = {
     startLine: number
     startCharacter: number
     endLine: number
     endCharacter: number
+  }
+
+  type LspTextEdit = {
+    range: LspRange
+    newText: string
+  }
+
+  type LspCompletionItem = {
+    label: string
+    kind?: number
+    detail?: string
+    labelDescription?: string
+    insertText?: string
+    insertTextFormat?: number
+    documentation?: string
+    sortText?: string
+    filterText?: string
+    textEdit?: LspTextEdit
+    additionalTextEdits?: LspTextEdit[]
+    data?: unknown
   }
 
   type LspHover = {

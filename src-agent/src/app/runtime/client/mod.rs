@@ -818,6 +818,13 @@ pub(super) enum HostCtl {
         character: u32,
         request_id: String,
     },
+    /// `completionItem/resolve` — reply `LspCompletionResolve` with `request_id`.
+    LspCompletionResolve {
+        root: String,
+        path: String,
+        item: Box<crate::lsp::LspCompletionItem>,
+        request_id: String,
+    },
     /// `textDocument/hover` — reply `LspHover` with `request_id`.
     LspHover {
         root: String,
