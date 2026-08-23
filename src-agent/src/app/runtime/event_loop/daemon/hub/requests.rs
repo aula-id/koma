@@ -189,6 +189,20 @@ impl DaemonHub {
                 self.file_search(idx, state, query, limit);
             }
 
+            ClientRequest::UsagePreview { session, scope } => {
+                self.usage_preview(idx, session, scope);
+            }
+
+            ClientRequest::Analytics {
+                req_seq,
+                session,
+                scope,
+                range,
+                metric,
+            } => {
+                self.analytics(idx, req_seq, session, scope, range, metric);
+            }
+
             ClientRequest::ListModels { provider } => {
                 self.list_models(idx, state, handle, provider);
             }
@@ -733,6 +747,8 @@ impl DaemonHub {
             | ClientRequest::Status
             | ClientRequest::RemoveAttachment { .. }
             | ClientRequest::FileSearch { .. }
+            | ClientRequest::UsagePreview { .. }
+            | ClientRequest::Analytics { .. }
             | ClientRequest::ListModels { .. }
             | ClientRequest::ListRoutes { .. }
             | ClientRequest::GetSettings

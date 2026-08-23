@@ -165,6 +165,16 @@ pub(super) fn push_loop(
     // When set, this fold is an SSH-bridged remote session: leave/kill returns to
     // the remote hub (not the local swapper), and KillSession uses remote SSH kill.
     remote_ctx: Option<&super::remote_ctl::RemoteCtx>,
+    // When set, Coding panel File* ops go to `koma remote-fs` over SSH (local
+    // session_workdirs_for is wrong for remote attach).
+    remote_fs: Option<&super::remote_fs_client::RemoteFsClient>,
+    // When set, Source Control Git* ops go to `koma remote-git` over SSH (local
+    // repo_root_for is wrong for remote attach).
+    remote_git: Option<&super::remote_git_client::RemoteGitClient>,
+    // When set, Import Graph ops go to `koma remote-linker` over SSH (local
+    // session_workdirs_for / local linker daemon are wrong for remote attach).
+    #[cfg(feature = "linker")]
+    remote_linker: Option<&super::remote_linker_client::RemoteLinkerClient>,
 ) -> HostTransition {
     use std::sync::mpsc::TryRecvError;
 
@@ -606,258 +616,278 @@ pub(super) fn push_loop(
                         let _ = tx.send(result);
                     });
                 }
-                // Explore GIT panel + Settings SSH-key vault: NEVER touch the daemon
-                // (host-side only, regardless of attach state) — each spawns its
-                // blocking git/fs work off this thread via the shared `git_host`
-                // bodies (also used by the detached `host_swapper` twin); a mutation
-                // ALSO sends a follow-up refreshed status/list over the EXISTING
-                // status/list channel, reusing whichever drain point a plain
-                // fetch uses (git: (b-sex)/(b-sept)/(b-oct); keys:
-                // (b-undec)/(b-tredec)/(b-duodec)).
-                Ok(super::HostCtl::GitStatus) => {
-                    git_host::spawn_git_status_attached(
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                    );
+                // Explore GIT panel: host-local for local sessions; remote attach
+                // routes through `koma remote-git` (never laptop tooling against remote paths).
+                // SSH-key vault (Key*) stays host-local below — keys live in ~/.koma/keys
+                // on the GUI host.
+                Ok(ctl @ super::HostCtl::GitStatus)
+                | Ok(ctl @ super::HostCtl::GitDiff { .. })
+                | Ok(ctl @ super::HostCtl::GitStage { .. })
+                | Ok(ctl @ super::HostCtl::GitUnstage { .. })
+                | Ok(ctl @ super::HostCtl::GitDiscard { .. })
+                | Ok(ctl @ super::HostCtl::GitCommit { .. })
+                | Ok(ctl @ super::HostCtl::SetGitKey { .. })
+                | Ok(ctl @ super::HostCtl::GitFetch)
+                | Ok(ctl @ super::HostCtl::GitPull)
+                | Ok(ctl @ super::HostCtl::GitPush { .. })
+                | Ok(ctl @ super::HostCtl::GitStash)
+                | Ok(ctl @ super::HostCtl::GitStashPop)
+                | Ok(ctl @ super::HostCtl::GitStashList)
+                | Ok(ctl @ super::HostCtl::GitBranchList { .. })
+                | Ok(ctl @ super::HostCtl::GitRepos)
+                | Ok(ctl @ super::HostCtl::SetActiveRepo { .. })
+                | Ok(ctl @ super::HostCtl::GitCheckout { .. })
+                | Ok(ctl @ super::HostCtl::GitCreateBranch { .. })
+                | Ok(ctl @ super::HostCtl::GitCherryPick { .. })
+                | Ok(ctl @ super::HostCtl::GitRevert { .. })
+                | Ok(ctl @ super::HostCtl::GitReset { .. })
+                | Ok(ctl @ super::HostCtl::GitMerge { .. })
+                | Ok(ctl @ super::HostCtl::GitRebase { .. })
+                | Ok(ctl @ super::HostCtl::GitOpAbort { .. })
+                | Ok(ctl @ super::HostCtl::GitOpContinue { .. })
+                | Ok(ctl @ super::HostCtl::GitGraph { .. })
+                | Ok(ctl @ super::HostCtl::GitCommitDetail { .. })
+                | Ok(ctl @ super::HostCtl::GitCommitDiff { .. })
+                | Ok(ctl @ super::HostCtl::GitActivity { .. }) => {
+                    if let Some(rg) = remote_git {
+                        rg.handle_git_ctl(&ctl, push);
+                    } else if remote_ctx.is_some() {
+                        // Remote attach but remote-git child failed — never local tooling.
+                        push_remote_git_unavailable(&ctl, push);
+                    } else {
+                        match ctl {
+                            super::HostCtl::GitStatus => {
+                                git_host::spawn_git_status_attached(
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                );
+                            }
+                            super::HostCtl::GitDiff { path, staged } => {
+                                git_host::spawn_git_diff_attached(
+                                    git_diff_tx.clone(),
+                                    current_owned.clone(),
+                                    path,
+                                    staged,
+                                );
+                            }
+                            super::HostCtl::GitStage { paths } => {
+                                git_host::spawn_git_stage_attached(
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                    paths,
+                                );
+                            }
+                            super::HostCtl::GitUnstage { paths } => {
+                                git_host::spawn_git_unstage_attached(
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                    paths,
+                                );
+                            }
+                            super::HostCtl::GitDiscard { paths } => {
+                                git_host::spawn_git_discard_attached(
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                    paths,
+                                );
+                            }
+                            super::HostCtl::GitCommit { message } => {
+                                git_host::spawn_git_commit_attached(
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                    message,
+                                );
+                            }
+                            super::HostCtl::SetGitKey { name } => {
+                                git_host::spawn_set_git_key_attached(
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                    name,
+                                );
+                            }
+                            super::HostCtl::GitFetch => {
+                                git_host::spawn_git_fetch_attached(
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                );
+                            }
+                            super::HostCtl::GitPull => {
+                                git_host::spawn_git_pull_attached(
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                );
+                            }
+                            super::HostCtl::GitPush { mode, root } => {
+                                git_host::spawn_git_push_attached(
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                    mode,
+                                    root,
+                                );
+                            }
+                            super::HostCtl::GitStash => {
+                                git_host::spawn_git_stash_attached(
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                );
+                            }
+                            super::HostCtl::GitStashPop => {
+                                git_host::spawn_git_stash_pop_attached(
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                );
+                            }
+                            super::HostCtl::GitStashList => {
+                                git_host::spawn_git_stash_list_attached(
+                                    stash_list_tx.clone(),
+                                    current_owned.clone(),
+                                );
+                            }
+                            super::HostCtl::GitBranchList { request_id } => {
+                                git_host::spawn_git_branch_list_attached(
+                                    branch_list_tx.clone(),
+                                    current_owned.clone(),
+                                    request_id,
+                                );
+                            }
+                            super::HostCtl::GitRepos => {
+                                git_host::spawn_git_repos_attached(
+                                    repo_list_tx.clone(),
+                                    current_owned.clone(),
+                                );
+                            }
+                            super::HostCtl::SetActiveRepo { root } => {
+                                git_host::spawn_set_active_repo_attached(
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                    root,
+                                );
+                            }
+                            super::HostCtl::GitCheckout { ref_name, root } => {
+                                git_host::spawn_git_checkout_attached(
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                    ref_name,
+                                    root,
+                                );
+                            }
+                            super::HostCtl::GitCreateBranch {
+                                name,
+                                start,
+                                checkout,
+                                root,
+                            } => {
+                                let (ot, st, cur) = (
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                );
+                                git_host::spawn_git_create_branch_attached(
+                                    ot, st, cur, name, start, checkout, root,
+                                );
+                            }
+                            super::HostCtl::GitCherryPick { sha } => {
+                                let (ot, st, cur) = (
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                );
+                                git_host::spawn_git_cherry_pick_attached(ot, st, cur, sha);
+                            }
+                            super::HostCtl::GitRevert { sha } => {
+                                let (ot, st, cur) = (
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                );
+                                git_host::spawn_git_revert_attached(ot, st, cur, sha);
+                            }
+                            super::HostCtl::GitReset { sha, mode } => {
+                                let (ot, st, cur) = (
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                );
+                                git_host::spawn_git_reset_attached(ot, st, cur, sha, mode);
+                            }
+                            super::HostCtl::GitMerge { ref_name } => {
+                                let (ot, st, cur) = (
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                );
+                                git_host::spawn_git_merge_attached(ot, st, cur, ref_name);
+                            }
+                            super::HostCtl::GitRebase { upstream, branch } => {
+                                let (ot, st, cur) = (
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                );
+                                git_host::spawn_git_rebase_attached(ot, st, cur, upstream, branch);
+                            }
+                            super::HostCtl::GitOpAbort { kind } => {
+                                let (ot, st, cur) = (
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                );
+                                git_host::spawn_git_op_abort_attached(ot, st, cur, kind);
+                            }
+                            super::HostCtl::GitOpContinue { kind } => {
+                                let (ot, st, cur) = (
+                                    git_op_tx.clone(),
+                                    git_status_tx.clone(),
+                                    current_owned.clone(),
+                                );
+                                git_host::spawn_git_op_continue_attached(ot, st, cur, kind);
+                            }
+                            super::HostCtl::GitGraph { limit, skip } => {
+                                git_host::spawn_git_graph_attached(
+                                    git_graph_tx.clone(),
+                                    current_owned.clone(),
+                                    limit,
+                                    skip,
+                                );
+                            }
+                            super::HostCtl::GitCommitDetail { sha } => {
+                                git_host::spawn_commit_detail_attached(
+                                    commit_detail_tx.clone(),
+                                    current_owned.clone(),
+                                    sha,
+                                );
+                            }
+                            super::HostCtl::GitCommitDiff { sha, path } => {
+                                git_host::spawn_commit_diff_attached(
+                                    commit_diff_tx.clone(),
+                                    current_owned.clone(),
+                                    sha,
+                                    path,
+                                );
+                            }
+                            super::HostCtl::GitActivity { path, limit } => {
+                                git_host::spawn_git_activity_attached(
+                                    activity_tx.clone(),
+                                    current_owned.clone(),
+                                    path,
+                                    limit,
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
                 }
-                Ok(super::HostCtl::GitDiff { path, staged }) => {
-                    git_host::spawn_git_diff_attached(
-                        git_diff_tx.clone(),
-                        current_owned.clone(),
-                        path,
-                        staged,
-                    );
-                }
-                Ok(super::HostCtl::GitStage { paths }) => {
-                    git_host::spawn_git_stage_attached(
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                        paths,
-                    );
-                }
-                Ok(super::HostCtl::GitUnstage { paths }) => {
-                    git_host::spawn_git_unstage_attached(
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                        paths,
-                    );
-                }
-                Ok(super::HostCtl::GitDiscard { paths }) => {
-                    git_host::spawn_git_discard_attached(
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                        paths,
-                    );
-                }
-                Ok(super::HostCtl::GitCommit { message }) => {
-                    git_host::spawn_git_commit_attached(
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                        message,
-                    );
-                }
-                Ok(super::HostCtl::SetGitKey { name }) => {
-                    git_host::spawn_set_git_key_attached(
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                        name,
-                    );
-                }
-                Ok(super::HostCtl::GitFetch) => {
-                    git_host::spawn_git_fetch_attached(
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                    );
-                }
-                Ok(super::HostCtl::GitPull) => {
-                    git_host::spawn_git_pull_attached(
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                    );
-                }
-                Ok(super::HostCtl::GitPush { mode, root }) => {
-                    git_host::spawn_git_push_attached(
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                        mode,
-                        root,
-                    );
-                }
-                // Source Control toolbar stash ops (GK4a): host-local, never the
-                // daemon. `GitStash`/`GitStashPop` reuse the EXISTING `git_op_tx`/
-                // `git_status_tx` channels (drained at (b-oct)/(b-sex) via
-                // `git_drain`); `GitStashList` drains at (b-quattuordec).
-                Ok(super::HostCtl::GitStash) => {
-                    git_host::spawn_git_stash_attached(
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                    );
-                }
-                Ok(super::HostCtl::GitStashPop) => {
-                    git_host::spawn_git_stash_pop_attached(
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                    );
-                }
-                Ok(super::HostCtl::GitStashList) => {
-                    git_host::spawn_git_stash_list_attached(
-                        stash_list_tx.clone(),
-                        current_owned.clone(),
-                    );
-                }
-                // Branch-switcher / graph context menu (G4): host-local, never the
-                // daemon. `GitBranchList` drains at (b-octodec) below;
-                // `GitCheckout`/`GitCreateBranch` reuse the git-op channels above.
-                Ok(super::HostCtl::GitBranchList { request_id }) => {
-                    git_host::spawn_git_branch_list_attached(
-                        branch_list_tx.clone(),
-                        current_owned.clone(),
-                        request_id,
-                    );
-                }
-                // Source Control multi-repo picker: host-local, never the daemon.
-                // `GitRepos` drains at (b-octodec-bis) below; `SetActiveRepo` reuses
-                // the git-status channel above (fresh `GitStatus` for the new repo).
-                Ok(super::HostCtl::GitRepos) => {
-                    git_host::spawn_git_repos_attached(repo_list_tx.clone(), current_owned.clone());
-                }
-                Ok(super::HostCtl::SetActiveRepo { root }) => {
-                    git_host::spawn_set_active_repo_attached(
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                        root,
-                    );
-                }
-                Ok(super::HostCtl::GitCheckout { ref_name, root }) => {
-                    git_host::spawn_git_checkout_attached(
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                        ref_name,
-                        root,
-                    );
-                }
-                Ok(super::HostCtl::GitCreateBranch {
-                    name,
-                    start,
-                    checkout,
-                    root,
-                }) => {
-                    let (ot, st, cur) = (
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                    );
-                    git_host::spawn_git_create_branch_attached(
-                        ot, st, cur, name, start, checkout, root,
-                    );
-                }
-                // Commit-graph interactive/destructive ops (G5b): host-local, never
-                // the daemon. Each reuses the EXISTING `git_op_tx`/`git_status_tx`
-                // channels (same `GitOp` + follow-up `GitStatus` reply pattern) —
-                // drained at (b-oct)/(b-sex) below via `git_drain`, no new channel
-                // needed (`GitStatus` already carries the fresh `inProgress`/
-                // `conflicted` fields).
-                Ok(super::HostCtl::GitCherryPick { sha }) => {
-                    let (ot, st, cur) = (
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                    );
-                    git_host::spawn_git_cherry_pick_attached(ot, st, cur, sha);
-                }
-                Ok(super::HostCtl::GitRevert { sha }) => {
-                    let (ot, st, cur) = (
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                    );
-                    git_host::spawn_git_revert_attached(ot, st, cur, sha);
-                }
-                Ok(super::HostCtl::GitReset { sha, mode }) => {
-                    let (ot, st, cur) = (
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                    );
-                    git_host::spawn_git_reset_attached(ot, st, cur, sha, mode);
-                }
-                Ok(super::HostCtl::GitMerge { ref_name }) => {
-                    let (ot, st, cur) = (
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                    );
-                    git_host::spawn_git_merge_attached(ot, st, cur, ref_name);
-                }
-                Ok(super::HostCtl::GitRebase { upstream, branch }) => {
-                    let (ot, st, cur) = (
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                    );
-                    git_host::spawn_git_rebase_attached(ot, st, cur, upstream, branch);
-                }
-                Ok(super::HostCtl::GitOpAbort { kind }) => {
-                    let (ot, st, cur) = (
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                    );
-                    git_host::spawn_git_op_abort_attached(ot, st, cur, kind);
-                }
-                Ok(super::HostCtl::GitOpContinue { kind }) => {
-                    let (ot, st, cur) = (
-                        git_op_tx.clone(),
-                        git_status_tx.clone(),
-                        current_owned.clone(),
-                    );
-                    git_host::spawn_git_op_continue_attached(ot, st, cur, kind);
-                }
-                // Commit-graph panel: NEVER touches the daemon (host-local, regardless of
-                // attach state) — spawn the blocking git work off this thread; results are
-                // drained + pushed below at (b-quindec)/(b-sexdec)/(b-septdec).
-                Ok(super::HostCtl::GitGraph { limit, skip }) => {
-                    git_host::spawn_git_graph_attached(
-                        git_graph_tx.clone(),
-                        current_owned.clone(),
-                        limit,
-                        skip,
-                    );
-                }
-                Ok(super::HostCtl::GitCommitDetail { sha }) => {
-                    git_host::spawn_commit_detail_attached(
-                        commit_detail_tx.clone(),
-                        current_owned.clone(),
-                        sha,
-                    );
-                }
-                Ok(super::HostCtl::GitCommitDiff { sha, path }) => {
-                    git_host::spawn_commit_diff_attached(
-                        commit_diff_tx.clone(),
-                        current_owned.clone(),
-                        sha,
-                        path,
-                    );
-                }
-                Ok(super::HostCtl::GitActivity { path, limit }) => {
-                    git_host::spawn_git_activity_attached(
-                        activity_tx.clone(),
-                        current_owned.clone(),
-                        path,
-                        limit,
-                    );
-                }
-                // USAGE PANEL preview fetch: NEVER touches the daemon (host-side ledger
+                                // USAGE PANEL preview fetch: NEVER touches the daemon (host-side ledger
                 // read only, regardless of attach state) — spawn the blocking sqlite work
                 // off this thread; the result is drained + pushed below at (b-quin).
                 // `scope` AND `session` both ride along so the reply can echo them.
@@ -961,97 +991,117 @@ pub(super) fn push_loop(
                 | Ok(ctl @ super::HostCtl::FileCreate { .. })
                 | Ok(ctl @ super::HostCtl::FileRename { .. })
                 | Ok(ctl @ super::HostCtl::FileDelete { .. }) => {
-                    let workdirs = current_owned
-                        .as_deref()
-                        .and_then(super::diff::session_workdirs_for)
-                        .unwrap_or_default();
-                    super::file_ops::handle_file_ctl(
-                        &ctl,
-                        push,
-                        &workdirs,
-                        current_owned.as_deref(),
-                    );
+                    if let Some(fs) = remote_fs {
+                        fs.handle_file_ctl(&ctl, push);
+                    } else if remote_ctx.is_some() {
+                        // Remote attach but remote-fs child failed to start — never
+                        // fall back to the laptop filesystem (paths are remote).
+                        push_remote_fs_unavailable(&ctl, push);
+                    } else {
+                        let workdirs = current_owned
+                            .as_deref()
+                            .and_then(super::diff::session_workdirs_for)
+                            .unwrap_or_default();
+                        super::file_ops::handle_file_ctl(
+                            &ctl,
+                            push,
+                            &workdirs,
+                            current_owned.as_deref(),
+                        );
+                    }
                 }
                 #[cfg(feature = "linker")]
-                Ok(super::HostCtl::ImportGraph {
-                    path,
-                    depth,
-                    direction,
-                    filter_roots,
-                    filter_languages,
-                    session_id,
-                    request_id,
-                }) => {
-                    // Resolve the foreground session's configured workdirs for
-                    // session-scoped visualisation (never daemon-global).
-                    let wds = current_owned
-                        .as_deref()
-                        .and_then(super::diff::session_workdirs_for)
-                        .unwrap_or_default();
-                    let configured_roots = crate::linker::client::canonical_roots(&wds);
-                    let configured_root_map = crate::linker::client::configured_root_map(&wds);
-                    let resolved_session = session_id.or_else(|| current_owned.clone());
-                    super::import_graph::spawn_import_graph_attached(
-                        import_graph_tx.clone(),
-                        super::import_graph::ImportGraphJob {
-                            path,
-                            depth,
-                            direction,
-                            filter_roots,
-                            filter_languages,
-                            configured_roots,
-                            configured_root_map,
-                            session_id: resolved_session,
-                            request_id,
-                        },
-                    );
-                }
-                #[cfg(feature = "linker")]
-                Ok(super::HostCtl::ImportGraphImpact {
-                    path,
-                    depth,
-                    request_id,
-                    session_id,
-                }) => {
-                    // Resolve the foreground session's configured workdirs for
-                    // session-scoped impact analysis (never daemon-global).
-                    let configured_roots = current_owned
-                        .as_deref()
-                        .and_then(super::diff::session_workdirs_for)
-                        .map(|wds| crate::linker::client::canonical_roots(&wds))
-                        .unwrap_or_default();
-                    let resolved_session = session_id.or_else(|| current_owned.clone());
-                    super::import_graph::spawn_import_graph_impact_attached(
-                        impact_tx.clone(),
-                        path,
-                        depth,
-                        request_id,
-                        configured_roots,
-                        resolved_session,
-                    );
-                }
-                #[cfg(feature = "linker")]
-                Ok(super::HostCtl::ImportGraphReindex { request_id }) => {
-                    // Manual reindex: reconcile/register the foreground session's
-                    // current workdirs, issue Rescan, poll until the scan
-                    // completes, then refresh the scoped visualization.
-                    // Entirely off-thread.
-                    let session_id = current_owned.as_deref().unwrap_or_default().to_string();
-                    let wds = current_owned
-                        .as_deref()
-                        .and_then(super::diff::session_workdirs_for)
-                        .unwrap_or_default();
-                    let configured_roots = crate::linker::client::canonical_roots(&wds);
-                    let configured_root_map = crate::linker::client::configured_root_map(&wds);
-                    super::import_graph::spawn_import_graph_reindex_attached(
-                        import_graph_tx.clone(),
-                        session_id,
-                        configured_roots,
-                        configured_root_map,
-                        None, // All roots after reindex
-                        None,
-                        request_id,
-                    );
+                Ok(ctl @ super::HostCtl::ImportGraph { .. })
+                | Ok(ctl @ super::HostCtl::ImportGraphImpact { .. })
+                | Ok(ctl @ super::HostCtl::ImportGraphReindex { .. }) => {
+                    if let Some(linker) = remote_linker {
+                        linker.handle_import_ctl(&ctl, push, current_owned.as_deref());
+                    } else if remote_ctx.is_some() {
+                        // Remote attach but remote-linker child failed to start —
+                        // never fall back to the laptop linker daemon.
+                        super::remote_linker_client::push_remote_linker_unavailable(&ctl, push);
+                    } else {
+                        match ctl {
+                            super::HostCtl::ImportGraph {
+                                path,
+                                depth,
+                                direction,
+                                filter_roots,
+                                filter_languages,
+                                session_id,
+                                request_id,
+                            } => {
+                                let wds = current_owned
+                                    .as_deref()
+                                    .and_then(super::diff::session_workdirs_for)
+                                    .unwrap_or_default();
+                                let configured_roots =
+                                    crate::linker::client::canonical_roots(&wds);
+                                let configured_root_map =
+                                    crate::linker::client::configured_root_map(&wds);
+                                let resolved_session =
+                                    session_id.or_else(|| current_owned.clone());
+                                super::import_graph::spawn_import_graph_attached(
+                                    import_graph_tx.clone(),
+                                    super::import_graph::ImportGraphJob {
+                                        path,
+                                        depth,
+                                        direction,
+                                        filter_roots,
+                                        filter_languages,
+                                        configured_roots,
+                                        configured_root_map,
+                                        session_id: resolved_session,
+                                        request_id,
+                                    },
+                                );
+                            }
+                            super::HostCtl::ImportGraphImpact {
+                                path,
+                                depth,
+                                request_id,
+                                session_id,
+                            } => {
+                                let configured_roots = current_owned
+                                    .as_deref()
+                                    .and_then(super::diff::session_workdirs_for)
+                                    .map(|wds| crate::linker::client::canonical_roots(&wds))
+                                    .unwrap_or_default();
+                                let resolved_session =
+                                    session_id.or_else(|| current_owned.clone());
+                                super::import_graph::spawn_import_graph_impact_attached(
+                                    impact_tx.clone(),
+                                    path,
+                                    depth,
+                                    request_id,
+                                    configured_roots,
+                                    resolved_session,
+                                );
+                            }
+                            super::HostCtl::ImportGraphReindex { request_id } => {
+                                let session_id =
+                                    current_owned.as_deref().unwrap_or_default().to_string();
+                                let wds = current_owned
+                                    .as_deref()
+                                    .and_then(super::diff::session_workdirs_for)
+                                    .unwrap_or_default();
+                                let configured_roots =
+                                    crate::linker::client::canonical_roots(&wds);
+                                let configured_root_map =
+                                    crate::linker::client::configured_root_map(&wds);
+                                super::import_graph::spawn_import_graph_reindex_attached(
+                                    import_graph_tx.clone(),
+                                    session_id,
+                                    configured_roots,
+                                    configured_root_map,
+                                    None,
+                                    None,
+                                    request_id,
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 // ─── Remote host management (host-local, fast file I/O) ────
                 Ok(ctl @ super::HostCtl::GetRemoteHosts)
@@ -1224,6 +1274,21 @@ pub(super) fn push_loop(
                     // folding — see `push_intercept` (split out for file size; pure code
                     // motion, no behaviour change).
                     push_intercept::repush_before_fold(&frame, push);
+                    // Keep remote-fs sandbox roots in sync with the remote session's
+                    // workdirs (from SettingsValues or Snapshot). Local session_workdirs_for
+                    // must not be used when remote_fs is set.
+                    if let Some(fs) = remote_fs {
+                        if let DaemonEvent::SettingsValues { workdir, .. } = &frame.event {
+                            let _ = fs.set_roots(workdir.clone());
+                        }
+                    }
+                    // Same for remote-linker: workdirs are absolute remote paths.
+                    #[cfg(feature = "linker")]
+                    if let Some(linker) = remote_linker {
+                        if let DaemonEvent::SettingsValues { workdir, .. } = &frame.event {
+                            let _ = linker.set_roots(workdir.clone());
+                        }
+                    }
                     // Cache the authoritative config off every full snapshot so the
                     // `Config` envelope can be (re)emitted below (a config edit forces a
                     // full snapshot — see `ipc::snapshot::diff`).
@@ -1456,5 +1521,238 @@ pub(super) fn push_loop(
         if let Some(rem) = FRAME_BUDGET.checked_sub(frame_start.elapsed()) {
             std::thread::sleep(rem);
         }
+    }
+}
+
+/// Push a Git* error envelope when remote attach has no live remote-git child.
+fn push_remote_git_unavailable(ctl: &super::HostCtl, push: &dyn Fn(String)) {
+    use super::push_proto_git::{
+        push_activity, push_branch_list, push_commit_detail, push_commit_diff, push_git_diff,
+        push_git_graph, push_git_op, push_git_status, push_repo_list, push_stash_list,
+    };
+    const ERR: &str = "remote-git unavailable";
+    match ctl {
+        super::HostCtl::GitDiff { path, staged } => {
+            push_git_diff(
+                push,
+                super::git::GitDiffResult {
+                    path: path.clone(),
+                    staged: *staged,
+                    original: String::new(),
+                    modified: String::new(),
+                    error: Some(ERR.into()),
+                    binary: false,
+                },
+            );
+        }
+        super::HostCtl::GitStage { .. }
+        | super::HostCtl::GitUnstage { .. }
+        | super::HostCtl::GitDiscard { .. }
+        | super::HostCtl::GitCommit { .. }
+        | super::HostCtl::GitFetch
+        | super::HostCtl::GitPull
+        | super::HostCtl::GitPush { .. }
+        | super::HostCtl::GitStash
+        | super::HostCtl::GitStashPop
+        | super::HostCtl::GitCheckout { .. }
+        | super::HostCtl::GitCreateBranch { .. }
+        | super::HostCtl::GitCherryPick { .. }
+        | super::HostCtl::GitRevert { .. }
+        | super::HostCtl::GitReset { .. }
+        | super::HostCtl::GitMerge { .. }
+        | super::HostCtl::GitRebase { .. }
+        | super::HostCtl::GitOpAbort { .. }
+        | super::HostCtl::GitOpContinue { .. } => {
+            push_git_op(
+                push,
+                super::git::GitOpResult {
+                    ok: false,
+                    op: "remote".into(),
+                    error: Some(ERR.into()),
+                    message: None,
+                },
+            );
+        }
+        super::HostCtl::GitGraph { .. } => {
+            push_git_graph(
+                push,
+                super::git_graph::GitGraphResult {
+                    commits: Vec::new(),
+                    head: None,
+                    has_more: false,
+                    error: Some(ERR.into()),
+                },
+            );
+        }
+        super::HostCtl::GitCommitDetail { sha } => {
+            push_commit_detail(
+                push,
+                super::git_graph::CommitDetailResult {
+                    sha: sha.clone(),
+                    author: String::new(),
+                    email: String::new(),
+                    date: String::new(),
+                    subject: String::new(),
+                    body: String::new(),
+                    parents: Vec::new(),
+                    files: Vec::new(),
+                    error: Some(ERR.into()),
+                },
+            );
+        }
+        super::HostCtl::GitCommitDiff { sha, path } => {
+            push_commit_diff(
+                push,
+                super::git_graph::CommitDiffResult {
+                    sha: sha.clone(),
+                    path: path.clone(),
+                    original: String::new(),
+                    modified: String::new(),
+                    error: Some(ERR.into()),
+                    binary: false,
+                },
+            );
+        }
+        super::HostCtl::GitBranchList { request_id } => {
+            push_branch_list(
+                push,
+                super::git_branch::BranchListResult {
+                    branches: Vec::new(),
+                    error: Some(ERR.into()),
+                    root: None,
+                    request_id: *request_id,
+                },
+            );
+        }
+        super::HostCtl::GitRepos => {
+            push_repo_list(
+                push,
+                super::git_repos::RepoListResult {
+                    repos: Vec::new(),
+                    active: None,
+                },
+            );
+        }
+        super::HostCtl::GitStashList => {
+            push_stash_list(
+                push,
+                super::git_stash::StashListResult {
+                    entries: Vec::new(),
+                    error: Some(ERR.into()),
+                },
+            );
+        }
+        super::HostCtl::GitActivity { path, .. } => {
+            push_activity(
+                push,
+                super::git_activity::ActivityResult {
+                    commits: Vec::new(),
+                    path: path.clone(),
+                    error: Some(ERR.into()),
+                },
+            );
+        }
+        // GitStatus, SetGitKey, SetActiveRepo — status-shaped reply.
+        _ => {
+            push_git_status(
+                push,
+                super::git::GitStatusResult {
+                    root: None,
+                    branch: None,
+                    detached: false,
+                    ahead: None,
+                    behind: None,
+                    staged: Vec::new(),
+                    unstaged: Vec::new(),
+                    error: Some(ERR.into()),
+                    key_name: None,
+                    in_progress: None,
+                    conflicted: Vec::new(),
+                    push_mode: None,
+                },
+            );
+        }
+    }
+}
+
+/// Push a File* error envelope when remote attach has no live remote-fs child.
+fn push_remote_fs_unavailable(ctl: &super::HostCtl, push: &dyn Fn(String)) {
+    use super::push_proto::PushEnvelope;
+    const ERR: &str = "remote-fs unavailable";
+    let env = match ctl {
+        super::HostCtl::FileTree {
+            root,
+            path,
+            request_id,
+        } => PushEnvelope::FileTree {
+            root: root.clone(),
+            path: path.clone(),
+            request_id: request_id.clone(),
+            entries: Vec::new(),
+            error: Some(ERR.into()),
+        },
+        super::HostCtl::FileRead {
+            root,
+            path,
+            request_id,
+        } => PushEnvelope::FileRead {
+            root: root.clone(),
+            path: path.clone(),
+            request_id: request_id.clone(),
+            content: None,
+            fingerprint: String::new(),
+            binary: false,
+            too_large: false,
+            error: Some(ERR.into()),
+        },
+        super::HostCtl::FileSave {
+            root,
+            path,
+            request_id,
+            ..
+        } => PushEnvelope::FileSave {
+            root: root.clone(),
+            path: path.clone(),
+            request_id: request_id.clone(),
+            fingerprint: String::new(),
+            error: Some(ERR.into()),
+        },
+        super::HostCtl::FileCreate {
+            root,
+            path,
+            request_id,
+            ..
+        } => PushEnvelope::FileCreate {
+            root: root.clone(),
+            path: path.clone(),
+            request_id: request_id.clone(),
+            error: Some(ERR.into()),
+        },
+        super::HostCtl::FileRename {
+            root,
+            old_path,
+            new_path,
+            request_id,
+        } => PushEnvelope::FileRename {
+            root: root.clone(),
+            old_path: old_path.clone(),
+            new_path: new_path.clone(),
+            request_id: request_id.clone(),
+            error: Some(ERR.into()),
+        },
+        super::HostCtl::FileDelete {
+            root,
+            path,
+            request_id,
+        } => PushEnvelope::FileDelete {
+            root: root.clone(),
+            path: path.clone(),
+            request_id: request_id.clone(),
+            error: Some(ERR.into()),
+        },
+        _ => return,
+    };
+    if let Ok(json) = serde_json::to_string(&env) {
+        push(json);
     }
 }

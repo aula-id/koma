@@ -9,6 +9,9 @@
 //! component-based `..` rejection, then containment-checked after partial
 //! canonicalize (symlink-escape rejection). Tree listings hide `.git` / `.koma`
 //! / `node_modules` / `target`.
+//!
+//! The `exec_*` functions are the pure compute surface reused by both the local
+//! host path (`handle_file_ctl`) and the remote thin client (`koma remote-fs`).
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -24,6 +27,84 @@ const FILE_READ_SIZE_CAP: u64 = 5 * 1024 * 1024;
 
 /// Directory basenames excluded from Coding panel tree listings.
 const EXCLUDED_DIRS: &[&str] = &[".git", ".koma", "node_modules", "target"];
+
+// ─── Extractable result types (remote-fs + local host share these) ───────────
+
+/// Directory listing result for Coding panel / remote-fs.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileTreeResult {
+    pub root: String,
+    pub path: String,
+    pub request_id: String,
+    pub entries: Vec<PushFileTreeEntry>,
+    pub error: Option<String>,
+}
+
+/// File read result for Coding panel / remote-fs.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileReadResult {
+    pub root: String,
+    pub path: String,
+    pub request_id: String,
+    pub content: Option<String>,
+    pub fingerprint: String,
+    pub binary: bool,
+    pub too_large: bool,
+    pub error: Option<String>,
+}
+
+/// File save result for Coding panel / remote-fs.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileSaveResult {
+    pub root: String,
+    pub path: String,
+    pub request_id: String,
+    pub fingerprint: String,
+    pub error: Option<String>,
+    /// `true` when the write landed — caller may refresh git status.
+    #[serde(skip)]
+    pub mutated: bool,
+}
+
+/// File create result for Coding panel / remote-fs.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileCreateResult {
+    pub root: String,
+    pub path: String,
+    pub request_id: String,
+    pub error: Option<String>,
+    #[serde(skip)]
+    pub mutated: bool,
+}
+
+/// File rename result for Coding panel / remote-fs.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileRenameResult {
+    pub root: String,
+    pub old_path: String,
+    pub new_path: String,
+    pub request_id: String,
+    pub error: Option<String>,
+    #[serde(skip)]
+    pub mutated: bool,
+}
+
+/// File delete result for Coding panel / remote-fs.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileDeleteResult {
+    pub root: String,
+    pub path: String,
+    pub request_id: String,
+    pub error: Option<String>,
+    #[serde(skip)]
+    pub mutated: bool,
+}
 
 /// Handle one File* HostCtl by computing the result and pushing it back.
 /// Called from the host-relay's control-message loop.
@@ -41,52 +122,120 @@ pub(super) fn handle_file_ctl(
             root,
             path,
             request_id,
-        } => file_tree(root, path, request_id, push, workdirs),
+        } => {
+            let r = exec_file_tree(root, path, request_id, workdirs);
+            emit(
+                push,
+                &PushEnvelope::FileTree {
+                    root: r.root,
+                    path: r.path,
+                    request_id: r.request_id,
+                    entries: r.entries,
+                    error: r.error,
+                },
+            );
+        }
         HostCtl::FileRead {
             root,
             path,
             request_id,
-        } => file_read(root, path, request_id, push, workdirs),
+        } => {
+            let r = exec_file_read(root, path, request_id, workdirs);
+            emit(
+                push,
+                &PushEnvelope::FileRead {
+                    root: r.root,
+                    path: r.path,
+                    request_id: r.request_id,
+                    content: r.content,
+                    fingerprint: r.fingerprint,
+                    binary: r.binary,
+                    too_large: r.too_large,
+                    error: r.error,
+                },
+            );
+        }
         HostCtl::FileSave {
             root,
             path,
             content,
             expected_fingerprint,
             request_id,
-        } if file_save(
-            root,
-            path,
-            content,
-            expected_fingerprint,
-            request_id,
-            push,
-            workdirs,
-        ) =>
-        {
-            refresh_git_status(push, session);
+        } => {
+            let r = exec_file_save(root, path, content, expected_fingerprint, request_id, workdirs);
+            emit(
+                push,
+                &PushEnvelope::FileSave {
+                    root: r.root,
+                    path: r.path,
+                    request_id: r.request_id,
+                    fingerprint: r.fingerprint,
+                    error: r.error,
+                },
+            );
+            if r.mutated {
+                refresh_git_status(push, session);
+            }
         }
         HostCtl::FileCreate {
             root,
             path,
             kind,
             request_id,
-        } if file_create(root, path, kind, request_id, push, workdirs) => {
-            refresh_git_status(push, session);
+        } => {
+            let r = exec_file_create(root, path, kind, request_id, workdirs);
+            emit(
+                push,
+                &PushEnvelope::FileCreate {
+                    root: r.root,
+                    path: r.path,
+                    request_id: r.request_id,
+                    error: r.error,
+                },
+            );
+            if r.mutated {
+                refresh_git_status(push, session);
+            }
         }
         HostCtl::FileRename {
             root,
             old_path,
             new_path,
             request_id,
-        } if file_rename(root, old_path, new_path, request_id, push, workdirs) => {
-            refresh_git_status(push, session);
+        } => {
+            let r = exec_file_rename(root, old_path, new_path, request_id, workdirs);
+            emit(
+                push,
+                &PushEnvelope::FileRename {
+                    root: r.root,
+                    old_path: r.old_path,
+                    new_path: r.new_path,
+                    request_id: r.request_id,
+                    error: r.error,
+                },
+            );
+            if r.mutated {
+                refresh_git_status(push, session);
+            }
         }
         HostCtl::FileDelete {
             root,
             path,
             request_id,
-        } if file_delete(root, path, request_id, push, workdirs) => {
-            refresh_git_status(push, session);
+        } => {
+            let r = exec_file_delete(root, path, request_id, workdirs);
+            emit(
+                push,
+                &PushEnvelope::FileDelete {
+                    root: r.root,
+                    path: r.path,
+                    request_id: r.request_id,
+                    error: r.error,
+                },
+            );
+            if r.mutated {
+                refresh_git_status(push, session);
+            }
         }
         _ => {}
     }
@@ -98,40 +247,31 @@ fn emit(push: &dyn Fn(String), env: &PushEnvelope) {
     }
 }
 
-fn file_tree(
+// ─── Pure exec surface ───────────────────────────────────────────────────────
+
+/// List immediate children of `root`/`path` under the workdir sandbox.
+pub(crate) fn exec_file_tree(
     root: &str,
     path: &str,
     request_id: &str,
-    push: &dyn Fn(String),
     workdirs: &[PathBuf],
-) {
-    let reply = |entries: Vec<PushFileTreeEntry>, error: Option<String>| {
-        emit(
-            push,
-            &PushEnvelope::FileTree {
-                root: root.to_string(),
-                path: path.to_string(),
-                request_id: request_id.to_string(),
-                entries,
-                error,
-            },
-        );
+) -> FileTreeResult {
+    let fail = |error: String| FileTreeResult {
+        root: root.to_string(),
+        path: path.to_string(),
+        request_id: request_id.to_string(),
+        entries: Vec::new(),
+        error: Some(error),
     };
 
     let abs = match resolve_contained(root, path, workdirs) {
         Ok(p) => p,
-        Err(e) => {
-            reply(Vec::new(), Some(e));
-            return;
-        }
+        Err(e) => return fail(e),
     };
 
     let rd = match std::fs::read_dir(&abs) {
         Ok(rd) => rd,
-        Err(e) => {
-            reply(Vec::new(), Some(format!("failed to list directory: {e}")));
-            return;
-        }
+        Err(e) => return fail(format!("failed to list directory: {e}")),
     };
 
     let mut entries: Vec<PushFileTreeEntry> = Vec::new();
@@ -153,195 +293,154 @@ fn file_tree(
         });
     }
     sort_entries(&mut entries);
-    reply(entries, None);
+    FileTreeResult {
+        root: root.to_string(),
+        path: path.to_string(),
+        request_id: request_id.to_string(),
+        entries,
+        error: None,
+    }
 }
 
-fn file_read(
+/// Read a text file under the workdir sandbox.
+pub(crate) fn exec_file_read(
     root: &str,
     path: &str,
     request_id: &str,
-    push: &dyn Fn(String),
     workdirs: &[PathBuf],
-) {
-    let reply = |content: Option<String>,
-                 fingerprint: String,
-                 binary: bool,
-                 too_large: bool,
-                 error: Option<String>| {
-        emit(
-            push,
-            &PushEnvelope::FileRead {
-                root: root.to_string(),
-                path: path.to_string(),
-                request_id: request_id.to_string(),
-                content,
-                fingerprint,
-                binary,
-                too_large,
-                error,
-            },
-        );
+) -> FileReadResult {
+    let fail = |error: Option<String>, binary: bool, too_large: bool| FileReadResult {
+        root: root.to_string(),
+        path: path.to_string(),
+        request_id: request_id.to_string(),
+        content: None,
+        fingerprint: String::new(),
+        binary,
+        too_large,
+        error,
     };
 
     let abs = match resolve_contained(root, path, workdirs) {
         Ok(p) => p,
-        Err(e) => {
-            reply(None, String::new(), false, false, Some(e));
-            return;
-        }
+        Err(e) => return fail(Some(e), false, false),
     };
 
     let meta = match std::fs::metadata(&abs) {
         Ok(m) => m,
-        Err(e) => {
-            reply(
-                None,
-                String::new(),
-                false,
-                false,
-                Some(format!("failed to read file: {e}")),
-            );
-            return;
-        }
+        Err(e) => return fail(Some(format!("failed to read file: {e}")), false, false),
     };
     if meta.is_dir() {
-        reply(
-            None,
-            String::new(),
-            false,
-            false,
-            Some("path is a directory".to_string()),
-        );
-        return;
+        return fail(Some("path is a directory".to_string()), false, false);
     }
     if meta.len() > FILE_READ_SIZE_CAP {
-        reply(None, String::new(), false, true, None);
-        return;
+        return fail(None, false, true);
     }
 
     let bytes = match std::fs::read(&abs) {
         Ok(b) => b,
-        Err(e) => {
-            reply(
-                None,
-                String::new(),
-                false,
-                false,
-                Some(format!("failed to read file: {e}")),
-            );
-            return;
-        }
+        Err(e) => return fail(Some(format!("failed to read file: {e}")), false, false),
     };
     if looks_binary(&bytes) {
-        reply(None, String::new(), true, false, None);
-        return;
+        return fail(None, true, false);
     }
     let content = String::from_utf8_lossy(&bytes).into_owned();
     let fingerprint = compute_fingerprint(&abs);
-    reply(Some(content), fingerprint, false, false, None);
+    FileReadResult {
+        root: root.to_string(),
+        path: path.to_string(),
+        request_id: request_id.to_string(),
+        content: Some(content),
+        fingerprint,
+        binary: false,
+        too_large: false,
+        error: None,
+    }
 }
 
-fn file_save(
+/// Save a text file with stale-fingerprint protection.
+pub(crate) fn exec_file_save(
     root: &str,
     path: &str,
     content: &str,
     expected_fingerprint: &str,
     request_id: &str,
-    push: &dyn Fn(String),
     workdirs: &[PathBuf],
-) -> bool {
-    let reply = |fingerprint: String, error: Option<String>| {
-        emit(
-            push,
-            &PushEnvelope::FileSave {
-                root: root.to_string(),
-                path: path.to_string(),
-                request_id: request_id.to_string(),
-                fingerprint,
-                error,
-            },
-        );
+) -> FileSaveResult {
+    let fail = |fingerprint: String, error: String| FileSaveResult {
+        root: root.to_string(),
+        path: path.to_string(),
+        request_id: request_id.to_string(),
+        fingerprint,
+        error: Some(error),
+        mutated: false,
     };
 
     let abs = match resolve_contained(root, path, workdirs) {
         Ok(p) => p,
-        Err(e) => {
-            reply(String::new(), Some(e));
-            return false;
-        }
+        Err(e) => return fail(String::new(), e),
     };
 
     if abs.exists() {
         let current = compute_fingerprint(&abs);
         if current != expected_fingerprint {
-            reply(
+            return fail(
                 current,
-                Some("conflict: file changed on disk since last read".to_string()),
+                "conflict: file changed on disk since last read".to_string(),
             );
-            return false;
         }
     } else if !expected_fingerprint.is_empty() {
-        reply(
+        return fail(
             String::new(),
-            Some("conflict: file changed on disk since last read".to_string()),
+            "conflict: file changed on disk since last read".to_string(),
         );
-        return false;
     }
 
     if let Some(parent) = abs.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            reply(
-                String::new(),
-                Some(format!("failed to create parent dirs: {e}")),
-            );
-            return false;
+            return fail(String::new(), format!("failed to create parent dirs: {e}"));
         }
     }
     if let Err(e) = std::fs::write(&abs, content.as_bytes()) {
-        reply(String::new(), Some(format!("failed to write file: {e}")));
-        return false;
+        return fail(String::new(), format!("failed to write file: {e}"));
     }
-    reply(compute_fingerprint(&abs), None);
-    true
+    FileSaveResult {
+        root: root.to_string(),
+        path: path.to_string(),
+        request_id: request_id.to_string(),
+        fingerprint: compute_fingerprint(&abs),
+        error: None,
+        mutated: true,
+    }
 }
 
-fn file_create(
+/// Create a new file or directory under the workdir sandbox.
+pub(crate) fn exec_file_create(
     root: &str,
     path: &str,
     kind: &str,
     request_id: &str,
-    push: &dyn Fn(String),
     workdirs: &[PathBuf],
-) -> bool {
-    let reply = |error: Option<String>| {
-        emit(
-            push,
-            &PushEnvelope::FileCreate {
-                root: root.to_string(),
-                path: path.to_string(),
-                request_id: request_id.to_string(),
-                error,
-            },
-        );
+) -> FileCreateResult {
+    let fail = |error: String| FileCreateResult {
+        root: root.to_string(),
+        path: path.to_string(),
+        request_id: request_id.to_string(),
+        error: Some(error),
+        mutated: false,
     };
 
     let abs = match resolve_contained(root, path, workdirs) {
         Ok(p) => p,
-        Err(e) => {
-            reply(Some(e));
-            return false;
-        }
+        Err(e) => return fail(e),
     };
 
     if abs.exists() {
-        reply(Some("path already exists".to_string()));
-        return false;
+        return fail("path already exists".to_string());
     }
 
     if let Some(parent) = abs.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            reply(Some(format!("failed to create parent dirs: {e}")));
-            return false;
+            return fail(format!("failed to create parent dirs: {e}"));
         }
     }
 
@@ -351,110 +450,93 @@ fn file_create(
         other => Err(format!("unknown kind '{other}' (expected 'file' or 'dir')")),
     };
     match result {
-        Ok(()) => {
-            reply(None);
-            true
-        }
-        Err(e) => {
-            reply(Some(e));
-            false
-        }
+        Ok(()) => FileCreateResult {
+            root: root.to_string(),
+            path: path.to_string(),
+            request_id: request_id.to_string(),
+            error: None,
+            mutated: true,
+        },
+        Err(e) => fail(e),
     }
 }
 
-fn file_rename(
+/// Rename within the same workspace root.
+pub(crate) fn exec_file_rename(
     root: &str,
     old_path: &str,
     new_path: &str,
     request_id: &str,
-    push: &dyn Fn(String),
     workdirs: &[PathBuf],
-) -> bool {
-    let reply = |error: Option<String>| {
-        emit(
-            push,
-            &PushEnvelope::FileRename {
-                root: root.to_string(),
-                old_path: old_path.to_string(),
-                new_path: new_path.to_string(),
-                request_id: request_id.to_string(),
-                error,
-            },
-        );
+) -> FileRenameResult {
+    let fail = |error: String| FileRenameResult {
+        root: root.to_string(),
+        old_path: old_path.to_string(),
+        new_path: new_path.to_string(),
+        request_id: request_id.to_string(),
+        error: Some(error),
+        mutated: false,
     };
 
     let old_abs = match resolve_contained(root, old_path, workdirs) {
         Ok(p) => p,
-        Err(e) => {
-            reply(Some(e));
-            return false;
-        }
+        Err(e) => return fail(e),
     };
     let new_abs = match resolve_contained(root, new_path, workdirs) {
         Ok(p) => p,
-        Err(e) => {
-            reply(Some(e));
-            return false;
-        }
+        Err(e) => return fail(e),
     };
 
     if !old_abs.exists() {
-        reply(Some("source path does not exist".to_string()));
-        return false;
+        return fail("source path does not exist".to_string());
     }
     if new_abs.exists() {
-        reply(Some("destination already exists".to_string()));
-        return false;
+        return fail("destination already exists".to_string());
     }
     if let Some(parent) = new_abs.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            reply(Some(format!("failed to create parent dirs: {e}")));
-            return false;
+            return fail(format!("failed to create parent dirs: {e}"));
         }
     }
     if let Err(e) = std::fs::rename(&old_abs, &new_abs) {
-        reply(Some(format!("failed to rename: {e}")));
-        return false;
+        return fail(format!("failed to rename: {e}"));
     }
-    reply(None);
-    true
+    FileRenameResult {
+        root: root.to_string(),
+        old_path: old_path.to_string(),
+        new_path: new_path.to_string(),
+        request_id: request_id.to_string(),
+        error: None,
+        mutated: true,
+    }
 }
 
-fn file_delete(
+/// Delete a file or directory under the workdir sandbox.
+pub(crate) fn exec_file_delete(
     root: &str,
     path: &str,
     request_id: &str,
-    push: &dyn Fn(String),
     workdirs: &[PathBuf],
-) -> bool {
-    let reply = |error: Option<String>| {
-        emit(
-            push,
-            &PushEnvelope::FileDelete {
-                root: root.to_string(),
-                path: path.to_string(),
-                request_id: request_id.to_string(),
-                error,
-            },
-        );
+) -> FileDeleteResult {
+    let fail = |error: String| FileDeleteResult {
+        root: root.to_string(),
+        path: path.to_string(),
+        request_id: request_id.to_string(),
+        error: Some(error),
+        mutated: false,
     };
 
     let abs = match resolve_contained(root, path, workdirs) {
         Ok(p) => p,
-        Err(e) => {
-            reply(Some(e));
-            return false;
-        }
+        Err(e) => return fail(e),
     };
 
     if path.is_empty() || path == "." {
-        reply(Some("refusing to delete workspace root".to_string()));
-        return false;
+        return fail("refusing to delete workspace root".to_string());
     }
 
     if !abs.exists() {
-        reply(Some("path does not exist".to_string()));
-        return false;
+        return fail("path does not exist".to_string());
     }
 
     let result = if abs.is_dir() {
@@ -463,14 +545,14 @@ fn file_delete(
         std::fs::remove_file(&abs).map_err(|e| format!("failed to delete file: {e}"))
     };
     match result {
-        Ok(()) => {
-            reply(None);
-            true
-        }
-        Err(e) => {
-            reply(Some(e));
-            false
-        }
+        Ok(()) => FileDeleteResult {
+            root: root.to_string(),
+            path: path.to_string(),
+            request_id: request_id.to_string(),
+            error: None,
+            mutated: true,
+        },
+        Err(e) => fail(e),
     }
 }
 

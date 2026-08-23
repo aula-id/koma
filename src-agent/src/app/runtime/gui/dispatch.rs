@@ -350,14 +350,11 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         }
         GuiReq::GitOpAbort { kind } => dispatch_git::git_op_abort(&ctx.ctl, kind),
         GuiReq::GitOpContinue { kind } => dispatch_git::git_op_continue(&ctx.ctl, kind),
-        // Usage panel: host-side ledger read (global `~/.koma/usage.sqlite`).
-        // ALWAYS routed to the host-relay thread — never the daemon —
-        // regardless of attach state (see `HostCtl::UsagePreview`). A "session"
-        // scope with no session (the welcome/start-screen state) has nothing to
-        // filter by, so it is FORCED to "all" here — BEFORE deciding `session` —
-        // so the scope actually sent to the ledger query and the scope echoed
-        // back in the reply always agree (a reply must never claim "session"
-        // while carrying all-data).
+        // Usage panel: ledger read from the ATTACHED session daemon when live
+        // (so remote GUI sees the remote host's `~/.koma/usage.sqlite`), else
+        // host-local HostCtl when detached. A "session" scope with no session
+        // (welcome/start-screen) is FORCED to "all" BEFORE deciding `session`
+        // so the scope queried and the scope echoed always agree.
         GuiReq::UsagePreview { scope, session_id } => {
             let scope = scope.unwrap_or_else(|| "all".to_string());
             let scope = if scope == "session" && session_id.is_none() {
@@ -366,15 +363,18 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 scope
             };
             let session = if scope == "session" { session_id } else { None };
-            let _ = ctx.ctl.send(HostCtl::UsagePreview { session, scope });
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                ClientRequest::UsagePreview {
+                    session: session.clone(),
+                    scope: scope.clone(),
+                },
+                HostCtl::UsagePreview { session, scope },
+            );
         }
-        // Analytics tab: host-side ledger read (global `~/.koma/usage.sqlite`).
-        // ALWAYS routed to the host-relay thread — never the daemon —
-        // regardless of attach state (see `HostCtl::Analytics`). Same session-
-        // scope force-to-all rule as UsagePreview: a "session" scope with no
-        // sessionId is forced to "all" BEFORE deciding `session`, so the scope
-        // actually queried and the scope echoed always agree. Unknown/blank
-        // range/metric fall back to host-side defaults ("7d"/"cost").
+        // Analytics tab: same daemon-bridge / host fallback as UsagePreview.
+        // Unknown/blank range/metric fall back to host-side defaults ("7d"/"cost").
         GuiReq::Analytics {
             req_seq,
             scope,
@@ -391,13 +391,24 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             let session = if scope == "session" { session_id } else { None };
             let range = range.unwrap_or_else(|| "7d".to_string());
             let metric = metric.unwrap_or_else(|| "cost".to_string());
-            let _ = ctx.ctl.send(HostCtl::Analytics {
-                req_seq,
-                session,
-                scope,
-                range,
-                metric,
-            });
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                ClientRequest::Analytics {
+                    req_seq,
+                    session: session.clone(),
+                    scope: scope.clone(),
+                    range: range.clone(),
+                    metric: metric.clone(),
+                },
+                HostCtl::Analytics {
+                    req_seq,
+                    session,
+                    scope,
+                    range,
+                    metric,
+                },
+            );
         }
         // Stop button: interrupt the running turn on the attached daemon.
         GuiReq::Interrupt => {

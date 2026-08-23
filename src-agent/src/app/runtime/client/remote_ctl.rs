@@ -168,6 +168,20 @@ pub(super) struct ActiveRemote {
     /// Host context retained across session teardown so `/resume` can return to
     /// the remote hub without re-authing.
     pub ctx: RemoteCtx,
+    /// Coding-panel thin client (`koma remote-fs` over SSH). Started best-effort
+    /// at attach; `None` if spawn failed (File* then error via local path or
+    /// explicit remote error envelopes).
+    pub fs: Option<super::remote_fs_client::RemoteFsClient>,
+    /// Source Control thin client (`koma remote-git` over SSH). Started
+    /// best-effort at attach; `None` if spawn failed (Git* then error via
+    /// remote-unavailable envelopes — never local git against remote paths).
+    pub git: Option<super::remote_git_client::RemoteGitClient>,
+    /// Import-Graph thin client (`koma remote-linker` over SSH). Started
+    /// best-effort at attach; `None` if spawn failed or linker feature off.
+    #[cfg(feature = "linker")]
+    pub linker: Option<super::remote_linker_client::RemoteLinkerClient>,
+    /// Initial remote cwd used to seed remote-fs sandbox (if any).
+    pub cwd: Option<String>,
 }
 
 /// Outcome of the host-connect worker: host is ready, no session attached yet.
@@ -714,15 +728,55 @@ fn remote_session_worker(
         return;
     }
     shared.finish(attempt_id);
+    // Best-effort Coding-panel thin client. Failure is non-fatal — File* will
+    // surface errors when used; chat still works via the bridge above.
+    let fs = super::remote_fs_client::RemoteFsClient::start(
+        &handle,
+        &ctx,
+        cwd.as_deref(),
+    )
+    .ok();
+    // Best-effort Source Control thin client. Failure is non-fatal — Git* will
+    // surface unavailable when used; chat still works via the bridge above.
+    let git = super::remote_git_client::RemoteGitClient::start(
+        &handle,
+        &ctx,
+        Some(&session_id),
+    )
+    .ok();
+    // Best-effort Import-Graph thin client (linker feature). Failure is
+    // non-fatal — ImportGraph* will surface unavailable when used.
+    #[cfg(feature = "linker")]
+    let linker = super::remote_linker_client::RemoteLinkerClient::start(
+        &handle,
+        &ctx,
+        cwd.as_deref(),
+    )
+    .ok();
     if let Err(error) = connected_tx.send(ActiveRemote {
         attempt_id,
         connection,
         ssh_child: child,
         ctx,
+        fs,
+        git,
+        #[cfg(feature = "linker")]
+        linker,
+        cwd,
     }) {
         // Receiver gone: drop the unused bridge child only.
         let mut active = error.0;
         let _ = handle.block_on(async { active.ssh_child.kill().await });
+        if let Some(mut fs) = active.fs.take() {
+            fs.shutdown();
+        }
+        if let Some(mut git) = active.git.take() {
+            git.shutdown();
+        }
+        #[cfg(feature = "linker")]
+        if let Some(mut linker) = active.linker.take() {
+            linker.shutdown();
+        }
     }
 }
 

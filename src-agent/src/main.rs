@@ -177,9 +177,16 @@ fn main() -> anyhow::Result<()> {
     // here (best-effort) so it releases any session write-locks it holds and vacates disk.
     // Skip in the daemon/mcp-daemon children — they are spawned AFTER this migration runs
     // in the parent, and a child re-running migrate would be a no-op race anyway.
-    if !opts.daemon && !opts.mcp_daemon && !opts.oauth_daemon && !opts.server {
+    if !opts.daemon
+        && !opts.mcp_daemon
+        && !opts.oauth_daemon
+        && !opts.server
+        && !opts.remote_fs
+        && !opts.remote_git
+        && !opts.remote_usage
+    {
         #[cfg(feature = "linker")]
-        if !opts.linker_daemon {
+        if !opts.linker_daemon && !opts.remote_linker {
             app::migrate_legacy_daemon();
         }
         #[cfg(not(feature = "linker"))]
@@ -297,6 +304,23 @@ fn main() -> anyhow::Result<()> {
     // Checked BEFORE `--daemon` since `server` is a distinct mode.
     if opts.server {
         return app::run_server(opts);
+    }
+    // Panel thin clients for remote GUI (stdio, private protocols — not session IPC).
+    // Spawned over SSH by the local host beside `koma server`.
+    if opts.remote_fs {
+        return app::run_remote_fs(opts);
+    }
+    if opts.remote_git {
+        return app::run_remote_git(opts);
+    }
+    if opts.remote_usage {
+        anyhow::bail!(
+            "usage history is served via the session daemon when attached; no remote-usage process"
+        );
+    }
+    #[cfg(feature = "linker")]
+    if opts.remote_linker {
+        return app::run_remote_linker(opts);
     }
 
     // --- headless path: run the koma-daemon event loop (no TUI) ---

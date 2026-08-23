@@ -189,6 +189,19 @@ pub struct Opts {
     /// verb). Speaks the IPC protocol over stdin/stdout instead of a unix socket —
     /// designed for SSH remote development.
     pub server: bool,
+    /// When `true`, run the Coding-panel remote thin client over stdio
+    /// (`koma remote-fs` positional verb). Private File* protocol — not session IPC.
+    pub remote_fs: bool,
+    /// When `true`, run the Source-Control remote thin client over stdio
+    /// (`koma remote-git` positional verb).
+    pub remote_git: bool,
+    /// Legacy `koma remote-usage` positional verb. No longer spawns a thin client —
+    /// usage/analytics are served via the session daemon when attached.
+    pub remote_usage: bool,
+    /// When `true`, run the Import-Graph remote thin client over stdio
+    /// (`koma remote-linker` positional verb). Feature-gated like `linker_daemon`.
+    #[cfg(feature = "linker")]
+    pub remote_linker: bool,
     /// When `true`, `koma remote` opens the saved remote-host selector.
     pub remote_picker: bool,
     /// When `true`, enter the remote client directly and open its remote resume hub.
@@ -348,6 +361,13 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
             }
         }
         Some("server") => opts.server = true,
+        // Panel thin clients for remote GUI (Coding / Source Control / Usage / Import Graph).
+        // Hidden plumbing — spawned over SSH by the local host, not advertised in --help.
+        Some("remote-fs") => opts.remote_fs = true,
+        Some("remote-git") => opts.remote_git = true,
+        Some("remote-usage") => opts.remote_usage = true,
+        #[cfg(feature = "linker")]
+        Some("remote-linker") => opts.remote_linker = true,
         Some("sessions") => opts.sessions = true,
         Some("remote") => {
             // `remote <user@host>` connects directly; bare `remote` opens the saved-host picker.

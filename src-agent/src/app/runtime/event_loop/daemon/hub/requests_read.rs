@@ -166,6 +166,88 @@ impl DaemonHub {
         self.send_to(idx, DaemonEvent::FileSearchResults { query, items });
     }
 
+    /// GUI Usage panel: compute LAST-7-DAYS preview from THIS daemon host's
+    /// `~/.koma/usage.sqlite` and reply one-shot. Read-only; no attach/snapshot.
+    /// Bridged so a remote-attached GUI sees the session machine's ledger.
+    pub(super) fn usage_preview(
+        &mut self,
+        idx: usize,
+        session: Option<String>,
+        scope: String,
+    ) {
+        let result =
+            crate::app::runtime::client::diff::compute_usage_preview(session.as_deref());
+        self.send_to(
+            idx,
+            DaemonEvent::UsagePreview {
+                cost: result.cost,
+                tokens_in: result.tokens_in,
+                tokens_cached: result.tokens_cached,
+                tokens_out: result.tokens_out,
+                calls: result.calls,
+                days: result.days,
+                top_models: result.top_models,
+                scope,
+                session_id: session,
+            },
+        );
+    }
+
+    /// GUI Analytics tab: compute dashboard projection from THIS daemon host's
+    /// ledger and reply one-shot. Read-only; no attach/snapshot.
+    pub(super) fn analytics(
+        &mut self,
+        idx: usize,
+        req_seq: u64,
+        session: Option<String>,
+        scope: String,
+        range: String,
+        metric: String,
+    ) {
+        let result = crate::app::runtime::client::diff::compute_analytics(
+            req_seq, scope, session, range, metric,
+        );
+        self.send_to(
+            idx,
+            DaemonEvent::Analytics {
+                req_seq: result.req_seq,
+                scope: result.scope,
+                session_id: result.session_id,
+                range: result.range,
+                metric: result.metric,
+                status: result.status,
+                error: result.error,
+                cost: result.cost,
+                tokens_in: result.tokens_in,
+                tokens_cached: result.tokens_cached,
+                tokens_out: result.tokens_out,
+                calls: result.calls,
+                cache_rate: result.cache_rate,
+                series: result
+                    .series
+                    .into_iter()
+                    .map(|p| (p.epoch, p.cost, p.tokens))
+                    .collect(),
+                models: result
+                    .models
+                    .into_iter()
+                    .map(|m| crate::ipc::proto::AnalyticsModelRow {
+                        model_id: m.model_id,
+                        cost: m.cost,
+                        tokens_in: m.tokens_in,
+                        tokens_cached: m.tokens_cached,
+                        tokens_out: m.tokens_out,
+                        calls: m.calls,
+                    })
+                    .collect(),
+                main_cost: result.main_cost,
+                main_calls: result.main_calls,
+                sub_cost: result.sub_cost,
+                sub_calls: result.sub_calls,
+            },
+        );
+    }
+
     // GUI Connector model picker: fetch the model-id catalogue for a provider.
     // Read-only wrt session state. Three cases:
     //  - A `config.providers` entry: live `GET {endpoint}/models` (network call, so

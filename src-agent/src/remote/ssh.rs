@@ -203,14 +203,28 @@ pub(crate) fn connect(
     cwd: Option<&str>,
     koma_path: &str,
 ) -> Result<SshSession> {
+    let remote_args = server_args(session_id, cwd)?;
+    let remote_arg_refs: Vec<&str> = remote_args.iter().map(String::as_str).collect();
+    connect_command(target, auth, koma_path, &remote_arg_refs)
+}
+
+/// Spawn a long-lived SSH child running an arbitrary remote koma argv over stdio.
+///
+/// Used by panel thin clients (`remote-fs`, `remote-git`, …) that are NOT the
+/// session-daemon bridge. Reuses the same mux / StrictHostKeyChecking / auth base
+/// as [`connect`].
+pub(crate) fn connect_command(
+    target: &RemoteTarget,
+    auth: Option<&SshAuth>,
+    koma_path: &str,
+    remote_argv: &[&str],
+) -> Result<SshSession> {
     if koma_path.is_empty() || koma_path.contains('\0') || koma_path.contains('\n') {
         anyhow::bail!("invalid remote Koma executable path");
     }
     let mut cmd = Command::new("ssh");
     apply_tokio_ssh_base(&mut cmd, target, auth);
-    let remote_args = server_args(session_id, cwd)?;
-    let remote_arg_refs: Vec<&str> = remote_args.iter().map(String::as_str).collect();
-    let remote_command = remote_command(koma_path, &remote_arg_refs)?;
+    let remote_command = remote_command(koma_path, remote_argv)?;
     cmd.arg(format!("{}@{}", target.user, target.host));
     cmd.arg(remote_command);
     let mut child = cmd

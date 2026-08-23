@@ -23,9 +23,9 @@ use super::git_remote::assigned_key;
 /// `orig -> path`. A single on-disk path can appear in BOTH the `staged` and
 /// `unstaged` lists (e.g. `MM` — staged AND further modified since), mirroring
 /// VSCode's source-control view — this is intentional, not a bug.
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct GitFileEntry {
+pub(crate) struct GitFileEntry {
     pub path: String,
     pub orig_path: Option<String>,
     pub status: String,
@@ -36,9 +36,9 @@ pub(super) struct GitFileEntry {
 /// `GitStatus` envelope. `error` set means the working directory isn't a git
 /// repository (or `git status` itself failed) — every other field is then a neutral
 /// default (`root`/`branch` `None`, empty lists) rather than a panic.
-#[derive(serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct GitStatusResult {
+pub(crate) struct GitStatusResult {
     pub root: Option<String>,
     pub branch: Option<String>,
     pub detached: bool,
@@ -73,9 +73,9 @@ pub(super) struct GitStatusResult {
 /// then empty); `binary` set means either side isn't valid UTF-8 text (both strings
 /// then empty, no `error`). `staged` echoes the request — `true` = index-vs-HEAD,
 /// `false` = worktree-vs-index — so the reply can't be misapplied to the wrong tab.
-#[derive(serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct GitDiffResult {
+pub(crate) struct GitDiffResult {
     pub path: String,
     pub staged: bool,
     pub original: String,
@@ -92,9 +92,9 @@ pub(super) struct GitDiffResult {
 /// envelope carries NO list data — it is always followed by a fresh `GitStatus` push
 /// (the mutation worker computes + pushes that right after), which is what actually
 /// refreshes the panel's staged/unstaged lists.
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct GitOpResult {
+pub(crate) struct GitOpResult {
     pub ok: bool,
     pub op: String,
     pub error: Option<String>,
@@ -132,7 +132,7 @@ fn op_err(op: &str, error: impl Into<String>) -> GitOpResult {
 /// [`git_cmd_env`] with no extra env var — every LOCAL git op (status/diff/stage/
 /// unstage/discard/commit) goes through this; only [`super::git_remote`]'s
 /// fetch/pull/push need the `extra` slot (a `GIT_SSH_COMMAND` override).
-pub(super) fn git_cmd(dir: &std::path::Path, args: &[&str]) -> Option<std::process::Output> {
+pub(crate) fn git_cmd(dir: &std::path::Path, args: &[&str]) -> Option<std::process::Output> {
     git_cmd_env(dir, args, None)
 }
 
@@ -158,7 +158,7 @@ static GIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// makes the [`GIT_LOCK`] below an effective, single choke point rather than one of
 /// several. Never called re-entrantly while already holding [`GIT_LOCK`] (this fn is a
 /// leaf — it spawns one subprocess and returns — so no nested acquire is possible).
-pub(super) fn git_cmd_env(
+pub(crate) fn git_cmd_env(
     dir: &std::path::Path,
     args: &[&str],
     extra: Option<(&str, &str)>,
@@ -169,7 +169,7 @@ pub(super) fn git_cmd_env(
 /// Run several git commands as one process-local transaction.  Push planning uses
 /// this to ensure the ref and lease it proves are still the ones it acts on; other
 /// host git workers cannot interleave between planning and execution.
-pub(super) fn with_git_transaction<T>(
+pub(crate) fn with_git_transaction<T>(
     f: impl FnOnce(
         &dyn Fn(&std::path::Path, &[&str], Option<(&str, &str)>) -> Option<std::process::Output>,
     ) -> T,
@@ -200,7 +200,7 @@ pub(super) fn with_git_transaction<T>(
 /// workdirs, none hold a repo, or there's no session at all (the StartScreen case) —
 /// deliberately does NOT fall back to the host process's own cwd. Signature is
 /// unchanged, so all 27 callers stay untouched.
-pub(super) fn repo_root_for(session: Option<&str>) -> Option<std::path::PathBuf> {
+pub(crate) fn repo_root_for(session: Option<&str>) -> Option<std::path::PathBuf> {
     super::git_repos::resolve_repo_root(session)
 }
 
@@ -243,7 +243,7 @@ fn push_ordinary(
 /// its original path). ALWAYS returns a result — a non-git workdir sets `error`
 /// rather than panicking, mirroring [`super::diff::compute_file_diff`]'s always-reply
 /// rule so the GUI panel can never hang waiting on a spinner.
-pub(super) fn compute_git_status(session: Option<&str>) -> GitStatusResult {
+pub(crate) fn compute_git_status(session: Option<&str>) -> GitStatusResult {
     let empty = |error: Option<String>| GitStatusResult {
         root: None,
         branch: None,
@@ -464,7 +464,7 @@ fn detect_in_progress(root: &std::path::Path) -> Option<String> {
 /// show` exits non-zero, or the on-disk read fails) is NOT an error — that side is
 /// just empty (a valid all-added/all-removed diff); only "not inside a git repository"
 /// is reported as `error`.
-pub(super) fn compute_git_diff(path: &str, staged: bool, session: Option<&str>) -> GitDiffResult {
+pub(crate) fn compute_git_diff(path: &str, staged: bool, session: Option<&str>) -> GitDiffResult {
     let empty = |error: Option<String>, binary: bool| GitDiffResult {
         path: path.to_string(),
         staged,
@@ -543,7 +543,7 @@ fn safe_join(root: &std::path::Path, rel: &str) -> Option<std::path::PathBuf> {
 /// (where most git errors land), falling back to stdout (e.g. `git commit`'s
 /// "nothing to commit, working tree clean" prints there, not stderr), then a
 /// generic fallback if both are empty.
-pub(super) fn git_failure(out: &std::process::Output, fallback: &str) -> String {
+pub(crate) fn git_failure(out: &std::process::Output, fallback: &str) -> String {
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if !stderr.is_empty() {
         return stderr;
@@ -559,7 +559,7 @@ pub(super) fn git_failure(out: &std::process::Output, fallback: &str) -> String 
 /// <paths...>`, answering a [`super::HostCtl::GitStage`]. This ALSO stages the removal
 /// of a tracked file deleted on disk (`git add`'s own behaviour on a missing path) —
 /// intentional, matching VSCode's "Stage All Changes" / per-row stage.
-pub(super) fn git_stage(paths: &[String], session: Option<&str>) -> GitOpResult {
+pub(crate) fn git_stage(paths: &[String], session: Option<&str>) -> GitOpResult {
     const OP: &str = "stage";
     if paths.is_empty() {
         return op_ok(OP);
@@ -579,7 +579,7 @@ pub(super) fn git_stage(paths: &[String], session: Option<&str>) -> GitOpResult 
 /// Unstage `paths` via `git restore --staged -- <paths...>` (moves the index back to
 /// HEAD for just those paths, leaving worktree content untouched), answering a
 /// [`super::HostCtl::GitUnstage`].
-pub(super) fn git_unstage(paths: &[String], session: Option<&str>) -> GitOpResult {
+pub(crate) fn git_unstage(paths: &[String], session: Option<&str>) -> GitOpResult {
     const OP: &str = "unstage";
     if paths.is_empty() {
         return op_ok(OP);
@@ -606,7 +606,7 @@ pub(super) fn git_unstage(paths: &[String], session: Option<&str>) -> GitOpResul
 /// i.e. discards only the unstaged edit, never touching staged content. Restorable
 /// paths are batched into a single `git restore` call; deletes are unavoidably
 /// per-path (`std::fs::remove_file`).
-pub(super) fn git_discard(paths: &[String], session: Option<&str>) -> GitOpResult {
+pub(crate) fn git_discard(paths: &[String], session: Option<&str>) -> GitOpResult {
     const OP: &str = "discard";
     if paths.is_empty() {
         return op_ok(OP);
@@ -662,7 +662,7 @@ pub(super) fn git_discard(paths: &[String], session: Option<&str>) -> GitOpResul
 /// Runs `git commit -m <message>` (never `-a`, so unstaged changes are untouched);
 /// failure (e.g. nothing staged, no configured identity) surfaces git's own message
 /// (stderr, falling back to stdout for "nothing to commit, working tree clean").
-pub(super) fn git_commit(message: &str, session: Option<&str>) -> GitOpResult {
+pub(crate) fn git_commit(message: &str, session: Option<&str>) -> GitOpResult {
     const OP: &str = "commit";
     if message.trim().is_empty() {
         return op_err(OP, "commit message is empty");
