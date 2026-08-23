@@ -907,6 +907,15 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::KeyReveal { name, private }) => {
                 git_host::spawn_key_reveal(P::clone(push), name, private);
             }
+            Ok(HostCtl::LspStatus) => {
+                super::lsp_host::spawn_lsp_status(P::clone(push));
+            }
+            Ok(HostCtl::LspInstall { id, all, force }) => {
+                super::lsp_host::spawn_lsp_install(P::clone(push), id, all, force);
+            }
+            Ok(HostCtl::LspUninstall { id }) => {
+                super::lsp_host::spawn_lsp_uninstall(P::clone(push), id);
+            }
             // Extension STORE browse/detail/installed-list opened while detached
             // (StartScreen / swapper, e.g. the Store tab mounting on the home screen
             // with no session): koma.run is a PUBLIC endpoint and the installed list is

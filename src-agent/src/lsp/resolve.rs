@@ -63,6 +63,7 @@ pub fn status_all() -> Vec<ServerStatus> {
 }
 
 /// Resolve one server by catalogue id. Returns `None` if id is unknown.
+#[allow(dead_code)]
 pub fn status_one(id: &str) -> Option<ServerStatus> {
     let spec = catalog::find(id)?;
     let manifest = Manifest::load().unwrap_or_default();

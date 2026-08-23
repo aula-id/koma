@@ -918,6 +918,16 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 request_id,
             });
         }
+        // Language servers: host-local status/install/uninstall under ~/.koma/lsp/.
+        GuiReq::LspStatus => {
+            let _ = ctx.ctl.send(HostCtl::LspStatus);
+        }
+        GuiReq::LspInstall { id, all, force } => {
+            let _ = ctx.ctl.send(HostCtl::LspInstall { id, all, force });
+        }
+        GuiReq::LspUninstall { id } => {
+            let _ = ctx.ctl.send(HostCtl::LspUninstall { id });
+        }
         // Write error log: host-local, unconditional, fire-and-forget.
         GuiReq::WriteErrorLog { message } => {
             crate::model::store::append_global_error_log("frontend", &message);
