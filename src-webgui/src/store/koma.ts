@@ -1478,6 +1478,8 @@ export type PushEnvelope =
       size: number
       tooLarge: boolean
       error: string | null
+      /** Host already wrote via native save dialog; bytesB64 is empty. */
+      saved?: boolean
     }
   | {
       k: 'FileContentSearch'
@@ -4501,7 +4503,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         break
       case 'FileDownloadBytes': {
-        // Preview waiters (CodingFileViewer) consume first — skip save-as.
+        // Preview waiters (CodingFileViewer) consume first — skip save-as UI.
         if (
           resolveFilePreviewBytes(
             env.requestId,
@@ -4512,7 +4514,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         ) {
           break
         }
-        if (env.error || env.tooLarge || !env.bytesB64) {
+        if (env.error || env.tooLarge) {
           const text =
             env.error ||
             (env.tooLarge ? 'file too large to download' : 'download failed')
@@ -4528,33 +4530,25 @@ export const useKoma = create<KomaState>((set, get) => ({
           })
           break
         }
-        try {
-          const bin = atob(env.bytesB64)
-          const bytes = new Uint8Array(bin.length)
-          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-          const blob = new Blob([bytes])
+        // Host-native save-as (saveAs:true on the request) already wrote the
+        // file via rfd. Blob <a download> is a no-op in wry, so this is the
+        // only path that actually lands a file on disk.
+        if (env.saved) {
           const name = codingBaseName(env.path) || 'download'
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url
-          a.download = name
-          a.rel = 'noopener'
-          document.body.appendChild(a)
-          a.click()
-          a.remove()
-          URL.revokeObjectURL(url)
-        } catch {
           set((s) => {
             const seq = s.ui.toastSeq + 1
             return {
               ui: {
                 ...s.ui,
                 toastSeq: seq,
-                toast: { id: seq, text: 'failed to save download', kind: 'error' },
+                toast: { id: seq, text: `saved ${name}`, kind: 'info' },
               },
             }
           })
+          break
         }
+        // Cancelled dialog, or a non-saveAs reply that nobody claimed —
+        // nothing to do (no toast on cancel).
         break
       }
       case 'AgentOp': {
@@ -5977,7 +5971,15 @@ export const useKoma = create<KomaState>((set, get) => ({
     }
   },
   downloadCodingFile: (root, path) => {
-    get().req({ r: 'FileDownloadBytes', root, path, requestId: mintRequestId() })
+    // saveAs:true → host opens a native save dialog and writes the file.
+    // wry cannot honor in-page blob downloads.
+    get().req({
+      r: 'FileDownloadBytes',
+      root,
+      path,
+      requestId: mintRequestId(),
+      saveAs: true,
+    })
   },
   refreshCodingDir: (root, path) => {
     const key = fileKey(root, path)

@@ -517,7 +517,9 @@ declare global {
     // overwrite=false rejects existing paths. Reply: FileWriteBytes.
     | { r: 'FileWriteBytes'; root: string; path: string; bytesB64: string; overwrite?: boolean; requestId: string }
     // Read raw bytes for download / save-as. Reply: FileDownloadBytes.
-    | { r: 'FileDownloadBytes'; root: string; path: string; requestId: string }
+    // saveAs=true → host opens a native save dialog and writes the file
+    // (required in wry; blob <a download> is a no-op there).
+    | { r: 'FileDownloadBytes'; root: string; path: string; requestId: string; saveAs?: boolean }
     // VS Code-style content search. Reply: FileContentSearch.
     | {
         r: 'FileContentSearch'
@@ -656,6 +658,8 @@ declare global {
         size: number
         tooLarge: boolean
         error: string | null
+        /** Host already wrote via native save dialog; bytesB64 is empty. */
+        saved?: boolean
       }
     | {
         k: 'FileContentSearch'

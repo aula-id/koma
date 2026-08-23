@@ -700,6 +700,8 @@ pub(super) enum PushEnvelope {
         error: Option<String>,
     },
     /// Coding panel: binary download reply. `bytes_b64` is standard base64.
+    /// When `saved` is true the host already wrote the file via a native dialog
+    /// and `bytes_b64` is omitted.
     #[serde(rename_all = "camelCase")]
     FileDownloadBytes {
         root: String,
@@ -709,6 +711,8 @@ pub(super) enum PushEnvelope {
         size: u64,
         too_large: bool,
         error: Option<String>,
+        #[serde(default)]
+        saved: bool,
     },
     /// Coding panel: content-search reply (grouped by file).
     #[serde(rename_all = "camelCase")]

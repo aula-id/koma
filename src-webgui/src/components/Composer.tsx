@@ -116,16 +116,34 @@ function chipRangeForDelete(
   return ranges.find(([s, e]) => pos >= s && pos < e) ?? null
 }
 
+// Shared typography for the transparent textarea + its mirrored chip overlay.
+// MUST stay identical on both layers — any padding/line-height/wrap mismatch
+// drifts the caret vs painted text. Integer line-height (not leading-relaxed's
+// 1.625 × 14px = 22.75) avoids cumulative subpixel rounding that shows up as
+// caret misalignment after ~8–10 lines.
+const COMPOSER_FIELD_CLASS =
+  'm-0 box-border w-full whitespace-pre-wrap break-words p-0 text-[14px] leading-[22px] [overflow-wrap:anywhere] [tab-size:4]'
+
 // Overlay renderer: walks the chip ranges in order, emitting the untouched
 // in-between text verbatim and wrapping each range's slice in a tinted pill
 // span. The plain-text pieces + pill contents concatenate back to EXACTLY
 // `text` — this must stay character-identical (same glyphs, same wrapping),
 // since it paints directly behind the transparent textarea and has to line
 // up with the real caret/selection pixel-for-pixel.
+//
+// A trailing `\n` does not paint an empty line in a normal block box the way
+// a textarea does, so we append a zero-width space after the content. That
+// keeps line boxes (and caret row) aligned without changing visible glyphs.
 function renderComposerOverlay(text: string, pickedTokens: Set<string>): ReactNode {
   if (text === '') return null
   const ranges = findChipRanges(text, pickedTokens)
-  if (ranges.length === 0) return text
+  const tail = '\u200b'
+  if (ranges.length === 0) return (
+    <>
+      {text}
+      {tail}
+    </>
+  )
   const nodes: ReactNode[] = []
   let cursor = 0
   ranges.forEach(([start, end], i) => {
@@ -150,6 +168,7 @@ function renderComposerOverlay(text: string, pickedTokens: Set<string>): ReactNo
     cursor = end
   })
   if (cursor < text.length) nodes.push(text.slice(cursor))
+  nodes.push(tail)
   return nodes
 }
 
@@ -225,8 +244,8 @@ export function Composer() {
       caretToEndRef.current = false
     }
     // Height just changed (auto-grow above); keep the chip overlay's scroll
-    // glued to the textarea's own scrollTop.
-    syncOverlayScroll()
+    // glued to the textarea (rAF catches post-keystroke caret auto-scroll).
+    syncOverlayScrollSoon()
   }, [input])
 
   // Keep the composer correct across REFLOWS — not just keystrokes (the
@@ -248,7 +267,7 @@ export function Composer() {
       if (width === lastWidthRef.current) return
       lastWidthRef.current = width
       autosizeTextarea()
-      syncOverlayScroll()
+      syncOverlayScrollSoon()
     }
     handleReflow()
     const observer = wrapper ? new ResizeObserver(handleReflow) : null
@@ -335,11 +354,19 @@ export function Composer() {
   // Keep the chip overlay's scroll position glued to the textarea's — has to
   // track both user scrolling (wheel/keys inside a >200px-tall draft, once
   // the textarea itself scrolls internally) and programmatic height changes
-  // (the autosize effect above).
+  // (the autosize effect above). Also re-sync on the next frame: after a
+  // keystroke the browser may auto-scroll the caret into view *after* our
+  // layout effect, and without a follow-up the overlay lags one paint.
   const syncOverlayScroll = () => {
-    if (overlayRef.current && textareaRef.current) {
-      overlayRef.current.scrollTop = textareaRef.current.scrollTop
-    }
+    const overlay = overlayRef.current
+    const ta = textareaRef.current
+    if (!overlay || !ta) return
+    overlay.scrollTop = ta.scrollTop
+    overlay.scrollLeft = ta.scrollLeft
+  }
+  const syncOverlayScrollSoon = () => {
+    syncOverlayScroll()
+    requestAnimationFrame(syncOverlayScroll)
   }
 
   // Read straight off the store (no subscription — this only runs on an
@@ -648,11 +675,14 @@ export function Composer() {
               renderComposerOverlay above), painting chip-eligible `@label`
               tokens as tinted pills. pointer-events-none so it never steals
               clicks/caret placement from the (visually transparent, but very
-              much alive) textarea layered on top of it. */}
+              much alive) textarea layered on top of it.
+              Same field class + overflow-y:auto + stable gutter as the
+              textarea so wrap width and line boxes stay pixel-aligned once
+              the draft hits max-height and a scrollbar appears. */}
           <div
             ref={overlayRef}
             aria-hidden="true"
-            className="pointer-events-none absolute inset-0 z-0 w-full overflow-hidden whitespace-pre-wrap break-words text-[14px] leading-relaxed text-koma-fg"
+            className={`pointer-events-none absolute inset-0 z-0 overflow-x-hidden overflow-y-auto text-koma-fg [scrollbar-gutter:stable] ${COMPOSER_FIELD_CLASS}`}
           >
             {renderComposerOverlay(input, pickedTokensRef.current)}
           </div>
@@ -665,7 +695,7 @@ export function Composer() {
             onScroll={syncOverlayScroll}
             placeholder="Message koma…"
             rows={1}
-            className={`relative z-10 max-h-[200px] min-h-[24px] w-full resize-none bg-transparent text-[14px] leading-relaxed outline-none caret-koma-fg placeholder:text-koma-fg placeholder:opacity-40 ${
+            className={`relative z-10 max-h-[200px] min-h-[22px] resize-none overflow-x-hidden overflow-y-auto bg-transparent outline-none [scrollbar-gutter:stable] caret-koma-fg placeholder:text-koma-fg placeholder:opacity-40 ${COMPOSER_FIELD_CLASS} ${
               input === '' ? 'text-koma-fg' : 'text-transparent'
             }`}
           />

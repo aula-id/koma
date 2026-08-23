@@ -963,11 +963,16 @@ pub(super) enum GuiReq {
         request_id: String,
     },
     /// Coding panel: read raw bytes for download / save-as.
+    /// `saveAs: true` asks the host to open a native save dialog and write the
+    /// file (required in wry — blob `<a download>` is a no-op).
     FileDownloadBytes {
         root: String,
         path: String,
         #[serde(rename = "requestId")]
         request_id: String,
+        /// Default false keeps preview loads (CodingFileViewer) byte-returning.
+        #[serde(default, rename = "saveAs")]
+        save_as: bool,
     },
     /// Coding panel: VS Code-style content search across a workspace root/subdir.
     FileContentSearch {

@@ -367,6 +367,7 @@ fn handle_file_ctl_routes_create_tree_rename_delete() {
             root: root_s.clone(),
             path: "blob.bin".into(),
             request_id: "ctl-dl".into(),
+            save_as: false,
         },
         push.as_ref(),
         &workdirs,

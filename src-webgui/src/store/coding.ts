@@ -205,6 +205,8 @@ export type FileDownloadBytesPush = {
   size: number
   tooLarge: boolean
   error: string | null
+  /** Host already wrote via native save dialog; bytesB64 is empty. */
+  saved?: boolean
 }
 
 export type FileContentSearchPush = {
