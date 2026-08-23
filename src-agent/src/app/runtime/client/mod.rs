@@ -727,6 +727,22 @@ pub(super) enum HostCtl {
         path: String,
         request_id: String,
     },
+    /// Coding panel: write raw bytes (drag-upload / remote upload). `bytes_b64`
+    /// is standard base64 of the file body. When `overwrite` is false, existing
+    /// paths are rejected.
+    FileWriteBytes {
+        root: String,
+        path: String,
+        bytes_b64: String,
+        overwrite: bool,
+        request_id: String,
+    },
+    /// Coding panel: read raw bytes for download / save-as.
+    FileDownloadBytes {
+        root: String,
+        path: String,
+        request_id: String,
+    },
     /// Settings "Language servers": resolve every first-wave server (managed /
     /// PATH / missing) and push an `LspStatus` envelope. Host-local only.
     LspStatus,
@@ -742,6 +758,55 @@ pub(super) enum HostCtl {
     /// touches PATH copies. Followed by a fresh `LspStatus`.
     LspUninstall {
         id: String,
+    },
+    // ─── Language client (host-spawned JSON-RPC) ───────────────────────────
+    /// Coding tab opened a text file: `textDocument/didOpen` (lazy server start).
+    LspDidOpen {
+        root: String,
+        path: String,
+        language_id: String,
+        text: String,
+    },
+    /// Editor content changed: full-document `textDocument/didChange`.
+    LspDidChange {
+        root: String,
+        path: String,
+        text: String,
+    },
+    /// File saved: `textDocument/didSave`.
+    LspDidSave {
+        root: String,
+        path: String,
+        text: Option<String>,
+    },
+    /// Coding tab closed: `textDocument/didClose` + clear markers.
+    LspDidClose {
+        root: String,
+        path: String,
+    },
+    /// `textDocument/completion` — reply `LspCompletion` with `request_id`.
+    LspCompletion {
+        root: String,
+        path: String,
+        line: u32,
+        character: u32,
+        request_id: String,
+    },
+    /// `textDocument/hover` — reply `LspHover` with `request_id`.
+    LspHover {
+        root: String,
+        path: String,
+        line: u32,
+        character: u32,
+        request_id: String,
+    },
+    /// `textDocument/definition` — reply `LspDefinition` with `request_id`.
+    LspDefinition {
+        root: String,
+        path: String,
+        line: u32,
+        character: u32,
+        request_id: String,
     },
     /// Import-graph visualization: call the linker daemon's
     /// `Visualization` query and push the result back as an `ImportGraph` envelope.

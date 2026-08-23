@@ -342,5 +342,44 @@ fn handle_file_ctl_routes_create_tree_rename_delete() {
     assert_eq!(json_for_request(&sink, "ctl-d")["requestId"], "ctl-d");
     assert!(!dir.join("readme.md").exists());
 
+    // Binary write + download round-trip (drag-upload / save-as path).
+    use base64::Engine as _;
+    let payload = b"hello\0binary\xff";
+    let b64 = base64::engine::general_purpose::STANDARD.encode(payload);
+    handle_file_ctl(
+        &HostCtl::FileWriteBytes {
+            root: root_s.clone(),
+            path: "blob.bin".into(),
+            bytes_b64: b64,
+            overwrite: false,
+            request_id: "ctl-w".into(),
+        },
+        push.as_ref(),
+        &workdirs,
+        None,
+    );
+    let w = json_for_request(&sink, "ctl-w");
+    assert!(w["error"].is_null(), "{w}");
+    assert_eq!(std::fs::read(dir.join("blob.bin")).unwrap(), payload);
+
+    handle_file_ctl(
+        &HostCtl::FileDownloadBytes {
+            root: root_s.clone(),
+            path: "blob.bin".into(),
+            request_id: "ctl-dl".into(),
+        },
+        push.as_ref(),
+        &workdirs,
+        None,
+    );
+    let dl = json_for_request(&sink, "ctl-dl");
+    assert!(dl["error"].is_null(), "{dl}");
+    assert_eq!(dl["tooLarge"], false);
+    assert_eq!(dl["size"], payload.len() as u64);
+    let got = base64::engine::general_purpose::STANDARD
+        .decode(dl["bytesB64"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(got, payload);
+
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -513,6 +513,11 @@ declare global {
     | { r: 'FileRename'; root: string; oldPath: string; newPath: string; requestId: string }
     // Delete a file or directory (recursive for dirs). Reply lands as FileDelete push.
     | { r: 'FileDelete'; root: string; path: string; requestId: string }
+    // Write raw bytes (drag-upload / remote upload). bytesB64 is standard base64.
+    // overwrite=false rejects existing paths. Reply: FileWriteBytes.
+    | { r: 'FileWriteBytes'; root: string; path: string; bytesB64: string; overwrite?: boolean; requestId: string }
+    // Read raw bytes for download / save-as. Reply: FileDownloadBytes.
+    | { r: 'FileDownloadBytes'; root: string; path: string; requestId: string }
     // ─── Language servers (Settings + editor banner) ─────────────────────
     // Full catalogue status (managed / PATH / missing). Reply: LspStatus.
     | { r: 'LspStatus' }
@@ -521,6 +526,14 @@ declare global {
     | { r: 'LspInstall'; id?: string | null; all?: boolean; force?: boolean }
     // Remove a koma-managed install. Never touches PATH copies.
     | { r: 'LspUninstall'; id: string }
+    // ─── Language client (Monaco providers + doc sync) ────────────────
+    | { r: 'LspDidOpen'; root: string; path: string; languageId: string; text: string }
+    | { r: 'LspDidChange'; root: string; path: string; text: string }
+    | { r: 'LspDidSave'; root: string; path: string; text?: string | null }
+    | { r: 'LspDidClose'; root: string; path: string }
+    | { r: 'LspCompletion'; root: string; path: string; line: number; character: number; requestId: string }
+    | { r: 'LspHover'; root: string; path: string; line: number; character: number; requestId: string }
+    | { r: 'LspDefinition'; root: string; path: string; line: number; character: number; requestId: string }
     // Write an error message to the global error log (`~/.koma/error.log`). Used by
     // the React error boundary to log runtime errors that only occur in the built
     // app (not in dev mode). No reply, no session needed.
@@ -603,6 +616,17 @@ declare global {
     | { k: 'FileCreate'; root: string; path: string; requestId: string; error: string | null }
     | { k: 'FileRename'; root: string; oldPath: string; newPath: string; requestId: string; error: string | null }
     | { k: 'FileDelete'; root: string; path: string; requestId: string; error: string | null }
+    | { k: 'FileWriteBytes'; root: string; path: string; requestId: string; error: string | null }
+    | {
+        k: 'FileDownloadBytes'
+        root: string
+        path: string
+        requestId: string
+        bytesB64: string | null
+        size: number
+        tooLarge: boolean
+        error: string | null
+      }
 
   type LspServerStatus = {
     id: string
@@ -619,6 +643,47 @@ declare global {
   type LspPush =
     | { k: 'LspStatus'; servers: LspServerStatus[] }
     | { k: 'LspInstall'; id: string; pct: number; error: string | null }
+    | { k: 'LspDiagnostics'; uri: string; diagnostics: LspDiagnostic[] }
+    | { k: 'LspCompletion'; requestId: string; items: LspCompletionItem[]; error: string | null }
+    | { k: 'LspHover'; requestId: string; hover: LspHover | null; error: string | null }
+    | { k: 'LspDefinition'; requestId: string; locations: LspLocation[]; error: string | null }
+
+  type LspDiagnostic = {
+    uri: string
+    line: number
+    character: number
+    endLine: number
+    endCharacter: number
+    severity: number
+    message: string
+    source?: string
+    code?: string
+  }
+
+  type LspCompletionItem = {
+    label: string
+    kind?: number
+    detail?: string
+    insertText?: string
+    documentation?: string
+  }
+
+  type LspRange = {
+    startLine: number
+    startCharacter: number
+    endLine: number
+    endCharacter: number
+  }
+
+  type LspHover = {
+    contents: string
+    range?: LspRange
+  }
+
+  type LspLocation = {
+    uri: string
+    range: LspRange
+  }
 
   type RemoteHost = {
     id: string
