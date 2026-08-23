@@ -37,9 +37,9 @@ const MAX_WALK_DEPTH: usize = 8;
 /// One discovered repository, serialized to the webview for the picker. `root` is
 /// the absolute repo toplevel (a `git rev-parse --show-toplevel`, or a discovered
 /// `.git`-bearing dir); `name` is its last path component, the picker's label.
-#[derive(serde::Serialize, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RepoInfo {
+pub(crate) struct RepoInfo {
     pub root: String,
     pub name: String,
 }
@@ -49,9 +49,9 @@ pub(super) struct RepoInfo {
 /// (its domain module's result struct) — carried verbatim by the newtype envelope
 /// variant, already camelCase. `active` is the currently-selected repo's `root`
 /// (matches one of `repos[].root`), or `None` when nothing is selected yet.
-#[derive(serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RepoListResult {
+pub(crate) struct RepoListResult {
     pub repos: Vec<RepoInfo>,
     pub active: Option<String>,
 }
@@ -67,7 +67,7 @@ static ACTIVE_REPO: Mutex<Option<HashMap<String, PathBuf>>> = Mutex::new(None);
 
 /// Assign `session`'s active repo to `root`. No-op when there's no session (the
 /// StartScreen case — nothing to key on).
-pub(super) fn set_active_repo(session: Option<&str>, root: &str) {
+pub(crate) fn set_active_repo(session: Option<&str>, root: &str) {
     let Some(session) = session else { return };
     let mut guard = ACTIVE_REPO.lock().unwrap_or_else(|e| e.into_inner());
     guard
@@ -80,7 +80,7 @@ pub(super) fn set_active_repo(session: Option<&str>, root: &str) {
 /// this is the trust boundary that keeps the 27 git ops scoped to the
 /// session's workspace (mirrors the session_workdirs_for sandbox every other
 /// host op enforces). Returns true if accepted.
-pub(super) fn set_active_repo_checked(session: Option<&str>, root: &str) -> bool {
+pub(crate) fn set_active_repo_checked(session: Option<&str>, root: &str) -> bool {
     if session.is_none() {
         return false;
     }
@@ -116,7 +116,7 @@ pub(super) fn set_active_repo_checked(session: Option<&str>, root: &str) -> bool
 }
 
 /// Look up `session`'s active repo. `None` when unset, or when there's no session.
-pub(super) fn active_repo(session: Option<&str>) -> Option<PathBuf> {
+pub(crate) fn active_repo(session: Option<&str>) -> Option<PathBuf> {
     let session = session?;
     let guard = ACTIVE_REPO.lock().unwrap_or_else(|e| e.into_inner());
     guard.as_ref()?.get(session).cloned()
@@ -128,7 +128,7 @@ pub(super) fn active_repo(session: Option<&str>) -> Option<PathBuf> {
 /// vanished active triggers a [`discover_repos`] walk, whose first result becomes
 /// the new active. `None` when no repo can be found at all (no session, no
 /// workdirs, or none contain/hold a repo).
-pub(super) fn resolve_repo_root(session: Option<&str>) -> Option<PathBuf> {
+pub(crate) fn resolve_repo_root(session: Option<&str>) -> Option<PathBuf> {
     if let Some(active) = active_repo(session) {
         // Cheap validate — no subprocess. `.git` may be a dir OR a gitdir file
         // (linked worktree), `.exists()` covers both.
@@ -161,7 +161,7 @@ pub(super) fn resolve_repo_root(session: Option<&str>) -> Option<PathBuf> {
 /// reachable from two workdirs appears once), nesting-filtered (a root inside
 /// another discovered root is dropped — top-most wins), capped at [`MAX_REPOS`],
 /// and returned sorted by `name` (case-insensitive) for a stable picker order.
-pub(super) fn discover_repos(session: Option<&str>) -> Vec<RepoInfo> {
+pub(crate) fn discover_repos(session: Option<&str>) -> Vec<RepoInfo> {
     let dirs = match session.and_then(super::diff::session_workdirs_for) {
         Some(d) if !d.is_empty() => d,
         _ => return Vec::new(),

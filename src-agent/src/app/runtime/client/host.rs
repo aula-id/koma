@@ -1448,6 +1448,10 @@ fn host_attached(
             live_view,
             terminal_manager,
             None, // local attach
+            None, // no remote-fs
+            None, // no remote-git
+            #[cfg(feature = "linker")]
+            None, // no remote-linker
         )
     };
 
@@ -2004,6 +2008,10 @@ fn host_remote(
             live_view,
             terminal_manager,
             Some(&active.ctx),
+            active.fs.as_ref(),
+            active.git.as_ref(),
+            #[cfg(feature = "linker")]
+            active.linker.as_ref(),
         )
     };
     if let Ok(mut g) = live_req.lock() {
@@ -2022,6 +2030,17 @@ fn host_remote(
     handle.block_on(async {
         crate::app::runtime::stdio_bridge::reap_bridge_child(&mut active.ssh_child).await;
     });
+    // Tear down panel thin clients with the same lifetime as the chat bridge.
+    if let Some(mut fs) = active.fs.take() {
+        fs.shutdown();
+    }
+    if let Some(mut git) = active.git.take() {
+        git.shutdown();
+    }
+    #[cfg(feature = "linker")]
+    if let Some(mut linker) = active.linker.take() {
+        linker.shutdown();
+    }
 
     // Keep RemoteCtx unless the transition is a full disconnect / local swapper / exit.
     match transition {

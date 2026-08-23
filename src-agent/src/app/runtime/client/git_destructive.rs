@@ -50,7 +50,7 @@ fn valid_op_kind(kind: &str) -> bool {
 /// (non-zero exit, working tree left conflicted) surfaces git's own stderr as `error`;
 /// the caller's follow-up `GitStatus` push is what actually reports the conflicted
 /// state to the panel (see the module doc).
-pub(super) fn git_cherry_pick(sha: &str, session: Option<&str>) -> GitOpResult {
+pub(crate) fn git_cherry_pick(sha: &str, session: Option<&str>) -> GitOpResult {
     const OP: &str = "cherryPick";
     if !valid_commit_ref(sha) {
         return op_err(OP, "invalid commit reference");
@@ -73,7 +73,7 @@ pub(super) fn git_cherry_pick(sha: &str, session: Option<&str>) -> GitOpResult {
 /// validation + conflict reasoning as [`git_cherry_pick`]. `--no-edit` accepts git's
 /// default revert message rather than opening an editor (this is a headless GUI host —
 /// there is no editor to open).
-pub(super) fn git_revert(sha: &str, session: Option<&str>) -> GitOpResult {
+pub(crate) fn git_revert(sha: &str, session: Option<&str>) -> GitOpResult {
     const OP: &str = "revert";
     if !valid_commit_ref(sha) {
         return op_err(OP, "invalid commit reference");
@@ -99,7 +99,7 @@ pub(super) fn git_revert(sha: &str, session: Option<&str>) -> GitOpResult {
 /// git flag. `hard` DISCARDS uncommitted working-tree + index changes; that
 /// destructiveness is gated by a confirm on the REACT side before this is ever called —
 /// the host runs exactly what it's asked, no extra safety net.
-pub(super) fn git_reset(sha: &str, mode: &str, session: Option<&str>) -> GitOpResult {
+pub(crate) fn git_reset(sha: &str, mode: &str, session: Option<&str>) -> GitOpResult {
     const OP: &str = "reset";
     if !valid_commit_ref(sha) {
         return op_err(OP, "invalid commit reference");
@@ -126,7 +126,7 @@ pub(super) fn git_reset(sha: &str, mode: &str, session: Option<&str>) -> GitOpRe
 /// (branch-switcher / graph context menu "Merge into current branch"). `ref_` (a
 /// branch name or a sha) is validated via [`valid_commit_ref`] first. May conflict —
 /// same reasoning as [`git_cherry_pick`].
-pub(super) fn git_merge(ref_: &str, session: Option<&str>) -> GitOpResult {
+pub(crate) fn git_merge(ref_: &str, session: Option<&str>) -> GitOpResult {
     const OP: &str = "merge";
     if !valid_commit_ref(ref_) {
         return op_err(OP, "invalid ref");
@@ -153,7 +153,7 @@ pub(super) fn git_merge(ref_: &str, session: Option<&str>) -> GitOpResult {
 /// `branch: None` rebases the CURRENT branch instead (the plain G5b op). No
 /// interactive/`--onto` support here. May conflict — same reasoning as
 /// [`git_cherry_pick`].
-pub(super) fn git_rebase(
+pub(crate) fn git_rebase(
     upstream: &str,
     branch: Option<&str>,
     session: Option<&str>,
@@ -263,7 +263,7 @@ pub(super) fn git_rebase(
 /// `git <kind> --abort`, answering a [`super::HostCtl::GitOpAbort`] (the conflict
 /// banner's Abort button). `kind` is checked against [`valid_op_kind`]'s strict
 /// allowlist BEFORE ever being interpolated as the git SUBCOMMAND itself.
-pub(super) fn git_op_abort(kind: &str, session: Option<&str>) -> GitOpResult {
+pub(crate) fn git_op_abort(kind: &str, session: Option<&str>) -> GitOpResult {
     const OP: &str = "abort";
     if !valid_op_kind(kind) {
         return op_err(OP, "invalid operation kind");
@@ -320,7 +320,7 @@ pub(super) fn git_op_abort(kind: &str, session: Option<&str>) -> GitOpResult {
 /// editor for a commit message never hangs waiting on one (this is a headless GUI
 /// host, there is no editor to open; `true` as a command exits 0 immediately, so git
 /// treats the message as accepted unedited).
-pub(super) fn git_op_continue(kind: &str, session: Option<&str>) -> GitOpResult {
+pub(crate) fn git_op_continue(kind: &str, session: Option<&str>) -> GitOpResult {
     const OP: &str = "continue";
     if !valid_op_kind(kind) {
         return op_err(OP, "invalid operation kind");
