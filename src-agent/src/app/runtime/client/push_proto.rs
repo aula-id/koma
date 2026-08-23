@@ -691,6 +691,20 @@ pub(super) enum PushEnvelope {
         request_id: String,
         error: Option<String>,
     },
+    /// Settings "Language servers": full catalogue status (managed / PATH / missing).
+    #[serde(rename_all = "camelCase")]
+    LspStatus {
+        servers: Vec<crate::lsp::ServerStatus>,
+    },
+    /// Install/uninstall progress for one server. `pct` is 0–100; `error` set
+    /// means failure (pct may be partial). `id` may be empty for a worker-level
+    /// error before a specific server was chosen.
+    #[serde(rename_all = "camelCase")]
+    LspInstall {
+        id: String,
+        pct: u8,
+        error: Option<String>,
+    },
     /// One-shot import-graph visualization result answering a `GuiReq::ImportGraph`
     /// request from the GUI. Computed by the linker daemon (off-thread), pushed the
     /// same way regardless of attach state, ALWAYS a reply so the panel never hangs.
@@ -1114,6 +1128,28 @@ pub(super) fn push_terminal_exit(push: &dyn Fn(String), id: &str, code: Option<i
         &PushEnvelope::TerminalExit {
             id: id.to_string(),
             code,
+        },
+    );
+}
+
+/// Emit a one-shot `LspStatus` envelope for Settings "Language servers".
+pub(super) fn push_lsp_status(push: &dyn Fn(String), servers: Vec<crate::lsp::ServerStatus>) {
+    super::render::emit(push, &PushEnvelope::LspStatus { servers });
+}
+
+/// Emit a one-shot `LspInstall` progress/result frame.
+pub(super) fn push_lsp_install(
+    push: &dyn Fn(String),
+    id: &str,
+    pct: u8,
+    error: Option<String>,
+) {
+    super::render::emit(
+        push,
+        &PushEnvelope::LspInstall {
+            id: id.to_string(),
+            pct,
+            error,
         },
     );
 }

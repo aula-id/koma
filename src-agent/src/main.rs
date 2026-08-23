@@ -50,6 +50,7 @@ mod internet;
 mod ipc;
 #[cfg(feature = "linker")]
 mod linker;
+mod lsp;
 mod model;
 mod re_util;
 mod remote;
@@ -163,6 +164,14 @@ fn main() -> anyhow::Result<()> {
     // on-disk state, and it needs no daemon/session of its own.
     if opts.doctor {
         std::process::exit(app::run_doctor(opts.doctor_verbose));
+    }
+
+    // --- short-circuit: `koma lsp <status|install|uninstall>` (no TUI) ---
+    // Provisions / reports language servers under `~/.koma/lsp/`. Must work even
+    // when the TUI can't start; install uses blocking HTTP so it stays off any
+    // tokio runtime (this path never enters one).
+    if let Some(cmd) = opts.lsp {
+        std::process::exit(lsp::run_cli(cmd));
     }
 
     // --- short-circuit: `koma sessions --json` — list live sessions (no TUI) ---

@@ -3,6 +3,7 @@
 # Usage:
 #   curl -fsSL https://koma.run/install.sh | sh
 #   curl -fsSL https://koma.run/install.sh | sh -s -- --with-research
+#   curl -fsSL https://koma.run/install.sh | sh -s -- --with-lsp
 #
 # Environment overrides:
 #   KOMA_RELEASE_BASE   override the base download URL
@@ -16,9 +17,11 @@ KOMA_RELEASE_BASE="${KOMA_RELEASE_BASE:-https://github.com/aula-id/koma/releases
 INSTALL_DIR="${KOMA_INSTALL_DIR:-$HOME/.local/bin}"
 
 WITH_RESEARCH=0
+WITH_LSP=0
 for arg in "$@"; do
     case "$arg" in
         --with-research) WITH_RESEARCH=1 ;;
+        --with-lsp) WITH_LSP=1 ;;
     esac
 done
 
@@ -439,6 +442,18 @@ if [ "$WITH_RESEARCH" = "1" ]; then
         echo "Provisioning full internet mode environment (downloads ~80MB Firefox)..."
         "$INSTALL_DIR/$bin_name" --internet-fullmode-install
     fi
+fi
+
+# ---------------------------------------------------------------------------
+# Optional: provision first-wave language servers (~/.koma/lsp/)
+# ---------------------------------------------------------------------------
+if [ "$WITH_LSP" = "1" ]; then
+    echo ""
+    echo "Installing first-wave language servers under ~/.koma/lsp/ ..."
+    echo "(requires network; some servers also need node/npm, python3, or go on PATH)"
+    "$INSTALL_DIR/$bin_name" lsp install --all || {
+        echo "WARNING: some language servers failed to install — run 'koma lsp status' later." >&2
+    }
 fi
 
 # ---------------------------------------------------------------------------
