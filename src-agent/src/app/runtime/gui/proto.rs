@@ -976,7 +976,7 @@ pub(super) enum GuiReq {
     /// Settings "Language servers" opened / refreshed: full catalogue status.
     /// Reply: `LspStatus` envelope.
     LspStatus,
-    /// Install one catalogue id, or every managed first-wave server when `all`.
+    /// Install one catalogue id, or every managed server when `all`.
     /// Streams `LspInstall` progress, then a fresh `LspStatus`.
     LspInstall {
         #[serde(default)]

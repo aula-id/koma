@@ -20,7 +20,7 @@ pub enum InstallKind {
     GoInstall,
 }
 
-/// One first-wave language server entry.
+/// One catalogue language server entry.
 #[derive(Debug, Clone, Copy)]
 pub struct ServerSpec {
     /// Stable id used on disk (`~/.koma/lsp/<id>/`) and in CLI/IPC.

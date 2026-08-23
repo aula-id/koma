@@ -743,11 +743,11 @@ pub(super) enum HostCtl {
         path: String,
         request_id: String,
     },
-    /// Settings "Language servers": resolve every first-wave server (managed /
+    /// Settings "Language servers": resolve every catalogue server (managed /
     /// PATH / missing) and push an `LspStatus` envelope. Host-local only.
     LspStatus,
     /// Settings / editor banner: install one catalogue id, or every managed
-    /// first-wave server when `all` is set. Streams `LspInstall` progress, then
+    /// catalogue server when `all` is set. Streams `LspInstall` progress, then
     /// a fresh `LspStatus`. `force` reinstalls over an existing managed copy.
     LspInstall {
         id: Option<String>,
