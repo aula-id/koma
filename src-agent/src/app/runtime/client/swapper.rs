@@ -270,7 +270,7 @@ fn hub_from_remote_discovery(
         })
         .collect();
     // Newest first (no current-dir grouping remotely).
-    history.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+    history.sort_by_key(|a| std::cmp::Reverse(a.last_active));
     let history_filtered: Vec<usize> = (0..history.len()).collect();
 
     SessionHub {
