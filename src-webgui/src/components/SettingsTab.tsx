@@ -9,9 +9,12 @@ import {
   PanelLeft,
   Plus,
   SlidersHorizontal,
+  Code2,
   Trash2,
   UserCircle,
   X,
+  Download,
+  Loader2,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useKoma, resolveActivityBarOrder, type PaletteInfo } from '../store/koma'
@@ -27,13 +30,20 @@ import { BrailleSpinner } from './BrailleSpinner'
 // credential machinery). Every colour is a theme token (var(--koma-*) via the
 // koma-* Tailwind classes) so it tracks the live palette.
 
-type SectionId = 'account' | 'appearance' | 'session' | 'activityBar' | 'sshKeys'
+type SectionId = 'account' | 'appearance' | 'session' | 'activityBar' | 'lsp' | 'sshKeys'
 
 // Top-to-bottom order of the sections below — shared by `sectionRef` and the
 // scroll-spy so adding/reordering a section only needs a change here. Account
 // leads — it's the most prominent (koma.run sign-in is otherwise buried in the
 // Connector panel's OAuth list).
-const SECTION_ORDER: SectionId[] = ['account', 'appearance', 'session', 'activityBar', 'sshKeys']
+const SECTION_ORDER: SectionId[] = [
+  'account',
+  'appearance',
+  'session',
+  'activityBar',
+  'lsp',
+  'sshKeys',
+]
 
 export default function SettingsTab() {
   const req = useKoma((s) => s.req)
@@ -46,6 +56,7 @@ export default function SettingsTab() {
   const appearanceRef = useRef<HTMLDivElement>(null)
   const sessionRef = useRef<HTMLDivElement>(null)
   const activityBarRef = useRef<HTMLDivElement>(null)
+  const lspRef = useRef<HTMLDivElement>(null)
   const sshKeysRef = useRef<HTMLDivElement>(null)
   const [active, setActive] = useState<SectionId>('account')
 
@@ -58,7 +69,9 @@ export default function SettingsTab() {
           ? sessionRef
           : id === 'activityBar'
             ? activityBarRef
-            : sshKeysRef
+            : id === 'lsp'
+              ? lspRef
+              : sshKeysRef
 
   // Nav click → smooth-scroll the pane to the section header.
   const goto = (id: SectionId) => {
@@ -115,6 +128,12 @@ export default function SettingsTab() {
           onClick={() => goto('activityBar')}
         />
         <NavItem
+          icon={<Code2 size={15} />}
+          label="Language servers"
+          active={active === 'lsp'}
+          onClick={() => goto('lsp')}
+        />
+        <NavItem
           icon={<KeyRound size={15} />}
           label="SSH Keys"
           active={active === 'sshKeys'}
@@ -150,6 +169,14 @@ export default function SettingsTab() {
               desc="Show or hide activity-bar icons. Hidden icons move into the “…” overflow menu instead of disappearing — drag an icon on the activity bar itself to reorder it."
             />
             <ActivityBarSettings />
+          </section>
+
+          <section ref={lspRef} className="mt-12">
+            <SectionHeader
+              title="Language servers"
+              desc="Optional language servers for the coding panel. koma-managed installs land under ~/.koma/lsp/ and never touch system packages. PATH copies are detected automatically."
+            />
+            <LspSettings />
           </section>
 
           <section ref={sshKeysRef} className="mt-12">
@@ -979,6 +1006,162 @@ function KeyConfirmRow({
           cancel
         </button>
       </span>
+    </div>
+  )
+}
+
+// ── Language servers ─────────────────────────────────────────────────────────
+// Catalogue of first-wave language servers for the coding panel. Host-local
+// under ~/.koma/lsp/; PATH copies are detected. Install never mutates system
+// packages. Matches the SSH Keys host-req pattern (refresh on mount).
+
+function LspSettings() {
+  const servers = useKoma((s) => s.lspServers)
+  const progress = useKoma((s) => s.lspProgress)
+  const refreshLsp = useKoma((s) => s.refreshLsp)
+  const lspInstall = useKoma((s) => s.lspInstall)
+  const lspUninstall = useKoma((s) => s.lspUninstall)
+  const [armedUninstall, setArmedUninstall] = useState<string | null>(null)
+
+  useEffect(() => {
+    refreshLsp()
+  }, [refreshLsp])
+
+  const anyInstalling = Object.values(progress).some((p) => p.pct < 100 && !p.error)
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={anyInstalling}
+          onClick={() => lspInstall(null, true, false)}
+          className="flex items-center gap-1.5 rounded border border-koma-border px-2.5 py-1 text-[12px] text-koma-fg opacity-80 hover:bg-koma-hover hover:opacity-100 disabled:opacity-40"
+        >
+          {anyInstalling ? <BrailleSpinner size={13} /> : <Download size={13} />}
+          Install all first-wave
+        </button>
+        <button
+          type="button"
+          onClick={() => refreshLsp()}
+          className="flex items-center gap-1.5 rounded border border-koma-border px-2.5 py-1 text-[12px] text-koma-fg opacity-80 hover:bg-koma-hover hover:opacity-100"
+        >
+          Refresh
+        </button>
+      </div>
+
+      {servers.length === 0 ? (
+        <div className="py-6 text-center text-[12px] text-koma-fg opacity-45">
+          Loading language-server catalogue…
+        </div>
+      ) : (
+        <div className="flex flex-col">
+          {servers.map((s) => {
+            const prog = progress[s.id]
+            const installing = !!prog && prog.pct < 100 && !prog.error
+            const sourceLabel =
+              s.source === 'managed' ? 'koma-managed' : s.source === 'path' ? 'on PATH' : 'missing'
+            const sourceTone =
+              s.source === 'managed'
+                ? 'text-koma-success'
+                : s.source === 'path'
+                  ? 'text-koma-accent'
+                  : 'text-koma-dim opacity-70'
+            return (
+              <div
+                key={s.id}
+                className="flex flex-col gap-1.5 border-b border-koma-border py-3"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[13px] font-medium text-koma-fg">{s.name}</span>
+                      <span className={`text-[11px] ${sourceTone}`}>{sourceLabel}</span>
+                      {s.version && (
+                        <span className="text-[11px] text-koma-fg opacity-40">{s.version}</span>
+                      )}
+                    </div>
+                    <div className="mt-0.5 text-[11.5px] text-koma-fg opacity-45">
+                      <code className="opacity-80">{s.binary}</code>
+                      {' · '}
+                      {s.installKind}
+                      {s.extensions.length > 0 && (
+                        <> · {s.extensions.map((e) => `.${e}`).join(' ')}</>
+                      )}
+                    </div>
+                    {prog && !prog.error && prog.pct < 100 && (
+                      <div className="mt-1 text-[11px] text-koma-accent">
+                        Installing… {prog.pct}%
+                      </div>
+                    )}
+                    {prog?.error && (
+                      <div className="mt-1 text-[11px] text-koma-error">{prog.error}</div>
+                    )}
+                  </div>
+                  <div className="flex flex-none items-center gap-1.5">
+                    {s.source === 'managed' ? (
+                      armedUninstall === s.id ? (
+                        <KeyConfirmRow
+                          label={`Uninstall ${s.id}?`}
+                          confirmLabel="Uninstall"
+                          onConfirm={() => {
+                            lspUninstall(s.id)
+                            setArmedUninstall(null)
+                          }}
+                          onCancel={() => setArmedUninstall(null)}
+                        />
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            disabled={installing}
+                            onClick={() => lspInstall(s.id, false, true)}
+                            className="rounded border border-koma-border px-2 py-0.5 text-[11.5px] text-koma-fg opacity-80 hover:bg-koma-hover hover:opacity-100 disabled:opacity-40"
+                          >
+                            Update
+                          </button>
+                          <button
+                            type="button"
+                            disabled={installing}
+                            onClick={() => setArmedUninstall(s.id)}
+                            className="rounded border border-koma-border px-2 py-0.5 text-[11.5px] text-koma-error opacity-80 hover:bg-koma-hover hover:opacity-100 disabled:opacity-40"
+                          >
+                            Uninstall
+                          </button>
+                        </>
+                      )
+                    ) : s.source === 'path' ? (
+                      <button
+                        type="button"
+                        disabled={installing}
+                        onClick={() => lspInstall(s.id, false, false)}
+                        className="rounded border border-koma-border px-2 py-0.5 text-[11.5px] text-koma-fg opacity-80 hover:bg-koma-hover hover:opacity-100 disabled:opacity-40"
+                        title="Also install a koma-managed copy under ~/.koma/lsp/"
+                      >
+                        Install managed
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={installing}
+                        onClick={() => lspInstall(s.id, false, false)}
+                        className="flex items-center gap-1 rounded border border-koma-accent/40 bg-koma-accent/10 px-2 py-0.5 text-[11.5px] text-koma-accent hover:bg-koma-accent/20 disabled:opacity-40"
+                      >
+                        {installing ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : (
+                          <Download size={12} />
+                        )}
+                        Install
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

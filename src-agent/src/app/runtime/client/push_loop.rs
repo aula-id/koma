@@ -291,6 +291,11 @@ pub(super) fn push_loop(
     let (key_reveal_tx, key_reveal_rx) = std::sync::mpsc::channel::<super::keys::KeyRevealResult>();
     let (key_op_tx, key_op_rx) = std::sync::mpsc::channel::<super::keys::KeyOpResult>();
 
+    // --- Language servers (LspStatus/LspInstall/LspUninstall) --- host-local
+    // under ~/.koma/lsp/. Install is blocking network + toolchain work, so it
+    // runs off-thread; progress + final status drain via `lsp_tx`.
+    let (lsp_tx, lsp_rx) = std::sync::mpsc::channel::<super::lsp_host::LspReply>();
+
     // --- IMPORT GRAPH (ImportGraph) --- off-thread linker daemon IPC, same reasoning
     // as the GIT channels above (blocking IPC to the linker daemon).
     #[cfg(feature = "linker")]
@@ -955,6 +960,15 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::KeyReveal { name, private }) => {
                     git_host::spawn_key_reveal_attached(key_reveal_tx.clone(), name, private);
                 }
+                Ok(super::HostCtl::LspStatus) => {
+                    super::lsp_host::spawn_lsp_status_attached(lsp_tx.clone());
+                }
+                Ok(super::HostCtl::LspInstall { id, all, force }) => {
+                    super::lsp_host::spawn_lsp_install_attached(lsp_tx.clone(), id, all, force);
+                }
+                Ok(super::HostCtl::LspUninstall { id }) => {
+                    super::lsp_host::spawn_lsp_uninstall_attached(lsp_tx.clone(), id);
+                }
                 // Extension STORE browse/detail/installed-list: NEVER touches the
                 // daemon (host-side only, regardless of attach state) — spawn the
                 // blocking network/config work off this thread via the shared
@@ -1441,6 +1455,9 @@ pub(super) fn push_loop(
             &stash_list_rx,
             &activity_rx,
         );
+
+        // --- Language servers: push any completed status/install frames ---
+        super::lsp_host::drain_lsp_replies(&lsp_rx, push);
 
         // --- Extension STORE: push any completed off-thread browse/detail/installed-
         // list fetches. No coalescing needed — each is a self-contained, per-request

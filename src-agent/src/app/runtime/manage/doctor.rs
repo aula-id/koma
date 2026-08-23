@@ -86,6 +86,7 @@ pub fn run_doctor(verbose: bool) -> i32 {
         check_extensions(),
         check_internet_fullmode(),
         check_security_daemon(),
+        check_language_servers(),
         check_mcp_servers(config_ok),
         check_update(),
     ];
@@ -821,6 +822,50 @@ fn check_security_daemon() -> CheckResult {
                 vec!["optional — install with: koma --security-install".to_string()],
             )
         }
+    }
+}
+
+// ─── 7b. Language servers ───────────────────────────────────────────────────
+
+fn check_language_servers() -> CheckResult {
+    let rows = crate::lsp::status_all();
+    let managed = rows
+        .iter()
+        .filter(|r| r.source == crate::lsp::Source::Managed)
+        .count();
+    let on_path = rows
+        .iter()
+        .filter(|r| r.source == crate::lsp::Source::Path)
+        .count();
+    let missing = rows
+        .iter()
+        .filter(|r| r.source == crate::lsp::Source::Missing)
+        .count();
+    let total = rows.len();
+    let mut details = Vec::new();
+    for r in &rows {
+        details.push(format!(
+            "{}: {}{}",
+            r.id,
+            r.source.as_str(),
+            r.version
+                .as_ref()
+                .map(|v| format!(" ({v})"))
+                .unwrap_or_default()
+        ));
+    }
+    details.push(format!(
+        "optional — install with: koma lsp install --all  (or install.sh --with-lsp)"
+    ));
+    let headline = format!(
+        "Language servers ({managed} managed, {on_path} on PATH, {missing}/{total} missing)"
+    );
+    if missing == total {
+        CheckResult::warn(headline, details)
+    } else if missing > 0 {
+        CheckResult::warn(headline, details)
+    } else {
+        CheckResult::ok(headline)
     }
 }
 
