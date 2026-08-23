@@ -6,8 +6,8 @@
 //! host can forward replies without remapping.
 
 use super::client::file_ops::{
-    FileCreateResult, FileDeleteResult, FileReadResult, FileRenameResult, FileSaveResult,
-    FileTreeResult,
+    FileCreateResult, FileDeleteResult, FileDownloadBytesResult, FileReadResult, FileRenameResult,
+    FileSaveResult, FileTreeResult, FileWriteBytesResult,
 };
 
 /// Request from the local host to a remote `koma remote-fs` process.
@@ -52,6 +52,18 @@ pub(crate) enum RemoteFsReq {
         path: String,
         request_id: String,
     },
+    WriteBytes {
+        root: String,
+        path: String,
+        bytes_b64: String,
+        overwrite: bool,
+        request_id: String,
+    },
+    DownloadBytes {
+        root: String,
+        path: String,
+        request_id: String,
+    },
 }
 
 /// Reply from remote-fs. Bodies mirror PushEnvelope File* fields.
@@ -72,6 +84,8 @@ pub(crate) enum RemoteFsRep {
     Create(FileCreateResult),
     Rename(FileRenameResult),
     Delete(FileDeleteResult),
+    WriteBytes(FileWriteBytesResult),
+    DownloadBytes(FileDownloadBytesResult),
     /// Catch-all for protocol/parse errors on a request that had no op body.
     Error {
         error: String,

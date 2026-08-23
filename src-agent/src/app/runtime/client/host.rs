@@ -246,6 +246,11 @@ pub(in crate::app::runtime) fn run_host_relay(
     let terminal_manager = std::sync::Arc::new(std::sync::Mutex::new(
         super::terminal_host::TerminalManager::new(push.clone()),
     ));
+    // Host-spawned language servers for Monaco (completion/hover/definition/diagnostics).
+    // Shared across swapper/attached like TerminalManager so open docs survive attach.
+    let lsp_manager = std::sync::Arc::new(std::sync::Mutex::new(
+        crate::lsp::LspManager::new(push.clone()),
+    ));
 
     // Startup: attach directly to `--session`, else open cold into the swapper.
     // With `remote_target` + `session`, open a second-window remote attach
@@ -288,7 +293,10 @@ pub(in crate::app::runtime) fn run_host_relay(
                 &ctl_rx,
                 &mut push_state,
                 current_session_id.as_deref(),
-                &terminal_manager,
+                &HostLocalManagers {
+                    terminal: std::sync::Arc::clone(&terminal_manager),
+                    lsp: std::sync::Arc::clone(&lsp_manager),
+                },
             ),
             HostStep::RemoteHub { ctx } => host_remote_hub(
                 &handle,
@@ -299,6 +307,7 @@ pub(in crate::app::runtime) fn run_host_relay(
                 &mut current_session_id,
                 *ctx,
                 &terminal_manager,
+                &lsp_manager,
             ),
             HostStep::RemoteAttach {
                 ctx,
@@ -318,6 +327,7 @@ pub(in crate::app::runtime) fn run_host_relay(
                 session_id,
                 cwd,
                 &terminal_manager,
+                &lsp_manager,
             ),
             HostStep::Remote { active, session_id } => host_remote(
                 &handle,
@@ -332,6 +342,7 @@ pub(in crate::app::runtime) fn run_host_relay(
                 *active,
                 session_id,
                 &terminal_manager,
+                &lsp_manager,
             ),
             HostStep::Attach { id, workdir } => host_attached(
                 &handle,
@@ -346,6 +357,7 @@ pub(in crate::app::runtime) fn run_host_relay(
                 id,
                 workdir,
                 &terminal_manager,
+                &lsp_manager,
             ),
         };
     }
@@ -354,6 +366,7 @@ pub(in crate::app::runtime) fn run_host_relay(
     // the runtime drop since reader threads hold Arc clones of the push sink.
     {
         let _ = terminal_manager.lock().map(|mut mgr| mgr.cleanup_all());
+        let _ = lsp_manager.lock().map(|mut mgr| mgr.cleanup_all());
     }
 
     // Drop the runtime LAST so the active connection's reader task is cancelled after
@@ -530,6 +543,13 @@ pub(super) fn spawn_delete_and_refresh(ctl_tx: std::sync::mpsc::Sender<HostCtl>,
 // and `build_host_oauth_state` moved to the sibling `host_catalogue` module (file size) —
 // see the `use super::host_catalogue::{...}` import above.
 
+/// Host-local managers shared across the swapper control loop (PTY + LSP).
+/// Bundled so `host_swapper` stays under the clippy arg limit without an allow.
+struct HostLocalManagers {
+    terminal: std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
+    lsp: std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
+}
+
 /// The SWAPPER arm: build the hub from cross-daemon discovery, push it, and block for
 /// a control message. A `Ready` (page reload) re-discovers + re-pushes; a
 /// `Select`/`New` resolves to an attach; a closed control channel (window gone) ends
@@ -544,8 +564,10 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
     ctl_rx: &std::sync::mpsc::Receiver<HostCtl>,
     push_state: &mut push_loop::PushState,
     current: Option<&str>,
-    terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
+    managers: &HostLocalManagers,
 ) -> HostStep {
+    let terminal_manager = &managers.terminal;
+    let lsp_manager = &managers.lsp;
     // Build + push the hub (discovery blocks briefly; fine — nothing renders here).
     let hub = build_local_hub(current);
     push_state.reset();
@@ -665,7 +687,9 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             | Ok(ctl @ HostCtl::FileSave { .. })
             | Ok(ctl @ HostCtl::FileCreate { .. })
             | Ok(ctl @ HostCtl::FileRename { .. })
-            | Ok(ctl @ HostCtl::FileDelete { .. }) => {
+            | Ok(ctl @ HostCtl::FileDelete { .. })
+            | Ok(ctl @ HostCtl::FileWriteBytes { .. })
+            | Ok(ctl @ HostCtl::FileDownloadBytes { .. }) => {
                 let push2 = P::clone(push);
                 let workdirs = current
                     .and_then(super::diff::session_workdirs_for)
@@ -915,6 +939,49 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             }
             Ok(HostCtl::LspUninstall { id }) => {
                 super::lsp_host::spawn_lsp_uninstall(P::clone(push), id);
+            }
+
+            Ok(HostCtl::LspDidOpen { root, path, language_id, text }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspDidOpen { root, path, language_id, text },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspDidChange { root, path, text }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspDidChange { root, path, text },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspDidSave { root, path, text }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspDidSave { root, path, text },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspDidClose { root, path }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspDidClose { root, path },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspCompletion { root, path, line, character, request_id }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspCompletion { root, path, line, character, request_id },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspHover { root, path, line, character, request_id }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspHover { root, path, line, character, request_id },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspDefinition { root, path, line, character, request_id }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspDefinition { root, path, line, character, request_id },
+                    std::sync::Arc::clone(lsp_manager),
+                );
             }
             // Extension STORE browse/detail/installed-list opened while detached
             // (StartScreen / swapper, e.g. the Store tab mounting on the home screen
@@ -1441,6 +1508,7 @@ fn host_attached(
     id: String,
     workdir: Option<std::path::PathBuf>,
     terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
+    lsp_manager: &std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
 ) -> HostStep {
     let mut conn = match attach_session_headless(handle, &id, workdir.as_deref()) {
         Ok(c) => c,
@@ -1480,6 +1548,7 @@ fn host_attached(
             live_marks,
             live_view,
             terminal_manager,
+            lsp_manager,
             None, // local attach
             None, // no remote-fs
             None, // no remote-git
@@ -1572,6 +1641,7 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
     current: &mut Option<String>,
     ctx: super::remote_ctl::RemoteCtx,
     terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
+    lsp_manager: &std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
 ) -> HostStep {
     *current = None;
     push_state.reset();
@@ -1844,6 +1914,49 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                     mgr.kill(&id);
                 }
             }
+
+            Ok(HostCtl::LspDidOpen { root, path, language_id, text }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspDidOpen { root, path, language_id, text },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspDidChange { root, path, text }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspDidChange { root, path, text },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspDidSave { root, path, text }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspDidSave { root, path, text },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspDidClose { root, path }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspDidClose { root, path },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspCompletion { root, path, line, character, request_id }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspCompletion { root, path, line, character, request_id },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspHover { root, path, line, character, request_id }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspHover { root, path, line, character, request_id },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspDefinition { root, path, line, character, request_id }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspDefinition { root, path, line, character, request_id },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
             Ok(HostCtl::KillSession(id)) => {
                 // Kill the remote session-daemon; stay on this host hub.
                 // Distinct from DisconnectRemote (leave host, daemons keep cooking).
@@ -1889,6 +2002,7 @@ fn host_remote_attach(
     session_id: String,
     cwd: Option<String>,
     terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
+    lsp_manager: &std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
 ) -> HostStep {
     let (remote_state_tx, remote_state_rx) =
         std::sync::mpsc::channel::<super::remote_ctl::RemoteStateUpdate>();
@@ -1986,6 +2100,7 @@ fn host_remote_attach(
                 active,
                 sid,
                 terminal_manager,
+                lsp_manager,
             );
         }
 
@@ -2032,6 +2147,7 @@ fn host_remote(
     mut active: super::remote_ctl::ActiveRemote,
     session_id: String,
     terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
+    lsp_manager: &std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
 ) -> HostStep {
     *current = Some(session_id);
     if let Ok(mut g) = live_req.lock() {
@@ -2053,6 +2169,7 @@ fn host_remote(
             live_marks,
             live_view,
             terminal_manager,
+            lsp_manager,
             Some(&active.ctx),
             active.fs.as_ref(),
             active.git.as_ref(),

@@ -9,7 +9,7 @@ winresource = "0.1"
 
 [dependencies]
 ratatui = "0.30.2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "io-std", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "io-std", "signal", "process"] }
 reqwest = { version = "0.12", features = ["json", "stream", "blocking", "native-tls-vendored"] }
 dom_smoothie = "0.18.0"
 fast_html2md = "0.0.62"

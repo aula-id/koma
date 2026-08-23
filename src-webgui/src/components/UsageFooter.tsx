@@ -1,4 +1,4 @@
-import { Activity, FoldVertical, Server } from 'lucide-react'
+import { Activity, AlertCircle, AlertTriangle, FoldVertical, Server } from 'lucide-react'
 import { useKoma, visiblePlanTodos } from '../store/koma'
 import { BranchSwitcher } from './BranchSwitcher'
 
@@ -36,6 +36,18 @@ export function UsageFooter() {
   const gitDetached = useKoma((s) => s.git.detached)
   const gitError = useKoma((s) => s.git.error)
   const remoteState = useKoma((s) => s.remoteState)
+  const lspDiagnostics = useKoma((s) => s.lspDiagnostics)
+  const problemsOpen = useKoma((s) => s.problemsOpen)
+  const toggleProblemsOpen = useKoma((s) => s.toggleProblemsOpen)
+  let errCount = 0
+  let warnCount = 0
+  for (const list of Object.values(lspDiagnostics)) {
+    for (const d of list) {
+      if (d.severity === 1) errCount += 1
+      else if (d.severity === 2) warnCount += 1
+    }
+  }
+  const problemTotal = errCount + warnCount
   // Live remote target for the statusline chip (hub-ready OR attached-connected).
   const remoteTarget =
     (remoteState.state === 'ready' || remoteState.state === 'connected') &&
@@ -113,6 +125,28 @@ export function UsageFooter() {
         }`}
       >
         <FoldVertical size={12} />
+      </button>
+
+      {/* Problems badge — always visible; expands the cross-tab drawer */}
+      <button
+        type="button"
+        onClick={toggleProblemsOpen}
+        aria-label="Problems"
+        title={problemTotal ? `${errCount} errors, ${warnCount} warnings` : 'No problems'}
+        className={`flex h-4 flex-none items-center gap-1 rounded px-1 transition-colors ${
+          problemsOpen
+            ? 'bg-koma-accent/15 text-koma-accent'
+            : problemTotal
+              ? 'text-koma-fg hover:bg-koma-hover'
+              : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'
+        }`}
+      >
+        {errCount > 0 ? (
+          <AlertCircle size={11} className="text-red-400" />
+        ) : (
+          <AlertTriangle size={11} className={warnCount ? 'text-amber-400' : ''} />
+        )}
+        <span className="tabular-nums">{problemTotal}</span>
       </button>
     </div>
   )

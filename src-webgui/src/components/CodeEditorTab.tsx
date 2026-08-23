@@ -2,6 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
 import { Code2, Download, RotateCcw, Save, X } from 'lucide-react'
 import { initMonaco, applyKomaTheme, readMonoFont, langFromPath } from '../lib/monaco-setup'
+import {
+  ensureLspProviders,
+  languageIdForPath,
+  stampModelPath,
+  applyDiagnosticsToMonaco,
+  pathToUri,
+} from '../lib/monaco-lsp'
 import { useKoma, type Tab } from '../store/koma'
 import { fileKey } from '../store/coding'
 import { BrailleSpinner } from './BrailleSpinner'
@@ -9,14 +16,16 @@ import { BrailleSpinner } from './BrailleSpinner'
 type CodingTab = Extract<Tab, { kind: 'codingFile' }>
 
 const AUTOSAVE_MS = 750
+const LSP_CHANGE_MS = 300
 
 export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelRef = useRef<monaco.editor.ITextModel | null>(null)
-  // Suppress markDirty while applying host content programmatically.
   const applyingRef = useRef(false)
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lspChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lspOpenedRef = useRef(false)
 
   const fileState = useKoma((s) => s.coding.files[fileKey(tab.root, tab.path)] ?? null)
   const codingAutosave = useKoma((s) => !!s.settingsValues?.codingAutosave)
@@ -24,14 +33,22 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   const revertCodingFile = useKoma((s) => s.revertCodingFile)
   const lspServers = useKoma((s) => s.lspServers)
   const lspProgress = useKoma((s) => s.lspProgress)
+  const lspDiagnostics = useKoma((s) => s.lspDiagnostics)
   const refreshLsp = useKoma((s) => s.refreshLsp)
   const lspInstall = useKoma((s) => s.lspInstall)
+  const req = useKoma((s) => s.req)
   const [bannerDismissed, setBannerDismissed] = useState<Record<string, boolean>>({})
 
-  // Ensure we have a fresh LSP catalogue when a coding file opens.
   useEffect(() => {
     if (lspServers.length === 0) refreshLsp()
   }, [lspServers.length, refreshLsp])
+
+  useEffect(() => {
+    ensureLspProviders(
+      (body) => useKoma.getState().req(body as never),
+      () => (useKoma.getState().settingsValues?.workdir ?? []).filter(Boolean),
+    )
+  }, [])
 
   const missingServer = useMemo(() => {
     const file = tab.path.split('/').pop() ?? tab.path
@@ -67,8 +84,6 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     return 'Saved'
   }, [fileState, codingAutosave])
 
-  // Safe debounced autosave: only when enabled, dirty, editable, not already
-  // saving/conflicting, and content differs from last save.
   useEffect(() => {
     if (autosaveTimerRef.current) {
       clearTimeout(autosaveTimerRef.current)
@@ -112,7 +127,6 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     tab.path,
   ])
 
-  // Init Monaco + editor once per tab identity.
   useEffect(() => {
     const host = containerRef.current
     if (!host) return
@@ -130,33 +144,70 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       lineNumbersMinChars: 3,
       theme,
       wordWrap: 'on',
+      quickSuggestions: true,
+      suggestOnTriggerCharacters: true,
+      parameterHints: { enabled: true },
+      hover: { enabled: true, delay: 300 },
+      links: true,
+      folding: true,
+      multiCursorModifier: 'alt',
     })
     monaco.editor.setTheme(theme)
     editorRef.current = editor
 
-    // Ctrl/Cmd+S → save
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       useKoma.getState().saveCodingFile(tab.root, tab.path)
+    })
+    editor.addCommand(monaco.KeyCode.F12, () => {
+      void editor.getAction('editor.action.revealDefinition')?.run()
     })
 
     const sub = editor.onDidChangeModelContent(() => {
       if (applyingRef.current) return
       const model = editor.getModel()
       if (!model) return
-      useKoma.getState().updateCodingContent(tab.root, tab.path, model.getValue())
+      const text = model.getValue()
+      useKoma.getState().updateCodingContent(tab.root, tab.path, text)
+      if (lspChangeTimerRef.current) clearTimeout(lspChangeTimerRef.current)
+      lspChangeTimerRef.current = setTimeout(() => {
+        lspChangeTimerRef.current = null
+        if (!lspOpenedRef.current) return
+        useKoma.getState().req({
+          r: 'LspDidChange',
+          root: tab.root,
+          path: tab.path,
+          text,
+        })
+      }, LSP_CHANGE_MS)
     })
 
+    const onReveal = (ev: Event) => {
+      const detail = (ev as CustomEvent).detail as
+        | { root: string; path: string; line: number; column: number }
+        | undefined
+      if (!detail) return
+      if (detail.root !== tab.root || detail.path !== tab.path) return
+      const ed = editorRef.current
+      if (!ed) return
+      ed.setPosition({ lineNumber: detail.line, column: detail.column })
+      ed.revealLineInCenter(detail.line)
+      ed.focus()
+    }
+    window.addEventListener('koma-reveal-line', onReveal)
+
     return () => {
+      window.removeEventListener('koma-reveal-line', onReveal)
       sub.dispose()
+      if (lspChangeTimerRef.current) clearTimeout(lspChangeTimerRef.current)
       const model = modelRef.current
       editor.dispose()
       if (model) model.dispose()
       editorRef.current = null
       modelRef.current = null
+      lspOpenedRef.current = false
     }
   }, [tab.root, tab.path])
 
-  // Sync content when file state changes from the host.
   useEffect(() => {
     if (!fileState || !editorRef.current) return
     const editor = editorRef.current
@@ -178,11 +229,12 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
         }
       } else {
         const model = monaco.editor.createModel(next, lang)
+        stampModelPath(model, tab.root, tab.path)
         editor.setModel(model)
         modelRef.current = model
       }
+      if (modelRef.current) stampModelPath(modelRef.current, tab.root, tab.path)
     } finally {
-      // Defer so Monaco's own content-change event from setValue is ignored.
       queueMicrotask(() => {
         applyingRef.current = false
       })
@@ -191,6 +243,26 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     editor.updateOptions({
       readOnly: fileState.binary || fileState.tooLarge || !!fileState.error || fileState.conflict,
     })
+
+    if (
+      !lspOpenedRef.current &&
+      !fileState.binary &&
+      !fileState.tooLarge &&
+      !fileState.error &&
+      fileState.content != null
+    ) {
+      lspOpenedRef.current = true
+      req({
+        r: 'LspDidOpen',
+        root: tab.root,
+        path: tab.path,
+        languageId: languageIdForPath(tab.path),
+        text: fileState.content,
+      })
+      const uri = pathToUri(tab.root, tab.path)
+      const diags = useKoma.getState().lspDiagnostics[uri]
+      if (diags) applyDiagnosticsToMonaco(uri, diags)
+    }
   }, [
     fileState?.content,
     fileState?.loading,
@@ -200,7 +272,15 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     fileState?.conflict,
     fileState?.fingerprint,
     tab.path,
+    tab.root,
+    req,
   ])
+
+  useEffect(() => {
+    const uri = pathToUri(tab.root, tab.path)
+    const diags = lspDiagnostics[uri]
+    if (diags) applyDiagnosticsToMonaco(uri, diags)
+  }, [lspDiagnostics, tab.root, tab.path])
 
   if (fileState?.conflict) {
     return (
@@ -230,15 +310,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   if (fileState?.binary) {
     return (
       <div className="flex h-full w-full flex-col">
-        <EditorChrome
-          path={tab.path}
-          status={status}
-          canSave={false}
-          canRevert={false}
-          saving={false}
-          onSave={() => {}}
-          onRevert={() => {}}
-        />
+        <EditorChrome path={tab.path} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-[12px] text-koma-dim">
           Binary file — no preview
         </div>
@@ -248,15 +320,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   if (fileState?.tooLarge) {
     return (
       <div className="flex h-full w-full flex-col">
-        <EditorChrome
-          path={tab.path}
-          status={status}
-          canSave={false}
-          canRevert={false}
-          saving={false}
-          onSave={() => {}}
-          onRevert={() => {}}
-        />
+        <EditorChrome path={tab.path} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-[12px] text-koma-dim">
           File too large to edit
         </div>
@@ -266,15 +330,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   if (fileState?.error && fileState.content === null) {
     return (
       <div className="flex h-full w-full flex-col">
-        <EditorChrome
-          path={tab.path}
-          status={status}
-          canSave={false}
-          canRevert={false}
-          saving={false}
-          onSave={() => {}}
-          onRevert={() => {}}
-        />
+        <EditorChrome path={tab.path} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-[12px] text-koma-dim">
           {fileState.error}
         </div>
@@ -314,9 +370,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
           </button>
           <button
             type="button"
-            onClick={() =>
-              setBannerDismissed((m) => ({ ...m, [missingServer.id]: true }))
-            }
+            onClick={() => setBannerDismissed((m) => ({ ...m, [missingServer.id]: true }))}
             aria-label="Dismiss"
             className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-fg opacity-50 hover:bg-koma-hover hover:opacity-100"
           >
@@ -353,41 +407,30 @@ function EditorChrome({
   onSave: () => void
   onRevert: () => void
 }) {
-  const segments = path.split('/').filter(Boolean)
-
   return (
-    <div className="flex flex-none items-center gap-2 border-b border-koma-border bg-koma-panel2 px-3 py-1.5">
-      <Code2 size={14} className="flex-none text-koma-fg opacity-70" />
-      <nav aria-label="File path" className="flex min-w-0 flex-1 items-center truncate font-mono text-[12px] text-koma-fg" title={path}>
-        {segments.map((segment, index) => (
-          <span key={`${segment}-${index}`} className="flex min-w-0 items-center">
-            {index > 0 && <span className="mx-1 flex-none text-koma-dim">/</span>}
-            <span className="truncate">{segment}</span>
-          </span>
-        ))}
-      </nav>
+    <div className="flex h-8 flex-none items-center gap-2 border-b border-koma-border bg-koma-panel px-3 text-[12px]">
+      <Code2 size={13} className="flex-none text-koma-dim" />
+      <span className="min-w-0 flex-1 truncate font-mono text-koma-fg" title={path}>
+        {path}
+      </span>
       <span className="flex-none text-[11px] text-koma-dim">{status}</span>
       <button
         type="button"
         onClick={onRevert}
-        disabled={!canRevert}
+        disabled={!canRevert || saving}
         title="Revert"
-        aria-label="Revert"
-        className="flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100 disabled:cursor-default disabled:opacity-30"
+        className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:opacity-30"
       >
-        <RotateCcw size={12} />
-        Revert
+        <RotateCcw size={13} />
       </button>
       <button
         type="button"
         onClick={onSave}
         disabled={!canSave}
         title="Save"
-        aria-label="Save"
-        className="flex h-6 items-center gap-1 rounded bg-koma-accent/15 px-1.5 text-[11px] font-semibold text-koma-accent hover:bg-koma-accent/25 disabled:cursor-default disabled:bg-transparent disabled:opacity-30"
+        className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:opacity-30"
       >
-        {saving ? <BrailleSpinner size={12} /> : <Save size={12} />}
-        Save
+        <Save size={13} />
       </button>
     </div>
   )

@@ -164,9 +164,9 @@ fn download_bytes(url: &str, progress: &mut Option<ProgressFn>, id: &str) -> Res
         }
         buf.extend_from_slice(&tmp[..n]);
         read += n as u64;
-        if total > 0 {
-            let pct = 5 + ((read.saturating_mul(80)) / total) as u8;
-            report(progress, id, pct.min(85), None);
+        if let Some(part) = read.saturating_mul(80).checked_div(total) {
+            let pct = 5u8.saturating_add(part as u8).min(85);
+            report(progress, id, pct, None);
         }
     }
     report(progress, id, 85, None);
@@ -642,10 +642,7 @@ fn exe_name(name: &str) -> String {
 pub fn print_status() -> i32 {
     let rows = resolve::status_all();
     let mut any_missing = false;
-    println!(
-        "{:<22} {:<10} {:<10} {}",
-        "ID", "SOURCE", "VERSION", "PATH"
-    );
+    println!("{:<22} {:<10} {:<10} PATH", "ID", "SOURCE", "VERSION");
     println!("{}", "-".repeat(78));
     for r in &rows {
         if r.source == resolve::Source::Missing {
