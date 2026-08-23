@@ -162,6 +162,7 @@ pub(super) fn push_loop(
     live_marks: &std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
     live_view: &std::sync::Arc<std::sync::Mutex<super::StreamView>>,
     terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
+    lsp_manager: &std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
     // When set, this fold is an SSH-bridged remote session: leave/kill returns to
     // the remote hub (not the local swapper), and KillSession uses remote SSH kill.
     remote_ctx: Option<&super::remote_ctl::RemoteCtx>,
@@ -969,6 +970,91 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::LspUninstall { id }) => {
                     super::lsp_host::spawn_lsp_uninstall_attached(lsp_tx.clone(), id);
                 }
+
+
+                Ok(super::HostCtl::LspDidOpen { root, path, language_id, text }) => {
+
+                    super::lsp_host::handle_client_ctl(
+
+                        super::HostCtl::LspDidOpen { root, path, language_id, text },
+
+                        std::sync::Arc::clone(lsp_manager),
+
+                    );
+
+                }
+
+                Ok(super::HostCtl::LspDidChange { root, path, text }) => {
+
+                    super::lsp_host::handle_client_ctl(
+
+                        super::HostCtl::LspDidChange { root, path, text },
+
+                        std::sync::Arc::clone(lsp_manager),
+
+                    );
+
+                }
+
+                Ok(super::HostCtl::LspDidSave { root, path, text }) => {
+
+                    super::lsp_host::handle_client_ctl(
+
+                        super::HostCtl::LspDidSave { root, path, text },
+
+                        std::sync::Arc::clone(lsp_manager),
+
+                    );
+
+                }
+
+                Ok(super::HostCtl::LspDidClose { root, path }) => {
+
+                    super::lsp_host::handle_client_ctl(
+
+                        super::HostCtl::LspDidClose { root, path },
+
+                        std::sync::Arc::clone(lsp_manager),
+
+                    );
+
+                }
+
+                Ok(super::HostCtl::LspCompletion { root, path, line, character, request_id }) => {
+
+                    super::lsp_host::handle_client_ctl(
+
+                        super::HostCtl::LspCompletion { root, path, line, character, request_id },
+
+                        std::sync::Arc::clone(lsp_manager),
+
+                    );
+
+                }
+
+                Ok(super::HostCtl::LspHover { root, path, line, character, request_id }) => {
+
+                    super::lsp_host::handle_client_ctl(
+
+                        super::HostCtl::LspHover { root, path, line, character, request_id },
+
+                        std::sync::Arc::clone(lsp_manager),
+
+                    );
+
+                }
+
+                Ok(super::HostCtl::LspDefinition { root, path, line, character, request_id }) => {
+
+                    super::lsp_host::handle_client_ctl(
+
+                        super::HostCtl::LspDefinition { root, path, line, character, request_id },
+
+                        std::sync::Arc::clone(lsp_manager),
+
+                    );
+
+                }
                 // Extension STORE browse/detail/installed-list: NEVER touches the
                 // daemon (host-side only, regardless of attach state) — spawn the
                 // blocking network/config work off this thread via the shared
@@ -1014,7 +1100,9 @@ pub(super) fn push_loop(
                 | Ok(ctl @ super::HostCtl::FileSave { .. })
                 | Ok(ctl @ super::HostCtl::FileCreate { .. })
                 | Ok(ctl @ super::HostCtl::FileRename { .. })
-                | Ok(ctl @ super::HostCtl::FileDelete { .. }) => {
+                | Ok(ctl @ super::HostCtl::FileDelete { .. })
+                | Ok(ctl @ super::HostCtl::FileWriteBytes { .. })
+                | Ok(ctl @ super::HostCtl::FileDownloadBytes { .. }) => {
                     if let Some(fs) = remote_fs {
                         fs.handle_file_ctl(&ctl, push);
                     } else if remote_ctx.is_some() {
@@ -1786,6 +1874,30 @@ fn push_remote_fs_unavailable(ctl: &super::HostCtl, push: &dyn Fn(String)) {
             root: root.clone(),
             path: path.clone(),
             request_id: request_id.clone(),
+            error: Some(ERR.into()),
+        },
+        super::HostCtl::FileWriteBytes {
+            root,
+            path,
+            request_id,
+            ..
+        } => PushEnvelope::FileWriteBytes {
+            root: root.clone(),
+            path: path.clone(),
+            request_id: request_id.clone(),
+            error: Some(ERR.into()),
+        },
+        super::HostCtl::FileDownloadBytes {
+            root,
+            path,
+            request_id,
+        } => PushEnvelope::FileDownloadBytes {
+            root: root.clone(),
+            path: path.clone(),
+            request_id: request_id.clone(),
+            bytes_b64: None,
+            size: 0,
+            too_large: false,
             error: Some(ERR.into()),
         },
         _ => return,

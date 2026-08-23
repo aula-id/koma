@@ -691,6 +691,25 @@ pub(super) enum PushEnvelope {
         request_id: String,
         error: Option<String>,
     },
+    /// Coding panel: binary write (drag-upload) reply.
+    #[serde(rename_all = "camelCase")]
+    FileWriteBytes {
+        root: String,
+        path: String,
+        request_id: String,
+        error: Option<String>,
+    },
+    /// Coding panel: binary download reply. `bytes_b64` is standard base64.
+    #[serde(rename_all = "camelCase")]
+    FileDownloadBytes {
+        root: String,
+        path: String,
+        request_id: String,
+        bytes_b64: Option<String>,
+        size: u64,
+        too_large: bool,
+        error: Option<String>,
+    },
     /// Settings "Language servers": full catalogue status (managed / PATH / missing).
     #[serde(rename_all = "camelCase")]
     LspStatus {
@@ -703,6 +722,33 @@ pub(super) enum PushEnvelope {
     LspInstall {
         id: String,
         pct: u8,
+        error: Option<String>,
+    },
+    /// `textDocument/publishDiagnostics` — replaces markers for `uri`.
+    #[serde(rename_all = "camelCase")]
+    LspDiagnostics {
+        uri: String,
+        diagnostics: Vec<crate::lsp::LspDiagnostic>,
+    },
+    /// Reply to `LspCompletion` (always, so Monaco never hangs).
+    #[serde(rename_all = "camelCase")]
+    LspCompletion {
+        request_id: String,
+        items: Vec<crate::lsp::LspCompletionItem>,
+        error: Option<String>,
+    },
+    /// Reply to `LspHover`.
+    #[serde(rename_all = "camelCase")]
+    LspHover {
+        request_id: String,
+        hover: Option<crate::lsp::LspHover>,
+        error: Option<String>,
+    },
+    /// Reply to `LspDefinition`.
+    #[serde(rename_all = "camelCase")]
+    LspDefinition {
+        request_id: String,
+        locations: Vec<crate::lsp::LspLocation>,
         error: Option<String>,
     },
     /// One-shot import-graph visualization result answering a `GuiReq::ImportGraph`
@@ -1135,6 +1181,57 @@ pub(super) fn push_terminal_exit(push: &dyn Fn(String), id: &str, code: Option<i
 /// Emit a one-shot `LspStatus` envelope for Settings "Language servers".
 pub(super) fn push_lsp_status(push: &dyn Fn(String), servers: Vec<crate::lsp::ServerStatus>) {
     super::render::emit(push, &PushEnvelope::LspStatus { servers });
+}
+
+/// Emit `LspCompletion` reply (always — Monaco provider must not hang).
+pub(super) fn push_lsp_completion(
+    push: &dyn Fn(String),
+    request_id: String,
+    items: Vec<crate::lsp::LspCompletionItem>,
+    error: Option<String>,
+) {
+    super::render::emit(
+        push,
+        &PushEnvelope::LspCompletion {
+            request_id,
+            items,
+            error,
+        },
+    );
+}
+
+/// Emit `LspHover` reply.
+pub(super) fn push_lsp_hover(
+    push: &dyn Fn(String),
+    request_id: String,
+    hover: Option<crate::lsp::LspHover>,
+    error: Option<String>,
+) {
+    super::render::emit(
+        push,
+        &PushEnvelope::LspHover {
+            request_id,
+            hover,
+            error,
+        },
+    );
+}
+
+/// Emit `LspDefinition` reply.
+pub(super) fn push_lsp_definition(
+    push: &dyn Fn(String),
+    request_id: String,
+    locations: Vec<crate::lsp::LspLocation>,
+    error: Option<String>,
+) {
+    super::render::emit(
+        push,
+        &PushEnvelope::LspDefinition {
+            request_id,
+            locations,
+            error,
+        },
+    );
 }
 
 /// Emit a one-shot `LspInstall` progress/result frame.

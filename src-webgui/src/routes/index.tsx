@@ -16,6 +16,7 @@ import { RemotePasswordPrompt } from '../components/RemotePasswordPrompt'
 import { RemotePathPicker } from '../components/RemotePathPicker'
 import { ToastContainer } from '../components/ToastContainer'
 import { UsageFooter } from '../components/UsageFooter'
+import { ProblemsDrawer } from '../components/ProblemsDrawer'
 import { useKoma } from '../store/koma'
 import { BrailleSpinner } from '../components/BrailleSpinner'
 import { ExtensionPanelFrame } from '../components/ExtensionPanelFrame'
@@ -487,6 +488,7 @@ function TabbedMain() {
           ) : null,
         )}
       </div>
+      <ProblemsDrawer />
       <UsageFooter />
     </div>
   )

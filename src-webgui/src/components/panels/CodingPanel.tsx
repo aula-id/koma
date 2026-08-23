@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import {
   Check,
   ChevronDown,
   ChevronRight,
+  Download,
   File,
   Folder,
   FolderOpen,
@@ -54,16 +55,22 @@ type TreeNodeProps = {
   depth: number
   expanded: Set<string>
   draft: Draft | null
+  dropTargetPath: string | null
   onToggle: (path: string) => void
   onOpenFile: (path: string) => void
   onRefresh: (path: string) => void
   onStartCreate: (dirPath: string, item: 'file' | 'dir') => void
   onStartRename: (path: string) => void
   onStartDelete: (path: string, isDir: boolean) => void
+  onDownload: (path: string) => void
   onCancelDraft: () => void
   onSubmitCreate: (dirPath: string, item: 'file' | 'dir', name: string) => void
   onSubmitRename: (path: string, name: string) => void
   onConfirmDelete: (path: string) => void
+  onExternalDragOver: (e: DragEvent, dirPath: string) => void
+  onExternalDrop: (e: DragEvent, dirPath: string) => void
+  onExternalDragLeave: (e: DragEvent, dirPath: string) => void
+  onOpenContextMenu: (e: ReactMouseEvent, path: string, isDir: boolean) => void
 }
 
 function InlineNameInput({
@@ -170,16 +177,22 @@ function TreeNode({
   depth,
   expanded,
   draft,
+  dropTargetPath,
   onToggle,
   onOpenFile,
   onRefresh,
   onStartCreate,
   onStartRename,
   onStartDelete,
+  onDownload,
   onCancelDraft,
   onSubmitCreate,
   onSubmitRename,
   onConfirmDelete,
+  onExternalDragOver,
+  onExternalDrop,
+  onExternalDragLeave,
+  onOpenContextMenu,
 }: TreeNodeProps) {
   const key = fileKey(root, entry.path)
   const dirState = useKoma((s) => (entry.isDir ? s.coding.dirs[key] : null))
@@ -195,6 +208,9 @@ function TreeNode({
   const deleting = draft?.kind === 'delete' && draft.path === entry.path
   const createHere =
     draft?.kind === 'create' && draft.dirPath === entry.path && entry.isDir ? draft : null
+  // Drop target is the directory itself, or the parent dir when hovering a file.
+  const dropDir = entry.isDir ? entry.path : parentDirPath(entry.path)
+  const isDropTarget = dropTargetPath !== null && dropTargetPath === dropDir
 
   if (deleting) {
     return (
@@ -232,8 +248,15 @@ function TreeNode({
   return (
     <div>
       <div
-        className="group flex h-7 min-w-0 items-center gap-1 pr-1 text-[12px] text-koma-fg hover:bg-koma-hover"
+        className={`group flex h-7 min-w-0 items-center gap-1 pr-1 text-[12px] text-koma-fg hover:bg-koma-hover ${
+          isDropTarget ? 'bg-koma-accent/15 ring-1 ring-inset ring-koma-accent/40' : ''
+        }`}
         style={{ paddingLeft: pad }}
+        data-coding-row=""
+        onDragOver={(e) => onExternalDragOver(e, dropDir)}
+        onDrop={(e) => onExternalDrop(e, dropDir)}
+        onDragLeave={(e) => onExternalDragLeave(e, dropDir)}
+        onContextMenu={(e) => onOpenContextMenu(e, entry.path, entry.isDir)}
       >
         {entry.isDir ? (
           <button
@@ -288,7 +311,7 @@ function TreeNode({
             {/* Idle: max-w-0 so actions take no flex width (no premature ellipsis).
                 Hover: expand and show. opacity alone would still reserve space. */}
             {!draft ? (
-              <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[140px] group-hover:opacity-100">
+              <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[168px] group-hover:opacity-100">
                 {entry.isDir && (
                   <>
                     <IconBtn label="New file" onClick={() => onStartCreate(entry.path, 'file')}>
@@ -301,6 +324,11 @@ function TreeNode({
                       <RefreshCw size={12} />
                     </IconBtn>
                   </>
+                )}
+                {!entry.isDir && (
+                  <IconBtn label="Download" onClick={() => onDownload(entry.path)}>
+                    <Download size={12} />
+                  </IconBtn>
                 )}
                 <IconBtn label="Rename" onClick={() => onStartRename(entry.path)}>
                   <Pencil size={12} />
@@ -359,16 +387,22 @@ function TreeNode({
                 depth={depth + 1}
                 expanded={expanded}
                 draft={draft}
+                dropTargetPath={dropTargetPath}
                 onToggle={onToggle}
                 onOpenFile={onOpenFile}
                 onRefresh={onRefresh}
                 onStartCreate={onStartCreate}
                 onStartRename={onStartRename}
                 onStartDelete={onStartDelete}
+                onDownload={onDownload}
                 onCancelDraft={onCancelDraft}
                 onSubmitCreate={onSubmitCreate}
                 onSubmitRename={onSubmitRename}
                 onConfirmDelete={onConfirmDelete}
+                onExternalDragOver={onExternalDragOver}
+                onExternalDrop={onExternalDrop}
+                onExternalDragLeave={onExternalDragLeave}
+                onOpenContextMenu={onOpenContextMenu}
               />
             ))
           ) : dirState && !dirState.loading && !createHere ? (
@@ -400,10 +434,19 @@ export function CodingPanel() {
   const createCodingItem = useKoma((s) => s.createCodingItem)
   const renameCodingItem = useKoma((s) => s.renameCodingItem)
   const deleteCodingItem = useKoma((s) => s.deleteCodingItem)
+  const uploadCodingFile = useKoma((s) => s.uploadCodingFile)
+  const downloadCodingFile = useKoma((s) => s.downloadCodingFile)
   const req = useKoma((s) => s.req)
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']))
   const [draft, setDraft] = useState<Draft | null>(null)
+  const [dropTargetPath, setDropTargetPath] = useState<string | null>(null)
+  const [ctxMenu, setCtxMenu] = useState<null | {
+    x: number
+    y: number
+    path: string
+    isDir: boolean
+  }>(null)
 
   useEffect(() => {
     req({ r: 'GetSettings' })
@@ -432,10 +475,28 @@ export function CodingPanel() {
   }, [draft])
 
   useEffect(() => {
+    if (!ctxMenu) return
+    const close = () => setCtxMenu(null)
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') close()
+    }
+    window.addEventListener('click', close)
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('blur', close)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('blur', close)
+    }
+  }, [ctxMenu])
+
+  useEffect(() => {
     if (!activeRoot) return
     refreshCodingDir(activeRoot, '')
     setExpanded(new Set(['']))
     setDraft(null)
+    setDropTargetPath(null)
+    setCtxMenu(null)
   }, [activeRoot, refreshCodingDir])
 
   const rootKey = activeRoot ? fileKey(activeRoot, '') : null
@@ -443,6 +504,61 @@ export function CodingPanel() {
   const roots = useMemo(() => workdir.slice(), [workdir])
   const rootCreate =
     draft?.kind === 'create' && draft.dirPath === '' ? draft : null
+
+  const hasExternalFiles = (e: DragEvent) => {
+    const dt = e.dataTransfer
+    if (!dt) return false
+    if (dt.files && dt.files.length > 0) return true
+    if (dt.types) {
+      for (let i = 0; i < dt.types.length; i++) {
+        if (dt.types[i] === 'Files') return true
+      }
+    }
+    return false
+  }
+
+  const onExternalDragOver = (e: DragEvent, dirPath: string) => {
+    if (!hasExternalFiles(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    try {
+      e.dataTransfer.dropEffect = 'copy'
+    } catch {
+      /* ignore */
+    }
+    setDropTargetPath(dirPath)
+  }
+
+  const onExternalDragLeave = (e: DragEvent, dirPath: string) => {
+    e.stopPropagation()
+    // Only clear when leaving the current target (not entering a child).
+    const related = e.relatedTarget as Node | null
+    if (related && (e.currentTarget as HTMLElement).contains(related)) return
+    setDropTargetPath((cur) => (cur === dirPath ? null : cur))
+  }
+
+  const onExternalDrop = (e: DragEvent, dirPath: string) => {
+    if (!hasExternalFiles(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    setDropTargetPath(null)
+    if (!activeRoot) return
+    const files = Array.from(e.dataTransfer?.files ?? [])
+    for (const file of files) {
+      // Skip directory-like entries (webkit relative path empty folders, zero-size no-type).
+      if (!file.name || file.name === '.' || file.name === '..') continue
+      void uploadCodingFile(activeRoot, dirPath, file, true)
+    }
+    if (dirPath) {
+      setExpanded((prev) => new Set(prev).add(dirPath))
+    }
+  }
+
+  const onOpenContextMenu = (e: ReactMouseEvent, path: string, isDir: boolean) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setCtxMenu({ x: e.clientX, y: e.clientY, path, isDir })
+  }
 
   const onToggle = (path: string) => {
     if (!activeRoot) return
@@ -469,6 +585,11 @@ export function CodingPanel() {
   const onRefresh = (path: string) => {
     if (!activeRoot) return
     refreshCodingDir(activeRoot, path)
+  }
+
+  const onDownload = (path: string) => {
+    if (!activeRoot) return
+    downloadCodingFile(activeRoot, path)
   }
 
   const onStartCreate = (dirPath: string, item: 'file' | 'dir') => {
@@ -571,7 +692,19 @@ export function CodingPanel() {
         </> : null}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto py-1">
+      <div
+        className={`min-h-0 flex-1 overflow-y-auto py-1 ${
+          dropTargetPath === '' ? 'bg-koma-accent/5' : ''
+        }`}
+        onDragOver={(e) => onExternalDragOver(e, '')}
+        onDrop={(e) => onExternalDrop(e, '')}
+        onDragLeave={(e) => onExternalDragLeave(e, '')}
+        onContextMenu={(e) => {
+          // Empty-area right-click → root context (upload target only; no download).
+          if ((e.target as HTMLElement).closest('[data-coding-row]')) return
+          onOpenContextMenu(e, '', true)
+        }}
+      >
         {!activeRoot ? (
           <Empty>Select a workspace root</Empty>
         ) : rootDir?.loading && !rootDir.entries.length && !rootCreate ? (
@@ -600,24 +733,119 @@ export function CodingPanel() {
                   depth={0}
                   expanded={expanded}
                   draft={draft}
+                  dropTargetPath={dropTargetPath}
                   onToggle={onToggle}
                   onOpenFile={onOpenFile}
                   onRefresh={onRefresh}
                   onStartCreate={onStartCreate}
                   onStartRename={onStartRename}
                   onStartDelete={onStartDelete}
+                  onDownload={onDownload}
                   onCancelDraft={onCancelDraft}
                   onSubmitCreate={onSubmitCreate}
                   onSubmitRename={onSubmitRename}
                   onConfirmDelete={onConfirmDelete}
+                  onExternalDragOver={onExternalDragOver}
+                  onExternalDrop={onExternalDrop}
+                  onExternalDragLeave={onExternalDragLeave}
+                  onOpenContextMenu={onOpenContextMenu}
                 />
               ))
             ) : !rootCreate ? (
-              <Empty>Empty workspace</Empty>
+              <Empty>
+                {dropTargetPath === '' ? 'Drop files to upload' : 'Empty workspace'}
+              </Empty>
             ) : null}
           </>
         )}
       </div>
+
+      {ctxMenu && activeRoot ? (
+        <div
+          className="fixed z-[80] min-w-[140px] rounded border border-koma-border bg-koma-panel py-1 shadow-lg"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          {!ctxMenu.isDir ? (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-90 hover:bg-koma-hover"
+              onClick={() => {
+                onDownload(ctxMenu.path)
+                setCtxMenu(null)
+              }}
+            >
+              <Download size={12} className="opacity-70" />
+              Download
+            </button>
+          ) : null}
+          {ctxMenu.isDir ? (
+            <>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-90 hover:bg-koma-hover"
+                onClick={() => {
+                  onStartCreate(ctxMenu.path, 'file')
+                  setCtxMenu(null)
+                }}
+              >
+                <FilePlus size={12} className="opacity-70" />
+                New file
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-90 hover:bg-koma-hover"
+                onClick={() => {
+                  onStartCreate(ctxMenu.path, 'dir')
+                  setCtxMenu(null)
+                }}
+              >
+                <FolderPlus size={12} className="opacity-70" />
+                New folder
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-90 hover:bg-koma-hover"
+                onClick={() => {
+                  onRefresh(ctxMenu.path)
+                  setCtxMenu(null)
+                }}
+              >
+                <RefreshCw size={12} className="opacity-70" />
+                Refresh
+              </button>
+            </>
+          ) : null}
+          {ctxMenu.path !== '' ? (
+            <>
+              <div className="my-1 border-t border-koma-border" />
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-90 hover:bg-koma-hover"
+                onClick={() => {
+                  onStartRename(ctxMenu.path)
+                  setCtxMenu(null)
+                }}
+              >
+                <Pencil size={12} className="opacity-70" />
+                Rename
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-koma-error opacity-90 hover:bg-koma-error/15"
+                onClick={() => {
+                  onStartDelete(ctxMenu.path, ctxMenu.isDir)
+                  setCtxMenu(null)
+                }}
+              >
+                <Trash2 size={12} className="opacity-70" />
+                Delete
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }

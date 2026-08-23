@@ -950,6 +950,25 @@ pub(super) enum GuiReq {
         #[serde(rename = "requestId")]
         request_id: String,
     },
+    /// Coding panel: write raw bytes (drag-upload). `bytes_b64` is standard
+    /// base64. When `overwrite` is false, existing paths are rejected.
+    FileWriteBytes {
+        root: String,
+        path: String,
+        #[serde(rename = "bytesB64")]
+        bytes_b64: String,
+        #[serde(default)]
+        overwrite: bool,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    /// Coding panel: read raw bytes for download / save-as.
+    FileDownloadBytes {
+        root: String,
+        path: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
 
     // ─── Language servers (Settings + editor banner) ──────────────────────────
     // Host-local only (never the daemon): resolve / install / uninstall under
@@ -971,6 +990,61 @@ pub(super) enum GuiReq {
     /// Reply: `LspInstall` ack + fresh `LspStatus`.
     LspUninstall {
         id: String,
+    },
+    // ─── Language client (Monaco providers + doc sync) ───────────────────────
+    // Host-local only: LspManager owns stdio JSON-RPC to ~/.koma/lsp binaries.
+    /// Coding tab open / content load: `textDocument/didOpen`.
+    LspDidOpen {
+        root: String,
+        path: String,
+        #[serde(rename = "languageId")]
+        language_id: String,
+        text: String,
+    },
+    /// Editor dirty change: full-document `textDocument/didChange`.
+    LspDidChange {
+        root: String,
+        path: String,
+        text: String,
+    },
+    /// After successful save: `textDocument/didSave`.
+    LspDidSave {
+        root: String,
+        path: String,
+        #[serde(default)]
+        text: Option<String>,
+    },
+    /// Coding tab closed: `textDocument/didClose`.
+    LspDidClose {
+        root: String,
+        path: String,
+    },
+    /// Monaco completion provider. Reply: `LspCompletion`.
+    LspCompletion {
+        root: String,
+        path: String,
+        line: u32,
+        character: u32,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    /// Monaco hover provider. Reply: `LspHover`.
+    LspHover {
+        root: String,
+        path: String,
+        line: u32,
+        character: u32,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    /// Monaco definition provider. Reply: `LspDefinition`.
+    LspDefinition {
+        root: String,
+        path: String,
+        line: u32,
+        character: u32,
+        #[serde(rename = "requestId")]
+        request_id: String,
     },
 
     // ─── Frontend error logging ───────────────────────────────────────────────

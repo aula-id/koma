@@ -178,5 +178,29 @@ fn handle_req(req: RemoteFsReq, roots: &mut Vec<PathBuf>) -> RemoteFsRep {
             &request_id,
             roots,
         )),
+        RemoteFsReq::WriteBytes {
+            root,
+            path,
+            bytes_b64,
+            overwrite,
+            request_id,
+        } => RemoteFsRep::WriteBytes(file_ops::exec_file_write_bytes(
+            &root,
+            &path,
+            &bytes_b64,
+            overwrite,
+            &request_id,
+            roots,
+        )),
+        RemoteFsReq::DownloadBytes {
+            root,
+            path,
+            request_id,
+        } => RemoteFsRep::DownloadBytes(file_ops::exec_file_download_bytes(
+            &root,
+            &path,
+            &request_id,
+            roots,
+        )),
     }
 }
