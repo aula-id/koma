@@ -5,6 +5,7 @@ import { SessionRowActions, SessionRowConfirmStrip, type ArmedRow } from './Sess
 import { SessionBulkBar } from './SessionBulkBar'
 import { useSessionMultiSelect } from './sessionListSelection'
 import { useKoma, isDying } from '../store/koma'
+import { BrailleSpinner } from './BrailleSpinner'
 
 // Measures the component's own width with a ResizeObserver (a container query in
 // JS) so the start screen can flip stacked -> side-by-side against the ACTUAL
@@ -55,8 +56,10 @@ export function StartScreen() {
   const cooking = useKoma((s) => s.hub.cooking)
   const req = useKoma((s) => s.req)
   const startSwitching = useKoma((s) => s.startSwitching)
+  const requestRemotePath = useKoma((s) => s.requestRemotePath)
   const dyingSessions = useKoma((s) => s.dyingSessions)
   const remoteState = useKoma((s) => s.remoteState)
+  const remotePathState = useKoma((s) => s.remotePath.state)
   const [ref, width] = useContainerWidth<HTMLDivElement>()
   const wide = width >= 760
   // The single armed row (kill/delete confirm pill) across BOTH lists — arming
@@ -107,16 +110,21 @@ export function StartScreen() {
     startSwitching(name)
     req({ r: 'SelectSession', id })
   }
-  // No optimistic loader: the host opens a folder picker first and only
-  // attaches once a folder is confirmed (cancel would strand the loader).
-  // Remote hub uses the SSH path picker instead of the local native dialog.
+  // Local: no optimistic loader — host opens a native folder picker first and
+  // only attaches once confirmed (cancel would strand the loader).
+  // Remote hub: optimistic SSH path picker (requestRemotePath guards re-entry
+  // and shows braille listing immediately).
   const newSession = () => {
     if (remoteState.state === 'ready' || remoteState.state === 'connected') {
-      req({ r: 'RequestRemotePath' })
+      requestRemotePath()
       return
     }
     req({ r: 'NewSession' })
   }
+  const remotePathBusy =
+    remotePathState === 'listing' ||
+    remotePathState === 'ready' ||
+    remotePathState === 'error'
 
   const armRow = (row: ArmedRow) => {
     multi.clear()
@@ -164,23 +172,30 @@ export function StartScreen() {
         )}
       </div>
 
-      <div className="group flex items-center rounded-xl border border-koma-border bg-koma-panel transition-colors hover:border-koma-accent/60 hover:bg-koma-hover">
+      <div className={`group flex items-center rounded-xl border border-koma-border bg-koma-panel transition-colors ${remotePathBusy ? 'opacity-70' : 'hover:border-koma-accent/60 hover:bg-koma-hover'}`}>
         <button
           onClick={newSession}
-          className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left"
+          disabled={remotePathBusy}
+          className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left disabled:cursor-wait"
         >
           <span className="flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-koma-accent/15 text-koma-accent">
-            <FolderPlus size={18} />
+            {remotePathBusy ? <BrailleSpinner size={18} /> : <FolderPlus size={18} />}
           </span>
           <span className="min-w-0 flex-1">
             <span className="block text-[13px] font-semibold text-koma-fg">New session</span>
             <span className="block text-[11px] text-koma-fg opacity-45">
-              {remoteTarget
-                ? `Pick a folder on ${remoteTarget}`
-                : 'Start working in your default directory'}
+              {remotePathBusy
+                ? 'Opening remote folder picker…'
+                : remoteTarget
+                  ? `Pick a folder on ${remoteTarget}`
+                  : 'Start working in your default directory'}
             </span>
           </span>
-          <ArrowRight size={16} className="flex-none text-koma-fg opacity-30 transition group-hover:translate-x-0.5 group-hover:opacity-70" />
+          {remotePathBusy ? (
+            <span className="flex-none" />
+          ) : (
+            <ArrowRight size={16} className="flex-none text-koma-fg opacity-30 transition group-hover:translate-x-0.5 group-hover:opacity-70" />
+          )}
         </button>
         <NewSessionMenu className="pr-3" />
       </div>

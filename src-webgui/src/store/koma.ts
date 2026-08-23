@@ -2179,6 +2179,10 @@ type KomaState = {
   // loader — the eventual Snapshot for the target session still lands and is
   // applied normally.
   cancelSwitching: () => void
+  // Open the remote folder picker. Optimistic `listing` so the overlay + braille
+  // spinner appear on the first click (SSH list_dirs can lag). No-ops while the
+  // picker is already open so double-clicks don't spawn duplicate SSH listings.
+  requestRemotePath: () => void
   dismissLoading: () => void
   // Dismiss the active toast (auto-dismiss timer, or a manual close). No-op if
   // the id no longer matches the current toast (a newer toast already replaced
@@ -4309,6 +4313,29 @@ export const useKoma = create<KomaState>((set, get) => ({
   requestScrollBottom: () => set((s) => ({ ui: { ...s.ui, scrollTick: s.ui.scrollTick + 1 } })),
   startSwitching: (name) => set((s) => ({ ui: { ...s.ui, switchingTo: name } })),
   cancelSwitching: () => set((s) => ({ ui: { ...s.ui, switchingTo: null } })),
+  requestRemotePath: () => {
+    const s = get()
+    // Picker already visible / in-flight — drop the duplicate click.
+    if (
+      s.remotePath.state === 'listing' ||
+      s.remotePath.state === 'ready' ||
+      s.remotePath.state === 'error'
+    ) {
+      return
+    }
+    // Optimistic open: RemotePathPicker mounts immediately with a braille
+    // spinner while the host SSH-lists "~". Host RemotePathPicker push replaces
+    // this with the authoritative path/dirs.
+    set({
+      remotePath: {
+        state: 'listing',
+        path: '~',
+        dirs: [],
+        error: null,
+      },
+    })
+    get().req({ r: 'RequestRemotePath' })
+  },
   dismissLoading: () => set((s) => ({ ui: { ...s.ui, loadingDismissed: true } })),
   dismissToast: (id) =>
     set((s) => (s.ui.toast?.id === id ? { ui: { ...s.ui, toast: null } } : s)),

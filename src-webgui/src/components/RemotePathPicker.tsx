@@ -42,6 +42,9 @@ export function RemotePathPicker() {
     remotePath.state === 'listing' ||
     remotePath.state === 'ready' ||
     remotePath.state === 'error'
+  // Blocks double-click on "Select folder" minting two remote sessions before
+  // the optimistic dismiss unmounts the overlay.
+  const confirmingRef = useRef(false)
 
   const [query, setQuery] = useState('')
   const [focusTarget, setFocusTarget] = useState<FocusTarget>('search')
@@ -58,6 +61,7 @@ export function RemotePathPicker() {
       setFocusTarget('search')
       setHighlight(0)
       syncedPathRef.current = null
+      confirmingRef.current = false
       return
     }
     setFocusTarget('search')
@@ -136,12 +140,15 @@ export function RemotePathPicker() {
   if (!active) return null
 
   const cancel = () => {
+    confirmingRef.current = false
     req({ r: 'CancelRemotePath' })
     // Optimistic dismiss so Esc never leaves a stuck overlay if the host lags.
     useKoma.setState({ remotePath: { ...IDLE_PATH } })
   }
   const confirm = () => {
+    if (confirmingRef.current) return
     if (!remotePath.path || remotePath.state === 'listing') return
+    confirmingRef.current = true
     const path = remotePath.path
     req({ r: 'ConfirmRemotePath', path })
     // Optimistic close + switcher. Host also pushes cancelled + Switching;
