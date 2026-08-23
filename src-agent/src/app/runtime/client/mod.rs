@@ -739,10 +739,14 @@ pub(super) enum HostCtl {
         request_id: String,
     },
     /// Coding panel: read raw bytes for download / save-as.
+    /// When `save_as` is true the host opens a native save dialog and writes the
+    /// file itself (wry cannot honor in-page blob downloads).
     FileDownloadBytes {
         root: String,
         path: String,
         request_id: String,
+        /// True for user-facing Download; false for in-app preview loads.
+        save_as: bool,
     },
     /// Coding panel: VS Code-style content search across a workspace root.
     FileContentSearch {

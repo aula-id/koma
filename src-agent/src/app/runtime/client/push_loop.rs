@@ -1956,6 +1956,7 @@ fn push_remote_fs_unavailable(ctl: &super::HostCtl, push: &dyn Fn(String)) {
             root,
             path,
             request_id,
+            save_as: _,
         } => PushEnvelope::FileDownloadBytes {
             root: root.clone(),
             path: path.clone(),
@@ -1964,6 +1965,7 @@ fn push_remote_fs_unavailable(ctl: &super::HostCtl, push: &dyn Fn(String)) {
             size: 0,
             too_large: false,
             error: Some(ERR.into()),
+            saved: false,
         },
         super::HostCtl::FileContentSearch {
             root,

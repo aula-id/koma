@@ -3,8 +3,16 @@
  * Bytes come from FileDownloadBytes via filePreview.ts.
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Download } from 'lucide-react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
+import { Download, Maximize2, Minus, Plus, RotateCcw } from 'lucide-react'
 import { unzipSync, strFromU8 } from 'fflate'
 import { useKoma } from '../store/koma'
 import {
@@ -184,16 +192,255 @@ function DownloadBtn({ onClick }: { onClick: () => void }) {
   )
 }
 
+const ZOOM_MIN = 0.1
+const ZOOM_MAX = 8
+const ZOOM_STEP = 0.25
+
+function clampZoom(z: number): number {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z))
+}
+
 function ImageBody({ url, path }: { url: string; path: string }) {
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null)
+  const [zoom, setZoom] = useState(1)
+  const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const [mode, setMode] = useState<'fit' | 'custom'>('fit')
+  const dragRef = useRef<{
+    pointerId: number
+    startX: number
+    startY: number
+    origX: number
+    origY: number
+  } | null>(null)
+
+  // Reset when the image source changes.
+  useEffect(() => {
+    setNatural(null)
+    setZoom(1)
+    setOffset({ x: 0, y: 0 })
+    setMode('fit')
+  }, [url])
+
+  const fitZoom = useCallback((): number => {
+    const el = viewportRef.current
+    if (!el || !natural) return 1
+    const pad = 32
+    const availW = Math.max(1, el.clientWidth - pad)
+    const availH = Math.max(1, el.clientHeight - pad)
+    return clampZoom(Math.min(availW / natural.w, availH / natural.h, 1))
+  }, [natural])
+
+  // Keep fit mode locked to the viewport size.
+  useEffect(() => {
+    if (mode !== 'fit' || !natural) return
+    const el = viewportRef.current
+    if (!el) return
+    const apply = () => {
+      setZoom(fitZoom())
+      setOffset({ x: 0, y: 0 })
+    }
+    apply()
+    const ro = new ResizeObserver(apply)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [mode, natural, fitZoom])
+
+  const zoomRef = useRef(zoom)
+  zoomRef.current = zoom
+  const offsetRef = useRef(offset)
+  offsetRef.current = offset
+
+  const setZoomAround = useCallback(
+    (next: number, clientX?: number, clientY?: number) => {
+      const prev = zoomRef.current
+      const z = clampZoom(next)
+      if (z === prev && mode === 'custom') return
+      const el = viewportRef.current
+      setMode('custom')
+      if (!el || !natural || prev <= 0) {
+        setZoom(z)
+        return
+      }
+      const rect = el.getBoundingClientRect()
+      const cx = clientX ?? rect.left + rect.width / 2
+      const cy = clientY ?? rect.top + rect.height / 2
+      const vx = cx - rect.left - rect.width / 2
+      const vy = cy - rect.top - rect.height / 2
+      const off = offsetRef.current
+      // Point under cursor stays put: content = (screen - offset) / zoom
+      const contentX = (vx - off.x) / prev
+      const contentY = (vy - off.y) / prev
+      setOffset({
+        x: vx - contentX * z,
+        y: vy - contentY * z,
+      })
+      setZoom(z)
+    },
+    [natural, mode],
+  )
+
+  const zoomIn = () => setZoomAround(zoomRef.current + ZOOM_STEP)
+  const zoomOut = () => setZoomAround(zoomRef.current - ZOOM_STEP)
+  const zoomActual = () => {
+    setMode('custom')
+    setZoom(1)
+    setOffset({ x: 0, y: 0 })
+  }
+  const zoomFit = () => {
+    setMode('fit')
+    setZoom(fitZoom())
+    setOffset({ x: 0, y: 0 })
+  }
+
+  // Non-passive wheel so preventDefault actually stops page/tab scroll.
+  useEffect(() => {
+    const el = viewportRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const factor = e.deltaY > 0 ? 1 / 1.12 : 1.12
+      setZoomAround(zoomRef.current * factor, e.clientX, e.clientY)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [setZoomAround])
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
+    // Only pan when zoomed past fit.
+    if (mode === 'fit' && zoom <= fitZoom() + 0.001) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    dragRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: offset.x,
+      origY: offset.y,
+    }
+  }
+  const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current
+    if (!d || d.pointerId !== e.pointerId) return
+    setOffset({
+      x: d.origX + (e.clientX - d.startX),
+      y: d.origY + (e.clientY - d.startY),
+    })
+  }
+  const endDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current
+    if (!d || d.pointerId !== e.pointerId) return
+    dragRef.current = null
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const pct = Math.round(zoom * 100)
+  const canPan = mode === 'custom' || zoom > (natural ? fitZoom() : 1) + 0.001
+
   return (
-    <div className="flex h-full items-center justify-center bg-[repeating-conic-gradient(color-mix(in_srgb,var(--color-koma-fg)_6%,transparent)_0%_25%,transparent_0%_50%)] bg-[length:16px_16px] p-4">
-      <img
-        src={url}
-        alt={path}
-        className="max-h-full max-w-full object-contain shadow-lg"
-        draggable={false}
-      />
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-7 flex-none items-center gap-0.5 border-b border-koma-border bg-koma-panel2 px-1.5">
+        <ToolBtn title="Zoom out" onClick={zoomOut} disabled={zoom <= ZOOM_MIN}>
+          <Minus size={12} />
+        </ToolBtn>
+        <button
+          type="button"
+          title="Click to toggle fit / 100%"
+          onClick={() => (mode === 'fit' ? zoomActual() : zoomFit())}
+          className="min-w-[3.25rem] rounded px-1.5 py-0.5 text-center font-mono text-[11px] tabular-nums text-koma-fg hover:bg-koma-hover"
+        >
+          {pct}%
+        </button>
+        <ToolBtn title="Zoom in" onClick={zoomIn} disabled={zoom >= ZOOM_MAX}>
+          <Plus size={12} />
+        </ToolBtn>
+        <div className="mx-1 h-3 w-px bg-koma-border" />
+        <ToolBtn title="Fit to window" onClick={zoomFit} active={mode === 'fit'}>
+          <Maximize2 size={12} />
+        </ToolBtn>
+        <ToolBtn
+          title="Actual size (100%)"
+          onClick={zoomActual}
+          active={mode === 'custom' && Math.abs(zoom - 1) < 0.01}
+        >
+          <span className="text-[10px] font-medium leading-none">1:1</span>
+        </ToolBtn>
+        <ToolBtn title="Reset" onClick={zoomFit}>
+          <RotateCcw size={12} />
+        </ToolBtn>
+        {natural ? (
+          <span className="ml-auto truncate px-1 font-mono text-[10.5px] text-koma-dim">
+            {natural.w}×{natural.h}
+          </span>
+        ) : null}
+      </div>
+      <div
+        ref={viewportRef}
+        className={`relative min-h-0 flex-1 overflow-hidden bg-[repeating-conic-gradient(color-mix(in_srgb,var(--color-koma-fg)_6%,transparent)_0%_25%,transparent_0%_50%)] bg-[length:16px_16px] ${
+          canPan ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
+        }`}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+      >
+        <div
+          className="absolute left-1/2 top-1/2 will-change-transform"
+          style={{
+            transform: `translate(calc(-50% + ${offset.x}px), calc(-50% + ${offset.y}px)) scale(${zoom})`,
+            transformOrigin: 'center center',
+          }}
+        >
+          <img
+            src={url}
+            alt={path}
+            draggable={false}
+            className="block max-w-none select-none shadow-lg"
+            style={{
+              width: natural ? natural.w : undefined,
+              height: natural ? natural.h : undefined,
+            }}
+            onLoad={(e) => {
+              const img = e.currentTarget
+              setNatural({ w: img.naturalWidth, h: img.naturalHeight })
+            }}
+          />
+        </div>
+      </div>
     </div>
+  )
+}
+
+function ToolBtn({
+  children,
+  onClick,
+  title,
+  disabled,
+  active,
+}: {
+  children: ReactNode
+  onClick: () => void
+  title: string
+  disabled?: boolean
+  active?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      className={`flex h-5 min-w-5 items-center justify-center rounded px-1 text-koma-dim transition-colors hover:bg-koma-hover hover:text-koma-fg disabled:cursor-default disabled:opacity-30 ${
+        active ? 'bg-koma-hover text-koma-fg' : ''
+      }`}
+    >
+      {children}
+    </button>
   )
 }
 

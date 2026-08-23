@@ -139,12 +139,25 @@ impl RemoteFsClient {
 
     /// Map a File* HostCtl to a remote-fs request, await the reply, push the
     /// matching PushEnvelope. Always pushes so the webview never hangs.
+    ///
+    /// Download save-as runs the native dialog on THIS host after the remote
+    /// bytes arrive — the remote thin client only reads; the laptop writes.
     pub fn handle_file_ctl(&self, ctl: &super::HostCtl, push: &dyn Fn(String)) {
+        let save_as = matches!(
+            ctl,
+            super::HostCtl::FileDownloadBytes { save_as: true, .. }
+        );
         let req = match hostctl_to_req(ctl) {
             Some(r) => r,
             None => return,
         };
         let rep = self.request(req);
+        let rep = match rep {
+            RemoteFsRep::DownloadBytes(r) if save_as => {
+                RemoteFsRep::DownloadBytes(super::file_ops::finalize_download_bytes(r, true))
+            }
+            other => other,
+        };
         push_rep(push, rep);
     }
 
@@ -260,6 +273,7 @@ fn hostctl_to_req(ctl: &super::HostCtl) -> Option<RemoteFsReq> {
             root,
             path,
             request_id,
+            save_as: _,
         } => Some(RemoteFsReq::DownloadBytes {
             root: root.clone(),
             path: path.clone(),
@@ -372,6 +386,7 @@ fn push_rep(push: &dyn Fn(String), rep: RemoteFsRep) {
             size: r.size,
             too_large: r.too_large,
             error: r.error,
+            saved: r.saved,
         },
         RemoteFsRep::ContentSearch(r) => PushEnvelope::FileContentSearch {
             root: r.root,

@@ -937,11 +937,13 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             root,
             path,
             request_id,
+            save_as,
         } => {
             let _ = ctx.ctl.send(HostCtl::FileDownloadBytes {
                 root,
                 path,
                 request_id,
+                save_as,
             });
         }
         GuiReq::FileContentSearch {

@@ -125,6 +125,9 @@ pub(crate) struct FileWriteBytesResult {
 
 /// Binary download result for Coding panel / remote-fs.
 /// `bytes_b64` is standard base64 of the file body when successful.
+/// When `saved` is true the host already wrote the bytes via a native save
+/// dialog (save-as path) and `bytes_b64` is cleared — the webview must not
+/// attempt an in-page blob download (wry ignores `<a download>`).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FileDownloadBytesResult {
@@ -135,6 +138,9 @@ pub(crate) struct FileDownloadBytesResult {
     pub size: u64,
     pub too_large: bool,
     pub error: Option<String>,
+    /// True only after a successful native save-as write on the host.
+    #[serde(default)]
+    pub saved: bool,
 }
 
 /// Handle one File* HostCtl by computing the result and pushing it back.
@@ -293,8 +299,10 @@ pub(super) fn handle_file_ctl(
             root,
             path,
             request_id,
+            save_as,
         } => {
             let r = exec_file_download_bytes(root, path, request_id, workdirs);
+            let r = finalize_download_bytes(r, *save_as);
             emit(
                 push,
                 &PushEnvelope::FileDownloadBytes {
@@ -305,6 +313,7 @@ pub(super) fn handle_file_ctl(
                     size: r.size,
                     too_large: r.too_large,
                     error: r.error,
+                    saved: r.saved,
                 },
             );
         }
@@ -708,6 +717,7 @@ pub(crate) fn exec_file_download_bytes(
         size: 0,
         too_large,
         error: Some(error),
+        saved: false,
     };
 
     if path.is_empty() || path == "." {
@@ -743,6 +753,7 @@ pub(crate) fn exec_file_download_bytes(
                 "file too large to download (max {} MiB)",
                 FILE_BYTES_SIZE_CAP / (1024 * 1024)
             )),
+            saved: false,
         };
     }
 
@@ -761,6 +772,74 @@ pub(crate) fn exec_file_download_bytes(
         size,
         too_large: false,
         error: None,
+        saved: false,
+    }
+}
+
+/// When `save_as` is set, open a native save dialog and write the decoded
+/// bytes on the host. Clears `bytes_b64` so the webview never tries a blob
+/// download (dead in wry). Preview loads (`save_as=false`) pass through.
+/// Safe to call on the local worker thread or after a remote-fs fetch.
+pub(crate) fn finalize_download_bytes(
+    mut r: FileDownloadBytesResult,
+    save_as: bool,
+) -> FileDownloadBytesResult {
+    if !save_as {
+        return r;
+    }
+    // Propagate read failures / size caps without opening a dialog.
+    if r.error.is_some() || r.too_large {
+        r.saved = false;
+        r.bytes_b64 = None;
+        return r;
+    }
+    let Some(b64) = r.bytes_b64.take() else {
+        r.error = Some("empty download".to_string());
+        r.saved = false;
+        return r;
+    };
+    let bytes = match decode_b64(&b64) {
+        Ok(b) => b,
+        Err(e) => {
+            r.error = Some(e);
+            r.saved = false;
+            return r;
+        }
+    };
+    let name = Path::new(&r.path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("download")
+        .to_string();
+    match save_bytes_with_dialog(&name, &bytes) {
+        Ok(true) => {
+            r.saved = true;
+            r.error = None;
+        }
+        Ok(false) => {
+            // User cancelled the dialog — silent no-op for the GUI.
+            r.saved = false;
+            r.error = None;
+        }
+        Err(e) => {
+            r.saved = false;
+            r.error = Some(e);
+        }
+    }
+    r
+}
+
+/// Native save-file dialog + write. `Ok(true)` written, `Ok(false)` cancelled.
+fn save_bytes_with_dialog(suggested_name: &str, bytes: &[u8]) -> Result<bool, String> {
+    let chosen = rfd::FileDialog::new()
+        .set_file_name(suggested_name)
+        .save_file();
+    match chosen {
+        None => Ok(false),
+        Some(path) => std::fs::write(&path, bytes)
+            .map(|_| true)
+            .map_err(|e| format!("failed to write {}: {e}", path.display())),
     }
 }
 
