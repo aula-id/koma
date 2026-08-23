@@ -751,6 +751,20 @@ pub(super) enum PushEnvelope {
         locations: Vec<crate::lsp::LspLocation>,
         error: Option<String>,
     },
+    /// Reply to `LspReferences`.
+    #[serde(rename_all = "camelCase")]
+    LspReferences {
+        request_id: String,
+        locations: Vec<crate::lsp::LspLocation>,
+        error: Option<String>,
+    },
+    /// Reply to `LspDocumentSymbol`.
+    #[serde(rename_all = "camelCase")]
+    LspDocumentSymbol {
+        request_id: String,
+        symbols: Vec<crate::lsp::LspDocumentSymbol>,
+        error: Option<String>,
+    },
     /// One-shot import-graph visualization result answering a `GuiReq::ImportGraph`
     /// request from the GUI. Computed by the linker daemon (off-thread), pushed the
     /// same way regardless of attach state, ALWAYS a reply so the panel never hangs.
@@ -1229,6 +1243,40 @@ pub(super) fn push_lsp_definition(
         &PushEnvelope::LspDefinition {
             request_id,
             locations,
+            error,
+        },
+    );
+}
+
+/// Emit `LspReferences` reply.
+pub(super) fn push_lsp_references(
+    push: &dyn Fn(String),
+    request_id: String,
+    locations: Vec<crate::lsp::LspLocation>,
+    error: Option<String>,
+) {
+    super::render::emit(
+        push,
+        &PushEnvelope::LspReferences {
+            request_id,
+            locations,
+            error,
+        },
+    );
+}
+
+/// Emit `LspDocumentSymbol` reply.
+pub(super) fn push_lsp_document_symbol(
+    push: &dyn Fn(String),
+    request_id: String,
+    symbols: Vec<crate::lsp::LspDocumentSymbol>,
+    error: Option<String>,
+) {
+    super::render::emit(
+        push,
+        &PushEnvelope::LspDocumentSymbol {
+            request_id,
+            symbols,
             error,
         },
     );

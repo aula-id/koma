@@ -534,6 +534,8 @@ declare global {
     | { r: 'LspCompletion'; root: string; path: string; line: number; character: number; requestId: string }
     | { r: 'LspHover'; root: string; path: string; line: number; character: number; requestId: string }
     | { r: 'LspDefinition'; root: string; path: string; line: number; character: number; requestId: string }
+    | { r: 'LspReferences'; root: string; path: string; line: number; character: number; includeDeclaration?: boolean; requestId: string }
+    | { r: 'LspDocumentSymbol'; root: string; path: string; requestId: string }
     // Write an error message to the global error log (`~/.koma/error.log`). Used by
     // the React error boundary to log runtime errors that only occur in the built
     // app (not in dev mode). No reply, no session needed.
@@ -647,6 +649,8 @@ declare global {
     | { k: 'LspCompletion'; requestId: string; items: LspCompletionItem[]; error: string | null }
     | { k: 'LspHover'; requestId: string; hover: LspHover | null; error: string | null }
     | { k: 'LspDefinition'; requestId: string; locations: LspLocation[]; error: string | null }
+    | { k: 'LspReferences'; requestId: string; locations: LspLocation[]; error: string | null }
+    | { k: 'LspDocumentSymbol'; requestId: string; symbols: LspDocumentSymbol[]; error: string | null }
 
   type LspDiagnostic = {
     uri: string
@@ -683,6 +687,13 @@ declare global {
   type LspLocation = {
     uri: string
     range: LspRange
+  }
+
+  type LspDocumentSymbol = {
+    name: string
+    kind: number
+    range: LspRange
+    selectionRange: LspRange
   }
 
   type RemoteHost = {
