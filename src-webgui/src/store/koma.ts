@@ -36,6 +36,8 @@ import {
   disposeCodingModel,
   type LspDiagnostic,
 } from '../lib/monaco-lsp'
+import { resolveFilePreviewBytes } from '../lib/filePreview'
+import { codingRefToken } from '../lib/codingRef'
 
 export type { CodingSlice, CodingFileState, DirState, FileTreeEntry } from './coding'
 export type { LspDiagnostic }
@@ -2318,6 +2320,10 @@ type KomaState = {
   closeOmniSearch: () => void
   // Queue a workspace path for the Composer to insert into its draft text.
   insertToComposer: (path: string) => void
+  /** Insert a coding path/dir `@` token and focus the chat tab + composer. */
+  putCodingPathInChat: (root: string, path: string, opts?: { isDir?: boolean }) => void
+  /** Insert selection ask payload and focus chat. */
+  askCodingSelectionInChat: (payload: string) => void
   // Composer-side ack: clears the one-shot signal after consuming it.
   consumeComposerInsert: () => void
   // Queue text to REPLACE the Composer draft (rewind refill). Called right after
@@ -4495,6 +4501,17 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         break
       case 'FileDownloadBytes': {
+        // Preview waiters (CodingFileViewer) consume first — skip save-as.
+        if (
+          resolveFilePreviewBytes(
+            env.requestId,
+            env.bytesB64,
+            env.error,
+            env.tooLarge,
+          )
+        ) {
+          break
+        }
         if (env.error || env.tooLarge || !env.bytesB64) {
           const text =
             env.error ||
@@ -4707,6 +4724,29 @@ export const useKoma = create<KomaState>((set, get) => ({
   openOmniSearch: () => set((s) => ({ ui: { ...s.ui, omnisearchOpen: true } })),
   closeOmniSearch: () => set((s) => ({ ui: { ...s.ui, omnisearchOpen: false } })),
   insertToComposer: (path) => set((s) => ({ ui: { ...s.ui, composerInsert: path } })),
+  putCodingPathInChat: (root, path, opts) => {
+    const workdirs = (get().settingsValues?.workdir ?? []).filter(Boolean)
+    const token = codingRefToken(root, path, workdirs, { isDir: !!opts?.isDir })
+    get().insertToComposer(token)
+    get().activateTab('chat')
+    queueMicrotask(() => {
+      const el = document.querySelector(
+        '[data-tour="composer"] textarea',
+      ) as HTMLTextAreaElement | null
+      el?.focus()
+    })
+  },
+  askCodingSelectionInChat: (payload) => {
+    get().insertToComposer(payload)
+    get().activateTab('chat')
+    queueMicrotask(() => {
+      const el = document.querySelector(
+        '[data-tour="composer"] textarea',
+      ) as HTMLTextAreaElement | null
+      el?.focus()
+    })
+  },
+
   consumeComposerInsert: () => set((s) => ({ ui: { ...s.ui, composerInsert: null } })),
   refillComposer: (text) => set((s) => ({ ui: { ...s.ui, composerRefill: text } })),
   consumeComposerRefill: () => set((s) => ({ ui: { ...s.ui, composerRefill: null } })),

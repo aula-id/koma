@@ -13,9 +13,12 @@ import {
   setGoToDefinitionHandler,
   warmCodeLensCache,
 } from '../lib/monaco-lsp'
+import { codingAskInChatPayload } from '../lib/codingRef'
+import { viewerKindForPath, type ViewerKind } from '../lib/viewerKind'
 import { useKoma, type Tab } from '../store/koma'
 import { fileKey } from '../store/coding'
 import { BrailleSpinner } from './BrailleSpinner'
+import { CodingFileViewer } from './CodingFileViewer'
 
 type CodingTab = Extract<Tab, { kind: 'codingFile' }>
 
@@ -199,6 +202,41 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       void editor.getAction('editor.action.referenceSearch.trigger')?.run()
     })
 
+    // Selection → composer: `@path:start-end` + fenced buffer text, then focus chat.
+    editor.addAction({
+      id: 'koma.askInChat',
+      label: 'Ask in chat',
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 0.5,
+      precondition: 'editorHasSelection',
+      run: (ed) => {
+        const model = ed.getModel()
+        const sel = ed.getSelection()
+        if (!model || !sel || sel.isEmpty()) return
+        let startLine = Math.min(sel.startLineNumber, sel.endLineNumber)
+        let endLine = Math.max(sel.startLineNumber, sel.endLineNumber)
+        // Line-wise selections often end at column 1 of the next line.
+        if (
+          endLine > startLine &&
+          sel.endLineNumber > sel.startLineNumber &&
+          sel.endColumn === 1
+        ) {
+          endLine = endLine - 1
+        }
+        const selectedText = model.getValueInRange(sel)
+        const workdirs = (useKoma.getState().settingsValues?.workdir ?? []).filter(Boolean)
+        const payload = codingAskInChatPayload(
+          tab.root,
+          tab.path,
+          workdirs,
+          startLine,
+          endLine,
+          selectedText,
+        )
+        useKoma.getState().askCodingSelectionInChat(payload)
+      },
+    })
+
     const sub = editor.onDidChangeModelContent(() => {
       if (applyingRef.current) return
       const model = editor.getModel()
@@ -375,12 +413,45 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       </div>
     )
   }
+  // Known media / office types always use the binary viewer (even if FileRead
+  // returned text, e.g. SVG without NULs). Don't wait for FileRead — the viewer
+  // fetches bytes itself via FileDownloadBytes.
+  const viewKind = viewerKindForPath(tab.path)
+  if (viewKind !== 'text' && !fileState?.error && !fileState?.tooLarge) {
+    return (
+      <div className="flex h-full w-full flex-col">
+        <EditorChrome
+          path={tab.path}
+          status={fileState?.binary ? status : kindStatus(viewKind)}
+          canSave={false}
+          canRevert={false}
+          saving={false}
+          onSave={() => {}}
+          onRevert={() => {}}
+        />
+        <CodingFileViewer
+          root={tab.root}
+          path={tab.path}
+          onDownload={() => useKoma.getState().downloadCodingFile(tab.root, tab.path)}
+        />
+      </div>
+    )
+  }
+
   if (fileState?.binary) {
     return (
       <div className="flex h-full w-full flex-col">
         <EditorChrome path={tab.path} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
-        <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-[12px] text-koma-dim">
-          Binary file — no preview
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-[12px] text-koma-dim">
+          <div>Binary file — no preview</div>
+          <button
+            type="button"
+            onClick={() => useKoma.getState().downloadCodingFile(tab.root, tab.path)}
+            className="flex items-center gap-1 rounded border border-koma-border px-2 py-1 text-[11.5px] text-koma-fg hover:bg-koma-hover"
+          >
+            <Download size={12} />
+            Download
+          </button>
         </div>
       </div>
     )
@@ -456,6 +527,25 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       </div>
     </div>
   )
+}
+
+function kindStatus(kind: ViewerKind): string {
+  switch (kind) {
+    case 'image':
+      return 'Image'
+    case 'pdf':
+      return 'PDF'
+    case 'video':
+      return 'Video'
+    case 'sqlite':
+      return 'SQLite'
+    case 'docx':
+      return 'Word'
+    case 'excel':
+      return 'Excel'
+    default:
+      return 'Preview'
+  }
 }
 
 function EditorChrome({

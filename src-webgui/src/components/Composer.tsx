@@ -10,6 +10,9 @@ import {
 } from 'react'
 import { ArrowUp, CornerDownRight, Layers, Paperclip, Search, Square, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import {
+  readCodingPathDragData,
+} from '../lib/codingRef'
 import { ModelPicker } from './ModelPicker'
 import { EffortPicker } from './EffortPicker'
 import { ModeSelector } from './ModeSelector'
@@ -504,12 +507,26 @@ export function Composer() {
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     setDragOver(false)
+    // Coding tree path reference (not a file upload).
+    const coding = readCodingPathDragData(e.dataTransfer)
+    if (coding) {
+      useKoma.getState().putCodingPathInChat(coding.root, coding.path, {
+        isDir: coding.isDir,
+      })
+      return
+    }
     if (e.dataTransfer.files.length > 0) void attachFiles(e.dataTransfer.files)
   }
 
   const onDragOver = (e: DragEvent<HTMLDivElement>) => {
+    // Accept coding-tree path drags and external image files.
     e.preventDefault()
     setDragOver(true)
+    try {
+      e.dataTransfer.dropEffect = 'copy'
+    } catch {
+      /* ignore */
+    }
   }
 
   const onDragLeave = () => setDragOver(false)
