@@ -8,6 +8,7 @@ import {
   stampModelPath,
   applyDiagnosticsToMonaco,
   pathToUri,
+  consumeReveal,
 } from '../lib/monaco-lsp'
 import { useKoma, type Tab } from '../store/koma'
 import { fileKey } from '../store/coding'
@@ -47,6 +48,9 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     ensureLspProviders(
       (body) => useKoma.getState().req(body as never),
       () => (useKoma.getState().settingsValues?.workdir ?? []).filter(Boolean),
+      (uri, line, character) => {
+        useKoma.getState().openDiagnostic(uri, line, character)
+      },
     )
   }, [])
 
@@ -187,6 +191,8 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
         | undefined
       if (!detail) return
       if (detail.root !== tab.root || detail.path !== tab.path) return
+      // Drop any queued reveal so a later content paint does not re-jump.
+      consumeReveal(tab.root, tab.path)
       const ed = editorRef.current
       if (!ed) return
       ed.setPosition({ lineNumber: detail.line, column: detail.column })
@@ -243,6 +249,22 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     editor.updateOptions({
       readOnly: fileState.binary || fileState.tooLarge || !!fileState.error || fileState.conflict,
     })
+
+    // Go-to-def / Problems may open this tab before content is ready — apply
+    // the queued reveal once the model has text.
+    const reveal = consumeReveal(tab.root, tab.path)
+    if (reveal) {
+      const apply = () => {
+        const ed = editorRef.current
+        if (!ed) return
+        ed.setPosition({ lineNumber: reveal.line, column: reveal.column })
+        ed.revealLineInCenter(reveal.line)
+        ed.focus()
+      }
+      queueMicrotask(apply)
+      // Second pass after layout / late model attach.
+      setTimeout(apply, 50)
+    }
 
     if (
       !lspOpenedRef.current &&
