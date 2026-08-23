@@ -1068,6 +1068,16 @@ pub(super) enum GuiReq {
         #[serde(rename = "requestId")]
         request_id: String,
     },
+    /// Monaco completionItem/resolve (auto-import additionalTextEdits).
+    /// Reply: `LspCompletionResolve`.
+    LspCompletionResolve {
+        root: String,
+        path: String,
+        /// Boxed — CompletionItem carries opaque `data` JSON and edit lists.
+        item: Box<crate::lsp::LspCompletionItem>,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
     /// Monaco hover provider. Reply: `LspHover`.
     LspHover {
         root: String,

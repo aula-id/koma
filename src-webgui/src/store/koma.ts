@@ -25,6 +25,7 @@ import {
 import {
   applyDiagnosticsToMonaco,
   resolveLspCompletion,
+  resolveLspCompletionResolve,
   resolveLspDefinition,
   resolveLspDocumentSymbol,
   resolveLspHover,
@@ -1316,6 +1317,12 @@ export type PushEnvelope =
       k: 'LspCompletion'
       requestId: string
       items: import('../lib/monaco-lsp').LspCompletionItem[]
+      error: string | null
+    }
+  | {
+      k: 'LspCompletionResolve'
+      requestId: string
+      item: import('../lib/monaco-lsp').LspCompletionItem | null
       error: string | null
     }
   | {
@@ -4248,6 +4255,9 @@ export const useKoma = create<KomaState>((set, get) => ({
         break
       case 'LspCompletion':
         resolveLspCompletion(env.requestId, env.items ?? [], env.error)
+        break
+      case 'LspCompletionResolve':
+        resolveLspCompletionResolve(env.requestId, env.item ?? null, env.error)
         break
       case 'LspHover':
         resolveLspHover(env.requestId, env.hover ?? null, env.error)

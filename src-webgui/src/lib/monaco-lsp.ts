@@ -23,12 +23,33 @@ export type LspDiagnostic = {
   code?: string
 }
 
+export type LspTextEdit = {
+  range: {
+    startLine: number
+    startCharacter: number
+    endLine: number
+    endCharacter: number
+  }
+  newText: string
+}
+
 export type LspCompletionItem = {
   label: string
   kind?: number
   detail?: string
+  /** Secondary label (module path) from labelDetails.description. */
+  labelDescription?: string
   insertText?: string
+  /** 1=PlainText 2=Snippet */
+  insertTextFormat?: number
   documentation?: string
+  sortText?: string
+  filterText?: string
+  textEdit?: LspTextEdit
+  /** Auto-import and other side edits applied on accept. */
+  additionalTextEdits?: LspTextEdit[]
+  /** Opaque server token for completionItem/resolve. */
+  data?: unknown
 }
 
 export type LspHover = {
@@ -77,6 +98,7 @@ type Pending<T> = {
 const PENDING_MS = 12_000
 
 const pendingCompletion = new Map<string, Pending<LspCompletionItem[]>>()
+const pendingCompletionResolve = new Map<string, Pending<LspCompletionItem>>()
 const pendingHover = new Map<string, Pending<LspHover | null>>()
 const pendingDefinition = new Map<string, Pending<LspLocation[]>>()
 const pendingReferences = new Map<string, Pending<LspLocation[]>>()
@@ -310,6 +332,18 @@ export function resolveLspCompletion(
   error: string | null,
 ): void {
   settle(pendingCompletion, requestId, items ?? [], error)
+}
+
+export function resolveLspCompletionResolve(
+  requestId: string,
+  item: LspCompletionItem | null,
+  error: string | null,
+): void {
+  if (error) {
+    settle(pendingCompletionResolve, requestId, {} as LspCompletionItem, error)
+    return
+  }
+  settle(pendingCompletionResolve, requestId, item ?? ({} as LspCompletionItem), null)
 }
 
 export function resolveLspHover(
@@ -577,6 +611,55 @@ async function materializeLocations(
   return out
 }
 
+function lspRangeToMonaco(r: {
+  startLine: number
+  startCharacter: number
+  endLine: number
+  endCharacter: number
+}): monaco.IRange {
+  return {
+    startLineNumber: r.startLine + 1,
+    startColumn: r.startCharacter + 1,
+    endLineNumber: r.endLine + 1,
+    endColumn: r.endCharacter + 1,
+  }
+}
+
+function toMonacoCompletion(
+  it: LspCompletionItem,
+  defaultRange: monaco.IRange,
+  index: number,
+  loc?: { root: string; path: string },
+): monaco.languages.CompletionItem {
+  const range = it.textEdit ? lspRangeToMonaco(it.textEdit.range) : defaultRange
+  const insertText = it.textEdit?.newText ?? it.insertText ?? it.label
+  const isSnippet = it.insertTextFormat === 2
+  const additionalTextEdits = (it.additionalTextEdits ?? []).map((e) => ({
+    range: lspRangeToMonaco(e.range),
+    text: e.newText,
+  }))
+  const detail = it.detail || it.labelDescription
+  const label: string | monaco.languages.CompletionItemLabel =
+    it.labelDescription
+      ? { label: it.label, description: it.labelDescription }
+      : it.label
+  return {
+    label,
+    kind: lspCompletionKind(it.kind),
+    detail,
+    documentation: it.documentation,
+    insertText,
+    insertTextRules: isSnippet
+      ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+      : undefined,
+    range,
+    sortText: it.sortText ?? String(index).padStart(5, '0'),
+    filterText: it.filterText,
+    additionalTextEdits: additionalTextEdits.length ? additionalTextEdits : undefined,
+    ...({ __koma: it, __loc: loc } as object),
+  } as monaco.languages.CompletionItem
+}
+
 /**
  * Register completion / hover / definition / references / CodeLens providers.
  * Safe to call multiple times; only the first registration sticks.
@@ -615,31 +698,57 @@ export function ensureLspProviders(
       })
       try {
         const items = await p
-        const suggestions: monaco.languages.CompletionItem[] = items.map((it, i) => {
-          const range = {
-            startLineNumber: position.lineNumber,
-            startColumn: position.column,
-            endLineNumber: position.lineNumber,
-            endColumn: position.column,
-          }
-          const word = model.getWordUntilPosition(position)
-          if (word) {
-            range.startColumn = word.startColumn
-            range.endColumn = word.endColumn
-          }
-          return {
-            label: it.label,
-            kind: lspCompletionKind(it.kind),
-            detail: it.detail,
-            documentation: it.documentation,
-            insertText: it.insertText ?? it.label,
-            range,
-            sortText: String(i).padStart(5, '0'),
-          }
-        })
+        const word = model.getWordUntilPosition(position)
+        const defaultRange = {
+          startLineNumber: position.lineNumber,
+          startColumn: word?.startColumn ?? position.column,
+          endLineNumber: position.lineNumber,
+          endColumn: word?.endColumn ?? position.column,
+        }
+        const suggestions: monaco.languages.CompletionItem[] = items.map((it, i) =>
+          toMonacoCompletion(it, defaultRange, i, loc),
+        )
         return { suggestions }
       } catch {
         return { suggestions: [] }
+      }
+    },
+    resolveCompletionItem: async (item) => {
+      const raw = (item as monaco.languages.CompletionItem & { __koma?: LspCompletionItem; __loc?: { root: string; path: string } })
+      const src = raw.__koma
+      const loc = raw.__loc
+      if (!src || !loc) return item
+      // Already resolved with import edits — skip the round-trip.
+      if (src.additionalTextEdits && src.additionalTextEdits.length > 0) {
+        return item
+      }
+      // No data token → server has nothing more to resolve.
+      if (src.data == null) return item
+      const requestId = mintId('cmpr')
+      const p = track(pendingCompletionResolve, requestId)
+      req({
+        r: 'LspCompletionResolve',
+        root: loc.root,
+        path: loc.path,
+        item: src,
+        requestId,
+      })
+      try {
+        const resolved = await p
+        const range =
+          item.range && !('insert' in (item.range as object))
+            ? (item.range as monaco.IRange)
+            : {
+                startLineNumber: 1,
+                startColumn: 1,
+                endLineNumber: 1,
+                endColumn: 1,
+              }
+        const next = toMonacoCompletion(resolved, range as monaco.IRange, 0, loc)
+        // Preserve Monaco's internal bookkeeping fields.
+        return { ...item, ...next, __koma: resolved, __loc: loc } as monaco.languages.CompletionItem
+      } catch {
+        return item
       }
     },
   })

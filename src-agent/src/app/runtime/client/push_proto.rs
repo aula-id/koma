@@ -758,6 +758,13 @@ pub(super) enum PushEnvelope {
         items: Vec<crate::lsp::LspCompletionItem>,
         error: Option<String>,
     },
+    /// Reply to `LspCompletionResolve`.
+    #[serde(rename_all = "camelCase")]
+    LspCompletionResolve {
+        request_id: String,
+        item: Option<crate::lsp::LspCompletionItem>,
+        error: Option<String>,
+    },
     /// Reply to `LspHover`.
     #[serde(rename_all = "camelCase")]
     LspHover {
@@ -1230,6 +1237,23 @@ pub(super) fn push_lsp_completion(
         &PushEnvelope::LspCompletion {
             request_id,
             items,
+            error,
+        },
+    );
+}
+
+/// Emit `LspCompletionResolve` reply.
+pub(super) fn push_lsp_completion_resolve(
+    push: &dyn Fn(String),
+    request_id: String,
+    item: Option<crate::lsp::LspCompletionItem>,
+    error: Option<String>,
+) {
+    super::render::emit(
+        push,
+        &PushEnvelope::LspCompletionResolve {
+            request_id,
+            item,
             error,
         },
     );

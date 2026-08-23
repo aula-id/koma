@@ -1039,6 +1039,19 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 request_id,
             });
         }
+        GuiReq::LspCompletionResolve {
+            root,
+            path,
+            item,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::LspCompletionResolve {
+                root,
+                path,
+                item,
+                request_id,
+            });
+        }
         GuiReq::LspHover {
             root,
             path,

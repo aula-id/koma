@@ -29,7 +29,7 @@ pub use catalog::{find, find_by_extension, ServerSpec, CATALOG};
 #[allow(unused_imports)]
 pub use client::{
     language_id_for_path, LspCompletionItem, LspDiagnostic, LspDocumentSymbol, LspHover,
-    LspLocation, LspManager, LspRange, LspRuntimeServer,
+    LspLocation, LspManager, LspRange, LspRuntimeServer, LspTextEdit,
 };
 #[allow(unused_imports)]
 pub use install::{install_all, install_one, print_status, uninstall_one, ProgressFn};

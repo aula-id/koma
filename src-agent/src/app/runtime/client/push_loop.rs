@@ -1032,6 +1032,18 @@ pub(super) fn push_loop(
 
                 }
 
+                Ok(super::HostCtl::LspCompletionResolve { root, path, item, request_id }) => {
+
+                    super::lsp_host::handle_client_ctl(
+
+                        super::HostCtl::LspCompletionResolve { root, path, item, request_id },
+
+                        std::sync::Arc::clone(lsp_manager),
+
+                    );
+
+                }
+
                 Ok(super::HostCtl::LspHover { root, path, line, character, request_id }) => {
 
                     super::lsp_host::handle_client_ctl(
