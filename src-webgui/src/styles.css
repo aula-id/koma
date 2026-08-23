@@ -422,3 +422,90 @@ svg.animate-spin {
 .driver-overlay {
   /* driver paints via SVG; color comes from config.overlayColor — leave alone */
 }
+
+/* Monaco floating chrome — hover / suggest / peek / parameter hints inherit the
+   koma palette even when a stock base theme leaks through before defineTheme. */
+.monaco-editor .monaco-hover,
+.monaco-editor .monaco-hover-content,
+.monaco-hover {
+  background-color: var(--color-koma-panel) !important;
+  border-color: var(--color-koma-border) !important;
+  color: var(--color-koma-fg) !important;
+}
+.monaco-editor .monaco-hover .hover-row,
+.monaco-editor .monaco-hover .hover-contents,
+.monaco-hover .hover-contents {
+  color: var(--color-koma-fg) !important;
+}
+.monaco-editor .monaco-hover .hover-row.status-bar,
+.monaco-hover .hover-row.status-bar {
+  background-color: var(--color-koma-panel2) !important;
+  border-top-color: var(--color-koma-border) !important;
+  color: var(--color-koma-dim) !important;
+}
+.monaco-editor .monaco-hover a,
+.monaco-hover a {
+  color: var(--color-koma-accent) !important;
+}
+.monaco-editor .monaco-hover code,
+.monaco-hover code,
+.monaco-editor .monaco-hover pre,
+.monaco-hover pre {
+  background-color: var(--color-koma-panel2) !important;
+  color: var(--color-koma-fg) !important;
+}
+.monaco-editor .suggest-widget,
+.editor-widget.suggest-widget {
+  background-color: var(--color-koma-panel) !important;
+  border-color: var(--color-koma-border) !important;
+  color: var(--color-koma-fg) !important;
+}
+.monaco-editor .suggest-widget .monaco-list .monaco-list-row.focused,
+.monaco-editor .suggest-widget .monaco-list .monaco-list-row:hover {
+  background-color: var(--color-koma-hover) !important;
+}
+.monaco-editor .suggest-widget .monaco-list .monaco-list-row .highlight,
+.monaco-editor .suggest-widget .monaco-highlighted-label .highlight {
+  color: var(--color-koma-accent) !important;
+}
+.monaco-editor .parameter-hints-widget {
+  background-color: var(--color-koma-panel) !important;
+  border-color: var(--color-koma-border) !important;
+  color: var(--color-koma-fg) !important;
+}
+.monaco-editor .parameter-hints-widget .signature {
+  background-color: var(--color-koma-panel) !important;
+}
+.monaco-editor .parameter-hints-widget .code {
+  color: var(--color-koma-fg) !important;
+}
+.monaco-editor .find-widget,
+.monaco-editor .rename-box {
+  background-color: var(--color-koma-panel) !important;
+  border-color: var(--color-koma-border) !important;
+  color: var(--color-koma-fg) !important;
+}
+.monaco-editor .find-widget .monaco-inputbox,
+.monaco-editor .rename-box .monaco-inputbox {
+  background-color: var(--color-koma-panel2) !important;
+  border-color: var(--color-koma-border) !important;
+  color: var(--color-koma-fg) !important;
+}
+.monaco-editor .peekview-widget .head,
+.monaco-editor .peekview-widget .body {
+  background-color: var(--color-koma-panel) !important;
+  border-color: var(--color-koma-border) !important;
+}
+.monaco-editor .peekview-widget .head .peekview-title {
+  color: var(--color-koma-fg) !important;
+}
+.monaco-editor .peekview-widget .head .peekview-title .dirname,
+.monaco-editor .peekview-widget .head .peekview-title .filename + span {
+  color: var(--color-koma-dim) !important;
+}
+.monaco-editor .context-view.monaco-menu-container,
+.monaco-editor .monaco-menu {
+  background-color: var(--color-koma-panel) !important;
+  border-color: var(--color-koma-border) !important;
+  color: var(--color-koma-fg) !important;
+}

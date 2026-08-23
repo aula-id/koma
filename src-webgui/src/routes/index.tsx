@@ -17,6 +17,7 @@ import { RemotePathPicker } from '../components/RemotePathPicker'
 import { ToastContainer } from '../components/ToastContainer'
 import { UsageFooter } from '../components/UsageFooter'
 import { ProblemsDrawer } from '../components/ProblemsDrawer'
+import { LspDrawer } from '../components/LspDrawer'
 import { useKoma } from '../store/koma'
 import { BrailleSpinner } from '../components/BrailleSpinner'
 import { ExtensionPanelFrame } from '../components/ExtensionPanelFrame'
@@ -488,6 +489,7 @@ function TabbedMain() {
           ) : null,
         )}
       </div>
+      <LspDrawer />
       <ProblemsDrawer />
       <UsageFooter />
     </div>

@@ -596,6 +596,19 @@ export type LspInstallProgress = {
   error: string | null
 }
 
+// Live language-server runtime row (LspRuntime push) — footer Language Servers drawer.
+export type LspRuntimeServer = {
+  id: string
+  name: string
+  root: string
+  /** starting | ready | working | error */
+  phase: string
+  title?: string | null
+  message?: string | null
+  percentage?: number | null
+  openDocs: number
+}
+
 // One entry in the Agents dashboard's model catalogue (host
 // `CatalogueModelSnapshot`, snake_case on the wire — see `AgentsValues`).
 export type CatalogueModelEntry = { uuid: string; name: string; modelId: string; providerUuid: string }
@@ -1325,6 +1338,13 @@ export type PushEnvelope =
       requestId: string
       symbols: import('../lib/monaco-lsp').LspDocumentSymbol[]
       error: string | null
+    }
+  // Live language-server runtime (starting / indexing / ready / error).
+  | {
+      k: 'LspRuntime'
+      servers: LspRuntimeServer[]
+      replace?: boolean
+      removed?: string[]
     }
   // Reply to GuiReq GitBranchList (G4) — every local + remote-tracking branch
   // for the branch-switcher popover / graph context menu. Carries
@@ -2081,8 +2101,12 @@ type KomaState = {
   lspProgress: Record<string, LspInstallProgress>
   // Diagnostics keyed by file URI (latest LspDiagnostics per uri).
   lspDiagnostics: Record<string, LspDiagnostic[]>
+  // Live language-server processes (starting / indexing / ready). Footer drawer.
+  lspRuntime: LspRuntimeServer[]
   // Cross-tab Problems drawer (above UsageFooter).
   problemsOpen: boolean
+  // Cross-tab Language Servers drawer (twin of Problems).
+  lspDrawerOpen: boolean
   // The SSH Keys section's transient "Copy public key" / "Reveal private key"
   // result (latest KeyReveal push), or `null` when nothing has been revealed
   // yet / the reveal box was dismissed. Kept separate from `keys` (the list
@@ -2464,6 +2488,9 @@ type KomaState = {
   // Toggle the cross-tab Problems drawer above the footer.
   setProblemsOpen: (open: boolean) => void
   toggleProblemsOpen: () => void
+  // Toggle the cross-tab Language Servers drawer (mutually exclusive with Problems).
+  setLspDrawerOpen: (open: boolean) => void
+  toggleLspDrawerOpen: () => void
   // Open coding file at a diagnostic location (uri may be file://).
   openDiagnostic: (uri: string, line: number, character: number) => void
   // Open (or focus) a read-only STREAM tab for a sub-agent (`kind:'subagent'`) or bash
@@ -2805,6 +2832,13 @@ function applyPaletteVars(palette: PaletteColors) {
   // the CSS-var repaint, so a live panel's colours track the daemon exactly
   // like the chat chrome does (see docs/EXTENSIONS.md "Theme").
   broadcastThemeToPanels(palette)
+  // Keep Monaco hover/suggest/peek widgets on the live palette (lazy import so
+  // the main bundle doesn't pull monaco until an editor has loaded once).
+  void import('../lib/monaco-setup')
+    .then((m) => m.refreshKomaThemes())
+    .catch(() => {
+      /* monaco not loaded yet — fine */
+    })
 }
 
 // Basename of a path — a diff tab's title (TabBar disambiguates colliding
@@ -2886,7 +2920,9 @@ export const useKoma = create<KomaState>((set, get) => ({
   lspServers: [],
   lspProgress: {},
   lspDiagnostics: {},
+  lspRuntime: [],
   problemsOpen: false,
+  lspDrawerOpen: false,
   keyRevealResult: null,
   branches: [],
   branchesLoading: false,
@@ -4192,6 +4228,40 @@ export const useKoma = create<KomaState>((set, get) => ({
       case 'LspDocumentSymbol':
         resolveLspDocumentSymbol(env.requestId, env.symbols ?? [], env.error)
         break
+      case 'LspRuntime':
+        set((s) => {
+          const incoming = (env.servers ?? []).map((row) => ({
+            id: row.id,
+            name: row.name,
+            root: row.root ?? '',
+            phase: row.phase || 'ready',
+            title: row.title ?? null,
+            message: row.message ?? null,
+            percentage: row.percentage ?? null,
+            openDocs: row.openDocs ?? 0,
+          }))
+          const removed = new Set(env.removed ?? [])
+          if (env.replace) {
+            return { lspRuntime: incoming.filter((r) => !removed.has(r.id)) }
+          }
+          const byId = new Map(s.lspRuntime.map((r) => [r.id, r]))
+          for (const id of removed) byId.delete(id)
+          for (const row of incoming) {
+            const prev = byId.get(row.id)
+            // Reader-thread deltas don't know open-doc counts — keep the last
+            // control-loop value when the delta reports 0 and we already have one.
+            const openDocs =
+              row.openDocs > 0 || !prev
+                ? row.openDocs
+                : prev.openDocs
+            byId.set(row.id, { ...row, openDocs })
+          }
+          const next = Array.from(byId.values()).sort((a, b) =>
+            a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
+          )
+          return { lspRuntime: next }
+        })
+        break
       case 'FileTree':
         set((s) => ({ coding: reduceFileTree(s.coding, env) }))
         break
@@ -5338,8 +5408,20 @@ export const useKoma = create<KomaState>((set, get) => ({
   lspUninstall: (id) => {
     get().req({ r: 'LspUninstall', id })
   },
-  setProblemsOpen: (open) => set({ problemsOpen: !!open }),
-  toggleProblemsOpen: () => set((s) => ({ problemsOpen: !s.problemsOpen })),
+  setProblemsOpen: (open) =>
+    set({ problemsOpen: !!open, ...(open ? { lspDrawerOpen: false } : {}) }),
+  toggleProblemsOpen: () =>
+    set((s) => {
+      const next = !s.problemsOpen
+      return { problemsOpen: next, ...(next ? { lspDrawerOpen: false } : {}) }
+    }),
+  setLspDrawerOpen: (open) =>
+    set({ lspDrawerOpen: !!open, ...(open ? { problemsOpen: false } : {}) }),
+  toggleLspDrawerOpen: () =>
+    set((s) => {
+      const next = !s.lspDrawerOpen
+      return { lspDrawerOpen: next, ...(next ? { problemsOpen: false } : {}) }
+    }),
   openDiagnostic: (uri, line, character) => {
     const abs = uriToPath(uri)
     if (!abs) return

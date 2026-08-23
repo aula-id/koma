@@ -1,4 +1,4 @@
-import { Activity, AlertCircle, AlertTriangle, FoldVertical, Server } from 'lucide-react'
+import { Activity, AlertCircle, AlertTriangle, FoldVertical, Loader2, Server } from 'lucide-react'
 import { useKoma, visiblePlanTodos } from '../store/koma'
 import { BranchSwitcher } from './BranchSwitcher'
 
@@ -39,6 +39,10 @@ export function UsageFooter() {
   const lspDiagnostics = useKoma((s) => s.lspDiagnostics)
   const problemsOpen = useKoma((s) => s.problemsOpen)
   const toggleProblemsOpen = useKoma((s) => s.toggleProblemsOpen)
+  const lspRuntime = useKoma((s) => s.lspRuntime)
+  const lspProgress = useKoma((s) => s.lspProgress)
+  const lspDrawerOpen = useKoma((s) => s.lspDrawerOpen)
+  const toggleLspDrawerOpen = useKoma((s) => s.toggleLspDrawerOpen)
   let errCount = 0
   let warnCount = 0
   for (const list of Object.values(lspDiagnostics)) {
@@ -48,6 +52,24 @@ export function UsageFooter() {
     }
   }
   const problemTotal = errCount + warnCount
+  const lspBusy =
+    lspRuntime.some((s) => s.phase === 'starting' || s.phase === 'working') ||
+    Object.values(lspProgress).some((p) => p && !p.error && p.pct < 100)
+  const lspError = lspRuntime.some((s) => s.phase === 'error')
+  const lspLive = lspRuntime.length
+  const lspTitle = lspLive
+    ? lspRuntime
+        .map((s) => {
+          const st =
+            s.phase === 'working'
+              ? s.title
+                ? `${s.title}${s.percentage != null ? ` ${s.percentage}%` : ''}`
+                : 'working'
+              : s.phase
+          return `${s.name}: ${st}`
+        })
+        .join('\n')
+    : 'No language servers running'
   // Live remote target for the statusline chip (hub-ready OR attached-connected).
   const remoteTarget =
     (remoteState.state === 'ready' || remoteState.state === 'connected') &&
@@ -127,6 +149,30 @@ export function UsageFooter() {
         <FoldVertical size={12} />
       </button>
 
+      {/* Language Servers badge — live runtime / progress drawer */}
+      <button
+        type="button"
+        onClick={toggleLspDrawerOpen}
+        aria-label="Language servers"
+        title={lspTitle}
+        className={`flex h-4 flex-none items-center gap-1 rounded px-1 transition-colors ${
+          lspDrawerOpen
+            ? 'bg-koma-accent/15 text-koma-accent'
+            : lspError
+              ? 'text-koma-error hover:bg-koma-hover'
+              : lspBusy || lspLive
+                ? 'text-koma-fg hover:bg-koma-hover'
+                : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'
+        }`}
+      >
+        {lspBusy ? (
+          <Loader2 size={11} className="animate-spin text-koma-accent" />
+        ) : (
+          <Server size={11} className={lspError ? 'text-koma-error' : ''} />
+        )}
+        <span className="tabular-nums">{lspLive}</span>
+      </button>
+
       {/* Problems badge — always visible; expands the cross-tab drawer */}
       <button
         type="button"
@@ -142,9 +188,9 @@ export function UsageFooter() {
         }`}
       >
         {errCount > 0 ? (
-          <AlertCircle size={11} className="text-red-400" />
+          <AlertCircle size={11} className="text-koma-error" />
         ) : (
-          <AlertTriangle size={11} className={warnCount ? 'text-amber-400' : ''} />
+          <AlertTriangle size={11} className={warnCount ? 'text-koma-warn' : ''} />
         )}
         <span className="tabular-nums">{problemTotal}</span>
       </button>

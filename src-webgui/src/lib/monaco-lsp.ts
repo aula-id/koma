@@ -8,6 +8,7 @@
 //   Go-to (F12 / Ctrl+click) routes through registerEditorOpener → open coding tab.
 
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
+// Side-effect: load CodeLens + peek/goto contribs before providers register.
 import { langFromPath } from './monaco-setup'
 
 export type LspDiagnostic = {
@@ -81,6 +82,193 @@ const pendingDefinition = new Map<string, Pending<LspLocation[]>>()
 const pendingReferences = new Map<string, Pending<LspLocation[]>>()
 const pendingDocumentSymbol = new Map<string, Pending<LspDocumentSymbol[]>>()
 const pendingFileText = new Map<string, Pending<string>>()
+
+// ─── CodeLens reference-count cache ──────────────────────────────────────────
+// Survives tab close/reopen so "N references" does not re-hit the language
+// server for every open of an unchanged file. Keyed by root+path+content hash.
+const LENS_KINDS = new Set([5, 6, 9, 10, 11, 12, 23]) // Class..Struct
+const LENS_MAX = 40
+
+type CachedLens = {
+  /** 0-based symbol range start line (decoration line). */
+  rangeLine: number
+  /** 0-based selection position used for references + peek. */
+  selLine: number
+  selCharacter: number
+  count: number
+}
+
+type CodeLensCacheEntry = {
+  hash: string
+  lenses: CachedLens[]
+}
+
+const codeLensCache = new Map<string, CodeLensCacheEntry>()
+/** In-flight compute promises so concurrent provideCodeLenses share one fetch. */
+const codeLensInflight = new Map<string, Promise<CachedLens[]>>()
+
+function fileCacheKey(root: string, path: string): string {
+  return `${root.replace(/\\/g, '/')}\0${path.replace(/\\/g, '/')}`
+}
+
+/** Fast non-crypto fingerprint of file text (FNV-1a 32-bit + length). */
+function contentHash(text: string): string {
+  let h = 0x811c9dc5
+  const n = text.length
+  // Sample long files so open stays cheap; length + ends catch most edits.
+  if (n <= 64_000) {
+    for (let i = 0; i < n; i++) {
+      h ^= text.charCodeAt(i)
+      h = Math.imul(h, 0x01000193)
+    }
+  } else {
+    const step = Math.floor(n / 32_000) || 1
+    for (let i = 0; i < n; i += step) {
+      h ^= text.charCodeAt(i)
+      h = Math.imul(h, 0x01000193)
+    }
+    // Always mix head + tail.
+    for (let i = 0; i < 256 && i < n; i++) {
+      h ^= text.charCodeAt(i)
+      h = Math.imul(h, 0x01000193)
+    }
+    for (let i = Math.max(0, n - 256); i < n; i++) {
+      h ^= text.charCodeAt(i)
+      h = Math.imul(h, 0x01000193)
+    }
+  }
+  return `${n.toString(36)}:${(h >>> 0).toString(36)}`
+}
+
+function formatRefTitle(count: number): string {
+  if (count === 0) return '0 references'
+  if (count === 1) return '1 reference'
+  return `${count} references`
+}
+
+function lensesFromCache(
+  cached: CachedLens[],
+  modelUri: string,
+  commandId: string,
+): monaco.languages.CodeLens[] {
+  return cached.map((c) => ({
+    range: {
+      startLineNumber: c.rangeLine + 1,
+      startColumn: 1,
+      endLineNumber: c.rangeLine + 1,
+      endColumn: 1,
+    },
+    command: {
+      id: commandId,
+      title: formatRefTitle(c.count),
+      arguments: [
+        {
+          uri: modelUri,
+          line: c.selLine + 1,
+          column: Math.max(1, c.selCharacter + 1),
+        },
+      ],
+    },
+  }))
+}
+
+async function computeCodeLensCounts(
+  req: ReqFn,
+  root: string,
+  path: string,
+  hash: string,
+): Promise<CachedLens[]> {
+  const cacheKey = fileCacheKey(root, path)
+  const hit = codeLensCache.get(cacheKey)
+  if (hit && hit.hash === hash) return hit.lenses
+
+  const inflightKey = `${cacheKey}\0${hash}`
+  const existing = codeLensInflight.get(inflightKey)
+  if (existing) return existing
+
+  const work = (async () => {
+    const symId = mintId('sym')
+    const symP = track(pendingDocumentSymbol, symId)
+    req({
+      r: 'LspDocumentSymbol',
+      root,
+      path,
+      requestId: symId,
+    })
+    let symbols: LspDocumentSymbol[] = []
+    try {
+      symbols = await symP
+    } catch {
+      return []
+    }
+
+    const candidates = symbols.filter((s) => LENS_KINDS.has(s.kind)).slice(0, LENS_MAX)
+    const out: CachedLens[] = []
+    await Promise.all(
+      candidates.map(async (sym) => {
+        const refId = mintId('rlen')
+        const refP = track(pendingReferences, refId)
+        req({
+          r: 'LspReferences',
+          root,
+          path,
+          line: sym.selectionRange.startLine,
+          character: sym.selectionRange.startCharacter,
+          includeDeclaration: false,
+          requestId: refId,
+        })
+        let count = 0
+        try {
+          const refs = await refP
+          count = refs.length
+        } catch {
+          return
+        }
+        out.push({
+          rangeLine: sym.range.startLine,
+          selLine: sym.selectionRange.startLine,
+          selCharacter: sym.selectionRange.startCharacter,
+          count,
+        })
+      }),
+    )
+    out.sort((a, b) => a.rangeLine - b.rangeLine || a.selLine - b.selLine)
+    // Don't poison the cache when every references RPC failed (server still
+    // starting / indexing) — leave miss so the next provide retries.
+    if (candidates.length > 0 && out.length === 0) {
+      return out
+    }
+    codeLensCache.set(cacheKey, { hash, lenses: out })
+    return out
+  })()
+
+  codeLensInflight.set(inflightKey, work)
+  try {
+    return await work
+  } finally {
+    codeLensInflight.delete(inflightKey)
+  }
+}
+
+/**
+ * Eagerly warm the "N references" CodeLens cache after didOpen / didChange.
+ * Safe to call often; no-ops when hash already cached. Does not block the UI.
+ */
+export function warmCodeLensCache(req: ReqFn, root: string, path: string, text: string): void {
+  if (!root || !path) return
+  const hash = contentHash(text)
+  const cacheKey = fileCacheKey(root, path)
+  const hit = codeLensCache.get(cacheKey)
+  if (hit && hit.hash === hash) return
+  void computeCodeLensCounts(req, root, path, hash).catch(() => {
+    /* ignore warm failures */
+  })
+}
+
+/** Drop cached lenses for a file (content rewrite / dispose). */
+export function invalidateCodeLensCache(root: string, path: string): void {
+  codeLensCache.delete(fileCacheKey(root, path))
+}
 
 let reqCounter = 0
 function mintId(prefix: string): string {
@@ -545,12 +733,11 @@ export function ensureLspProviders(
   })
 
   // VS Code-style "N references" CodeLens above symbols.
-  // Click sets cursor then peeks references (stock trigger uses current position).
+  // Click peeks references at the symbol (requires edcore.main contribs).
   const CODELENS_PEEK_REFS = 'koma.codelens.peekReferences'
   monaco.editor.registerCommand(
     CODELENS_PEEK_REFS,
-    (accessor, ...args: unknown[]) => {
-      void accessor
+    (_accessor, ...args: unknown[]) => {
       const payload = args[0] as
         | { uri?: string; line?: number; column?: number }
         | undefined
@@ -561,9 +748,57 @@ export function ensureLspProviders(
         editors.find((e) => e.hasTextFocus()) ??
         editors[0]
       if (!ed) return
-      ed.setPosition({ lineNumber: payload.line, column: payload.column })
+      const pos = { lineNumber: payload.line, column: payload.column }
+      ed.setPosition(pos)
+      ed.revealPositionInCenterIfOutsideViewport(pos)
       ed.focus()
-      void ed.getAction('editor.action.referenceSearch.trigger')?.run()
+      // Defer one frame so the position sticks before the peek action reads it.
+      const runPeek = () => {
+        const action =
+          ed.getAction('editor.action.referenceSearch.trigger') ??
+          ed.getAction('editor.action.goToReferences')
+        if (action) {
+          void action.run()
+          return
+        }
+        // Contribs missing — last resort: open first reference as a tab via provider.
+        void (async () => {
+          const model = ed.getModel()
+          if (!model) return
+          const loc = modelToRootPath(model, getRoots())
+          if (!loc) return
+          const requestId = mintId('refclick')
+          const p = track(pendingReferences, requestId)
+          req({
+            r: 'LspReferences',
+            root: loc.root,
+            path: loc.path,
+            line: payload.line! - 1,
+            character: payload.column! - 1,
+            includeDeclaration: false,
+            requestId,
+          })
+          try {
+            const locations = await p
+            if (!locations.length) return
+            const mapped = await materializeLocations(locations, req, getRoots)
+            if (!mapped.length) return
+            // Prefer multi-reference peek path through opener when action absent.
+            const first = mapped[0]
+            const uri = first.uri.toString()
+            if (goToHook) {
+              goToHook(
+                uri,
+                first.range.startLineNumber - 1,
+                first.range.startColumn - 1,
+              )
+            }
+          } catch {
+            /* ignore */
+          }
+        })()
+      }
+      window.setTimeout(runPeek, 0)
     },
   )
 
@@ -572,80 +807,30 @@ export function ensureLspProviders(
       const loc = modelToRootPath(model, getRoots())
       if (!loc) return { lenses: [], dispose: () => {} }
 
-      const symId = mintId('sym')
-      const symP = track(pendingDocumentSymbol, symId)
-      req({
-        r: 'LspDocumentSymbol',
-        root: loc.root,
-        path: loc.path,
-        requestId: symId,
-      })
+      const hash = contentHash(model.getValue())
+      const cacheKey = fileCacheKey(loc.root, loc.path)
+      const hit = codeLensCache.get(cacheKey)
+      const modelUri = model.uri.toString()
+      if (hit && hit.hash === hash) {
+        return {
+          lenses: lensesFromCache(hit.lenses, modelUri, CODELENS_PEEK_REFS),
+          dispose: () => {},
+        }
+      }
 
-      let symbols: LspDocumentSymbol[] = []
       try {
-        symbols = await symP
+        const cached = await computeCodeLensCounts(req, loc.root, loc.path, hash)
+        // Model may have changed while we waited — only return if still matching.
+        if (model.isDisposed() || contentHash(model.getValue()) !== hash) {
+          return { lenses: [], dispose: () => {} }
+        }
+        return {
+          lenses: lensesFromCache(cached, modelUri, CODELENS_PEEK_REFS),
+          dispose: () => {},
+        }
       } catch {
         return { lenses: [], dispose: () => {} }
       }
-
-      // Class, Method, Constructor, Enum, Interface, Function, Struct
-      const LENS_KINDS = new Set([5, 6, 9, 10, 11, 12, 23])
-      const candidates = symbols
-        .filter((s) => LENS_KINDS.has(s.kind))
-        .slice(0, 40)
-
-      const lenses: monaco.languages.CodeLens[] = []
-      const modelUri = model.uri.toString()
-      await Promise.all(
-        candidates.map(async (sym) => {
-          const refId = mintId('rlen')
-          const refP = track(pendingReferences, refId)
-          req({
-            r: 'LspReferences',
-            root: loc.root,
-            path: loc.path,
-            line: sym.selectionRange.startLine,
-            character: sym.selectionRange.startCharacter,
-            includeDeclaration: false,
-            requestId: refId,
-          })
-          let count = 0
-          try {
-            const refs = await refP
-            count = refs.length
-          } catch {
-            return
-          }
-          const title =
-            count === 0
-              ? '0 references'
-              : count === 1
-                ? '1 reference'
-                : `${count} references`
-          lenses.push({
-            range: {
-              startLineNumber: sym.range.startLine + 1,
-              startColumn: 1,
-              endLineNumber: sym.range.startLine + 1,
-              endColumn: 1,
-            },
-            command: {
-              id: CODELENS_PEEK_REFS,
-              title,
-              arguments: [
-                {
-                  uri: modelUri,
-                  line: sym.selectionRange.startLine + 1,
-                  column: Math.max(1, sym.selectionRange.startCharacter + 1),
-                },
-              ],
-            },
-          })
-        }),
-      )
-
-      lenses.sort((a, b) => a.range.startLineNumber - b.range.startLineNumber)
-      return { lenses, dispose: () => {} }
     },
   })
 }
@@ -838,7 +1023,9 @@ export function languageIdForPath(path: string): string {
 export function disposeCodingModel(root: string, path: string): void {
   const uri = monacoUriFromPath(root, path)
   const model = monaco.editor.getModel(uri)
-  if (!model) return
-  monaco.editor.setModelMarkers(model, MARKER_OWNER, [])
-  model.dispose()
+  if (model) {
+    monaco.editor.setModelMarkers(model, MARKER_OWNER, [])
+    model.dispose()
+  }
+  // Keep CodeLens cache so reopen of unchanged content is instant.
 }
