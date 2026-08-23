@@ -189,6 +189,7 @@ fn is_managed_installable(id: &str) -> bool {
             | "gopls"
             | "vscode-langservers"
             | "bash-language-server"
+            | "intelephense"
     )
 }
 

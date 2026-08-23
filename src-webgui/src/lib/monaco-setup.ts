@@ -27,6 +27,7 @@ import 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution'
 import 'monaco-editor/esm/vs/basic-languages/sql/sql.contribution'
 import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution'
 import 'monaco-editor/esm/vs/basic-languages/java/java.contribution'
+import 'monaco-editor/esm/vs/basic-languages/php/php.contribution'
 import 'monaco-editor/esm/vs/basic-languages/ini/ini.contribution'
 
 // Custom-protocol (koma://) webviews can't reliably fetch module workers, so the
@@ -64,6 +65,7 @@ const EXT_LANG: Record<string, string> = {
   sql: 'sql',
   c: 'cpp', h: 'cpp', hpp: 'cpp', hh: 'cpp', cpp: 'cpp', cc: 'cpp', cxx: 'cpp',
   java: 'java',
+  php: 'php', phtml: 'php', php3: 'php', php4: 'php', php5: 'php', phps: 'php',
   ini: 'ini', toml: 'ini', cfg: 'ini', conf: 'ini',
 }
 

@@ -125,6 +125,7 @@ fn managed_install_supported(spec: &ServerSpec) -> bool {
             | "gopls"
             | "vscode-langservers"
             | "bash-language-server"
+            | "intelephense"
     )
 }
 
@@ -679,6 +680,7 @@ mod tests {
             "gopls",
             "vscode-langservers",
             "bash-language-server",
+            "intelephense",
         ] {
             let spec = catalog::find(id).expect(id);
             assert!(managed_install_supported(spec), "{id}");
