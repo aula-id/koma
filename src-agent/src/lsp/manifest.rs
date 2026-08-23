@@ -117,34 +117,80 @@ pub fn managed_binary_path(id: &str, binary: &str) -> Option<PathBuf> {
             }
         }
     }
-    // Common layouts.
-    let candidates = [
-        dir.join("bin").join(binary_name(binary)),
-        dir.join(binary_name(binary)),
-        // npm --prefix puts bins in bin/ already covered; pip venv:
-        dir.join("venv").join(venv_bin_dir()).join(binary_name(binary)),
-    ];
-    candidates.into_iter().find(|p| p.is_file())
-}
-
-#[cfg(windows)]
-fn binary_name(name: &str) -> String {
-    if name.ends_with(".exe") || name.ends_with(".cmd") || name.ends_with(".bat") {
-        name.to_string()
-    } else {
-        // Prefer .cmd for npm shims, else .exe.
-        let cmd = format!("{name}.cmd");
-        let exe = format!("{name}.exe");
-        // Caller joins against a dir and checks is_file — return bare name with
-        // .exe; the search loop below also tries .cmd via managed path layout.
-        let _ = cmd;
-        exe
+    // Common layouts (also try .js / Windows .cmd — npm package bins).
+    let names = managed_binary_names(binary);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for name in &names {
+        candidates.push(dir.join("bin").join(name));
+        candidates.push(dir.join(name));
+        candidates.push(dir.join("node_modules").join(".bin").join(name));
+        candidates.push(dir.join("venv").join(venv_bin_dir()).join(name));
     }
+    if let Some(p) = candidates.into_iter().find(|p| p.is_file()) {
+        return Some(p);
+    }
+    let base = binary.to_string();
+    let js = format!("{base}.js");
+    // Slow path: look under lib/node_modules and node_modules for the bin name.
+    for root in [
+        dir.join("lib").join("node_modules"),
+        dir.join("node_modules"),
+    ] {
+        if !root.is_dir() {
+            continue;
+        }
+        if let Some(found) = find_file_named(&root, &base).or_else(|| find_file_named(&root, &js)) {
+            return Some(found);
+        }
+    }
+    None
 }
 
-#[cfg(not(windows))]
-fn binary_name(name: &str) -> String {
-    name.to_string()
+fn find_file_named(root: &Path, name: &str) -> Option<PathBuf> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir).ok()?;
+        for ent in entries.flatten() {
+            let p = ent.path();
+            if p.is_dir() {
+                // Skip bulky trees we never need for bin lookup.
+                if let Some(n) = p.file_name().and_then(|s| s.to_str()) {
+                    if n == "node_modules" && dir != root {
+                        // Still descend top-level package node_modules? No —
+                        // package bins live in the package's own bin/, not deps.
+                        continue;
+                    }
+                }
+                stack.push(p);
+            } else if p.is_file() {
+                if p.file_name().and_then(|s| s.to_str()) == Some(name) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Candidate basenames for a managed binary on this platform.
+fn managed_binary_names(binary: &str) -> Vec<String> {
+    let mut names = vec![binary.to_string()];
+    if !binary.ends_with(".js") {
+        names.push(format!("{binary}.js"));
+    }
+    #[cfg(windows)]
+    {
+        if !binary.ends_with(".cmd") {
+            names.push(format!("{binary}.cmd"));
+        }
+        if !binary.ends_with(".exe") {
+            names.push(format!("{binary}.exe"));
+        }
+        if !binary.ends_with(".bat") {
+            names.push(format!("{binary}.bat"));
+        }
+    }
+    names
 }
 
 #[cfg(windows)]
