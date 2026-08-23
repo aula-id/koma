@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
-import { Code2, RotateCcw, Save } from 'lucide-react'
+import { Code2, Download, RotateCcw, Save, X } from 'lucide-react'
 import { initMonaco, applyKomaTheme, readMonoFont, langFromPath } from '../lib/monaco-setup'
 import { useKoma, type Tab } from '../store/koma'
 import { fileKey } from '../store/coding'
@@ -22,6 +22,27 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   const codingAutosave = useKoma((s) => !!s.settingsValues?.codingAutosave)
   const saveCodingFile = useKoma((s) => s.saveCodingFile)
   const revertCodingFile = useKoma((s) => s.revertCodingFile)
+  const lspServers = useKoma((s) => s.lspServers)
+  const lspProgress = useKoma((s) => s.lspProgress)
+  const refreshLsp = useKoma((s) => s.refreshLsp)
+  const lspInstall = useKoma((s) => s.lspInstall)
+  const [bannerDismissed, setBannerDismissed] = useState<Record<string, boolean>>({})
+
+  // Ensure we have a fresh LSP catalogue when a coding file opens.
+  useEffect(() => {
+    if (lspServers.length === 0) refreshLsp()
+  }, [lspServers.length, refreshLsp])
+
+  const missingServer = useMemo(() => {
+    const file = tab.path.split('/').pop() ?? tab.path
+    const dot = file.lastIndexOf('.')
+    const ext = dot > 0 ? file.slice(dot + 1).toLowerCase() : ''
+    if (!ext) return null
+    const match = lspServers.find((s) => s.extensions.includes(ext))
+    if (!match || match.source !== 'missing') return null
+    if (bannerDismissed[match.id]) return null
+    return match
+  }, [tab.path, lspServers, bannerDismissed])
 
   const canEdit = !!(
     fileState &&
@@ -272,6 +293,37 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
         onSave={() => saveCodingFile(tab.root, tab.path)}
         onRevert={() => revertCodingFile(tab.root, tab.path)}
       />
+      {missingServer && (
+        <div className="flex flex-none items-center gap-2 border-b border-koma-border bg-koma-accent/10 px-3 py-1.5 text-[12px] text-koma-fg">
+          <span className="min-w-0 flex-1 truncate opacity-85">
+            Install <strong className="font-semibold">{missingServer.name}</strong> for
+            language features on this filetype.
+          </span>
+          <button
+            type="button"
+            onClick={() => lspInstall(missingServer.id, false, false)}
+            disabled={!!lspProgress[missingServer.id] && lspProgress[missingServer.id].pct < 100}
+            className="flex flex-none items-center gap-1 rounded border border-koma-accent/40 bg-koma-accent/15 px-2 py-0.5 text-[11.5px] font-medium text-koma-accent hover:bg-koma-accent/25 disabled:opacity-50"
+          >
+            {lspProgress[missingServer.id] && lspProgress[missingServer.id].pct < 100 ? (
+              <BrailleSpinner size={12} />
+            ) : (
+              <Download size={12} />
+            )}
+            Install
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              setBannerDismissed((m) => ({ ...m, [missingServer.id]: true }))
+            }
+            aria-label="Dismiss"
+            className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-fg opacity-50 hover:bg-koma-hover hover:opacity-100"
+          >
+            <X size={13} />
+          </button>
+        </div>
+      )}
       <div className="relative min-h-0 flex-1">
         <div ref={containerRef} className="absolute inset-0" />
         {fileState?.loading && (

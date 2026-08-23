@@ -13,6 +13,8 @@
 //! - `koma doctor [-v|--verbose]` — flutter-doctor-style readiness report
 //!   (config/daemons/models/GUI deps/extensions/optional subsystems/MCP/update);
 //!   strictly read-only, exits non-zero only on a hard failure.
+//! - `koma lsp <status|install|uninstall>` — manage language servers for the
+//!   coding panel (`~/.koma/lsp/`). Opt-in; never auto-installed by default curl|sh.
 //! - `--internet-fullmode-install` — provision the Python full-mode (browser) environment and exit.
 //! - `--internet-fullmode-uninstall` — remove the Python full-mode environment and exit.
 //! - `--force`                     — modifier for `--internet-fullmode-install`: force a reinstall
@@ -218,6 +220,10 @@ pub struct Opts {
     /// When `true`, list remote koma sessions as JSON and exit
     /// (`koma sessions` positional verb, hidden internal subcommand).
     pub sessions: bool,
+    /// `koma lsp <status|install|uninstall …>` — manage language servers for the
+    /// coding panel. Short-circuited in `main` before the TUI (same pattern as
+    /// `doctor` / `ext`).
+    pub lsp: Option<crate::lsp::LspCli>,
 }
 
 /// Print `koma <version>` to STDOUT and return the process exit code (`0`).
@@ -251,6 +257,7 @@ pub fn print_help() -> i32 {
          \x20 daemon <status|kill|restart|clean|delete>  daemon management CLI\n\
          \x20 ext install --dev <zip|dir>    sideload an unsigned local extension (dev-only)\n\
          \x20 doctor [-v|--verbose]          readiness report (config/daemons/models/gui/…)\n\
+         \x20 lsp <status|install|uninstall> manage language servers for the coding panel\n\
          \x20 server                         headless daemon over stdio (for remote dev via SSH)\n\
          \x20 remote <user@host>              SSH-connect to a remote machine and run koma\n\
          \n\
@@ -394,6 +401,19 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
         Some("doctor") => {
             opts.doctor = true;
             opts.doctor_verbose = all.iter().any(|a| a == "-v" || a == "--verbose");
+        }
+        Some("lsp") => {
+            // Remaining argv after the `lsp` verb (flags + sub-verb + id).
+            // Re-collect from `all` so `--force`/`--all` survive the non-`--`
+            // positional filter above.
+            let lsp_args: Vec<String> = all
+                .iter()
+                .skip(1) // argv[0]
+                .skip_while(|a| a.as_str() != "lsp")
+                .skip(1) // the `lsp` token itself
+                .cloned()
+                .collect();
+            opts.lsp = Some(crate::lsp::LspCli::parse(&lsp_args));
         }
         Some("daemon") => {
             opts.subcommand = Some(

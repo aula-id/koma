@@ -560,6 +560,26 @@ export type KeyReveal = {
   error: string | null
 }
 
+// One first-wave language server status row (LspStatus push).
+export type LspServerStatus = {
+  id: string
+  name: string
+  binary: string
+  source: 'managed' | 'path' | 'missing'
+  path?: string
+  version?: string
+  extensions: string[]
+  installKind: string
+  package: string
+}
+
+// Transient install progress for one server id (LspInstall push).
+export type LspInstallProgress = {
+  id: string
+  pct: number
+  error: string | null
+}
+
 // One entry in the Agents dashboard's model catalogue (host
 // `CatalogueModelSnapshot`, snake_case on the wire — see `AgentsValues`).
 export type CatalogueModelEntry = { uuid: string; name: string; modelId: string; providerUuid: string }
@@ -1241,6 +1261,18 @@ export type PushEnvelope =
       k: 'KeyOp'
       ok: boolean
       op: string
+      error: string | null
+    }
+  // Settings "Language servers": full catalogue status (managed / PATH / missing).
+  | {
+      k: 'LspStatus'
+      servers: LspServerStatus[]
+    }
+  // Install/uninstall progress for one server. pct 0–100; error set = failure.
+  | {
+      k: 'LspInstall'
+      id: string
+      pct: number
       error: string | null
     }
   // Reply to GuiReq GitBranchList (G4) — every local + remote-tracking branch
@@ -1975,6 +2007,10 @@ type KomaState = {
   // the model's own git credential machinery. REPLACED wholesale on each push;
   // empty until the first reply lands. Global (not per-session), mirroring `git`.
   keys: KeyInfo[]
+  // Settings "Language servers" catalogue (latest LspStatus). Empty until first reply.
+  lspServers: LspServerStatus[]
+  // Per-id install progress (latest LspInstall). Cleared when status lands idle.
+  lspProgress: Record<string, LspInstallProgress>
   // The SSH Keys section's transient "Copy public key" / "Reveal private key"
   // result (latest KeyReveal push), or `null` when nothing has been revealed
   // yet / the reveal box was dismissed. Kept separate from `keys` (the list
@@ -2347,6 +2383,12 @@ type KomaState = {
   // Delete a keypair (both halves, best-effort). Same reply pattern as
   // keyGenerate.
   keyDelete: (name: string) => void
+  // Settings "Language servers": re-fetch catalogue status.
+  refreshLsp: () => void
+  // Install one server (or all managed first-wave when `all`).
+  lspInstall: (id: string | null, all?: boolean, force?: boolean) => void
+  // Uninstall a koma-managed server (never touches PATH copies).
+  lspUninstall: (id: string) => void
   // Open (or focus) a read-only STREAM tab for a sub-agent (`kind:'subagent'`) or bash
   // job (`kind:'bash'`) by its numeric id: find-or-create (dedup by the stable
   // `sa:`/`bash:` id), activate it, and sync the stream view so the host starts streaming
@@ -2760,6 +2802,8 @@ export const useKoma = create<KomaState>((set, get) => ({
   remoteBusy: null,
   commitDraft: '',
   keys: initialKeys,
+  lspServers: [],
+  lspProgress: {},
   keyRevealResult: null,
   branches: [],
   branchesLoading: false,
@@ -4015,6 +4059,35 @@ export const useKoma = create<KomaState>((set, get) => ({
             : {}
         })
         break
+      case 'LspStatus':
+        set(() => ({
+          lspServers: env.servers,
+          // Clear progress for servers that are no longer installing.
+          lspProgress: {},
+        }))
+        break
+      case 'LspInstall':
+        set((s) => {
+          const text = env.error ? `lsp ${env.id || 'install'}: ${env.error}` : null
+          const raise = !!text && text !== s.ui.toast?.text
+          const seq = raise ? s.ui.toastSeq + 1 : s.ui.toastSeq
+          const nextProgress = { ...s.lspProgress }
+          if (env.id) {
+            if (env.error || env.pct >= 100) {
+              // Keep a brief terminal state; status push will clear.
+              nextProgress[env.id] = { id: env.id, pct: env.pct, error: env.error }
+            } else {
+              nextProgress[env.id] = { id: env.id, pct: env.pct, error: env.error }
+            }
+          }
+          return {
+            lspProgress: nextProgress,
+            ui: raise
+              ? { ...s.ui, toastSeq: seq, toast: { id: seq, text: text as string, kind: 'error' } }
+              : s.ui,
+          }
+        })
+        break
       case 'FileTree':
         set((s) => ({ coding: reduceFileTree(s.coding, env) }))
         break
@@ -5058,6 +5131,20 @@ export const useKoma = create<KomaState>((set, get) => ({
   clearKeyReveal: () => set(() => ({ keyRevealResult: null })),
   keyDelete: (name) => {
     get().req({ r: 'KeyDelete', name })
+  },
+  refreshLsp: () => {
+    get().req({ r: 'LspStatus' })
+  },
+  lspInstall: (id, all = false, force = false) => {
+    get().req({
+      r: 'LspInstall',
+      id: all ? null : id,
+      all,
+      force,
+    })
+  },
+  lspUninstall: (id) => {
+    get().req({ r: 'LspUninstall', id })
   },
   openStreamTab: (kind, targetId, title) => {
     const id = kind === 'subagent' ? `sa:${targetId}` : `bash:${targetId}`

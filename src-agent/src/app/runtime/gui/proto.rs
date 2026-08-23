@@ -951,6 +951,28 @@ pub(super) enum GuiReq {
         request_id: String,
     },
 
+    // ─── Language servers (Settings + editor banner) ──────────────────────────
+    // Host-local only (never the daemon): resolve / install / uninstall under
+    // `~/.koma/lsp/`. Same reasoning as KeyList / FileTree.
+    /// Settings "Language servers" opened / refreshed: full catalogue status.
+    /// Reply: `LspStatus` envelope.
+    LspStatus,
+    /// Install one catalogue id, or every managed first-wave server when `all`.
+    /// Streams `LspInstall` progress, then a fresh `LspStatus`.
+    LspInstall {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        all: bool,
+        #[serde(default)]
+        force: bool,
+    },
+    /// Remove a koma-managed install. Never touches PATH copies.
+    /// Reply: `LspInstall` ack + fresh `LspStatus`.
+    LspUninstall {
+        id: String,
+    },
+
     // ─── Frontend error logging ───────────────────────────────────────────────
     /// Write an error message to the global error log (`~/.koma/error.log`).
     /// Used by the web frontend to log runtime errors that only occur in the

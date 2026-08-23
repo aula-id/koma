@@ -513,6 +513,14 @@ declare global {
     | { r: 'FileRename'; root: string; oldPath: string; newPath: string; requestId: string }
     // Delete a file or directory (recursive for dirs). Reply lands as FileDelete push.
     | { r: 'FileDelete'; root: string; path: string; requestId: string }
+    // ─── Language servers (Settings + editor banner) ─────────────────────
+    // Full catalogue status (managed / PATH / missing). Reply: LspStatus.
+    | { r: 'LspStatus' }
+    // Install one id, or every managed first-wave server when all=true.
+    // Streams LspInstall progress, then a fresh LspStatus.
+    | { r: 'LspInstall'; id?: string | null; all?: boolean; force?: boolean }
+    // Remove a koma-managed install. Never touches PATH copies.
+    | { r: 'LspUninstall'; id: string }
     // Write an error message to the global error log (`~/.koma/error.log`). Used by
     // the React error boundary to log runtime errors that only occur in the built
     // app (not in dev mode). No reply, no session needed.
@@ -595,6 +603,22 @@ declare global {
     | { k: 'FileCreate'; root: string; path: string; requestId: string; error: string | null }
     | { k: 'FileRename'; root: string; oldPath: string; newPath: string; requestId: string; error: string | null }
     | { k: 'FileDelete'; root: string; path: string; requestId: string; error: string | null }
+
+  type LspServerStatus = {
+    id: string
+    name: string
+    binary: string
+    source: 'managed' | 'path' | 'missing'
+    path?: string
+    version?: string
+    extensions: string[]
+    installKind: string
+    package: string
+  }
+
+  type LspPush =
+    | { k: 'LspStatus'; servers: LspServerStatus[] }
+    | { k: 'LspInstall'; id: string; pct: number; error: string | null }
 
   type RemoteHost = {
     id: string

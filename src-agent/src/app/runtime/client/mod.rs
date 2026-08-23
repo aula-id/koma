@@ -79,6 +79,7 @@ pub(crate) mod remote;
 mod remote_ctl;
 mod remote_fs_client;
 mod remote_git_client;
+mod lsp_host;
 #[cfg(feature = "linker")]
 mod remote_linker_client;
 mod render;
@@ -725,6 +726,22 @@ pub(super) enum HostCtl {
         root: String,
         path: String,
         request_id: String,
+    },
+    /// Settings "Language servers": resolve every first-wave server (managed /
+    /// PATH / missing) and push an `LspStatus` envelope. Host-local only.
+    LspStatus,
+    /// Settings / editor banner: install one catalogue id, or every managed
+    /// first-wave server when `all` is set. Streams `LspInstall` progress, then
+    /// a fresh `LspStatus`. `force` reinstalls over an existing managed copy.
+    LspInstall {
+        id: Option<String>,
+        all: bool,
+        force: bool,
+    },
+    /// Settings: remove a koma-managed install (`~/.koma/lsp/<id>/`). Never
+    /// touches PATH copies. Followed by a fresh `LspStatus`.
+    LspUninstall {
+        id: String,
     },
     /// Import-graph visualization: call the linker daemon's
     /// `Visualization` query and push the result back as an `ImportGraph` envelope.
