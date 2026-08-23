@@ -410,14 +410,18 @@ fn install_npm(spec: &ServerSpec, progress: &mut Option<ProgressFn>) -> Result<(
     })?;
     let dir = prepare_server_dir(spec.id)?;
     report(progress, spec.id, 10, None);
+    // `-g --prefix` is required: without `-g`, modern npm only links bins under
+    // `node_modules/.bin/` and never creates `<prefix>/bin/<name>`. With `-g`,
+    // bins land at `<prefix>/bin/` (Unix) / `<prefix>/` shims (Windows).
     println!(
-        "npm install --prefix {} {} ...",
+        "npm install -g --prefix {} {} ...",
         dir.display(),
         spec.package
     );
     let status = Command::new(&npm)
         .args([
             "install",
+            "-g",
             "--prefix",
             dir.to_str().ok_or_else(|| anyhow!("non-utf8 path"))?,
             spec.package,
@@ -428,30 +432,104 @@ fn install_npm(spec: &ServerSpec, progress: &mut Option<ProgressFn>) -> Result<(
         bail!("npm install failed for {} (status {status})", spec.package);
     }
     report(progress, spec.id, 90, None);
-    // npm puts bins in <prefix>/bin/<name>
-    let bin_rel = format!("bin/{}", exe_name(spec.binary));
-    let bin_path = dir.join(&bin_rel);
-    if !bin_path.exists() {
-        // Some packages use a different bin name; try to locate.
-        if let Some(found) = find_named_file(&dir.join("bin"), &exe_name(spec.binary)) {
-            let rel = found
-                .strip_prefix(&dir)
-                .map(|p| p.to_string_lossy().replace('\\', "/"))
-                .unwrap_or(bin_rel);
-            write_manifest(spec, "latest", "npm", &rel)?;
-            println!("installed {} → {}", spec.id, found.display());
-            return Ok(());
-        }
-        bail!(
-            "npm install succeeded but {} not found under {}",
+
+    let found = find_npm_binary(&dir, spec.binary).ok_or_else(|| {
+        anyhow!(
+            "npm install succeeded but `{}` not found under {} \
+             (checked bin/, node_modules/.bin/, and package bin/*.js)",
             spec.binary,
             dir.display()
-        );
-    }
-    ensure_executable(&bin_path)?;
-    write_manifest(spec, "latest", "npm", &bin_rel)?;
-    println!("installed {} → {}", spec.id, bin_path.display());
+        )
+    })?;
+    let rel = found
+        .strip_prefix(&dir)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| found.display().to_string());
+    ensure_executable(&found)?;
+    write_manifest(spec, "latest", "npm", &rel)?;
+    println!("installed {} → {}", spec.id, found.display());
     Ok(())
+}
+
+/// Locate an npm-installed binary under a `--prefix` root.
+///
+/// Search order (covers `-g --prefix`, non-global, and nested package bins):
+/// 1. `<prefix>/bin/<name>`  (npm -g --prefix layout; often a symlink)
+/// 2. `<prefix>/node_modules/.bin/<name>`  (local --prefix without -g)
+/// 3. `<prefix>/lib/node_modules/*/**/bin/<name>`  (global package payload)
+/// 4. recursive basename match for `<name>`, `<name>.js`, `<name>.cmd`
+fn find_npm_binary(prefix: &Path, binary: &str) -> Option<PathBuf> {
+    let names = npm_binary_names(binary);
+    for name in &names {
+        let candidates = [
+            prefix.join("bin").join(name),
+            prefix.join("node_modules").join(".bin").join(name),
+        ];
+        for c in candidates {
+            if path_is_runnable(&c) {
+                return Some(c);
+            }
+        }
+    }
+    // Global npm puts the package under lib/node_modules/<pkg>/…; the bin/
+    // shim normally points there, but if the shim is missing, dig for the
+    // package-local bin script (e.g. bin/vtsls.js, bin/vscode-json-language-server).
+    let lib_nm = prefix.join("lib").join("node_modules");
+    if lib_nm.is_dir() {
+        for name in &names {
+            if let Some(found) = find_named_file(&lib_nm, name) {
+                if path_is_runnable(&found) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    let local_nm = prefix.join("node_modules");
+    if local_nm.is_dir() {
+        for name in &names {
+            if let Some(found) = find_named_file(&local_nm, name) {
+                if path_is_runnable(&found) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    // Last resort: whole prefix walk.
+    for name in &names {
+        if let Some(found) = find_named_file(prefix, name) {
+            if path_is_runnable(&found) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// True for regular files and symlinks that resolve to a file.
+fn path_is_runnable(p: &Path) -> bool {
+    // `is_file` follows symlinks — good for npm's bin/ → lib/node_modules/... shims.
+    p.is_file()
+}
+
+fn npm_binary_names(binary: &str) -> Vec<String> {
+    let mut names = vec![binary.to_string()];
+    // Package bins are often `name.js` (e.g. @vtsls/language-server → bin/vtsls.js).
+    if !binary.ends_with(".js") {
+        names.push(format!("{binary}.js"));
+    }
+    #[cfg(windows)]
+    {
+        if !binary.ends_with(".cmd") {
+            names.push(format!("{binary}.cmd"));
+        }
+        if !binary.ends_with(".exe") {
+            names.push(format!("{binary}.exe"));
+        }
+        if !binary.ends_with(".ps1") {
+            names.push(format!("{binary}.ps1"));
+        }
+    }
+    names
 }
 
 // ─── pip venv (basedpyright) ─────────────────────────────────────────────────
@@ -608,6 +686,93 @@ mod tests {
             let spec = catalog::find(id).expect(id);
             assert!(managed_install_supported(spec), "{id}");
         }
+    }
+
+    #[test]
+    fn npm_binary_names_include_js_shim() {
+        let names = npm_binary_names("vtsls");
+        assert!(names.iter().any(|n| n == "vtsls"));
+        assert!(names.iter().any(|n| n == "vtsls.js"));
+    }
+
+    #[test]
+    fn find_npm_binary_prefers_bin_then_node_modules() {
+        let tmp = tempfile_dir("koma-lsp-npm-bin");
+        let bin_dir = tmp.join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let target = bin_dir.join("vtsls");
+        std::fs::write(&target, b"#!/bin/sh\n").unwrap();
+        let found = find_npm_binary(&tmp, "vtsls").expect("found");
+        assert_eq!(found, target);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn find_npm_binary_falls_back_to_js() {
+        let tmp = tempfile_dir("koma-lsp-npm-js");
+        let bin_dir = tmp.join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let target = bin_dir.join("vtsls.js");
+        std::fs::write(&target, b"#!/usr/bin/env node\n").unwrap();
+        let found = find_npm_binary(&tmp, "vtsls").expect("found js");
+        assert_eq!(found, target);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn find_npm_binary_follows_global_layout() {
+        // Mirrors `npm install -g --prefix <dir>`:
+        //   bin/vtsls -> ../lib/node_modules/@vtsls/language-server/bin/vtsls.js
+        let tmp = tempfile_dir("koma-lsp-npm-global");
+        let pkg_bin = tmp
+            .join("lib")
+            .join("node_modules")
+            .join("@vtsls")
+            .join("language-server")
+            .join("bin");
+        std::fs::create_dir_all(&pkg_bin).unwrap();
+        let real = pkg_bin.join("vtsls.js");
+        std::fs::write(&real, b"#!/usr/bin/env node\n").unwrap();
+        let bin_dir = tmp.join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let shim = bin_dir.join("vtsls");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &shim).unwrap();
+        #[cfg(not(unix))]
+        std::fs::write(&shim, b"@node \"%~dp0\\..\\lib\\node_modules\\@vtsls\\language-server\\bin\\vtsls.js\" %*\r\n").unwrap();
+        let found = find_npm_binary(&tmp, "vtsls").expect("found global shim");
+        assert!(found.ends_with("vtsls") || found.ends_with("vtsls.js"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn find_npm_binary_finds_vscode_json_under_lib() {
+        // No bin/ shim — only the package payload (degraded layout).
+        let tmp = tempfile_dir("koma-lsp-npm-vls-lib");
+        let pkg_bin = tmp
+            .join("lib")
+            .join("node_modules")
+            .join("vscode-langservers-extracted")
+            .join("bin");
+        std::fs::create_dir_all(&pkg_bin).unwrap();
+        let real = pkg_bin.join("vscode-json-language-server");
+        std::fs::write(&real, b"#!/usr/bin/env node\n").unwrap();
+        let found = find_npm_binary(&tmp, "vscode-json-language-server").expect("found under lib");
+        assert_eq!(found, real);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    fn tempfile_dir(prefix: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "{prefix}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
     }
 
     #[test]
