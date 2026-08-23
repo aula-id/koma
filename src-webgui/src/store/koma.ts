@@ -23,7 +23,10 @@ import {
   applyDiagnosticsToMonaco,
   resolveLspCompletion,
   resolveLspDefinition,
+  resolveLspDocumentSymbol,
   resolveLspHover,
+  resolveLspReferences,
+  resolveLspFileText,
   uriToPath,
   queueReveal,
   type LspDiagnostic,
@@ -1308,6 +1311,18 @@ export type PushEnvelope =
       k: 'LspDefinition'
       requestId: string
       locations: import('../lib/monaco-lsp').LspLocation[]
+      error: string | null
+    }
+  | {
+      k: 'LspReferences'
+      requestId: string
+      locations: import('../lib/monaco-lsp').LspLocation[]
+      error: string | null
+    }
+  | {
+      k: 'LspDocumentSymbol'
+      requestId: string
+      symbols: import('../lib/monaco-lsp').LspDocumentSymbol[]
       error: string | null
     }
   // Reply to GuiReq GitBranchList (G4) — every local + remote-tracking branch
@@ -4170,10 +4185,23 @@ export const useKoma = create<KomaState>((set, get) => ({
       case 'LspDefinition':
         resolveLspDefinition(env.requestId, env.locations ?? [], env.error)
         break
+      case 'LspReferences':
+        resolveLspReferences(env.requestId, env.locations ?? [], env.error)
+        break
+      case 'LspDocumentSymbol':
+        resolveLspDocumentSymbol(env.requestId, env.symbols ?? [], env.error)
+        break
       case 'FileTree':
         set((s) => ({ coding: reduceFileTree(s.coding, env) }))
         break
       case 'FileRead':
+        resolveLspFileText(
+          env.requestId,
+          env.content ?? null,
+          env.error,
+          env.binary,
+          env.tooLarge,
+        )
         set((s) => ({ coding: reduceFileRead(s.coding, env) }))
         break
       case 'FileSave':

@@ -983,6 +983,32 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
+            Ok(HostCtl::LspReferences {
+                root,
+                path,
+                line,
+                character,
+                include_declaration,
+                request_id,
+            }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspReferences {
+                        root,
+                        path,
+                        line,
+                        character,
+                        include_declaration,
+                        request_id,
+                    },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspDocumentSymbol { root, path, request_id }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspDocumentSymbol { root, path, request_id },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
             // Extension STORE browse/detail/installed-list opened while detached
             // (StartScreen / swapper, e.g. the Store tab mounting on the home screen
             // with no session): koma.run is a PUBLIC endpoint and the installed list is
@@ -1954,6 +1980,32 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::LspDefinition { root, path, line, character, request_id }) => {
                 super::lsp_host::handle_client_ctl(
                     HostCtl::LspDefinition { root, path, line, character, request_id },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspReferences {
+                root,
+                path,
+                line,
+                character,
+                include_declaration,
+                request_id,
+            }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspReferences {
+                        root,
+                        path,
+                        line,
+                        character,
+                        include_declaration,
+                        request_id,
+                    },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspDocumentSymbol { root, path, request_id }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspDocumentSymbol { root, path, request_id },
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
