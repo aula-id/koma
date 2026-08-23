@@ -55,6 +55,7 @@ dependencies = [
  "dom_smoothie",
  "ed25519-dalek",
  "fast_html2md",
+ "flate2",
  "futures-util",
  "globset",
  "ignore",
