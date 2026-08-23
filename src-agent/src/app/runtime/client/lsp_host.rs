@@ -1,5 +1,6 @@
 //! Host-side language-server status / install / uninstall for the GUI Settings
-//! "Language servers" section.
+//! "Language servers" section, plus the live [`crate::lsp::LspManager`] dispatch
+//! for Monaco doc-sync and language features.
 //!
 //! Entirely host-local (never the daemon), mirroring [`super::keys`]: a
 //! `std::thread::spawn` worker does the blocking work (`reqwest`, npm, pip, go).
@@ -8,6 +9,10 @@
 //! - **detached** (`host_swapper`): push replies straight through a cloned sink
 //! - **attached** (`push_loop`): send replies over an `mpsc` channel drained by
 //!   the fold loop (the fold's `push` is `&dyn Fn(String)` and cannot be cloned)
+//!
+//! Language-client ops (didOpen / completion / …) run on a short-lived worker
+//! thread holding `Arc<Mutex<LspManager>>` so a slow `initialize` never blocks
+//! the 16ms host control loop.
 
 use std::sync::mpsc::Sender;
 
@@ -184,5 +189,128 @@ fn is_managed_installable(id: &str) -> bool {
             | "gopls"
             | "vscode-langservers"
             | "bash-language-server"
+    )
+}
+
+// ─── Language client (LspManager) ────────────────────────────────────────────
+
+use std::sync::{Arc, Mutex};
+
+use super::push_proto::{push_lsp_completion, push_lsp_definition, push_lsp_hover};
+use super::HostCtl;
+use crate::lsp::LspManager;
+
+/// Dispatch one language-client HostCtl on a worker thread.
+///
+/// Notifications (didOpen/Change/Save/Close) are fire-and-forget.
+/// Requests always push a typed reply so Monaco providers never hang.
+/// Replies go through the manager's own push sink (same Arc the reader
+/// thread uses for diagnostics), so this works from both the detached
+/// swapper (cloneable push) and the attached fold (`&dyn Fn` only).
+pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
+    std::thread::spawn(move || {
+        let push = match mgr.lock() {
+            Ok(g) => g.push_sink(),
+            Err(_) => return,
+        };
+        match ctl {
+            HostCtl::LspDidOpen {
+                root,
+                path,
+                language_id,
+                text,
+            } => {
+                if let Ok(mut g) = mgr.lock() {
+                    if let Err(e) = g.did_open(&root, &path, &language_id, &text) {
+                        // Missing server is expected until install — don't spam the error log
+                        // for "no language server for .md" style misses on every open.
+                        if !e.contains("no language server") && !e.contains("not installed") {
+                            crate::model::store::append_global_error_log(
+                                "lsp",
+                                &format!("didOpen {path}: {e}"),
+                            );
+                        }
+                    }
+                }
+            }
+            HostCtl::LspDidChange { root, path, text } => {
+                if let Ok(mut g) = mgr.lock() {
+                    let _ = g.did_change(&root, &path, &text);
+                }
+            }
+            HostCtl::LspDidSave { root, path, text } => {
+                if let Ok(mut g) = mgr.lock() {
+                    let _ = g.did_save(&root, &path, text.as_deref());
+                }
+            }
+            HostCtl::LspDidClose { root, path } => {
+                if let Ok(mut g) = mgr.lock() {
+                    let _ = g.did_close_path(&root, &path);
+                }
+            }
+            HostCtl::LspCompletion {
+                root,
+                path,
+                line,
+                character,
+                request_id,
+            } => {
+                let (items, error) = match mgr.lock() {
+                    Ok(mut g) => match g.completion(&root, &path, line, character) {
+                        Ok(items) => (items, None),
+                        Err(e) => (Vec::new(), Some(e)),
+                    },
+                    Err(_) => (Vec::new(), Some("lsp manager lock poisoned".into())),
+                };
+                push_lsp_completion(&*push, request_id, items, error);
+            }
+            HostCtl::LspHover {
+                root,
+                path,
+                line,
+                character,
+                request_id,
+            } => {
+                let (hover, error) = match mgr.lock() {
+                    Ok(mut g) => match g.hover(&root, &path, line, character) {
+                        Ok(h) => (h, None),
+                        Err(e) => (None, Some(e)),
+                    },
+                    Err(_) => (None, Some("lsp manager lock poisoned".into())),
+                };
+                push_lsp_hover(&*push, request_id, hover, error);
+            }
+            HostCtl::LspDefinition {
+                root,
+                path,
+                line,
+                character,
+                request_id,
+            } => {
+                let (locations, error) = match mgr.lock() {
+                    Ok(mut g) => match g.definition(&root, &path, line, character) {
+                        Ok(locs) => (locs, None),
+                        Err(e) => (Vec::new(), Some(e)),
+                    },
+                    Err(_) => (Vec::new(), Some("lsp manager lock poisoned".into())),
+                };
+                push_lsp_definition(&*push, request_id, locations, error);
+            }
+            _ => {}
+        }
+    });
+}
+
+/// Returns true when `ctl` is a language-client op handled by [`handle_client_ctl`].
+pub(super) fn is_client_ctl(ctl: &HostCtl) -> bool {
+    matches!(
+        ctl,
+        HostCtl::LspDidOpen { .. }
+            | HostCtl::LspDidChange { .. }
+            | HostCtl::LspDidSave { .. }
+            | HostCtl::LspDidClose { .. }
+            | HostCtl::LspCompletion { .. }
+            | HostCtl::LspHover { .. }
+            | HostCtl::LspDefinition { .. }
     )
 }

@@ -131,6 +131,23 @@ export type FileDeletePush = {
   requestId: string
   error: string | null
 }
+export type FileWriteBytesPush = {
+  k: 'FileWriteBytes'
+  root: string
+  path: string
+  requestId: string
+  error: string | null
+}
+export type FileDownloadBytesPush = {
+  k: 'FileDownloadBytes'
+  root: string
+  path: string
+  requestId: string
+  bytesB64: string | null
+  size: number
+  tooLarge: boolean
+  error: string | null
+}
 
 export type CodingPush =
   | FileTreePush
@@ -139,6 +156,8 @@ export type CodingPush =
   | FileCreatePush
   | FileRenamePush
   | FileDeletePush
+  | FileWriteBytesPush
+  | FileDownloadBytesPush
 
 /** Apply a FileTree push into the coding slice (stale-reply guarded). */
 export function reduceFileTree(coding: CodingSlice, env: FileTreePush): CodingSlice {
@@ -369,4 +388,9 @@ export function reduceFileDelete(coding: CodingSlice, env: FileDeletePush): Codi
   let next = dropPathAndDescendants(coding, env.root, env.path)
   next = invalidateDir(next, env.root, env.path)
   return next
+}
+
+export function reduceFileWriteBytes(coding: CodingSlice, env: FileWriteBytesPush): CodingSlice {
+  if (env.error) return coding
+  return invalidateDir(coding, env.root, env.path)
 }

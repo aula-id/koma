@@ -854,15 +854,14 @@ fn check_language_servers() -> CheckResult {
                 .unwrap_or_default()
         ));
     }
-    details.push(format!(
+    details.push(
         "optional — install with: koma lsp install --all  (or install.sh --with-lsp)"
-    ));
+            .to_string(),
+    );
     let headline = format!(
         "Language servers ({managed} managed, {on_path} on PATH, {missing}/{total} missing)"
     );
-    if missing == total {
-        CheckResult::warn(headline, details)
-    } else if missing > 0 {
+    if missing > 0 {
         CheckResult::warn(headline, details)
     } else {
         CheckResult::ok(headline)

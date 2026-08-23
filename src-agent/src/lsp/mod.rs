@@ -1,9 +1,9 @@
 //! koma-managed language servers (`~/.koma/lsp/`).
 //!
 //! Host-spawned LSP side of the coding panel: catalogue, PATH/managed resolve,
-//! install/uninstall recipes, and the `koma lsp` CLI. The actual JSON-RPC
-//! language client (completion/hover/definition/diagnostics) is a later phase;
-//! this module only provisions and discovers server binaries.
+//! install/uninstall recipes, the `koma lsp` CLI, and the stdio JSON-RPC
+//! language client ([`client::LspManager`]) that drives Monaco completion /
+//! hover / definition / diagnostics.
 //!
 //! Layout:
 //! ```text
@@ -17,14 +17,20 @@
 //! Resolution order: koma-managed → PATH → missing.
 
 pub mod catalog;
+pub mod client;
 pub mod install;
 pub mod manifest;
 pub mod resolve;
 
-// Re-exports are the stable surface for GUI host code and future LspManager.
+// Re-exports are the stable surface for GUI host code and LspManager.
 // Not every symbol is consumed by the CLI path yet — keep them public.
 #[allow(unused_imports)]
 pub use catalog::{find, find_by_extension, ServerSpec, CATALOG};
+#[allow(unused_imports)]
+pub use client::{
+    language_id_for_path, LspCompletionItem, LspDiagnostic, LspHover, LspLocation, LspManager,
+    LspRange,
+};
 #[allow(unused_imports)]
 pub use install::{install_all, install_one, print_status, uninstall_one, ProgressFn};
 #[allow(unused_imports)]

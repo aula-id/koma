@@ -918,6 +918,32 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 request_id,
             });
         }
+        GuiReq::FileWriteBytes {
+            root,
+            path,
+            bytes_b64,
+            overwrite,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::FileWriteBytes {
+                root,
+                path,
+                bytes_b64,
+                overwrite,
+                request_id,
+            });
+        }
+        GuiReq::FileDownloadBytes {
+            root,
+            path,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::FileDownloadBytes {
+                root,
+                path,
+                request_id,
+            });
+        }
         // Language servers: host-local status/install/uninstall under ~/.koma/lsp/.
         GuiReq::LspStatus => {
             let _ = ctx.ctl.send(HostCtl::LspStatus);
@@ -927,6 +953,73 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         }
         GuiReq::LspUninstall { id } => {
             let _ = ctx.ctl.send(HostCtl::LspUninstall { id });
+        }
+        GuiReq::LspDidOpen {
+            root,
+            path,
+            language_id,
+            text,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::LspDidOpen {
+                root,
+                path,
+                language_id,
+                text,
+            });
+        }
+        GuiReq::LspDidChange { root, path, text } => {
+            let _ = ctx.ctl.send(HostCtl::LspDidChange { root, path, text });
+        }
+        GuiReq::LspDidSave { root, path, text } => {
+            let _ = ctx.ctl.send(HostCtl::LspDidSave { root, path, text });
+        }
+        GuiReq::LspDidClose { root, path } => {
+            let _ = ctx.ctl.send(HostCtl::LspDidClose { root, path });
+        }
+        GuiReq::LspCompletion {
+            root,
+            path,
+            line,
+            character,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::LspCompletion {
+                root,
+                path,
+                line,
+                character,
+                request_id,
+            });
+        }
+        GuiReq::LspHover {
+            root,
+            path,
+            line,
+            character,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::LspHover {
+                root,
+                path,
+                line,
+                character,
+                request_id,
+            });
+        }
+        GuiReq::LspDefinition {
+            root,
+            path,
+            line,
+            character,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::LspDefinition {
+                root,
+                path,
+                line,
+                character,
+                request_id,
+            });
         }
         // Write error log: host-local, unconditional, fire-and-forget.
         GuiReq::WriteErrorLog { message } => {

@@ -13,12 +13,23 @@ import {
   reduceFileCreate,
   reduceFileRename,
   reduceFileDelete,
+  reduceFileWriteBytes,
   remapPath as codingRemapPath,
   type CodingSlice,
   type FileTreeEntry,
 } from './coding'
 
+import {
+  applyDiagnosticsToMonaco,
+  resolveLspCompletion,
+  resolveLspDefinition,
+  resolveLspHover,
+  uriToPath,
+  type LspDiagnostic,
+} from '../lib/monaco-lsp'
+
 export type { CodingSlice, CodingFileState, DirState, FileTreeEntry } from './coding'
+export type { LspDiagnostic }
 export { fileKey, initialCoding } from './coding'
 import { postToPanel, broadcastThemeToPanels } from '../lib/panelBridge'
 
@@ -1275,6 +1286,29 @@ export type PushEnvelope =
       pct: number
       error: string | null
     }
+  | {
+      k: 'LspDiagnostics'
+      uri: string
+      diagnostics: LspDiagnostic[]
+    }
+  | {
+      k: 'LspCompletion'
+      requestId: string
+      items: import('../lib/monaco-lsp').LspCompletionItem[]
+      error: string | null
+    }
+  | {
+      k: 'LspHover'
+      requestId: string
+      hover: import('../lib/monaco-lsp').LspHover | null
+      error: string | null
+    }
+  | {
+      k: 'LspDefinition'
+      requestId: string
+      locations: import('../lib/monaco-lsp').LspLocation[]
+      error: string | null
+    }
   // Reply to GuiReq GitBranchList (G4) — every local + remote-tracking branch
   // for the branch-switcher popover / graph context menu. Carries
   // `BranchListResult` verbatim (already camelCase) flattened onto the
@@ -1377,6 +1411,23 @@ export type PushEnvelope =
       root: string
       path: string
       requestId: string
+      error: string | null
+    }
+  | {
+      k: 'FileWriteBytes'
+      root: string
+      path: string
+      requestId: string
+      error: string | null
+    }
+  | {
+      k: 'FileDownloadBytes'
+      root: string
+      path: string
+      requestId: string
+      bytesB64: string | null
+      size: number
+      tooLarge: boolean
       error: string | null
     }
   // Reply to GuiReq ImportGraphImpact — transitive impact paths.
@@ -2011,6 +2062,10 @@ type KomaState = {
   lspServers: LspServerStatus[]
   // Per-id install progress (latest LspInstall). Cleared when status lands idle.
   lspProgress: Record<string, LspInstallProgress>
+  // Diagnostics keyed by file URI (latest LspDiagnostics per uri).
+  lspDiagnostics: Record<string, LspDiagnostic[]>
+  // Cross-tab Problems drawer (above UsageFooter).
+  problemsOpen: boolean
   // The SSH Keys section's transient "Copy public key" / "Reveal private key"
   // result (latest KeyReveal push), or `null` when nothing has been revealed
   // yet / the reveal box was dismissed. Kept separate from `keys` (the list
@@ -2389,6 +2444,11 @@ type KomaState = {
   lspInstall: (id: string | null, all?: boolean, force?: boolean) => void
   // Uninstall a koma-managed server (never touches PATH copies).
   lspUninstall: (id: string) => void
+  // Toggle the cross-tab Problems drawer above the footer.
+  setProblemsOpen: (open: boolean) => void
+  toggleProblemsOpen: () => void
+  // Open coding file at a diagnostic location (uri may be file://).
+  openDiagnostic: (uri: string, line: number, character: number) => void
   // Open (or focus) a read-only STREAM tab for a sub-agent (`kind:'subagent'`) or bash
   // job (`kind:'bash'`) by its numeric id: find-or-create (dedup by the stable
   // `sa:`/`bash:` id), activate it, and sync the stream view so the host starts streaming
@@ -2467,6 +2527,10 @@ type KomaState = {
   createCodingItem: (root: string, path: string, kind: 'file' | 'dir') => void
   renameCodingItem: (root: string, oldPath: string, newPath: string) => void
   deleteCodingItem: (root: string, path: string) => void
+  /** Drag-upload / remote upload: write raw file bytes under root/path. */
+  uploadCodingFile: (root: string, dirPath: string, file: File, overwrite?: boolean) => Promise<void>
+  /** Download / save-as: fetch bytes and trigger a browser download. */
+  downloadCodingFile: (root: string, path: string) => void
   refreshCodingDir: (root: string, path: string) => void
   clearCodingConflict: (root: string, path: string) => void
 }
@@ -2804,6 +2868,8 @@ export const useKoma = create<KomaState>((set, get) => ({
   keys: initialKeys,
   lspServers: [],
   lspProgress: {},
+  lspDiagnostics: {},
+  problemsOpen: false,
   keyRevealResult: null,
   branches: [],
   branchesLoading: false,
@@ -4088,6 +4154,21 @@ export const useKoma = create<KomaState>((set, get) => ({
           }
         })
         break
+      case 'LspDiagnostics':
+        set((s) => ({
+          lspDiagnostics: { ...s.lspDiagnostics, [env.uri]: env.diagnostics ?? [] },
+        }))
+        applyDiagnosticsToMonaco(env.uri, env.diagnostics ?? [])
+        break
+      case 'LspCompletion':
+        resolveLspCompletion(env.requestId, env.items ?? [], env.error)
+        break
+      case 'LspHover':
+        resolveLspHover(env.requestId, env.hover ?? null, env.error)
+        break
+      case 'LspDefinition':
+        resolveLspDefinition(env.requestId, env.locations ?? [], env.error)
+        break
       case 'FileTree':
         set((s) => ({ coding: reduceFileTree(s.coding, env) }))
         break
@@ -4096,6 +4177,16 @@ export const useKoma = create<KomaState>((set, get) => ({
         break
       case 'FileSave':
         set((s) => ({ coding: reduceFileSave(s.coding, env) }))
+        if (!env.error) {
+          const key = fileKey(env.root, env.path)
+          const content = get().coding.files[key]?.content
+          get().req({
+            r: 'LspDidSave',
+            root: env.root,
+            path: env.path,
+            text: content ?? null,
+          })
+        }
         break
       case 'FileCreate':
         set((s) => {
@@ -4215,6 +4306,75 @@ export const useKoma = create<KomaState>((set, get) => ({
           return { coding, ui: { ...s.ui, tabs, activeTabId } }
         })
         break
+      case 'FileWriteBytes':
+        set((s) => {
+          const coding = reduceFileWriteBytes(s.coding, env)
+          if (env.error) {
+            const seq = s.ui.toastSeq + 1
+            return {
+              coding,
+              ui: {
+                ...s.ui,
+                toastSeq: seq,
+                toast: { id: seq, text: env.error, kind: 'error' },
+              },
+            }
+          }
+          queueMicrotask(() => {
+            const parent = env.path.includes('/')
+              ? env.path.slice(0, env.path.lastIndexOf('/'))
+              : ''
+            get().refreshCodingDir(env.root, parent)
+          })
+          return { coding }
+        })
+        break
+      case 'FileDownloadBytes': {
+        if (env.error || env.tooLarge || !env.bytesB64) {
+          const text =
+            env.error ||
+            (env.tooLarge ? 'file too large to download' : 'download failed')
+          set((s) => {
+            const seq = s.ui.toastSeq + 1
+            return {
+              ui: {
+                ...s.ui,
+                toastSeq: seq,
+                toast: { id: seq, text, kind: 'error' },
+              },
+            }
+          })
+          break
+        }
+        try {
+          const bin = atob(env.bytesB64)
+          const bytes = new Uint8Array(bin.length)
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+          const blob = new Blob([bytes])
+          const name = codingBaseName(env.path) || 'download'
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = name
+          a.rel = 'noopener'
+          document.body.appendChild(a)
+          a.click()
+          a.remove()
+          URL.revokeObjectURL(url)
+        } catch {
+          set((s) => {
+            const seq = s.ui.toastSeq + 1
+            return {
+              ui: {
+                ...s.ui,
+                toastSeq: seq,
+                toast: { id: seq, text: 'failed to save download', kind: 'error' },
+              },
+            }
+          })
+        }
+        break
+      }
       case 'AgentOp': {
         // Daemon SetAgent/DeleteAgent result — surface the error as a toast
         // and clear the pending saving state. Success is authoritative via
@@ -4339,7 +4499,9 @@ export const useKoma = create<KomaState>((set, get) => ({
       g.r === 'FileSave' ||
       g.r === 'FileCreate' ||
       g.r === 'FileRename' ||
-      g.r === 'FileDelete'
+      g.r === 'FileDelete' ||
+      g.r === 'FileWriteBytes' ||
+      g.r === 'FileDownloadBytes'
     const ipc = window.ipc
     if (!ipc || typeof ipc.postMessage !== 'function') {
       if (isCodingReq) {
@@ -5146,6 +5308,47 @@ export const useKoma = create<KomaState>((set, get) => ({
   lspUninstall: (id) => {
     get().req({ r: 'LspUninstall', id })
   },
+  setProblemsOpen: (open) => set({ problemsOpen: !!open }),
+  toggleProblemsOpen: () => set((s) => ({ problemsOpen: !s.problemsOpen })),
+  openDiagnostic: (uri, line, character) => {
+    const abs = uriToPath(uri)
+    if (!abs) return
+    const roots = (get().settingsValues?.workdir ?? []).filter(Boolean)
+    const sorted = [...roots].sort((a, b) => b.length - a.length)
+    let root: string | null = get().coding.activeRoot
+    let rel = abs
+    const aa = abs.replace(/\\/g, '/')
+    for (const r of sorted) {
+      const rr = r.replace(/\\/g, '/').replace(/\/$/, '')
+      if (aa === rr || aa.startsWith(rr + '/')) {
+        root = r
+        rel = aa === rr ? '' : aa.slice(rr.length + 1)
+        break
+      }
+    }
+    if (!root) {
+      for (const tab of get().ui.tabs) {
+        if (tab.kind !== 'codingFile') continue
+        const rr = tab.root.replace(/\\/g, '/').replace(/\/$/, '')
+        if (aa === rr || aa.startsWith(rr + '/')) {
+          root = tab.root
+          rel = aa === rr ? '' : aa.slice(rr.length + 1)
+          break
+        }
+      }
+    }
+    if (!root) return
+    get().openCodingFile(root, rel)
+    const targetLine = line + 1
+    const targetCol = character + 1
+    setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent('koma-reveal-line', {
+          detail: { root, path: rel, line: targetLine, column: targetCol },
+        }),
+      )
+    }, 80)
+  },
   openStreamTab: (kind, targetId, title) => {
     const id = kind === 'subagent' ? `sa:${targetId}` : `bash:${targetId}`
     set((s) => {
@@ -5206,6 +5409,9 @@ export const useKoma = create<KomaState>((set, get) => ({
       if (closing && closing.kind === 'codingFile' && !opts?.force) {
         const f = get().coding.files[fileKey(closing.root, closing.path)]
         if (f?.dirty) return
+      }
+      if (closing && closing.kind === 'codingFile') {
+        get().req({ r: 'LspDidClose', root: closing.root, path: closing.path })
       }
     }
     const closedAnalytics = id === 'analytics'
@@ -5466,6 +5672,61 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
   deleteCodingItem: (root, path) => {
     get().req({ r: 'FileDelete', root, path, requestId: mintRequestId() })
+  },
+  uploadCodingFile: async (root, dirPath, file, overwrite = true) => {
+    const name = (file.name || 'upload').replace(/^.*[/\\]/, '')
+    if (!name || name.includes('..')) {
+      const text = 'invalid file name'
+      set((s) => {
+        const seq = s.ui.toastSeq + 1
+        return {
+          ui: { ...s.ui, toastSeq: seq, toast: { id: seq, text, kind: 'error' } },
+        }
+      })
+      return
+    }
+    // Match host FILE_BYTES_SIZE_CAP (25 MiB) before shipping base64 over IPC.
+    const MAX = 25 * 1024 * 1024
+    if (file.size > MAX) {
+      const text = `file too large (max 25 MiB): ${name}`
+      set((s) => {
+        const seq = s.ui.toastSeq + 1
+        return {
+          ui: { ...s.ui, toastSeq: seq, toast: { id: seq, text, kind: 'error' } },
+        }
+      })
+      return
+    }
+    const path = dirPath ? `${dirPath.replace(/\/+$/, '')}/${name}` : name
+    try {
+      const buf = await file.arrayBuffer()
+      const bytes = new Uint8Array(buf)
+      let binary = ''
+      const chunk = 0x8000
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+      }
+      const bytesB64 = btoa(binary)
+      get().req({
+        r: 'FileWriteBytes',
+        root,
+        path,
+        bytesB64,
+        overwrite: overwrite !== false,
+        requestId: mintRequestId(),
+      })
+    } catch {
+      const text = `failed to read file: ${name}`
+      set((s) => {
+        const seq = s.ui.toastSeq + 1
+        return {
+          ui: { ...s.ui, toastSeq: seq, toast: { id: seq, text, kind: 'error' } },
+        }
+      })
+    }
+  },
+  downloadCodingFile: (root, path) => {
+    get().req({ r: 'FileDownloadBytes', root, path, requestId: mintRequestId() })
   },
   refreshCodingDir: (root, path) => {
     const key = fileKey(root, path)

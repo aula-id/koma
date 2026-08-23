@@ -41,8 +41,7 @@ pub struct ServerSpec {
     /// - GoInstall: `module@latest` path (without the `@latest` suffix stored here)
     pub package: &'static str,
     /// Extra argv after the binary when spawning (e.g. `["--stdio"]` for node CLIs).
-    /// Reserved for the future host-spawned LspManager; unused by install/resolve.
-    #[allow(dead_code)]
+    /// Consumed by [`crate::lsp::client::LspManager`]; unused by install/resolve.
     pub args: &'static [&'static str],
 }
 

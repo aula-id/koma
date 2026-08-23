@@ -162,10 +162,8 @@ fn find_file_named(root: &Path, name: &str) -> Option<PathBuf> {
                     }
                 }
                 stack.push(p);
-            } else if p.is_file() {
-                if p.file_name().and_then(|s| s.to_str()) == Some(name) {
-                    return Some(p);
-                }
+            } else if p.is_file() && p.file_name().and_then(|s| s.to_str()) == Some(name) {
+                return Some(p);
             }
         }
     }

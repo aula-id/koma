@@ -25,6 +25,11 @@ use super::HostCtl;
 /// `tooLarge: true` rather than shipping multi-megabyte content into Monaco.
 const FILE_READ_SIZE_CAP: u64 = 5 * 1024 * 1024;
 
+/// Cap on binary upload/download through the GUI bridge (~25 MiB decoded).
+/// Larger than the Monaco text-read cap: drag-upload / save-as carry raw bytes
+/// as base64, not editor buffers.
+const FILE_BYTES_SIZE_CAP: u64 = 25 * 1024 * 1024;
+
 /// Directory basenames excluded from Coding panel tree listings.
 const EXCLUDED_DIRS: &[&str] = &[".git", ".koma", "node_modules", "target"];
 
@@ -104,6 +109,32 @@ pub(crate) struct FileDeleteResult {
     pub error: Option<String>,
     #[serde(skip)]
     pub mutated: bool,
+}
+
+/// Binary write (drag-upload) result for Coding panel / remote-fs.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileWriteBytesResult {
+    pub root: String,
+    pub path: String,
+    pub request_id: String,
+    pub error: Option<String>,
+    #[serde(skip)]
+    pub mutated: bool,
+}
+
+/// Binary download result for Coding panel / remote-fs.
+/// `bytes_b64` is standard base64 of the file body when successful.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileDownloadBytesResult {
+    pub root: String,
+    pub path: String,
+    pub request_id: String,
+    pub bytes_b64: Option<String>,
+    pub size: u64,
+    pub too_large: bool,
+    pub error: Option<String>,
 }
 
 /// Handle one File* HostCtl by computing the result and pushing it back.
@@ -236,6 +267,46 @@ pub(super) fn handle_file_ctl(
             if r.mutated {
                 refresh_git_status(push, session);
             }
+        }
+        HostCtl::FileWriteBytes {
+            root,
+            path,
+            bytes_b64,
+            overwrite,
+            request_id,
+        } => {
+            let r = exec_file_write_bytes(root, path, bytes_b64, *overwrite, request_id, workdirs);
+            emit(
+                push,
+                &PushEnvelope::FileWriteBytes {
+                    root: r.root,
+                    path: r.path,
+                    request_id: r.request_id,
+                    error: r.error,
+                },
+            );
+            if r.mutated {
+                refresh_git_status(push, session);
+            }
+        }
+        HostCtl::FileDownloadBytes {
+            root,
+            path,
+            request_id,
+        } => {
+            let r = exec_file_download_bytes(root, path, request_id, workdirs);
+            emit(
+                push,
+                &PushEnvelope::FileDownloadBytes {
+                    root: r.root,
+                    path: r.path,
+                    request_id: r.request_id,
+                    bytes_b64: r.bytes_b64,
+                    size: r.size,
+                    too_large: r.too_large,
+                    error: r.error,
+                },
+            );
         }
         _ => {}
     }
@@ -554,6 +625,151 @@ pub(crate) fn exec_file_delete(
         },
         Err(e) => fail(e),
     }
+}
+
+/// Write raw bytes (base64-encoded on the wire) under the workdir sandbox.
+/// Used for drag-upload from the Coding tree (local copy or remote upload).
+pub(crate) fn exec_file_write_bytes(
+    root: &str,
+    path: &str,
+    bytes_b64: &str,
+    overwrite: bool,
+    request_id: &str,
+    workdirs: &[PathBuf],
+) -> FileWriteBytesResult {
+    let fail = |error: String| FileWriteBytesResult {
+        root: root.to_string(),
+        path: path.to_string(),
+        request_id: request_id.to_string(),
+        error: Some(error),
+        mutated: false,
+    };
+
+    if path.is_empty() || path == "." {
+        return fail("refusing to write workspace root".to_string());
+    }
+
+    let bytes = match decode_b64(bytes_b64) {
+        Ok(b) => b,
+        Err(e) => return fail(e),
+    };
+    if bytes.len() as u64 > FILE_BYTES_SIZE_CAP {
+        return fail(format!(
+            "file too large (max {} MiB)",
+            FILE_BYTES_SIZE_CAP / (1024 * 1024)
+        ));
+    }
+
+    let abs = match resolve_contained(root, path, workdirs) {
+        Ok(p) => p,
+        Err(e) => return fail(e),
+    };
+
+    if abs.exists() {
+        if abs.is_dir() {
+            return fail("destination is a directory".to_string());
+        }
+        if !overwrite {
+            return fail("path already exists".to_string());
+        }
+    }
+
+    if let Some(parent) = abs.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return fail(format!("failed to create parent dirs: {e}"));
+        }
+    }
+
+    if let Err(e) = std::fs::write(&abs, &bytes) {
+        return fail(format!("failed to write file: {e}"));
+    }
+
+    FileWriteBytesResult {
+        root: root.to_string(),
+        path: path.to_string(),
+        request_id: request_id.to_string(),
+        error: None,
+        mutated: true,
+    }
+}
+
+/// Read raw bytes for download / save-as. Returns standard base64.
+pub(crate) fn exec_file_download_bytes(
+    root: &str,
+    path: &str,
+    request_id: &str,
+    workdirs: &[PathBuf],
+) -> FileDownloadBytesResult {
+    let fail = |error: String, too_large: bool| FileDownloadBytesResult {
+        root: root.to_string(),
+        path: path.to_string(),
+        request_id: request_id.to_string(),
+        bytes_b64: None,
+        size: 0,
+        too_large,
+        error: Some(error),
+    };
+
+    if path.is_empty() || path == "." {
+        return fail("refusing to download workspace root".to_string(), false);
+    }
+
+    let abs = match resolve_contained(root, path, workdirs) {
+        Ok(p) => p,
+        Err(e) => return fail(e, false),
+    };
+
+    if !abs.exists() {
+        return fail("path does not exist".to_string(), false);
+    }
+    if abs.is_dir() {
+        return fail("cannot download a directory".to_string(), false);
+    }
+
+    let meta = match std::fs::metadata(&abs) {
+        Ok(m) => m,
+        Err(e) => return fail(format!("failed to stat file: {e}"), false),
+    };
+    let size = meta.len();
+    if size > FILE_BYTES_SIZE_CAP {
+        return FileDownloadBytesResult {
+            root: root.to_string(),
+            path: path.to_string(),
+            request_id: request_id.to_string(),
+            bytes_b64: None,
+            size,
+            too_large: true,
+            error: Some(format!(
+                "file too large to download (max {} MiB)",
+                FILE_BYTES_SIZE_CAP / (1024 * 1024)
+            )),
+        };
+    }
+
+    let bytes = match std::fs::read(&abs) {
+        Ok(b) => b,
+        Err(e) => return fail(format!("failed to read file: {e}"), false),
+    };
+
+    use base64::Engine as _;
+    let bytes_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    FileDownloadBytesResult {
+        root: root.to_string(),
+        path: path.to_string(),
+        request_id: request_id.to_string(),
+        bytes_b64: Some(bytes_b64),
+        size,
+        too_large: false,
+        error: None,
+    }
+}
+
+fn decode_b64(s: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(s.trim())
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(s.trim()))
+        .map_err(|e| format!("invalid base64: {e}"))
 }
 
 /// Best-effort GIT panel refresh after a Coding-panel mutation.

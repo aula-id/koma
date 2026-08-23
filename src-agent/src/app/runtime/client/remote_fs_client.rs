@@ -170,7 +170,9 @@ fn req_id_of(req: &RemoteFsReq) -> Option<String> {
         | RemoteFsReq::Save { request_id, .. }
         | RemoteFsReq::Create { request_id, .. }
         | RemoteFsReq::Rename { request_id, .. }
-        | RemoteFsReq::Delete { request_id, .. } => Some(request_id.clone()),
+        | RemoteFsReq::Delete { request_id, .. }
+        | RemoteFsReq::WriteBytes { request_id, .. }
+        | RemoteFsReq::DownloadBytes { request_id, .. } => Some(request_id.clone()),
         _ => None,
     }
 }
@@ -239,6 +241,28 @@ fn hostctl_to_req(ctl: &super::HostCtl) -> Option<RemoteFsReq> {
             path: path.clone(),
             request_id: request_id.clone(),
         }),
+        super::HostCtl::FileWriteBytes {
+            root,
+            path,
+            bytes_b64,
+            overwrite,
+            request_id,
+        } => Some(RemoteFsReq::WriteBytes {
+            root: root.clone(),
+            path: path.clone(),
+            bytes_b64: bytes_b64.clone(),
+            overwrite: *overwrite,
+            request_id: request_id.clone(),
+        }),
+        super::HostCtl::FileDownloadBytes {
+            root,
+            path,
+            request_id,
+        } => Some(RemoteFsReq::DownloadBytes {
+            root: root.clone(),
+            path: path.clone(),
+            request_id: request_id.clone(),
+        }),
         _ => None,
     }
 }
@@ -286,6 +310,21 @@ fn push_rep(push: &dyn Fn(String), rep: RemoteFsRep) {
             root: r.root,
             path: r.path,
             request_id: r.request_id,
+            error: r.error,
+        },
+        RemoteFsRep::WriteBytes(r) => PushEnvelope::FileWriteBytes {
+            root: r.root,
+            path: r.path,
+            request_id: r.request_id,
+            error: r.error,
+        },
+        RemoteFsRep::DownloadBytes(r) => PushEnvelope::FileDownloadBytes {
+            root: r.root,
+            path: r.path,
+            request_id: r.request_id,
+            bytes_b64: r.bytes_b64,
+            size: r.size,
+            too_large: r.too_large,
             error: r.error,
         },
         RemoteFsRep::Error { error, request_id } => {
