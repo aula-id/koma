@@ -293,8 +293,10 @@ pub(in crate::app::runtime) fn run_host_relay(
                 &ctl_rx,
                 &mut push_state,
                 current_session_id.as_deref(),
-                &terminal_manager,
-                &lsp_manager,
+                &HostLocalManagers {
+                    terminal: std::sync::Arc::clone(&terminal_manager),
+                    lsp: std::sync::Arc::clone(&lsp_manager),
+                },
             ),
             HostStep::RemoteHub { ctx } => host_remote_hub(
                 &handle,
@@ -541,6 +543,13 @@ pub(super) fn spawn_delete_and_refresh(ctl_tx: std::sync::mpsc::Sender<HostCtl>,
 // and `build_host_oauth_state` moved to the sibling `host_catalogue` module (file size) —
 // see the `use super::host_catalogue::{...}` import above.
 
+/// Host-local managers shared across the swapper control loop (PTY + LSP).
+/// Bundled so `host_swapper` stays under the clippy arg limit without an allow.
+struct HostLocalManagers {
+    terminal: std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
+    lsp: std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
+}
+
 /// The SWAPPER arm: build the hub from cross-daemon discovery, push it, and block for
 /// a control message. A `Ready` (page reload) re-discovers + re-pushes; a
 /// `Select`/`New` resolves to an attach; a closed control channel (window gone) ends
@@ -555,9 +564,10 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
     ctl_rx: &std::sync::mpsc::Receiver<HostCtl>,
     push_state: &mut push_loop::PushState,
     current: Option<&str>,
-    terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
-    lsp_manager: &std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
+    managers: &HostLocalManagers,
 ) -> HostStep {
+    let terminal_manager = &managers.terminal;
+    let lsp_manager = &managers.lsp;
     // Build + push the hub (discovery blocks briefly; fine — nothing renders here).
     let hub = build_local_hub(current);
     push_state.reset();

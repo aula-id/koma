@@ -96,25 +96,20 @@ enum PendingReply {
 
 struct OpenDoc {
     server_id: String,
+    /// LSP languageId sent on didOpen (used to detect language switches).
     language_id: String,
-    #[allow(dead_code)]
     version: i32,
 }
 
 struct ServerSession {
-    /// Catalogue id (e.g. `rust-analyzer`).
-    #[allow(dead_code)]
+    /// Catalogue / spawn id (e.g. `rust-analyzer`).
     id: String,
     /// Workspace root this process was initialized for (absolute).
-    #[allow(dead_code)]
     root: PathBuf,
     child: Child,
     stdin: Arc<Mutex<ChildStdin>>,
     next_id: AtomicU64,
     pending: Arc<Mutex<HashMap<u64, Sender<PendingReply>>>>,
-    /// Language ids this multi-binary session was spawned for (vscode-langservers).
-    #[allow(dead_code)]
-    language_ids: Vec<String>,
 }
 
 /// Host-owned map of live language servers + open documents.
@@ -162,9 +157,19 @@ impl LspManager {
     ) -> Result<(), String> {
         let abs = abs_path(root, path)?;
         let uri = path_to_uri(&abs);
-        if self.docs.contains_key(&uri) {
-            // Re-open: bump as full change.
-            return self.did_change(root, path, text);
+        // Empty languageId from the GUI → derive from extension.
+        let language_id = if language_id.is_empty() {
+            language_id_for_path(path)
+        } else {
+            language_id
+        };
+        if let Some(existing) = self.docs.get(&uri) {
+            // Same language: treat as a full-document change. Language switch:
+            // close and fall through so the server sees a fresh didOpen.
+            if existing.language_id == language_id {
+                return self.did_change(root, path, text);
+            }
+            self.did_close(&uri);
         }
 
         let ext = abs
@@ -180,7 +185,17 @@ impl LspManager {
             return Err("workspace root must be absolute".into());
         }
 
-        if !self.servers.contains_key(&spawn_id) {
+        if let Some(session) = self.servers.get(&spawn_id) {
+            // One process per (server, root). Refuse silently-wrong roots.
+            if session.root != root_path {
+                return Err(format!(
+                    "LSP {} already running for {} (requested {})",
+                    session.id,
+                    session.root.display(),
+                    root_path.display()
+                ));
+            }
+        } else {
             let session = spawn_server(
                 &spawn_id,
                 &binary,
@@ -254,15 +269,12 @@ impl LspManager {
             .servers
             .get_mut(&server_id)
             .ok_or_else(|| "server not running".to_string())?;
-        let doc = serde_json::json!({ "uri": uri });
-        let mut params = serde_json::json!({ "textDocument": doc });
+        let mut params = serde_json::Map::new();
+        params.insert("textDocument".into(), serde_json::json!({ "uri": uri }));
         if let Some(t) = text {
-            params
-                .as_object_mut()
-                .unwrap()
-                .insert("text".into(), serde_json::Value::String(t.to_string()));
+            params.insert("text".into(), serde_json::Value::String(t.to_string()));
         }
-        session.notify("textDocument/didSave", params)
+        session.notify("textDocument/didSave", serde_json::Value::Object(params))
     }
 
     /// `textDocument/didClose` by file URI or root+path.
@@ -494,7 +506,6 @@ fn spawn_server(
         stdin: stdin_init,
         next_id: AtomicU64::new(1),
         pending,
-        language_ids: Vec::new(),
     };
 
     // initialize → initialized
@@ -543,8 +554,6 @@ fn spawn_server(
     let _caps = session.request("initialize", init_params)?;
     session.notify("initialized", serde_json::json!({}))?;
 
-    // rust-analyzer: wait is not required; first didOpen triggers analysis.
-    let _ = id;
     Ok(session)
 }
 
