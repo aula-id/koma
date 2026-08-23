@@ -507,8 +507,18 @@ pub(super) fn push_loop(
                 // Physically DELETE a history session OFF-thread (guarded host-side against
                 // deleting a live/locked session), then RefreshHub. A history row is never the
                 // attached session, so there is no live-conn interaction here.
+                // Remote attach → SSH `daemon delete`; local → laptop store delete.
                 Ok(super::HostCtl::DeleteSession(id)) => {
-                    super::host::spawn_delete_and_refresh(ctl_tx.clone(), id);
+                    if let Some(ctx) = remote_ctx {
+                        super::host::spawn_remote_delete_and_refresh(
+                            ctl_tx.clone(),
+                            ctx.target.clone(),
+                            ctx.password.clone(),
+                            id,
+                        );
+                    } else {
+                        super::host::spawn_delete_and_refresh(ctl_tx.clone(), id);
+                    }
                 }
                 // Cancel-switch (best-effort): the swap in flight can't be interrupted, so
                 // this simply drops to the hub AFTER the current/queued attach resolves.

@@ -20,13 +20,14 @@ use crate::model::store;
 /// exit code the caller should use (non-zero — a malformed invocation is an error).
 pub fn print_daemon_usage() -> i32 {
     eprintln!(
-        "usage: koma daemon <status|kill|restart|clean>\n\
+        "usage: koma daemon <status|kill|restart|clean|delete>\n\
          \n\
-         \x20 status              show whether the koma daemon is running (PID, socket, sessions)\n\
-         \x20 kill                stop every live session-daemon (escalates to signals if needed)\n\
-         \x20 kill --session <id> stop only the session-daemon for <id>\n\
-         \x20 restart             stop the daemon (if any) then start a fresh one\n\
-         \x20 clean               remove a stale socket/pidfile when NO daemon is running"
+         \x20 status                show whether the koma daemon is running (PID, socket, sessions)\n\
+         \x20 kill                  stop every live session-daemon (escalates to signals if needed)\n\
+         \x20 kill --session <id>   stop only the session-daemon for <id>\n\
+         \x20 delete --session <id> physically delete one on-disk history session (refuses if live)\n\
+         \x20 restart               stop the daemon (if any) then start a fresh one\n\
+         \x20 clean                 remove a stale socket/pidfile when NO daemon is running"
     );
     2
 }
@@ -133,6 +134,49 @@ fn daemon_session_count(sock: &Path) -> Result<usize> {
 /// a still-running daemon, or a daemon spawned by an older/different-path binary). That
 /// keeps "no daemons running" honest and makes `kill` reliably clear the way for a
 /// reinstall (a lingering orphan otherwise holds the binary, causing "Text file busy").
+/// `koma daemon delete --session <id>` — physically delete one on-disk history session.
+///
+/// Used by the remote hub HISTORY pane over SSH. Refuses when the session is live
+/// (socket accepting) so a cooking row can never be wiped out from under its daemon.
+/// Missing id is best-effort success (already gone) so delete is idempotent.
+pub(super) fn cmd_delete(session: Option<&str>) -> Result<()> {
+    let id = session.ok_or_else(|| anyhow!("delete requires --session <id>"))?;
+    if id.is_empty() || id.contains('\0') {
+        anyhow::bail!("invalid session id");
+    }
+    // Refuse live — remote HISTORY should never include live ids, but re-check here.
+    if super::daemon_alive(id) {
+        anyhow::bail!("refusing to delete live session {id}");
+    }
+    // Also refuse if any live list still reports it (belt + suspenders vs bind race).
+    if super::list_live_sessions()
+        .into_iter()
+        .any(|s| s.session_id == id)
+    {
+        anyhow::bail!("refusing to delete live session {id}");
+    }
+    match store::list_all_sessions() {
+        Ok(metas) => {
+            if let Some(meta) = metas.into_iter().find(|m| m.id == id) {
+                if meta.locked {
+                    anyhow::bail!("refusing to delete locked session {id}");
+                }
+                // Final TOCTOU re-probe immediately before the remove.
+                if super::daemon_alive(id) {
+                    anyhow::bail!("refusing to delete live session {id}");
+                }
+                store::delete_session(&meta.path)?;
+                println!("koma daemon: deleted session {id}");
+            } else {
+                // Already gone — best-effort success (mirrors kill missing-id).
+                println!("koma daemon: session {id} not found (already gone)");
+            }
+        }
+        Err(e) => return Err(e),
+    }
+    Ok(())
+}
+
 pub(super) fn cmd_kill(session: Option<&str>) -> Result<()> {
     // `koma daemon kill --session <id>`: stop exactly one session-daemon (remote hub
     // kill over SSH uses this). Leave MCP/OAuth/linker alone — those are host-global.

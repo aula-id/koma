@@ -6,7 +6,7 @@
 //! - `koma agents`                 — open the session hub (friendly alias for `--resume`).
 //! - `koma --resume`               — open the session hub.
 //! - `koma alone`                  — standalone no-daemon TUI (friendly alias for `--local`).
-//! - `koma daemon <status|kill|restart|clean>` — daemon management CLI.
+//! - `koma daemon <status|kill|restart|clean|delete>` — daemon management CLI.
 //! - `koma ext install --dev <zip|dir>` — sideload an unsigned local extension
 //!   (dev-only; `koma ext`/`koma ext install` with no `--dev` prints usage — the
 //!   in-app store is the normal, signed install path).
@@ -37,7 +37,7 @@
 //! - `agents` — alias for `--resume` (open the session hub). Sets the same `resume` bit.
 //! - `alone`  — alias for `--local` (standalone TUI). Sets the same `local` bit, so `main`
 //!   reuses the identical `--local` branch, daemon-alive guard included.
-//! - `daemon <status|kill|restart|clean>` — the daemon management CLI (#118). Parsed
+//! - `daemon <status|kill|restart|clean|delete>` — the daemon management CLI (#118). Parsed
 //!   into [`Opts::subcommand`] and short-circuited in `main` BEFORE the TUI, so it
 //!   works even when the TUI can't start.
 //!
@@ -59,10 +59,12 @@ pub enum DaemonSub {
     Restart,
     /// `koma daemon clean` — nuke a stale socket/pidfile when NO daemon is running (refuses if one is).
     Clean,
+    /// `koma daemon delete --session <id>` — physically delete one on-disk history session.
+    Delete,
 }
 
 impl DaemonSub {
-    /// Map a verb token (`status`/`kill`/`restart`/`clean`) to a [`DaemonSub`].
+    /// Map a verb token (`status`/`kill`/`restart`/`clean`/`delete`) to a [`DaemonSub`].
     /// Returns `None` for anything else so the caller can print usage rather than guess.
     fn from_verb(verb: &str) -> Option<Self> {
         match verb {
@@ -70,6 +72,7 @@ impl DaemonSub {
             "kill" => Some(DaemonSub::Kill),
             "restart" => Some(DaemonSub::Restart),
             "clean" => Some(DaemonSub::Clean),
+            "delete" => Some(DaemonSub::Delete),
             _ => None,
         }
     }
@@ -245,7 +248,7 @@ pub fn print_help() -> i32 {
          \x20 alone                          standalone no-daemon TUI (alias for --local)\n\
          \x20 gui                            launch the desktop GUI client\n\
          \x20 update                         stop the daemon, fetch the latest release, then exit\n\
-         \x20 daemon <status|kill|restart|clean>  daemon management CLI\n\
+         \x20 daemon <status|kill|restart|clean|delete>  daemon management CLI\n\
          \x20 ext install --dev <zip|dir>    sideload an unsigned local extension (dev-only)\n\
          \x20 doctor [-v|--verbose]          readiness report (config/daemons/models/gui/…)\n\
          \x20 server                         headless daemon over stdio (for remote dev via SSH)\n\

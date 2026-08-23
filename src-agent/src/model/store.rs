@@ -863,7 +863,7 @@ pub fn list_all_sessions() -> Result<Vec<SessionMeta>> {
 
 /// Return the last path segment (basename) of `workdir` as a display label.
 /// Returns an empty string if the path has no filename component.
-pub(crate) fn dir_basename(workdir: &str) -> String {
+pub fn dir_basename(workdir: &str) -> String {
     std::path::Path::new(workdir)
         .file_name()
         .and_then(|s| s.to_str())

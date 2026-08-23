@@ -245,9 +245,12 @@ pub(super) fn spawn_session_worker(
 }
 
 fn sessions_to_json(
-    sessions: &[crate::remote::sessions::DiscoveredSession],
+    sessions: &crate::remote::sessions::DiscoveredSessions,
 ) -> Vec<serde_json::Value> {
+    // Live-only list for the remoteState badge / status strip. History is pushed
+    // through the hub panes (`build_remote_hub`), not this badge payload.
     sessions
+        .live
         .iter()
         .map(|session| {
             serde_json::json!({
