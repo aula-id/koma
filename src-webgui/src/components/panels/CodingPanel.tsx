@@ -267,7 +267,7 @@ function TreeNode({
             <button
               type="button"
               onClick={() => (entry.isDir ? onToggle(entry.path) : onOpenFile(entry.path))}
-              className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+              className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left"
               title={entry.path || entry.name}
             >
               {entry.isDir ? (
@@ -279,35 +279,41 @@ function TreeNode({
               ) : (
                 <File size={13} className="flex-none opacity-70" />
               )}
-              <span className="min-w-0 truncate">{entry.name}</span>
+              {/* Truncates at the panel wall while idle. Hover expands the action
+                  gutter below, which shrinks this flex slot so ellipsis moves to
+                  the button edge instead of a permanently reserved gutter. */}
+              <span className="min-w-0 flex-1 truncate">{entry.name}</span>
             </button>
 
-            {!draft ? <div className="flex flex-none items-center opacity-0 group-hover:opacity-100">
-              {entry.isDir && (
-                <>
-                  <IconBtn label="New file" faded onClick={() => onStartCreate(entry.path, 'file')}>
-                    <FilePlus size={12} />
-                  </IconBtn>
-                  <IconBtn label="New folder" faded onClick={() => onStartCreate(entry.path, 'dir')}>
-                    <FolderPlus size={12} />
-                  </IconBtn>
-                  <IconBtn label="Refresh" faded onClick={() => onRefresh(entry.path)}>
-                    <RefreshCw size={12} />
-                  </IconBtn>
-                </>
-              )}
-              <IconBtn label="Rename" faded onClick={() => onStartRename(entry.path)}>
-                <Pencil size={12} />
-              </IconBtn>
-              <IconBtn
-                label="Delete"
-                tone="red"
-                faded
-                onClick={() => onStartDelete(entry.path, entry.isDir)}
-              >
-                <Trash2 size={12} />
-              </IconBtn>
-            </div> : null}
+            {/* Idle: max-w-0 so actions take no flex width (no premature ellipsis).
+                Hover: expand and show. opacity alone would still reserve space. */}
+            {!draft ? (
+              <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[140px] group-hover:opacity-100">
+                {entry.isDir && (
+                  <>
+                    <IconBtn label="New file" onClick={() => onStartCreate(entry.path, 'file')}>
+                      <FilePlus size={12} />
+                    </IconBtn>
+                    <IconBtn label="New folder" onClick={() => onStartCreate(entry.path, 'dir')}>
+                      <FolderPlus size={12} />
+                    </IconBtn>
+                    <IconBtn label="Refresh" onClick={() => onRefresh(entry.path)}>
+                      <RefreshCw size={12} />
+                    </IconBtn>
+                  </>
+                )}
+                <IconBtn label="Rename" onClick={() => onStartRename(entry.path)}>
+                  <Pencil size={12} />
+                </IconBtn>
+                <IconBtn
+                  label="Delete"
+                  tone="red"
+                  onClick={() => onStartDelete(entry.path, entry.isDir)}
+                >
+                  <Trash2 size={12} />
+                </IconBtn>
+              </div>
+            ) : null}
 
             {dirty ? (
               <span

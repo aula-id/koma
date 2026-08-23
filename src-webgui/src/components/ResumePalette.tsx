@@ -7,6 +7,7 @@ import { SessionRowActions, SessionRowConfirmStrip, type ArmedRow } from './Sess
 import { SessionBulkBar } from './SessionBulkBar'
 import { useSessionMultiSelect } from './sessionListSelection'
 import { useKoma, isDying } from '../store/koma'
+import { BrailleSpinner } from './BrailleSpinner'
 
 type ResumePaletteProps = {
   onClose: () => void
@@ -37,8 +38,10 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
   const history = useKoma((s) => s.hub.history)
   const req = useKoma((s) => s.req)
   const startSwitching = useKoma((s) => s.startSwitching)
+  const requestRemotePath = useKoma((s) => s.requestRemotePath)
   const dyingSessions = useKoma((s) => s.dyingSessions)
   const remoteState = useKoma((s) => s.remoteState)
+  const remotePathState = useKoma((s) => s.remotePath.state)
   const [query, setQuery] = useState('')
   // The single armed row (kill/delete confirm pill) across BOTH lists — arming
   // a different row disarms whichever was armed before.
@@ -97,10 +100,15 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
     onClose()
   }
 
+  const remotePathBusy =
+    remotePathState === 'listing' ||
+    remotePathState === 'ready' ||
+    remotePathState === 'error'
+
   const newSession = () => {
-    // Remote hub / attached remote: open remote path picker (not local folder dialog).
+    // Remote hub / attached remote: optimistic SSH path picker (guards re-entry).
     if (remoteState.state === 'ready' || remoteState.state === 'connected') {
-      req({ r: 'RequestRemotePath' })
+      requestRemotePath()
       onClose()
       return
     }
@@ -200,9 +208,14 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
                 <span className="flex items-center">
                   <button
                     onClick={newSession}
-                    className="flex items-center gap-1 text-[11px] text-koma-fg opacity-70 transition-colors hover:opacity-100"
+                    disabled={remotePathBusy}
+                    className="flex items-center gap-1 text-[11px] text-koma-fg opacity-70 transition-colors hover:opacity-100 disabled:cursor-wait disabled:opacity-50"
                   >
-                    <Plus size={12} className="flex-none" />
+                    {remotePathBusy ? (
+                      <BrailleSpinner size={12} className="flex-none" />
+                    ) : (
+                      <Plus size={12} className="flex-none" />
+                    )}
                     New session
                   </button>
                   <NewSessionMenu afterPick={onClose} />
