@@ -43,8 +43,14 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
   const req = useKoma((s) => s.req)
   const remoteHosts = useKoma((s) => s.remoteHosts)
   const remoteState = useKoma((s) => s.remoteState)
+  const remotePathState = useKoma((s) => s.remotePath.state)
   const startSwitching = useKoma((s) => s.startSwitching)
+  const requestRemotePath = useKoma((s) => s.requestRemotePath)
   const attachedId = useKoma((s) => s.session.id)
+  const remotePathBusy =
+    remotePathState === 'listing' ||
+    remotePathState === 'ready' ||
+    remotePathState === 'error'
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -72,8 +78,8 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
 
   const pick = (kill: boolean) => {
     if (remoteState.state === 'ready' || remoteState.state === 'connected') {
-      // Remote hub: open the remote path picker instead of a local session.
-      req({ r: 'RequestRemotePath' })
+      // Remote hub: optimistic SSH path picker (guards re-entry + braille).
+      requestRemotePath()
       setOpen(false)
       afterPick?.()
       return
@@ -85,7 +91,7 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
 
   const openFolder = () => {
     if (remoteState.state === 'ready' || remoteState.state === 'connected') {
-      req({ r: 'RequestRemotePath' })
+      requestRemotePath()
       setOpen(false)
       afterPick?.()
       return
@@ -167,11 +173,19 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
             className="overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm"
           >
             {/* Local session options — always visible */}
-            <MenuItem onClick={openFolder} icon={<FolderOpen size={13} />}>
+            <MenuItem
+              onClick={openFolder}
+              disabled={remotePathBusy}
+              icon={
+                remotePathBusy ? <BrailleSpinner size={13} /> : <FolderOpen size={13} />
+              }
+            >
               New session
             </MenuItem>
             {attachedId && (
-              <MenuItem onClick={() => pick(true)}>New session + close current</MenuItem>
+              <MenuItem onClick={() => pick(true)} disabled={remotePathBusy}>
+                New session + close current
+              </MenuItem>
             )}
             {/* Remote hosts — always visible when any are saved */}
             {remoteHosts.length > 0 && (

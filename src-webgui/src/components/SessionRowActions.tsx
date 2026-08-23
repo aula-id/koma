@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Check, ExternalLink, Power, Trash2, X } from 'lucide-react'
+import { Check, Power, Trash2, X } from 'lucide-react'
 import { useKoma, isDying } from '../store/koma'
 import { BrailleSpinner } from './BrailleSpinner'
 
@@ -15,8 +15,6 @@ type SessionRowActionsProps = {
   kind: 'session' | 'history'
   armed: ArmedRow
   onArm: (row: ArmedRow) => void
-  /** When set, show "open in new window" for multi-window multi-attach. */
-  remoteHostId?: string | null
 }
 
 // Trailing ghost icon on a Cooking/History row. Meant to be rendered INSIDE a
@@ -31,12 +29,13 @@ type SessionRowActionsProps = {
 // (non-interactive) instead while `dyingSessions` carries a kind-matching
 // mark for this id — cleared automatically the moment a fresh Hub push
 // confirms the kill/delete landed (see koma.ts's Hub push handler).
-export function SessionRowActions({ id, kind, armed, onArm, remoteHostId }: SessionRowActionsProps) {
+//
+// Multi-window ("open in new window") is intentionally NOT offered here —
+// session lists are single-window by design.
+export function SessionRowActions({ id, kind, armed, onArm }: SessionRowActionsProps) {
   const dying = useKoma((s) => isDying(s.dyingSessions, id, kind))
   const theme = useKoma((s) => s.config.theme)
   const palettes = useKoma((s) => s.config.palettes)
-  const req = useKoma((s) => s.req)
-  const remoteState = useKoma((s) => s.remoteState)
 
   // Reserved for future row-action tints (confirm strip uses its own lookup).
   const _errorTint = useMemo(() => {
@@ -53,32 +52,9 @@ export function SessionRowActions({ id, kind, armed, onArm, remoteHostId }: Sess
   // in place of the row's normal content instead of this trailing slot.
   if (armed?.id === id && armed.kind === kind) return null
 
-  const hostId =
-    remoteHostId ??
-    (remoteState.state === 'ready' || remoteState.state === 'connected'
-      ? remoteState.hostId
-      : null)
-
   const Icon = kind === 'session' ? Power : Trash2
   return (
     <span className="flex h-full w-full flex-none items-center justify-end gap-0.5">
-      {kind === 'session' && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            req({
-              r: 'OpenSecondWindow',
-              sessionId: id,
-              ...(hostId ? { hostId } : {}),
-            })
-          }}
-          aria-label="Open in new window"
-          title="Open in new window"
-          className="flex h-full w-6 flex-none items-center justify-center text-koma-fg opacity-0 transition-opacity group-hover:opacity-40 hover:!opacity-100 focus-visible:opacity-100"
-        >
-          <ExternalLink size={12} className="flex-none" />
-        </button>
-      )}
       <button
         onClick={(e) => {
           e.stopPropagation()
