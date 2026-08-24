@@ -13,8 +13,9 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 use crate::ipc::frame::{read_frame_from, write_frame_to, FrameReader};
 use crate::ipc::linker_proto::{LinkerQuery, LinkerRequest, LinkerResponse};
@@ -36,19 +37,30 @@ const REAPER_POLL: std::time::Duration = std::time::Duration::from_secs(15);
 /// Number of consecutive empty scans before exit.
 const REAPER_EMPTY_STREAK_TO_EXIT: u32 = 2;
 
-/// Coordinates scan versioning to prevent stale scans from publishing.
+/// Newest-wins full-scan request coalesced by [`request_scan`].
+struct ScanRequest {
+    roots: Vec<PathBuf>,
+}
+
+/// Coordinates single-flight full scans: at most one worker, cooperative cancel,
+/// and newest-wins pending coalesce.
 ///
-/// Every call to `spawn_scan_versioned` bumps `desired_revision` and sets
-/// `in_flight`. When a scan thread completes it checks whether its revision
-/// is still current before publishing, preventing a slow/stale scan from
-/// overwriting a graph that was already updated by a newer scan.
+/// `desired_revision` cancels in-flight workers. `applied_revision` tracks the
+/// last published full-scan revision. Client-visible graph generation lives in
+/// `published_generation` / `ImportGraph::generation`.
 struct ScanCoordinator {
     /// Monotonically-increasing counter, bumped on each desired scan.
     desired_revision: u64,
     /// The revision whose results are currently published in the graph.
     applied_revision: u64,
-    /// `Some(rev)` while a scan thread for `rev` is running.
+    /// `Some(rev)` while a scan worker for `rev` is running.
     in_flight: Option<u64>,
+    /// Cooperative cancel flag for the current worker (shared with scan).
+    cancel: Arc<AtomicBool>,
+    /// Newest pending full-scan request (at most one).
+    pending: Option<ScanRequest>,
+    /// How many scan worker threads have been spawned (test observability).
+    spawn_count: u64,
 }
 
 /// Shared daemon state: the import graph plus per-client root tracking, the
@@ -122,9 +134,12 @@ impl DaemonState {
                 desired_revision: 0,
                 applied_revision: 0,
                 in_flight: None,
+                cancel: Arc::new(AtomicBool::new(false)),
+                pending: None,
+                spawn_count: 0,
             }),
             session_revisions: RwLock::new(HashMap::new()),
-            published_generation: std::sync::atomic::AtomicU64::new(0),
+            published_generation: AtomicU64::new(0),
         }
     }
 }
@@ -384,7 +399,7 @@ fn handle_request(
             } && !all_roots.is_empty();
 
             if needs_scan || first_scan_needed {
-                spawn_scan_versioned(state, all_roots);
+                request_scan(state, all_roots);
             }
 
             let status = if state.scanning.load(Ordering::SeqCst) {
@@ -450,6 +465,8 @@ fn handle_request(
                     coord.desired_revision = coord.desired_revision.saturating_add(1);
                     let empty_revision = coord.desired_revision;
                     coord.in_flight = None;
+                    coord.pending = None;
+                    coord.cancel.store(true, Ordering::SeqCst);
                     let _pub = state
                         .publication_lock
                         .lock()
@@ -469,7 +486,7 @@ fn handle_request(
                     state.scanning.store(false, Ordering::SeqCst);
                 } else if !roots_to_drop.is_empty() {
                     // Rescan remaining roots (dropped roots are gone from all_roots).
-                    spawn_scan_versioned(state, all_roots);
+                    request_scan(state, all_roots);
                 }
             }
 
@@ -550,84 +567,67 @@ fn collect_all_roots(state: &Arc<DaemonState>) -> Vec<PathBuf> {
     all_roots
 }
 
-/// Spawn a versioned background scan thread that replaces the graph and project
-/// index.  The scan is tagged with a monotonically-increasing `desired_revision`
-/// from the [`ScanCoordinator`].  When the thread completes, it only publishes
-/// results if its revision is still the latest — preventing a slow/stale scan
-/// from overwriting a graph that was already updated by a newer scan.
+/// Request a full root scan through the single-flight scheduler.
 ///
-/// Returns the accepted scan revision (monotonically increasing).
+/// - Merges into `pending` (newest roots win).
+/// - If a worker is running, sets cancel and does **not** spawn another thread.
+/// - If idle, starts one worker that drains pending requests until empty.
 ///
-/// On thread-spawn failure the coordinator and scanning flag are restored so
-/// state never becomes permanently inconsistent.
-fn spawn_scan_versioned(state: &Arc<DaemonState>, roots: Vec<PathBuf>) -> u64 {
-    let scan_rev = {
+/// Returns the accepted scan revision (`desired_revision` after the request).
+fn request_scan(state: &Arc<DaemonState>, roots: Vec<PathBuf>) -> u64 {
+    let (scan_rev, should_spawn) = {
         let mut coord = state
             .scan_coordinator
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        coord.desired_revision += 1;
-        coord.in_flight = Some(coord.desired_revision);
-        coord.desired_revision
+        coord.desired_revision = coord.desired_revision.saturating_add(1);
+        let scan_rev = coord.desired_revision;
+        // Newest-wins coalesce: replace any pending request.
+        coord.pending = Some(ScanRequest { roots });
+        let should_spawn = coord.in_flight.is_none();
+        if !should_spawn {
+            // Cancel the running worker so it exits promptly; the pending
+            // request will run when it finishes.
+            coord.cancel.store(true, Ordering::SeqCst);
+        }
+        (scan_rev, should_spawn)
     };
-    state.scanning.store(true, Ordering::SeqCst);
+
+    if should_spawn {
+        start_scan_worker(state);
+    } else {
+        // Worker is running and will pick up pending after cancel/finish.
+        state.scanning.store(true, Ordering::SeqCst);
+    }
+
+    scan_rev
+}
+
+/// Start the single scan worker if one is not already running. The worker
+/// drains `pending` until empty (loop), so callers never stack threads.
+fn start_scan_worker(state: &Arc<DaemonState>) {
+    {
+        let mut coord = state
+            .scan_coordinator
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if coord.in_flight.is_some() {
+            return;
+        }
+        // Reserve the in_flight slot with the current desired revision; the
+        // actual work roots come from pending inside the worker loop.
+        if coord.pending.is_none() {
+            return;
+        }
+        coord.in_flight = Some(coord.desired_revision);
+        coord.spawn_count = coord.spawn_count.saturating_add(1);
+        state.scanning.store(true, Ordering::SeqCst);
+    }
 
     let state_clone = Arc::clone(state);
     if std::thread::Builder::new()
         .name("linker-scan".to_string())
-        .spawn(move || {
-            let (graph, pi) = crate::linker::scan::scan_roots(&roots);
-
-            // Publish atomically with respect to scan scheduling and the
-            // watcher loop.  Holding the coordinator prevents a newer desired
-            // scan from being registered, and publication_lock ensures the
-            // graph + project_index pair is swapped atomically relative to
-            // watcher batches.
-            {
-                let mut coord = state_clone
-                    .scan_coordinator
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if coord.in_flight == Some(scan_rev) && coord.desired_revision == scan_rev {
-                    let _pub = state_clone
-                        .publication_lock
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    // Advance the monotonically-increasing generation counter.
-                    let new_gen = state_clone
-                        .published_generation
-                        .fetch_add(1, Ordering::SeqCst)
-                        + 1;
-                    if let Ok(mut g) = state_clone.graph.write() {
-                        *g = graph;
-                        // Set generation AFTER swap so it never moves backward.
-                        g.generation = new_gen;
-                    }
-                    if let Ok(mut idx) = state_clone.project_index.write() {
-                        *idx = pi;
-                    }
-                    coord.applied_revision = scan_rev;
-                    coord.in_flight = None;
-                } else if coord.in_flight == Some(scan_rev) {
-                    // Superseded without a replacement scan (for example all
-                    // roots were removed): release the stale slot so scanning
-                    // cannot remain stuck forever.
-                    coord.in_flight = None;
-                }
-            }
-
-            // Update scanning flag based on whether any scan is still in flight.
-            let still_in_flight = {
-                let coord = state_clone
-                    .scan_coordinator
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                coord.in_flight.is_some()
-            };
-            state_clone
-                .scanning
-                .store(still_in_flight, Ordering::SeqCst);
-        })
+        .spawn(move || scan_worker_loop(state_clone))
         .is_err()
     {
         // Thread spawn failure — restore coordinator and scanning flag.
@@ -635,15 +635,93 @@ fn spawn_scan_versioned(state: &Arc<DaemonState>, roots: Vec<PathBuf>) -> u64 {
             .scan_coordinator
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if coord.in_flight == Some(scan_rev) {
-            coord.in_flight = None;
-        }
+        coord.in_flight = None;
         state
             .scanning
             .store(coord.in_flight.is_some(), Ordering::SeqCst);
     }
+}
 
-    scan_rev
+/// Single-flight worker: take pending → scan → publish or discard → repeat.
+fn scan_worker_loop(state: Arc<DaemonState>) {
+    loop {
+        // Take the newest pending request and bind it to a revision.
+        let (scan_rev, roots, cancel) = {
+            let mut coord = state
+                .scan_coordinator
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let Some(req) = coord.pending.take() else {
+                coord.in_flight = None;
+                state.scanning.store(false, Ordering::SeqCst);
+                return;
+            };
+            // Bind this attempt to the current desired revision so a cancel
+            // that races after take still discards the result.
+            let scan_rev = coord.desired_revision;
+            coord.in_flight = Some(scan_rev);
+            coord.cancel.store(false, Ordering::SeqCst);
+            let cancel = Arc::clone(&coord.cancel);
+            state.scanning.store(true, Ordering::SeqCst);
+            (scan_rev, req.roots, cancel)
+        };
+
+        let outcome = crate::linker::scan::scan_roots_cancellable(&roots, Some(&cancel));
+
+        {
+            let mut coord = state
+                .scan_coordinator
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+
+            let still_current =
+                coord.in_flight == Some(scan_rev) && coord.desired_revision == scan_rev;
+            let cancelled = cancel.load(Ordering::SeqCst) || matches!(outcome, None);
+
+            if still_current {
+                if let Some((graph, pi)) = outcome {
+                    if !cancelled {
+                        let _pub = state
+                            .publication_lock
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        let new_gen = state.published_generation.fetch_add(1, Ordering::SeqCst) + 1;
+                        if let Ok(mut g) = state.graph.write() {
+                            *g = graph;
+                            g.generation = new_gen;
+                        }
+                        if let Ok(mut idx) = state.project_index.write() {
+                            *idx = pi;
+                        }
+                        coord.applied_revision = scan_rev;
+                    }
+                }
+                // Either published or cancelled-while-still-current: clear
+                // in_flight only if no newer pending was queued. The loop head
+                // will re-check pending.
+                if coord.pending.is_none() {
+                    coord.in_flight = None;
+                    state.scanning.store(false, Ordering::SeqCst);
+                    return;
+                }
+                // Keep in_flight occupied while we drain pending.
+                coord.in_flight = Some(coord.desired_revision);
+            } else if coord.in_flight == Some(scan_rev) {
+                // Superseded (e.g. empty unregister invalidated us).
+                if coord.pending.is_none() {
+                    coord.in_flight = None;
+                    state.scanning.store(false, Ordering::SeqCst);
+                    return;
+                }
+                coord.in_flight = Some(coord.desired_revision);
+            } else if coord.pending.is_none() {
+                // Another path cleared in_flight (empty unregister). Exit.
+                state.scanning.store(false, Ordering::SeqCst);
+                return;
+            }
+            // else: pending set and/or newer in_flight — loop and drain.
+        }
+    }
 }
 
 /// Stop the current file watcher (if running), dropping the debouncer.
@@ -710,18 +788,21 @@ fn maybe_update_watcher(state: &Arc<DaemonState>, new_roots: &[PathBuf]) {
     }
 }
 
+/// Ceiling for storm coalesce: force-process a batch even if events keep
+/// arriving. Quiet debounce is handled by notify-debouncer-mini (400ms).
+const WATCHER_STORM_CEILING: Duration = Duration::from_millis(1500);
+/// Short drain window after each recv to batch path-identity duplicates.
+const WATCHER_DRAIN_IDLE: Duration = Duration::from_millis(50);
+
 /// Background thread: read debounced file-change events and update the graph.
 ///
 /// Runs until the receiver is disconnected (watcher dropped).
 ///
-/// **Phase 2:** Uses `ProjectIndex` for owner-based resolution.
-///
 /// **Coordination:** Acquires `publication_lock` during graph + project_index
 /// mutation so the pair is always updated atomically relative to scan-thread
-/// publications.  Also bumps `desired_revision` so any in-flight full scan
-/// sees itself as stale and does not overwrite watcher-applied mutations.
-/// If the watcher supersedes an in-flight scan, a follow-up rescan is
-/// scheduled so the full-scan path re-applies cleanly.
+/// publications. Content-only batches apply incrementally. Full rebuilds
+/// (config / repair) go through [`request_scan`] single-flight — the watcher
+/// never stacks scan threads.
 fn watcher_loop(state: Arc<DaemonState>) {
     // Take the receiver out of the Mutex — this thread owns it exclusively.
     let rx = {
@@ -733,27 +814,59 @@ fn watcher_loop(state: Arc<DaemonState>) {
     };
 
     // Read events in a loop. The channel closes when the debouncer is dropped.
-    while let Ok(paths) = rx.recv() {
-        if paths.is_empty() {
+    while let Ok(first) = rx.recv() {
+        if first.is_empty() {
             continue;
         }
 
-        // Supersede any in-flight full scan so it won't overwrite our
-        // incremental mutations when it completes.
-        let superseded = {
+        // Coalesce: path-identity dedupe + storm ceiling flush.
+        let mut batch: HashSet<PathBuf> = first.into_iter().collect();
+        let storm_started = Instant::now();
+        loop {
+            // Drain anything already queued without blocking.
+            while let Ok(more) = rx.try_recv() {
+                batch.extend(more);
+            }
+            if storm_started.elapsed() >= WATCHER_STORM_CEILING {
+                break;
+            }
+            // Brief idle wait for a quiet window after the mini debounce.
+            match rx.recv_timeout(WATCHER_DRAIN_IDLE) {
+                Ok(more) => {
+                    batch.extend(more);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    // Process what we have, then exit outer loop on next recv.
+                    break;
+                }
+            }
+        }
+
+        if batch.is_empty() {
+            continue;
+        }
+        let paths: Vec<PathBuf> = batch.into_iter().collect();
+
+        // Cancel any in-flight full scan so it won't overwrite incremental
+        // mutations — but do NOT spawn a replacement scan on every batch.
+        // Content-only apply stays incremental; full rebuilds are requested
+        // only when handle_events reports a root rebuild is required.
+        {
             let mut coord = state
                 .scan_coordinator
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            let was_in_flight = coord.in_flight.is_some();
-            if was_in_flight {
-                coord.desired_revision += 1;
+            if coord.in_flight.is_some() {
+                coord.desired_revision = coord.desired_revision.saturating_add(1);
+                coord.cancel.store(true, Ordering::SeqCst);
             }
-            was_in_flight
-        };
+        }
 
         // Hold publication_lock during the graph + project_index mutation
         // so it is atomic with respect to scan-thread publications.
+        let mut full_rebuild_roots = Vec::new();
+        let mut new_dirs = Vec::new();
         {
             let _pub = state
                 .publication_lock
@@ -761,18 +874,39 @@ fn watcher_loop(state: Arc<DaemonState>) {
                 .unwrap_or_else(|e| e.into_inner());
             if let (Ok(mut graph), Ok(mut pi)) = (state.graph.write(), state.project_index.write())
             {
-                crate::linker::watch::handle_events(&paths, &mut graph, &mut pi);
+                let outcome = crate::linker::watch::handle_events(&paths, &mut graph, &mut pi);
+                full_rebuild_roots = outcome.full_rebuild_roots;
+                new_dirs = outcome.new_dirs;
             }
         }
 
-        // If we superseded an in-flight scan, schedule a follow-up rescan
-        // so the full-scan path re-applies cleanly (the stale scan's
-        // results are discarded, but any roots it was scanning still need
-        // a fresh pass).
-        if superseded {
+        // Dynamically attach NonRecursive watches for newly created dirs.
+        if !new_dirs.is_empty() {
+            if let Ok(mut w) = state.watcher.lock() {
+                if let Some(debouncer) = w.as_mut() {
+                    for dir in &new_dirs {
+                        let _ = crate::linker::watch::watch_new_dir(debouncer.watcher(), dir);
+                    }
+                }
+            }
+        }
+
+        // Config / repair paths request a single-flight full scan (coalesced).
+        if !full_rebuild_roots.is_empty() {
             let all_roots = collect_all_roots(&state);
             if !all_roots.is_empty() {
-                spawn_scan_versioned(&state, all_roots);
+                // Prefer the specific roots when they are still registered;
+                // otherwise fall back to the full union.
+                let scoped: Vec<PathBuf> = full_rebuild_roots
+                    .into_iter()
+                    .filter(|r| all_roots.iter().any(|a| a == r))
+                    .collect();
+                let roots = if scoped.is_empty() {
+                    all_roots
+                } else {
+                    scoped
+                };
+                request_scan(&state, roots);
             }
         }
     }
@@ -902,7 +1036,7 @@ fn handle_query(
             if all_roots.is_empty() {
                 return LinkerResponse::Ack;
             }
-            let scan_rev = spawn_scan_versioned(state, all_roots);
+            let scan_rev = request_scan(state, all_roots);
             LinkerResponse::ScanRevision { revision: scan_rev }
         }
         LinkerQuery::ScanStatus => {

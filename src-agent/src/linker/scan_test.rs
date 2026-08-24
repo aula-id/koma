@@ -868,3 +868,39 @@ fn p2_source_refs_installed_atomically() {
     assert_eq!(refs.external_count(), 1);
     graph.check_invariants().unwrap();
 }
+
+#[test]
+fn scan_roots_cancellable_returns_none_when_precancelled() {
+    let cancel = std::sync::atomic::AtomicBool::new(true);
+    let result = scan_roots_cancellable(&[std::path::PathBuf::from("/tmp")], Some(&cancel));
+    assert!(result.is_none(), "pre-cancelled scan must not publish");
+}
+
+#[test]
+fn collect_watchable_dirs_excludes_target_and_node_modules() {
+    let tmp = TempDir::new("watchable");
+    let root = tmp.path().to_path_buf();
+    std::fs::create_dir_all(root.join("src/nested")).unwrap();
+    std::fs::create_dir_all(root.join("target/debug")).unwrap();
+    std::fs::create_dir_all(root.join("node_modules/x")).unwrap();
+    std::fs::write(root.join("src/a.rs"), "fn a(){}\n").unwrap();
+    std::fs::write(root.join("target/x.rs"), "fn x(){}\n").unwrap();
+
+    let dirs = collect_watchable_dirs(&[root.clone()]);
+    let joined: Vec<String> = dirs
+        .iter()
+        .map(|d| d.to_string_lossy().replace('\\', "/"))
+        .collect();
+    assert!(
+        joined.iter().any(|d| d.ends_with("/src") || d.ends_with("/src/nested")),
+        "expected src dirs in {joined:?}"
+    );
+    assert!(
+        !joined.iter().any(|d| d.contains("/target")),
+        "target must be excluded: {joined:?}"
+    );
+    assert!(
+        !joined.iter().any(|d| d.contains("/node_modules")),
+        "node_modules must be excluded: {joined:?}"
+    );
+}

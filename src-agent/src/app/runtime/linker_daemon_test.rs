@@ -646,13 +646,14 @@ fn watcher_supersede_bumps_desired_revision() {
         coord.in_flight = Some(coord.desired_revision);
     }
 
-    // Now the watcher_loop would bump desired_revision.  We simulate
+    // Now the watcher_loop would bump desired_revision + cancel. We simulate
     // the relevant section of watcher_loop here:
     let superseded = {
         let mut coord = state.scan_coordinator.lock().unwrap();
         let was_in_flight = coord.in_flight.is_some();
         if was_in_flight {
-            coord.desired_revision += 1;
+            coord.desired_revision = coord.desired_revision.saturating_add(1);
+            coord.cancel.store(true, Ordering::SeqCst);
         }
         was_in_flight
     };
@@ -660,12 +661,89 @@ fn watcher_supersede_bumps_desired_revision() {
 
     let after = {
         let coord = state.scan_coordinator.lock().unwrap();
+        assert!(coord.cancel.load(Ordering::SeqCst));
         coord.desired_revision
     };
     assert!(
         after > before,
         "desired_revision should advance after supersede: before={before}, after={after}"
     );
+}
+
+#[test]
+fn request_scan_single_flight_no_stacked_spawns() {
+    let state = test_state();
+    // Seed a root so rescan has something to target.
+    register(&state, "s1", &["/nonexistent_for_single_flight"]);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    let spawns_before = {
+        let coord = state.scan_coordinator.lock().unwrap();
+        coord.spawn_count
+    };
+
+    // Thrash: many supersede requests while a worker may be running.
+    for _ in 0..20 {
+        request_scan(&state, vec![PathBuf::from("/nonexistent_for_single_flight")]);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let (spawns_after, desired) = {
+        let coord = state.scan_coordinator.lock().unwrap();
+        (coord.spawn_count, coord.desired_revision)
+    };
+    // At most one additional worker beyond whatever the register started
+    // (pending coalesce means thrash does not stack threads).
+    assert!(
+        spawns_after <= spawns_before + 1,
+        "thrash must not stack scan workers: before={spawns_before} after={spawns_after}"
+    );
+    assert!(desired >= 20, "each request_scan bumps desired_revision");
+}
+
+#[test]
+fn request_scan_coalesce_pending_newest_wins() {
+    let state = test_state();
+    // Force idle coordinator with no running worker by waiting out any scan.
+    for _ in 0..50 {
+        if !state.scanning.load(Ordering::SeqCst) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    // Artificially hold a fake in-flight so request_scan only queues pending.
+    {
+        let mut coord = state.scan_coordinator.lock().unwrap();
+        coord.in_flight = Some(coord.desired_revision.max(1));
+        coord.pending = None;
+        state.scanning.store(true, Ordering::SeqCst);
+    }
+
+    request_scan(&state, vec![PathBuf::from("/old")]);
+    request_scan(&state, vec![PathBuf::from("/new")]);
+
+    let pending_roots = {
+        let coord = state.scan_coordinator.lock().unwrap();
+        coord
+            .pending
+            .as_ref()
+            .map(|p| p.roots.clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        pending_roots,
+        vec![PathBuf::from("/new")],
+        "newest pending roots must win"
+    );
+
+    // Release fake in-flight so the test doesn't leave scanning stuck.
+    {
+        let mut coord = state.scan_coordinator.lock().unwrap();
+        coord.in_flight = None;
+        coord.pending = None;
+        state.scanning.store(false, Ordering::SeqCst);
+    }
 }
 
 #[test]
