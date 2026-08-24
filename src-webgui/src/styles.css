@@ -628,3 +628,92 @@ svg.animate-spin {
 .monaco-editor .monaco-menu .monaco-action-bar .action-item .action-menu-item.disabled .action-label {
   color: var(--color-koma-dim) !important;
 }
+
+/* ── Boot / session-switch loader (compositor-thread) ─────────────────────
+   Game-style side-loaded presentation: animate only transform/opacity so the
+   spinner keeps painting while the main thread is jammed on Snapshot parse +
+   React reconcile. JS setInterval braille freezes in that window; this does not.
+   will-change promotes the layer; no backdrop filters on the spinner itself. */
+@keyframes koma-boot-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes koma-boot-fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+/* Stepped braille via content — best-effort TUI glyph; may still hitch on some
+   engines under extreme main-thread load. Prefer .koma-boot-ring for the big
+   center spinner. */
+@keyframes koma-boot-braille {
+  0% {
+    content: '⠋';
+  }
+  10% {
+    content: '⠙';
+  }
+  20% {
+    content: '⠹';
+  }
+  30% {
+    content: '⠸';
+  }
+  40% {
+    content: '⠼';
+  }
+  50% {
+    content: '⠴';
+  }
+  60% {
+    content: '⠦';
+  }
+  70% {
+    content: '⠧';
+  }
+  80% {
+    content: '⠇';
+  }
+  90%,
+  100% {
+    content: '⠏';
+  }
+}
+.koma-boot-ring {
+  box-sizing: border-box;
+  flex: none;
+  border-radius: 9999px;
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--color-koma-fg) 18%, transparent);
+  border-top-color: var(--color-koma-accent);
+  animation: koma-boot-spin 0.7s linear infinite;
+  will-change: transform;
+  /* Promote early so first paint already has a layer. */
+  transform: translateZ(0);
+}
+.koma-boot-braille {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  color: var(--color-koma-accent);
+}
+.koma-boot-braille::before {
+  content: '⠋';
+  animation: koma-boot-braille 0.8s steps(1, end) infinite;
+}
+.koma-boot-panel {
+  animation: koma-boot-fade-in 0.16s ease-out both;
+  will-change: opacity, transform;
+}
+.koma-boot-overlay {
+  /* Opaque-ish dim beats backdrop-blur during load (blur is main/GPU heavy). */
+  background-color: color-mix(in srgb, var(--color-koma-bg) 92%, transparent);
+}
