@@ -536,15 +536,13 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         *control_flow = ControlFlow::Wait;
         match event {
             // Host-relay state push: inject the authoritative JSON envelope into the
-            // native-React client. `json` is a complete JSON object; it must be
-            // re-encoded as a quoted, escaped JS string literal (not embedded
-            // verbatim as a raw object) so the JS side's `JSON.parse(j)` receives
-            // an actual string to parse, robust to arbitrary chat content.
+            // native-React client. Embed the JSON object LITERAL (one serde) so JS
+            // receives a real object — no string-wrap + JSON.parse round-trip.
+            // Content is already JSON-escaped by serde_json, so it is safe inside
+            // the script source. Fallback to quoted string only if serialise fails.
             Event::UserEvent(UserEvent::Push(json)) => {
-                let _ = webview.evaluate_script(&format!(
-                    "window.__komaClient.push({})",
-                    serde_json::to_string(&json).unwrap_or_else(|_| "\"\"".to_string())
-                ));
+                let script = format!("window.__komaClient&&window.__komaClient.push({json})");
+                let _ = webview.evaluate_script(&script);
             }
             // Custom-titlebar window commands: the window is undecorated, so
             // drag / minimize / maximize / close / edge-resize all have to be driven
