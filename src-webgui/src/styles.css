@@ -602,20 +602,29 @@ svg.animate-spin {
   border-bottom-color: var(--color-koma-border) !important;
   color: var(--color-koma-fg) !important;
 }
+/* Context menus mount on document.body (outside .monaco-editor), so keep
+   unscoped selectors like .monaco-hover above. */
+.context-view.monaco-menu-container,
+.monaco-menu,
 .monaco-editor .context-view.monaco-menu-container,
 .monaco-editor .monaco-menu {
   background-color: var(--color-koma-panel) !important;
   border-color: var(--color-koma-border) !important;
   color: var(--color-koma-fg) !important;
 }
+.monaco-menu .monaco-action-bar .action-item .action-label,
+.monaco-menu .monaco-action-bar .action-item .keybinding,
 .monaco-editor .monaco-menu .monaco-action-bar .action-item .action-label,
 .monaco-editor .monaco-menu .monaco-action-bar .action-item .keybinding {
   color: var(--color-koma-fg) !important;
 }
+.monaco-menu .monaco-action-bar .action-item.focused,
+.monaco-menu .monaco-action-bar .action-item:hover,
 .monaco-editor .monaco-menu .monaco-action-bar .action-item.focused,
 .monaco-editor .monaco-menu .monaco-action-bar .action-item:hover {
   background-color: var(--color-koma-hover) !important;
 }
+.monaco-menu .monaco-action-bar .action-item .action-menu-item.disabled .action-label,
 .monaco-editor .monaco-menu .monaco-action-bar .action-item .action-menu-item.disabled .action-label {
   color: var(--color-koma-dim) !important;
 }
