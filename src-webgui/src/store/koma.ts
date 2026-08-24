@@ -2134,6 +2134,8 @@ type KomaState = {
   lspProgress: Record<string, LspInstallProgress>
   // Diagnostics keyed by file URI (latest LspDiagnostics per uri).
   lspDiagnostics: Record<string, LspDiagnostic[]>
+  // Precomputed problem badge counts (updated in LspDiagnostics reducer).
+  lspDiagCounts: { errors: number; warnings: number }
   // Live language-server processes (starting / indexing / ready). Footer drawer.
   lspRuntime: LspRuntimeServer[]
   // Cross-tab Problems drawer (above UsageFooter).
@@ -2968,6 +2970,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   lspServers: [],
   lspProgress: {},
   lspDiagnostics: {},
+  lspDiagCounts: { errors: 0, warnings: 0 },
   lspRuntime: [],
   problemsOpen: false,
   lspDrawerOpen: false,
@@ -4256,9 +4259,25 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         break
       case 'LspDiagnostics':
-        set((s) => ({
-          lspDiagnostics: { ...s.lspDiagnostics, [env.uri]: env.diagnostics ?? [] },
-        }))
+        set((s) => {
+          const nextMap = {
+            ...s.lspDiagnostics,
+            [env.uri]: env.diagnostics ?? [],
+          }
+          let errors = 0
+          let warnings = 0
+          for (const list of Object.values(nextMap)) {
+            for (const d of list) {
+              if (d.severity === 1) errors += 1
+              else if (d.severity === 2) warnings += 1
+            }
+          }
+          return {
+            lspDiagnostics: nextMap,
+            lspDiagCounts: { errors, warnings },
+          }
+        })
+        // Markers only — coding tabs must not subscribe to the full map.
         applyDiagnosticsToMonaco(env.uri, env.diagnostics ?? [])
         break
       case 'LspCompletion':

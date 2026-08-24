@@ -37,21 +37,14 @@ export function UsageFooter() {
   const gitDetached = useKoma((s) => s.git.detached)
   const gitError = useKoma((s) => s.git.error)
   const remoteState = useKoma((s) => s.remoteState)
-  const lspDiagnostics = useKoma((s) => s.lspDiagnostics)
+  const errCount = useKoma((s) => s.lspDiagCounts.errors)
+  const warnCount = useKoma((s) => s.lspDiagCounts.warnings)
   const problemsOpen = useKoma((s) => s.problemsOpen)
   const toggleProblemsOpen = useKoma((s) => s.toggleProblemsOpen)
   const lspRuntime = useKoma((s) => s.lspRuntime)
   const lspProgress = useKoma((s) => s.lspProgress)
   const lspDrawerOpen = useKoma((s) => s.lspDrawerOpen)
   const toggleLspDrawerOpen = useKoma((s) => s.toggleLspDrawerOpen)
-  let errCount = 0
-  let warnCount = 0
-  for (const list of Object.values(lspDiagnostics)) {
-    for (const d of list) {
-      if (d.severity === 1) errCount += 1
-      else if (d.severity === 2) warnCount += 1
-    }
-  }
   const problemTotal = errCount + warnCount
   const lspBusy =
     lspRuntime.some((s) => s.phase === 'starting' || s.phase === 'working') ||

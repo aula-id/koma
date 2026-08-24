@@ -109,7 +109,11 @@ const pendingFileText = new Map<string, Pending<string>>()
 // Survives tab close/reopen so "N references" does not re-hit the language
 // server for every open of an unchanged file. Keyed by root+path+content hash.
 const LENS_KINDS = new Set([5, 6, 9, 10, 11, 12, 23]) // Class..Struct
-const LENS_MAX = 40
+// Cap hard — each lens is a full textDocument/references RPC that holds the
+// host LspManager mutex for the whole round-trip. 40 parallel refs freezes
+// hover/completion while typing.
+const LENS_MAX = 12
+const LENS_REF_CONCURRENCY = 2
 
 type CachedLens = {
   /** 0-based symbol range start line (decoration line). */
@@ -226,34 +230,38 @@ async function computeCodeLensCounts(
 
     const candidates = symbols.filter((s) => LENS_KINDS.has(s.kind)).slice(0, LENS_MAX)
     const out: CachedLens[] = []
-    await Promise.all(
-      candidates.map(async (sym) => {
-        const refId = mintId('rlen')
-        const refP = track(pendingReferences, refId)
-        req({
-          r: 'LspReferences',
-          root,
-          path,
-          line: sym.selectionRange.startLine,
-          character: sym.selectionRange.startCharacter,
-          includeDeclaration: false,
-          requestId: refId,
-        })
-        let count = 0
-        try {
-          const refs = await refP
-          count = refs.length
-        } catch {
-          return
-        }
-        out.push({
-          rangeLine: sym.range.startLine,
-          selLine: sym.selectionRange.startLine,
-          selCharacter: sym.selectionRange.startCharacter,
-          count,
-        })
-      }),
-    )
+    // Bounded concurrency — never stampede the host mutex with 40 parallel refs.
+    for (let i = 0; i < candidates.length; i += LENS_REF_CONCURRENCY) {
+      const batch = candidates.slice(i, i + LENS_REF_CONCURRENCY)
+      await Promise.all(
+        batch.map(async (sym) => {
+          const refId = mintId('rlen')
+          const refP = track(pendingReferences, refId)
+          req({
+            r: 'LspReferences',
+            root,
+            path,
+            line: sym.selectionRange.startLine,
+            character: sym.selectionRange.startCharacter,
+            includeDeclaration: false,
+            requestId: refId,
+          })
+          let count = 0
+          try {
+            const refs = await refP
+            count = refs.length
+          } catch {
+            return
+          }
+          out.push({
+            rangeLine: sym.range.startLine,
+            selLine: sym.selectionRange.startLine,
+            selCharacter: sym.selectionRange.startCharacter,
+            count,
+          })
+        }),
+      )
+    }
     out.sort((a, b) => a.rangeLine - b.rangeLine || a.selLine - b.selLine)
     // Don't poison the cache when every references RPC failed (server still
     // starting / indexing) — leave miss so the next provide retries.

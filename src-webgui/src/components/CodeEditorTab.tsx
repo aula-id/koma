@@ -23,7 +23,10 @@ import { CodingFileViewer } from './CodingFileViewer'
 type CodingTab = Extract<Tab, { kind: 'codingFile' }>
 
 const AUTOSAVE_MS = 750
-const LSP_CHANGE_MS = 300
+const LSP_CHANGE_MS = 500
+// CodeLens ref-counts are expensive (documentSymbol + N references RPCs) and
+// share the host LSP mutex with hover/completion. Only warm on open / save idle.
+const CODELENS_IDLE_MS = 2500
 
 export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -40,7 +43,9 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   const revertCodingFile = useKoma((s) => s.revertCodingFile)
   const lspServers = useKoma((s) => s.lspServers)
   const lspProgress = useKoma((s) => s.lspProgress)
-  const lspDiagnostics = useKoma((s) => s.lspDiagnostics)
+  // Markers are applied in the store push handler — do NOT subscribe to the
+  // whole lspDiagnostics map here (every URI publish would re-render every
+  // mounted coding tab).
   const refreshLsp = useKoma((s) => s.refreshLsp)
   const lspInstall = useKoma((s) => s.lspInstall)
   const req = useKoma((s) => s.req)
@@ -237,6 +242,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       },
     })
 
+    let codeLensIdleTimer: ReturnType<typeof setTimeout> | null = null
     const sub = editor.onDidChangeModelContent(() => {
       if (applyingRef.current) return
       const model = editor.getModel()
@@ -247,20 +253,31 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       lspChangeTimerRef.current = setTimeout(() => {
         lspChangeTimerRef.current = null
         if (!lspOpenedRef.current) return
+        // Fresh text at fire time — the closed-over `text` may be stale if the
+        // user kept typing through the debounce window.
+        const latest = editor.getModel()?.getValue()
+        if (latest == null) return
         useKoma.getState().req({
           r: 'LspDidChange',
           root: tab.root,
           path: tab.path,
-          text,
+          text: latest,
         })
-        // Re-warm CodeLens counts for the new content (cache keyed by hash).
+      }, LSP_CHANGE_MS)
+      // Defer CodeLens warm until typing goes idle — never on every didChange.
+      if (codeLensIdleTimer) clearTimeout(codeLensIdleTimer)
+      codeLensIdleTimer = setTimeout(() => {
+        codeLensIdleTimer = null
+        if (!lspOpenedRef.current) return
+        const latest = editor.getModel()?.getValue()
+        if (latest == null) return
         warmCodeLensCache(
           (body) => useKoma.getState().req(body as never),
           tab.root,
           tab.path,
-          text,
+          latest,
         )
-      }, LSP_CHANGE_MS)
+      }, CODELENS_IDLE_MS)
     })
 
     const onReveal = (ev: Event) => {
@@ -283,6 +300,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       window.removeEventListener('koma-reveal-line', onReveal)
       sub.dispose()
       if (lspChangeTimerRef.current) clearTimeout(lspChangeTimerRef.current)
+      if (codeLensIdleTimer) clearTimeout(codeLensIdleTimer)
       // Detach only — keep the file:// model alive for peek widgets / reopen.
       editor.setModel(null)
       editor.dispose()
@@ -342,33 +360,6 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       // Second pass after layout / late model attach.
       setTimeout(apply, 50)
     }
-
-    if (
-      !lspOpenedRef.current &&
-      !fileState.binary &&
-      !fileState.tooLarge &&
-      !fileState.error &&
-      fileState.content != null
-    ) {
-      lspOpenedRef.current = true
-      req({
-        r: 'LspDidOpen',
-        root: tab.root,
-        path: tab.path,
-        languageId: languageIdForPath(tab.path),
-        text: fileState.content,
-      })
-      const uri = pathToUri(tab.root, tab.path)
-      const diags = useKoma.getState().lspDiagnostics[uri]
-      if (diags) applyDiagnosticsToMonaco(uri, diags)
-      // Eager CodeLens counts so reopen / first paint hits cache.
-      warmCodeLensCache(
-        (body) => useKoma.getState().req(body as never),
-        tab.root,
-        tab.path,
-        fileState.content,
-      )
-    }
   }, [
     fileState?.content,
     fileState?.loading,
@@ -382,11 +373,56 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     req,
   ])
 
+  // Attach LSP when content is ready AND the matching server is installed.
+  // Do not mark opened while source === 'missing' — install updates lspServers
+  // without remounting the tab, so this effect must re-run and send LspDidOpen.
   useEffect(() => {
+    if (lspOpenedRef.current) return
+    if (
+      !fileState ||
+      fileState.content == null ||
+      fileState.binary ||
+      fileState.tooLarge ||
+      fileState.error
+    ) {
+      return
+    }
+    const file = tab.path.split('/').pop() ?? tab.path
+    const dot = file.lastIndexOf('.')
+    const ext = dot > 0 ? file.slice(dot + 1).toLowerCase() : ''
+    if (!ext) return
+    // Wait for catalogue so we don't burn the one-shot open while status is unknown.
+    if (lspServers.length === 0) return
+    const match = lspServers.find((s) => s.extensions.includes(ext))
+    if (!match || match.source === 'missing') return
+
+    lspOpenedRef.current = true
+    req({
+      r: 'LspDidOpen',
+      root: tab.root,
+      path: tab.path,
+      languageId: languageIdForPath(tab.path),
+      text: fileState.content,
+    })
     const uri = pathToUri(tab.root, tab.path)
-    const diags = lspDiagnostics[uri]
+    const diags = useKoma.getState().lspDiagnostics[uri]
     if (diags) applyDiagnosticsToMonaco(uri, diags)
-  }, [lspDiagnostics, tab.root, tab.path])
+    warmCodeLensCache(
+      (body) => useKoma.getState().req(body as never),
+      tab.root,
+      tab.path,
+      fileState.content,
+    )
+  }, [
+    fileState?.content,
+    fileState?.binary,
+    fileState?.tooLarge,
+    fileState?.error,
+    tab.path,
+    tab.root,
+    lspServers,
+    req,
+  ])
 
   if (fileState?.conflict) {
     return (
