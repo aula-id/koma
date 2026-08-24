@@ -278,8 +278,16 @@ pub struct UninitializedSession {
 
 impl UninitializedSession {
     pub fn handshake(self) -> Result<ServerSession, String> {
-        self.session.handshake()?;
-        Ok(self.session)
+        match self.session.handshake() {
+            Ok(()) => Ok(self.session),
+            Err(e) => {
+                // Kill the orphan child — Child does not kill on Drop.
+                let mut session = self.session;
+                let _ = session.child.kill();
+                let _ = session.child.wait();
+                Err(e)
+            }
+        }
     }
 }
 
@@ -303,8 +311,20 @@ pub struct LspManager {
     servers: HashMap<String, ServerSession>,
     /// file URI → open doc metadata.
     docs: HashMap<String, OpenDoc>,
+    /// `spawn_id` → docs waiting while the first handshake runs outside the lock.
+    /// Claim is inserted before releasing the lock so concurrent prepare_did_open
+    /// cannot double-spawn.
+    spawning: HashMap<String, Vec<QueuedOpen>>,
     /// Push sink for diagnostics (and future server-log envelopes).
     push: Arc<dyn Fn(String) + Send + Sync>,
+}
+
+/// Document waiting for an in-flight first handshake of its language server.
+struct QueuedOpen {
+    uri: String,
+    language_id: String,
+    text: String,
+    root_path: PathBuf,
 }
 
 impl LspManager {
@@ -312,6 +332,7 @@ impl LspManager {
         Self {
             servers: HashMap::new(),
             docs: HashMap::new(),
+            spawning: HashMap::new(),
             push: Arc::new(push),
         }
     }
@@ -322,6 +343,7 @@ impl LspManager {
         for uri in uris {
             self.did_close(&uri);
         }
+        self.spawning.clear();
         for (_, mut s) in self.servers.drain() {
             let _ = s.child.kill();
             let _ = s.child.wait();
@@ -857,7 +879,33 @@ impl LspManager {
             return Ok(DidOpenPrep::Done);
         }
 
-        let uninit = self.spawn_process_only(&spawn_id, spec, &binary, &args, &root_path)?;
+        // Another thread is already handshaking this server — queue and exit.
+        if let Some(queue) = self.spawning.get_mut(&spawn_id) {
+            // Replace queued open for the same URI (latest text wins).
+            if let Some(existing) = queue.iter_mut().find(|q| q.uri == uri) {
+                existing.language_id = language_id.to_string();
+                existing.text = text.to_string();
+                existing.root_path = root_path;
+            } else {
+                queue.push(QueuedOpen {
+                    uri,
+                    language_id: language_id.to_string(),
+                    text: text.to_string(),
+                    root_path,
+                });
+            }
+            return Ok(DidOpenPrep::Done);
+        }
+
+        // Claim the slot before releasing the lock so concurrent opens queue.
+        self.spawning.insert(spawn_id.clone(), Vec::new());
+        let uninit = match self.spawn_process_only(&spawn_id, spec, &binary, &args, &root_path) {
+            Ok(u) => u,
+            Err(e) => {
+                self.spawning.remove(&spawn_id);
+                return Err(e);
+            }
+        };
         Ok(DidOpenPrep::NeedsHandshake {
             uninit,
             spawn_id,
@@ -868,7 +916,13 @@ impl LspManager {
         })
     }
 
-    /// Insert a handshaken session and send didOpen (after lock re-acquired).
+    /// Clear an in-flight spawn claim after handshake failure so retries work.
+    pub fn abort_spawn(&mut self, spawn_id: &str) {
+        self.spawning.remove(spawn_id);
+    }
+
+    /// Insert a handshaken session and send didOpen for the primary URI plus
+    /// any docs queued while handshake ran outside the lock.
     pub fn finish_did_open(
         &mut self,
         spawn_id: String,
@@ -878,9 +932,30 @@ impl LspManager {
         text: String,
         root_path: PathBuf,
     ) -> Result<(), String> {
-        self.servers.insert(spawn_id.clone(), session);
+        let queued = self.spawning.remove(&spawn_id).unwrap_or_default();
+        // If a racer already finished (shouldn't with claim), kill the loser.
+        if let Some(mut old) = self.servers.insert(spawn_id.clone(), session) {
+            let _ = old.child.kill();
+            let _ = old.child.wait();
+        }
         self.emit_runtime();
-        self.finish_did_open_notify(&spawn_id, uri, &language_id, &text, root_path)
+        self.finish_did_open_notify(&spawn_id, uri, &language_id, &text, root_path)?;
+        for q in queued {
+            if let Some(live) = self.servers.get(&spawn_id) {
+                if live.root != q.root_path {
+                    // Different root while spawning — skip; client can reopen.
+                    continue;
+                }
+            }
+            let _ = self.finish_did_open_notify(
+                &spawn_id,
+                q.uri,
+                &q.language_id,
+                &q.text,
+                q.root_path,
+            );
+        }
+        Ok(())
     }
 
     fn finish_did_open_notify(

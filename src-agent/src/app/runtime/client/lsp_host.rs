@@ -254,6 +254,9 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                         let session = match uninit.handshake() {
                             Ok(s) => s,
                             Err(e) => {
+                                if let Ok(mut g) = mgr.lock() {
+                                    g.abort_spawn(&spawn_id);
+                                }
                                 crate::model::store::append_global_error_log(
                                     "lsp",
                                     &format!("didOpen handshake {path}: {e}"),
