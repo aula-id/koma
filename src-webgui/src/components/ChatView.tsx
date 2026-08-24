@@ -1,4 +1,11 @@
-import { memo, useLayoutEffect, useRef, useState, type ComponentType } from 'react'
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentType,
+} from 'react'
 import {
   Archive,
   Brain,
@@ -22,10 +29,16 @@ import {
   Terminal,
 } from 'lucide-react'
 import { useKoma, type AttachmentEntry, type ChatMessage, type ToolCallView } from '../store/koma'
-import { MessageBody } from './MessageBody'
+import { ChatScrollRootContext, MessageBody } from './MessageBody'
 import { Composer } from './Composer'
 import { ApprovalOverlay } from './ApprovalOverlay'
 import { fallbackSignature, truncateChars } from '../lib/toolSignature'
+
+// On attach, only mount the newest slice of history. Older rows expand when
+// the user scrolls near the top (or clicks the affordance). Caps Streamdown/
+// Shiki mount cost after a fat Snapshot without needing pixel virtualization.
+const CHAT_WINDOW = 40
+const CHAT_WINDOW_STEP = 40
 
 // Native chat view — a 1:1 clone of the TUI `view::chat` render grammar
 // (src-agent/src/view/chat/*), with every box-drawing/unicode glyph swapped
@@ -427,6 +440,7 @@ function Message({ m, index }: { m: ChatMessage; index: number }) {
 }
 
 export function ChatView() {
+  const sessionId = useKoma((s) => s.session.id)
   const messages = useKoma((s) => s.session.messages)
   const stream = useKoma((s) => s.session.stream)
   const reasoning = useKoma((s) => s.session.reasoning)
@@ -444,20 +458,63 @@ export function ChatView() {
   // ref (not state) so the scroll handler never triggers a re-render, and the
   // pin runs in a layout effect (before paint) so streaming never flickers.
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [scrollRoot, setScrollRoot] = useState<HTMLElement | null>(null)
   const stickRef = useRef(true)
+  const pendingTopRestoreRef = useRef<number | null>(null)
+  const expandingRef = useRef(false)
+
+  // Newest-first window into `messages`. Resets on session switch / big attach
+  // so a 730KB Snapshot only mounts ~CHAT_WINDOW bubbles on first paint.
+  const [renderFrom, setRenderFrom] = useState(() =>
+    Math.max(0, messages.length - CHAT_WINDOW),
+  )
+  useEffect(() => {
+    setRenderFrom(Math.max(0, messages.length - CHAT_WINDOW))
+    stickRef.current = true
+  }, [sessionId])
+  useEffect(() => {
+    // Growing the transcript at the end must keep the live tail mounted; if
+    // renderFrom was left pointing past the new length, clamp. Shrinking
+    // (rewind) also clamps. Do not reset on every append — that would drop
+    // older rows the user already expanded.
+    setRenderFrom((from) => Math.min(from, Math.max(0, messages.length - CHAT_WINDOW)))
+  }, [messages.length])
+
+  const expandOlder = () => {
+    if (expandingRef.current || renderFrom <= 0) return
+    expandingRef.current = true
+    const el = scrollRef.current
+    if (el) pendingTopRestoreRef.current = el.scrollHeight - el.scrollTop
+    setRenderFrom((from) => Math.max(0, from - CHAT_WINDOW_STEP))
+  }
+
+  const setScrollEl = (el: HTMLDivElement | null) => {
+    scrollRef.current = el
+    setScrollRoot((prev) => (prev === el ? prev : el))
+  }
 
   const onScroll = () => {
     const el = scrollRef.current
     if (!el) return
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
     stickRef.current = distanceFromBottom < 40
+    if (el.scrollTop < 80 && renderFrom > 0) expandOlder()
   }
 
   useLayoutEffect(() => {
-    if (!stickRef.current) return
     const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [messages, stream, reasoning, showLive])
+    if (!el) return
+    const pending = pendingTopRestoreRef.current
+    if (pending != null) {
+      el.scrollTop = el.scrollHeight - pending
+      pendingTopRestoreRef.current = null
+      expandingRef.current = false
+      return
+    }
+    expandingRef.current = false
+    if (!stickRef.current) return
+    el.scrollTop = el.scrollHeight
+  }, [messages, stream, reasoning, showLive, renderFrom])
 
   // Scroll-on-send: the composer bumps `scrollTick` on every submit. FORCE
   // re-engage the bottom-stick (even if the user had scrolled up to read back)
@@ -469,27 +526,44 @@ export function ChatView() {
     if (el) el.scrollTop = el.scrollHeight
   }, [scrollTick])
 
+  const visible = messages.slice(renderFrom)
+  const hiddenCount = renderFrom
+
   return (
     <div className="term-shell flex flex-col">
-      <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        className="flex-1 space-y-4 overflow-y-auto px-2 py-4"
-      >
-        {messages.map((m, i) => (
-          <Message key={i} m={m} index={i} />
-        ))}
-        {showLive && (
-          <AssistantMessage
-            key={messages.length}
-            content={stream}
-            reasoning={reasoning || null}
-            streaming
-          />
-        )}
-      </div>
+      <ChatScrollRootContext.Provider value={scrollRoot}>
+        <div
+          ref={setScrollEl}
+          onScroll={onScroll}
+          className="flex-1 space-y-4 overflow-y-auto px-2 py-4"
+        >
+          {hiddenCount > 0 && (
+            <button
+              type="button"
+              onClick={expandOlder}
+              className="mx-auto block rounded-md border border-koma-border bg-koma-panel px-3 py-1 text-[12px] text-koma-dim transition-colors hover:bg-koma-hover hover:text-koma-fg"
+            >
+              Show {Math.min(CHAT_WINDOW_STEP, hiddenCount)} earlier
+              {hiddenCount > CHAT_WINDOW_STEP ? ` (${hiddenCount} hidden)` : ''}
+            </button>
+          )}
+          {visible.map((m, i) => {
+            const index = renderFrom + i
+            return <Message key={index} m={m} index={index} />
+          })}
+          {showLive && (
+            <AssistantMessage
+              key={messages.length}
+              content={stream}
+              reasoning={reasoning || null}
+              streaming
+            />
+          )}
+        </div>
+      </ChatScrollRootContext.Provider>
       <ApprovalOverlay />
       <Composer />
     </div>
   )
 }
+
