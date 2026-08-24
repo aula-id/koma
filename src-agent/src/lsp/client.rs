@@ -17,7 +17,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::catalog::{self, ServerSpec};
 use super::resolve::{self, Source};
@@ -170,6 +170,8 @@ struct RuntimeState {
     phase: String,
     progress: WorkProgress,
     error: Option<String>,
+    /// Last time we pushed a `$/progress` footer snapshot (throttle mid-report spam).
+    last_progress_push: Option<Instant>,
 }
 
 impl Default for RuntimeState {
@@ -178,6 +180,7 @@ impl Default for RuntimeState {
             phase: "starting".into(),
             progress: WorkProgress::default(),
             error: None,
+            last_progress_push: None,
         }
     }
 }
@@ -1541,7 +1544,7 @@ fn handle_progress(
         None => return,
     };
     let kind = value.get("kind").and_then(|k| k.as_str()).unwrap_or("");
-    {
+    let should_push = {
         let mut st = runtime.lock().unwrap_or_else(|p| p.into_inner());
         match kind {
             "begin" => {
@@ -1561,6 +1564,7 @@ fn handle_progress(
                 if st.phase != "error" {
                     st.phase = "working".into();
                 }
+                true
             }
             "report" => {
                 if let Some(m) = value.get("message").and_then(|t| t.as_str()) {
@@ -1572,6 +1576,11 @@ fn handle_progress(
                 if st.phase != "error" {
                     st.progress.active = true;
                     st.phase = "working".into();
+                }
+                // Throttle mid-report pushes (≥100 ms) to cut IPC storms during RA index.
+                match st.last_progress_push {
+                    Some(t) if t.elapsed() < Duration::from_millis(100) => false,
+                    _ => true,
                 }
             }
             "end" => {
@@ -1585,9 +1594,17 @@ fn handle_progress(
                 }
                 // Keep last title briefly visible via message only.
                 st.progress.title = None;
+                true
             }
             _ => return,
         }
+    };
+    if !should_push {
+        return;
+    }
+    {
+        let mut st = runtime.lock().unwrap_or_else(|p| p.into_inner());
+        st.last_progress_push = Some(Instant::now());
     }
     let row = {
         let st = runtime.lock().unwrap_or_else(|p| p.into_inner()).clone();

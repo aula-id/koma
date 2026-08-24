@@ -138,35 +138,6 @@ function fileCacheKey(root: string, path: string): string {
   return `${root.replace(/\\/g, '/')}\0${path.replace(/\\/g, '/')}`
 }
 
-/** Fast non-crypto fingerprint of file text (FNV-1a 32-bit + length). */
-function contentHash(text: string): string {
-  let h = 0x811c9dc5
-  const n = text.length
-  // Sample long files so open stays cheap; length + ends catch most edits.
-  if (n <= 64_000) {
-    for (let i = 0; i < n; i++) {
-      h ^= text.charCodeAt(i)
-      h = Math.imul(h, 0x01000193)
-    }
-  } else {
-    const step = Math.floor(n / 32_000) || 1
-    for (let i = 0; i < n; i += step) {
-      h ^= text.charCodeAt(i)
-      h = Math.imul(h, 0x01000193)
-    }
-    // Always mix head + tail.
-    for (let i = 0; i < 256 && i < n; i++) {
-      h ^= text.charCodeAt(i)
-      h = Math.imul(h, 0x01000193)
-    }
-    for (let i = Math.max(0, n - 256); i < n; i++) {
-      h ^= text.charCodeAt(i)
-      h = Math.imul(h, 0x01000193)
-    }
-  }
-  return `${n.toString(36)}:${(h >>> 0).toString(36)}`
-}
-
 function formatRefTitle(count: number): string {
   if (count === 0) return '0 references'
   if (count === 1) return '1 reference'
@@ -283,11 +254,17 @@ async function computeCodeLensCounts(
 
 /**
  * Eagerly warm the "N references" CodeLens cache after didOpen / didChange.
- * Safe to call often; no-ops when hash already cached. Does not block the UI.
+ * Safe to call often; no-ops when version already cached. Does not block the UI.
+ * `versionId` is Monaco `ITextModel.getVersionId()` (O(1) identity).
  */
-export function warmCodeLensCache(req: ReqFn, root: string, path: string, text: string): void {
+export function warmCodeLensCache(
+  req: ReqFn,
+  root: string,
+  path: string,
+  versionId: number,
+): void {
   if (!root || !path) return
-  const hash = contentHash(text)
+  const hash = String(versionId)
   const cacheKey = fileCacheKey(root, path)
   const hit = codeLensCache.get(cacheKey)
   if (hit && hit.hash === hash) return
@@ -917,7 +894,8 @@ export function ensureLspProviders(
       const loc = modelToRootPath(model, getRoots())
       if (!loc) return { lenses: [], dispose: () => {} }
 
-      const hash = contentHash(model.getValue())
+      // Prefer Monaco version id (O(1)) over hashing the full buffer twice.
+      const hash = String(model.getVersionId())
       const cacheKey = fileCacheKey(loc.root, loc.path)
       const hit = codeLensCache.get(cacheKey)
       const modelUri = model.uri.toString()
@@ -931,7 +909,7 @@ export function ensureLspProviders(
       try {
         const cached = await computeCodeLensCounts(req, loc.root, loc.path, hash)
         // Model may have changed while we waited — only return if still matching.
-        if (model.isDisposed() || contentHash(model.getValue()) !== hash) {
+        if (model.isDisposed() || String(model.getVersionId()) !== hash) {
           return { lenses: [], dispose: () => {} }
         }
         return {

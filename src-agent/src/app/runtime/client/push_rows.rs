@@ -12,9 +12,10 @@
 // envelopes the React client consumes and pushes them through
 // `window.__komaClient.push(...)`. These structs are the Rust half of the bridge
 // contract — `#[serde(tag = "k")]` names each envelope, matching the JS `push`
-// dispatcher's `k` switch EXACTLY. The host always pushes AUTHORITATIVE full values
-// (React REPLACES on `StreamMsg` / `Reasoning`, never appends); [`PushState`] dedups
-// so an unchanged frame emits nothing.
+// dispatcher's `k` switch EXACTLY. The host pushes AUTHORITATIVE values; live stream
+// / reasoning prefer `StreamDelta` / `ReasoningDelta` (append when prefix-stable),
+// with full `StreamMsg` / `Reasoning` kept for clear-on-commit and reload. [`PushState`]
+// dedups so an unchanged frame emits nothing.
 
 /// One committed conversation turn in a [`PushEnvelope::Snapshot`].
 ///
