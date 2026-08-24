@@ -208,11 +208,34 @@ struct ServerSession {
     /// Workspace root this process was initialized for (absolute).
     root: PathBuf,
     child: Child,
-    stdin: Arc<Mutex<ChildStdin>>,
-    next_id: AtomicU64,
-    pending: Arc<Mutex<HashMap<u64, Sender<PendingReply>>>>,
+    /// Clonable IO handle — request/notify only need this (not the Child).
+    io: SessionIo,
     /// Live phase + `$/progress` (reader + control loop).
     runtime: Arc<Mutex<RuntimeState>>,
+}
+
+/// Cheap clone of the pieces needed to talk to a live server without holding
+/// `LspManager`'s mutex across the blocking `request` round-trip.
+#[derive(Clone)]
+struct SessionIo {
+    stdin: Arc<Mutex<ChildStdin>>,
+    next_id: Arc<AtomicU64>,
+    pending: Arc<Mutex<HashMap<u64, Sender<PendingReply>>>>,
+}
+
+/// In-flight LSP request handle: caller resolves `SessionIo` under the manager
+/// lock, drops the lock, then waits on this handle. Prevents CodeLens/references
+/// from serializing hover/completion behind a single `Mutex<LspManager>`.
+pub struct LspPendingRequest {
+    io: SessionIo,
+    method: &'static str,
+    params: serde_json::Value,
+}
+
+impl LspPendingRequest {
+    pub fn wait(self) -> Result<serde_json::Value, String> {
+        self.io.request(self.method, self.params)
+    }
 }
 
 /// Host-owned map of live language servers + open documents.
@@ -448,26 +471,26 @@ impl LspManager {
     }
 
     /// `textDocument/completion`.
+    ///
+    /// Returns a pending request — caller must `.wait()` **after** dropping
+    /// the `LspManager` lock so hover/didChange are not serialized behind RPC.
     pub fn completion(
         &mut self,
         root: &str,
         path: &str,
         line: u32,
         character: u32,
-    ) -> Result<Vec<LspCompletionItem>, String> {
-        let (uri, server_id) = self.uri_server(root, path)?;
-        self.ensure_server_alive(&server_id)?;
-        let session = self
-            .servers
-            .get_mut(&server_id)
-            .ok_or_else(|| "server not running".to_string())?;
-        let params = serde_json::json!({
-            "textDocument": { "uri": uri },
-            "position": { "line": line, "character": character },
-            "context": { "triggerKind": 1 }
-        });
-        let result = session.request("textDocument/completion", params)?;
-        Ok(parse_completions(&result))
+    ) -> Result<LspPendingRequest, String> {
+        let (uri, io) = self.uri_io(root, path)?;
+        Ok(LspPendingRequest {
+            io,
+            method: "textDocument/completion",
+            params: serde_json::json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character },
+                "context": { "triggerKind": 1 }
+            }),
+        })
     }
 
     /// `completionItem/resolve` — fills `additionalTextEdits` (auto-import) etc.
@@ -475,14 +498,9 @@ impl LspManager {
         &mut self,
         root: &str,
         path: &str,
-        item: LspCompletionItem,
-    ) -> Result<LspCompletionItem, String> {
-        let (_uri, server_id) = self.uri_server(root, path)?;
-        self.ensure_server_alive(&server_id)?;
-        let session = self
-            .servers
-            .get_mut(&server_id)
-            .ok_or_else(|| "server not running".to_string())?;
+        item: &LspCompletionItem,
+    ) -> Result<LspPendingRequest, String> {
+        let (_uri, io) = self.uri_io(root, path)?;
         // Rebuild a minimal CompletionItem the server can resolve. `data` is the
         // critical opaque token for vtsls/tsserver auto-import.
         let mut params = serde_json::json!({
@@ -529,17 +547,11 @@ impl LspManager {
                 );
             }
         }
-        let result = session.request("completionItem/resolve", params)?;
-        // Merge resolved fields onto the original item (preserve label if missing).
-        let mut resolved = parse_one_completion(&result).unwrap_or(item.clone());
-        if resolved.label.is_empty() {
-            resolved.label = item.label;
-        }
-        // Keep data from the original when the server omits it.
-        if resolved.data.is_none() {
-            resolved.data = item.data;
-        }
-        Ok(resolved)
+        Ok(LspPendingRequest {
+            io,
+            method: "completionItem/resolve",
+            params,
+        })
     }
 
     /// `textDocument/hover`.
@@ -549,22 +561,16 @@ impl LspManager {
         path: &str,
         line: u32,
         character: u32,
-    ) -> Result<Option<LspHover>, String> {
-        let (uri, server_id) = self.uri_server(root, path)?;
-        self.ensure_server_alive(&server_id)?;
-        let session = self
-            .servers
-            .get_mut(&server_id)
-            .ok_or_else(|| "server not running".to_string())?;
-        let params = serde_json::json!({
-            "textDocument": { "uri": uri },
-            "position": { "line": line, "character": character },
-        });
-        let result = session.request("textDocument/hover", params)?;
-        if result.is_null() {
-            return Ok(None);
-        }
-        Ok(parse_hover(&result))
+    ) -> Result<LspPendingRequest, String> {
+        let (uri, io) = self.uri_io(root, path)?;
+        Ok(LspPendingRequest {
+            io,
+            method: "textDocument/hover",
+            params: serde_json::json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character },
+            }),
+        })
     }
 
     /// `textDocument/definition`.
@@ -574,19 +580,16 @@ impl LspManager {
         path: &str,
         line: u32,
         character: u32,
-    ) -> Result<Vec<LspLocation>, String> {
-        let (uri, server_id) = self.uri_server(root, path)?;
-        self.ensure_server_alive(&server_id)?;
-        let session = self
-            .servers
-            .get_mut(&server_id)
-            .ok_or_else(|| "server not running".to_string())?;
-        let params = serde_json::json!({
-            "textDocument": { "uri": uri },
-            "position": { "line": line, "character": character },
-        });
-        let result = session.request("textDocument/definition", params)?;
-        Ok(parse_locations(&result))
+    ) -> Result<LspPendingRequest, String> {
+        let (uri, io) = self.uri_io(root, path)?;
+        Ok(LspPendingRequest {
+            io,
+            method: "textDocument/definition",
+            params: serde_json::json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character },
+            }),
+        })
     }
 
     /// `textDocument/references`.
@@ -597,20 +600,17 @@ impl LspManager {
         line: u32,
         character: u32,
         include_declaration: bool,
-    ) -> Result<Vec<LspLocation>, String> {
-        let (uri, server_id) = self.uri_server(root, path)?;
-        self.ensure_server_alive(&server_id)?;
-        let session = self
-            .servers
-            .get_mut(&server_id)
-            .ok_or_else(|| "server not running".to_string())?;
-        let params = serde_json::json!({
-            "textDocument": { "uri": uri },
-            "position": { "line": line, "character": character },
-            "context": { "includeDeclaration": include_declaration },
-        });
-        let result = session.request("textDocument/references", params)?;
-        Ok(parse_locations(&result))
+    ) -> Result<LspPendingRequest, String> {
+        let (uri, io) = self.uri_io(root, path)?;
+        Ok(LspPendingRequest {
+            io,
+            method: "textDocument/references",
+            params: serde_json::json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character },
+                "context": { "includeDeclaration": include_declaration },
+            }),
+        })
     }
 
     /// `textDocument/documentSymbol` — flattened list (children expanded).
@@ -618,18 +618,27 @@ impl LspManager {
         &mut self,
         root: &str,
         path: &str,
-    ) -> Result<Vec<LspDocumentSymbol>, String> {
+    ) -> Result<LspPendingRequest, String> {
+        let (uri, io) = self.uri_io(root, path)?;
+        Ok(LspPendingRequest {
+            io,
+            method: "textDocument/documentSymbol",
+            params: serde_json::json!({
+                "textDocument": { "uri": uri },
+            }),
+        })
+    }
+
+    /// Resolve URI + clone SessionIo so the caller can drop `LspManager` before
+    /// the blocking request wait. Also revives a dead server if needed.
+    fn uri_io(&mut self, root: &str, path: &str) -> Result<(String, SessionIo), String> {
         let (uri, server_id) = self.uri_server(root, path)?;
         self.ensure_server_alive(&server_id)?;
         let session = self
             .servers
-            .get_mut(&server_id)
+            .get(&server_id)
             .ok_or_else(|| "server not running".to_string())?;
-        let params = serde_json::json!({
-            "textDocument": { "uri": uri },
-        });
-        let result = session.request("textDocument/documentSymbol", params)?;
-        Ok(parse_document_symbols(&result))
+        Ok((uri, session.io.clone()))
     }
 
     fn uri_server(&self, root: &str, path: &str) -> Result<(String, String), String> {
@@ -851,6 +860,16 @@ impl ServerSession {
     }
 
     fn notify(&self, method: &str, params: serde_json::Value) -> Result<(), String> {
+        self.io.notify(method, params)
+    }
+
+    fn request(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+        self.io.request(method, params)
+    }
+}
+
+impl SessionIo {
+    fn notify(&self, method: &str, params: serde_json::Value) -> Result<(), String> {
         let msg = serde_json::json!({
             "jsonrpc": "2.0",
             "method": method,
@@ -994,9 +1013,11 @@ fn spawn_server(
         name,
         root: root.to_path_buf(),
         child,
-        stdin: stdin_init,
-        next_id: AtomicU64::new(1),
-        pending,
+        io: SessionIo {
+            stdin: stdin_init,
+            next_id: Arc::new(AtomicU64::new(1)),
+            pending,
+        },
         runtime,
     };
 
@@ -1597,6 +1618,22 @@ pub fn language_id_for_path(path: &str) -> &'static str {
 }
 
 // ─── Result parsers ──────────────────────────────────────────────────────────
+
+pub fn parse_completions_public(result: &serde_json::Value) -> Vec<LspCompletionItem> {
+    parse_completions(result)
+}
+pub fn parse_one_completion_public(it: &serde_json::Value) -> Option<LspCompletionItem> {
+    parse_one_completion(it)
+}
+pub fn parse_hover_public(result: &serde_json::Value) -> Option<LspHover> {
+    parse_hover(result)
+}
+pub fn parse_locations_public(result: &serde_json::Value) -> Vec<LspLocation> {
+    parse_locations(result)
+}
+pub fn parse_document_symbols_public(result: &serde_json::Value) -> Vec<LspDocumentSymbol> {
+    parse_document_symbols(result)
+}
 
 fn parse_completions(result: &serde_json::Value) -> Vec<LspCompletionItem> {
     let items = if let Some(arr) = result.as_array() {
