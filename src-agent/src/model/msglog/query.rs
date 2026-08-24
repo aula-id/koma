@@ -262,26 +262,35 @@ pub fn truncate_after(session_dir: &Path, cut_id: i64) -> Result<()> {
     Ok(())
 }
 
+/// Max tokens kept from a multi-word query. Extra tokens are dropped so a
+/// long natural-language prompt cannot explode into a huge OR of prefixes.
+const SEARCH_MAX_TERMS: usize = 8;
+/// Tokens shorter than this are matched exactly (no `*`). One/two-char
+/// prefixes like `a*` / `to*` scan nearly the whole FTS index on large
+/// tool-heavy archives and were a primary hang source for `message_find`.
+const SEARCH_PREFIX_MIN_CHARS: usize = 3;
+
 /// Full-text search the session's message archive via the FTS5 index.
 ///
-/// `query` is a natural-language search string. Multi-word input is transformed
-/// into OR'd prefix terms so the model can search conversationally ("hello test
-/// thing" → any message matching "hello*" OR "test*" OR "thing*"). Each term has
-/// FTS5 syntax chars stripped and a `*` suffix appended for prefix matching.
+/// `raw_query` is a natural-language search string. Multi-word input becomes
+/// OR'd terms (prefix match when a term is ≥3 chars) so the model can search
+/// conversationally. FTS5 syntax chars are stripped; at most 8 terms are kept.
 ///
 /// `role_filter` optionally restricts results to a specific role ("user",
 /// "assistant", "tool"). Pass `None` to search all roles.
 ///
 /// Results are ranked by BM25 and capped at `limit`. Each result includes the
 /// first 300 characters of the matching message for coherent context (instead of
-/// FTS5's fragmentary `snippet()` output). Best-effort: returns an empty vec on
-/// error or empty/whitespace query.
+/// FTS5's fragmentary `snippet()` output).
+///
+/// Empty/whitespace query → `Ok([])`. Real DB/FTS failures → `Err` (callers
+/// must not treat errors as "no matches").
 pub fn search_messages(
     session_dir: &Path,
     raw_query: &str,
     limit: i64,
     role_filter: Option<&str>,
-) -> Vec<MessageMatch> {
+) -> anyhow::Result<Vec<MessageMatch>> {
     let terms: Vec<String> = raw_query
         .split_whitespace()
         .map(|t| {
@@ -292,65 +301,66 @@ pub fn search_messages(
                 .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
                 .collect::<String>()
         })
-        .filter(|t| !t.is_empty())
-        .map(|t| format!("{}*", t))
+        // Drop 1-char tokens entirely — too broad even as exact match.
+        .filter(|t| t.chars().count() >= 2)
+        .take(SEARCH_MAX_TERMS)
+        .map(|t| {
+            // Quote so hyphens/dots stay one token; prefix only on longer terms.
+            if t.chars().count() >= SEARCH_PREFIX_MIN_CHARS {
+                format!("\"{}\"*", t)
+            } else {
+                format!("\"{}\"", t)
+            }
+        })
         .collect();
     if terms.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let fts_query = terms.join(" OR ");
 
-    fn inner(
-        session_dir: &Path,
-        fts_query: &str,
-        limit: i64,
-        role_filter: Option<&str>,
-    ) -> anyhow::Result<Vec<MessageMatch>> {
-        let conn = open(session_dir)?;
-        // Use substr() for the first 300 chars of the actual message content
-        // instead of FTS5's snippet() — gives coherent, readable context.
-        // Reasoning is also returned as a first-300-chars snippet for display
-        // in `message_find` results; it is NOT in the FTS index.
-        let sql = if role_filter.is_some() {
-            "SELECT m.id, m.role, substr(m.content, 1, 300) AS excerpt, m.created_at,
-                    substr(m.reasoning, 1, 300)
-             FROM messages_fts
-             JOIN messages m ON m.id = messages_fts.rowid
-             WHERE messages_fts MATCH ?1 AND m.role = ?2
-             ORDER BY rank
-             LIMIT ?3"
-        } else {
-            "SELECT m.id, m.role, substr(m.content, 1, 300) AS excerpt, m.created_at,
-                    substr(m.reasoning, 1, 300)
-             FROM messages_fts
-             JOIN messages m ON m.id = messages_fts.rowid
-             WHERE messages_fts MATCH ?1
-             ORDER BY rank
-             LIMIT ?2"
-        };
-        fn map_row(r: &rusqlite::Row) -> rusqlite::Result<MessageMatch> {
-            let reasoning: Option<String> = r.get(4)?;
-            Ok(MessageMatch {
-                id: r.get(0)?,
-                role: r.get(1)?,
-                snippet: r.get(2)?,
-                created_at: r.get(3)?,
-                reasoning: reasoning.filter(|s| !s.is_empty()),
-            })
-        }
-        let mut stmt = conn.prepare(sql)?;
-        let rows = if let Some(role) = role_filter {
-            stmt.query_map(rusqlite::params![fts_query, role, limit], map_row)?
-        } else {
-            stmt.query_map(rusqlite::params![fts_query, limit], map_row)?
-        };
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
-        }
-        Ok(out)
+    let conn = open(session_dir)?;
+    // Use substr() for the first 300 chars of the actual message content
+    // instead of FTS5's snippet() — gives coherent, readable context.
+    // Reasoning is also returned as a first-300-chars snippet for display
+    // in `message_find` results; it is NOT in the FTS index.
+    let sql = if role_filter.is_some() {
+        "SELECT m.id, m.role, substr(m.content, 1, 300) AS excerpt, m.created_at,
+                substr(m.reasoning, 1, 300)
+         FROM messages_fts
+         JOIN messages m ON m.id = messages_fts.rowid
+         WHERE messages_fts MATCH ?1 AND m.role = ?2
+         ORDER BY rank
+         LIMIT ?3"
+    } else {
+        "SELECT m.id, m.role, substr(m.content, 1, 300) AS excerpt, m.created_at,
+                substr(m.reasoning, 1, 300)
+         FROM messages_fts
+         JOIN messages m ON m.id = messages_fts.rowid
+         WHERE messages_fts MATCH ?1
+         ORDER BY rank
+         LIMIT ?2"
+    };
+    fn map_row(r: &rusqlite::Row) -> rusqlite::Result<MessageMatch> {
+        let reasoning: Option<String> = r.get(4)?;
+        Ok(MessageMatch {
+            id: r.get(0)?,
+            role: r.get(1)?,
+            snippet: r.get(2)?,
+            created_at: r.get(3)?,
+            reasoning: reasoning.filter(|s| !s.is_empty()),
+        })
     }
-    inner(session_dir, &fts_query, limit, role_filter).unwrap_or_default()
+    let mut stmt = conn.prepare(sql)?;
+    let rows = if let Some(role) = role_filter {
+        stmt.query_map(rusqlite::params![fts_query, role, limit], map_row)?
+    } else {
+        stmt.query_map(rusqlite::params![fts_query, limit], map_row)?
+    };
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

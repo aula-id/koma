@@ -62,7 +62,10 @@ impl Tool for MessageFind {
             None => bail!("no active session to search"),
         };
 
-        let matches = crate::model::msglog::search_messages(session_dir, query, 10, role_filter);
+        // Surface DB/FTS errors instead of mapping them to "no matches" — the
+        // previous swallow made the model retry forever on a broken index.
+        let matches = crate::model::msglog::search_messages(session_dir, query, 10, role_filter)
+            .map_err(|e| anyhow::anyhow!("message_find failed: {e}"))?;
         let out = format_matches(matches.iter().map(|m| {
             (
                 m.id,
@@ -80,6 +83,15 @@ impl Tool for MessageFind {
     }
 }
 
+/// Truncate on a char boundary so multi-byte UTF-8 never panics the deferred
+/// tool thread (which would leave the round stuck on a running message_find).
+fn floor_chars(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
+
 fn format_matches<'a>(
     matches: impl Iterator<Item = (i64, &'a str, &'a str, i64, Option<&'a str>)>,
 ) -> String {
@@ -93,22 +105,13 @@ fn format_matches<'a>(
             _ => "[?]",
         };
         // Strip leading/trailing whitespace and truncate to keep output dense.
-        let snippet = content.trim();
-        let snippet = if snippet.len() > 300 {
-            &snippet[..300]
-        } else {
-            snippet
-        };
+        let snippet = floor_chars(content.trim(), 300);
         out.push_str(&format!("{} #{}: {}\n\n", role_prefix, msg_id, snippet));
         // Append a thinking snippet for assistant messages that have reasoning.
         if let Some(thinking) = reasoning {
             let thinking = thinking.trim();
             if !thinking.is_empty() {
-                let t = if thinking.len() > 300 {
-                    &thinking[..300]
-                } else {
-                    thinking
-                };
+                let t = floor_chars(thinking, 300);
                 out.push_str(&format!("  thinking: {}\n\n", t));
             }
         }

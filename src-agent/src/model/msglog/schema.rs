@@ -43,7 +43,15 @@ pub(super) fn role_str(role: Role) -> &'static str {
 /// expensive `ensure_schema` (especially FTS backfill) from executing more
 /// than once per `messages.sqlite` file across all `open()` calls in this
 /// process — the primary fix for the multi-minute stall on large sessions.
+///
+/// Entries are only inserted *after* schema/backfill succeeds. The mutex is
+/// released while backfill runs so other session DBs are not blocked.
 static SCHEMA_READY: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+
+/// Rows per FTS backfill batch. Keeps each INSERT bounded so a huge archive
+/// does not lock the connection (and the process-wide ready-set) for minutes
+/// in one shot.
+const FTS_BACKFILL_BATCH: i64 = 500;
 
 /// Open the session's SQLite archive and run migrations. Centralises the path
 /// join so every entry point hits the same file + schema.
@@ -67,20 +75,49 @@ pub fn open(session_dir: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
-/// Run [`ensure_schema`] exactly once per file path. The `OnceLock` + `HashSet`
-/// avoids repeated schema checks (and especially the FTS backfill probe) on
-/// every `open()` call within a process — the primary fix for the multi-minute
-/// stall caused by `COUNT(*)` on large FTS tables.
+/// Run [`ensure_schema`] exactly once per file path.
+///
+/// Fast path: path already ready → return under a short lock.
+/// Slow path: claim the path as in-flight (so concurrent opens of the *same*
+/// DB wait/retry instead of double-backfilling), drop the lock, run
+/// schema+backfill, then mark ready only on success. Other session paths are
+/// never blocked by this work.
 fn ensure_schema_once(path: &Path, conn: &Connection) -> Result<()> {
     let set = SCHEMA_READY.get_or_init(|| Mutex::new(HashSet::new()));
-    let mut guard = set.lock().unwrap_or_else(|e| e.into_inner());
     let key = path.to_path_buf();
-    if guard.contains(&key) {
-        return Ok(());
+    let inflight_key = {
+        let mut p = path.to_path_buf();
+        p.push(".inflight");
+        p
+    };
+
+    loop {
+        {
+            let mut guard = set.lock().unwrap_or_else(|e| e.into_inner());
+            if guard.contains(&key) {
+                return Ok(());
+            }
+            if guard.contains(&inflight_key) {
+                // Another thread is backfilling this path — wait briefly.
+                drop(guard);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                continue;
+            }
+            guard.insert(inflight_key.clone());
+        }
+
+        let result = ensure_schema(conn);
+
+        let mut guard = set.lock().unwrap_or_else(|e| e.into_inner());
+        guard.remove(&inflight_key);
+        match result {
+            Ok(()) => {
+                guard.insert(key);
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        }
     }
-    ensure_schema(conn)?;
-    guard.insert(key);
-    Ok(())
 }
 
 /// Unix-seconds timestamp, or 0 if the clock is before the epoch (won't happen
@@ -216,20 +253,19 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE messages ADD COLUMN reasoning TEXT", []);
 
     // FTS backfill: gated by schema_meta to avoid the O(n) COUNT(*) that caused
-    // multi-minute stalls on large sessions. Once fts_backfilled=1, we never
-    // re-run (even if FTS is somehow emptied — better than silent full reindex;
-    // truncate_after already keeps FTS in sync).
-    let backfilled: i64 = conn
+    // multi-minute stalls on large sessions. Flag is only set after a successful
+    // backfill (or when there is nothing to backfill). If a previous run set the
+    // flag but FTS stayed empty while messages exist (failed/interrupted
+    // backfill), clear the flag and repair.
+    let mut backfilled: i64 = conn
         .query_row(
             "SELECT value FROM schema_meta WHERE key = 'fts_backfilled'",
             [],
             |r| r.get(0),
         )
         .unwrap_or(0);
-    if backfilled == 0 {
-        // Only backfill if FTS is empty AND messages has rows — one-shot for
-        // old DBs that predate the FTS virtual table. EXISTS is O(1) / first
-        // page, not a full FTS count.
+
+    if backfilled == 1 {
         let fts_empty: bool = conn
             .query_row(
                 "SELECT NOT EXISTS(SELECT 1 FROM messages_fts LIMIT 1)",
@@ -237,17 +273,62 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
                 |r| r.get(0),
             )
             .unwrap_or(true);
-        if fts_empty {
+        let has_messages: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM messages LIMIT 1)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if fts_empty && has_messages {
+            // Permanent empty-search state from a prior failed backfill — retry.
             let _ = conn.execute(
-                "INSERT INTO messages_fts(rowid, content, role)
-                 SELECT id, content, role FROM messages",
+                "DELETE FROM schema_meta WHERE key = 'fts_backfilled'",
                 [],
             );
+            backfilled = 0;
         }
-        let _ = conn.execute(
+    }
+
+    if backfilled == 0 {
+        // Batched backfill by id cursor. Each batch is bounded so open() cannot
+        // monopolize the connection for one giant INSERT. Failures leave
+        // fts_backfilled unset so the next open retries.
+        //
+        // Start from max existing FTS rowid so a partial prior attempt resumes
+        // instead of re-inserting (duplicate rowid would error on FTS5).
+        let mut after_id: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(rowid), 0) FROM messages_fts",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        loop {
+            let inserted = conn.execute(
+                "INSERT INTO messages_fts(rowid, content, role)
+                 SELECT m.id, m.content, m.role
+                 FROM messages m
+                 WHERE m.id > ?1
+                 ORDER BY m.id
+                 LIMIT ?2",
+                rusqlite::params![after_id, FTS_BACKFILL_BATCH],
+            )?;
+            if inserted == 0 {
+                break;
+            }
+            after_id = conn
+                .query_row(
+                    "SELECT COALESCE(MAX(rowid), 0) FROM messages_fts",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(after_id);
+        }
+        conn.execute(
             "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('fts_backfilled', 1)",
             [],
-        );
+        )?;
     }
     Ok(())
 }
