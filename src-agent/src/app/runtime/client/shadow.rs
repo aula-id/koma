@@ -7,11 +7,48 @@ use crate::app::runtime::client_shadow::*;
 
 use super::render::{ConnectRemoteRequest, TOAST_TTL};
 
+/// What a single [`apply_frame`] did to the shadow — used by the GUI push loop to
+/// skip full transcript projection on stream-only ticks.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct FrameEffect {
+    /// Any visual change (stream, status, toast, structural, …).
+    pub visual: bool,
+    /// Transcript / list / mode structure may have changed — full Snapshot project.
+    pub snapshot: bool,
+}
+
+impl FrameEffect {
+    fn none() -> Self {
+        Self {
+            visual: false,
+            snapshot: false,
+        }
+    }
+    fn light() -> Self {
+        Self {
+            visual: true,
+            snapshot: false,
+        }
+    }
+    fn full() -> Self {
+        Self {
+            visual: true,
+            snapshot: true,
+        }
+    }
+    /// OR-assign another effect (used when draining multiple frames).
+    pub(super) fn or_assign(&mut self, other: Self) {
+        self.visual |= other.visual;
+        self.snapshot |= other.snapshot;
+    }
+}
+
 /// Apply one incoming [`DaemonFrame`] to the shadow, handling seq-gap recovery.
 ///
-/// Returns `true` if the shadow changed and a redraw is needed. On a detected gap
-/// it sends [`ClientRequest::Resync`], sets `awaiting_resync`, and drops the frame;
-/// while `awaiting_resync` only a fresh `Snapshot` is applied (it reseeds the seq +
+/// Returns a [`FrameEffect`] describing whether the shadow changed and whether a
+/// full Snapshot project is needed. On a detected gap it sends
+/// [`ClientRequest::Resync`], sets `awaiting_resync`, and drops the frame; while
+/// `awaiting_resync` only a fresh `Snapshot` is applied (it reseeds the seq +
 /// clears the flag). `Ack` / `Error` frames advance the seq but are non-visual
 /// (an `Error` could surface as a toast in a later refinement).
 #[allow(clippy::too_many_arguments)]
@@ -26,7 +63,7 @@ pub(super) fn apply_frame(
     new_session_requested: &mut Option<bool>,
     connect_remote_requested: &mut Option<ConnectRemoteRequest>,
     req_tx: &std::sync::mpsc::Sender<ClientRequest>,
-) -> bool {
+) -> FrameEffect {
     // --- seq-gap detection (critique #1) ---
     if !*seeded {
         // First frame ever: seed the expectation from it (whatever it is) so we
@@ -47,7 +84,7 @@ pub(super) fn apply_frame(
             // Resync the expectation forward so we don't spam Resync on every
             // subsequent gapped frame; the awaited Snapshot will reseed precisely.
             *expected = frame.seq.wrapping_add(1);
-            return false;
+            return FrameEffect::none();
         }
     }
     // Next frame should be exactly one past this one.
@@ -60,13 +97,13 @@ pub(super) fn apply_frame(
             // to keep the `DaemonEvent` enum small; unbox it for `apply_snapshot`.)
             *awaiting_resync = false;
             apply_snapshot(shadow, *snap);
-            true
+            FrameEffect::full()
         }
         DaemonEvent::Delta(delta) => {
             // Drop deltas while the shadow is known-stale (waiting on the resync
             // Snapshot) — applying them onto a wrong baseline would corrupt it.
             if *awaiting_resync {
-                return false;
+                return FrameEffect::none();
             }
             apply_delta(shadow, delta)
         }
@@ -77,20 +114,20 @@ pub(super) fn apply_frame(
         // it after this drain pass completes. Non-visual to the shadow itself.
         DaemonEvent::EnterSelect => {
             *select_requested = true;
-            false
+            FrameEffect::none()
         }
         // The build-skew handshake frame (task #142) is consumed BEFORE the render
         // loop, in the pre-render handshake (see `client_run`). If one still reaches
         // here (a re-attach mid-session re-emits it), it is non-visual: the version was
         // already verified at connect time, so just advance the seq and render nothing.
-        DaemonEvent::Hello { .. } => false,
+        DaemonEvent::Hello { .. } => FrameEffect::none(),
         // The `/resume` hand-off: the daemon asked THIS client to open its LOCAL
         // swapper. Latch the request so `render_loop` returns `ClientTransition::OpenSwapper`
         // AFTER this drain pass — `apply_frame` owns no terminal / connection and can't
         // detach itself. Non-visual to the shadow, so the redraw flag stays false.
         DaemonEvent::OpenSwapper => {
             *open_swapper_requested = true;
-            false
+            FrameEffect::none()
         }
         // The `/new` hand-off: the daemon asked THIS client to spawn + attach a brand-new
         // session-daemon (detaching — or killing, then detaching — the current one). Latch
@@ -100,7 +137,7 @@ pub(super) fn apply_frame(
         // the redraw flag stays false. Mirrors `OpenSwapper`.
         DaemonEvent::NewSession { kill } => {
             *new_session_requested = Some(kill);
-            false
+            FrameEffect::none()
         }
         // The `/remote` hand-off: the daemon signalled the controller to connect to a
         // remote host via SSH. Latch the target address so `render_loop` returns
@@ -120,7 +157,7 @@ pub(super) fn apply_frame(
                 session_id,
                 host_id,
             });
-            false
+            FrameEffect::none()
         }
         // Non-visual control replies. (A future refinement could toast an Error.)
         // `Status` is a discovery-only reply consumed by the SYNC `probe_status` path,
@@ -166,14 +203,14 @@ pub(super) fn apply_frame(
         | DaemonEvent::StoreCatalogue { .. }
         | DaemonEvent::StoreItemDetail { .. }
         | DaemonEvent::InstalledExtensions { .. }
-        | DaemonEvent::ExtensionOpResult { .. } => false,
-        DaemonEvent::McpStatus { .. } => false,
+        | DaemonEvent::ExtensionOpResult { .. } => FrameEffect::none(),
+        DaemonEvent::McpStatus { .. } => FrameEffect::none(),
         // GUI-only usage/analytics daemon replies (re-pushed by push_intercept).
-        DaemonEvent::UsagePreview { .. } | DaemonEvent::Analytics { .. } => false,
+        DaemonEvent::UsagePreview { .. } | DaemonEvent::Analytics { .. } => FrameEffect::none(),
         // W8 panel bridge: the GUI host intercepts `ExtPanelReply`/`ExtPanelPush` in `push_loop`
         // (re-pushing its own envelope); the TUI client never opens an extension panel, so both
         // fold as non-visual no-ops here (like the store replies / `AttachSession`).
-        DaemonEvent::ExtPanelReply { .. } | DaemonEvent::ExtPanelPush { .. } => false,
+        DaemonEvent::ExtPanelReply { .. } | DaemonEvent::ExtPanelPush { .. } => FrameEffect::none(),
     }
 }
 
@@ -452,54 +489,44 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
 /// reconciles). The differ only emits these for high-frequency per-tick changes;
 /// anything structural (history, tokens, approval, sub-agents, the session set)
 /// arrives as a full Snapshot instead (see `ipc::snapshot::diff`).
-pub(super) fn apply_delta(shadow: &mut AppState, delta: StateDelta) -> bool {
+pub(super) fn apply_delta(shadow: &mut AppState, delta: StateDelta) -> FrameEffect {
     match delta {
+        // Stream tokens / reasoning: light-only — GUI must NOT rebuild transcript Snapshot.
         StateDelta::TokenAppended { session_id, text } => {
             if let Some(rt) = session_by_id_mut(shadow, &session_id) {
                 // A token before any `streaming` buffer means the daemon went
                 // None -> Some("…") this turn (the differ treats None/Some("") alike);
                 // initialise the buffer so the append lands.
                 rt.streaming.get_or_insert_with(String::new).push_str(&text);
-                return true;
+                return FrameEffect::light();
             }
-            false
+            FrameEffect::none()
         }
         StateDelta::ReasoningAppended { session_id, text } => {
             if let Some(rt) = session_by_id_mut(shadow, &session_id) {
                 rt.stream_reasoning.push_str(&text);
-                return true;
+                return FrameEffect::light();
             }
-            false
+            FrameEffect::none()
         }
+        // Status line text is TUI chrome; GUI Status envelope uses waiting/tokens/toast.
+        // Treat as light so we still re-emit Status if needed without full Snapshot.
         StateDelta::StatusChanged { session_id, text } => match session_id {
-            // The status line is rendered from the foreground session (C6). The daemon's
-            // global status delta was diffed off ITS foreground's status, so apply it onto
-            // the shadow's foreground session — the window the user is looking at.
             None => {
                 shadow.rest.fg_mut().status = text;
-                true
+                FrameEffect::light()
             }
-            Some(_) => false,
+            Some(_) => FrameEffect::none(),
         },
+        // Composer input is not on the GUI Snapshot path (React owns the draft).
         StateDelta::InputChanged { text, cursor } => {
-            // The shared composer moved (typed/deleted a char, or the caret moved).
-            // Carries the WHOLE input string, so replace wholesale; clamp the caret
-            // into bounds defensively (the daemon sends a consistent pair, but the
-            // composer renderer indexes by cursor and must never read past the end).
-            // Composer now lives on the foreground session (single global fg in C1).
             let fg = shadow.rest.fg_mut();
             fg.input = text;
             fg.cursor = cursor.min(fg.input.chars().count());
-            true
+            FrameEffect::light()
         }
-        StateDelta::ScrollChanged { .. } => {
-            // Don't reconcile scroll from the daemon — the client owns its own
-            // scroll position (see apply_snapshot). Mouse wheel scroll is local;
-            // keyboard scroll (Up/Down/PageUp/PageDown/Home/End) is forwarded via
-            // SendKey and the daemon's response is ignored. This prevents the
-            // shadow's scroll from snapping back on every delta.
-            false
-        }
+        StateDelta::ScrollChanged { .. } => FrameEffect::none(),
+        // working flag → Status envelope only.
         StateDelta::SessionStatusChanged {
             session_id,
             working,
@@ -508,47 +535,33 @@ pub(super) fn apply_delta(shadow: &mut AppState, delta: StateDelta) -> bool {
             if let Some(rt) = session_by_id_mut(shadow, &session_id) {
                 rt.waiting = working;
                 rt.finished_unseen = finished_unseen;
-                // The working flag feeds the comet clock; reconcile it (only the
-                // foreground session's clock is rendered).
                 reconcile_work_clock(shadow);
-                return true;
+                return FrameEffect::light();
             }
-            false
+            FrameEffect::none()
         }
         StateDelta::ForegroundChanged { session_id } => {
             if let Some(idx) = shadow.rest.sessions.iter().position(|s| s.id == session_id) {
                 shadow.rest.foreground = idx;
-                // Switching foreground swaps the visible transcript wholesale; clear
-                // the rendered-lines cache so it rebuilds for the new session.
                 shadow.rest.transcript_cache.borrow_mut().blocks.clear();
                 reconcile_work_clock(shadow);
-                return true;
+                return FrameEffect::full();
             }
-            false
+            FrameEffect::none()
         }
         StateDelta::SessionAdded(snap) => {
-            // A new parallel session appeared. Append its runtime; the differ would
-            // normally send a full Snapshot for a set change, but accept the delta
-            // form too (it is in the vocabulary) so the shadow stays in step either way.
             if !shadow.rest.sessions.iter().any(|s| s.id == snap.id) {
                 shadow.rest.sessions.push(shadow_session_runtime(&snap));
-                // Clear the transcript cache since a new session may become foreground,
-                // and the committed history can change wholesale on a foreground switch.
                 shadow.rest.transcript_cache.borrow_mut().blocks.clear();
-                // Reconcile the work clock to match the daemon's state with the new session
-                // in place, so the comet animation stays in sync.
                 reconcile_work_clock(shadow);
-                return true;
+                return FrameEffect::full();
             }
-            // (`snap` is `Box<SessionSnapshot>`; `&snap` derefs to `&SessionSnapshot`.)
-            false
+            FrameEffect::none()
         }
         StateDelta::Toast { kind, text } => {
-            // Toast is per-session (C6); the daemon diffed it off its foreground, so raise
-            // it on the shadow's foreground session — the one this client is viewing.
             shadow.rest.fg_mut().toast =
                 Some((text, Instant::now() + TOAST_TTL, toast_kind(&kind)));
-            true
+            FrameEffect::light()
         }
     }
 }

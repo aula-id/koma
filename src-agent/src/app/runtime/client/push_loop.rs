@@ -388,6 +388,7 @@ pub(super) fn push_loop(
     loop {
         let frame_start = Instant::now();
         let mut dirty = force_push;
+        let mut need_snapshot = force_push;
         force_push = false;
 
         // --- (0) control messages from the ipc thread (NON-BLOCKING) ---
@@ -397,6 +398,7 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::Ready) => {
                     last.reset();
                     dirty = true;
+                    need_snapshot = true;
                 }
                 // A hub pick / new-session request: signal swap-START (so React raises the
                 // loader BEFORE this attached push_loop returns + the connection is torn
@@ -1499,18 +1501,22 @@ pub(super) fn push_loop(
                         let proj = ConfigProjection::from_global(&snap.global);
                         current_config = Some(proj);
                     }
-                    dirty |= apply_frame(
-                        frame,
-                        &mut shadow,
-                        &mut expected,
-                        &mut seeded,
-                        &mut awaiting_resync,
-                        &mut select_requested,
-                        &mut open_swapper_requested,
-                        &mut new_session_requested,
-                        &mut connect_remote_requested,
-                        req_tx,
-                    );
+                    {
+                        let fx = apply_frame(
+                            frame,
+                            &mut shadow,
+                            &mut expected,
+                            &mut seeded,
+                            &mut awaiting_resync,
+                            &mut select_requested,
+                            &mut open_swapper_requested,
+                            &mut new_session_requested,
+                            &mut connect_remote_requested,
+                            req_tx,
+                        );
+                        dirty |= fx.visual;
+                        need_snapshot |= fx.snapshot;
+                    }
                 }
                 Err(TryRecvError::Empty) => break,
                 // The reader task dropped its sender: the daemon's socket closed. Fall
@@ -1566,6 +1572,7 @@ pub(super) fn push_loop(
                 if Instant::now() >= *until {
                     fg.toast = None;
                     dirty = true;
+                    // Toast clear only needs Status, not a full Snapshot rebuild.
                 }
             }
         }
@@ -1721,6 +1728,8 @@ pub(super) fn push_loop(
         if view != last_view {
             last_view = view;
             dirty = true;
+            // Viewed subagent/bash tails ride Snapshot — force full project.
+            need_snapshot = true;
         }
         // Gate the heavy transcript project+hash on dirty. Side channels (hub/git/lsp/
         // store/…) already push their own envelopes above. `push_config` stays every
@@ -1730,8 +1739,11 @@ pub(super) fn push_loop(
         // Loading phase strings only change on daemon warm status (already dirty via
         // apply_frame); GUI Loading does not need the TUI's local spinner frame tick.
         // Toast expiry and StreamView tab switches set dirty above.
+        //
+        // Stream-only / status-only ticks set dirty without need_snapshot so we skip
+        // rebuilding+hashing the full messages[] (the hot-path lag fix).
         if dirty {
-            serialize_and_push(&shadow, push, last, view);
+            serialize_and_push(&shadow, push, last, view, need_snapshot);
         }
         // Config catalogue (Connector + MCP panels): emit whenever it changed since the
         // last frame, or re-emit after a `Ready` reset. Independent of the per-session
