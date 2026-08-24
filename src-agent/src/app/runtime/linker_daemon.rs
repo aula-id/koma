@@ -393,9 +393,17 @@ fn handle_request(
                 .cloned()
                 .collect();
             let needs_scan = !globally_new_roots.is_empty() || !finally_dropped_roots.is_empty();
+            // Gate on applied_revision (full-scan publish), not graph.generation.
+            // Watcher incremental batches bump generation without a full index,
+            // so generation==0 would permanently miss a cancelled first scan.
             let first_scan_needed = {
-                let graph = state.graph.read().unwrap_or_else(|e| e.into_inner());
-                graph.generation == 0
+                let coord = state
+                    .scan_coordinator
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                coord.applied_revision == 0
+                    && coord.in_flight.is_none()
+                    && coord.pending.is_none()
             } && !all_roots.is_empty();
 
             if needs_scan || first_scan_needed {
@@ -849,19 +857,22 @@ fn watcher_loop(state: Arc<DaemonState>) {
         let paths: Vec<PathBuf> = batch.into_iter().collect();
 
         // Cancel any in-flight full scan so it won't overwrite incremental
-        // mutations — but do NOT spawn a replacement scan on every batch.
-        // Content-only apply stays incremental; full rebuilds are requested
-        // only when handle_events reports a root rebuild is required.
-        {
+        // mutations. Always re-queue a single-flight full scan when we
+        // supersede — without this, a cancelled first index leaves the graph
+        // near-empty forever (generation already > 0, Ready, no re-trigger).
+        // request_scan coalesces, so this cannot restack threads.
+        let superseded = {
             let mut coord = state
                 .scan_coordinator
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            if coord.in_flight.is_some() {
+            let was_in_flight = coord.in_flight.is_some();
+            if was_in_flight {
                 coord.desired_revision = coord.desired_revision.saturating_add(1);
                 coord.cancel.store(true, Ordering::SeqCst);
             }
-        }
+            was_in_flight
+        };
 
         // Hold publication_lock during the graph + project_index mutation
         // so it is atomic with respect to scan-thread publications.
@@ -881,6 +892,9 @@ fn watcher_loop(state: Arc<DaemonState>) {
         }
 
         // Dynamically attach NonRecursive watches for newly created dirs.
+        // Files already present under the dir produce no create events once
+        // the watch is attached — handle_events already queued a scoped
+        // rebuild for those roots via new_dirs → full_rebuild_roots.
         if !new_dirs.is_empty() {
             if let Ok(mut w) = state.watcher.lock() {
                 if let Some(debouncer) = w.as_mut() {
@@ -891,23 +905,25 @@ fn watcher_loop(state: Arc<DaemonState>) {
             }
         }
 
-        // Config / repair paths request a single-flight full scan (coalesced).
-        if !full_rebuild_roots.is_empty() {
-            let all_roots = collect_all_roots(&state);
-            if !all_roots.is_empty() {
-                // Prefer the specific roots when they are still registered;
-                // otherwise fall back to the full union.
-                let scoped: Vec<PathBuf> = full_rebuild_roots
-                    .into_iter()
-                    .filter(|r| all_roots.iter().any(|a| a == r))
-                    .collect();
-                let roots = if scoped.is_empty() {
-                    all_roots
-                } else {
-                    scoped
-                };
-                request_scan(&state, roots);
-            }
+        // Single-flight full scan when: superseded in-flight work, config
+        // change, new-dir catch-up, or incremental overflow.
+        let all_roots = collect_all_roots(&state);
+        if all_roots.is_empty() {
+            continue;
+        }
+        if superseded {
+            request_scan(&state, all_roots);
+        } else if !full_rebuild_roots.is_empty() {
+            let scoped: Vec<PathBuf> = full_rebuild_roots
+                .into_iter()
+                .filter(|r| all_roots.iter().any(|a| a == r))
+                .collect();
+            let roots = if scoped.is_empty() {
+                all_roots
+            } else {
+                scoped
+            };
+            request_scan(&state, roots);
         }
     }
 }

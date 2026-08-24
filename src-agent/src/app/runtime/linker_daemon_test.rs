@@ -671,6 +671,67 @@ fn watcher_supersede_bumps_desired_revision() {
 }
 
 #[test]
+fn watcher_supersede_reschedules_full_scan() {
+    // Blocker regression: cancelling in-flight first scan without re-queue
+    // left the graph near-empty forever. Supersede must request_scan.
+    let state = test_state();
+    register(&state, "s1", &["/nonexistent_for_supersede_reschedule"]);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    // Simulate in-flight full scan (as during first index).
+    {
+        let mut coord = state.scan_coordinator.lock().unwrap();
+        coord.in_flight = Some(coord.desired_revision.max(1));
+        coord.pending = None;
+        coord.applied_revision = 0;
+        state.scanning.store(true, Ordering::SeqCst);
+    }
+
+    // watcher_loop supersede path: cancel + request_scan(all_roots).
+    let superseded = {
+        let mut coord = state.scan_coordinator.lock().unwrap();
+        let was = coord.in_flight.is_some();
+        if was {
+            coord.desired_revision = coord.desired_revision.saturating_add(1);
+            coord.cancel.store(true, Ordering::SeqCst);
+        }
+        was
+    };
+    assert!(superseded);
+    let all_roots = collect_all_roots(&state);
+    let rev = request_scan(&state, all_roots);
+
+    let (pending, desired, applied) = {
+        let coord = state.scan_coordinator.lock().unwrap();
+        (
+            coord.pending.is_some(),
+            coord.desired_revision,
+            coord.applied_revision,
+        )
+    };
+    assert!(
+        pending || state.scanning.load(Ordering::SeqCst),
+        "supersede must leave a pending or running full scan"
+    );
+    assert_eq!(desired, rev);
+    assert_eq!(applied, 0, "cancelled first scan must not count as applied");
+
+    // first_scan_needed gate uses applied_revision, not generation.
+    {
+        let mut g = state.graph.write().unwrap();
+        g.generation = 5; // watcher incremental bump must not hide missing full scan
+    }
+    let first_scan_needed = {
+        let coord = state.scan_coordinator.lock().unwrap();
+        coord.applied_revision == 0
+    };
+    assert!(
+        first_scan_needed,
+        "applied_revision==0 must still demand a full scan even if generation>0"
+    );
+}
+
+#[test]
 fn request_scan_single_flight_no_stacked_spawns() {
     let state = test_state();
     // Seed a root so rescan has something to target.
