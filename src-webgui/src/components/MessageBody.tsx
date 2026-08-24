@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { Streamdown } from 'streamdown'
 import { komaCode } from './komaShiki'
 import { useKoma } from '../store/koma'
@@ -21,6 +21,10 @@ import { luminance } from '../lib/luminance'
 // expects the complete current markdown as children (block memoization +
 // repair both assume it). Memoized per message so sibling bubbles don't
 // re-render as the live bubble grows.
+//
+// While `streaming`, the visible text is THROTTLED (~50ms / rAF) so Shiki +
+// repair don't run on every token; the final committed frame always uses the
+// latest `text` immediately.
 export const MessageBody = memo(function MessageBody({
   text,
   streaming = false,
@@ -38,6 +42,46 @@ export const MessageBody = memo(function MessageBody({
   // for why that prop change is what actually cascades into a re-tokenize).
   const bg = useKoma((s) => s.palette.bg)
   const codeTheme = luminance(bg) >= 0.5 ? 'github-light' : 'github-dark'
+
+  const [shown, setShown] = useState(text)
+  const pendingRef = useRef(text)
+  const rafRef = useRef(0)
+  const lastPaintRef = useRef(0)
+
+  useEffect(() => {
+    if (!streaming) {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = 0
+      }
+      setShown(text)
+      pendingRef.current = text
+      return
+    }
+    pendingRef.current = text
+    const tick = (now: number) => {
+      rafRef.current = 0
+      // ~20 Hz max while streaming; always paint if we lagged > 50ms.
+      if (now - lastPaintRef.current >= 50) {
+        lastPaintRef.current = now
+        setShown(pendingRef.current)
+      } else if (pendingRef.current !== shown) {
+        rafRef.current = requestAnimationFrame(tick)
+      }
+    }
+    if (!rafRef.current) {
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    return () => {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = 0
+      }
+    }
+  }, [text, streaming, shown])
+
+  const body = streaming ? shown : text
+
   return (
     <Streamdown
       className="koma-md"
@@ -54,7 +98,7 @@ export const MessageBody = memo(function MessageBody({
       // 1:1 TUI grammar has no such affordances.
       controls={{ code: { copy: true, download: false }, table: false, mermaid: false }}
     >
-      {text}
+      {body}
     </Streamdown>
   )
 })
