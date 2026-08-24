@@ -483,6 +483,8 @@ pub(crate) fn advance_turn(
         // minimal submit path spins a fresh turn.
         let steers = std::mem::take(&mut state.rest.sessions[sess_idx].pending_steer);
         if !steers.is_empty() {
+            state.rest.pending_steer_sel = 0;
+            state.rest.pending_steer_focus = false;
             let joined = steers.join("\n\n");
             // Replicate the minimal submit sequence: push the user message, wire up
             // the session state, and start a new stream. `handle_submit` is

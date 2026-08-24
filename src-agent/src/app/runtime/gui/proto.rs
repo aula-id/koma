@@ -531,6 +531,18 @@ pub(super) enum GuiReq {
     /// mid-turn steer at once. Forwarded as [`ClientRequest::CancelSteers`],
     /// attached-only, like `Interrupt`.
     CancelSteers,
+    /// Remove one queued follow-up by list index. Forwarded as
+    /// [`ClientRequest::RemoveSteer`].
+    RemoveSteer {
+        index: usize,
+    },
+    /// Load one queued follow-up into the composer for edit (removes it from
+    /// the queue). Forwarded as [`ClientRequest::EditSteer`]. The GUI should
+    /// also `refillComposer` locally with the known full text, since the web
+    /// composer does not reconcile `InputChanged`.
+    EditSteer {
+        index: usize,
+    },
     /// The chat hover-edit PENCIL on a user bubble: rewind the conversation TO that
     /// message by its `index` into `SessionSnapshot.messages` (Conversation::messages()).
     /// Forwarded as [`ClientRequest::RewindTo`], which runs koma's `RewindToMessage`

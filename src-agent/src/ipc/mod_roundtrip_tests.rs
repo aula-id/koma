@@ -144,6 +144,8 @@ fn sample_global_snapshot() -> GlobalSnapshot {
         // Non-default `@`/`/` picker selection index so the round-trip proves
         // `palette_sel` survives serialize -> deserialize (0 would alias the default).
         palette_sel: 3,
+        pending_steer_sel: 1,
+        pending_steer_focus: true,
         // A staged attachment + a populated `@`-file palette so the round-trip
         // proves both new global projections survive serialize -> deserialize.
         pending_attachments: vec![crate::dto::chat::Attachment {
