@@ -109,7 +109,7 @@ fn ensure_schema_once(path: &Path, conn: &Connection) -> Result<()> {
                 // Another thread is backfilling this path — park with a bound.
                 let wait_start = Instant::now();
                 loop {
-                    let (g, timed_out) = match cvar.wait_timeout(guard, Duration::from_secs(1)) {
+                    let (g, _timed_out) = match cvar.wait_timeout(guard, Duration::from_secs(1)) {
                         Ok((g, res)) => (g, res.timed_out()),
                         Err(e) => (e.into_inner().0, true),
                     };
@@ -123,9 +123,7 @@ fn ensure_schema_once(path: &Path, conn: &Connection) -> Result<()> {
                                 guard.remove(&key);
                                 break;
                             }
-                            if timed_out {
-                                continue;
-                            }
+                            // Timed out or spuriously woken — loop and re-wait.
                         }
                         None => break, // claim freed; fall through to take it
                     }
@@ -339,18 +337,11 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
         // monopolize the connection for one giant INSERT. Failures leave
         // fts_backfilled unset so the next open retries.
         //
-        // Start from max existing FTS rowid so a partial prior attempt resumes
-        // instead of re-inserting (duplicate rowid would error on FTS5).
-        // Advance the cursor from the *batch* (max id among candidates), not
-        // from MAX(messages_fts.rowid) after INSERT — a concurrent writer can
-        // append higher FTS rowids and push that MAX past unprocessed messages.
-        let mut after_id: i64 = conn
-            .query_row(
-                "SELECT COALESCE(MAX(rowid), 0) FROM messages_fts",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
+        // Start from 0 every backfill. Append writes FTS rowids directly, so
+        // seeding from MAX(messages_fts.rowid) can land past unindexed message
+        // ids after an interrupted run and permanently skip a gap once the
+        // flag is set. NOT EXISTS makes re-walking already-indexed ids safe.
+        let mut after_id: i64 = 0;
         loop {
             // Bound of this batch from the messages table alone.
             let batch_max: Option<i64> = conn
