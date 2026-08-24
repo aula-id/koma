@@ -645,24 +645,29 @@ svg.animate-spin {
   border-bottom-color: var(--color-koma-border) !important;
   color: var(--color-koma-fg) !important;
 }
-/* Context menus mount on document.body (outside .monaco-editor). Monaco only
-   scopes --vscode-* vars under .monaco-editor; applyKomaTheme mirrors menu
-   tokens onto :root, and these rules force koma palette as a hard fallback
-   (inline menu styles use var(--vscode-menu-*), which now resolve on :root). */
+/* Context menus mount on document.body (outside .monaco-editor).
+   Monaco sets the *visible* fill on the scroll wrapper that PARENTS
+   `.monaco-menu` (inline backgroundColor: var(--vscode-menu-background)),
+   NOT on .monaco-menu itself. Selectors that only hit .monaco-menu / labels
+   theme the TEXT while the wrapper keeps a transparent or base-theme plate.
+   Force the whole stack with koma panel colors. */
+.context-view,
 .context-view.monaco-menu-container,
 .monaco-menu-container,
+.monaco-menu-container > .monaco-scrollable-element,
+.context-view > .monaco-scrollable-element,
 .monaco-menu,
-.monaco-menu .monaco-scrollable-element,
 .monaco-menu .monaco-action-bar,
 .monaco-menu .monaco-action-bar .actions-container {
-  background-color: var(--vscode-menu-background, var(--color-koma-panel)) !important;
-  color: var(--vscode-menu-foreground, var(--color-koma-fg)) !important;
-  border-color: var(--vscode-menu-border, var(--color-koma-border)) !important;
+  background: var(--color-koma-panel) !important;
+  background-color: var(--color-koma-panel) !important;
+  color: var(--color-koma-fg) !important;
+  border-color: var(--color-koma-border) !important;
 }
 .monaco-menu .monaco-action-bar .action-item .action-label,
 .monaco-menu .monaco-action-bar .action-item .keybinding,
 .monaco-menu .monaco-action-bar .action-item .submenu-indicator {
-  color: var(--vscode-menu-foreground, var(--color-koma-fg)) !important;
+  color: var(--color-koma-fg) !important;
 }
 .monaco-menu .monaco-action-bar .action-item.focused,
 .monaco-menu .monaco-action-bar .action-item:hover,
@@ -670,8 +675,9 @@ svg.animate-spin {
 .monaco-menu .monaco-action-bar.vertical .action-menu-item.focused,
 .monaco-menu .monaco-action-bar.vertical .action-item.focused,
 .monaco-menu .monaco-action-bar.vertical .action-item:hover {
-  background-color: var(--vscode-menu-selectionBackground, var(--color-koma-hover)) !important;
-  color: var(--vscode-menu-selectionForeground, var(--color-koma-fg)) !important;
+  background: var(--color-koma-hover) !important;
+  background-color: var(--color-koma-hover) !important;
+  color: var(--color-koma-fg) !important;
 }
 .monaco-menu .monaco-action-bar .action-item.focused .action-label,
 .monaco-menu .monaco-action-bar .action-item:hover .action-label,
@@ -679,7 +685,7 @@ svg.animate-spin {
 .monaco-menu .monaco-action-bar .action-item:hover .keybinding,
 .monaco-menu .monaco-action-bar .action-item.focused .submenu-indicator,
 .monaco-menu .monaco-action-bar .action-item:hover .submenu-indicator {
-  color: var(--vscode-menu-selectionForeground, var(--color-koma-fg)) !important;
+  color: var(--color-koma-fg) !important;
 }
 .monaco-menu .monaco-action-bar .action-item .action-menu-item.disabled .action-label,
 .monaco-menu .monaco-action-bar .action-item.disabled .action-label,
@@ -689,12 +695,14 @@ svg.animate-spin {
   opacity: 0.55;
 }
 .monaco-menu .monaco-action-bar .action-label.separator {
-  border-bottom-color: var(--vscode-menu-separatorBackground, var(--color-koma-border)) !important;
+  border-bottom-color: var(--color-koma-border) !important;
+  background: transparent !important;
+  background-color: transparent !important;
 }
 .monaco-menu .monaco-keybinding > .monaco-keybinding-key {
-  background-color: var(--vscode-keybindingLabel-background, var(--color-koma-panel2)) !important;
-  color: var(--vscode-keybindingLabel-foreground, var(--color-koma-dim)) !important;
-  border-color: var(--vscode-keybindingLabel-border, var(--color-koma-border)) !important;
+  background-color: var(--color-koma-panel2) !important;
+  color: var(--color-koma-dim) !important;
+  border-color: var(--color-koma-border) !important;
 }
 
 /* ── Boot / session-switch loader ─────────────────────────────────────────

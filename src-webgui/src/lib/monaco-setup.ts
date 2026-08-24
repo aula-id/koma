@@ -316,6 +316,8 @@ function mirrorMenuCssVars(p: {
   const root = document.documentElement
   const shadow = mixHex('#000000', p.bg, 0.45)
   const set = (name: string, value: string) => root.style.setProperty(name, value)
+  // Hex (not var()) so inline styles like backgroundColor: var(--vscode-menu-background)
+  // always resolve even when the menu is outside .monaco-editor.
   set('--vscode-menu-background', p.panel)
   set('--vscode-menu-foreground', p.fg)
   set('--vscode-menu-border', p.border)
@@ -323,6 +325,7 @@ function mirrorMenuCssVars(p: {
   set('--vscode-menu-selectionForeground', p.fg)
   set('--vscode-menu-separatorBackground', p.border)
   set('--vscode-widget-shadow', shadow)
+  set('--vscode-widget-border', p.border)
   set('--vscode-scrollbar-shadow', p.bg)
   set('--vscode-scrollbarSlider-background', mixHex(p.fg, p.bg, 0.18))
   set('--vscode-scrollbarSlider-hoverBackground', mixHex(p.fg, p.bg, 0.28))
@@ -332,11 +335,21 @@ function mirrorMenuCssVars(p: {
   set('--vscode-keybindingLabel-border', p.border)
   set('--vscode-keybindingLabel-bottomBorder', p.border)
   set('--vscode-focusBorder', resolveVarHex('--color-koma-accent', '#39ff14'))
-  // select.* is the registered default fallback for menu.foreground/background
+  // menu.background defaults to selectBackground in Monaco's color registry —
+  // keep both in lockstep for any path that still reads select.*.
   set('--vscode-select-background', p.panel)
   set('--vscode-select-foreground', p.fg)
+  set('--vscode-select-border', p.border)
   set('--vscode-list-activeSelectionBackground', p.hover)
   set('--vscode-list-activeSelectionForeground', p.fg)
+  set('--vscode-editorActionList-background', p.panel)
+  set('--vscode-editorActionList-foreground', p.fg)
+  set('--vscode-editorActionList-focusBackground', p.hover)
+  set('--vscode-editorActionList-focusForeground', p.fg)
+  set('--vscode-dropdown-background', p.panel)
+  set('--vscode-dropdown-foreground', p.fg)
+  set('--vscode-dropdown-border', p.border)
+  set('--vscode-dropdown-listBackground', p.panel)
 }
 
 // Re-apply koma Monaco themes after a live palette change (Settings / Snapshot).
