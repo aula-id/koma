@@ -502,16 +502,21 @@ pub(super) fn serialize_and_push(
         }
     }
 
-    // --- StreamMsg: full live buffer; empty text clears the bubble on commit ---
+    // --- Stream: prefer StreamDelta (append) when last is a prefix; else full reset ---
     match &fg.streaming {
         Some(text) => {
             if last.stream.as_deref() != Some(text.as_str()) {
+                let (reset, append) = match last.stream.as_deref() {
+                    Some(prev) if text.starts_with(prev) => (false, text[prev.len()..].to_string()),
+                    _ => (true, text.clone()),
+                };
                 last.stream = Some(text.clone());
                 super::render::emit(
                     push,
-                    &PushEnvelope::StreamMsg {
+                    &PushEnvelope::StreamDelta {
                         session: session.clone(),
-                        text: text.clone(),
+                        reset,
+                        append,
                     },
                 );
             }
@@ -519,6 +524,8 @@ pub(super) fn serialize_and_push(
         None => {
             if last.stream.is_some() {
                 last.stream = None;
+                // Empty full StreamMsg keeps clear-on-commit compatible with older GUIs
+                // and matches the historical contract.
                 super::render::emit(
                     push,
                     &PushEnvelope::StreamMsg {
@@ -530,15 +537,26 @@ pub(super) fn serialize_and_push(
         }
     }
 
-    // --- Reasoning: full live thinking buffer; empty text clears it ---
+    // --- Reasoning: same delta-when-prefix pattern ---
     if !fg.stream_reasoning.is_empty() {
         if last.reasoning != fg.stream_reasoning {
+            let (reset, append) = if fg.stream_reasoning.starts_with(&last.reasoning)
+                && !last.reasoning.is_empty()
+            {
+                (
+                    false,
+                    fg.stream_reasoning[last.reasoning.len()..].to_string(),
+                )
+            } else {
+                (true, fg.stream_reasoning.clone())
+            };
             last.reasoning = fg.stream_reasoning.clone();
             super::render::emit(
                 push,
-                &PushEnvelope::Reasoning {
+                &PushEnvelope::ReasoningDelta {
                     session: session.clone(),
-                    text: fg.stream_reasoning.clone(),
+                    reset,
+                    append,
                 },
             );
         }

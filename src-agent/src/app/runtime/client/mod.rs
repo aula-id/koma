@@ -274,7 +274,7 @@ fn teardown_connection(handle: &tokio::runtime::Handle, conn: Connection) {
 /// frame to decide whose transcript / output tail to fold into the push (mirrors the
 /// shared `live_marks`). At most one of the two is `Some` in practice (the active tab).
 /// `Copy` so the fold can snapshot it out of the lock by value each frame.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(in crate::app::runtime) struct StreamView {
     /// The id of the sub-agent being streamed, or `None`.
     pub subagent: Option<usize>,

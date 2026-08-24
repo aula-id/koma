@@ -269,13 +269,13 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       codeLensIdleTimer = setTimeout(() => {
         codeLensIdleTimer = null
         if (!lspOpenedRef.current) return
-        const latest = editor.getModel()?.getValue()
-        if (latest == null) return
+        const m = editor.getModel()
+        if (!m) return
         warmCodeLensCache(
           (body) => useKoma.getState().req(body as never),
           tab.root,
           tab.path,
-          latest,
+          m.getVersionId(),
         )
       }, CODELENS_IDLE_MS)
     })
@@ -411,12 +411,17 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
         const uri = pathToUri(tab.root, tab.path)
         const diags = useKoma.getState().lspDiagnostics[uri]
         if (diags) applyDiagnosticsToMonaco(uri, diags)
-        warmCodeLensCache(
-          (body) => useKoma.getState().req(body as never),
-          tab.root,
-          tab.path,
-          fileState.content!,
-        )
+        {
+          const m =
+            monaco.editor.getModel(monacoUriFromPath(tab.root, tab.path)) ??
+            modelRef.current
+          warmCodeLensCache(
+            (body) => useKoma.getState().req(body as never),
+            tab.root,
+            tab.path,
+            m?.getVersionId() ?? 1,
+          )
+        }
       }, 2500)
       return () => window.clearTimeout(t)
     }
@@ -434,12 +439,16 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     const uri = pathToUri(tab.root, tab.path)
     const diags = useKoma.getState().lspDiagnostics[uri]
     if (diags) applyDiagnosticsToMonaco(uri, diags)
-    warmCodeLensCache(
-      (body) => useKoma.getState().req(body as never),
-      tab.root,
-      tab.path,
-      fileState.content,
-    )
+    {
+      const m =
+        monaco.editor.getModel(monacoUriFromPath(tab.root, tab.path)) ?? modelRef.current
+      warmCodeLensCache(
+        (body) => useKoma.getState().req(body as never),
+        tab.root,
+        tab.path,
+        m?.getVersionId() ?? 1,
+      )
+    }
   }, [
     fileState?.content,
     fileState?.binary,

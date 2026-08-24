@@ -920,7 +920,10 @@ export type PushEnvelope =
   // falling back to any optimistic label already raised, then a generic one.
   | { k: 'Switching'; to: string }
   | { k: 'StreamMsg'; session: string; text: string }
+  // Incremental stream: reset replaces the bubble; else append. Empty append+reset clears.
+  | { k: 'StreamDelta'; session: string; reset: boolean; append: string }
   | { k: 'Reasoning'; session: string; text: string }
+  | { k: 'ReasoningDelta'; session: string; reset: boolean; append: string }
   // `toast` is the transient message text (safeguard/harness/classifier notices
   // + generic host toasts). `kind` is the severity token ("error"/"info") the
   // host now carries alongside the text so the GUI can colour error vs info —
@@ -3124,8 +3127,24 @@ export const useKoma = create<KomaState>((set, get) => ({
       case 'StreamMsg':
         set((s) => ({ session: { ...s.session, stream: env.text } }))
         break
+      case 'StreamDelta':
+        set((s) => ({
+          session: {
+            ...s.session,
+            stream: env.reset ? env.append : s.session.stream + env.append,
+          },
+        }))
+        break
       case 'Reasoning':
         set((s) => ({ session: { ...s.session, reasoning: env.text } }))
+        break
+      case 'ReasoningDelta':
+        set((s) => ({
+          session: {
+            ...s.session,
+            reasoning: env.reset ? env.append : s.session.reasoning + env.append,
+          },
+        }))
         break
       case 'Status':
         set((s) => {
@@ -4260,20 +4279,25 @@ export const useKoma = create<KomaState>((set, get) => ({
         break
       case 'LspDiagnostics':
         set((s) => {
-          const nextMap = {
-            ...s.lspDiagnostics,
-            [env.uri]: env.diagnostics ?? [],
+          const prev = s.lspDiagnostics[env.uri] ?? []
+          const next = env.diagnostics ?? []
+          let errors = s.lspDiagCounts.errors
+          let warnings = s.lspDiagCounts.warnings
+          for (const d of prev) {
+            if (d.severity === 1) errors -= 1
+            else if (d.severity === 2) warnings -= 1
           }
-          let errors = 0
-          let warnings = 0
-          for (const list of Object.values(nextMap)) {
-            for (const d of list) {
-              if (d.severity === 1) errors += 1
-              else if (d.severity === 2) warnings += 1
-            }
+          for (const d of next) {
+            if (d.severity === 1) errors += 1
+            else if (d.severity === 2) warnings += 1
           }
+          if (errors < 0) errors = 0
+          if (warnings < 0) warnings = 0
           return {
-            lspDiagnostics: nextMap,
+            lspDiagnostics: {
+              ...s.lspDiagnostics,
+              [env.uri]: next,
+            },
             lspDiagCounts: { errors, warnings },
           }
         })

@@ -11,7 +11,7 @@
 //! caller ([`super::host::run_host_relay`]) does next.
 
 use std::sync::mpsc::{Receiver, Sender};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::app::mode::{Mode, SessionHub};
 use crate::app::state::AppState;
@@ -31,6 +31,10 @@ use super::render::{advance_local_animations, ConnectRemoteRequest, FRAME_BUDGET
 use super::shadow::apply_frame;
 use super::store_host;
 use super::tutorial_host;
+
+/// Quiet GUI fold cadence when nothing needs a push (~10 Hz). Busy / dirty frames
+/// still use [`FRAME_BUDGET`] (~60 Hz). GUI-only — TUI `render_loop` keeps 16 ms.
+const GUI_IDLE_BUDGET: Duration = Duration::from_millis(100);
 
 /// Snapshot of the full `Status` envelope payload.
 /// `(working, toast, toast_kind, tokens_in, tokens_cached, tokens_out, cost, mode)`.
@@ -146,9 +150,9 @@ pub(super) enum HostTransition {
 /// `Select`/`New` returns an [`HostTransition::Attach`]; (a) drain every queued
 /// [`DaemonFrame`] and apply it (an `OpenSwapper`/`NewSession` hand-off returns the
 /// matching transition, a closed socket returns [`HostTransition::ToSwapper`]); (b)
-/// advance the local-clock animations + sweep the toast; (c) serialise the shadow and
-/// push whatever changed; then pace to the frame budget. Returns when a transition is
-/// resolved.
+/// advance the local-clock animations + sweep the toast; (c) when dirty, serialise
+/// the shadow and push whatever changed; then pace to a busy (~16ms) or idle (~100ms)
+/// budget. Returns when a transition is resolved.
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub(super) fn push_loop(
     push: &dyn Fn(String),
@@ -375,14 +379,25 @@ pub(super) fn push_loop(
         }
     }
 
+    // Last StreamView the fold pushed with — a tab switch dirties without a daemon frame.
+    let mut last_view = live_view.lock().map(|v| *v).unwrap_or_default();
+    // First live iteration must push so the webview gets the attach baseline even when
+    // prebuffered frames left PushState empty and no further daemon traffic arrives yet.
+    let mut force_push = true;
+
     loop {
         let frame_start = Instant::now();
+        let mut dirty = force_push;
+        force_push = false;
 
         // --- (0) control messages from the ipc thread (NON-BLOCKING) ---
         loop {
             match ctl_rx.try_recv() {
                 // The page (re)booted: re-push the full authoritative state this frame.
-                Ok(super::HostCtl::Ready) => last.reset(),
+                Ok(super::HostCtl::Ready) => {
+                    last.reset();
+                    dirty = true;
+                }
                 // A hub pick / new-session request: signal swap-START (so React raises the
                 // loader BEFORE this attached push_loop returns + the connection is torn
                 // down — the ONLY seam still holding a live socket), then hand back to the
@@ -1484,7 +1499,7 @@ pub(super) fn push_loop(
                         let proj = ConfigProjection::from_global(&snap.global);
                         current_config = Some(proj);
                     }
-                    apply_frame(
+                    dirty |= apply_frame(
                         frame,
                         &mut shadow,
                         &mut expected,
@@ -1550,6 +1565,7 @@ pub(super) fn push_loop(
             if let Some((_, until, _)) = fg.toast.as_ref() {
                 if Instant::now() >= *until {
                     fg.toast = None;
+                    dirty = true;
                 }
             }
         }
@@ -1702,14 +1718,35 @@ pub(super) fn push_loop(
         // Snapshot the current stream view (Copy) out of the shared lock so the fold folds
         // the viewed sub-agent's transcript / viewed bash job's output tail into the push.
         let view = live_view.lock().map(|v| *v).unwrap_or_default();
-        serialize_and_push(&shadow, push, last, view);
+        if view != last_view {
+            last_view = view;
+            dirty = true;
+        }
+        // Gate the heavy transcript project+hash on dirty. Side channels (hub/git/lsp/
+        // store/…) already push their own envelopes above. `push_config` stays every
+        // iteration — it is JSON-deduped and must re-emit after Ready without waiting
+        // on a daemon frame.
+        //
+        // Loading phase strings only change on daemon warm status (already dirty via
+        // apply_frame); GUI Loading does not need the TUI's local spinner frame tick.
+        // Toast expiry and StreamView tab switches set dirty above.
+        if dirty {
+            serialize_and_push(&shadow, push, last, view);
+        }
         // Config catalogue (Connector + MCP panels): emit whenever it changed since the
         // last frame, or re-emit after a `Ready` reset. Independent of the per-session
         // draw so a page reload always re-pushes the current global config.
         push_config(current_config.as_ref(), push, last);
 
-        // --- frame pacing: sleep the remainder of the ~16ms budget ---
-        if let Some(rem) = FRAME_BUDGET.checked_sub(frame_start.elapsed()) {
+        // --- frame pacing: busy ~16ms when dirty/streaming/working; idle ~100ms ---
+        // GUI-only. TUI `render_loop` keeps unconditional FRAME_BUDGET.
+        let busy = dirty
+            || shadow.rest.fg().waiting
+            || shadow.rest.fg().streaming.is_some()
+            || !shadow.rest.fg().stream_reasoning.is_empty()
+            || matches!(shadow.mode(), Mode::Loading(_));
+        let budget = if busy { FRAME_BUDGET } else { GUI_IDLE_BUDGET };
+        if let Some(rem) = budget.checked_sub(frame_start.elapsed()) {
             std::thread::sleep(rem);
         }
     }

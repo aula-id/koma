@@ -122,9 +122,26 @@ pub(super) enum PushEnvelope {
     Switching { to: String },
     /// The FULL live streaming buffer (React REPLACES the live bubble). Emitted every
     /// frame the buffer changes; an empty `text` clears the bubble on commit.
+    /// Prefer [`StreamDelta`] for steady growth; this full-replace path remains for
+    /// clear-on-commit and any host that still ships whole buffers.
     StreamMsg { session: String, text: String },
+    /// Incremental live stream update. `reset: true` replaces the bubble with `append`
+    /// (empty `append` clears). `reset: false` appends bytes onto the existing bubble.
+    /// Host emits this when `last.stream` is a prefix of the new buffer.
+    StreamDelta {
+        session: String,
+        reset: bool,
+        append: String,
+    },
     /// The FULL live reasoning buffer (React REPLACES). Empty `text` clears it.
+    /// Prefer [`ReasoningDelta`] for steady growth.
     Reasoning { session: String, text: String },
+    /// Incremental live reasoning update (same semantics as [`StreamDelta`]).
+    ReasoningDelta {
+        session: String,
+        reset: bool,
+        append: String,
+    },
     /// Working flag + optional toast. React animates the spinner locally; the host
     /// only says whether the session is working and what toast (if any) to show.
     /// `toastKind` carries the toast SEVERITY (`"error"` / `"info"`) so React can colour
