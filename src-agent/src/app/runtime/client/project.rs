@@ -37,11 +37,15 @@ use super::push_proto::{
 /// palette), a `StreamMsg` (full live buffer, or empty to clear on commit), a
 /// `Reasoning` (full live thinking, or empty to clear), and a `Status` (working +
 /// toast). `PushState` holds the last-pushed values so a quiescent frame is silent.
+///
+/// `need_snapshot`: when false, skip building/hashing the full messages[] Snapshot
+/// payload (stream/status-only tick). Structural frames and force-push pass true.
 pub(super) fn serialize_and_push(
     shadow: &AppState,
     push: &dyn Fn(String),
     last: &mut PushState,
     view: super::StreamView,
+    need_snapshot: bool,
 ) {
     let fg = shadow.rest.fg();
     let session = fg.id.clone();
@@ -50,6 +54,194 @@ pub(super) fn serialize_and_push(
     // composer mode selector. Rides the Snapshot below so a `SetMode` reflects live.
     let mode = shadow.rest.agent_mode().label().to_string();
 
+    if need_snapshot {
+        push_snapshot_if_changed(shadow, fg, &session, &mode, push, last, view);
+    }
+
+    // --- Stream: prefer StreamDelta (append) when last is a prefix; else full reset ---
+    match &fg.streaming {
+        Some(text) => {
+            if last.stream.as_deref() != Some(text.as_str()) {
+                let (reset, append) = match last.stream.as_deref() {
+                    Some(prev) if text.starts_with(prev) => (false, text[prev.len()..].to_string()),
+                    _ => (true, text.clone()),
+                };
+                last.stream = Some(text.clone());
+                super::render::emit(
+                    push,
+                    &PushEnvelope::StreamDelta {
+                        session: session.clone(),
+                        reset,
+                        append,
+                    },
+                );
+            }
+        }
+        None => {
+            if last.stream.is_some() {
+                last.stream = None;
+                // Empty full StreamMsg keeps clear-on-commit compatible with older GUIs
+                // and matches the historical contract.
+                super::render::emit(
+                    push,
+                    &PushEnvelope::StreamMsg {
+                        session: session.clone(),
+                        text: String::new(),
+                    },
+                );
+            }
+        }
+    }
+
+    // --- Reasoning: same delta-when-prefix pattern ---
+    if !fg.stream_reasoning.is_empty() {
+        if last.reasoning != fg.stream_reasoning {
+            let (reset, append) = if fg.stream_reasoning.starts_with(&last.reasoning)
+                && !last.reasoning.is_empty()
+            {
+                (
+                    false,
+                    fg.stream_reasoning[last.reasoning.len()..].to_string(),
+                )
+            } else {
+                (true, fg.stream_reasoning.clone())
+            };
+            last.reasoning = fg.stream_reasoning.clone();
+            super::render::emit(
+                push,
+                &PushEnvelope::ReasoningDelta {
+                    session: session.clone(),
+                    reset,
+                    append,
+                },
+            );
+        }
+    } else if !last.reasoning.is_empty() {
+        last.reasoning.clear();
+        super::render::emit(
+            push,
+            &PushEnvelope::Reasoning {
+                session: session.clone(),
+                text: String::new(),
+            },
+        );
+    }
+
+    // --- Status: working flag (waiting or mid-stream) + optional toast (+ severity) ---
+    // The toast TEXT and its `ToastKind` severity both ride here; a safeguard/harness
+    // block surfaces as an Error toast (set_toast), an informational notice as Info.
+    // `waiting` mirrors the daemon's `is_ui_busy()` (SessionSnapshot.working, which
+    // already folds in streaming); do not OR in shadow-derived `fg.streaming.is_some()`
+    // here — that re-derivation is what let a stale `Some("")` shadow buffer (a
+    // zero-token stream error) desync the Status envelope and leave the stop
+    // button / cooking indicator stuck forever. The differ now forces a resync on
+    // any streaming Option flip, so `waiting` alone is authoritative.
+    let working = fg.waiting;
+    let toast = fg.toast.as_ref().map(|(t, _, _)| t.clone());
+    let toast_kind = fg.toast.as_ref().map(|(_, _, k)| match k {
+        crate::app::state::ToastKind::Error => "error",
+        crate::app::state::ToastKind::Info => "info",
+    });
+    // Usage counters: mirror the daemon's `SessionRuntime` totals (rehydrated onto the
+    // shadow verbatim in `client_shadow/session.rs`), folded into the dedupe tuple so a
+    // counter tick alone (no transcript/toast change) still re-emits `Status`.
+    let tokens_in = fg.tokens_in;
+    let tokens_cached = fg.tokens_cached;
+    let tokens_out = fg.tokens_out;
+    let cost = fg.cost;
+    let status = (
+        working,
+        toast,
+        toast_kind,
+        tokens_in,
+        tokens_cached,
+        tokens_out,
+        cost,
+        mode.clone(),
+    );
+    if last.status.as_ref() != Some(&status) {
+        last.status = Some(status.clone());
+        super::render::emit(
+            push,
+            &PushEnvelope::Status {
+                session,
+                working: status.0,
+                toast: status.1,
+                toast_kind: status.2,
+                tokens_in: status.3,
+                tokens_cached: status.4,
+                tokens_out: status.5,
+                cost: status.6,
+                mode: status.7,
+            },
+        );
+    }
+
+    // --- Loading: the TUI startup splash, projected for the GUI's own overlay ---
+    // `Mode::Loading` is per-session (unlike the `agent_mode` label above), so this
+    // reads the SAME foreground mode `view::draw` would switch on locally. Dedup on
+    // the whole `(active, workspace, awareness)` triple (any phase tick re-emits).
+    //
+    // INVARIANT the webview relies on: once a `Loading{active:true, ...}` frame has
+    // gone out, leaving `Mode::Loading` MUST emit exactly one terminal
+    // `Loading{active:false, workspace:"done", awareness:"done"}` frame before this
+    // fn goes quiet again — that single `false` is the ONLY signal telling the
+    // webview to dismiss its overlay (there is no separate "closed" event). This is
+    // why the else-branch below gates on `last.last_loading`'s stored `active` flag
+    // (the last frame WE emitted) rather than on `shadow`'s own prior-tick mode —
+    // it is the single source of truth for "does the webview still think a splash
+    // is showing".
+    match shadow.mode() {
+        Mode::Loading(s) => {
+            let triple = (
+                true,
+                warm_status_label(&s.workspace).to_string(),
+                warm_status_label(&s.awareness).to_string(),
+            );
+            if last.last_loading.as_ref() != Some(&triple) {
+                last.last_loading = Some(triple.clone());
+                super::render::emit(
+                    push,
+                    &PushEnvelope::Loading {
+                        active: triple.0,
+                        workspace: triple.1,
+                        awareness: triple.2,
+                    },
+                );
+            }
+        }
+        _ => {
+            if last
+                .last_loading
+                .as_ref()
+                .is_some_and(|(active, ..)| *active)
+            {
+                let triple = (false, "done".to_string(), "done".to_string());
+                last.last_loading = Some(triple.clone());
+                super::render::emit(
+                    push,
+                    &PushEnvelope::Loading {
+                        active: triple.0,
+                        workspace: triple.1,
+                        awareness: triple.2,
+                    },
+                );
+            }
+        }
+    }
+}
+
+/// Build + fingerprint + maybe emit the structural `Snapshot` envelope.
+/// Extracted so stream-only ticks can skip the O(transcript) work entirely.
+fn push_snapshot_if_changed(
+    shadow: &AppState,
+    fg: &crate::app::state::SessionRuntime,
+    session: &str,
+    mode: &str,
+    push: &dyn Fn(String),
+    last: &mut PushState,
+    view: super::StreamView,
+) {
     // Title: the session's display name, falling back to its id, then a constant.
     let title = fg
         .session
@@ -474,7 +666,7 @@ pub(super) fn serialize_and_push(
     if last.snapshot_fp != Some(fp) {
         last.snapshot_fp = Some(fp);
         let env = PushEnvelope::Snapshot {
-            session: session.clone(),
+            session: session.to_string(),
             state: "attached",
             messages,
             title,
@@ -484,10 +676,7 @@ pub(super) fn serialize_and_push(
             file_changes,
             plan_todos,
             attachments,
-            // Cloned (not moved): `mode` is re-read below for the `Status` envelope,
-            // which is emitted unconditionally every call, unlike this `Snapshot`
-            // block which only runs when the fingerprint changed.
-            mode: mode.clone(),
+            mode: mode.to_string(),
             pending_steer,
             awaiting_approval,
             approval_reason,
@@ -500,178 +689,6 @@ pub(super) fn serialize_and_push(
         };
         if let Ok(json) = serde_json::to_string(&env) {
             push(json);
-        }
-    }
-
-    // --- Stream: prefer StreamDelta (append) when last is a prefix; else full reset ---
-    match &fg.streaming {
-        Some(text) => {
-            if last.stream.as_deref() != Some(text.as_str()) {
-                let (reset, append) = match last.stream.as_deref() {
-                    Some(prev) if text.starts_with(prev) => (false, text[prev.len()..].to_string()),
-                    _ => (true, text.clone()),
-                };
-                last.stream = Some(text.clone());
-                super::render::emit(
-                    push,
-                    &PushEnvelope::StreamDelta {
-                        session: session.clone(),
-                        reset,
-                        append,
-                    },
-                );
-            }
-        }
-        None => {
-            if last.stream.is_some() {
-                last.stream = None;
-                // Empty full StreamMsg keeps clear-on-commit compatible with older GUIs
-                // and matches the historical contract.
-                super::render::emit(
-                    push,
-                    &PushEnvelope::StreamMsg {
-                        session: session.clone(),
-                        text: String::new(),
-                    },
-                );
-            }
-        }
-    }
-
-    // --- Reasoning: same delta-when-prefix pattern ---
-    if !fg.stream_reasoning.is_empty() {
-        if last.reasoning != fg.stream_reasoning {
-            let (reset, append) = if fg.stream_reasoning.starts_with(&last.reasoning)
-                && !last.reasoning.is_empty()
-            {
-                (
-                    false,
-                    fg.stream_reasoning[last.reasoning.len()..].to_string(),
-                )
-            } else {
-                (true, fg.stream_reasoning.clone())
-            };
-            last.reasoning = fg.stream_reasoning.clone();
-            super::render::emit(
-                push,
-                &PushEnvelope::ReasoningDelta {
-                    session: session.clone(),
-                    reset,
-                    append,
-                },
-            );
-        }
-    } else if !last.reasoning.is_empty() {
-        last.reasoning.clear();
-        super::render::emit(
-            push,
-            &PushEnvelope::Reasoning {
-                session: session.clone(),
-                text: String::new(),
-            },
-        );
-    }
-
-    // --- Status: working flag (waiting or mid-stream) + optional toast (+ severity) ---
-    // The toast TEXT and its `ToastKind` severity both ride here; a safeguard/harness
-    // block surfaces as an Error toast (set_toast), an informational notice as Info.
-    // `waiting` mirrors the daemon's `is_ui_busy()` (SessionSnapshot.working, which
-    // already folds in streaming); do not OR in shadow-derived `fg.streaming.is_some()`
-    // here — that re-derivation is what let a stale `Some("")` shadow buffer (a
-    // zero-token stream error) desync the Status envelope and leave the stop
-    // button / cooking indicator stuck forever. The differ now forces a resync on
-    // any streaming Option flip, so `waiting` alone is authoritative.
-    let working = fg.waiting;
-    let toast = fg.toast.as_ref().map(|(t, _, _)| t.clone());
-    let toast_kind = fg.toast.as_ref().map(|(_, _, k)| match k {
-        crate::app::state::ToastKind::Error => "error",
-        crate::app::state::ToastKind::Info => "info",
-    });
-    // Usage counters: mirror the daemon's `SessionRuntime` totals (rehydrated onto the
-    // shadow verbatim in `client_shadow/session.rs`), folded into the dedupe tuple so a
-    // counter tick alone (no transcript/toast change) still re-emits `Status`.
-    let tokens_in = fg.tokens_in;
-    let tokens_cached = fg.tokens_cached;
-    let tokens_out = fg.tokens_out;
-    let cost = fg.cost;
-    let status = (
-        working,
-        toast,
-        toast_kind,
-        tokens_in,
-        tokens_cached,
-        tokens_out,
-        cost,
-        mode.clone(),
-    );
-    if last.status.as_ref() != Some(&status) {
-        last.status = Some(status.clone());
-        super::render::emit(
-            push,
-            &PushEnvelope::Status {
-                session,
-                working: status.0,
-                toast: status.1,
-                toast_kind: status.2,
-                tokens_in: status.3,
-                tokens_cached: status.4,
-                tokens_out: status.5,
-                cost: status.6,
-                mode: status.7,
-            },
-        );
-    }
-
-    // --- Loading: the TUI startup splash, projected for the GUI's own overlay ---
-    // `Mode::Loading` is per-session (unlike the `agent_mode` label above), so this
-    // reads the SAME foreground mode `view::draw` would switch on locally. Dedup on
-    // the whole `(active, workspace, awareness)` triple (any phase tick re-emits).
-    //
-    // INVARIANT the webview relies on: once a `Loading{active:true, ...}` frame has
-    // gone out, leaving `Mode::Loading` MUST emit exactly one terminal
-    // `Loading{active:false, workspace:"done", awareness:"done"}` frame before this
-    // fn goes quiet again — that single `false` is the ONLY signal telling the
-    // webview to dismiss its overlay (there is no separate "closed" event). This is
-    // why the else-branch below gates on `last.last_loading`'s stored `active` flag
-    // (the last frame WE emitted) rather than on `shadow`'s own prior-tick mode —
-    // it is the single source of truth for "does the webview still think a splash
-    // is showing".
-    match shadow.mode() {
-        Mode::Loading(s) => {
-            let triple = (
-                true,
-                warm_status_label(&s.workspace).to_string(),
-                warm_status_label(&s.awareness).to_string(),
-            );
-            if last.last_loading.as_ref() != Some(&triple) {
-                last.last_loading = Some(triple.clone());
-                super::render::emit(
-                    push,
-                    &PushEnvelope::Loading {
-                        active: triple.0,
-                        workspace: triple.1,
-                        awareness: triple.2,
-                    },
-                );
-            }
-        }
-        _ => {
-            if last
-                .last_loading
-                .as_ref()
-                .is_some_and(|(active, ..)| *active)
-            {
-                let triple = (false, "done".to_string(), "done".to_string());
-                last.last_loading = Some(triple.clone());
-                super::render::emit(
-                    push,
-                    &PushEnvelope::Loading {
-                        active: triple.0,
-                        workspace: triple.1,
-                        awareness: triple.2,
-                    },
-                );
-            }
         }
     }
 }
