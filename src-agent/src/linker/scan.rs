@@ -138,7 +138,12 @@ struct ModuleContext {
 ///
 /// Returns the graph and the `ProjectIndex` built during the scan.
 pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
-    scan_roots_cancellable(roots, None).expect("uncancellable scan always returns Some")
+    match scan_roots_cancellable(roots, None) {
+        Some(pair) => pair,
+        // Uncancellable path never returns None; keep a defined empty graph
+        // rather than panicking under deny(clippy::expect_used).
+        None => (ImportGraph::new(), ProjectIndex::new()),
+    }
 }
 
 /// Like [`scan_roots`], but cooperatively cancels when `cancel` is set.

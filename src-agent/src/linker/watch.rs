@@ -121,12 +121,37 @@ pub fn create_watcher(
 }
 
 /// Install NonRecursive watches on every non-pruned directory under `roots`.
+///
+/// Best-effort: individual `watch()` failures (e.g. ENOSPC / max_user_watches)
+/// are logged and skipped so partial coverage remains instead of disabling the
+/// entire watcher. Returns `Ok` unless *no* directory could be watched.
 pub fn install_watches(watcher: &mut dyn Watcher, roots: &[PathBuf]) -> Result<(), String> {
     let dirs = collect_watchable_dirs(roots);
+    if dirs.is_empty() {
+        return Ok(());
+    }
+    let mut ok = 0usize;
+    let mut fail = 0usize;
+    let mut last_err = String::new();
     for dir in &dirs {
-        watcher
-            .watch(dir.as_path(), RecursiveMode::NonRecursive)
-            .map_err(|e| format!("failed to watch {}: {e}", dir.display()))?;
+        match watcher.watch(dir.as_path(), RecursiveMode::NonRecursive) {
+            Ok(()) => ok += 1,
+            Err(e) => {
+                fail += 1;
+                last_err = format!("{}: {e}", dir.display());
+            }
+        }
+    }
+    if ok == 0 {
+        return Err(format!(
+            "failed to watch any of {} dirs (last error: {last_err})",
+            dirs.len()
+        ));
+    }
+    if fail > 0 {
+        eprintln!(
+            "[linker] install_watches: {ok} ok, {fail} failed (partial coverage; last: {last_err})"
+        );
     }
     Ok(())
 }
@@ -382,13 +407,39 @@ pub fn handle_events(
         }
     }
 
-    // new_dirs: tell the daemon to attach watches (graph is not mutated).
-    outcome.new_dirs = batch.new_dirs;
+    // new_dirs: attach watches in the daemon AND request a scoped owner-root
+    // rebuild. Files already present under a newly watched dir produce no
+    // create events once the watch is installed (same blind spot as notify's
+    // recursive add_watch_by_event), so without a rebuild they never enter the
+    // graph — especially after git checkout / unzip during debounce settle.
+    outcome.new_dirs = batch.new_dirs.clone();
+    for dir in &batch.new_dirs {
+        let dir_str = normalize_lexical(&dir.to_string_lossy().replace('\\', "/"));
+        let owner = project_index
+            .file_owner(&dir_str)
+            .map(|s| s.to_string())
+            .or_else(|| {
+                // Dir may not be in the index yet — longest registered root prefix.
+                project_index
+                    .roots()
+                    .iter()
+                    .filter(|r| dir_str == **r || dir_str.starts_with(&format!("{r}/")))
+                    .max_by_key(|r| r.len())
+                    .cloned()
+            });
+        if let Some(owner) = owner {
+            let pb = PathBuf::from(&owner);
+            if !outcome.full_rebuild_roots.iter().any(|r| r == &pb) {
+                outcome.full_rebuild_roots.push(pb);
+            }
+        }
+    }
 
     graph.file_count = graph.nodes.len();
     if !batch.source_exists.is_empty()
         || !batch.source_deleted.is_empty()
         || !batch.config_changed.is_empty()
+        || !batch.new_dirs.is_empty()
     {
         graph.generation += 1;
     }
