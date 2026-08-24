@@ -11,7 +11,10 @@ import {
 import { useKoma } from '../../store/koma'
 import { baseName, type ContentSearchFileHit } from '../../store/coding'
 import { BrailleSpinner } from '../BrailleSpinner'
-import { Empty, IconBtn } from './helpers'
+import { Empty } from './helpers'
+
+/** Fixed rail width — chevron column; find/replace share one left edge. */
+const RAIL = 'w-5'
 
 function ToggleChip({
   on,
@@ -30,10 +33,10 @@ function ToggleChip({
       title={title}
       aria-pressed={on}
       onClick={onClick}
-      className={`flex h-[22px] w-[22px] flex-none items-center justify-center rounded-sm text-[11px] transition-colors ${
+      className={`flex h-6 w-6 flex-none items-center justify-center rounded-sm transition-colors ${
         on
-          ? 'bg-koma-accent/20 text-koma-accent'
-          : 'text-koma-dim opacity-70 hover:bg-koma-hover hover:text-koma-fg hover:opacity-100'
+          ? 'bg-koma-accent/18 text-koma-accent'
+          : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'
       }`}
     >
       {children}
@@ -41,7 +44,7 @@ function ToggleChip({
   )
 }
 
-/** Bordered input row: field grows; trailing controls stay fixed on the right. */
+/** VS Code-like bordered field: input + optional trailing action cluster. */
 function FieldRow({
   children,
   trailing,
@@ -50,17 +53,27 @@ function FieldRow({
   trailing?: ReactNode
 }) {
   return (
-    <div className="flex h-7 min-w-0 items-center gap-0.5 rounded border border-koma-border bg-koma-bg px-1 focus-within:border-koma-fg/35">
-      {children}
+    <div className="flex h-7 min-w-0 items-stretch rounded-[3px] border border-koma-border bg-koma-bg focus-within:border-koma-fg/40">
+      <div className="flex min-w-0 flex-1 items-center">{children}</div>
       {trailing ? (
-        <div className="flex flex-none items-center gap-px">{trailing}</div>
+        <div className="flex flex-none items-center gap-px border-l border-koma-border/80 px-0.5">
+          {trailing}
+        </div>
       ) : null}
     </div>
   )
 }
 
 function fieldInputClass() {
-  return 'h-full min-w-0 flex-1 bg-transparent px-1.5 font-mono text-[12px] leading-none text-koma-fg outline-none placeholder:text-koma-dim placeholder:opacity-55'
+  return 'h-full w-full min-w-0 bg-transparent px-2 font-mono text-[12px] leading-none text-koma-fg outline-none placeholder:text-koma-dim placeholder:opacity-50'
+}
+
+function FilterLabel({ children }: { children: ReactNode }) {
+  return (
+    <div className="select-none px-0.5 pt-0.5 text-[11px] leading-none text-koma-dim opacity-80">
+      {children}
+    </div>
+  )
 }
 
 function SearchHitGroup({
@@ -137,7 +150,6 @@ export function CodingSearchPanel({ root }: { root: string | null }) {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
 
-  // Debounced search on query / flags / globs / root.
   useEffect(() => {
     if (!root) return
     if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -158,12 +170,10 @@ export function CodingSearchPanel({ root }: { root: string | null }) {
     runSearch,
   ])
 
-  // Expand all result files by default when a new result set lands.
   useEffect(() => {
     setExpandedFiles(new Set(search.results.map((r) => r.path)))
   }, [search.results])
 
-  // Keep local glob inputs in sync when store is reset externally.
   useEffect(() => {
     setIncludeLocal(search.includeGlob)
   }, [search.includeGlob])
@@ -171,7 +181,6 @@ export function CodingSearchPanel({ root }: { root: string | null }) {
     setExcludeLocal(search.excludeGlob)
   }, [search.excludeGlob])
 
-  // Focus search when the pane mounts (tab switch into Search).
   useEffect(() => {
     const t = window.setTimeout(() => searchInputRef.current?.focus(), 0)
     return () => window.clearTimeout(t)
@@ -196,24 +205,24 @@ export function CodingSearchPanel({ root }: { root: string | null }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/*
-        VS Code Search layout:
-        [chevron] [ find …………………… Aa ab .* ]
-                  [ replace ……………  ⇄  ]
-        files to include
-        [ ………………………………… ]
-        files to exclude
-        [ ………………………………… ]
+        VS Code Search symmetry:
+          [>] [ find …………… | Aa ab .* ]
+              [ replace ……… | ⇄      ]
+          files to include
+          [ …………………………… ]
+          files to exclude
+          [ …………………………… ]
+        Chevron is a fixed rail; find/replace/filters share one column width.
       */}
       <div className="flex flex-none flex-col gap-1.5 border-b border-koma-border px-2 py-2">
         <div className="flex min-w-0 items-start gap-1">
-          {/* Toggle replace — fixed rail so find/replace boxes share the same left edge */}
           <button
             type="button"
             title={search.replaceOpen ? 'Hide replace' : 'Toggle Replace mode'}
             aria-label={search.replaceOpen ? 'Hide replace' : 'Show replace'}
             aria-expanded={search.replaceOpen}
             onClick={() => setFlag('replaceOpen', !search.replaceOpen)}
-            className="mt-0.5 flex h-7 w-5 flex-none items-center justify-center rounded-sm text-koma-dim opacity-70 hover:bg-koma-hover hover:text-koma-fg hover:opacity-100"
+            className={`${RAIL} mt-0.5 flex h-7 flex-none items-center justify-center rounded-sm text-koma-dim hover:bg-koma-hover hover:text-koma-fg`}
           >
             {search.replaceOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           </button>
@@ -259,9 +268,9 @@ export function CodingSearchPanel({ root }: { root: string | null }) {
             {search.replaceOpen ? (
               <FieldRow
                 trailing={
-                  <IconBtn
-                    label="Replace All (Ctrl+Enter)"
-                    tone="emerald"
+                  <ToggleChip
+                    on={false}
+                    title="Replace All (Ctrl+Enter)"
                     onClick={() => {
                       if (!canReplace) return
                       replaceAll(root)
@@ -270,9 +279,9 @@ export function CodingSearchPanel({ root }: { root: string | null }) {
                     {search.replacing ? (
                       <BrailleSpinner size={13} />
                     ) : (
-                      <ReplaceAll size={13} />
+                      <ReplaceAll size={14} className="text-koma-fg opacity-80" />
                     )}
-                  </IconBtn>
+                  </ToggleChip>
                 }
               >
                 <input
@@ -293,81 +302,71 @@ export function CodingSearchPanel({ root }: { root: string | null }) {
           </div>
         </div>
 
-        {/* files to include / exclude — always labeled like VS Code */}
-        <div className="flex flex-col gap-1 pl-6">
-          <button
-            type="button"
-            className="flex items-center gap-1 text-left text-[11px] text-koma-dim opacity-75 hover:opacity-100"
-            onClick={() => setFlag('filtersOpen', !search.filtersOpen)}
-          >
-            {search.filtersOpen ? (
-              <ChevronDown size={11} className="flex-none" />
-            ) : (
-              <ChevronRight size={11} className="flex-none" />
-            )}
-            <span>files to include</span>
-          </button>
-          {search.filtersOpen ? (
-            <>
-              <FieldRow>
-                <input
-                  value={includeLocal}
-                  onChange={(e) => setIncludeLocal(e.target.value)}
-                  onBlur={commitGlobs}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      commitGlobs()
-                    }
-                  }}
-                  placeholder="e.g. *.ts, src/**"
-                  spellCheck={false}
-                  className={fieldInputClass()}
-                />
-              </FieldRow>
-              <div className="text-[11px] text-koma-dim opacity-75">files to exclude</div>
-              <FieldRow>
-                <input
-                  value={excludeLocal}
-                  onChange={(e) => setExcludeLocal(e.target.value)}
-                  onBlur={commitGlobs}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      commitGlobs()
-                    }
-                  }}
-                  placeholder="e.g. **/node_modules/**"
-                  spellCheck={false}
-                  className={fieldInputClass()}
-                />
-              </FieldRow>
-            </>
-          ) : null}
+        {/* Filters: same column as find/replace (rail spacer keeps left edge). */}
+        <div className="flex min-w-0 items-start gap-1">
+          <div className={`${RAIL} flex-none`} aria-hidden />
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <FilterLabel>files to include</FilterLabel>
+            <FieldRow>
+              <input
+                value={includeLocal}
+                onChange={(e) => setIncludeLocal(e.target.value)}
+                onBlur={commitGlobs}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    commitGlobs()
+                  }
+                }}
+                placeholder="e.g. *.ts, src/**"
+                spellCheck={false}
+                className={fieldInputClass()}
+              />
+            </FieldRow>
+            <FilterLabel>files to exclude</FilterLabel>
+            <FieldRow>
+              <input
+                value={excludeLocal}
+                onChange={(e) => setExcludeLocal(e.target.value)}
+                onBlur={commitGlobs}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    commitGlobs()
+                  }
+                }}
+                placeholder="e.g. **/node_modules/**"
+                spellCheck={false}
+                className={fieldInputClass()}
+              />
+            </FieldRow>
+          </div>
         </div>
 
-        {/* status line */}
-        <div className="flex min-h-[14px] items-center gap-1.5 pl-6 text-[10px] text-koma-dim">
-          {search.loading ? (
-            <>
-              <BrailleSpinner size={10} />
-              <span>Searching…</span>
-            </>
-          ) : search.error ? (
-            <span className="text-koma-error">{search.error}</span>
-          ) : search.replaceError ? (
-            <span className="text-koma-error">{search.replaceError}</span>
-          ) : search.lastReplaceSummary ? (
-            <span className="text-koma-fg opacity-70">{search.lastReplaceSummary}</span>
-          ) : search.query.trim() ? (
-            <span>
-              {totalMatches} result{totalMatches === 1 ? '' : 's'} in {search.results.length} file
-              {search.results.length === 1 ? '' : 's'}
-              {search.truncated ? ' (truncated)' : ''}
-            </span>
-          ) : (
-            <span className="opacity-50">Type to search workspace</span>
-          )}
+        <div className="flex min-h-[14px] min-w-0 items-center gap-1.5">
+          <div className={`${RAIL} flex-none`} aria-hidden />
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 text-[10px] text-koma-dim">
+            {search.loading ? (
+              <>
+                <BrailleSpinner size={10} />
+                <span>Searching…</span>
+              </>
+            ) : search.error ? (
+              <span className="text-koma-error">{search.error}</span>
+            ) : search.replaceError ? (
+              <span className="text-koma-error">{search.replaceError}</span>
+            ) : search.lastReplaceSummary ? (
+              <span className="text-koma-fg opacity-70">{search.lastReplaceSummary}</span>
+            ) : search.query.trim() ? (
+              <span>
+                {totalMatches} result{totalMatches === 1 ? '' : 's'} in {search.results.length}{' '}
+                file{search.results.length === 1 ? '' : 's'}
+                {search.truncated ? ' (truncated)' : ''}
+              </span>
+            ) : (
+              <span className="opacity-50">Type to search workspace</span>
+            )}
+          </div>
         </div>
       </div>
 

@@ -46,8 +46,8 @@ export function useBrailleFrame(): string {
 // replaces. Do NOT pass `animate-spin` — the braille frames self-animate.
 //
 // Main-thread driven (setInterval + React). Fine for chrome badges. For the
-// session-switch / cold-boot overlay use {@link BootSpinner} instead — CSS
-// compositor animation survives Snapshot parse jank.
+// session-switch / cold-boot overlay use {@link BootBrailleSpinner} instead —
+// CSS stepped braille (no React ticks) so it keeps moving under Snapshot jank.
 export function BrailleSpinner({
   size = 14,
   className = '',
@@ -68,34 +68,12 @@ export function BrailleSpinner({
 }
 
 /**
- * Game-style loader: CSS `transform` spin on the compositor thread.
- * Keeps moving while JS is blocked on fat Snapshot apply / React reconcile.
- * Prefer this on full-screen boot/switch overlays; keep {@link BrailleSpinner}
- * for small in-app busy affordances.
+ * Braille loader for boot/switch overlays — same glyphs as {@link BrailleSpinner},
+ * but driven by CSS keyframes (no setInterval / React re-render). Prefer this on
+ * full-screen attach loaders; keep BrailleSpinner for small in-app badges.
  */
-export function BootSpinner({
+export function BootBrailleSpinner({
   size = 28,
-  className = '',
-}: {
-  size?: number
-  className?: string
-}) {
-  const border = Math.max(2, Math.round(size / 12))
-  return (
-    <span
-      aria-hidden
-      className={`koma-boot-ring ${className}`}
-      style={{ width: size, height: size, borderWidth: border }}
-    />
-  )
-}
-
-/**
- * Small CSS braille glyph for phase rows (no React re-render per frame).
- * Content keyframes are best-effort; still cheaper than useSyncExternalStore.
- */
-export function BootBrailleGlyph({
-  size = 13,
   className = '',
 }: {
   size?: number
@@ -109,3 +87,6 @@ export function BootBrailleGlyph({
     />
   )
 }
+
+/** @deprecated alias — use {@link BootBrailleSpinner} */
+export const BootBrailleGlyph = BootBrailleSpinner
