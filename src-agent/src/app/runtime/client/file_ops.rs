@@ -831,6 +831,11 @@ pub(crate) fn finalize_download_bytes(
 }
 
 /// Native save-file dialog + write. `Ok(true)` written, `Ok(false)` cancelled.
+///
+/// `rfd` is only linked under the `gui` feature (CI builds with
+/// `--no-default-features`). Headless/TUI builds get a clear error instead of
+/// a compile failure.
+#[cfg(feature = "gui")]
 fn save_bytes_with_dialog(suggested_name: &str, bytes: &[u8]) -> Result<bool, String> {
     let chosen = rfd::FileDialog::new()
         .set_file_name(suggested_name)
@@ -841,6 +846,11 @@ fn save_bytes_with_dialog(suggested_name: &str, bytes: &[u8]) -> Result<bool, St
             .map(|_| true)
             .map_err(|e| format!("failed to write {}: {e}", path.display())),
     }
+}
+
+#[cfg(not(feature = "gui"))]
+fn save_bytes_with_dialog(_suggested_name: &str, _bytes: &[u8]) -> Result<bool, String> {
+    Err("save-as requires the gui feature".to_string())
 }
 
 fn decode_b64(s: &str) -> Result<Vec<u8>, String> {
