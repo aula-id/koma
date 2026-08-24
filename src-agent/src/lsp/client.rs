@@ -200,7 +200,7 @@ struct OpenDoc {
     text: String,
 }
 
-struct ServerSession {
+pub struct ServerSession {
     /// Catalogue / spawn id (e.g. `rust-analyzer`).
     id: String,
     /// Display name for the footer drawer.
@@ -233,9 +233,69 @@ pub struct LspPendingRequest {
 }
 
 impl LspPendingRequest {
-    pub fn wait(self) -> Result<serde_json::Value, String> {
+    fn wait_raw(self) -> Result<serde_json::Value, String> {
         self.io.request(self.method, self.params)
     }
+
+    pub fn wait_completions(self) -> Result<Vec<LspCompletionItem>, String> {
+        Ok(parse_completions(&self.wait_raw()?))
+    }
+
+    pub fn wait_resolve(self, original: &LspCompletionItem) -> Result<LspCompletionItem, String> {
+        let result = self.wait_raw()?;
+        let mut resolved = parse_one_completion(&result).unwrap_or_else(|| original.clone());
+        if resolved.label.is_empty() {
+            resolved.label = original.label.clone();
+        }
+        if resolved.data.is_none() {
+            resolved.data = original.data.clone();
+        }
+        Ok(resolved)
+    }
+
+    pub fn wait_hover(self) -> Result<Option<LspHover>, String> {
+        let result = self.wait_raw()?;
+        if result.is_null() {
+            return Ok(None);
+        }
+        Ok(parse_hover(&result))
+    }
+
+    pub fn wait_locations(self) -> Result<Vec<LspLocation>, String> {
+        Ok(parse_locations(&self.wait_raw()?))
+    }
+
+    pub fn wait_document_symbols(self) -> Result<Vec<LspDocumentSymbol>, String> {
+        Ok(parse_document_symbols(&self.wait_raw()?))
+    }
+}
+
+/// Process spawn + reader threads ready; `initialize` not yet sent.
+/// Run [`UninitializedSession::handshake`] **outside** `Mutex<LspManager>`.
+pub struct UninitializedSession {
+    session: ServerSession,
+}
+
+impl UninitializedSession {
+    pub fn handshake(self) -> Result<ServerSession, String> {
+        self.session.handshake()?;
+        Ok(self.session)
+    }
+}
+
+/// Result of [`LspManager::prepare_did_open`].
+pub enum DidOpenPrep {
+    /// didOpen already applied (server was live or reduced to didChange).
+    Done,
+    /// Caller must handshake outside the lock, then [`LspManager::finish_did_open`].
+    NeedsHandshake {
+        uninit: UninitializedSession,
+        spawn_id: String,
+        uri: String,
+        language_id: String,
+        text: String,
+        root_path: PathBuf,
+    },
 }
 
 /// Host-owned map of live language servers + open documents.
@@ -296,6 +356,7 @@ impl LspManager {
     }
 
     /// `textDocument/didOpen` — start the matching server lazily if needed.
+    #[allow(dead_code)] // public API; host uses prepare_did_open + finish
     pub fn did_open(
         &mut self,
         root: &str,
@@ -652,6 +713,9 @@ impl LspManager {
     }
 
     /// Spawn a fresh server into `servers[spawn_id]` (slot must be empty).
+    ///
+    /// Process start is cheap; **`initialize` still blocks here**. Prefer
+    /// [`Self::prepare_did_open`] / host-side handshake for the hot open path.
     fn spawn_into_slot(
         &mut self,
         spawn_id: &str,
@@ -660,6 +724,22 @@ impl LspManager {
         args: &[&str],
         root_path: &Path,
     ) -> Result<(), String> {
+        let uninit = self.spawn_process_only(spawn_id, spec, binary, args, root_path)?;
+        let session = uninit.handshake()?;
+        self.servers.insert(spawn_id.to_string(), session);
+        self.emit_runtime();
+        Ok(())
+    }
+
+    /// Start the child + reader threads and emit "starting", without `initialize`.
+    fn spawn_process_only(
+        &mut self,
+        spawn_id: &str,
+        spec: &ServerSpec,
+        binary: &Path,
+        args: &[&str],
+        root_path: &Path,
+    ) -> Result<UninitializedSession, String> {
         let display = display_name_for(spawn_id, spec);
         push_runtime_snapshot(
             &*self.push,
@@ -676,7 +756,7 @@ impl LspManager {
             false,
             &[],
         );
-        let session = match spawn_server(
+        match spawn_server_process(
             spawn_id,
             display,
             binary,
@@ -684,7 +764,7 @@ impl LspManager {
             root_path,
             Arc::clone(&self.push),
         ) {
-            Ok(s) => s,
+            Ok(session) => Ok(UninitializedSession { session }),
             Err(e) => {
                 push_runtime_snapshot(
                     &*self.push,
@@ -701,10 +781,143 @@ impl LspManager {
                     false,
                     &[],
                 );
-                return Err(e);
+                Err(e)
             }
+        }
+    }
+
+    /// Prepare didOpen: under the manager lock, resolve server + either return
+    /// a live notify path or an [`UninitializedSession`] whose handshake must
+    /// run **outside** the lock, then [`Self::finish_did_open`].
+    pub fn prepare_did_open(
+        &mut self,
+        root: &str,
+        path: &str,
+        language_id: &str,
+        text: &str,
+    ) -> Result<DidOpenPrep, String> {
+        let abs = abs_path(root, path)?;
+        let uri = path_to_uri(&abs);
+        let derived = language_id_for_path(path);
+        let language_id = if derived != "plaintext" {
+            derived
+        } else if !language_id.is_empty() {
+            language_id
+        } else {
+            derived
         };
-        self.servers.insert(spawn_id.to_string(), session);
+        if let Some(existing) = self.docs.get(&uri) {
+            if existing.language_id == language_id {
+                self.did_change(root, path, text)?;
+                return Ok(DidOpenPrep::Done);
+            }
+            self.did_close(&uri);
+        }
+
+        let ext = abs
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let spec = catalog::find_by_extension(&ext)
+            .ok_or_else(|| format!("no language server for .{ext}"))?;
+        let (spawn_id, binary, args) = resolve_spawn(spec, &ext)?;
+        let root_path = PathBuf::from(root);
+        if !root_path.is_absolute() {
+            return Err("workspace root must be absolute".into());
+        }
+
+        if self.servers.get(&spawn_id).is_some_and(|s| s.is_dead()) {
+            let has_siblings = self.docs.values().any(|d| d.server_id == spawn_id);
+            if has_siblings {
+                // Revive still handshakes under lock today — rare path.
+                self.revive_server(&spawn_id)?;
+            } else {
+                self.drop_dead_server(&spawn_id);
+            }
+        }
+
+        if let Some(session) = self.servers.get(&spawn_id) {
+            if session.root != root_path {
+                return Err(format!(
+                    "LSP {} already running for {} (requested {})",
+                    session.id,
+                    session.root.display(),
+                    root_path.display()
+                ));
+            }
+            // Server ready — notify under lock (no long RPC).
+            self.finish_did_open_notify(
+                &spawn_id,
+                uri,
+                language_id,
+                text,
+                root_path,
+            )?;
+            return Ok(DidOpenPrep::Done);
+        }
+
+        let uninit = self.spawn_process_only(&spawn_id, spec, &binary, &args, &root_path)?;
+        Ok(DidOpenPrep::NeedsHandshake {
+            uninit,
+            spawn_id,
+            uri,
+            language_id: language_id.to_string(),
+            text: text.to_string(),
+            root_path,
+        })
+    }
+
+    /// Insert a handshaken session and send didOpen (after lock re-acquired).
+    pub fn finish_did_open(
+        &mut self,
+        spawn_id: String,
+        session: ServerSession,
+        uri: String,
+        language_id: String,
+        text: String,
+        root_path: PathBuf,
+    ) -> Result<(), String> {
+        self.servers.insert(spawn_id.clone(), session);
+        self.emit_runtime();
+        self.finish_did_open_notify(&spawn_id, uri, &language_id, &text, root_path)
+    }
+
+    fn finish_did_open_notify(
+        &mut self,
+        spawn_id: &str,
+        uri: String,
+        language_id: &str,
+        text: &str,
+        root_path: PathBuf,
+    ) -> Result<(), String> {
+        let version = 1;
+        {
+            let session = self
+                .servers
+                .get_mut(spawn_id)
+                .ok_or_else(|| "server missing after spawn".to_string())?;
+            let params = serde_json::json!({
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": language_id,
+                    "version": version,
+                    "text": text,
+                }
+            });
+            session.notify("textDocument/didOpen", params)?;
+        }
+
+        self.docs.insert(
+            uri,
+            OpenDoc {
+                server_id: spawn_id.to_string(),
+                root: root_path,
+                language_id: language_id.to_string(),
+                version,
+                text: text.to_string(),
+            },
+        );
         self.emit_runtime();
         Ok(())
     }
@@ -729,11 +942,8 @@ impl LspManager {
 
     /// If the session is dead (or missing), respawn and re-didOpen all its docs.
     ///
-    /// **Known stall:** revive/spawn runs `initialize` under the caller's
-    /// `Mutex<LspManager>` (via `uri_io`). First open and server revive still
-    /// serialize every LSP feature for the whole handshake (seconds for
-    /// rust-analyzer). Request wait itself is unlocked via [`LspPendingRequest`];
-    /// hoisting spawn out of the lock is a follow-up.
+    /// Revive still runs `initialize` under the caller lock (rare vs first open).
+    /// First open uses [`Self::prepare_did_open`] so handshake is outside the lock.
     fn ensure_server_alive(&mut self, server_id: &str) -> Result<(), String> {
         let dead = match self.servers.get(server_id) {
             Some(s) => s.is_dead(),
@@ -823,6 +1033,86 @@ impl ServerSession {
         // via try_wait on a duplicated approach: lock isn't needed; Child::try_wait
         // requires &mut self, so we only trust the runtime phase from the reader.
         false
+    }
+
+    /// `initialize` → `initialized`. Call outside `Mutex<LspManager>`.
+    fn handshake(&self) -> Result<(), String> {
+        let root = &self.root;
+        let root_uri = path_to_uri(root);
+        let init_params = serde_json::json!({
+            "processId": std::process::id(),
+            "clientInfo": { "name": "koma", "version": env!("CARGO_PKG_VERSION") },
+            "rootUri": root_uri,
+            "rootPath": root.to_string_lossy(),
+            "capabilities": {
+                "textDocument": {
+                    "synchronization": {
+                        "dynamicRegistration": false,
+                        "willSave": false,
+                        "willSaveWaitUntil": false,
+                        "didSave": true
+                    },
+                    "completion": {
+                        "completionItem": {
+                            "snippetSupport": true,
+                            "commitCharactersSupport": true,
+                            "documentationFormat": ["plaintext", "markdown"],
+                            "deprecatedSupport": true,
+                            "preselectSupport": true,
+                            "insertReplaceSupport": false,
+                            "labelDetailsSupport": true,
+                            "resolveSupport": {
+                                "properties": [
+                                    "documentation",
+                                    "detail",
+                                    "additionalTextEdits",
+                                    "insertText",
+                                    "insertTextFormat",
+                                    "command"
+                                ]
+                            }
+                        },
+                        "contextSupport": true,
+                        "completionItemKind": { "valueSet": null }
+                    },
+                    "hover": {
+                        "contentFormat": ["plaintext", "markdown"]
+                    },
+                    "definition": {
+                        "linkSupport": false
+                    },
+                    "references": {
+                        "dynamicRegistration": false
+                    },
+                    "documentSymbol": {
+                        "hierarchicalDocumentSymbolSupport": true
+                    },
+                    "publishDiagnostics": {
+                        "relatedInformation": false,
+                        "versionSupport": false
+                    }
+                },
+                "window": {
+                    "workDoneProgress": true
+                },
+                "workspace": {
+                    "workspaceFolders": true
+                }
+            },
+            "workspaceFolders": [{
+                "uri": root_uri,
+                "name": root.file_name().and_then(|s| s.to_str()).unwrap_or("workspace")
+            }],
+            "initializationOptions": {}
+        });
+        let _caps = self.request("initialize", init_params)?;
+        self.notify("initialized", serde_json::json!({}))?;
+        {
+            let mut st = self.runtime.lock().unwrap_or_else(|p| p.into_inner());
+            st.phase = "ready".into();
+            st.error = None;
+        }
+        Ok(())
     }
 
     fn to_runtime_row(&self, open_docs: u32) -> LspRuntimeServer {
@@ -931,7 +1221,7 @@ fn write_message(stdin: &Arc<Mutex<ChildStdin>>, msg: &serde_json::Value) -> Res
         .map_err(|e| format!("LSP stdin write failed: {e}"))
 }
 
-fn spawn_server(
+fn spawn_server_process(
     id: &str,
     name: String,
     binary: &Path,
@@ -1014,7 +1304,7 @@ fn spawn_server(
         })
         .map_err(|e| format!("lsp reader spawn: {e}"))?;
 
-    let session = ServerSession {
+    Ok(ServerSession {
         id: id.to_string(),
         name,
         root: root.to_path_buf(),
@@ -1025,85 +1315,7 @@ fn spawn_server(
             pending,
         },
         runtime,
-    };
-
-    // initialize → initialized
-    let root_uri = path_to_uri(root);
-    let init_params = serde_json::json!({
-        "processId": std::process::id(),
-        "clientInfo": { "name": "koma", "version": env!("CARGO_PKG_VERSION") },
-        "rootUri": root_uri,
-        "rootPath": root.to_string_lossy(),
-        "capabilities": {
-            "textDocument": {
-                "synchronization": {
-                    "dynamicRegistration": false,
-                    "willSave": false,
-                    "willSaveWaitUntil": false,
-                    "didSave": true
-                },
-                "completion": {
-                    "completionItem": {
-                        "snippetSupport": true,
-                        "commitCharactersSupport": true,
-                        "documentationFormat": ["plaintext", "markdown"],
-                        "deprecatedSupport": true,
-                        "preselectSupport": true,
-                        "insertReplaceSupport": false,
-                        "labelDetailsSupport": true,
-                        "resolveSupport": {
-                            "properties": [
-                                "documentation",
-                                "detail",
-                                "additionalTextEdits",
-                                "insertText",
-                                "insertTextFormat",
-                                "command"
-                            ]
-                        }
-                    },
-                    "contextSupport": true,
-                    "completionItemKind": { "valueSet": null }
-                },
-                "hover": {
-                    "contentFormat": ["plaintext", "markdown"]
-                },
-                "definition": {
-                    "linkSupport": false
-                },
-                "references": {
-                    "dynamicRegistration": false
-                },
-                "documentSymbol": {
-                    "hierarchicalDocumentSymbolSupport": true
-                },
-                "publishDiagnostics": {
-                    "relatedInformation": false,
-                    "versionSupport": false
-                }
-            },
-            "window": {
-                "workDoneProgress": true
-            },
-            "workspace": {
-                "workspaceFolders": true
-            }
-        },
-        "workspaceFolders": [{
-            "uri": root_uri,
-            "name": root.file_name().and_then(|s| s.to_str()).unwrap_or("workspace")
-        }],
-        "initializationOptions": {}
-    });
-    let _caps = session.request("initialize", init_params)?;
-    session.notify("initialized", serde_json::json!({}))?;
-    {
-        let mut st = session.runtime.lock().unwrap_or_else(|p| p.into_inner());
-        st.phase = "ready".into();
-        st.error = None;
-    }
-
-    Ok(session)
+    })
 }
 
 struct ReaderCtx {
@@ -1624,22 +1836,6 @@ pub fn language_id_for_path(path: &str) -> &'static str {
 }
 
 // ─── Result parsers ──────────────────────────────────────────────────────────
-
-pub fn parse_completions_public(result: &serde_json::Value) -> Vec<LspCompletionItem> {
-    parse_completions(result)
-}
-pub fn parse_one_completion_public(it: &serde_json::Value) -> Option<LspCompletionItem> {
-    parse_one_completion(it)
-}
-pub fn parse_hover_public(result: &serde_json::Value) -> Option<LspHover> {
-    parse_hover(result)
-}
-pub fn parse_locations_public(result: &serde_json::Value) -> Vec<LspLocation> {
-    parse_locations(result)
-}
-pub fn parse_document_symbols_public(result: &serde_json::Value) -> Vec<LspDocumentSymbol> {
-    parse_document_symbols(result)
-}
 
 fn parse_completions(result: &serde_json::Value) -> Vec<LspCompletionItem> {
     let items = if let Some(arr) = result.as_array() {
