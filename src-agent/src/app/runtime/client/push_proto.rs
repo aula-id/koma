@@ -120,6 +120,18 @@ pub(super) enum PushEnvelope {
     /// naturally by the next `Snapshot { state:"attached" }` — whose `session` equals `to`
     /// on a resolved swap.
     Switching { to: String },
+    /// Append-only transcript growth: new committed messages after a shared prefix with
+    /// the last Snapshot. Same session; React concatenates onto `messages`.
+    SnapshotTail {
+        session: String,
+        messages: Vec<PushMsg>,
+    },
+    /// In-place update of the last committed message (tool result join, content tweak).
+    /// React replaces `messages[messages.length-1]` when lengths still match.
+    SnapshotSetLast {
+        session: String,
+        message: PushMsg,
+    },
     /// The FULL live streaming buffer (React REPLACES the live bubble). Emitted every
     /// frame the buffer changes; an empty `text` clears the bubble on commit.
     /// Prefer [`StreamDelta`] for steady growth; this full-replace path remains for

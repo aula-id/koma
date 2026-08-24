@@ -25,7 +25,7 @@ use super::push_intercept;
 use super::push_proto::{
     push_analytics, push_ext_op_result, push_file_diff, push_installed_extensions,
     push_remote_state, push_store_catalogue, push_store_detail, push_switching, push_tutorial_chat_done,
-    push_usage_preview,
+    push_usage_preview, PushMsg,
 };
 use super::render::{advance_local_animations, ConnectRemoteRequest, FRAME_BUDGET};
 use super::shadow::apply_frame;
@@ -55,6 +55,10 @@ type StatusSnapshot = (
 pub(super) struct PushState {
     /// Fingerprint of the last `Snapshot` (session + messages + title + palette).
     pub(super) snapshot_fp: Option<u64>,
+    /// Last full projected messages list (for SnapshotTail / SnapshotSetLast).
+    pub(super) last_messages: Option<Vec<PushMsg>>,
+    /// Fingerprint of non-message Snapshot fields (must match for message patches).
+    pub(super) last_meta_fp: Option<u64>,
     /// Last streaming buffer pushed (`None` once cleared).
     pub(super) stream: Option<String>,
     /// Last reasoning buffer pushed (empty once cleared).
@@ -85,6 +89,8 @@ impl PushState {
     pub(super) fn new() -> Self {
         Self {
             snapshot_fp: None,
+            last_messages: None,
+            last_meta_fp: None,
             stream: None,
             reasoning: String::new(),
             status: None,
