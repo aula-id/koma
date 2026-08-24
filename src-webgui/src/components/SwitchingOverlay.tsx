@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { Check, Minus, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import type { LoadPhase } from '../store/koma'
-import { BootBrailleGlyph, BootSpinner } from './BrailleSpinner'
+import { BootBrailleSpinner } from './BrailleSpinner'
 
 // Duplicated from Titlebar.tsx's private (unexported) `post` helper — this
 // overlay covers the titlebar region too and needs the same win-drag/maximize
@@ -49,7 +49,7 @@ function useErrorTint(): string {
 function PhaseGlyph({ phase, errorTint }: { phase: LoadPhase; errorTint: string }) {
   switch (phase) {
     case 'running':
-      return <BootBrailleGlyph size={13} className="flex-none" />
+      return <BootBrailleSpinner size={13} className="flex-none" />
     case 'done':
       return <Check size={13} className="flex-none text-koma-fg opacity-50" />
     case 'skipped':
@@ -81,9 +81,8 @@ function PhaseRow({
 
 // TUI-parity startup splash — the koma wordmark + the two cold-session warm-up
 // phase lines (indexing workspace / reading project docs), mirroring the TUI's
-// startup screen. Phase "running" glyphs use CSS (BootBrailleGlyph), not the
-// shared JS braille ticker, so they keep stepping while Snapshot apply blocks
-// the main thread.
+// startup screen. Phase "running" glyphs use CSS braille, not the shared JS
+// ticker, so they keep stepping while Snapshot apply blocks the main thread.
 function LoadingSplash({ workspace, awareness }: { workspace: LoadPhase; awareness: LoadPhase }) {
   const errorTint = useErrorTint()
 
@@ -108,9 +107,9 @@ function LoadingSplash({ workspace, awareness }: { workspace: LoadPhase; awarene
 // Hub lands (attach failure/degrade — the host always bounces back to the
 // swapper with a fresh Hub push on that path).
 //
-// Presentation is game-style / side-loaded: the center spinner is a CSS
-// compositor `transform` ring (BootSpinner), not BrailleSpinner's setInterval.
-// Fat Snapshot parse can still stall React, but the ring keeps painting.
+// Presentation is game-style / side-loaded: center loader is CSS stepped
+// braille (BootBrailleSpinner), not BrailleSpinner's setInterval — same glyphs,
+// no React tick. Fat Snapshot parse can stall React; CSS keeps stepping.
 //
 // The in-flight swap itself cannot be interrupted (the client thread blocks
 // synchronously on attach), so Cancel is best-effort: it just dismisses the
@@ -190,7 +189,7 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
           </>
         ) : (
           <>
-            <BootSpinner size={28} />
+            <BootBrailleSpinner size={28} className="text-koma-accent" />
             <div className="text-[13px] text-koma-fg opacity-70">
               {remoteConnecting
                 ? `${remoteState.state.replace('_', ' ')} ${to?.replace(/^remote /, '')}…`
