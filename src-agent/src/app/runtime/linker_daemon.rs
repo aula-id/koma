@@ -856,22 +856,24 @@ fn watcher_loop(state: Arc<DaemonState>) {
         }
         let paths: Vec<PathBuf> = batch.into_iter().collect();
 
-        // Cancel any in-flight full scan so it won't overwrite incremental
-        // mutations. Always re-queue a single-flight full scan when we
-        // supersede — without this, a cancelled first index leaves the graph
-        // near-empty forever (generation already > 0, Ready, no re-trigger).
-        // request_scan coalesces, so this cannot restack threads.
+        // Cancel in-flight full scan only after a successful full index has
+        // published (applied_revision > 0). During the first index there is no
+        // incremental graph worth preserving — cancelling + re-queue under a
+        // sustained event stream restarts forever and the first scan never lands.
+        // request_scan still coalesces when we do supersede.
         let superseded = {
             let mut coord = state
                 .scan_coordinator
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             let was_in_flight = coord.in_flight.is_some();
-            if was_in_flight {
+            if was_in_flight && coord.applied_revision > 0 {
                 coord.desired_revision = coord.desired_revision.saturating_add(1);
                 coord.cancel.store(true, Ordering::SeqCst);
+                true
+            } else {
+                false
             }
-            was_in_flight
         };
 
         // Hold publication_lock during the graph + project_index mutation

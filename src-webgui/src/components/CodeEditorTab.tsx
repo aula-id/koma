@@ -395,7 +395,6 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     // unknown. If refreshLsp never lands (empty forever), fail open after a
     // short grace so LSP still attaches for managed/path servers.
     if (lspServers.length === 0) {
-      const openedAt = performance.now()
       // Effect re-runs when lspServers updates; only schedule a late retry once.
       const t = window.setTimeout(() => {
         if (lspOpenedRef.current) return
@@ -418,7 +417,6 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
           tab.path,
           fileState.content!,
         )
-        void openedAt
       }, 2500)
       return () => window.clearTimeout(t)
     }
