@@ -137,6 +137,7 @@ struct ModuleContext {
 /// gets an `ImportRef` + `Resolution` installed atomically with graph edges.
 ///
 /// Returns the graph and the `ProjectIndex` built during the scan.
+#[allow(dead_code)] // public API for tests/tools; daemon uses cancellable path
 pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
     match scan_roots_cancellable(roots, None) {
         Some(pair) => pair,

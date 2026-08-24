@@ -224,15 +224,57 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                 language_id,
                 text,
             } => {
-                if let Ok(mut g) = mgr.lock() {
-                    if let Err(e) = g.did_open(&root, &path, &language_id, &text) {
-                        // Missing server is expected until install — don't spam the error log
-                        // for "no language server for .md" style misses on every open.
+                // prepare under lock → handshake outside lock → finish under lock
+                let prep = match mgr.lock() {
+                    Ok(mut g) => g.prepare_did_open(&root, &path, &language_id, &text),
+                    Err(_) => return,
+                };
+                let prep = match prep {
+                    Ok(p) => p,
+                    Err(e) => {
                         if !e.contains("no language server") && !e.contains("not installed") {
                             crate::model::store::append_global_error_log(
                                 "lsp",
                                 &format!("didOpen {path}: {e}"),
                             );
+                        }
+                        return;
+                    }
+                };
+                match prep {
+                    crate::lsp::client::DidOpenPrep::Done => {}
+                    crate::lsp::client::DidOpenPrep::NeedsHandshake {
+                        uninit,
+                        spawn_id,
+                        uri,
+                        language_id,
+                        text,
+                        root_path,
+                    } => {
+                        let session = match uninit.handshake() {
+                            Ok(s) => s,
+                            Err(e) => {
+                                crate::model::store::append_global_error_log(
+                                    "lsp",
+                                    &format!("didOpen handshake {path}: {e}"),
+                                );
+                                return;
+                            }
+                        };
+                        if let Ok(mut g) = mgr.lock() {
+                            if let Err(e) = g.finish_did_open(
+                                spawn_id,
+                                session,
+                                uri,
+                                language_id,
+                                text,
+                                root_path,
+                            ) {
+                                crate::model::store::append_global_error_log(
+                                    "lsp",
+                                    &format!("didOpen finish {path}: {e}"),
+                                );
+                            }
                         }
                     }
                 }
@@ -267,8 +309,8 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                     Err(_) => Err("lsp manager lock poisoned".into()),
                 };
                 let (items, error) = match pending {
-                    Ok(p) => match p.wait() {
-                        Ok(result) => (crate::lsp::client::parse_completions_public(&result), None),
+                    Ok(p) => match p.wait_completions() {
+                        Ok(items) => (items, None),
                         Err(e) => (Vec::new(), Some(e)),
                     },
                     Err(e) => (Vec::new(), Some(e)),
@@ -286,18 +328,8 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                     Err(_) => Err("lsp manager lock poisoned".into()),
                 };
                 let (resolved, error) = match pending {
-                    Ok(p) => match p.wait() {
-                        Ok(result) => {
-                            let mut resolved = crate::lsp::client::parse_one_completion_public(&result)
-                                .unwrap_or_else(|| (*item).clone());
-                            if resolved.label.is_empty() {
-                                resolved.label = item.label.clone();
-                            }
-                            if resolved.data.is_none() {
-                                resolved.data = item.data.clone();
-                            }
-                            (Some(resolved), None)
-                        }
+                    Ok(p) => match p.wait_resolve(&item) {
+                        Ok(it) => (Some(it), None),
                         Err(e) => (None, Some(e)),
                     },
                     Err(e) => (None, Some(e)),
@@ -316,9 +348,8 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                     Err(_) => Err("lsp manager lock poisoned".into()),
                 };
                 let (hover, error) = match pending {
-                    Ok(p) => match p.wait() {
-                        Ok(result) if result.is_null() => (None, None),
-                        Ok(result) => (crate::lsp::client::parse_hover_public(&result), None),
+                    Ok(p) => match p.wait_hover() {
+                        Ok(h) => (h, None),
                         Err(e) => (None, Some(e)),
                     },
                     Err(e) => (None, Some(e)),
@@ -337,8 +368,8 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                     Err(_) => Err("lsp manager lock poisoned".into()),
                 };
                 let (locations, error) = match pending {
-                    Ok(p) => match p.wait() {
-                        Ok(result) => (crate::lsp::client::parse_locations_public(&result), None),
+                    Ok(p) => match p.wait_locations() {
+                        Ok(locs) => (locs, None),
                         Err(e) => (Vec::new(), Some(e)),
                     },
                     Err(e) => (Vec::new(), Some(e)),
@@ -358,8 +389,8 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                     Err(_) => Err("lsp manager lock poisoned".into()),
                 };
                 let (locations, error) = match pending {
-                    Ok(p) => match p.wait() {
-                        Ok(result) => (crate::lsp::client::parse_locations_public(&result), None),
+                    Ok(p) => match p.wait_locations() {
+                        Ok(locs) => (locs, None),
                         Err(e) => (Vec::new(), Some(e)),
                     },
                     Err(e) => (Vec::new(), Some(e)),
@@ -376,8 +407,8 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                     Err(_) => Err("lsp manager lock poisoned".into()),
                 };
                 let (symbols, error) = match pending {
-                    Ok(p) => match p.wait() {
-                        Ok(result) => (crate::lsp::client::parse_document_symbols_public(&result), None),
+                    Ok(p) => match p.wait_document_symbols() {
+                        Ok(syms) => (syms, None),
                         Err(e) => (Vec::new(), Some(e)),
                     },
                     Err(e) => (Vec::new(), Some(e)),
