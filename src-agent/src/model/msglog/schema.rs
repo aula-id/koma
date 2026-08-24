@@ -9,10 +9,10 @@
 //! `schema_meta` is a key/value table that gates one-shot migrations (e.g.
 //! FTS backfill) so `open()` never re-runs expensive init work.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Condvar, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use rusqlite::Connection;
@@ -39,14 +39,28 @@ pub(super) fn role_str(role: Role) -> &'static str {
     }
 }
 
-/// Per-process set of paths whose schema has already been run. Prevents the
-/// expensive `ensure_schema` (especially FTS backfill) from executing more
-/// than once per `messages.sqlite` file across all `open()` calls in this
-/// process — the primary fix for the multi-minute stall on large sessions.
+/// Per-path schema state. Ready paths skip work; InFlight waiters park on the
+/// condvar instead of spinning 20 ms polls for the whole multi-minute backfill.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SchemaPathState {
+    InFlight,
+    Ready,
+}
+
+/// Per-process map of paths whose schema has already been run (or is running).
+/// Prevents the expensive `ensure_schema` (especially FTS backfill) from
+/// executing more than once per `messages.sqlite` file across all `open()`
+/// calls in this process — the primary fix for the multi-minute stall on
+/// large sessions.
 ///
-/// Entries are only inserted *after* schema/backfill succeeds. The mutex is
+/// Entries become `Ready` only after schema/backfill succeeds. The mutex is
 /// released while backfill runs so other session DBs are not blocked.
-static SCHEMA_READY: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+static SCHEMA_READY: OnceLock<(Mutex<HashMap<PathBuf, SchemaPathState>>, Condvar)> =
+    OnceLock::new();
+
+/// How long a waiter will park for an in-flight backfill before giving up and
+/// trying to claim the path itself (avoids indefinite hang if the owner dies).
+const SCHEMA_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Rows per FTS backfill batch. Keeps each INSERT bounded so a huge archive
 /// does not lock the connection (and the process-wide ready-set) for minutes
@@ -79,43 +93,73 @@ pub fn open(session_dir: &Path) -> Result<Connection> {
 ///
 /// Fast path: path already ready → return under a short lock.
 /// Slow path: claim the path as in-flight (so concurrent opens of the *same*
-/// DB wait/retry instead of double-backfilling), drop the lock, run
+/// DB wait on a condvar instead of double-backfilling), drop the lock, run
 /// schema+backfill, then mark ready only on success. Other session paths are
 /// never blocked by this work.
 fn ensure_schema_once(path: &Path, conn: &Connection) -> Result<()> {
-    let set = SCHEMA_READY.get_or_init(|| Mutex::new(HashSet::new()));
+    let pair = SCHEMA_READY.get_or_init(|| (Mutex::new(HashMap::new()), Condvar::new()));
+    let (lock, cvar) = pair;
     let key = path.to_path_buf();
-    let inflight_key = {
-        let mut p = path.to_path_buf();
-        p.push(".inflight");
-        p
-    };
 
     loop {
-        {
-            let mut guard = set.lock().unwrap_or_else(|e| e.into_inner());
-            if guard.contains(&key) {
-                return Ok(());
+        let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.get(&key).copied() {
+            Some(SchemaPathState::Ready) => return Ok(()),
+            Some(SchemaPathState::InFlight) => {
+                // Another thread is backfilling this path — park with a bound.
+                let wait_start = Instant::now();
+                loop {
+                    let (g, timed_out) = match cvar.wait_timeout(guard, Duration::from_secs(1)) {
+                        Ok((g, res)) => (g, res.timed_out()),
+                        Err(e) => (e.into_inner().0, true),
+                    };
+                    guard = g;
+                    match guard.get(&key).copied() {
+                        Some(SchemaPathState::Ready) => return Ok(()),
+                        Some(SchemaPathState::InFlight) => {
+                            if wait_start.elapsed() >= SCHEMA_WAIT_TIMEOUT {
+                                // Owner stuck or dead — drop the stale claim and
+                                // try to take over rather than hang forever.
+                                guard.remove(&key);
+                                break;
+                            }
+                            if timed_out {
+                                continue;
+                            }
+                        }
+                        None => break, // claim freed; fall through to take it
+                    }
+                }
+                // Fall through to try claiming.
             }
-            if guard.contains(&inflight_key) {
-                // Another thread is backfilling this path — wait briefly.
-                drop(guard);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                continue;
-            }
-            guard.insert(inflight_key.clone());
+            None => {}
         }
+
+        // Claim in-flight.
+        if matches!(
+            guard.get(&key).copied(),
+            Some(SchemaPathState::Ready | SchemaPathState::InFlight)
+        ) {
+            // Raced with another claim/ready — loop and re-evaluate.
+            continue;
+        }
+        guard.insert(key.clone(), SchemaPathState::InFlight);
+        drop(guard);
 
         let result = ensure_schema(conn);
 
-        let mut guard = set.lock().unwrap_or_else(|e| e.into_inner());
-        guard.remove(&inflight_key);
+        let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         match result {
             Ok(()) => {
-                guard.insert(key);
+                guard.insert(key, SchemaPathState::Ready);
+                cvar.notify_all();
                 return Ok(());
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                guard.remove(&key);
+                cvar.notify_all();
+                return Err(e);
+            }
         }
     }
 }
@@ -297,6 +341,9 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
         //
         // Start from max existing FTS rowid so a partial prior attempt resumes
         // instead of re-inserting (duplicate rowid would error on FTS5).
+        // Advance the cursor from the *batch* (max id among candidates), not
+        // from MAX(messages_fts.rowid) after INSERT — a concurrent writer can
+        // append higher FTS rowids and push that MAX past unprocessed messages.
         let mut after_id: i64 = conn
             .query_row(
                 "SELECT COALESCE(MAX(rowid), 0) FROM messages_fts",
@@ -305,25 +352,31 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             )
             .unwrap_or(0);
         loop {
-            let inserted = conn.execute(
+            // Bound of this batch from the messages table alone.
+            let batch_max: Option<i64> = conn
+                .query_row(
+                    "SELECT MAX(id) FROM (
+                         SELECT id FROM messages WHERE id > ?1 ORDER BY id LIMIT ?2
+                     )",
+                    rusqlite::params![after_id, FTS_BACKFILL_BATCH],
+                    |r| r.get(0),
+                )
+                .unwrap_or(None);
+            let Some(batch_max) = batch_max else {
+                break;
+            };
+            conn.execute(
                 "INSERT INTO messages_fts(rowid, content, role)
                  SELECT m.id, m.content, m.role
                  FROM messages m
-                 WHERE m.id > ?1
-                 ORDER BY m.id
-                 LIMIT ?2",
-                rusqlite::params![after_id, FTS_BACKFILL_BATCH],
+                 WHERE m.id > ?1 AND m.id <= ?2
+                   AND NOT EXISTS (
+                       SELECT 1 FROM messages_fts f WHERE f.rowid = m.id
+                   )
+                 ORDER BY m.id",
+                rusqlite::params![after_id, batch_max],
             )?;
-            if inserted == 0 {
-                break;
-            }
-            after_id = conn
-                .query_row(
-                    "SELECT COALESCE(MAX(rowid), 0) FROM messages_fts",
-                    [],
-                    |r| r.get(0),
-                )
-                .unwrap_or(after_id);
+            after_id = batch_max;
         }
         conn.execute(
             "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('fts_backfilled', 1)",
