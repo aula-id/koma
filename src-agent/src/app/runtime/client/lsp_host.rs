@@ -259,12 +259,19 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                 character,
                 request_id,
             } => {
-                let (items, error) = match mgr.lock() {
-                    Ok(mut g) => match g.completion(&root, &path, line, character) {
-                        Ok(items) => (items, None),
+                // Phase 1: resolve SessionIo under the lock (fast).
+                // Phase 2: wait on the RPC with the lock released so concurrent
+                // hover/didChange/CodeLens do not serialize on Mutex<LspManager>.
+                let pending = match mgr.lock() {
+                    Ok(mut g) => g.completion(&root, &path, line, character),
+                    Err(_) => Err("lsp manager lock poisoned".into()),
+                };
+                let (items, error) = match pending {
+                    Ok(p) => match p.wait() {
+                        Ok(result) => (crate::lsp::client::parse_completions_public(&result), None),
                         Err(e) => (Vec::new(), Some(e)),
                     },
-                    Err(_) => (Vec::new(), Some("lsp manager lock poisoned".into())),
+                    Err(e) => (Vec::new(), Some(e)),
                 };
                 push_lsp_completion(&*push, request_id, items, error);
             }
@@ -274,12 +281,26 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                 item,
                 request_id,
             } => {
-                let (resolved, error) = match mgr.lock() {
-                    Ok(mut g) => match g.resolve_completion(&root, &path, *item) {
-                        Ok(it) => (Some(it), None),
+                let pending = match mgr.lock() {
+                    Ok(mut g) => g.resolve_completion(&root, &path, &*item),
+                    Err(_) => Err("lsp manager lock poisoned".into()),
+                };
+                let (resolved, error) = match pending {
+                    Ok(p) => match p.wait() {
+                        Ok(result) => {
+                            let mut resolved = crate::lsp::client::parse_one_completion_public(&result)
+                                .unwrap_or_else(|| (*item).clone());
+                            if resolved.label.is_empty() {
+                                resolved.label = item.label.clone();
+                            }
+                            if resolved.data.is_none() {
+                                resolved.data = item.data.clone();
+                            }
+                            (Some(resolved), None)
+                        }
                         Err(e) => (None, Some(e)),
                     },
-                    Err(_) => (None, Some("lsp manager lock poisoned".into())),
+                    Err(e) => (None, Some(e)),
                 };
                 push_lsp_completion_resolve(&*push, request_id, resolved, error);
             }
@@ -290,12 +311,17 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                 character,
                 request_id,
             } => {
-                let (hover, error) = match mgr.lock() {
-                    Ok(mut g) => match g.hover(&root, &path, line, character) {
-                        Ok(h) => (h, None),
+                let pending = match mgr.lock() {
+                    Ok(mut g) => g.hover(&root, &path, line, character),
+                    Err(_) => Err("lsp manager lock poisoned".into()),
+                };
+                let (hover, error) = match pending {
+                    Ok(p) => match p.wait() {
+                        Ok(result) if result.is_null() => (None, None),
+                        Ok(result) => (crate::lsp::client::parse_hover_public(&result), None),
                         Err(e) => (None, Some(e)),
                     },
-                    Err(_) => (None, Some("lsp manager lock poisoned".into())),
+                    Err(e) => (None, Some(e)),
                 };
                 push_lsp_hover(&*push, request_id, hover, error);
             }
@@ -306,12 +332,16 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                 character,
                 request_id,
             } => {
-                let (locations, error) = match mgr.lock() {
-                    Ok(mut g) => match g.definition(&root, &path, line, character) {
-                        Ok(locs) => (locs, None),
+                let pending = match mgr.lock() {
+                    Ok(mut g) => g.definition(&root, &path, line, character),
+                    Err(_) => Err("lsp manager lock poisoned".into()),
+                };
+                let (locations, error) = match pending {
+                    Ok(p) => match p.wait() {
+                        Ok(result) => (crate::lsp::client::parse_locations_public(&result), None),
                         Err(e) => (Vec::new(), Some(e)),
                     },
-                    Err(_) => (Vec::new(), Some("lsp manager lock poisoned".into())),
+                    Err(e) => (Vec::new(), Some(e)),
                 };
                 push_lsp_definition(&*push, request_id, locations, error);
             }
@@ -323,14 +353,16 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                 include_declaration,
                 request_id,
             } => {
-                let (locations, error) = match mgr.lock() {
-                    Ok(mut g) => {
-                        match g.references(&root, &path, line, character, include_declaration) {
-                            Ok(locs) => (locs, None),
-                            Err(e) => (Vec::new(), Some(e)),
-                        }
-                    }
-                    Err(_) => (Vec::new(), Some("lsp manager lock poisoned".into())),
+                let pending = match mgr.lock() {
+                    Ok(mut g) => g.references(&root, &path, line, character, include_declaration),
+                    Err(_) => Err("lsp manager lock poisoned".into()),
+                };
+                let (locations, error) = match pending {
+                    Ok(p) => match p.wait() {
+                        Ok(result) => (crate::lsp::client::parse_locations_public(&result), None),
+                        Err(e) => (Vec::new(), Some(e)),
+                    },
+                    Err(e) => (Vec::new(), Some(e)),
                 };
                 push_lsp_references(&*push, request_id, locations, error);
             }
@@ -339,12 +371,16 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                 path,
                 request_id,
             } => {
-                let (symbols, error) = match mgr.lock() {
-                    Ok(mut g) => match g.document_symbols(&root, &path) {
-                        Ok(syms) => (syms, None),
+                let pending = match mgr.lock() {
+                    Ok(mut g) => g.document_symbols(&root, &path),
+                    Err(_) => Err("lsp manager lock poisoned".into()),
+                };
+                let (symbols, error) = match pending {
+                    Ok(p) => match p.wait() {
+                        Ok(result) => (crate::lsp::client::parse_document_symbols_public(&result), None),
                         Err(e) => (Vec::new(), Some(e)),
                     },
-                    Err(_) => (Vec::new(), Some("lsp manager lock poisoned".into())),
+                    Err(e) => (Vec::new(), Some(e)),
                 };
                 push_lsp_document_symbol(&*push, request_id, symbols, error);
             }
