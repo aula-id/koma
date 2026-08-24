@@ -282,7 +282,7 @@ pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
                 request_id,
             } => {
                 let pending = match mgr.lock() {
-                    Ok(mut g) => g.resolve_completion(&root, &path, &*item),
+                    Ok(mut g) => g.resolve_completion(&root, &path, &item),
                     Err(_) => Err("lsp manager lock poisoned".into()),
                 };
                 let (resolved, error) = match pending {
