@@ -1,6 +1,7 @@
 import { MessageSquare, FileDiff, Settings, CircleHelp, GraduationCap, Bot, Terminal, GitGraph, BarChart3, Blocks, Puzzle, Code2, X, ChevronLeft, ChevronRight, Package, Network, SquareTerminal } from 'lucide-react'
 import { useKoma } from '../store/koma'
-import { useRef, useEffect, useState, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from 'react'
+import { useRef, useEffect, useState, useCallback, type MouseEvent as ReactMouseEvent } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { fileKey } from '../store/coding'
 import { DirtyCloseConfirm } from './DirtyCloseConfirm'
 
@@ -9,6 +10,17 @@ import { DirtyCloseConfirm } from './DirtyCloseConfirm'
 function parentDir(path: string): string {
   const parts = path.split('/').filter(Boolean)
   return parts.length > 1 ? parts[parts.length - 2] : ''
+}
+
+type CodingDirtyFlags = {
+  dirty: boolean
+  conflict: boolean
+  error: boolean
+  binary: boolean
+  tooLarge: boolean
+  saving: boolean
+  /** True when the file has never been saved (new buffer). */
+  savedContentNull: boolean
 }
 
 // VSCode-style tab strip over the main content column. tabs[0] is the permanent,
@@ -21,51 +33,28 @@ export function TabBar() {
   const activeTabId = useKoma((s) => s.ui.activeTabId)
   const activateTab = useKoma((s) => s.activateTab)
   const closeTab = useKoma((s) => s.closeTab)
-  // Fingerprint of dirty/conflict/saving only — content keystrokes must not
-  // re-render the whole tab strip (zustand v5 has no equality-fn overload).
-  const codingDirtyFp = useKoma((s) => {
-    const parts: string[] = []
-    for (const [k, f] of Object.entries(s.coding.files)) {
-      if (!f) continue
-      if (!(f.dirty || f.conflict || f.saving)) continue
-      parts.push(
-        `${k}\0${f.dirty ? 1 : 0}${f.conflict ? 1 : 0}${f.error ? 1 : 0}${f.binary ? 1 : 0}${f.tooLarge ? 1 : 0}${f.saving ? 1 : 0}${f.savedContent === null ? 1 : 0}`,
-      )
-    }
-    parts.sort()
-    return parts.join('\n')
-  })
-  const codingDirty = useMemo(() => {
-    const out: Record<
-      string,
-      {
-        dirty: boolean
-        conflict: boolean
-        error: boolean
-        binary: boolean
-        tooLarge: boolean
-        saving: boolean
-        savedContentNull: boolean
+  // Only dirty/conflict/saving flags — content keystrokes must not re-render
+  // the whole strip. useShallow (zustand v5) replaces the removed equality-fn
+  // overload and avoids a fragile positional string fingerprint.
+  const codingDirty = useKoma(
+    useShallow((s) => {
+      const out: Record<string, CodingDirtyFlags> = {}
+      for (const [k, f] of Object.entries(s.coding.files)) {
+        if (!f) continue
+        if (!(f.dirty || f.conflict || f.saving)) continue
+        out[k] = {
+          dirty: !!f.dirty,
+          conflict: !!f.conflict,
+          error: !!f.error,
+          binary: !!f.binary,
+          tooLarge: !!f.tooLarge,
+          saving: !!f.saving,
+          savedContentNull: f.savedContent === null,
+        }
       }
-    > = {}
-    if (!codingDirtyFp) return out
-    for (const line of codingDirtyFp.split('\n')) {
-      const sep = line.indexOf('\0')
-      if (sep < 0) continue
-      const k = line.slice(0, sep)
-      const f = line.slice(sep + 1)
-      out[k] = {
-        dirty: f[0] === '1',
-        conflict: f[1] === '1',
-        error: f[2] === '1',
-        binary: f[3] === '1',
-        tooLarge: f[4] === '1',
-        saving: f[5] === '1',
-        savedContentNull: f[6] === '1',
-      }
-    }
-    return out
-  }, [codingDirtyFp])
+      return out
+    }),
+  )
   const codingAutosave = useKoma((s) => !!s.settingsValues?.codingAutosave)
   const saveCodingFile = useKoma((s) => s.saveCodingFile)
   const [dirtyClose, setDirtyClose] = useState<{
