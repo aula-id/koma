@@ -929,6 +929,10 @@ export type PushEnvelope =
   // `to` is the target session id/uuid — resolved to a friendly hub label,
   // falling back to any optimistic label already raised, then a generic one.
   | { k: 'Switching'; to: string }
+  // Append-only transcript growth (same session); concat onto messages.
+  | { k: 'SnapshotTail'; session: string; messages: ChatMessage[] }
+  // In-place last-message update (tool result join, etc.).
+  | { k: 'SnapshotSetLast'; session: string; message: ChatMessage }
   | { k: 'StreamMsg'; session: string; text: string }
   // Incremental stream: reset replaces the bubble; else append. Empty append+reset clears.
   | { k: 'StreamDelta'; session: string; reset: boolean; append: string }
@@ -3165,6 +3169,40 @@ export const useKoma = create<KomaState>((set, get) => ({
           return { ui: { ...s.ui, switchingTo: row?.name ?? 'session' } }
         })
         break
+      case 'SnapshotTail': {
+        // Same-session append-only growth. Ignore if session drifted (full
+        // Snapshot will resync). Map planTodos-style fields aren't present.
+        if (env.session !== get().session.id) break
+        const mapped = (env.messages ?? []).map((m: any) => ({
+          ...m,
+          toolCalls: m.toolCalls ?? m.tool_calls,
+        }))
+        if (mapped.length === 0) break
+        set((s) => ({
+          session: {
+            ...s.session,
+            messages: s.session.messages.concat(mapped),
+          },
+        }))
+        break
+      }
+      case 'SnapshotSetLast': {
+        if (env.session !== get().session.id) break
+        const m: any = env.message
+        if (!m) break
+        const mapped = {
+          ...m,
+          toolCalls: m.toolCalls ?? m.tool_calls,
+        }
+        set((s) => {
+          const msgs = s.session.messages
+          if (msgs.length === 0) return s
+          const next = msgs.slice()
+          next[next.length - 1] = mapped
+          return { session: { ...s.session, messages: next } }
+        })
+        break
+      }
       case 'StreamMsg':
         set((s) => ({ session: { ...s.session, stream: env.text } }))
         break

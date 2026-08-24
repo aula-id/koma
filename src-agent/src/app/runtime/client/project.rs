@@ -663,34 +663,162 @@ fn push_snapshot_if_changed(
         sdlc_sealed.hash(&mut h);
         h.finish()
     };
-    if last.snapshot_fp != Some(fp) {
-        last.snapshot_fp = Some(fp);
-        let env = PushEnvelope::Snapshot {
-            session: session.to_string(),
-            state: "attached",
-            messages,
-            title,
-            palette,
-            subagents,
-            bash,
-            file_changes,
-            plan_todos,
-            attachments,
-            mode: mode.to_string(),
-            pending_steer,
-            awaiting_approval,
-            approval_reason,
-            pending_call,
-            sdlc_phase,
-            sdlc_goal,
-            sdlc_branch,
-            sdlc_open,
-            sdlc_sealed,
-        };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
+    if last.snapshot_fp == Some(fp) {
+        return;
+    }
+    last.snapshot_fp = Some(fp);
+
+    // Meta fingerprint excludes messages so we only emit Tail/SetLast when the
+    // rest of the Snapshot payload is unchanged (pending_steer, subagents, …).
+    let meta_fp = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        session.hash(&mut h);
+        title.hash(&mut h);
+        mode.hash(&mut h);
+        palette.bg.hash(&mut h);
+        palette.fg.hash(&mut h);
+        palette.accent.hash(&mut h);
+        palette.dim.hash(&mut h);
+        palette.panel.hash(&mut h);
+        palette.warn.hash(&mut h);
+        palette.success.hash(&mut h);
+        palette.info.hash(&mut h);
+        palette.error.hash(&mut h);
+        subagents.len().hash(&mut h);
+        for sa in &subagents {
+            sa.id.hash(&mut h);
+            sa.name.hash(&mut h);
+            sa.status.hash(&mut h);
+            sa.summary.hash(&mut h);
+            sa.detached.hash(&mut h);
+            sa.blocking.hash(&mut h);
+            sa.transcript.hash(&mut h);
+            sa.live_text.hash(&mut h);
+            sa.thinking.hash(&mut h);
+        }
+        bash.len().hash(&mut h);
+        for b in &bash {
+            b.id.hash(&mut h);
+            b.cmd.hash(&mut h);
+            b.status.hash(&mut h);
+            b.output_tail.hash(&mut h);
+        }
+        file_changes.len().hash(&mut h);
+        for c in &file_changes {
+            c.path.hash(&mut h);
+            c.status.hash(&mut h);
+        }
+        plan_todos.len().hash(&mut h);
+        for t in &plan_todos {
+            t.content.hash(&mut h);
+            t.status.hash(&mut h);
+            t.locked.hash(&mut h);
+        }
+        attachments.len().hash(&mut h);
+        for a in &attachments {
+            a.marker_n.hash(&mut h);
+            a.name.hash(&mut h);
+            a.kind.hash(&mut h);
+        }
+        pending_steer.len().hash(&mut h);
+        for s in &pending_steer {
+            s.hash(&mut h);
+        }
+        awaiting_approval.hash(&mut h);
+        approval_reason.hash(&mut h);
+        if let Some(pc) = &pending_call {
+            pc.name.hash(&mut h);
+            pc.args.hash(&mut h);
+        }
+        sdlc_phase.hash(&mut h);
+        sdlc_goal.hash(&mut h);
+        sdlc_branch.hash(&mut h);
+        sdlc_open.hash(&mut h);
+        sdlc_sealed.hash(&mut h);
+        h.finish()
+    };
+    let meta_unchanged = last.last_meta_fp == Some(meta_fp);
+    last.last_meta_fp = Some(meta_fp);
+
+    // Prefer narrow transcript patches when only messages grew or the last row
+    // changed and Snapshot meta is unchanged. Full Snapshot otherwise.
+    let msg_patch = if meta_unchanged {
+        match last.last_messages.as_ref() {
+            Some(prev) if !messages.is_empty() => {
+                if messages.len() > prev.len() && messages[..prev.len()] == prev[..] {
+                    Some(MsgPatch::Tail(messages[prev.len()..].to_vec()))
+                } else if messages.len() == prev.len()
+                    && !messages.is_empty()
+                    && messages[..messages.len() - 1] == prev[..prev.len() - 1]
+                    && messages[messages.len() - 1] != prev[prev.len() - 1]
+                {
+                    Some(MsgPatch::SetLast(messages[messages.len() - 1].clone()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    match msg_patch {
+        Some(MsgPatch::Tail(tail)) if !tail.is_empty() => {
+            last.last_messages = Some(messages);
+            super::render::emit(
+                push,
+                &PushEnvelope::SnapshotTail {
+                    session: session.to_string(),
+                    messages: tail,
+                },
+            );
+        }
+        Some(MsgPatch::SetLast(message)) => {
+            last.last_messages = Some(messages);
+            super::render::emit(
+                push,
+                &PushEnvelope::SnapshotSetLast {
+                    session: session.to_string(),
+                    message,
+                },
+            );
+        }
+        _ => {
+            last.last_messages = Some(messages.clone());
+            let env = PushEnvelope::Snapshot {
+                session: session.to_string(),
+                state: "attached",
+                messages,
+                title,
+                palette,
+                subagents,
+                bash,
+                file_changes,
+                plan_todos,
+                attachments,
+                mode: mode.to_string(),
+                pending_steer,
+                awaiting_approval,
+                approval_reason,
+                pending_call,
+                sdlc_phase,
+                sdlc_goal,
+                sdlc_branch,
+                sdlc_open,
+                sdlc_sealed,
+            };
+            if let Ok(json) = serde_json::to_string(&env) {
+                push(json);
+            }
         }
     }
+}
+
+enum MsgPatch {
+    Tail(Vec<PushMsg>),
+    SetLast(PushMsg),
 }
 
 /// Map a [`WarmStatus`] to its lowercase wire token for the `Loading` envelope
