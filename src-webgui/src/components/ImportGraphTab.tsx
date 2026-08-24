@@ -4,6 +4,7 @@ import { useKoma, type ImportGraphNode, type ImportGraphRootInfo } from '../stor
 import { BrailleSpinner } from './BrailleSpinner'
 import { ImportGraphFlow } from './ImportGraphFlow'
 import { sourceLanguage } from '../lib/importGraphLanguages'
+import { isTabVisible, normalizeGroups } from '../store/editorGroups'
 
 // Detail pane width constants.
 const DETAIL_W_MIN = 260
@@ -194,7 +195,7 @@ export default function ImportGraphTab() {
   const setImportGraphLanguageFilter = useKoma((s) => s.setImportGraphLanguageFilter)
   const requestImportGraphImpact = useKoma((s) => s.requestImportGraphImpact)
 
-  const isActiveTab = useKoma((s) => s.ui.activeTabId === 'import-graph')
+  const isActiveTab = useKoma((s) => isTabVisible(normalizeGroups(s.ui), 'import-graph'))
   const sessionId = useKoma((s) => s.session.id)
 
   // Use backend-scoped availableRoots directly — the Rust linker daemon

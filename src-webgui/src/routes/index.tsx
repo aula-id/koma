@@ -1,7 +1,7 @@
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
-import { lazy, Suspense, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { ChatView } from '../components/ChatView'
-import { TabBar } from '../components/TabBar'
+import { TAB_DRAG_MIME, TabBar } from '../components/TabBar'
 import { StartScreen } from '../components/StartScreen'
 import { Onboarding } from '../components/Onboarding'
 import { Titlebar, getPlatform } from '../components/Titlebar'
@@ -23,6 +23,17 @@ import { BrailleSpinner } from '../components/BrailleSpinner'
 import { ExtensionPanelFrame } from '../components/ExtensionPanelFrame'
 import { GlobalContextMenu } from '../components/GlobalContextMenu'
 import { installPanelBridgeListener } from '../lib/panelBridge'
+import {
+  MAX_GROUPS,
+  dropZoneFor,
+  gridLayout,
+  groupOf,
+  isTabVisible,
+  normalizeGroups,
+  type DropZone,
+  type EditorGroupId,
+} from '../store/editorGroups'
+import type { Tab } from '../store/koma'
 
 const SIDEBAR_MIN = 150
 const SIDEBAR_MAX = 500
@@ -383,109 +394,267 @@ function DiffFallback() {
   )
 }
 
-// Tabbed main column: a VSCode-style TabBar over stacked tab contents, with the
-// usage/statusline footer pinned along the bottom — full width, spanning from
-// the sidebar edge to the window edge, visible across every tab (chat + diff).
-// The chat stays MOUNTED at all times (hidden, not unmounted, when a diff tab
-// is active) so its scroll/stream/state survive tab switches; diff tabs mount
-// when opened and stay mounted while open for fast switching, unmounting only
-// on close. The TabBar spans the full main column; the chat keeps its centered
-// reading column, while diff editors use the full width.
+function TabBody({ tab }: { tab: Exclude<Tab, { kind: 'chat' }> }) {
+  return (
+    <Suspense fallback={<DiffFallback />}>
+      {tab.kind === 'diff' ? (
+        <DiffTab tab={tab} />
+      ) : tab.kind === 'settings' ? (
+        <SettingsTab />
+      ) : tab.kind === 'help' ? (
+        <HelpTab />
+      ) : tab.kind === 'tutorial' ? (
+        <TutorialTab />
+      ) : tab.kind === 'agent' ? (
+        <AgentTab tab={tab} />
+      ) : tab.kind === 'subagent' || tab.kind === 'bash' ? (
+        <StreamTab tab={tab} />
+      ) : tab.kind === 'graph' ? (
+        <GraphTab />
+      ) : tab.kind === 'importGraph' ? (
+        <ImportGraphTab />
+      ) : tab.kind === 'analytics' ? (
+        <AnalyticsTab />
+      ) : tab.kind === 'store' ? (
+        <StoreTab />
+      ) : tab.kind === 'installedExtension' ? (
+        <InstalledExtensionTab extId={tab.extId} />
+      ) : tab.kind === 'extension' ? (
+        <ExtensionPanelFrame extId={tab.extId} panelId={tab.panelId} title={tab.title} />
+      ) : tab.kind === 'codingFile' ? (
+        <CodeEditorTab tab={tab} />
+      ) : tab.kind === 'terminal' ? (
+        <TerminalTab tab={tab} />
+      ) : null}
+    </Suspense>
+  )
+}
+
+function EditorDropTarget({
+  groupId,
+  dragging,
+}: {
+  groupId: EditorGroupId
+  dragging: boolean
+}) {
+  const rawUi = useKoma((s) => s.ui)
+  const ui = useMemo(() => normalizeGroups(rawUi), [rawUi])
+  const moveTab = useKoma((s) => s.moveTabToGroup)
+  const splitTab = useKoma((s) => s.splitTab)
+  const [zone, setZone] = useState<DropZone>('center')
+
+  const updateZone = (e: ReactDragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer.types.includes(TAB_DRAG_MIME)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    const r = e.currentTarget.getBoundingClientRect()
+    setZone(
+      ui.groups.length >= MAX_GROUPS
+        ? 'center'
+        : dropZoneFor(e.clientX - r.left, e.clientY - r.top, r.width, r.height),
+    )
+  }
+
+  const drop = (e: ReactDragEvent<HTMLDivElement>) => {
+    const tabId = e.dataTransfer.getData(TAB_DRAG_MIME)
+    if (!tabId) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (zone === 'center') {
+      moveTab(tabId, groupId)
+    } else {
+      splitTab(
+        tabId,
+        groupId,
+        zone === 'left' || zone === 'top' ? 'before' : 'after',
+        zone === 'left' || zone === 'right' ? 'row' : 'col',
+      )
+    }
+    setZone('center')
+  }
+
+  const highlight =
+    zone === 'left'
+      ? 'inset-y-2 left-2 w-[48%]'
+      : zone === 'right'
+        ? 'inset-y-2 right-2 w-[48%]'
+        : zone === 'top'
+          ? 'inset-x-2 top-2 h-[48%]'
+          : zone === 'bottom'
+            ? 'inset-x-2 bottom-2 h-[48%]'
+            : 'inset-2'
+
+  return (
+    <div
+      className={`relative z-40 h-full w-full min-h-0 min-w-0 ${dragging ? 'pointer-events-auto' : 'pointer-events-none'}`}
+      onDragEnter={updateZone}
+      onDragOver={updateZone}
+      onDrop={drop}
+    >
+      {dragging && (
+        <div
+          className={`pointer-events-none absolute ${highlight} rounded border border-koma-accent bg-koma-accent/15`}
+        />
+      )}
+    </div>
+  )
+}
+
+// A single CSS grid hosts every group strip, every tab body, and every divider.
+// Tab bodies stay siblings even when moved: only their grid coordinates change,
+// so React never remounts chat, Monaco, xterm, streams, or extension iframes.
 function TabbedMain() {
-  const tabs = useKoma((s) => s.ui.tabs)
-  const activeTabId = useKoma((s) => s.ui.activeTabId)
+  const rawUi = useKoma((s) => s.ui)
+  const ui = useMemo(() => normalizeGroups(rawUi), [rawUi])
   const sessionId = useKoma((s) => s.session.id)
-  const chatActive = activeTabId === 'chat'
+  const focusGroup = useKoma((s) => s.focusEditorGroup)
+  const splitTab = useKoma((s) => s.splitTab)
+  const resizeGroups = useKoma((s) => s.resizeEditorGroups)
+  const gridRef = useRef<HTMLDivElement>(null)
+  const [dragging, setDragging] = useState(false)
+  const layout = useMemo(
+    () => gridLayout(ui.groups, ui.groupSizes, ui.splitDir),
+    [ui.groupSizes, ui.groups, ui.splitDir],
+  )
+  const cells = useMemo(
+    () => new Map(layout.cells.map((cell) => [cell.id, cell])),
+    [layout.cells],
+  )
+  const chatGroupId = groupOf(ui, 'chat')
+
+  useEffect(() => {
+    const start = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes(TAB_DRAG_MIME)) setDragging(true)
+    }
+    const stop = () => setDragging(false)
+    window.addEventListener('dragstart', start)
+    window.addEventListener('dragend', stop)
+    window.addEventListener('drop', stop)
+    return () => {
+      window.removeEventListener('dragstart', start)
+      window.removeEventListener('dragend', stop)
+      window.removeEventListener('drop', stop)
+    }
+  }, [])
+
+  // VSCode's primary split shortcut plus direct group focus (Ctrl/Cmd+1..3).
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return
+      if (e.key === '\\') {
+        if (ui.activeTabId === 'chat' || ui.groups.length >= MAX_GROUPS) return
+        e.preventDefault()
+        splitTab(ui.activeTabId, ui.activeGroupId, 'after', 'row')
+        return
+      }
+      const index = Number(e.key) - 1
+      const groupId = ui.groups[index]
+      if (index >= 0 && index < 3 && groupId) {
+        e.preventDefault()
+        focusGroup(groupId)
+      }
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [focusGroup, splitTab, ui.activeGroupId, ui.activeTabId, ui.groups])
+
+  const startResize = (index: number, e: ReactMouseEvent) => {
+    e.preventDefault()
+    let prev = ui.splitDir === 'row' ? e.clientX : e.clientY
+    const total =
+      ui.splitDir === 'row'
+        ? (gridRef.current?.clientWidth ?? 1)
+        : (gridRef.current?.clientHeight ?? 1)
+    const move = (ev: MouseEvent) => {
+      const next = ui.splitDir === 'row' ? ev.clientX : ev.clientY
+      resizeGroups(index, next - prev, total)
+      prev = next
+    }
+    const up = () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    document.body.style.cursor = ui.splitDir === 'row' ? 'ew-resize' : 'ns-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  }
+
   return (
     <div className="flex h-full w-full min-w-0 flex-col">
-      <TabBar />
-      <div className="relative min-h-0 flex-1">
-        <div className={`absolute inset-0 flex items-stretch justify-center ${chatActive ? '' : 'hidden'}`}>
-          {sessionId === null ? <StartScreen /> : <ChatView />}
+      <div
+        ref={gridRef}
+        className="grid min-h-0 min-w-0 flex-1 overflow-hidden"
+        style={{
+          gridTemplateColumns: layout.gridTemplateColumns,
+          gridTemplateRows: layout.gridTemplateRows,
+        }}
+      >
+        {layout.cells.map((cell) => (
+          <div key={`bar:${cell.id}`} style={cell.bar} className="min-w-0">
+            <TabBar groupId={cell.id} focused={ui.activeGroupId === cell.id} />
+          </div>
+        ))}
+
+        <div
+          style={cells.get(chatGroupId)?.content}
+          className={`relative min-h-0 min-w-0 ${
+            isTabVisible(ui, 'chat') ? '' : 'invisible pointer-events-none'
+          }`}
+          onMouseDown={() => {
+            if (ui.activeGroupId !== chatGroupId) focusGroup(chatGroupId)
+          }}
+        >
+          <div className="absolute inset-0 flex items-stretch justify-center">
+            {sessionId === null ? <StartScreen /> : <ChatView />}
+          </div>
         </div>
-        {tabs.map((t) =>
-          t.kind === 'diff' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <DiffTab tab={t} />
-              </Suspense>
+
+        {ui.tabs.map((tab) => {
+          if (tab.kind === 'chat') return null
+          const groupId = groupOf(ui, tab.id)
+          return (
+            <div
+              key={tab.id}
+              style={cells.get(groupId)?.content}
+              className={`relative min-h-0 min-w-0 ${
+                isTabVisible(ui, tab.id) ? '' : 'invisible pointer-events-none'
+              }`}
+              onMouseDown={() => {
+                if (ui.activeGroupId !== groupId) focusGroup(groupId)
+              }}
+            >
+              <div className="absolute inset-0">
+                <TabBody tab={tab} />
+              </div>
             </div>
-          ) : t.kind === 'settings' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <SettingsTab />
-              </Suspense>
-            </div>
-          ) : t.kind === 'help' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <HelpTab />
-              </Suspense>
-            </div>
-          ) : t.kind === 'tutorial' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <TutorialTab />
-              </Suspense>
-            </div>
-          ) : t.kind === 'agent' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <AgentTab tab={t} />
-              </Suspense>
-            </div>
-          ) : t.kind === 'subagent' || t.kind === 'bash' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <StreamTab tab={t} />
-              </Suspense>
-            </div>
-          ) : t.kind === 'graph' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <GraphTab />
-              </Suspense>
-            </div>
-          ) : t.kind === 'importGraph' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <ImportGraphTab />
-              </Suspense>
-            </div>
-          ) : t.kind === 'analytics' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <AnalyticsTab />
-              </Suspense>
-            </div>
-          ) : t.kind === 'store' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <StoreTab />
-              </Suspense>
-            </div>
-          ) : t.kind === 'installedExtension' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <InstalledExtensionTab extId={t.extId} />
-              </Suspense>
-            </div>
-          ) : t.kind === 'extension' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <ExtensionPanelFrame extId={t.extId} panelId={t.panelId} title={t.title} />
-            </div>
-          ) : t.kind === 'codingFile' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <CodeEditorTab tab={t} />
-              </Suspense>
-            </div>
-          ) : t.kind === 'terminal' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <TerminalTab tab={t} />
-              </Suspense>
-            </div>
+          )
+        })}
+
+        {layout.cells.map((cell) => (
+          <div
+            key={`drop:${cell.id}`}
+            style={cell.content}
+            className="pointer-events-none relative z-40 min-h-0 min-w-0"
+          >
+            <EditorDropTarget groupId={cell.id} dragging={dragging} />
+          </div>
+        ))}
+
+        {layout.cells.map((cell, index) =>
+          cell.grip ? (
+            <div
+              key={`grip:${cell.id}`}
+              style={cell.grip}
+              onMouseDown={(e) => startResize(index, e)}
+              className={`z-30 bg-koma-panel2 hover:bg-koma-grip ${
+                ui.splitDir === 'row'
+                  ? 'cursor-ew-resize border-l border-koma-border'
+                  : 'cursor-ns-resize border-t border-koma-border'
+              }`}
+            />
           ) : null,
         )}
       </div>

@@ -35,10 +35,12 @@ function GuiCodeEditorPage() {
         <div>
           <h3 className="mb-1 text-base font-semibold text-koma-fg">Monaco Tabs</h3>
           <p>
-            Each open file appears as a tab. The editor supports syntax
-            highlighting for all languages Monaco provides, plus minimap,
-            find/replace, and bracket matching. Multiple split views are
-            supported.
+            Each open file appears as a tab. Drag tabs between editor groups,
+            drop a tab on a pane edge to split there, or right-click a tab and
+            choose Split Right or Split Down. Dividers are resizable, with up
+            to three groups. Ctrl+\ splits the focused tab to the right and
+            Ctrl+1 through Ctrl+3 focus a group. The editor also supports
+            syntax highlighting, minimap, find/replace, and bracket matching.
           </p>
         </div>
 

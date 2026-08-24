@@ -21,6 +21,16 @@ import {
   type FileTreeEntry,
   type ContentSearchFileHit,
 } from './coding'
+import {
+  DEFAULT_GROUP,
+  insertGroup,
+  neighbourInGroup,
+  normalizeGroups,
+  reorderTab,
+  resizeGroups,
+  type EditorGroupId,
+  type SplitDir,
+} from './editorGroups'
 
 import {
   applyDiagnosticsToMonaco,
@@ -1788,8 +1798,18 @@ type UiSlice = {
   // on a genuine session switch (a diff tab is file-change context for the OLD
   // session).
   tabs: Tab[]
-  // The shown tab's id — 'chat' or a `diff:${path}`.
+  // The focused group's shown tab. Other groups have their own entry in
+  // `groupActive` and remain visible while this points elsewhere.
   activeTabId: string
+  // VSCode-style editor groups. Membership is stored separately from Tab so
+  // existing open-tab actions remain additive; normalizeGroups stamps newly
+  // opened tabs into the focused group and repairs stale mappings.
+  groups: EditorGroupId[]
+  tabGroup: Record<string, EditorGroupId>
+  groupActive: Record<EditorGroupId, string>
+  activeGroupId: EditorGroupId
+  splitDir: SplitDir
+  groupSizes: Record<EditorGroupId, number>
   // Monotonic tick bumped by `focusPlanSection` (the UsageFooter PLAN badge
   // click): a cross-tree signal, mirrors `scrollTick`. RootLayout watches it
   // to open the Explore sidebar/panel; ExplorePanel watches it to expand its
@@ -2560,6 +2580,21 @@ type KomaState = {
   // freshness (contents may have changed since it was opened) while keeping the
   // stale diff on screen so the editor doesn't flash.
   activateTab: (id: string) => void
+  // Focus a pane without changing which tab that pane shows.
+  focusEditorGroup: (groupId: EditorGroupId) => void
+  // Move/reorder one tab into an existing pane. `beforeId: null` appends it to
+  // that pane's strip. The permanent chat tab cannot be moved.
+  moveTabToGroup: (tabId: string, groupId: EditorGroupId, beforeId?: string | null) => void
+  // Create an adjacent pane and move one tab into it. A flat layout supports
+  // up to three groups; a split on the other axis re-orients the whole layout.
+  splitTab: (
+    tabId: string,
+    targetGroupId: EditorGroupId,
+    side: 'before' | 'after',
+    dir: SplitDir,
+  ) => void
+  // Resize the divider between group[index] and group[index + 1].
+  resizeEditorGroups: (index: number, deltaPx: number, totalPx: number) => void
   // The UsageFooter PLAN badge click (Plan mode only): bump `focusPlanTick` so
   // RootLayout opens the Explore sidebar/panel and ExplorePanel expands its
   // PLAN section in response.
@@ -2683,6 +2718,12 @@ const initialUi: UiSlice = {
   toastSeq: 0,
   tabs: [makeChatTab()],
   activeTabId: 'chat',
+  groups: [DEFAULT_GROUP],
+  tabGroup: { chat: DEFAULT_GROUP },
+  groupActive: { [DEFAULT_GROUP]: 'chat' },
+  activeGroupId: DEFAULT_GROUP,
+  splitDir: 'row',
+  groupSizes: { [DEFAULT_GROUP]: 1 },
   focusPlanTick: 0,
   usageScope: 'all',
   loading: null,
@@ -5681,13 +5722,18 @@ export const useKoma = create<KomaState>((set, get) => ({
     }
     const closedAnalytics = id === 'analytics'
     set((s) => {
-      const idx = s.ui.tabs.findIndex((t) => t.id === id)
+      const normalized = normalizeGroups(s.ui)
+      const idx = normalized.tabs.findIndex((t) => t.id === id)
       if (idx < 0) return s
-      const tabs = s.ui.tabs.filter((t) => t.id !== id)
-      // If the closed tab was active, fall back to the left neighbour. idx-1 is
-      // always valid (tabs[0] is the chat tab), so this never underflows.
+      const tabs = normalized.tabs.filter((t) => t.id !== id)
+      // A split has multiple active tabs. If the closed tab owns focus, stay in
+      // its pane by preferring that pane's left/right neighbour. If it was the
+      // pane's last tab, normalizeGroups collapses the empty pane and selects a
+      // surviving group's active tab.
       const activeTabId =
-        s.ui.activeTabId === id ? s.ui.tabs[idx - 1]?.id ?? 'chat' : s.ui.activeTabId
+        normalized.activeTabId === id
+          ? neighbourInGroup(normalized, id) ?? id
+          : normalized.activeTabId
 
       let coding = s.coding
       if (closingCoding && opts?.force) {
@@ -5698,7 +5744,7 @@ export const useKoma = create<KomaState>((set, get) => ({
       }
 
       return {
-        ui: { ...s.ui, tabs, activeTabId },
+        ui: normalizeGroups({ ...normalized, tabs, activeTabId }),
         coding,
         // Closing the Analytics tab drops its in-flight state so a later reopen
         // starts clean (filters preserved as user preference; data cleared so a
@@ -5725,19 +5771,22 @@ export const useKoma = create<KomaState>((set, get) => ({
     const tab = get().ui.tabs.find((t) => t.id === id)
     if (!tab) return
     const isDiff = tab != null && tab.kind === 'diff'
-    set((s) => ({
-      ui: {
-        ...s.ui,
-        activeTabId: id,
-        // Mark a re-focused diff tab loading for the re-request below, but keep
-        // its existing `diff` so the editor doesn't flash to a spinner.
-        tabs: isDiff
-          ? s.ui.tabs.map((t) =>
-              t.id === id && t.kind === 'diff' ? { ...t, loading: true } : t,
-            )
-          : s.ui.tabs,
-      },
-    }))
+    set((s) => {
+      const normalized = normalizeGroups(s.ui)
+      return {
+        ui: normalizeGroups({
+          ...normalized,
+          activeTabId: id,
+          // Mark a re-focused diff tab loading for the re-request below, but keep
+          // its existing `diff` so the editor doesn't flash to a spinner.
+          tabs: isDiff
+            ? normalized.tabs.map((t) =>
+                t.id === id && t.kind === 'diff' ? { ...t, loading: true } : t,
+              )
+            : normalized.tabs,
+        }),
+      }
+    })
     // A GIT-panel diff tab (has `staged`) re-requests via GitDiff, echoing
     // the SAME staged/unstaged side it was opened for; a plain File-changed
     // diff tab (no `staged`) re-requests via FileDiff — the two paths are
@@ -5784,6 +5833,72 @@ export const useKoma = create<KomaState>((set, get) => ({
     // unchanged view, so activating a non-stream tab repeatedly is cheap.
     get().syncStreamView()
   },
+  focusEditorGroup: (groupId) => {
+    set((s) => {
+      const ui = normalizeGroups(s.ui)
+      if (!ui.groups.includes(groupId)) return s
+      const activeTabId = ui.groupActive[groupId]
+      if (!activeTabId) return s
+      if (ui.activeGroupId === groupId && ui.activeTabId === activeTabId) return s
+      return {
+        ui: normalizeGroups({ ...ui, activeGroupId: groupId, activeTabId }),
+      }
+    })
+    get().syncStreamView()
+  },
+  moveTabToGroup: (tabId, groupId, beforeId = null) => {
+    if (tabId === 'chat') return
+    set((s) => {
+      const ui = normalizeGroups(s.ui)
+      if (!ui.groups.includes(groupId) || !ui.tabs.some((t) => t.id === tabId)) return s
+      const before =
+        beforeId != null && ui.tabGroup[beforeId] === groupId ? beforeId : null
+      const tabs = reorderTab(ui.tabs, tabId, before)
+      return {
+        ui: normalizeGroups({
+          ...ui,
+          tabs,
+          tabGroup: { ...ui.tabGroup, [tabId]: groupId },
+          groupActive: { ...ui.groupActive, [groupId]: tabId },
+          activeGroupId: groupId,
+          activeTabId: tabId,
+        }),
+      }
+    })
+    get().syncStreamView()
+  },
+  splitTab: (tabId, targetGroupId, side, dir) => {
+    if (tabId === 'chat') return
+    set((s) => {
+      const ui = normalizeGroups(s.ui)
+      if (!ui.tabs.some((t) => t.id === tabId)) return s
+      const inserted = insertGroup(ui, targetGroupId, side, dir)
+      if (!inserted) return s
+      return {
+        ui: normalizeGroups({
+          ...ui,
+          groups: inserted.groups,
+          groupSizes: inserted.groupSizes,
+          splitDir: inserted.splitDir,
+          tabGroup: { ...ui.tabGroup, [tabId]: inserted.id },
+          groupActive: { ...ui.groupActive, [inserted.id]: tabId },
+          activeGroupId: inserted.id,
+          activeTabId: tabId,
+        }),
+      }
+    })
+    get().syncStreamView()
+  },
+  resizeEditorGroups: (index, deltaPx, totalPx) =>
+    set((s) => {
+      const ui = normalizeGroups(s.ui)
+      return {
+        ui: {
+          ...ui,
+          groupSizes: resizeGroups(ui.groups, ui.groupSizes, index, deltaPx, totalPx),
+        },
+      }
+    }),
   focusPlanSection: () => set((s) => ({ ui: { ...s.ui, focusPlanTick: s.ui.focusPlanTick + 1 } })),
   setUsageScope: (scope) => set((s) => ({ ui: { ...s.ui, usageScope: scope } })),
   refreshUsagePreview: () => {
