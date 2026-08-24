@@ -424,24 +424,51 @@ svg.animate-spin {
 }
 
 /* Monaco floating chrome — hover / suggest / peek / parameter hints inherit the
-   koma palette even when a stock base theme leaks through before defineTheme. */
+   koma palette even when a stock base theme leaks through before defineTheme.
+   Editor body is fontSize:12; widgets often fall back to browser ~16px or
+   markdown defaults without an explicit size — pin them to the editor. */
 .monaco-editor .monaco-hover,
 .monaco-editor .monaco-hover-content,
 .monaco-hover {
   background-color: var(--color-koma-panel) !important;
   border-color: var(--color-koma-border) !important;
   color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
 }
 .monaco-editor .monaco-hover .hover-row,
 .monaco-editor .monaco-hover .hover-contents,
-.monaco-hover .hover-contents {
+.monaco-hover .hover-contents,
+.monaco-editor .monaco-hover .markdown-hover,
+.monaco-editor .monaco-hover .hover-contents .rendered-markdown,
+.monaco-hover .rendered-markdown {
   color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+}
+.monaco-editor .monaco-hover .hover-contents h1,
+.monaco-editor .monaco-hover .hover-contents h2,
+.monaco-editor .monaco-hover .hover-contents h3,
+.monaco-editor .monaco-hover .hover-contents h4,
+.monaco-editor .monaco-hover .hover-contents h5,
+.monaco-editor .monaco-hover .hover-contents h6,
+.monaco-hover .hover-contents h1,
+.monaco-hover .hover-contents h2,
+.monaco-hover .hover-contents h3,
+.monaco-hover .hover-contents h4,
+.monaco-hover .hover-contents h5,
+.monaco-hover .hover-contents h6 {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  line-height: 1.45 !important;
+  margin: 0.35em 0 !important;
 }
 .monaco-editor .monaco-hover .hover-row.status-bar,
 .monaco-hover .hover-row.status-bar {
   background-color: var(--color-koma-panel2) !important;
   border-top-color: var(--color-koma-border) !important;
   color: var(--color-koma-dim) !important;
+  font-size: 11px !important;
 }
 .monaco-editor .monaco-hover a,
 .monaco-hover a {
@@ -453,11 +480,14 @@ svg.animate-spin {
 .monaco-hover pre {
   background-color: var(--color-koma-panel2) !important;
   color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
+  line-height: 1.4 !important;
 }
 .monaco-editor .codelens-decoration,
 .monaco-editor .codelens-decoration > a,
 .monaco-editor .codelens-decoration > span {
   color: var(--color-koma-dim) !important;
+  font-size: 11px !important;
 }
 .monaco-editor .codelens-decoration > a:hover {
   color: var(--color-koma-accent) !important;
@@ -467,6 +497,7 @@ svg.animate-spin {
   background-color: var(--color-koma-panel) !important;
   border-color: var(--color-koma-border) !important;
   color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
 }
 .monaco-editor .suggest-widget .monaco-list .monaco-list-row.focused,
 .monaco-editor .suggest-widget .monaco-list .monaco-list-row:hover {
@@ -482,16 +513,19 @@ svg.animate-spin {
   background-color: var(--color-koma-panel) !important;
   border-color: var(--color-koma-border) !important;
   color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
 }
 .monaco-editor .suggest-details .header,
 .monaco-editor .suggest-details .type,
 .monaco-editor .suggest-details .docs {
   color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
 }
 .monaco-editor .suggest-details .docs code,
 .monaco-editor .suggest-details .docs pre {
   background-color: var(--color-koma-panel2) !important;
   color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
 }
 .monaco-editor .suggest-widget .monaco-list .monaco-list-row .monaco-icon-label,
 .monaco-editor .suggest-widget .monaco-list .monaco-list-row .label-name {
@@ -505,12 +539,15 @@ svg.animate-spin {
   background-color: var(--color-koma-panel) !important;
   border-color: var(--color-koma-border) !important;
   color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
 }
 .monaco-editor .parameter-hints-widget .signature {
   background-color: var(--color-koma-panel) !important;
+  font-size: 12px !important;
 }
 .monaco-editor .parameter-hints-widget .code {
   color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
 }
 .monaco-editor .parameter-hints-widget .parameter.active {
   color: var(--color-koma-accent) !important;
@@ -547,19 +584,23 @@ svg.animate-spin {
 }
 .monaco-editor .peekview-widget {
   border-color: var(--color-koma-accent) !important;
+  font-size: 12px !important;
 }
 .monaco-editor .peekview-widget .head,
 .monaco-editor .peekview-widget .body {
   background-color: var(--color-koma-panel) !important;
   border-color: var(--color-koma-border) !important;
+  font-size: 12px !important;
 }
 .monaco-editor .peekview-widget .head .peekview-title {
   color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
 }
 .monaco-editor .peekview-widget .head .peekview-title .dirname,
 .monaco-editor .peekview-widget .head .peekview-title .filename + span,
 .monaco-editor .peekview-widget .head .peekview-title .meta {
   color: var(--color-koma-dim) !important;
+  font-size: 11px !important;
 }
 .monaco-editor .peekview-widget .head .peekview-actions .action-label,
 .monaco-editor .peekview-widget .head .codicon {
@@ -574,6 +615,7 @@ svg.animate-spin {
 .monaco-editor .peekview-widget .body .monaco-tl-row {
   background-color: var(--color-koma-panel) !important;
   color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
 }
 .monaco-editor .peekview-widget .body .monaco-list .monaco-list-row {
   color: var(--color-koma-fg) !important;
@@ -591,6 +633,7 @@ svg.animate-spin {
 .monaco-editor .peekview-widget .body .referenceMatch,
 .monaco-editor .peekview-widget .body .monaco-tl-contents {
   color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
 }
 .monaco-editor .peekview-widget .body .monaco-editor,
 .monaco-editor .peekview-widget .body .monaco-editor-background,
