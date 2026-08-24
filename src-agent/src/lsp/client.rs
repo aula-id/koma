@@ -728,6 +728,12 @@ impl LspManager {
     }
 
     /// If the session is dead (or missing), respawn and re-didOpen all its docs.
+    ///
+    /// **Known stall:** revive/spawn runs `initialize` under the caller's
+    /// `Mutex<LspManager>` (via `uri_io`). First open and server revive still
+    /// serialize every LSP feature for the whole handshake (seconds for
+    /// rust-analyzer). Request wait itself is unlocked via [`LspPendingRequest`];
+    /// hoisting spawn out of the lock is a follow-up.
     fn ensure_server_alive(&mut self, server_id: &str) -> Result<(), String> {
         let dead = match self.servers.get(server_id) {
             Some(s) => s.is_dead(),
