@@ -391,8 +391,37 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     const dot = file.lastIndexOf('.')
     const ext = dot > 0 ? file.slice(dot + 1).toLowerCase() : ''
     if (!ext) return
-    // Wait for catalogue so we don't burn the one-shot open while status is unknown.
-    if (lspServers.length === 0) return
+    // Wait for catalogue so we don't burn the one-shot open while status is
+    // unknown. If refreshLsp never lands (empty forever), fail open after a
+    // short grace so LSP still attaches for managed/path servers.
+    if (lspServers.length === 0) {
+      const openedAt = performance.now()
+      // Effect re-runs when lspServers updates; only schedule a late retry once.
+      const t = window.setTimeout(() => {
+        if (lspOpenedRef.current) return
+        if (useKoma.getState().lspServers.length > 0) return
+        // Catalogue still empty — try didOpen anyway (host no-ops missing servers).
+        lspOpenedRef.current = true
+        useKoma.getState().req({
+          r: 'LspDidOpen',
+          root: tab.root,
+          path: tab.path,
+          languageId: languageIdForPath(tab.path),
+          text: fileState.content!,
+        })
+        const uri = pathToUri(tab.root, tab.path)
+        const diags = useKoma.getState().lspDiagnostics[uri]
+        if (diags) applyDiagnosticsToMonaco(uri, diags)
+        warmCodeLensCache(
+          (body) => useKoma.getState().req(body as never),
+          tab.root,
+          tab.path,
+          fileState.content!,
+        )
+        void openedAt
+      }, 2500)
+      return () => window.clearTimeout(t)
+    }
     const match = lspServers.find((s) => s.extensions.includes(ext))
     if (!match || match.source === 'missing') return
 

@@ -109,11 +109,12 @@ const pendingFileText = new Map<string, Pending<string>>()
 // Survives tab close/reopen so "N references" does not re-hit the language
 // server for every open of an unchanged file. Keyed by root+path+content hash.
 const LENS_KINDS = new Set([5, 6, 9, 10, 11, 12, 23]) // Class..Struct
-// Cap hard — each lens is a full textDocument/references RPC that holds the
-// host LspManager mutex for the whole round-trip. 40 parallel refs freezes
-// hover/completion while typing.
-const LENS_MAX = 12
-const LENS_REF_CONCURRENCY = 2
+// Cap lenses so CodeLens warm stays bounded. Each lens is a references RPC;
+// with host lock released during wait, concurrency is safe but still costly.
+// Prefer earlier document-order symbols (usually types/functions near top).
+// Symbols past the cap simply omit the "N references" lens — hover/goto still work.
+const LENS_MAX = 24
+const LENS_REF_CONCURRENCY = 3
 
 type CachedLens = {
   /** 0-based symbol range start line (decoration line). */
