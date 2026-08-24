@@ -185,6 +185,44 @@ fn attach_session_headless(
     Ok(conn)
 }
 
+/// Run [`attach_session_headless`] on a worker thread while the host client-thread
+/// keeps pumping `Switching` heartbeats so the webview overlay stays live (CSS
+/// braille + cancel affordance) instead of freezing on a washed-out frame.
+fn attach_session_headless_pumped(
+    handle: &tokio::runtime::Handle,
+    session_id: &str,
+    workdir: Option<std::path::PathBuf>,
+    push: &dyn Fn(String),
+) -> anyhow::Result<Connection> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let sid = session_id.to_string();
+    let h = handle.clone();
+    std::thread::Builder::new()
+        .name("koma-gui-attach".into())
+        .spawn(move || {
+            let r = attach_session_headless(&h, &sid, workdir.as_deref());
+            let _ = tx.send(r);
+        })
+        .map_err(|e| anyhow::anyhow!("could not spawn attach worker: {e}"))?;
+
+    // Heartbeat while the worker runs: re-emit Switching so the overlay remains
+    // the authoritative surface and the main thread keeps getting UserEvents
+    // (proves liveness; cheap envelope).
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_millis(250)) {
+            Ok(r) => return r,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                push_switching(push, session_id);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(anyhow::anyhow!(
+                    "attach worker dropped without a result for session {session_id}"
+                ));
+            }
+        }
+    }
+}
+
 /// Run the host-relay client on a background thread: own a tokio runtime and run the
 /// two-state machine (swapper / attached) that PUSHES the shadow state into the
 /// webview. The `push` sink hands a ready JSON envelope to the main tao thread;
@@ -1561,7 +1599,12 @@ fn host_attached(
     terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
     lsp_manager: &std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
 ) -> HostStep {
-    let mut conn = match attach_session_headless(handle, &id, workdir.as_deref()) {
+    let mut conn = match attach_session_headless_pumped(
+        handle,
+        &id,
+        workdir,
+        push,
+    ) {
         Ok(c) => c,
         Err(e) => {
             crate::model::store::append_global_error_log(
@@ -1572,7 +1615,19 @@ fn host_attached(
             return HostStep::Swapper;
         }
     };
-    *current = Some(id);
+    *current = Some(id.clone());
+
+    // Seed a warm-up splash BEFORE the first Snapshot so React never paints a
+    // blank gap between attach and Mode::Loading. If the session is already
+    // warm, the first serialize_and_push emits Loading{active:false} and clears it.
+    super::render::emit(
+        push,
+        &super::push_proto::PushEnvelope::Loading {
+            active: true,
+            workspace: "pending".into(),
+            awareness: "pending".into(),
+        },
+    );
 
     // Publish this connection's request sender so the ipc handler's `Submit` lands on
     // the CURRENT daemon; take the handshake's prebuffered frames for the fold.
@@ -1581,6 +1636,9 @@ fn host_attached(
     }
     let prebuffered = std::mem::take(&mut conn.prebuffered);
     push_state.reset();
+    // Remember we already told the webview a splash is up so serialize_and_push
+    // will emit the terminal active:false if Mode::Loading never engages.
+    push_state.last_loading = Some((true, "pending".into(), "pending".into()));
 
     // Enter the runtime context ONLY for the fold loop (a reconstructed shadow
     // sub-agent mints an inert AbortHandle, which needs a runtime in scope) — SCOPED

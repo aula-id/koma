@@ -3085,21 +3085,25 @@ export const useKoma = create<KomaState>((set, get) => ({
               ...(switched ? { stream: '', reasoning: '' } : {}),
             },
             palette: env.palette,
-            // Any Snapshot is authoritative proof the swap (if one was in
-            // flight) has landed — clear the loader. A genuine session SWITCH
-            // additionally resets the editor tabs back to just the chat tab: a
-            // diff tab is file-change context for the OLD session, so it must
-            // not bleed across.
+            // Snapshot proves attach landed, but cold sessions still push a
+            // Loading splash AFTER this. Keep `switchingTo` until Loading
+            // settles (active→false) so we never flash a blank/washed frame
+            // between attach and warm-up. Hub bounce still clears it.
             ui: {
               ...s.ui,
-              switchingTo: null,
-              // A genuine switch also drops any stale startup splash — it
-              // described the OLD attach's warm-up, and must not bleed into
-              // the new session's view (the host will push a fresh `Loading`
-              // for the new session if it's cold too).
+              // Same-session Snapshot: clear switch chrome (normal refresh).
+              // Cross-session: keep switchingTo until Loading settles so we never
+              // flash a blank frame between attach and warm-up splash.
               ...(switched
-                ? { tabs: [makeChatTab(), ...get().ui.tabs.filter((t) => t.kind === 'terminal')], activeTabId: 'chat', loading: null, loadingDismissed: false }
-                : {}),
+                ? {
+                    tabs: [makeChatTab(), ...get().ui.tabs.filter((t) => t.kind === 'terminal')],
+                    activeTabId: 'chat',
+                    loadingDismissed: false,
+                    loading: s.ui.loading?.active
+                      ? s.ui.loading
+                      : { active: true, workspace: 'pending' as const, awareness: 'pending' as const },
+                  }
+                : { switchingTo: null }),
             },
             // A genuine switch also drops the OLD session's git/graph/activity
             // slices — they're host-driven for the PREVIOUS repo/session and
@@ -3494,6 +3498,9 @@ export const useKoma = create<KomaState>((set, get) => ({
             loading: env.active
               ? { active: env.active, workspace: env.workspace, awareness: env.awareness }
               : null,
+            // Warm-up finished (or never started) — drop switch chrome too so
+            // the overlay fully dismisses in one step.
+            ...(env.active ? {} : { switchingTo: null }),
           },
         }))
         break
