@@ -137,12 +137,44 @@ function RootLayout() {
       : any
     let raf = 0
     const pending: any[] = []
+    let pacedRaf = 0
+    const paced: any[] = []
+    // Only these attach envelopes are frame-paced. Stream/Status/chat traffic
+    // must never sit behind Snapshot — that jammed the composer after switch.
+    const isPacedKind = (k: string) =>
+      k === 'Switching' ||
+      k === 'Loading' ||
+      k === 'Snapshot' ||
+      k === 'SnapshotTail' ||
+      k === 'Config' ||
+      k === 'SettingsValues' ||
+      k === 'RepoList'
     const isCoalesce = (k: string) =>
       k === 'StreamDelta' ||
       k === 'StreamMsg' ||
       k === 'ReasoningDelta' ||
       k === 'Reasoning' ||
       k === 'Status'
+
+    const logPace = (msg: string) => {
+      try {
+        window.komaIpc?.({ r: 'WriteErrorLog', message: `[ui-pace] ${msg}` })
+      } catch {
+        /* fire-and-forget */
+      }
+    }
+
+    const peekKind = (item: string | object): string | null => {
+      if (item && typeof item === 'object' && 'k' in item) {
+        const k = (item as { k?: unknown }).k
+        return typeof k === 'string' ? k : null
+      }
+      if (typeof item === 'string') {
+        const m = item.match(/"k"\s*:\s*"([^"]+)"/)
+        return m?.[1] ?? null
+      }
+      return null
+    }
 
     const flush = () => {
       raf = 0
@@ -155,7 +187,38 @@ function RootLayout() {
       for (const env of batch) push(env)
     }
 
+    // During a session attach, apply one *heavy* host envelope per browser
+    // frame so Snapshot/Loading/Config don't become one giant React task.
+    // Chat stream envelopes always take the coalesce path — never this queue.
+    const flushPaced = () => {
+      pacedRaf = 0
+      const item = paced.shift()
+      if (!item) return
+      const t0 = performance.now()
+      const env = typeof item === 'string' ? JSON.parse(item) : item
+      const kind = typeof env?.k === 'string' ? env.k : '?'
+      const rawLen = typeof item === 'string' ? item.length : 0
+      useKoma.getState().push(env)
+      const ms = performance.now() - t0
+      if (ms >= 8 || kind === 'Snapshot' || paced.length > 0) {
+        logPace(
+          `apply k=${kind} parse+push_ms=${ms.toFixed(1)} raw_bytes=${rawLen} queue_left=${paced.length}`,
+        )
+      }
+      if (paced.length > 0) pacedRaf = requestAnimationFrame(flushPaced)
+    }
+
+    const enqueuePaced = (item: string | object) => {
+      if (pending.length) flush()
+      paced.push(item)
+      if (!pacedRaf) pacedRaf = requestAnimationFrame(flushPaced)
+    }
+
     const enqueue = (env: any) => {
+      if (env && typeof env === 'object' && typeof env.k === 'string' && isPacedKind(env.k)) {
+        enqueuePaced(env)
+        return
+      }
       if (env && typeof env === 'object' && isCoalesce(env.k)) {
         pending.push(env)
         if (!raf) raf = requestAnimationFrame(flush)
@@ -173,6 +236,21 @@ function RootLayout() {
       push: (j) => {
         const env = typeof j === 'string' ? JSON.parse(j) : j
         enqueue(env)
+      },
+      // Native GUI host path: one evaluate_script carries every envelope that
+      // accumulated in its 16 ms frame window. Rust sends JSON strings so a fat
+      // Snapshot is not parsed until its own paced frame.
+      pushBatch: (items) => {
+        logPace(`batch n=${items.length}`)
+        for (const item of items) {
+          const kind = peekKind(item)
+          if (kind && isPacedKind(kind)) {
+            enqueuePaced(item)
+          } else {
+            const env = typeof item === 'string' ? JSON.parse(item) : item
+            enqueue(env)
+          }
+        }
       },
     }
     // komaIpc is for fire-and-forget requests that don't need a reply
@@ -205,6 +283,7 @@ function RootLayout() {
     const uninstallPanelBridge = installPanelBridgeListener()
     return () => {
       if (raf) cancelAnimationFrame(raf)
+      if (pacedRaf) cancelAnimationFrame(pacedRaf)
       window.__komaClient = undefined
       window.komaIpc = undefined
       uninstallPanelBridge()

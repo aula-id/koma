@@ -11,10 +11,11 @@
 pub(super) enum UserEvent {
     /// A custom-titlebar window command posted from the webview.
     Win(WinCmd),
-    /// A ready-to-inject JSON envelope from the host-relay client-thread. The main
-    /// thread hands it to `window.__komaClient.push(...)` via `evaluate_script`. The
-    /// payload is a COMPLETE JSON object (tagged on `k` — `Snapshot`/`StreamMsg`/
-    /// `Reasoning`/`Status`/`Hub`), so it is embedded verbatim (not quoted).
+    /// A ready-to-inject JSON envelope from the host-relay client-thread. The GUI
+    /// event loop frame-batches these as quoted strings through one
+    /// `window.__komaClient.pushBatch(...)` evaluate_script call; React paces only
+    /// heavy attach envelopes (Snapshot/Loading/Config/…) one frame at a time —
+    /// stream/chat traffic is never queued behind them.
     Push(String),
 }
 

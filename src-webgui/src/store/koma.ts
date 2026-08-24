@@ -353,6 +353,16 @@ export type SearchResultEntry = {
 // progress, 'done'/'skipped'/'failed' are terminal.
 export type LoadPhase = 'pending' | 'running' | 'done' | 'skipped' | 'failed'
 
+// GUI-only attach hydration. These phases describe work in the native webview
+// bridge, not daemon warm-up: each corresponding envelope is applied on a
+// separate animation frame so WebKit gets a paint between expensive state swaps.
+export type BootstrapState = {
+  session: LoadPhase
+  config: LoadPhase
+  settings: LoadPhase
+  repos: LoadPhase
+}
+
 // The tool call the session is currently PARKED on awaiting a decision (host
 // `pending_tool_calls[tool_idx]` while `awaiting_approval` is set — approval.rs).
 // `name`/`args` are the raw tool name + stringified-JSON arguments; `signature`
@@ -1834,6 +1844,10 @@ type UiSlice = {
   // `switched` branch) and in `detachSession()` so a stale splash from the OLD
   // session/warm-up can never leak into a new attach.
   loading: { active: boolean; workspace: LoadPhase; awareness: LoadPhase } | null
+  // GUI attach hydration shown above `loading`: session Snapshot, Config, then
+  // the SettingsValues/RepoList replies requested by Snapshot. Null once every
+  // phase is terminal. This is deliberately separate from daemon Loading.
+  bootstrap: BootstrapState | null
   // Skip-latch: set true when the user dismisses the cold-start splash via
   // the Skip button. Suppresses splash VISIBILITY only — `loading` itself
   // keeps updating with fresh host `Loading` pushes underneath. Reset to
@@ -2377,6 +2391,9 @@ type KomaState = {
   // loader — the eventual Snapshot for the target session still lands and is
   // applied normally.
   cancelSwitching: () => void
+  // Force any still-pending GUI bootstrap phases to `skipped` so a hung
+  // settings/repos reply cannot keep attach chrome alive forever.
+  skipBootstrapRemaining: () => void
   // Open the remote folder picker. Optimistic `listing` so the overlay + braille
   // spinner appear on the first click (SSH list_dirs can lag). No-ops while the
   // picker is already open so double-clicks don't spawn duplicate SSH listings.
@@ -2711,6 +2728,26 @@ const initialHub: HubSlice = {
 // factory (not a shared const) so every reset gets a fresh array/object.
 const makeChatTab = (): Tab => ({ id: 'chat', kind: 'chat' })
 
+const makeBootstrapState = (): BootstrapState => ({
+  session: 'running',
+  config: 'pending',
+  settings: 'pending',
+  repos: 'pending',
+})
+
+function updateBootstrap(ui: UiSlice, patch: Partial<BootstrapState>): UiSlice {
+  if (!ui.bootstrap) return ui
+  const bootstrap = { ...ui.bootstrap, ...patch }
+  const complete = Object.values(bootstrap).every(
+    (phase) => phase === 'done' || phase === 'skipped' || phase === 'failed',
+  )
+  return {
+    ...ui,
+    bootstrap: complete ? null : bootstrap,
+    ...(complete && !ui.loading?.active ? { switchingTo: null } : {}),
+  }
+}
+
 const initialUi: UiSlice = {
   omnisearchOpen: false,
   composerInsert: null,
@@ -2731,6 +2768,7 @@ const initialUi: UiSlice = {
   focusPlanTick: 0,
   usageScope: 'all',
   loading: null,
+  bootstrap: null,
   loadingDismissed: false,
 }
 
@@ -3040,6 +3078,9 @@ export const useKoma = create<KomaState>((set, get) => ({
         // reasoning (it belongs to the old session — don't let it bleed into the new
         // view until the next send clears it) + reset the editor tabs.
         const switched = env.session !== get().session.id
+        // Re-attaching the same session id is still a GUI bootstrap even though
+        // it must not discard that session's existing tabs/slices.
+        const bootstrapping = !!get().ui.bootstrap
         set((s) => {
           return {
             session: {
@@ -3094,14 +3135,25 @@ export const useKoma = create<KomaState>((set, get) => ({
               // Same-session Snapshot: clear switch chrome (normal refresh).
               // Cross-session: keep switchingTo until Loading settles so we never
               // flash a blank frame between attach and warm-up splash.
-              ...(switched
+              ...(switched || bootstrapping
                 ? {
-                    tabs: [makeChatTab(), ...get().ui.tabs.filter((t) => t.kind === 'terminal')],
-                    activeTabId: 'chat',
+                    ...(switched
+                      ? {
+                          tabs: [makeChatTab(), ...get().ui.tabs.filter((t) => t.kind === 'terminal')],
+                          activeTabId: 'chat',
+                        }
+                      : {}),
                     loadingDismissed: false,
                     loading: s.ui.loading?.active
                       ? s.ui.loading
                       : { active: true, workspace: 'pending' as const, awareness: 'pending' as const },
+                    bootstrap: {
+                      ...(s.ui.bootstrap ?? makeBootstrapState()),
+                      session: 'done',
+                      config: s.ui.bootstrap?.config === 'done' ? 'done' : 'running',
+                      settings: s.ui.bootstrap?.settings === 'done' ? 'done' : 'running',
+                      repos: s.ui.bootstrap?.repos === 'done' ? 'done' : 'running',
+                    },
                   }
                 : { switchingTo: null }),
             },
@@ -3155,8 +3207,8 @@ export const useKoma = create<KomaState>((set, get) => ({
         // envelope itself. Re-fetch so the (always-visible) EffortPicker trigger
         // pill and the Settings tab (if open) rehydrate for the NEW session
         // instead of showing the old one's values until Settings is reopened.
-        if (switched) get().req({ r: 'GetSettings' })
-        if (switched) get().refreshRepos()
+        if (switched || bootstrapping) get().req({ r: 'GetSettings' })
+        if (switched || bootstrapping) get().refreshRepos()
         break
       }
       case 'Switching':
@@ -3166,11 +3218,18 @@ export const useKoma = create<KomaState>((set, get) => ({
           // against the hub rows; else fall back to a generic label (e.g. a
           // daemon-driven new session with no hub row yet). Never clobber a
           // nicer label with a raw uuid.
-          if (s.ui.switchingTo) return s
+          if (s.ui.switchingTo && s.ui.bootstrap) return s
           const row =
             s.hub.cooking.find((c) => c.id === env.to) ??
             s.hub.history.find((h) => h.id === env.to)
-          return { ui: { ...s.ui, switchingTo: row?.name ?? 'session' } }
+          return {
+            ui: {
+              ...s.ui,
+              switchingTo: s.ui.switchingTo ?? row?.name ?? 'session',
+              bootstrap: s.ui.bootstrap ?? makeBootstrapState(),
+              loadingDismissed: false,
+            },
+          }
         })
         break
       case 'SnapshotTail': {
@@ -3319,7 +3378,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             // RefreshHub polling interval is already torn down. Net: any Hub
             // that arrives while switchingTo is set means the swap bounced
             // back to the hub, so clear the loader unconditionally.
-            ui: { ...s.ui, switchingTo: null },
+            ui: { ...s.ui, switchingTo: null, loading: null, bootstrap: null },
           }
         })
         break
@@ -3348,6 +3407,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             palettes: env.palettes && env.palettes.length > 0 ? env.palettes : s.config.palettes,
           },
           ...(env.palette ? { palette: env.palette } : {}),
+          ...(s.ui.bootstrap ? { ui: updateBootstrap(s.ui, { config: 'done' }) } : {}),
         }))
         break
       case 'McpStatus': {
@@ -3411,7 +3471,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         break
       case 'SettingsValues': {
         const prevWorkdir = get().settingsValues?.workdir
-        set(() => ({
+        set((s) => ({
           settingsValues: {
             name: env.name,
             workdir: env.workdir,
@@ -3424,6 +3484,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             effort: env.effort ?? '',
             subagentMaxTurns: env.subagentMaxTurns ?? 500,
           },
+          ...(s.ui.bootstrap ? { ui: updateBootstrap(s.ui, { settings: 'done' }) } : {}),
         }))
         // Prune importGraph state when the workdir list changes (same session).
         // Use canonical availableRoots (backend-provided) as ground truth —
@@ -3498,8 +3559,8 @@ export const useKoma = create<KomaState>((set, get) => ({
             loading: env.active
               ? { active: env.active, workspace: env.workspace, awareness: env.awareness }
               : null,
-            // Warm-up finished (or never started) — drop switch chrome too so
-            // the overlay fully dismisses in one step.
+            // Warm-up finished — drop switch chrome even if config/settings/repos
+            // bootstrap rows are still finishing. Those must not block chat.
             ...(env.active ? {} : { switchingTo: null }),
           },
         }))
@@ -4280,7 +4341,11 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         break
       case 'RepoList':
-        set(() => ({ repos: env.repos, activeRepoRoot: env.active }))
+        set((s) => ({
+          repos: env.repos,
+          activeRepoRoot: env.active,
+          ...(s.ui.bootstrap ? { ui: updateBootstrap(s.ui, { repos: 'done' }) } : {}),
+        }))
         break
       case 'StashList':
         set(() => ({ stashes: env.entries }))
@@ -4876,8 +4941,34 @@ export const useKoma = create<KomaState>((set, get) => ({
   stageRewind: (index) => set((s) => ({ ui: { ...s.ui, pendingRewindIndex: index } })),
   clearRewind: () => set((s) => ({ ui: { ...s.ui, pendingRewindIndex: null } })),
   requestScrollBottom: () => set((s) => ({ ui: { ...s.ui, scrollTick: s.ui.scrollTick + 1 } })),
-  startSwitching: (name) => set((s) => ({ ui: { ...s.ui, switchingTo: name } })),
-  cancelSwitching: () => set((s) => ({ ui: { ...s.ui, switchingTo: null } })),
+  startSwitching: (name) =>
+    set((s) => ({
+      ui: {
+        ...s.ui,
+        switchingTo: name,
+        loadingDismissed: false,
+        bootstrap: makeBootstrapState(),
+      },
+    })),
+  cancelSwitching: () =>
+    set((s) => ({
+      ui: { ...s.ui, switchingTo: null, loading: null, bootstrap: null },
+    })),
+  skipBootstrapRemaining: () =>
+    set((s) => {
+      if (!s.ui.bootstrap) return s
+      const b = s.ui.bootstrap
+      const term = (p: LoadPhase): LoadPhase =>
+        p === 'done' || p === 'skipped' || p === 'failed' ? p : 'skipped'
+      return {
+        ui: updateBootstrap(s.ui, {
+          session: term(b.session),
+          config: term(b.config),
+          settings: term(b.settings),
+          repos: term(b.repos),
+        }),
+      }
+    }),
   requestRemotePath: () => {
     const s = get()
     // Picker already visible / in-flight — drop the duplicate click.
@@ -5990,6 +6081,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         // Defensive: also drop any stale startup splash — it described the
         // now-dead session's warm-up and must not linger over StartScreen.
         loading: null,
+        bootstrap: null,
         loadingDismissed: false,
       },
       // Drop session-scoped Analytics result on detach (all-scope data can stay;

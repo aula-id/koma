@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { Check, Minus, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
-import type { LoadPhase } from '../store/koma'
+import type { BootstrapState, LoadPhase } from '../store/koma'
 import { BootBrailleSpinner } from './BrailleSpinner'
 
 // Duplicated from Titlebar.tsx's private (unexported) `post` helper — this
@@ -83,15 +83,31 @@ function PhaseRow({
 // phase lines (indexing workspace / reading project docs), mirroring the TUI's
 // startup screen. Phase "running" glyphs use CSS braille, not the shared JS
 // ticker, so they keep stepping while Snapshot apply blocks the main thread.
-function LoadingSplash({ workspace, awareness }: { workspace: LoadPhase; awareness: LoadPhase }) {
+function LoadingSplash({
+  bootstrap,
+  workspace,
+  awareness,
+}: {
+  bootstrap: BootstrapState | null
+  workspace?: LoadPhase
+  awareness?: LoadPhase
+}) {
   const errorTint = useErrorTint()
 
   return (
     <div className="flex flex-col items-center gap-4">
       <span className="text-[22px] font-bold text-koma-fg">koma</span>
       <div className="flex flex-col gap-1.5">
-        <PhaseRow label="indexing workspace" phase={workspace} errorTint={errorTint} />
-        <PhaseRow label="reading project docs" phase={awareness} errorTint={errorTint} />
+        {bootstrap && (
+          <>
+            <PhaseRow label="loading session state" phase={bootstrap.session} errorTint={errorTint} />
+            <PhaseRow label="loading configuration" phase={bootstrap.config} errorTint={errorTint} />
+            <PhaseRow label="loading workspace settings" phase={bootstrap.settings} errorTint={errorTint} />
+            <PhaseRow label="discovering repositories" phase={bootstrap.repos} errorTint={errorTint} />
+          </>
+        )}
+        {workspace && <PhaseRow label="indexing workspace" phase={workspace} errorTint={errorTint} />}
+        {awareness && <PhaseRow label="reading project docs" phase={awareness} errorTint={errorTint} />}
       </div>
     </div>
   )
@@ -116,9 +132,14 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
     !!to?.startsWith('remote ') &&
     !['ready', 'connected', 'error', 'disconnected'].includes(remoteState.state)
   const loading = useKoma((s) => s.ui.loading)
+  const bootstrap = useKoma((s) => s.ui.bootstrap)
   const loadingDismissed = useKoma((s) => s.ui.loadingDismissed)
   const dismissLoading = useKoma((s) => s.dismissLoading)
-  const showSplash = !!loading?.active && !loadingDismissed
+  const showWarm = !!loading?.active && !loadingDismissed
+  // Once Snapshot marks session done, don't keep the full-screen splash up for
+  // trailing config/settings/repos — those were jamming chat behind the overlay.
+  const showSplash =
+    showWarm || (!!bootstrap && bootstrap.session !== 'done' && bootstrap.session !== 'skipped')
   const [stuck, setStuck] = useState(false)
   const timersRef = useRef<{ hint: number; autoCancel: number } | null>(null)
   const onCancelRef = useRef(onCancel)
@@ -138,6 +159,27 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
       timersRef.current = null
     }
   }, [to])
+
+  // If settings/repos never reply, force-complete bootstrap and log why.
+  // Depend on presence only — resetting on every phase tick would never fire.
+  const bootstrapping = !!bootstrap
+  useEffect(() => {
+    if (!bootstrapping) return
+    const t = window.setTimeout(() => {
+      const b = useKoma.getState().ui.bootstrap
+      if (!b) return
+      try {
+        window.komaIpc?.({
+          r: 'WriteErrorLog',
+          message: `[ui-pace] bootstrap timeout session=${b.session} config=${b.config} settings=${b.settings} repos=${b.repos}`,
+        })
+      } catch {
+        /* ignore */
+      }
+      useKoma.getState().skipBootstrapRemaining()
+    }, 8000)
+    return () => window.clearTimeout(t)
+  }, [bootstrapping])
 
   if (!to && !showSplash) return null
 
@@ -164,15 +206,21 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
       onMouseDown={handleMouseDown}
     >
       <div className="koma-boot-panel flex flex-col items-center gap-4">
-        {showSplash && loading ? (
+        {showSplash ? (
           <>
-            <LoadingSplash workspace={loading.workspace} awareness={loading.awareness} />
-            <button
-              onClick={dismissLoading}
-              className="mt-6 rounded-md border border-koma-border bg-koma-panel px-3 py-1.5 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
-            >
-              Skip
-            </button>
+            <LoadingSplash
+              bootstrap={bootstrap}
+              workspace={showWarm ? loading?.workspace : undefined}
+              awareness={showWarm ? loading?.awareness : undefined}
+            />
+            {showWarm && (
+              <button
+                onClick={dismissLoading}
+                className="mt-6 rounded-md border border-koma-border bg-koma-panel px-3 py-1.5 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+              >
+                Skip
+              </button>
+            )}
           </>
         ) : (
           <>
