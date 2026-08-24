@@ -292,6 +292,16 @@ pub enum ClientRequest {
     /// `pending_steer` + a status line). A no-op when the queue is already
     /// empty. gui-gated: the TUI drives this via `SendKey` (Ctrl+X).
     CancelSteers,
+    /// Remove one queued follow-up by index. Reuses `Action::RemoveSteer`.
+    /// gui-gated (TUI uses SendKey while the list is focused).
+    RemoveSteer {
+        index: usize,
+    },
+    /// Pull one queued follow-up into the composer for edit. Reuses
+    /// `Action::EditSteer`. gui-gated.
+    EditSteer {
+        index: usize,
+    },
     /// Kill a single sub-agent of the foreground session by its stable id (the GUI
     /// agent-row kill button). Mirrors the model-callable `task_kill` primitive: abort
     /// the tokio task + flip a still-Running status to Killed (a terminal status is left

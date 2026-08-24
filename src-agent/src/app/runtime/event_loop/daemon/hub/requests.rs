@@ -582,6 +582,12 @@ impl DaemonHub {
             ClientRequest::CancelSteers => {
                 self.cancel_steers(idx, state, client, handle);
             }
+            ClientRequest::RemoveSteer { index } => {
+                self.remove_steer(idx, state, client, handle, index);
+            }
+            ClientRequest::EditSteer { index } => {
+                self.edit_steer(idx, state, client, handle, index);
+            }
 
             // GUI hover-edit pencil on a USER chat bubble: rewind the foreground
             // session to JUST BEFORE the message at `index` — the non-key equivalent

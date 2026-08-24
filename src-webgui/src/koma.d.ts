@@ -116,6 +116,11 @@ declare global {
     // Composer queued-steer-list clear button: cancel every pending mid-turn
     // steer at once (koma's Ctrl+X-with-pending-steers equivalent).
     | { r: 'CancelSteers' }
+    // Remove one queued follow-up by index.
+    | { r: 'RemoveSteer'; index: number }
+    // Load one queued follow-up into the composer for edit (daemon removes it
+    // from the queue). Pair with local refillComposer(fullText).
+    | { r: 'EditSteer'; index: number }
     // Rewind the conversation TO a user message by its index into
     // SessionSnapshot.messages (Conversation::messages()) — drops everything
     // after it, mirroring the TUI's double-Esc MessageRewind. No id: the daemon

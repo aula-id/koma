@@ -902,10 +902,10 @@ export type PushEnvelope =
       // the host's process-global agent_mode. Optional-tolerant: a host build
       // that doesn't project it yet leaves the store's current mode untouched.
       mode?: string
-      // Queued mid-turn steer previews (host `SessionSnapshot.pending_steer`):
+      // Queued mid-turn steer messages (host `SessionSnapshot.pending_steer`):
       // messages submitted while the turn is cooking, capped at 5 daemon-side.
-      // Truncated one-line previews. Optional-tolerant: a host build that doesn't
-      // project it yet leaves the store's queue empty.
+      // Full text (clients ellipsize at render). Optional-tolerant: a host build
+      // that doesn't project it yet leaves the store's queue empty.
       pendingSteer?: string[]
       // Approval/plan-decision gate (host `awaiting_approval` — approval.rs).
       // True when the turn is PARKED waiting on a y/a/n decision. The paused
@@ -1616,10 +1616,10 @@ type SessionSlice = {
   // host's process-global agent_mode via the Snapshot envelope. Drives the
   // composer mode selector. Defaults to "auto".
   mode: string
-  // Queued mid-turn steer previews (host `SessionSnapshot.pending_steer`) —
+  // Queued mid-turn follow-ups (host `SessionSnapshot.pending_steer`) —
   // submits made while the turn is cooking are queued daemon-side (cap 5) rather
-  // than starting a new turn. Drives the composer's pending-steer indicator +
-  // the send cap. REPLACED wholesale on each Snapshot.
+  // than starting a new turn. Full text for edit/remove. REPLACED wholesale on
+  // each Snapshot.
   pendingSteer: string[]
   // Approval gate (host `awaiting_approval`): true while the turn is parked on a
   // y/a/n decision. Drives the ApprovalOverlay modal (risky/classifier pause) +

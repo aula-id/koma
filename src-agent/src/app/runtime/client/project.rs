@@ -315,8 +315,9 @@ pub(super) fn serialize_and_push(
         })
         .collect();
 
-    // Queued mid-turn steer previews (koma's `pending_steer`, decoded into the shadow):
-    // the composer renders these as the "Queued N/5" list while a turn is in flight.
+    // Queued mid-turn follow-ups (koma's `pending_steer`, decoded into the shadow):
+    // the composer renders these as the follow-ups list while a turn is in flight.
+    // Full text so clients can edit/remove per item.
     let pending_steer: Vec<String> = fg.pending_steer.clone();
 
     // Tool-approval GATE (wave-7): the foreground session parks with `awaiting_approval`

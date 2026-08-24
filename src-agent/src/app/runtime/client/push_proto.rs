@@ -71,9 +71,9 @@ pub(super) enum PushEnvelope {
         /// fingerprint) so the composer mode selector shows + reflects the live mode; a
         /// `SetMode` round-trip flips this on the next snapshot.
         mode: String,
-        /// Foreground session's QUEUED mid-turn steer previews (koma's `pending_steer`).
-        /// Authoritative full array — React REPLACES on each Snapshot; the composer
-        /// renders it as the "Queued N/5" preview list while a turn is in flight.
+        /// Foreground session's QUEUED mid-turn follow-ups (koma's `pending_steer`).
+        /// Authoritative full array (full text) — React REPLACES on each Snapshot; the
+        /// composer renders it as the follow-ups list while a turn is in flight.
         /// Folded into the fingerprint so queuing/consuming a steer re-emits the Snapshot.
         #[serde(rename = "pendingSteer")]
         pending_steer: Vec<String>,

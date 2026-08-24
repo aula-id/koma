@@ -311,6 +311,8 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     // `subagent_sel` so Up/Down on either picker moves the highlight on the client
     // (without this the shadow `palette_sel` stays at 0 and the row never moves).
     shadow.rest.palette_sel = global.palette_sel;
+    shadow.rest.pending_steer_sel = global.pending_steer_sel;
+    shadow.rest.pending_steer_focus = global.pending_steer_focus;
 
     // Staged composer attachments (ingested daemon-side via path-paste / clipboard /
     // @-picker). The `[Image #N]` marker text already arrives in `input`; mirror the

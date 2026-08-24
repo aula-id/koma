@@ -250,11 +250,56 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
         };
     }
 
-    // Ctrl+X (with pending steers) → cancel all queued mid-turn steer messages.
+    // Ctrl+X (with pending steers) → cancel all queued mid-turn follow-ups.
     // Only fires when the queue is non-empty so Ctrl+X stays free for other uses
     // (e.g. sub-agent kill above) when there is nothing to cancel.
     if is_ctrl(&key, 'x') && !rest.fg().pending_steer.is_empty() {
         return Action::CancelSteers;
+    }
+
+    // Follow-ups list focus: when the queue is non-empty and focus is on the
+    // list, Up/Down/Enter/Esc/Delete own the keys. Esc unfocuses (does not
+    // interrupt the turn). Ctrl+X above still clears all.
+    let steer_n = rest.fg().pending_steer.len();
+    if steer_n > 0 && rest.pending_steer_focus {
+        // Clamp selection against live queue length every key.
+        if rest.pending_steer_sel >= steer_n {
+            rest.pending_steer_sel = steer_n - 1;
+        }
+        match key.code {
+            KeyCode::Up => {
+                rest.pending_steer_sel = rest.pending_steer_sel.saturating_sub(1);
+                return Action::None;
+            }
+            KeyCode::Down => {
+                rest.pending_steer_sel = (rest.pending_steer_sel + 1).min(steer_n - 1);
+                return Action::None;
+            }
+            KeyCode::Enter => {
+                let idx = rest.pending_steer_sel;
+                return Action::EditSteer(idx);
+            }
+            KeyCode::Delete | KeyCode::Backspace => {
+                let idx = rest.pending_steer_sel;
+                return Action::RemoveSteer(idx);
+            }
+            KeyCode::Esc => {
+                // Unfocus the list only — leave the turn running and the queue intact.
+                rest.pending_steer_focus = false;
+                return Action::None;
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Typing returns focus to the composer and inserts the char.
+                rest.pending_steer_focus = false;
+                rest.push_char(c);
+                return Action::None;
+            }
+            _ => {
+                // Other keys (Ctrl+V, etc.) fall through to the normal chat path
+                // after dropping list focus so they don't get swallowed forever.
+                rest.pending_steer_focus = false;
+            }
+        }
     }
     // Ctrl+R: resend (only when idle).
     if is_ctrl(&key, 'r') {
@@ -483,8 +528,9 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             Action::None
         }
         KeyCode::Up => {
-            // Command palette takes precedence; then file palette; then within-input
-            // line movement; finally history recall (only when already on line 0).
+            // Command palette takes precedence; then file palette; then
+            // within-input line movement; then the follow-ups list; finally
+            // history recall (only when already on line 0 / empty queue).
             if !command::palette_matches(&rest.fg().input).is_empty() {
                 rest.palette_sel = rest.palette_sel.saturating_sub(1);
             } else {
@@ -499,7 +545,18 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                     .unwrap_or_default();
                 if !fmatches.is_empty() {
                     rest.palette_sel = rest.palette_sel.saturating_sub(1);
-                } else if !rest.cursor_up() {
+                } else if rest.cursor_up() {
+                    // Moved within a multi-line draft — stay in the composer.
+                } else if !rest.fg().pending_steer.is_empty() {
+                    // Top of composer + non-empty queue → enter follow-ups list.
+                    let n = rest.fg().pending_steer.len();
+                    if !rest.pending_steer_focus {
+                        rest.pending_steer_focus = true;
+                        rest.pending_steer_sel = n - 1;
+                    } else {
+                        rest.pending_steer_sel = rest.pending_steer_sel.saturating_sub(1);
+                    }
+                } else {
                     let users = user_messages(rest);
                     rest.history_prev(&users);
                 }
@@ -522,6 +579,14 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                     .unwrap_or_default();
                 if !fmatches.is_empty() {
                     rest.palette_sel = (rest.palette_sel + 1).min(fmatches.len() - 1);
+                } else if rest.pending_steer_focus && !rest.fg().pending_steer.is_empty() {
+                    let sn = rest.fg().pending_steer.len();
+                    if rest.pending_steer_sel + 1 < sn {
+                        rest.pending_steer_sel += 1;
+                    } else {
+                        // Past the last item → return focus to the composer.
+                        rest.pending_steer_focus = false;
+                    }
                 } else if !rest.cursor_down() {
                     let users = user_messages(rest);
                     rest.history_next(&users);

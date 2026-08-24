@@ -442,6 +442,20 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 }
             }
         }
+        GuiReq::RemoveSteer { index } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::RemoveSteer { index });
+                }
+            }
+        }
+        GuiReq::EditSteer { index } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::EditSteer { index });
+                }
+            }
+        }
         // Status-footer Compact action: summarise + trim the foreground
         // session's history on the attached daemon. No session attached →
         // silent no-op (compacting nothing is meaningless).

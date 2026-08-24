@@ -59,6 +59,14 @@ pub struct GlobalSnapshot {
     pub subagents_open: bool,
     pub subagent_sel: usize,
     pub palette_sel: usize,
+    /// Highlighted row in the pending follow-ups list (index into session
+    /// `pending_steer`). Mirrored like `palette_sel` so Up/Down moves the
+    /// client highlight without waiting on a separate channel.
+    #[serde(default)]
+    pub pending_steer_sel: usize,
+    /// Whether the follow-ups list currently owns Up/Down/Enter/Esc.
+    #[serde(default)]
+    pub pending_steer_focus: bool,
     pub pending_attachments: Vec<crate::dto::chat::Attachment>,
     pub file_palette: Option<Vec<String>>,
     pub agent_mode: String,
