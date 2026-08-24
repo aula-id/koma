@@ -98,30 +98,17 @@ function LoadingSplash({ workspace, awareness }: { workspace: LoadPhase; awarene
 }
 
 // Full-screen loader shown while a session swap (SelectSession/NewSession) is
-// in flight. The host gives no reliable "swap started" push on this build —
-// the attach can block synchronously for seconds (build-skew daemon restart,
-// cold session spawn) — and during that window the webview would otherwise
-// keep rendering the stale previous session. Raised optimistically by
-// ResumePalette's startSwitching() the instant the request is sent; cleared
-// by koma.ts the moment the next authoritative Snapshot lands (success) or
-// Hub lands (attach failure/degrade — the host always bounces back to the
-// swapper with a fresh Hub push on that path).
+// in flight, and while cold-session warm-up (`ui.loading`) runs afterward.
+// Raised optimistically by ResumePalette's startSwitching() and/or host
+// Switching pushes. Cleared when Loading goes inactive (or Hub bounce).
 //
-// Presentation is game-style / side-loaded: center loader is CSS stepped
-// braille (BootBrailleSpinner), not BrailleSpinner's setInterval — same glyphs,
-// no React tick. Fat Snapshot parse can stall React; CSS keeps stepping.
+// Presentation is side-loaded: CSS stepped braille (BootBrailleSpinner), not
+// BrailleSpinner's setInterval — same glyphs, no React tick. Fat Snapshot
+// parse can stall React; CSS keeps stepping. Overlay bg is fully opaque so a
+// transparent wry window never shows through as a white freeze.
 //
-// The in-flight swap itself cannot be interrupted (the client thread blocks
-// synchronously on attach), so Cancel is best-effort: it just dismisses the
-// loader and bails back to the resume hub. Whatever session was being
-// switched to still lands eventually and is applied normally when its
-// Snapshot arrives.
-//
-// Also stays mounted (rendering the TUI-parity startup splash) while
-// `ui.loading?.active` is true, even after `ui.switchingTo` has already
-// cleared — the cold-session warm-up (workspace indexing / awareness reading)
-// can outlast the attach itself, so the splash's own condition is ORed in
-// alongside the classic switch-spinner condition.
+// Attach runs off the UI thread; Cancel is best-effort (HostCtl::ToSwapper
+// after the in-flight attach returns).
 export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
   const to = useKoma((s) => s.ui.switchingTo)
   const remoteState = useKoma((s) => s.remoteState)

@@ -717,6 +717,6 @@ svg.animate-spin {
   animation: koma-boot-fade-in 0.16s ease-out both;
 }
 .koma-boot-overlay {
-  /* Opaque-ish dim beats backdrop-blur during load (blur is main/GPU heavy). */
-  background-color: color-mix(in srgb, var(--color-koma-bg) 92%, transparent);
+  /* Fully opaque — transparent wry window + 92% mix read as a frozen white wash. */
+  background-color: var(--color-koma-bg, var(--koma-bg, #0b0e14));
 }
