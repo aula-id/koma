@@ -254,7 +254,9 @@ fn parse_resize_dir(dir: &str) -> Option<tao::window::ResizeDirection> {
 }
 
 pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
+    use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
     use tao::{
         dpi::LogicalSize,
         event::{Event, WindowEvent},
@@ -532,17 +534,79 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     // just exit the loop — the host-relay client-thread's daemon is a SEPARATE
     // detached process that keeps cooking (resumable via the swapper), exactly like
     // closing a terminal; the process exit drops the client-thread with it.
+    // WebKitGTK executes `evaluate_script` on its UI thread. A cold attach emits
+    // several envelopes back-to-back (Loading/Snapshot/Status/Config, followed by
+    // settings/repo replies); injecting each as its own tao user event starves
+    // WebKit's paint pass and visibly freezes even the CSS boot spinner. Collect
+    // everything that arrived in one event-loop turn and inject ONE array at most
+    // once per display frame. The React bridge consumes the array in-order and,
+    // while switching, deliberately applies one envelope per animation frame.
+    const PUSH_FRAME_BUDGET: Duration = Duration::from_millis(16);
+    let mut pending_pushes: VecDeque<String> = VecDeque::new();
+    let mut next_push_at: Option<Instant> = None;
+    let mut last_push_at: Option<Instant> = None;
+
     event_loop.run(move |event, _target, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        *control_flow = next_push_at
+            .map(ControlFlow::WaitUntil)
+            .unwrap_or(ControlFlow::Wait);
         match event {
-            // Host-relay state push: inject the authoritative JSON envelope into the
-            // native-React client. Embed the JSON object LITERAL (one serde) so JS
-            // receives a real object — no string-wrap + JSON.parse round-trip.
-            // Content is already JSON-escaped by serde_json, so it is safe inside
-            // the script source. Fallback to quoted string only if serialise fails.
+            // Host-relay state push: queue the already-serialised object literal.
+            // `MainEventsCleared` below drains a whole burst through one JS call,
+            // never one synchronous `evaluate_script` per envelope.
             Event::UserEvent(UserEvent::Push(json)) => {
-                let script = format!("window.__komaClient&&window.__komaClient.push({json})");
-                let _ = webview.evaluate_script(&script);
+                pending_pushes.push_back(json);
+                if next_push_at.is_none() {
+                    let now = Instant::now();
+                    next_push_at = Some(
+                        last_push_at
+                            .map(|last| last + PUSH_FRAME_BUDGET)
+                            .filter(|at| *at > now)
+                            .unwrap_or(now),
+                    );
+                }
+            }
+            Event::MainEventsCleared => {
+                let now = Instant::now();
+                if next_push_at.is_some_and(|at| now >= at) && !pending_pushes.is_empty() {
+                    let n = pending_pushes.len();
+                    let mut batch = String::from("[");
+                    while let Some(json) = pending_pushes.pop_front() {
+                        if batch.len() > 1 {
+                            batch.push(',');
+                        }
+                        // Keep each envelope as a JSON STRING inside the batch.
+                        // WebKit only parses the cheap outer string array during
+                        // evaluate_script; React JSON.parse's one queued bootstrap
+                        // envelope per animation frame instead of parsing the fat
+                        // Snapshot together with every sibling push.
+                        batch.push_str(
+                            &serde_json::to_string(&json)
+                                .expect("serialising an owned JSON string cannot fail"),
+                        );
+                    }
+                    batch.push(']');
+                    let script = format!(
+                        "window.__komaClient&&(window.__komaClient.pushBatch?window.__komaClient.pushBatch({batch}):{batch}.forEach(x=>window.__komaClient.push(x)))"
+                    );
+                    let bytes = script.len();
+                    let t0 = Instant::now();
+                    let _ = webview.evaluate_script(&script);
+                    let took = t0.elapsed();
+                    // Always log fat/slow injects; sample small ones so we can
+                    // see attach bursts without flooding ~/.koma/error.log.
+                    if took >= Duration::from_millis(8) || bytes >= 32_768 || n > 1 {
+                        crate::model::store::append_global_error_log(
+                            "gui-pace",
+                            &format!(
+                                "inject n={n} bytes={bytes} took_ms={}",
+                                took.as_millis()
+                            ),
+                        );
+                    }
+                    last_push_at = Some(now);
+                    next_push_at = None;
+                }
             }
             // Custom-titlebar window commands: the window is undecorated, so
             // drag / minimize / maximize / close / edge-resize all have to be driven
@@ -572,6 +636,13 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 *control_flow = ControlFlow::Exit;
             }
             _ => {}
+        }
+        // A push queued during this callback must wake no later than its frame
+        // deadline. Preserve Exit selected by a close event.
+        if *control_flow != ControlFlow::Exit {
+            *control_flow = next_push_at
+                .map(ControlFlow::WaitUntil)
+                .unwrap_or(ControlFlow::Wait);
         }
     });
 }

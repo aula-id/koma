@@ -793,6 +793,9 @@ declare global {
     // Rust -> JS: host calls this via evaluate_script. Accepts a JSON string
     // (legacy) or a pre-parsed envelope object (preferred cheaper path).
     push(json: string | object): void
+    // Native GUI fast path: Rust batches all pushes from one display-frame
+    // window into a single evaluate_script; the client preserves wire order.
+    pushBatch(items: Array<string | object>): void
   }
 
   interface Window {
