@@ -286,7 +286,57 @@ export function applyKomaTheme(name = 'koma-editor'): string {
       'progressBar.background': accent,
     },
   })
+  // Context menus mount on document.body (outside .monaco-editor). Monaco only
+  // injects `--vscode-*` color vars under `.monaco-editor, .monaco-diff-editor,
+  // .monaco-component`, so body menus keep the previous base theme (often dark
+  // on a light koma palette). Mirror the menu tokens onto :root every apply.
+  mirrorMenuCssVars({
+    bg,
+    panel,
+    panel2,
+    fg,
+    dim,
+    border,
+    hover,
+  })
   return name
+}
+
+/** Push menu-related --vscode-* tokens onto :root for body-mounted menus. */
+function mirrorMenuCssVars(p: {
+  bg: string
+  panel: string
+  panel2: string
+  fg: string
+  dim: string
+  border: string
+  hover: string
+}): void {
+  if (typeof document === 'undefined') return
+  const root = document.documentElement
+  const shadow = mixHex('#000000', p.bg, 0.45)
+  const set = (name: string, value: string) => root.style.setProperty(name, value)
+  set('--vscode-menu-background', p.panel)
+  set('--vscode-menu-foreground', p.fg)
+  set('--vscode-menu-border', p.border)
+  set('--vscode-menu-selectionBackground', p.hover)
+  set('--vscode-menu-selectionForeground', p.fg)
+  set('--vscode-menu-separatorBackground', p.border)
+  set('--vscode-widget-shadow', shadow)
+  set('--vscode-scrollbar-shadow', p.bg)
+  set('--vscode-scrollbarSlider-background', mixHex(p.fg, p.bg, 0.18))
+  set('--vscode-scrollbarSlider-hoverBackground', mixHex(p.fg, p.bg, 0.28))
+  set('--vscode-scrollbarSlider-activeBackground', mixHex(p.fg, p.bg, 0.38))
+  set('--vscode-keybindingLabel-background', p.panel2)
+  set('--vscode-keybindingLabel-foreground', p.dim)
+  set('--vscode-keybindingLabel-border', p.border)
+  set('--vscode-keybindingLabel-bottomBorder', p.border)
+  set('--vscode-focusBorder', resolveVarHex('--color-koma-accent', '#39ff14'))
+  // select.* is the registered default fallback for menu.foreground/background
+  set('--vscode-select-background', p.panel)
+  set('--vscode-select-foreground', p.fg)
+  set('--vscode-list-activeSelectionBackground', p.hover)
+  set('--vscode-list-activeSelectionForeground', p.fg)
 }
 
 // Re-apply koma Monaco themes after a live palette change (Settings / Snapshot).
