@@ -128,8 +128,52 @@ function RootLayout() {
   // push (Hub if swapper else Snapshot). Also expose window.komaIpc for
   // fire-and-forget IPC calls (e.g., error logging).
   useEffect(() => {
+    // Coalesce high-frequency Stream/Reasoning/Status envelopes to one store
+    // apply per animation frame. Structural envelopes (Snapshot*, Hub, …) flush
+    // immediately so UI never lags a commit behind a batched token tick.
+    type Env = Parameters<NonNullable<typeof window.__komaClient>['push']> extends
+      never
+      ? never
+      : any
+    let raf = 0
+    const pending: any[] = []
+    const isCoalesce = (k: string) =>
+      k === 'StreamDelta' ||
+      k === 'StreamMsg' ||
+      k === 'ReasoningDelta' ||
+      k === 'Reasoning' ||
+      k === 'Status'
+
+    const flush = () => {
+      raf = 0
+      if (pending.length === 0) return
+      // Collapse stream/reasoning deltas: apply in order but one React tick
+      // by calling push back-to-back inside the rAF (zustand batches sync sets
+      // in the same event loop turn when using the default path).
+      const batch = pending.splice(0, pending.length)
+      const push = useKoma.getState().push
+      for (const env of batch) push(env)
+    }
+
+    const enqueue = (env: any) => {
+      if (env && typeof env === 'object' && isCoalesce(env.k)) {
+        pending.push(env)
+        if (!raf) raf = requestAnimationFrame(flush)
+        return
+      }
+      // Structural: drain any pending light envelopes first so order is preserved
+      // (e.g. last StreamDelta before Snapshot clear).
+      if (pending.length) flush()
+      useKoma.getState().push(env)
+    }
+
     window.__komaClient = {
-      push: (j) => useKoma.getState().push(JSON.parse(j)),
+      // Host may pass a JSON string (legacy double-encode) OR a pre-parsed
+      // object (cheaper inject path).
+      push: (j) => {
+        const env = typeof j === 'string' ? JSON.parse(j) : j
+        enqueue(env)
+      },
     }
     // komaIpc is for fire-and-forget requests that don't need a reply
     window.komaIpc = (g) => {
@@ -160,6 +204,7 @@ function RootLayout() {
     // of the JS<->Rust bridge setup so exactly one listener exists.
     const uninstallPanelBridge = installPanelBridgeListener()
     return () => {
+      if (raf) cancelAnimationFrame(raf)
       window.__komaClient = undefined
       window.komaIpc = undefined
       uninstallPanelBridge()
