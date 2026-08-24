@@ -790,9 +790,9 @@ declare global {
   }
 
   interface KomaClient {
-    // Rust -> JS: host calls this via evaluate_script with a JSON-encoded
-    // push envelope; forwarded straight into the koma store's reducer.
-    push(json: string): void
+    // Rust -> JS: host calls this via evaluate_script. Accepts a JSON string
+    // (legacy) or a pre-parsed envelope object (preferred cheaper path).
+    push(json: string | object): void
   }
 
   interface Window {
