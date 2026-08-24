@@ -185,14 +185,18 @@ fn attach_session_headless(
     Ok(conn)
 }
 
-/// Run [`attach_session_headless`] on a worker thread while the host client-thread
-/// keeps pumping `Switching` heartbeats so the webview overlay stays live (CSS
-/// braille + cancel affordance) instead of freezing on a washed-out frame.
-fn attach_session_headless_pumped(
+/// Run [`attach_session_headless`] on a worker thread so the host client-thread
+/// is not stuck inside ensure/handshake/restart.
+///
+/// Do **not** heartbeat via `evaluate_script` while waiting: each inject runs on
+/// the tao/WebKit main thread and freezes CSS overlay animations (BootBraille).
+/// The overlay is already raised by optimistic `startSwitching` / the first
+/// `Switching` push before this is called — silence is correct until attach
+/// finishes and Loading/Snapshot land.
+fn attach_session_headless_async(
     handle: &tokio::runtime::Handle,
     session_id: &str,
     workdir: Option<std::path::PathBuf>,
-    push: &dyn Fn(String),
 ) -> anyhow::Result<Connection> {
     let (tx, rx) = std::sync::mpsc::channel();
     let sid = session_id.to_string();
@@ -205,22 +209,10 @@ fn attach_session_headless_pumped(
         })
         .map_err(|e| anyhow::anyhow!("could not spawn attach worker: {e}"))?;
 
-    // Heartbeat while the worker runs: re-emit Switching so the overlay remains
-    // the authoritative surface and the main thread keeps getting UserEvents
-    // (proves liveness; cheap envelope).
-    loop {
-        match rx.recv_timeout(std::time::Duration::from_millis(250)) {
-            Ok(r) => return r,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                push_switching(push, session_id);
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(anyhow::anyhow!(
-                    "attach worker dropped without a result for session {session_id}"
-                ));
-            }
-        }
-    }
+    // Block this client-thread only (not tao). No UI pushes here.
+    rx.recv().map_err(|_| {
+        anyhow::anyhow!("attach worker dropped without a result for session {session_id}")
+    })?
 }
 
 /// Run the host-relay client on a background thread: own a tokio runtime and run the
@@ -1599,12 +1591,7 @@ fn host_attached(
     terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
     lsp_manager: &std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
 ) -> HostStep {
-    let mut conn = match attach_session_headless_pumped(
-        handle,
-        &id,
-        workdir,
-        push,
-    ) {
+    let mut conn = match attach_session_headless_async(handle, &id, workdir) {
         Ok(c) => c,
         Err(e) => {
             crate::model::store::append_global_error_log(
