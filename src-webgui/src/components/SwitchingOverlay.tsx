@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
-import { motion } from 'framer-motion'
 import { Check, Minus, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import type { LoadPhase } from '../store/koma'
-import { BrailleSpinner, useBrailleFrame } from './BrailleSpinner'
+import { BootBrailleGlyph, BootSpinner } from './BrailleSpinner'
 
 // Duplicated from Titlebar.tsx's private (unexported) `post` helper — this
 // overlay covers the titlebar region too and needs the same win-drag/maximize
@@ -44,18 +43,13 @@ function useErrorTint(): string {
   }, [palettes, theme])
 }
 
-// One phase row's status glyph: running = TUI-parity braille spinner frame
-// (accent-tinted, monospace so it doesn't wobble across frames — the app is
-// already set in the KomaMono monospace face globally); pending = dim hollow
-// dot; done = dim check; skipped = dim dash; failed = an error-role-tinted x.
-function PhaseGlyph({ phase, frame, errorTint }: { phase: LoadPhase; frame: string; errorTint: string }) {
+// One phase row's status glyph: running = CSS braille (no JS ticker — survives
+// main-thread Snapshot jank); pending = dim hollow dot; done = dim check;
+// skipped = dim dash; failed = an error-role-tinted x.
+function PhaseGlyph({ phase, errorTint }: { phase: LoadPhase; errorTint: string }) {
   switch (phase) {
     case 'running':
-      return (
-        <span className="flex h-[13px] w-[13px] flex-none items-center justify-center text-[13px] leading-none text-koma-accent">
-          {frame}
-        </span>
-      )
+      return <BootBrailleGlyph size={13} className="flex-none" />
     case 'done':
       return <Check size={13} className="flex-none text-koma-fg opacity-50" />
     case 'skipped':
@@ -71,17 +65,15 @@ function PhaseGlyph({ phase, frame, errorTint }: { phase: LoadPhase; frame: stri
 function PhaseRow({
   label,
   phase,
-  frame,
   errorTint,
 }: {
   label: string
   phase: LoadPhase
-  frame: string
   errorTint: string
 }) {
   return (
     <div className="flex items-center gap-2 text-[12px] text-koma-fg opacity-80">
-      <PhaseGlyph phase={phase} frame={frame} errorTint={errorTint} />
+      <PhaseGlyph phase={phase} errorTint={errorTint} />
       <span>{label}</span>
     </div>
   )
@@ -89,24 +81,18 @@ function PhaseRow({
 
 // TUI-parity startup splash — the koma wordmark + the two cold-session warm-up
 // phase lines (indexing workspace / reading project docs), mirroring the TUI's
-// startup screen. The wordmark reuses StartScreen/Onboarding's brand text
-// recipe (font-bold text-koma-fg, no accent on the text itself); the whole app
-// is already set in the KomaMono monospace face globally (#app in styles.css),
-// so the phase labels are monospace with no extra classes needed.
+// startup screen. Phase "running" glyphs use CSS (BootBrailleGlyph), not the
+// shared JS braille ticker, so they keep stepping while Snapshot apply blocks
+// the main thread.
 function LoadingSplash({ workspace, awareness }: { workspace: LoadPhase; awareness: LoadPhase }) {
   const errorTint = useErrorTint()
-  // ONE shared braille frame index for the whole splash (both phase rows
-  // stay in sync, matching the TUI's single cooking spinner) — driven by the
-  // app-wide BrailleSpinner ticker (see useBrailleFrame) instead of its own
-  // interval.
-  const frame = useBrailleFrame()
 
   return (
     <div className="flex flex-col items-center gap-4">
       <span className="text-[22px] font-bold text-koma-fg">koma</span>
       <div className="flex flex-col gap-1.5">
-        <PhaseRow label="indexing workspace" phase={workspace} frame={frame} errorTint={errorTint} />
-        <PhaseRow label="reading project docs" phase={awareness} frame={frame} errorTint={errorTint} />
+        <PhaseRow label="indexing workspace" phase={workspace} errorTint={errorTint} />
+        <PhaseRow label="reading project docs" phase={awareness} errorTint={errorTint} />
       </div>
     </div>
   )
@@ -121,6 +107,10 @@ function LoadingSplash({ workspace, awareness }: { workspace: LoadPhase; awarene
 // by koma.ts the moment the next authoritative Snapshot lands (success) or
 // Hub lands (attach failure/degrade — the host always bounces back to the
 // swapper with a fresh Hub push on that path).
+//
+// Presentation is game-style / side-loaded: the center spinner is a CSS
+// compositor `transform` ring (BootSpinner), not BrailleSpinner's setInterval.
+// Fat Snapshot parse can still stall React, but the ring keeps painting.
 //
 // The in-flight swap itself cannot be interrupted (the client thread blocks
 // synchronously on attach), so Cancel is best-effort: it just dismisses the
@@ -184,15 +174,10 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
 
   return (
     <div
-      className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-4 bg-koma-bg/90 backdrop-blur-sm"
+      className="koma-boot-overlay absolute inset-0 z-[60] flex flex-col items-center justify-center gap-4"
       onMouseDown={handleMouseDown}
     >
-      <motion.div
-        initial={{ opacity: 0, scale: 0.96 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.16, ease: 'easeOut' }}
-        className="flex flex-col items-center gap-4"
-      >
+      <div className="koma-boot-panel flex flex-col items-center gap-4">
         {showSplash && loading ? (
           <>
             <LoadingSplash workspace={loading.workspace} awareness={loading.awareness} />
@@ -205,21 +190,16 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
           </>
         ) : (
           <>
-            <BrailleSpinner size={28} className="text-koma-accent" />
+            <BootSpinner size={28} />
             <div className="text-[13px] text-koma-fg opacity-70">
               {remoteConnecting
                 ? `${remoteState.state.replace('_', ' ')} ${to?.replace(/^remote /, '')}…`
                 : `switching to ${to}…`}
             </div>
             {stuck && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 0.16, ease: 'easeOut' }}
-                className="text-[12px] text-koma-fg opacity-50"
-              >
+              <div className="text-[12px] text-koma-fg opacity-50">
                 Taking longer than expected…
-              </motion.div>
+              </div>
             )}
             {remoteState.state === 'auth_required' ? (
               <div className="text-[12px] text-koma-fg opacity-50">
@@ -246,7 +226,7 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
             )}
           </>
         )}
-      </motion.div>
+      </div>
     </div>
   )
 }
