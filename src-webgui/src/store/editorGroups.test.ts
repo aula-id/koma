@@ -9,6 +9,8 @@ import {
   normalizeGroups,
   reorderTab,
   resizeGroups,
+  setSplitDir,
+  toggleSplitDir,
   type GroupLayout,
 } from './editorGroups'
 
@@ -98,7 +100,7 @@ const layout = (partial: Partial<GroupLayout> = {}): GroupLayout => ({
   assert.deepEqual(reorderTab(tabs, 'chat', 'b').map((t) => t.id), ['chat', 'a', 'b', 'c'])
 }
 
-// Group insertion is bounded and preserves the requested side/orientation.
+// Group insertion is bounded at two panes and preserves the requested side/orientation.
 {
   const first = insertGroup(layout(), 'g0', 'after', 'row')
   assert.ok(first)
@@ -106,25 +108,44 @@ const layout = (partial: Partial<GroupLayout> = {}): GroupLayout => ({
   assert.equal(first.splitDir, 'row')
 
   const atLimit = layout({
-    groups: ['g0', 'g1', 'g2'],
-    groupSizes: { g0: 1, g1: 1, g2: 1 },
+    groups: ['g0', 'g1'],
+    groupSizes: { g0: 1, g1: 1 },
   })
   assert.equal(insertGroup(atLimit, 'g1', 'after', 'col'), null)
 }
 
-// Edge drop zones and center move zone.
+// Axis flip only when two panes are open.
+{
+  const unsplit = layout()
+  assert.equal(toggleSplitDir(unsplit), null)
+  assert.equal(setSplitDir(unsplit, 'col'), null)
+
+  const split = layout({
+    groups: ['g0', 'g1'],
+    tabGroup: { chat: 'g0', a: 'g0', b: 'g1' },
+    groupActive: { g0: 'a', g1: 'b' },
+    groupSizes: { g0: 1, g1: 1 },
+    splitDir: 'row',
+  })
+  assert.deepEqual(toggleSplitDir(split), { splitDir: 'col' })
+  assert.deepEqual(setSplitDir(split, 'col'), { splitDir: 'col' })
+  assert.equal(setSplitDir(split, 'row'), null)
+}
+
+// Edge drop zones and center move zone (edges optional once already split).
 {
   assert.equal(dropZoneFor(5, 50, 100, 100), 'left')
   assert.equal(dropZoneFor(95, 50, 100, 100), 'right')
   assert.equal(dropZoneFor(50, 5, 100, 100), 'top')
   assert.equal(dropZoneFor(50, 95, 100, 100), 'bottom')
   assert.equal(dropZoneFor(50, 50, 100, 100), 'center')
+  assert.equal(dropZoneFor(5, 50, 100, 100, { allowEdges: false }), 'center')
+  assert.equal(dropZoneFor(95, 5, 100, 100, { allowEdges: false }), 'center')
 }
 
 // Resize trades only between adjacent groups and clamps away from zero.
 {
-  const sizes = resizeGroups(['g0', 'g1', 'g2'], { g0: 1, g1: 1, g2: 1 }, 0, 100, 600)
-  assert.equal(sizes.g2, 1)
+  const sizes = resizeGroups(['g0', 'g1'], { g0: 1, g1: 1 }, 0, 100, 600)
   assert.ok(sizes.g0 > 1)
   assert.ok(sizes.g1 < 1)
 

@@ -35,12 +35,13 @@ function GuiCodeEditorPage() {
         <div>
           <h3 className="mb-1 text-base font-semibold text-koma-fg">Monaco Tabs</h3>
           <p>
-            Each open file appears as a tab. Drag tabs between editor groups,
-            drop a tab on a pane edge to split there, or right-click a tab and
-            choose Split Right or Split Down. Dividers are resizable, with up
-            to three groups. Ctrl+\ splits the focused tab to the right and
-            Ctrl+1 through Ctrl+3 focus a group. The editor also supports
-            syntax highlighting, minimap, find/replace, and bracket matching.
+            Each open file appears as a tab. Drag tabs between the two editor
+            panes, drop a tab on a pane edge while unsplit to create the second
+            pane, or right-click a tab and choose Split Right or Split Down.
+            Once split, a strip button (or Ctrl+\) flips horizontal ↔ vertical;
+            edge drops become move-only. Dividers are resizable. Ctrl+1 / Ctrl+2
+            focus a pane. The editor also supports syntax highlighting, minimap,
+            find/replace, and bracket matching.
           </p>
         </div>
 
