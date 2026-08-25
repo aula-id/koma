@@ -4,12 +4,9 @@ import { RouterProvider } from '@tanstack/react-router'
 import { router } from './router'
 import './styles.css'
 
-// webkitgtk font-loading race: if text paints before the bundled KomaMono
-// (JetBrains Mono) faces finish loading, it renders with a fallback face —
-// and webkitgtk often never repaints once the real font lands
-// (font-display: swap repaint bug). Gate the first render on the faces
-// being loaded so static regions (e.g. the PLAN todo list, which never
-// re-renders) never get stuck with the wrong face.
+// First paint must not wait on webfonts — the static #koma-boot-splash in
+// index.html is already on screen. React replaces #root as soon as the
+// module graph is ready. Fonts keep loading in the background.
 function renderApp() {
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
@@ -36,10 +33,9 @@ if (typeof MutationObserver !== 'undefined') {
 
 if (typeof document !== 'undefined' && document.fonts) {
   const fonts = ['400', '500', '700'].map((w) => document.fonts.load(`${w} 12px KomaMono`))
-  Promise.all(fonts)
+  void Promise.all(fonts)
     .then(() => document.fonts.ready)
     .catch(() => undefined)
-    .then(() => renderApp())
-} else {
-  renderApp()
 }
+
+renderApp()

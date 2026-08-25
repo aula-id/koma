@@ -7,9 +7,61 @@
   <link rel="preload" href="/fonts/jetbrains-mono-400.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/fonts/jetbrains-mono-500.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/fonts/jetbrains-mono-700.woff2" as="font" type="font/woff2" crossorigin>
+  <style>
+    html, body, #root {
+      margin: 0;
+      height: 100%;
+      background: #0b0e14;
+      color: #c8d3f5;
+      font-family: ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+    }
+    #koma-boot-splash {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: #0b0e14;
+      z-index: 1;
+    }
+    #koma-boot-splash .word {
+      font-size: 22px;
+      font-weight: 700;
+    }
+    #koma-boot-splash .spin {
+      width: 28px;
+      height: 28px;
+      font-size: 28px;
+      line-height: 1;
+      color: #39ff14;
+    }
+    #koma-boot-splash .spin::before {
+      content: '⠋';
+      animation: koma-html-braille 0.8s steps(1, end) infinite;
+    }
+    @keyframes koma-html-braille {
+      0% { content: '⠋'; }
+      10% { content: '⠙'; }
+      20% { content: '⠹'; }
+      30% { content: '⠸'; }
+      40% { content: '⠼'; }
+      50% { content: '⠴'; }
+      60% { content: '⠦'; }
+      70% { content: '⠧'; }
+      80% { content: '⠇'; }
+      90%, 100% { content: '⠏'; }
+    }
+  </style>
 </head>
 <body>
-  <div id="root"></div>
+  <div id="root">
+    <div id="koma-boot-splash">
+      <span class="word">koma</span>
+      <span class="spin" aria-hidden></span>
+    </div>
+  </div>
   <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>

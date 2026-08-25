@@ -126,6 +126,12 @@ pub(super) enum PushEnvelope {
         session: String,
         messages: Vec<PushMsg>,
     },
+    /// Prepend older committed messages after a truncated first Snapshot.
+    /// Same session; React concatenates onto the front of `messages`.
+    SnapshotHead {
+        session: String,
+        messages: Vec<PushMsg>,
+    },
     /// In-place update of the last committed message (tool result join, content tweak).
     /// React replaces `messages[messages.length-1]` when lengths still match.
     SnapshotSetLast {

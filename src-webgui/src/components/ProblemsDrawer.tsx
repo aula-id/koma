@@ -4,7 +4,7 @@
 import { useMemo } from 'react'
 import { AlertCircle, AlertTriangle, ChevronDown, Info, X } from 'lucide-react'
 import { useKoma, type LspDiagnostic } from '../store/koma'
-import { uriToPath } from '../lib/monaco-lsp'
+import { uriToPath } from '../lib/lsp-bridge'
 
 type Row = LspDiagnostic & { fileLabel: string }
 

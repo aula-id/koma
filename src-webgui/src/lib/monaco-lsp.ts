@@ -10,100 +10,62 @@
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
 // Side-effect: load CodeLens + peek/goto contribs before providers register.
 import { langFromPath } from './monaco-setup'
+import {
+  consumeReveal,
+  mintId,
+  pathToUri,
+  queueReveal,
+  splitRootPath,
+  trackCompletion,
+  trackCompletionResolve,
+  trackDefinition,
+  trackDocumentSymbol,
+  trackFileText,
+  trackHover,
+  trackReferences,
+  uriToPath,
+  type LspCompletionItem,
+  type LspDiagnostic,
+  type LspDocumentSymbol,
+  type LspHover,
+  type LspLocation,
+  type LspTextEdit,
+} from './lsp-bridge'
 
-export type LspDiagnostic = {
-  uri: string
-  line: number
-  character: number
-  endLine: number
-  endCharacter: number
-  severity: number
-  message: string
-  source?: string
-  code?: string
-}
+export {
+  consumeReveal,
+  mintId,
+  pathToUri,
+  queueReveal,
+  resolveLspCompletion,
+  resolveLspCompletionResolve,
+  resolveLspDefinition,
+  resolveLspDocumentSymbol,
+  resolveLspFileText,
+  resolveLspHover,
+  resolveLspReferences,
+  splitRootPath,
+  uriToPath,
+  type LspCompletionItem,
+  type LspDiagnostic,
+  type LspDocumentSymbol,
+  type LspHover,
+  type LspLocation,
+  type LspTextEdit,
+} from './lsp-bridge'
 
-export type LspTextEdit = {
-  range: {
-    startLine: number
-    startCharacter: number
-    endLine: number
-    endCharacter: number
-  }
-  newText: string
-}
+// Workspace-wide "N references" CodeLens is off by default — each lens is a
+// full textDocument/references search and can freeze the machine on a large
+// rust-analyzer / vtsls index. Hover / go-to / peek still work.
+const CODELENS_ENABLED = false
+// Cap unique files materialised for peek/go-to so a popular symbol cannot
+// FileRead hundreds of buffers into Monaco.
+const PEEK_FILE_CAP = 24
 
-export type LspCompletionItem = {
-  label: string
-  kind?: number
-  detail?: string
-  /** Secondary label (module path) from labelDetails.description. */
-  labelDescription?: string
-  insertText?: string
-  /** 1=PlainText 2=Snippet */
-  insertTextFormat?: number
-  documentation?: string
-  sortText?: string
-  filterText?: string
-  textEdit?: LspTextEdit
-  /** Auto-import and other side edits applied on accept. */
-  additionalTextEdits?: LspTextEdit[]
-  /** Opaque server token for completionItem/resolve. */
-  data?: unknown
-}
-
-export type LspHover = {
-  contents: string
-  range?: {
-    startLine: number
-    startCharacter: number
-    endLine: number
-    endCharacter: number
-  }
-}
-
-export type LspLocation = {
-  uri: string
-  range: {
-    startLine: number
-    startCharacter: number
-    endLine: number
-    endCharacter: number
-  }
-}
-
-export type LspDocumentSymbol = {
-  name: string
-  kind: number
-  range: {
-    startLine: number
-    startCharacter: number
-    endLine: number
-    endCharacter: number
-  }
-  selectionRange: {
-    startLine: number
-    startCharacter: number
-    endLine: number
-    endCharacter: number
-  }
-}
-
-type Pending<T> = {
-  resolve: (v: T) => void
-  reject: (e: Error) => void
-  timer: ReturnType<typeof setTimeout>
-}
-
-const PENDING_MS = 12_000
-
-const pendingCompletion = new Map<string, Pending<LspCompletionItem[]>>()
-const pendingCompletionResolve = new Map<string, Pending<LspCompletionItem>>()
-const pendingHover = new Map<string, Pending<LspHover | null>>()
-const pendingDefinition = new Map<string, Pending<LspLocation[]>>()
-const pendingReferences = new Map<string, Pending<LspLocation[]>>()
-const pendingDocumentSymbol = new Map<string, Pending<LspDocumentSymbol[]>>()
-const pendingFileText = new Map<string, Pending<string>>()
+type ReqFn = (body: object) => void
+type RootsFn = () => string[]
+/** Open a coding tab at 0-based line/character (go-to only; not peek). */
+type OpenLocationFn = (uri: string, line: number, character: number) => void
 
 // ─── CodeLens reference-count cache ──────────────────────────────────────────
 // Survives tab close/reopen so "N references" does not re-hit the language
@@ -186,7 +148,7 @@ async function computeCodeLensCounts(
 
   const work = (async () => {
     const symId = mintId('sym')
-    const symP = track(pendingDocumentSymbol, symId)
+    const symP = trackDocumentSymbol(symId)
     req({
       r: 'LspDocumentSymbol',
       root,
@@ -208,7 +170,7 @@ async function computeCodeLensCounts(
       await Promise.all(
         batch.map(async (sym) => {
           const refId = mintId('rlen')
-          const refP = track(pendingReferences, refId)
+          const refP = trackReferences(refId)
           req({
             r: 'LspReferences',
             root,
@@ -263,6 +225,7 @@ export function warmCodeLensCache(
   path: string,
   versionId: number,
 ): void {
+  if (!CODELENS_ENABLED) return
   if (!root || !path) return
   const hash = String(versionId)
   const cacheKey = fileCacheKey(root, path)
@@ -276,157 +239,6 @@ export function warmCodeLensCache(
 /** Drop cached lenses for a file (content rewrite / dispose). */
 export function invalidateCodeLensCache(root: string, path: string): void {
   codeLensCache.delete(fileCacheKey(root, path))
-}
-
-let reqCounter = 0
-function mintId(prefix: string): string {
-  reqCounter += 1
-  return `${prefix}-${Date.now().toString(36)}-${reqCounter}`
-}
-
-function track<T>(
-  map: Map<string, Pending<T>>,
-  id: string,
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      map.delete(id)
-      reject(new Error('LSP request timed out'))
-    }, PENDING_MS)
-    map.set(id, { resolve, reject, timer })
-  })
-}
-
-function settle<T>(
-  map: Map<string, Pending<T>>,
-  id: string,
-  value: T,
-  error: string | null | undefined,
-): void {
-  const p = map.get(id)
-  if (!p) return
-  map.delete(id)
-  clearTimeout(p.timer)
-  if (error) p.reject(new Error(error))
-  else p.resolve(value)
-}
-
-/** Called from the store push reducer. */
-export function resolveLspCompletion(
-  requestId: string,
-  items: LspCompletionItem[],
-  error: string | null,
-): void {
-  settle(pendingCompletion, requestId, items ?? [], error)
-}
-
-export function resolveLspCompletionResolve(
-  requestId: string,
-  item: LspCompletionItem | null,
-  error: string | null,
-): void {
-  if (error) {
-    settle(pendingCompletionResolve, requestId, {} as LspCompletionItem, error)
-    return
-  }
-  settle(pendingCompletionResolve, requestId, item ?? ({} as LspCompletionItem), null)
-}
-
-export function resolveLspHover(
-  requestId: string,
-  hover: LspHover | null,
-  error: string | null,
-): void {
-  settle(pendingHover, requestId, hover, error)
-}
-
-export function resolveLspDefinition(
-  requestId: string,
-  locations: LspLocation[],
-  error: string | null,
-): void {
-  settle(pendingDefinition, requestId, locations ?? [], error)
-}
-
-export function resolveLspReferences(
-  requestId: string,
-  locations: LspLocation[],
-  error: string | null,
-): void {
-  settle(pendingReferences, requestId, locations ?? [], error)
-}
-
-export function resolveLspDocumentSymbol(
-  requestId: string,
-  symbols: LspDocumentSymbol[],
-  error: string | null,
-): void {
-  settle(pendingDocumentSymbol, requestId, symbols ?? [], error)
-}
-
-/**
- * Resolve a FileRead that was issued for peek model materialization.
- * Store still applies reduceFileRead; this only settles the bridge Promise.
- */
-export function resolveLspFileText(
-  requestId: string,
-  content: string | null,
-  error: string | null,
-  binary?: boolean,
-  tooLarge?: boolean,
-): void {
-  if (!pendingFileText.has(requestId)) return
-  if (error) {
-    settle(pendingFileText, requestId, '', error)
-    return
-  }
-  if (binary || tooLarge) {
-    settle(pendingFileText, requestId, '', binary ? 'binary file' : 'file too large')
-    return
-  }
-  settle(pendingFileText, requestId, content ?? '', null)
-}
-
-// ─── URI helpers ─────────────────────────────────────────────────────────────
-
-/** file:// URI matching the host's path_to_uri. */
-export function pathToUri(root: string, path: string): string {
-  const abs = path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
-    ? path
-    : `${root.replace(/\/$/, '')}/${path.replace(/^\//, '')}`
-  const norm = abs.replace(/\\/g, '/')
-  if (norm.startsWith('/')) return `file://${norm}`
-  return `file:///${norm}`
-}
-
-/** Best-effort parse of file:// URI → absolute filesystem path. */
-export function uriToPath(uri: string): string | null {
-  if (!uri.startsWith('file://')) return null
-  let rest = uri.slice('file://'.length)
-  // Windows file:///C:/...
-  if (/^\/[A-Za-z]:\//.test(rest)) rest = rest.slice(1)
-  try {
-    return decodeURIComponent(rest)
-  } catch {
-    return rest
-  }
-}
-
-/** Split absolute path into workspace root + relative path using open roots. */
-export function splitRootPath(
-  absPath: string,
-  roots: string[],
-): { root: string; path: string } | null {
-  const norm = absPath.replace(/\\/g, '/')
-  const sorted = [...roots].sort((a, b) => b.length - a.length)
-  for (const root of sorted) {
-    const r = root.replace(/\\/g, '/').replace(/\/$/, '')
-    if (norm === r) return { root, path: '' }
-    if (norm.startsWith(r + '/')) {
-      return { root, path: norm.slice(r.length + 1) }
-    }
-  }
-  return null
 }
 
 export function monacoUriFromPath(root: string, path: string): monaco.Uri {
@@ -472,47 +284,10 @@ function lspSeverityToMonaco(s: number): monaco.MarkerSeverity {
   return monaco.MarkerSeverity.Hint
 }
 
-// ─── Pending go-to reveal (tab open path) ────────────────────────────────────
-
-/** Pending go-to / diagnostic reveal applied when the target tab's model is ready. */
-let pendingReveal: {
-  root: string
-  path: string
-  line: number
-  column: number
-} | null = null
-
-/** Queue a 1-based line/column reveal for a coding tab (consumed on model ready). */
-export function queueReveal(
-  root: string,
-  path: string,
-  line: number,
-  column: number,
-): void {
-  pendingReveal = { root, path, line, column }
-}
-
-/** If a reveal is queued for this tab, take it (once). */
-export function consumeReveal(
-  root: string,
-  path: string,
-): { line: number; column: number } | null {
-  const p = pendingReveal
-  if (!p) return null
-  if (p.root !== root || p.path !== path) return null
-  pendingReveal = null
-  return { line: p.line, column: p.column }
-}
-
 // ─── Provider registration (once) ────────────────────────────────────────────
 
 let providersReady = false
 let openerReady = false
-
-type ReqFn = (body: object) => void
-type RootsFn = () => string[]
-/** Open a coding tab at 0-based line/character (go-to only; not peek). */
-type OpenLocationFn = (uri: string, line: number, character: number) => void
 
 /**
  * Get-or-create a Monaco text model for a workspace file URI.
@@ -542,7 +317,7 @@ export async function ensureModelForUri(
   let text = preferText ?? null
   if (text == null) {
     const requestId = mintId('ftxt')
-    const p = track(pendingFileText, requestId)
+    const p = trackFileText(requestId)
     req({ r: 'FileRead', root: split.root, path: split.path, requestId })
     try {
       text = await p
@@ -583,10 +358,11 @@ async function materializeLocations(
   getRoots: RootsFn,
 ): Promise<monaco.languages.Location[]> {
   const out: monaco.languages.Location[] = []
-  // Dedupe URI loads.
+  // Dedupe URI loads. Cap unique files so a popular symbol cannot stampede FileRead.
   const seen = new Set<string>()
   for (const l of locations) {
     if (!seen.has(l.uri)) {
+      if (seen.size >= PEEK_FILE_CAP) continue
       seen.add(l.uri)
       await ensureModelForUri(l.uri, req, getRoots)
     }
@@ -673,7 +449,7 @@ export function ensureLspProviders(
       const loc = modelToRootPath(model, getRoots())
       if (!loc) return { suggestions: [] }
       const requestId = mintId('cmp')
-      const p = track(pendingCompletion, requestId)
+      const p = trackCompletion(requestId)
       req({
         r: 'LspCompletion',
         root: loc.root,
@@ -711,7 +487,7 @@ export function ensureLspProviders(
       // No data token → server has nothing more to resolve.
       if (src.data == null) return item
       const requestId = mintId('cmpr')
-      const p = track(pendingCompletionResolve, requestId)
+      const p = trackCompletionResolve(requestId)
       req({
         r: 'LspCompletionResolve',
         root: loc.root,
@@ -744,7 +520,7 @@ export function ensureLspProviders(
       const loc = modelToRootPath(model, getRoots())
       if (!loc) return null
       const requestId = mintId('hov')
-      const p = track(pendingHover, requestId)
+      const p = trackHover(requestId)
       req({
         r: 'LspHover',
         root: loc.root,
@@ -779,7 +555,7 @@ export function ensureLspProviders(
       const loc = modelToRootPath(model, getRoots())
       if (!loc) return null
       const requestId = mintId('def')
-      const p = track(pendingDefinition, requestId)
+      const p = trackDefinition(requestId)
       req({
         r: 'LspDefinition',
         root: loc.root,
@@ -806,7 +582,7 @@ export function ensureLspProviders(
       const loc = modelToRootPath(model, getRoots())
       if (!loc) return null
       const requestId = mintId('ref')
-      const p = track(pendingReferences, requestId)
+      const p = trackReferences(requestId)
       req({
         r: 'LspReferences',
         root: loc.root,
@@ -827,8 +603,8 @@ export function ensureLspProviders(
     },
   })
 
-  // VS Code-style "N references" CodeLens above symbols.
-  // Always open the peek widget (never jump / go-to), including single hits.
+  // VS Code-style "N references" CodeLens above symbols — off by default.
+  if (!CODELENS_ENABLED) return
   const CODELENS_PEEK_REFS = 'koma.codelens.peekReferences'
   monaco.editor.registerCommand(
     CODELENS_PEEK_REFS,
@@ -864,7 +640,7 @@ export function ensureLspProviders(
           const loc = modelToRootPath(model, getRoots())
           if (!loc) return
           const requestId = mintId('refclick')
-          const p = track(pendingReferences, requestId)
+          const p = trackReferences(requestId)
           req({
             r: 'LspReferences',
             root: loc.root,

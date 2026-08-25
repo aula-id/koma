@@ -468,16 +468,25 @@ export function ChatView() {
   const [renderFrom, setRenderFrom] = useState(() =>
     Math.max(0, messages.length - CHAT_WINDOW),
   )
+  const prevLenRef = useRef(messages.length)
   useEffect(() => {
+    prevLenRef.current = messages.length
     setRenderFrom(Math.max(0, messages.length - CHAT_WINDOW))
     stickRef.current = true
   }, [sessionId])
   useEffect(() => {
     // Growing the transcript at the end must keep the live tail mounted; if
     // renderFrom was left pointing past the new length, clamp. Shrinking
-    // (rewind) also clamps. Do not reset on every append — that would drop
-    // older rows the user already expanded.
-    setRenderFrom((from) => Math.min(from, Math.max(0, messages.length - CHAT_WINDOW)))
+    // (rewind) also clamps. A SnapshotHead prepend is a large jump — shift
+    // renderFrom so the visible tail stays put instead of mounting every row.
+    const prev = prevLenRef.current
+    const added = messages.length - prev
+    prevLenRef.current = messages.length
+    setRenderFrom((from) => {
+      const tail = Math.max(0, messages.length - CHAT_WINDOW)
+      if (added >= CHAT_WINDOW && from < added) return from + added
+      return Math.min(from, tail)
+    })
   }, [messages.length])
 
   const expandOlder = () => {

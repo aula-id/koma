@@ -54,6 +54,18 @@ pub(super) fn serialize_and_push(
     // composer mode selector. Rides the Snapshot below so a `SetMode` reflects live.
     let mode = shadow.rest.agent_mode().label().to_string();
 
+    if let Some((sid, older)) = last.pending_snapshot_head.take() {
+        if !older.is_empty() {
+            super::render::emit(
+                push,
+                &PushEnvelope::SnapshotHead {
+                    session: sid,
+                    messages: older,
+                },
+            );
+        }
+    }
+
     if need_snapshot {
         push_snapshot_if_changed(shadow, fg, &session, &mode, push, last, view);
     }
@@ -786,11 +798,25 @@ fn push_snapshot_if_changed(
             );
         }
         _ => {
+            let is_first = last.last_messages.is_none();
             last.last_messages = Some(messages.clone());
+            const SNAPSHOT_WINDOW: usize = 40;
+            let (windowed, older) = if is_first && messages.len() > SNAPSHOT_WINDOW {
+                let split = messages.len() - SNAPSHOT_WINDOW;
+                (
+                    messages[split..].to_vec(),
+                    Some(messages[..split].to_vec()),
+                )
+            } else {
+                (messages, None)
+            };
+            if let Some(older) = older {
+                last.pending_snapshot_head = Some((session.to_string(), older));
+            }
             let env = PushEnvelope::Snapshot {
                 session: session.to_string(),
                 state: "attached",
-                messages,
+                messages: windowed,
                 title,
                 palette,
                 subagents,

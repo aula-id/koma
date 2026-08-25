@@ -96,7 +96,7 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
     // host gives no "swap started" push and the attach can block for
     // seconds. Cleared by the next authoritative Snapshot (see koma.ts).
     startSwitching(name)
-    req({ r: 'SelectSession', id })
+    requestAnimationFrame(() => req({ r: 'SelectSession', id }))
     onClose()
   }
 

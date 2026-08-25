@@ -33,7 +33,6 @@ import {
 } from './editorGroups'
 
 import {
-  applyDiagnosticsToMonaco,
   resolveLspCompletion,
   resolveLspCompletionResolve,
   resolveLspDefinition,
@@ -43,9 +42,8 @@ import {
   resolveLspFileText,
   uriToPath,
   queueReveal,
-  disposeCodingModel,
   type LspDiagnostic,
-} from '../lib/monaco-lsp'
+} from '../lib/lsp-bridge'
 import { resolveFilePreviewBytes } from '../lib/filePreview'
 import { codingRefToken } from '../lib/codingRef'
 
@@ -941,6 +939,8 @@ export type PushEnvelope =
   | { k: 'Switching'; to: string }
   // Append-only transcript growth (same session); concat onto messages.
   | { k: 'SnapshotTail'; session: string; messages: ChatMessage[] }
+  // Prepend older history after a truncated first Snapshot (same session).
+  | { k: 'SnapshotHead'; session: string; messages: ChatMessage[] }
   // In-place last-message update (tool result join, etc.).
   | { k: 'SnapshotSetLast'; session: string; message: ChatMessage }
   | { k: 'StreamMsg'; session: string; text: string }
@@ -1345,37 +1345,37 @@ export type PushEnvelope =
   | {
       k: 'LspCompletion'
       requestId: string
-      items: import('../lib/monaco-lsp').LspCompletionItem[]
+      items: import('../lib/lsp-bridge').LspCompletionItem[]
       error: string | null
     }
   | {
       k: 'LspCompletionResolve'
       requestId: string
-      item: import('../lib/monaco-lsp').LspCompletionItem | null
+      item: import('../lib/lsp-bridge').LspCompletionItem | null
       error: string | null
     }
   | {
       k: 'LspHover'
       requestId: string
-      hover: import('../lib/monaco-lsp').LspHover | null
+      hover: import('../lib/lsp-bridge').LspHover | null
       error: string | null
     }
   | {
       k: 'LspDefinition'
       requestId: string
-      locations: import('../lib/monaco-lsp').LspLocation[]
+      locations: import('../lib/lsp-bridge').LspLocation[]
       error: string | null
     }
   | {
       k: 'LspReferences'
       requestId: string
-      locations: import('../lib/monaco-lsp').LspLocation[]
+      locations: import('../lib/lsp-bridge').LspLocation[]
       error: string | null
     }
   | {
       k: 'LspDocumentSymbol'
       requestId: string
-      symbols: import('../lib/monaco-lsp').LspDocumentSymbol[]
+      symbols: import('../lib/lsp-bridge').LspDocumentSymbol[]
       error: string | null
     }
   // Live language-server runtime (starting / indexing / ready / error).
@@ -2968,13 +2968,18 @@ function applyPaletteVars(palette: PaletteColors) {
   // the CSS-var repaint, so a live panel's colours track the daemon exactly
   // like the chat chrome does (see docs/EXTENSIONS.md "Theme").
   broadcastThemeToPanels(palette)
-  // Keep Monaco hover/suggest/peek widgets on the live palette (lazy import so
-  // the main bundle doesn't pull monaco until an editor has loaded once).
-  void import('../lib/monaco-setup')
-    .then((m) => m.refreshKomaThemes())
-    .catch(() => {
-      /* monaco not loaded yet — fine */
-    })
+  // Do not import monaco-setup here — that parsed the 4MB editor on the first
+  // Config/Snapshot. Coding/diff tabs call applyKomaTheme on mount; if monaco
+  // is already loaded, refresh the live theme without forcing the chunk.
+  const monacoReady = (globalThis as unknown as { __komaMonacoReady?: boolean })
+    .__komaMonacoReady
+  if (monacoReady) {
+    void import('../lib/monaco-setup')
+      .then((m) => m.refreshKomaThemes())
+      .catch(() => {
+        /* ignore */
+      })
+  }
 }
 
 // Basename of a path — a diff tab's title (TabBar disambiguates colliding
@@ -3202,13 +3207,14 @@ export const useKoma = create<KomaState>((set, get) => ({
         // session's sub-agent/bash target (the new session's daemon starts with none
         // anyway). Fired AFTER the set so it reads the reset tab state.
         if (switched) get().syncStreamView()
-        // A genuine switch also invalidates `settingsValues` — it's the OLD
-        // session's name/workdir/toggles/effort, never refreshed by the Snapshot
-        // envelope itself. Re-fetch so the (always-visible) EffortPicker trigger
-        // pill and the Settings tab (if open) rehydrate for the NEW session
-        // instead of showing the old one's values until Settings is reopened.
-        if (switched || bootstrapping) get().req({ r: 'GetSettings' })
-        if (switched || bootstrapping) get().refreshRepos()
+        // Settings / repos after the Snapshot turn so they cannot join the fat
+        // apply and freeze the overlay paint.
+        if (switched || bootstrapping) {
+          requestAnimationFrame(() => {
+            get().req({ r: 'GetSettings' })
+            get().refreshRepos()
+          })
+        }
         break
       }
       case 'Switching':
@@ -3245,6 +3251,21 @@ export const useKoma = create<KomaState>((set, get) => ({
           session: {
             ...s.session,
             messages: s.session.messages.concat(mapped),
+          },
+        }))
+        break
+      }
+      case 'SnapshotHead': {
+        if (env.session !== get().session.id) break
+        const mapped = (env.messages ?? []).map((m: any) => ({
+          ...m,
+          toolCalls: m.toolCalls ?? m.tool_calls,
+        }))
+        if (mapped.length === 0) break
+        set((s) => ({
+          session: {
+            ...s.session,
+            messages: mapped.concat(s.session.messages),
           },
         }))
         break
@@ -4453,7 +4474,12 @@ export const useKoma = create<KomaState>((set, get) => ({
           }
         })
         // Markers only — coding tabs must not subscribe to the full map.
-        applyDiagnosticsToMonaco(env.uri, env.diagnostics ?? [])
+        // Lazy: monaco-lsp is not in the boot bundle.
+        void import('../lib/monaco-lsp')
+          .then((m) => m.applyDiagnosticsToMonaco(env.uri, env.diagnostics ?? []))
+          .catch(() => {
+            /* monaco not loaded yet */
+          })
         break
       case 'LspCompletion':
         resolveLspCompletion(env.requestId, env.items ?? [], env.error)
@@ -5853,7 +5879,13 @@ export const useKoma = create<KomaState>((set, get) => ({
       // Close-without-save must drop the dirty buffer + Monaco model; otherwise
       // reopen restores unsaved edits (reduceFileRead refuses to clobber dirty).
       if (opts?.force) {
-        disposeCodingModel(closingCoding.root, closingCoding.path)
+        const root = closingCoding.root
+        const path = closingCoding.path
+        void import('../lib/monaco-lsp')
+          .then((m) => m.disposeCodingModel(root, path))
+          .catch(() => {
+            /* monaco not loaded yet */
+          })
       }
     }
     const closedAnalytics = id === 'analytics'

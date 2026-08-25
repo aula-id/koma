@@ -108,7 +108,7 @@ export function StartScreen() {
     // Optimistic swap overlay (no host "swap started" push; attach can block for
     // seconds) — cleared by the next authoritative Snapshot. Mirrors ResumePalette.
     startSwitching(name)
-    req({ r: 'SelectSession', id })
+    requestAnimationFrame(() => req({ r: 'SelectSession', id }))
   }
   // Local: no optimistic loader — host opens a native folder picker first and
   // only attaches once confirmed (cancel would strand the loader).
