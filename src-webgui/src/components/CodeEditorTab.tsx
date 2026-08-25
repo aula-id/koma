@@ -17,6 +17,7 @@ import { codingAskInChatPayload } from '../lib/codingRef'
 import { viewerKindForPath, type ViewerKind } from '../lib/viewerKind'
 import { useKoma, type Tab } from '../store/koma'
 import { fileKey } from '../store/coding'
+import { isTabVisible, normalizeGroups } from '../store/editorGroups'
 import { BrailleSpinner } from './BrailleSpinner'
 import { CodingFileViewer } from './CodingFileViewer'
 
@@ -50,6 +51,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   const lspInstall = useKoma((s) => s.lspInstall)
   const req = useKoma((s) => s.req)
   const [bannerDismissed, setBannerDismissed] = useState<Record<string, boolean>>({})
+  const isActive = useKoma((s) => isTabVisible(normalizeGroups(s.ui), tab.id))
 
   useEffect(() => {
     if (lspServers.length === 0) refreshLsp()
@@ -309,6 +311,14 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       lspOpenedRef.current = false
     }
   }, [tab.root, tab.path])
+
+  // Parent uses display:none for inactive panes; force layout on reveal so the
+  // editor isn't stuck at 0×0 after WebKit skips ResizeObserver.
+  useEffect(() => {
+    if (!isActive) return
+    const raf = requestAnimationFrame(() => editorRef.current?.layout())
+    return () => cancelAnimationFrame(raf)
+  }, [isActive])
 
   useEffect(() => {
     if (!fileState || !editorRef.current) return
