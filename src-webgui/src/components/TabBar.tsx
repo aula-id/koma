@@ -34,6 +34,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { useShallow } from 'zustand/react/shallow'
+import { hasCodingPathDrag, readCodingPathDragData } from '../lib/codingRef'
 import { fileKey } from '../store/coding'
 import {
   MAX_GROUPS,
@@ -259,6 +260,7 @@ export function TabBar({ groupId, focused }: Props) {
   const closeTab = useKoma((s) => s.closeTab)
   const moveTabToGroup = useKoma((s) => s.moveTabToGroup)
   const splitTab = useKoma((s) => s.splitTab)
+  const openCodingFile = useKoma((s) => s.openCodingFile)
   const focusGroup = useKoma((s) => s.focusEditorGroup)
   const codingDirty = useKoma(
     useShallow((s) => {
@@ -375,7 +377,28 @@ export function TabBar({ groupId, focused }: Props) {
     e.dataTransfer.setData('text/plain', tabId)
   }
 
+  const acceptStripDrag = (e: ReactDragEvent) => {
+    if (e.dataTransfer.types.includes(TAB_DRAG_MIME)) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      return
+    }
+    if (hasCodingPathDrag(e.dataTransfer)) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    }
+  }
+
   const dropBefore = (e: ReactDragEvent, beforeId: string | null) => {
+    const coding = readCodingPathDragData(e.dataTransfer)
+    if (coding) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (!coding.isDir) {
+        openCodingFile(coding.root, coding.path, { groupId, beforeId })
+      }
+      return
+    }
     const tabId = e.dataTransfer.getData(TAB_DRAG_MIME)
     if (!tabId) return
     e.preventDefault()
@@ -394,12 +417,7 @@ export function TabBar({ groupId, focused }: Props) {
       onMouseDown={() => {
         if (!focused) focusGroup(groupId)
       }}
-      onDragOver={(e) => {
-        if (e.dataTransfer.types.includes(TAB_DRAG_MIME)) {
-          e.preventDefault()
-          e.dataTransfer.dropEffect = 'move'
-        }
-      }}
+      onDragOver={acceptStripDrag}
       onDrop={(e) => dropBefore(e, null)}
     >
       {canScrollLeft && (
@@ -432,9 +450,7 @@ export function TabBar({ groupId, focused }: Props) {
               tabIndex={0}
               draggable={tab.id !== 'chat'}
               onDragStart={(e) => startDrag(e, tab.id)}
-              onDragOver={(e) => {
-                if (e.dataTransfer.types.includes(TAB_DRAG_MIME)) e.preventDefault()
-              }}
+              onDragOver={acceptStripDrag}
               onDrop={(e) => dropBefore(e, tab.id)}
               onClick={() => activateTab(tab.id)}
               onKeyDown={(e) => {
