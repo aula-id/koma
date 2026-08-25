@@ -147,6 +147,7 @@ function RootLayout() {
       k === 'Snapshot' ||
       k === 'SnapshotTail' ||
       k === 'SnapshotHead' ||
+      k === 'HistoryPage' ||
       k === 'Config' ||
       k === 'SettingsValues' ||
       k === 'RepoList'
@@ -201,7 +202,13 @@ function RootLayout() {
       const rawLen = typeof item === 'string' ? item.length : 0
       useKoma.getState().push(env)
       const ms = performance.now() - t0
-      if (ms >= 8 || kind === 'Snapshot' || paced.length > 0) {
+      if (
+        ms >= 8 ||
+        kind === 'Snapshot' ||
+        kind === 'SnapshotHead' ||
+        kind === 'HistoryPage' ||
+        paced.length > 0
+      ) {
         logPace(
           `apply k=${kind} parse+push_ms=${ms.toFixed(1)} raw_bytes=${rawLen} queue_left=${paced.length}`,
         )
