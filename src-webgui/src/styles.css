@@ -351,14 +351,22 @@ svg.animate-spin {
   transform-origin: center;
 }
 
-/* Centered, max-width column for the terminal. The absolute inner xterm
-   container positions against this (position: relative). Side gutters fall
-   back to #app's background. */
+/* Centered, max-width column for chat. Side gutters shrink when the parent
+   chat pane (`@container/chat` on the absolute cell wrapper) is tight. */
 .term-shell {
   position: relative;
-  width: calc(100% - 48px);
-  max-width: 1024px;
+  width: min(1024px, calc(100% - 48px));
   height: 100%;
+}
+@container chat (max-width: 20rem) {
+  .term-shell {
+    width: min(1024px, calc(100% - 16px));
+  }
+}
+@container chat (max-width: 14rem) {
+  .term-shell {
+    width: min(1024px, calc(100% - 8px));
+  }
 }
 
 /* Legacy ::-webkit-scrollbar styling instead of scrollbar-width:thin — the

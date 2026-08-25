@@ -559,12 +559,12 @@ export function ChatView() {
   const canShowEarlier = hiddenCount > 0 || hasMoreOlder
 
   return (
-    <div className="term-shell flex flex-col">
+    <div className="term-shell flex min-w-0 flex-col">
       <ChatScrollRootContext.Provider value={scrollRoot}>
         <div
           ref={setScrollEl}
           onScroll={onScroll}
-          className="flex-1 space-y-4 overflow-y-auto px-2 py-4"
+          className="flex-1 space-y-4 overflow-y-auto px-2 py-4 @max-xs/chat:px-1.5 @max-xs/chat:py-3"
         >
           {canShowEarlier && (
             <button

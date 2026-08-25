@@ -542,9 +542,14 @@ export function TabBar({ groupId, focused }: Props) {
         ? 'Split editor right'
         : 'Select a non-chat tab to split'
 
+  // Density is pure CSS container queries on this strip — no React width state
+  // (RO → setState dual-TabBar loops were the prior #185 class of bug).
+  //   ≥320px  full labels
+  //   <320px  compact padding + tighter max tab width, hide path suffix
+  //   <176px  icon-only tabs (label+suffix hidden; dirty → corner dot)
   return (
     <div
-      className={`flex h-8 min-w-0 items-stretch border-b border-koma-border bg-koma-panel2 ${
+      className={`@container/tabstrip flex h-8 min-w-0 items-stretch border-b border-koma-border bg-koma-panel2 ${
         focused ? '' : 'opacity-75'
       }`}
       onMouseDown={() => {
@@ -562,7 +567,7 @@ export function TabBar({ groupId, focused }: Props) {
         aria-label="Scroll tabs left"
         aria-hidden="true"
         tabIndex={-1}
-        className={CHEVRON_OFF}
+        className={`${CHEVRON_OFF} @max-[11rem]/tabstrip:w-5`}
       >
         <ChevronLeft size={14} />
       </button>
@@ -576,6 +581,7 @@ export function TabBar({ groupId, focused }: Props) {
             tab.kind === 'codingFile' ? codingDirty[fileKey(tab.root, tab.path)] : undefined
           const visual = tabVisual(tab, counts, fs)
           const { Icon } = visual
+          const dirtyDot = !!fs?.dirty
           return (
             <div
               key={tab.id}
@@ -599,25 +605,38 @@ export function TabBar({ groupId, focused }: Props) {
                 setMenu({ x: e.clientX, y: e.clientY, tabId: tab.id })
               }}
               title={visual.title}
-              className={`group relative flex h-full max-w-[220px] flex-none cursor-pointer select-none items-center gap-1.5 border-r border-koma-border pl-3 pr-1.5 text-[12px] transition-colors ${
+              className={`group relative flex h-full max-w-[220px] flex-none cursor-pointer select-none items-center gap-1.5 border-r border-koma-border pl-3 pr-1.5 text-[12px] transition-colors @max-xs/tabstrip:max-w-[148px] @max-xs/tabstrip:gap-1 @max-xs/tabstrip:pl-2 @max-xs/tabstrip:pr-1 @max-[11rem]/tabstrip:max-w-none @max-[11rem]/tabstrip:gap-0 @max-[11rem]/tabstrip:px-1.5 ${
                 active
                   ? 'bg-koma-bg text-koma-fg'
                   : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'
               }`}
             >
               {active && <span className="absolute inset-x-0 top-0 h-0.5 bg-koma-fg" />}
-              <Icon size={13} className="flex-none opacity-80" />
-              <span className="min-w-0 truncate">{visual.label}</span>
+              <span className="relative flex-none">
+                <Icon size={13} className="opacity-80" />
+                {/* Icon-only density: dirty marker moves off the hidden label. */}
+                {dirtyDot && (
+                  <span
+                    aria-hidden
+                    className="absolute -right-0.5 -bottom-0.5 hidden h-1.5 w-1.5 rounded-full bg-koma-accent @max-[11rem]/tabstrip:block"
+                  />
+                )}
+              </span>
+              <span className="min-w-0 truncate @max-[11rem]/tabstrip:hidden">{visual.label}</span>
               {visual.suffix && (
-                <span className="flex-none truncate text-koma-dim opacity-60">{visual.suffix}</span>
+                <span className="flex-none truncate text-koma-dim opacity-60 @max-xs/tabstrip:hidden">
+                  {visual.suffix}
+                </span>
               )}
               {tab.id !== 'chat' && (
                 <button
                   onClick={(e) => requestClose(tab, e)}
                   aria-label={`Close ${visual.title}`}
                   title="Close"
-                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
+                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 @max-[11rem]/tabstrip:ml-0 ${
+                    active
+                      ? 'opacity-70'
+                      : 'opacity-0 group-hover:opacity-70 @max-[11rem]/tabstrip:opacity-50'
                   }`}
                 >
                   <X size={12} />
@@ -635,7 +654,7 @@ export function TabBar({ groupId, focused }: Props) {
         aria-label="Scroll tabs right"
         aria-hidden="true"
         tabIndex={-1}
-        className={CHEVRON_OFF}
+        className={`${CHEVRON_OFF} @max-[11rem]/tabstrip:w-5`}
       >
         <ChevronRight size={14} />
       </button>
@@ -656,7 +675,7 @@ export function TabBar({ groupId, focused }: Props) {
         }}
         aria-label={layoutLabel}
         title={layoutLabel}
-        className={`flex w-7 flex-none items-center justify-center text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:cursor-not-allowed ${
+        className={`flex w-7 flex-none items-center justify-center text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:cursor-not-allowed @max-[11rem]/tabstrip:w-6 ${
           focused ? 'opacity-70 hover:opacity-100' : 'opacity-25'
         } disabled:opacity-25`}
       >

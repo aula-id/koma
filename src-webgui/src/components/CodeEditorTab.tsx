@@ -675,13 +675,20 @@ function EditorChrome({
   onSave: () => void
   onRevert: () => void
 }) {
+  // Density via container query — no RO/setState. Narrow split panes hide the
+  // full path (title still has it) and drop the status text so Save/Revert stay.
   return (
-    <div className="flex h-8 flex-none items-center gap-2 border-b border-koma-border bg-koma-panel px-3 text-[12px]">
+    <div className="@container/pathbar flex h-8 min-w-0 flex-none items-center gap-2 border-b border-koma-border bg-koma-panel px-3 text-[12px] @max-xs/pathbar:gap-1.5 @max-xs/pathbar:px-2 @max-[12rem]/pathbar:px-1.5">
       <Code2 size={13} className="flex-none text-koma-dim" />
-      <span className="min-w-0 flex-1 truncate font-mono text-koma-fg" title={path}>
+      <span
+        className="min-w-0 flex-1 truncate font-mono text-koma-fg @max-[12rem]/pathbar:hidden"
+        title={path}
+      >
         {path}
       </span>
-      <span className="flex-none text-[11px] text-koma-dim">{status}</span>
+      <span className="min-w-0 flex-none truncate text-[11px] text-koma-dim @max-xs/pathbar:max-w-[5rem] @max-[12rem]/pathbar:hidden">
+        {status}
+      </span>
       <button
         type="button"
         onClick={onRevert}

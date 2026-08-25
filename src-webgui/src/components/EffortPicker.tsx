@@ -79,15 +79,15 @@ export function EffortPicker() {
         type="button"
         onClick={toggle}
         title="Reasoning effort"
-        className="flex h-8 max-w-[120px] flex-none items-center gap-1 rounded-lg px-2 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+        className="flex h-8 max-w-[120px] flex-none items-center gap-1 rounded-lg px-2 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100 @max-xs/chat:max-w-[5.5rem] @max-[14rem]/chat:max-w-none @max-[14rem]/chat:px-1.5"
       >
         <Gauge size={15} className="flex-none" />
-        <span className="min-w-0 truncate">{triggerLabel}</span>
-        <ChevronDown size={12} className="flex-none opacity-60" />
+        <span className="min-w-0 truncate @max-[14rem]/chat:hidden">{triggerLabel}</span>
+        <ChevronDown size={12} className="flex-none opacity-60 @max-[14rem]/chat:hidden" />
       </button>
       {open && (
         // Opens UPWARD — sits just above the composer at the bottom of the chat.
-        <div className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[200px] overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm">
+        <div className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[min(200px,calc(100cqw-1rem))] max-w-[calc(100vw-1rem)] overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm">
           {menu == null || menu.state === 'loading' ? (
             <div className="flex items-center gap-2 px-2 py-1 text-[12px] text-koma-fg opacity-50">
               <BrailleSpinner size={12} />
