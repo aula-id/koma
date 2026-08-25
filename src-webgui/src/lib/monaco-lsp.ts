@@ -301,9 +301,14 @@ export async function ensureModelForUri(
 ): Promise<monaco.editor.ITextModel | null> {
   const existing = monaco.editor.getModel(monaco.Uri.parse(uriStr))
   if (existing) {
-    if (preferText != null && existing.getValue() !== preferText) {
-      // Tab content is authoritative when provided.
-      existing.setValue(preferText)
+    if (preferText != null) {
+      const next = preferText.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+      existing.setEOL(monaco.editor.EndOfLineSequence.LF)
+      if (existing.getValue(monaco.editor.EndOfLinePreference.LF) !== next) {
+        // Tab content is authoritative when provided.
+        existing.setValue(next)
+        existing.setEOL(monaco.editor.EndOfLineSequence.LF)
+      }
     }
     return existing
   }
@@ -327,15 +332,22 @@ export async function ensureModelForUri(
   }
 
   const uri = monaco.Uri.parse(uriStr)
+  const normalized = (text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+
   // Another concurrent ensure may have created it.
   const raced = monaco.editor.getModel(uri)
   if (raced) {
-    if (raced.getValue() !== text) raced.setValue(text)
+    raced.setEOL(monaco.editor.EndOfLineSequence.LF)
+    if (raced.getValue(monaco.editor.EndOfLinePreference.LF) !== normalized) {
+      raced.setValue(normalized)
+      raced.setEOL(monaco.editor.EndOfLineSequence.LF)
+    }
     stampModelPath(raced, split.root, split.path)
     return raced
   }
 
-  const model = monaco.editor.createModel(text, langFromPath(split.path), uri)
+  const model = monaco.editor.createModel(normalized, langFromPath(split.path), uri)
+  model.setEOL(monaco.editor.EndOfLineSequence.LF)
   stampModelPath(model, split.root, split.path)
   return model
 }

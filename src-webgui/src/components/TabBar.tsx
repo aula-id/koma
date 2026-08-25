@@ -357,26 +357,41 @@ export function TabBar({ groupId, focused }: Props) {
   const checkOverflow = useCallback(() => {
     const el = containerRef.current
     if (!el) return
-    setCanScrollLeft(el.scrollLeft > 0)
-    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth)
+    // Epsilon + functional setState: chevron mount/unmount used to change the
+    // strip width by 24px and re-fire ResizeObserver into a setState storm
+    // (React #185) near the overflow boundary.
+    const nextLeft = el.scrollLeft > 1
+    const nextRight = el.scrollWidth - el.clientWidth - el.scrollLeft > 1
+    setCanScrollLeft((v) => (v === nextLeft ? v : nextLeft))
+    setCanScrollRight((v) => (v === nextRight ? v : nextRight))
   }, [])
 
+  // Size/scroll only — never scrollIntoView here (that mutates scrollLeft and
+  // can flip overflow flags every RO callback).
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
-    const reveal = () => {
-      const active = tabRefs.current.get(activeTabId)
-      if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-      checkOverflow()
-    }
-    const observer = new ResizeObserver(reveal)
+    const observer = new ResizeObserver(() => {
+      requestAnimationFrame(checkOverflow)
+    })
     observer.observe(el)
-    el.addEventListener('scroll', checkOverflow)
-    reveal()
+    el.addEventListener('scroll', checkOverflow, { passive: true })
+    checkOverflow()
     return () => {
       observer.disconnect()
       el.removeEventListener('scroll', checkOverflow)
     }
+  }, [checkOverflow, tabs.length])
+
+  // Reveal the active tab once when selection or strip membership changes.
+  useEffect(() => {
+    const active = tabRefs.current.get(activeTabId)
+    if (!active) return
+    const raf = requestAnimationFrame(() => {
+      active.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      checkOverflow()
+    })
+    return () => cancelAnimationFrame(raf)
   }, [activeTabId, checkOverflow, tabs.length])
 
   if (ui.tabs.length <= 1 && ui.groups.length <= 1) return null
@@ -457,15 +472,22 @@ export function TabBar({ groupId, focused }: Props) {
       onDragOver={acceptStripDrag}
       onDrop={(e) => dropBefore(e, null)}
     >
-      {canScrollLeft && (
-        <button
-          onClick={() => scroll(-1)}
-          aria-label="Scroll tabs left"
-          className="flex w-6 flex-none items-center justify-center text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100"
-        >
-          <ChevronLeft size={14} />
-        </button>
-      )}
+      {/* Always reserve chevron width so showing/hiding never reflows the strip. */}
+      <button
+        type="button"
+        onClick={() => scroll(-1)}
+        disabled={!canScrollLeft}
+        aria-label="Scroll tabs left"
+        aria-hidden={!canScrollLeft}
+        tabIndex={canScrollLeft ? 0 : -1}
+        className={`flex w-6 flex-none items-center justify-center text-koma-fg ${
+          canScrollLeft
+            ? 'opacity-60 hover:bg-koma-hover hover:opacity-100'
+            : 'pointer-events-none opacity-0'
+        }`}
+      >
+        <ChevronLeft size={14} />
+      </button>
       <div
         ref={containerRef}
         className="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
@@ -527,15 +549,21 @@ export function TabBar({ groupId, focused }: Props) {
           )
         })}
       </div>
-      {canScrollRight && (
-        <button
-          onClick={() => scroll(1)}
-          aria-label="Scroll tabs right"
-          className="flex w-6 flex-none items-center justify-center text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100"
-        >
-          <ChevronRight size={14} />
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={() => scroll(1)}
+        disabled={!canScrollRight}
+        aria-label="Scroll tabs right"
+        aria-hidden={!canScrollRight}
+        tabIndex={canScrollRight ? 0 : -1}
+        className={`flex w-6 flex-none items-center justify-center text-koma-fg ${
+          canScrollRight
+            ? 'opacity-60 hover:bg-koma-hover hover:opacity-100'
+            : 'pointer-events-none opacity-0'
+        }`}
+      >
+        <ChevronRight size={14} />
+      </button>
       {showLayoutBtn && (
         <button
           type="button"

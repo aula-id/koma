@@ -249,15 +249,24 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       if (applyingRef.current) return
       const model = editor.getModel()
       if (!model) return
-      const text = model.getValue()
-      useKoma.getState().updateCodingContent(tab.root, tab.path, text)
+      // Always LF so store ↔ model never thrash on CRLF (React #185).
+      const text = model.getValue(monaco.editor.EndOfLinePreference.LF)
+      const key = fileKey(tab.root, tab.path)
+      const prev = useKoma.getState().coding.files[key]
+      if (prev?.content === text) {
+        // External setValue / setEOL can still emit didChange; don't write back.
+      } else {
+        useKoma.getState().updateCodingContent(tab.root, tab.path, text)
+      }
       if (lspChangeTimerRef.current) clearTimeout(lspChangeTimerRef.current)
       lspChangeTimerRef.current = setTimeout(() => {
         lspChangeTimerRef.current = null
         if (!lspOpenedRef.current) return
         // Fresh text at fire time — the closed-over `text` may be stale if the
         // user kept typing through the debounce window.
-        const latest = editor.getModel()?.getValue()
+        const latest = editor
+          .getModel()
+          ?.getValue(monaco.editor.EndOfLinePreference.LF)
         if (latest == null) return
         useKoma.getState().req({
           r: 'LspDidChange',
@@ -330,24 +339,35 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     }
 
     const lang = langFromPath(tab.path)
-    const next = fileState.content
+    // Host/store always uses \n; pin Monaco the same way so getValue() never
+    // disagrees with store and retriggers this effect (React #185).
+    const next = fileState.content.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
     applyingRef.current = true
     try {
       const uri = monacoUriFromPath(tab.root, tab.path)
       let model = monaco.editor.getModel(uri)
       if (!model) {
         model = monaco.editor.createModel(next, lang, uri)
-      } else if (model.getValue() !== next) {
-        const pos = editor.getPosition()
-        model.setValue(next)
-        if (pos) editor.setPosition(pos)
+        model.setEOL(monaco.editor.EndOfLineSequence.LF)
+      } else {
+        model.setEOL(monaco.editor.EndOfLineSequence.LF)
+        const cur = model.getValue(monaco.editor.EndOfLinePreference.LF)
+        if (cur !== next) {
+          const pos = editor.getPosition()
+          model.setValue(next)
+          model.setEOL(monaco.editor.EndOfLineSequence.LF)
+          if (pos) editor.setPosition(pos)
+        }
       }
       stampModelPath(model, tab.root, tab.path)
       if (editor.getModel() !== model) editor.setModel(model)
       modelRef.current = model
     } finally {
+      // Suppress didChange until after Monaco flushes setValue/setEOL events.
       queueMicrotask(() => {
-        applyingRef.current = false
+        requestAnimationFrame(() => {
+          applyingRef.current = false
+        })
       })
     }
 
@@ -370,9 +390,10 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       // Second pass after layout / late model attach.
       setTimeout(apply, 50)
     }
+    // Intentionally omit `loading` — openCodingFile used to flip loading true
+    // while content was already present, which re-entered setValue for free.
   }, [
     fileState?.content,
-    fileState?.loading,
     fileState?.binary,
     fileState?.tooLarge,
     fileState?.error,
@@ -380,7 +401,6 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     fileState?.fingerprint,
     tab.path,
     tab.root,
-    req,
   ])
 
   // Attach LSP when content is ready AND the matching server is installed.
