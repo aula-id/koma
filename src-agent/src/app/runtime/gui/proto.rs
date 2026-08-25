@@ -552,6 +552,13 @@ pub(super) enum GuiReq {
     RewindTo {
         index: usize,
     },
+    /// Pull older transcript held after a windowed first Snapshot.
+    /// `before` = current oldest display idx on the FE (exclusive). Host replies
+    /// with `HistoryPage` push. Host-local (uses PushState stash), not the daemon.
+    HistoryPage {
+        #[serde(default)]
+        before: Option<usize>,
+    },
     /// The Explore sidepanel agent-row KILL button: kill sub-agent `id`. Forwarded as
     /// [`ClientRequest::KillSubagent`].
     KillSubagent {

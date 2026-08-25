@@ -28,6 +28,9 @@
 #[derive(Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct PushMsg {
+    /// Stable display index in the projected (System/Tool-filtered) transcript.
+    /// Used for React keys, RewindTo, and HistoryPage cursors.
+    pub(super) idx: usize,
     pub(super) role: &'static str,
     /// Special render kind for a USER message, detected daemon-side from its
     /// invisible sentinel prefix and STRIPPED out of `content` so React never

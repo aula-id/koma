@@ -474,6 +474,10 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 }
             }
         }
+        // Pull older chat history held after a windowed first Snapshot (host-local).
+        GuiReq::HistoryPage { before } => {
+            let _ = ctx.ctl.send(HostCtl::HistoryPage { before });
+        }
         // Kill one sub-agent by id (Explore agent-row kill button).
         GuiReq::KillSubagent { id } => {
             if let Ok(g) = ctx.req.lock() {
