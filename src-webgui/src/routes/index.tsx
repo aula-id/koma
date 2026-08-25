@@ -725,7 +725,10 @@ function TabbedMain() {
         <div
           style={cells.get(chatGroupId)?.content}
           className={`relative min-h-0 min-w-0 ${
-            isTabVisible(ui, 'chat') ? '' : 'invisible pointer-events-none'
+            // `hidden` (display:none), not `invisible`: Monaco/xterm canvas layers
+            // on WebKitGTK keep compositing through visibility:hidden and bleed
+            // over the active tab after a git/explorer/coding file open.
+            isTabVisible(ui, 'chat') ? '' : 'hidden'
           }`}
           onMouseDown={() => {
             if (ui.activeGroupId !== chatGroupId) focusGroup(chatGroupId)
@@ -744,7 +747,7 @@ function TabbedMain() {
               key={tab.id}
               style={cells.get(groupId)?.content}
               className={`relative min-h-0 min-w-0 ${
-                isTabVisible(ui, tab.id) ? '' : 'invisible pointer-events-none'
+                isTabVisible(ui, tab.id) ? '' : 'hidden'
               }`}
               onMouseDown={() => {
                 if (ui.activeGroupId !== groupId) focusGroup(groupId)
