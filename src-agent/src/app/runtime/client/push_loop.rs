@@ -58,7 +58,10 @@ pub(super) struct PushState {
     /// Last full projected messages list (for SnapshotTail / SnapshotSetLast).
     pub(super) last_messages: Option<Vec<PushMsg>>,
     /// Older prefix to prepend on the next fold after a truncated first Snapshot.
+    /// Drained in chunks (see project.rs SNAPSHOT_HEAD_CHUNK).
     pub(super) pending_snapshot_head: Option<(String, Vec<PushMsg>)>,
+    /// Older-than-auto-backfill prefix; served only via HistoryPage pull.
+    pub(super) held_history_head: Option<(String, Vec<PushMsg>)>,
     /// Fingerprint of non-message Snapshot fields (must match for message patches).
     pub(super) last_meta_fp: Option<u64>,
     /// Last streaming buffer pushed (`None` once cleared).
@@ -93,6 +96,7 @@ impl PushState {
             snapshot_fp: None,
             last_messages: None,
             pending_snapshot_head: None,
+            held_history_head: None,
             last_meta_fp: None,
             stream: None,
             reasoning: String::new(),
@@ -1467,6 +1471,10 @@ pub(super) fn push_loop(
                     if let Ok(mut mgr) = terminal_manager.lock() {
                         mgr.kill(&id);
                     }
+                }
+                Ok(super::HostCtl::HistoryPage { before }) => {
+                    let sid = current_owned.as_deref().unwrap_or("");
+                    super::project::serve_history_page(last, sid, before, push);
                 }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.

@@ -949,6 +949,12 @@ pub(super) enum HostCtl {
     TerminalInput { id: String, data: String },
     TerminalResize { id: String, cols: u16, rows: u16 },
     TerminalKill { id: String },
+
+    /// Pull one page of older chat history held after a windowed first Snapshot.
+    /// `before` is the FE's current oldest display idx (exclusive upper bound).
+    HistoryPage {
+        before: Option<usize>,
+    },
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.

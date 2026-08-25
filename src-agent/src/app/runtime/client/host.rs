@@ -1579,6 +1579,8 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     mgr.kill(&id);
                 }
             }
+            // History pull only meaningful while attached (PushState stash).
+            Ok(HostCtl::HistoryPage { .. }) => {}
             // The ipc side hung up (window gone) — leave the host.
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return HostStep::Done,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
@@ -2028,6 +2030,7 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                     mgr.kill(&id);
                 }
             }
+            Ok(HostCtl::HistoryPage { .. }) => {}
 
             Ok(HostCtl::LspDidOpen { root, path, language_id, text }) => {
                 super::lsp_host::handle_client_ctl(

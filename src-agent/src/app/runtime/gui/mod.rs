@@ -585,15 +585,20 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                     let mut batch_jsons: Vec<String> = Vec::new();
                     let mut hold_rest = false;
                     while let Some(json) = pending_pushes.pop_front() {
-                        let is_snapshot = peek_push_kind(&json) == Some("Snapshot");
-                        if is_snapshot && !batch_jsons.is_empty() {
+                        // Fat transcript envelopes ride alone so Switching/Loading
+                        // paint first and WebKit never parses Snapshot+Head together.
+                        let kind = peek_push_kind(&json);
+                        let solo = matches!(
+                            kind,
+                            Some("Snapshot") | Some("SnapshotHead") | Some("HistoryPage")
+                        );
+                        if solo && !batch_jsons.is_empty() {
                             pending_pushes.push_front(json);
                             hold_rest = true;
                             break;
                         }
                         batch_jsons.push(json);
-                        if is_snapshot {
-                            // Snapshot rides alone; leave later envelopes for next frame.
+                        if solo {
                             hold_rest = !pending_pushes.is_empty();
                             break;
                         }

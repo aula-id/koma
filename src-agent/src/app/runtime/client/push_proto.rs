@@ -46,6 +46,10 @@ pub(super) enum PushEnvelope {
         session: String,
         state: &'static str,
         messages: Vec<PushMsg>,
+        /// Full projected transcript length (including not-yet-pushed older head).
+        /// Lets the FE know `hasMoreOlder` without stuffing the archive into the store.
+        #[serde(rename = "messageCount", default)]
+        message_count: usize,
         title: String,
         palette: PushPalette,
         /// Foreground session's sub-agents (list + status). Authoritative full array —
@@ -128,9 +132,27 @@ pub(super) enum PushEnvelope {
     },
     /// Prepend older committed messages after a truncated first Snapshot.
     /// Same session; React concatenates onto the front of `messages`.
+    /// May arrive as multiple chunks (`more: true` until the auto-backfill
+    /// prefix is exhausted). `total_older` is optional telemetry.
     SnapshotHead {
         session: String,
         messages: Vec<PushMsg>,
+        /// More auto-backfill chunks will follow on later folds.
+        #[serde(default)]
+        more: bool,
+        /// Original older-prefix length when known (first chunk only).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total_older: Option<usize>,
+    },
+    /// On-demand older history page (pull). Prepend like SnapshotHead.
+    /// `before` is the display idx the FE already has as its oldest message;
+    /// host returns messages with idx < before, newest-of-page last.
+    HistoryPage {
+        session: String,
+        messages: Vec<PushMsg>,
+        /// More held history remains on the host for further pulls.
+        #[serde(default)]
+        has_more: bool,
     },
     /// In-place update of the last committed message (tool result join, content tweak).
     /// React replaces `messages[messages.length-1]` when lengths still match.
