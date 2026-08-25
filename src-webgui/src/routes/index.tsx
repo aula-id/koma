@@ -23,6 +23,7 @@ import { BrailleSpinner } from '../components/BrailleSpinner'
 import { ExtensionPanelFrame } from '../components/ExtensionPanelFrame'
 import { GlobalContextMenu } from '../components/GlobalContextMenu'
 import { installPanelBridgeListener } from '../lib/panelBridge'
+import { hasCodingPathDrag, readCodingPathDragData } from '../lib/codingRef'
 import {
   MAX_GROUPS,
   dropZoneFor,
@@ -34,6 +35,11 @@ import {
   type EditorGroupId,
 } from '../store/editorGroups'
 import type { Tab } from '../store/koma'
+
+function isEditorBodyDrag(dt: DataTransfer | null | undefined): boolean {
+  if (!dt?.types) return false
+  return dt.types.includes(TAB_DRAG_MIME) || hasCodingPathDrag(dt)
+}
 
 const SIDEBAR_MIN = 150
 const SIDEBAR_MAX = 500
@@ -568,21 +574,42 @@ function EditorDropTarget({
   const ui = useMemo(() => normalizeGroups(rawUi), [rawUi])
   const moveTab = useKoma((s) => s.moveTabToGroup)
   const splitTab = useKoma((s) => s.splitTab)
+  const openCodingFile = useKoma((s) => s.openCodingFile)
   const [zone, setZone] = useState<DropZone>('center')
 
   const updateZone = (e: ReactDragEvent<HTMLDivElement>) => {
-    if (!e.dataTransfer.types.includes(TAB_DRAG_MIME)) return
+    if (!isEditorBodyDrag(e.dataTransfer)) return
     e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = e.dataTransfer.types.includes(TAB_DRAG_MIME) ? 'move' : 'copy'
     const r = e.currentTarget.getBoundingClientRect()
-    setZone(
+    const next: DropZone =
       ui.groups.length >= MAX_GROUPS
         ? 'center'
-        : dropZoneFor(e.clientX - r.left, e.clientY - r.top, r.width, r.height),
-    )
+        : dropZoneFor(e.clientX - r.left, e.clientY - r.top, r.width, r.height)
+    // Equality guard — dragover fires continuously; avoid a setState storm.
+    setZone((prev) => (prev === next ? prev : next))
   }
 
   const drop = (e: ReactDragEvent<HTMLDivElement>) => {
+    const side = zone === 'left' || zone === 'top' ? 'before' : 'after'
+    const dir = zone === 'left' || zone === 'right' ? 'row' : 'col'
+    const split = zone === 'center' ? undefined : { side: side as 'before' | 'after', dir: dir as 'row' | 'col' }
+
+    const coding = readCodingPathDragData(e.dataTransfer)
+    if (coding) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (!coding.isDir) {
+        openCodingFile(coding.root, coding.path, {
+          groupId,
+          split,
+        })
+      }
+      setZone('center')
+      return
+    }
+
     const tabId = e.dataTransfer.getData(TAB_DRAG_MIME)
     if (!tabId) return
     e.preventDefault()
@@ -590,12 +617,7 @@ function EditorDropTarget({
     if (zone === 'center') {
       moveTab(tabId, groupId)
     } else {
-      splitTab(
-        tabId,
-        groupId,
-        zone === 'left' || zone === 'top' ? 'before' : 'after',
-        zone === 'left' || zone === 'right' ? 'row' : 'col',
-      )
+      splitTab(tabId, groupId, side, dir)
     }
     setZone('center')
   }
@@ -651,7 +673,9 @@ function TabbedMain() {
 
   useEffect(() => {
     const start = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes(TAB_DRAG_MIME)) setDragging(true)
+      // Tab moves and coding-tree file opens both light the pane drop overlays
+      // so Monaco never sees the bare text/plain path fallback.
+      if (isEditorBodyDrag(e.dataTransfer)) setDragging(true)
     }
     const stop = () => setDragging(false)
     window.addEventListener('dragstart', start)

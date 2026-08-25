@@ -2689,7 +2689,18 @@ type KomaState = {
   clearAgentSaving: (seq?: number) => void
   // ─── Coding panel ──────────────────────────────────────────────────────
   setActiveCodingRoot: (root: string | null) => void
-  openCodingFile: (root: string, path: string, opts?: { force?: boolean }) => void
+  // Open (or focus) a coding file tab. Optional placement drives explorer DnD:
+  // drop on a pane center / tab strip → that group; drop on a pane edge → split.
+  openCodingFile: (
+    root: string,
+    path: string,
+    opts?: {
+      force?: boolean
+      groupId?: EditorGroupId
+      beforeId?: string | null
+      split?: { side: 'before' | 'after'; dir: SplitDir }
+    },
+  ) => void
   saveCodingFile: (root: string, path: string) => void
   revertCodingFile: (root: string, path: string) => void
   updateCodingContent: (root: string, path: string, content: string) => void
@@ -6257,10 +6268,59 @@ export const useKoma = create<KomaState>((set, get) => ({
     const requestId = mintRequestId()
     const force = !!opts?.force
     set((s) => {
-      const exists = s.ui.tabs.some((t) => t.id === id)
-      const tabs: Tab[] = exists
-        ? s.ui.tabs
-        : [...s.ui.tabs, { id, kind: 'codingFile', root, path, title: codingBaseName(path) }]
+      const baseUi = normalizeGroups(s.ui)
+      const exists = baseUi.tabs.some((t) => t.id === id)
+      let tabs: Tab[] = exists
+        ? baseUi.tabs
+        : [...baseUi.tabs, { id, kind: 'codingFile', root, path, title: codingBaseName(path) }]
+      let ui = { ...baseUi, tabs, activeTabId: id }
+
+      const targetGroup =
+        opts?.groupId && ui.groups.includes(opts.groupId) ? opts.groupId : ui.activeGroupId
+
+      if (opts?.split) {
+        // Edge drop: open the file into a new adjacent pane (or the target
+        // group when we're already at MAX_GROUPS).
+        const inserted = insertGroup(ui, targetGroup, opts.split.side, opts.split.dir)
+        if (inserted) {
+          ui = {
+            ...ui,
+            groups: inserted.groups,
+            groupSizes: inserted.groupSizes,
+            splitDir: inserted.splitDir,
+            tabGroup: { ...ui.tabGroup, [id]: inserted.id },
+            groupActive: { ...ui.groupActive, [inserted.id]: id },
+            activeGroupId: inserted.id,
+            activeTabId: id,
+          }
+        } else {
+          tabs = reorderTab(tabs, id, null)
+          ui = {
+            ...ui,
+            tabs,
+            tabGroup: { ...ui.tabGroup, [id]: targetGroup },
+            groupActive: { ...ui.groupActive, [targetGroup]: id },
+            activeGroupId: targetGroup,
+            activeTabId: id,
+          }
+        }
+      } else if (opts?.groupId) {
+        // Center / tab-strip drop: land in that group (optionally before a tab).
+        const before =
+          opts.beforeId != null && ui.tabGroup[opts.beforeId] === targetGroup
+            ? opts.beforeId
+            : null
+        tabs = reorderTab(tabs, id, before)
+        ui = {
+          ...ui,
+          tabs,
+          tabGroup: { ...ui.tabGroup, [id]: targetGroup },
+          groupActive: { ...ui.groupActive, [targetGroup]: id },
+          activeGroupId: targetGroup,
+          activeTabId: id,
+        }
+      }
+
       const prev = s.coding.files[key]
       // force (Revert): clear dirty/conflict so FileRead may replace the buffer.
       // Without this, reduceFileRead keeps local edits and Revert is a no-op.
@@ -6281,7 +6341,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             loading: true,
           })
       return {
-        ui: { ...s.ui, tabs, activeTabId: id },
+        ui: normalizeGroups(ui),
         coding: {
           ...s.coding,
           _readReq: { ...s.coding._readReq, [key]: requestId },
@@ -6293,6 +6353,7 @@ export const useKoma = create<KomaState>((set, get) => ({
       }
     })
     get().req({ r: 'FileRead', root, path, requestId })
+    if (opts?.groupId || opts?.split) get().syncStreamView()
   },
   saveCodingFile: (root, path) => {
     const key = fileKey(root, path)
