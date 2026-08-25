@@ -136,7 +136,7 @@ export function Sidebar({ width, view }: SidebarProps) {
         {view === 'explore' && <ExplorePanel />}
         {view === 'git' && <GitPanel />}
         {view === 'coding' && (
-          <ErrorBoundary>
+          <ErrorBoundary label="CodingPanel">
             <CodingPanel />
           </ErrorBoundary>
         )}

@@ -22,6 +22,7 @@ import { useKoma } from '../store/koma'
 import { BrailleSpinner } from '../components/BrailleSpinner'
 import { ExtensionPanelFrame } from '../components/ExtensionPanelFrame'
 import { GlobalContextMenu } from '../components/GlobalContextMenu'
+import { ErrorBoundary } from '../components/ErrorBoundary'
 import { installPanelBridgeListener } from '../lib/panelBridge'
 import { hasCodingPathDrag, readCodingPathDragData } from '../lib/codingRef'
 import {
@@ -631,6 +632,19 @@ function TabbedMain() {
     [layout.cells],
   )
   const chatGroupId = groupOf(ui, 'chat')
+  // Hit-test reads these from refs so document drag listeners are NOT rebound
+  // on every groupSizes tick (grip drag used to tear down/re-add window listeners
+  // every pixel via layout.cells identity).
+  const layoutCellsRef = useRef(layout.cells)
+  layoutCellsRef.current = layout.cells
+  const groupsLenRef = useRef(ui.groups.length)
+  groupsLenRef.current = ui.groups.length
+  const moveTabRef = useRef(moveTab)
+  moveTabRef.current = moveTab
+  const openCodingFileRef = useRef(openCodingFile)
+  openCodingFileRef.current = openCodingFile
+  const splitTabRef = useRef(splitTab)
+  splitTabRef.current = splitTab
 
   const setPaneEl = (id: EditorGroupId, el: HTMLElement | null) => {
     if (el) paneEls.current.set(id, el)
@@ -644,7 +658,7 @@ function TabbedMain() {
   }
 
   const hitTestPane = (clientX: number, clientY: number): DropHover | null => {
-    for (const cell of layout.cells) {
+    for (const cell of layoutCellsRef.current) {
       const el = paneEls.current.get(cell.id)
       if (!el) continue
       const r = el.getBoundingClientRect()
@@ -657,7 +671,7 @@ function TabbedMain() {
         continue
       }
       const zone = dropZoneFor(clientX - r.left, clientY - r.top, r.width, r.height, {
-        allowEdges: ui.groups.length < MAX_GROUPS,
+        allowEdges: groupsLenRef.current < MAX_GROUPS,
       })
       return { groupId: cell.id, zone }
     }
@@ -734,7 +748,7 @@ function TabbedMain() {
       const coding = readCodingPathDragData(dt)
       if (coding) {
         if (!coding.isDir) {
-          openCodingFile(coding.root, coding.path, {
+          openCodingFileRef.current(coding.root, coding.path, {
             groupId: hit.groupId,
             split,
           })
@@ -746,9 +760,9 @@ function TabbedMain() {
       const tabId = dt.getData(TAB_DRAG_MIME)
       if (tabId) {
         if (dropZone === 'center') {
-          moveTab(tabId, hit.groupId)
+          moveTabRef.current(tabId, hit.groupId)
         } else {
-          splitTab(tabId, hit.groupId, side, dir)
+          splitTabRef.current(tabId, hit.groupId, side, dir)
         }
       }
       endDragSession()
@@ -774,7 +788,7 @@ function TabbedMain() {
       window.removeEventListener('blur', stop)
       window.removeEventListener('keydown', onKey)
     }
-  }, [layout.cells, moveTab, openCodingFile, splitTab, ui.groups.length])
+  }, [])
 
   // Split (Ctrl/Cmd+\): create the second pane, or flip axis when already split.
   // Group focus is Ctrl/Cmd+1..2 only (max two panes).
@@ -805,23 +819,36 @@ function TabbedMain() {
 
   const startResize = (index: number, e: ReactMouseEvent) => {
     e.preventDefault()
-    let prev = ui.splitDir === 'row' ? e.clientX : e.clientY
+    const dir = ui.splitDir
+    let prev = dir === 'row' ? e.clientX : e.clientY
     const total =
-      ui.splitDir === 'row'
+      dir === 'row'
         ? (gridRef.current?.clientWidth ?? 1)
         : (gridRef.current?.clientHeight ?? 1)
+    let raf = 0
+    let pending: number | null = null
+    const flush = () => {
+      raf = 0
+      if (pending == null) return
+      const d = pending
+      pending = null
+      resizeGroups(index, d, total)
+    }
     const move = (ev: MouseEvent) => {
-      const next = ui.splitDir === 'row' ? ev.clientX : ev.clientY
-      resizeGroups(index, next - prev, total)
+      const next = dir === 'row' ? ev.clientX : ev.clientY
+      pending = (pending ?? 0) + (next - prev)
       prev = next
+      if (!raf) raf = requestAnimationFrame(flush)
     }
     const up = () => {
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
+      if (raf) cancelAnimationFrame(raf)
+      flush()
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
     }
-    document.body.style.cursor = ui.splitDir === 'row' ? 'ew-resize' : 'ns-resize'
+    document.body.style.cursor = dir === 'row' ? 'ew-resize' : 'ns-resize'
     document.body.style.userSelect = 'none'
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', up)
@@ -923,7 +950,11 @@ function TabbedMain() {
 function IndexPage() {
   const needsOnboarding = useNeedsOnboarding()
   if (needsOnboarding) return <Onboarding />
-  return <TabbedMain />
+  return (
+    <ErrorBoundary label="TabbedMain">
+      <TabbedMain />
+    </ErrorBoundary>
+  )
 }
 
 function SettingsPage() {

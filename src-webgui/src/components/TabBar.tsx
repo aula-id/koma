@@ -384,11 +384,20 @@ export function TabBar({ groupId, focused }: Props) {
   }, [checkOverflow, tabs.length])
 
   // Reveal the active tab once when selection or strip membership changes.
+  // Only scroll when the chip is outside the visible strip — unconditional
+  // scrollIntoView mutates scrollLeft and can thrash overflow flags under
+  // dual TabBars during split/resize.
   useEffect(() => {
+    const strip = containerRef.current
     const active = tabRefs.current.get(activeTabId)
-    if (!active) return
+    if (!strip || !active) return
     const raf = requestAnimationFrame(() => {
-      active.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      const sRect = strip.getBoundingClientRect()
+      const aRect = active.getBoundingClientRect()
+      const outside = aRect.left < sRect.left - 1 || aRect.right > sRect.right + 1
+      if (outside) {
+        active.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      }
       checkOverflow()
     })
     return () => cancelAnimationFrame(raf)
