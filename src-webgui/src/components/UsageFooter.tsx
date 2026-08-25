@@ -85,20 +85,22 @@ export function UsageFooter() {
   // before the first checklist call lands).
   const planLabel = visiblePlan.length > 0 ? `PLAN ${planDone}/${visiblePlan.length}` : 'PLAN'
 
+  // Viewport max-* only — footer spans the whole main column, not a split pane.
+  // Collapse long chips before they shove usage off-screen on narrow windows.
   return (
-    <div className="flex h-5 w-full flex-none items-center gap-2 border-t border-koma-border bg-koma-panel px-3 font-mono text-[11px] text-koma-dim">
+    <div className="flex h-5 w-full min-w-0 flex-none items-center gap-2 overflow-hidden border-t border-koma-border bg-koma-panel px-3 font-mono text-[11px] text-koma-dim max-[720px]:gap-1.5 max-[720px]:px-2 max-[520px]:gap-1 max-[520px]:px-1.5">
       {/* Mode badge — clickable ONLY in Plan mode: opens the Explore sidebar
           panel and expands its PLAN section (see `focusPlanSection`). */}
       {isPlan ? (
         <button
           onClick={focusPlanSection}
           title="Show plan"
-          className="rounded bg-koma-accent/15 px-1 text-koma-accent transition hover:bg-koma-accent/25"
+          className="flex-none rounded bg-koma-accent/15 px-1 text-koma-accent transition hover:bg-koma-accent/25"
         >
           {planLabel}
         </button>
       ) : (
-        <span className="lowercase opacity-80">{mode}</span>
+        <span className="flex-none lowercase opacity-80">{mode}</span>
       )}
 
       {/* Remote host chip — visible across welcome/session whenever the GUI is
@@ -106,10 +108,10 @@ export function UsageFooter() {
       {remoteTarget && (
         <span
           title={`Remote: ${remoteTarget}`}
-          className="flex min-w-0 max-w-[40%] items-center gap-1 truncate rounded bg-koma-accent/10 px-1 text-koma-accent"
+          className="flex min-w-0 max-w-[40%] items-center gap-1 truncate rounded bg-koma-accent/10 px-1 text-koma-accent max-[720px]:max-w-[28%] max-[520px]:max-w-none"
         >
           <Server size={10} className="flex-none opacity-80" />
-          <span className="truncate">{remoteTarget}</span>
+          <span className="truncate max-[520px]:hidden">{remoteTarget}</span>
         </span>
       )}
 
@@ -120,14 +122,26 @@ export function UsageFooter() {
           Hidden entirely outside a git repo (no error tolerance — a
           stale/unresolved branch name is worse than no indicator) and on
           detached HEAD (no branch name to show as the trigger label). */}
-      {!gitError && gitBranch && !gitDetached && <BranchSwitcher variant="footer" />}
+      {!gitError && gitBranch && !gitDetached && (
+        <span className="min-w-0 max-[520px]:hidden">
+          <BranchSwitcher variant="footer" />
+        </span>
+      )}
 
-      <div className="flex-1" />
+      <div className="min-w-0 flex-1" />
 
-      {/* Usage readout */}
-      <span className="truncate">
-        ↑ {fmtTokens(tokensIn)} · cached {fmtTokens(tokensCached)} · ↓ {fmtTokens(tokensOut)} ·{' '}
+      {/* Usage readout — short form under 720px, cost-only under 520px. */}
+      <span className="min-w-0 truncate max-[520px]:hidden" title={`↑ ${fmtTokens(tokensIn)} · cached ${fmtTokens(tokensCached)} · ↓ ${fmtTokens(tokensOut)} · $${cost.toFixed(4)}`}>
+        <span className="max-[720px]:hidden">
+          ↑ {fmtTokens(tokensIn)} · cached {fmtTokens(tokensCached)} · ↓ {fmtTokens(tokensOut)} ·{' '}
+        </span>
+        <span className="hidden max-[720px]:inline">
+          ↑{fmtTokens(tokensIn)} ↓{fmtTokens(tokensOut)}{' '}
+        </span>
         <span className="text-koma-accent">${cost.toFixed(4)}</span>
+      </span>
+      <span className="hidden flex-none text-koma-accent max-[520px]:inline" title={`↑ ${fmtTokens(tokensIn)} · cached ${fmtTokens(tokensCached)} · ↓ ${fmtTokens(tokensOut)} · $${cost.toFixed(4)}`}>
+        ${cost.toFixed(4)}
       </span>
 
       {/* Compact button */}

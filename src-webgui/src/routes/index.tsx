@@ -882,7 +882,7 @@ function TabbedMain() {
             if (ui.activeGroupId !== chatGroupId) focusGroup(chatGroupId)
           }}
         >
-          <div className="absolute inset-0 flex items-stretch justify-center">
+          <div className="absolute inset-0 flex items-stretch justify-center @container/chat">
             {sessionId === null ? <StartScreen /> : <ChatView />}
           </div>
         </div>

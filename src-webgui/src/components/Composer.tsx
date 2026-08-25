@@ -740,7 +740,7 @@ export function Composer() {
         onDrop={onDrop}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
-        className={`relative flex flex-col gap-2 rounded-2xl border bg-koma-panel px-3 py-2.5 shadow-sm transition-colors ${
+        className={`relative flex flex-col gap-2 rounded-2xl border bg-koma-panel px-3 py-2.5 shadow-sm transition-colors @max-xs/chat:gap-1.5 @max-xs/chat:rounded-xl @max-xs/chat:px-2 @max-xs/chat:py-2 @max-[14rem]/chat:px-1.5 @max-[14rem]/chat:py-1.5 ${
           dragOver ? 'border-koma-accent bg-koma-hover' : 'border-koma-border'
         }`}
       >
@@ -831,8 +831,8 @@ export function Composer() {
           />
         </div>
 
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1">
+        <div className="flex min-w-0 items-center justify-between gap-1">
+          <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden @max-xs/chat:gap-0">
             <input
               ref={fileInputRef}
               type="file"
@@ -845,7 +845,7 @@ export function Composer() {
               onClick={() => fileInputRef.current?.click()}
               aria-label="Attach file"
               title="Attach file"
-              className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+              className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100 @max-[14rem]/chat:h-7 @max-[14rem]/chat:w-7"
             >
               <Paperclip size={16} />
             </button>
@@ -853,7 +853,7 @@ export function Composer() {
               onClick={openOmniSearch}
               aria-label="Search workspace files"
               title="Search workspace files"
-              className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+              className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100 @max-[14rem]/chat:h-7 @max-[14rem]/chat:w-7"
             >
               <Search size={16} />
             </button>
@@ -865,7 +865,7 @@ export function Composer() {
             <ModeSelector />
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-none items-center gap-1.5 @max-xs/chat:gap-1">
             {/* STOP is a SEPARATE control from send (not a morph): while the turn
                 runs, both are shown — send stays LIVE so a submit QUEUES as a
                 steer, and stop aborts the in-flight turn (GuiReq Interrupt). */}
@@ -874,7 +874,7 @@ export function Composer() {
                 onClick={() => req({ r: 'Interrupt' })}
                 aria-label="Stop"
                 title="Stop"
-                className="flex h-8 w-8 flex-none items-center justify-center rounded-full border border-koma-border text-koma-fg opacity-80 transition-colors hover:bg-koma-hover hover:opacity-100"
+                className="flex h-8 w-8 flex-none items-center justify-center rounded-full border border-koma-border text-koma-fg opacity-80 transition-colors hover:bg-koma-hover hover:opacity-100 @max-[14rem]/chat:h-7 @max-[14rem]/chat:w-7"
               >
                 <Square size={13} className="fill-current" />
               </button>
@@ -890,7 +890,7 @@ export function Composer() {
                     ? 'Queue while working'
                     : 'Send'
               }
-              className={`flex h-8 w-8 flex-none items-center justify-center rounded-full transition-colors ${
+              className={`flex h-8 w-8 flex-none items-center justify-center rounded-full transition-colors @max-[14rem]/chat:h-7 @max-[14rem]/chat:w-7 ${
                 canSend
                   ? 'bg-koma-accent text-koma-bg hover:opacity-90'
                   : 'bg-koma-hover text-koma-fg opacity-40'
