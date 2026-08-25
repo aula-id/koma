@@ -479,6 +479,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         "min" => Some(WinCmd::Minimize),
                         "max" => Some(WinCmd::ToggleMax),
                         "close" => Some(WinCmd::Close),
+                        "devtools" => Some(WinCmd::OpenDevTools),
                         _ => None,
                     };
                     if let Some(cmd) = cmd {
@@ -664,6 +665,11 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 }
                 WinCmd::Resize(dir) => {
                     let _ = window.drag_resize_window(dir);
+                }
+                WinCmd::OpenDevTools => {
+                    // with_devtools(true) only enables the inspector; open it
+                    // explicitly (custom context menu swallows the native one).
+                    webview.open_devtools();
                 }
             },
             Event::WindowEvent {

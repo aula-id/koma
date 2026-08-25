@@ -30,6 +30,8 @@ pub(super) enum WinCmd {
     ToggleMax,
     Close,
     Resize(tao::window::ResizeDirection),
+    /// Open the WebView inspector (F12 / context-menu Inspect).
+    OpenDevTools,
 }
 
 /// Messages posted from `koma.js` via `window.ipc.postMessage(JSON.stringify(..))`.
