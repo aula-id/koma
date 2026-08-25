@@ -37,6 +37,7 @@ import { fallbackSignature, truncateChars } from '../lib/toolSignature'
 // On attach, only mount the newest slice of history. Older rows expand when
 // the user scrolls near the top (or clicks the affordance). Caps Streamdown/
 // Shiki mount cost after a fat Snapshot without needing pixel virtualization.
+// Keep in lockstep with host SNAPSHOT_WINDOW / SNAPSHOT_HEAD_CHUNK (project.rs).
 const CHAT_WINDOW = 40
 const CHAT_WINDOW_STEP = 40
 
@@ -416,6 +417,9 @@ const AssistantMessage = memo(function AssistantMessage({
 function Message({ m, index }: { m: ChatMessage; index: number }) {
   const refillComposer = useKoma((s) => s.refillComposer)
   const stageRewind = useKoma((s) => s.stageRewind)
+  // Prefer host display idx (absolute projected index) so RewindTo stays correct
+  // even when older history is still held off-store.
+  const rewindIndex = typeof m.idx === 'number' ? m.idx : index
   if (m.role === 'user') {
     if (m.kind === 'shell') return <ShellMessage content={m.content} />
     if (m.kind === 'bashNudge') return <BashNudgeMessage content={m.content} />
@@ -425,7 +429,7 @@ function Message({ m, index }: { m: ChatMessage; index: number }) {
     // stays visible and the edit is cancelable — clear the composer to back out.
     const onEdit = () => {
       refillComposer(m.content)
-      stageRewind(index)
+      stageRewind(rewindIndex)
     }
     return <UserMessage content={m.content} attachments={m.attachments} onEdit={onEdit} />
   }
@@ -442,14 +446,14 @@ function Message({ m, index }: { m: ChatMessage; index: number }) {
 export function ChatView() {
   const sessionId = useKoma((s) => s.session.id)
   const messages = useKoma((s) => s.session.messages)
+  const hasMoreOlder = useKoma((s) => s.session.hasMoreOlder)
+  const requestHistoryPage = useKoma((s) => s.requestHistoryPage)
   const stream = useKoma((s) => s.session.stream)
   const reasoning = useKoma((s) => s.session.reasoning)
   const working = useKoma((s) => s.session.working)
 
-  // Live in-flight bubble: shown once tokens or live reasoning arrive. Keyed at
-  // its FUTURE index (messages.length) so that when the Snapshot commit lands
-  // and the message joins the array, React reuses the same DOM node instead of
-  // remounting it.
+  // Live in-flight bubble: shown once tokens or live reasoning arrive. Keyed
+  // stably as "live" so Snapshot commits don't remount the streaming node.
   const showLive = stream.length > 0 || (working && reasoning.trim() !== '')
 
   // Scroll-anchored to BOTTOM: auto-stick to the newest content as the
@@ -462,9 +466,10 @@ export function ChatView() {
   const stickRef = useRef(true)
   const pendingTopRestoreRef = useRef<number | null>(null)
   const expandingRef = useRef(false)
+  const historyPullInflight = useRef(false)
 
   // Newest-first window into `messages`. Resets on session switch / big attach
-  // so a 730KB Snapshot only mounts ~CHAT_WINDOW bubbles on first paint.
+  // so a fat Snapshot only mounts ~CHAT_WINDOW bubbles on first paint.
   const [renderFrom, setRenderFrom] = useState(() =>
     Math.max(0, messages.length - CHAT_WINDOW),
   )
@@ -473,28 +478,42 @@ export function ChatView() {
     prevLenRef.current = messages.length
     setRenderFrom(Math.max(0, messages.length - CHAT_WINDOW))
     stickRef.current = true
+    historyPullInflight.current = false
   }, [sessionId])
   useEffect(() => {
     // Growing the transcript at the end must keep the live tail mounted; if
     // renderFrom was left pointing past the new length, clamp. Shrinking
-    // (rewind) also clamps. A SnapshotHead prepend is a large jump — shift
+    // (rewind) also clamps. A SnapshotHead/HistoryPage prepend shifts
     // renderFrom so the visible tail stays put instead of mounting every row.
     const prev = prevLenRef.current
     const added = messages.length - prev
     prevLenRef.current = messages.length
+    if (added > 0) historyPullInflight.current = false
     setRenderFrom((from) => {
       const tail = Math.max(0, messages.length - CHAT_WINDOW)
       if (added >= CHAT_WINDOW && from < added) return from + added
+      if (added > 0 && from > 0) return from + added
       return Math.min(from, tail)
     })
   }, [messages.length])
 
   const expandOlder = () => {
-    if (expandingRef.current || renderFrom <= 0) return
-    expandingRef.current = true
-    const el = scrollRef.current
-    if (el) pendingTopRestoreRef.current = el.scrollHeight - el.scrollTop
-    setRenderFrom((from) => Math.max(0, from - CHAT_WINDOW_STEP))
+    if (expandingRef.current) return
+    if (renderFrom > 0) {
+      expandingRef.current = true
+      const el = scrollRef.current
+      if (el) pendingTopRestoreRef.current = el.scrollHeight - el.scrollTop
+      setRenderFrom((from) => Math.max(0, from - CHAT_WINDOW_STEP))
+      return
+    }
+    // Local window exhausted — pull host-held older history if any.
+    if (hasMoreOlder && !historyPullInflight.current) {
+      historyPullInflight.current = true
+      const el = scrollRef.current
+      if (el) pendingTopRestoreRef.current = el.scrollHeight - el.scrollTop
+      expandingRef.current = true
+      requestHistoryPage()
+    }
   }
 
   const setScrollEl = (el: HTMLDivElement | null) => {
@@ -507,7 +526,7 @@ export function ChatView() {
     if (!el) return
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
     stickRef.current = distanceFromBottom < 40
-    if (el.scrollTop < 80 && renderFrom > 0) expandOlder()
+    if (el.scrollTop < 80 && (renderFrom > 0 || hasMoreOlder)) expandOlder()
   }
 
   useLayoutEffect(() => {
@@ -537,6 +556,7 @@ export function ChatView() {
 
   const visible = messages.slice(renderFrom)
   const hiddenCount = renderFrom
+  const canShowEarlier = hiddenCount > 0 || hasMoreOlder
 
   return (
     <div className="term-shell flex flex-col">
@@ -546,23 +566,28 @@ export function ChatView() {
           onScroll={onScroll}
           className="flex-1 space-y-4 overflow-y-auto px-2 py-4"
         >
-          {hiddenCount > 0 && (
+          {canShowEarlier && (
             <button
               type="button"
               onClick={expandOlder}
               className="mx-auto block rounded-md border border-koma-border bg-koma-panel px-3 py-1 text-[12px] text-koma-dim transition-colors hover:bg-koma-hover hover:text-koma-fg"
             >
-              Show {Math.min(CHAT_WINDOW_STEP, hiddenCount)} earlier
-              {hiddenCount > CHAT_WINDOW_STEP ? ` (${hiddenCount} hidden)` : ''}
+              {hiddenCount > 0
+                ? `Show ${Math.min(CHAT_WINDOW_STEP, hiddenCount)} earlier${
+                    hiddenCount > CHAT_WINDOW_STEP ? ` (${hiddenCount} hidden)` : ''
+                  }`
+                : 'Load earlier messages'}
             </button>
           )}
           {visible.map((m, i) => {
             const index = renderFrom + i
-            return <Message key={index} m={m} index={index} />
+            const key =
+              typeof m.idx === 'number' ? `m-${m.idx}` : `i-${index}`
+            return <Message key={key} m={m} index={index} />
           })}
           {showLive && (
             <AssistantMessage
-              key={messages.length}
+              key="live"
               content={stream}
               reasoning={reasoning || null}
               streaming
