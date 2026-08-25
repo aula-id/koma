@@ -583,10 +583,11 @@ function EditorDropTarget({
     e.stopPropagation()
     e.dataTransfer.dropEffect = e.dataTransfer.types.includes(TAB_DRAG_MIME) ? 'move' : 'copy'
     const r = e.currentTarget.getBoundingClientRect()
-    const next: DropZone =
-      ui.groups.length >= MAX_GROUPS
-        ? 'center'
-        : dropZoneFor(e.clientX - r.left, e.clientY - r.top, r.width, r.height)
+    // Edges only when unsplit (1 → 2). Once two panes exist, center = move only —
+    // the model cannot nest or grow a third group.
+    const next = dropZoneFor(e.clientX - r.left, e.clientY - r.top, r.width, r.height, {
+      allowEdges: ui.groups.length < MAX_GROUPS,
+    })
     // Equality guard — dragover fires continuously; avoid a setState storm.
     setZone((prev) => (prev === next ? prev : next))
   }
@@ -658,6 +659,7 @@ function TabbedMain() {
   const sessionId = useKoma((s) => s.session.id)
   const focusGroup = useKoma((s) => s.focusEditorGroup)
   const splitTab = useKoma((s) => s.splitTab)
+  const toggleSplitDir = useKoma((s) => s.toggleSplitDir)
   const resizeGroups = useKoma((s) => s.resizeEditorGroups)
   const gridRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState(false)
@@ -688,11 +690,17 @@ function TabbedMain() {
     }
   }, [])
 
-  // VSCode's primary split shortcut plus direct group focus (Ctrl/Cmd+1..3).
+  // Split (Ctrl/Cmd+\): create the second pane, or flip axis when already split.
+  // Group focus is Ctrl/Cmd+1..2 only (max two panes).
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return
       if (e.key === '\\') {
+        if (ui.groups.length >= 2) {
+          e.preventDefault()
+          toggleSplitDir()
+          return
+        }
         if (ui.activeTabId === 'chat' || ui.groups.length >= MAX_GROUPS) return
         e.preventDefault()
         splitTab(ui.activeTabId, ui.activeGroupId, 'after', 'row')
@@ -700,14 +708,14 @@ function TabbedMain() {
       }
       const index = Number(e.key) - 1
       const groupId = ui.groups[index]
-      if (index >= 0 && index < 3 && groupId) {
+      if (index >= 0 && index < MAX_GROUPS && groupId) {
         e.preventDefault()
         focusGroup(groupId)
       }
     }
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
-  }, [focusGroup, splitTab, ui.activeGroupId, ui.activeTabId, ui.groups])
+  }, [focusGroup, splitTab, toggleSplitDir, ui.activeGroupId, ui.activeTabId, ui.groups])
 
   const startResize = (index: number, e: ReactMouseEvent) => {
     e.preventDefault()

@@ -1,9 +1,9 @@
 // VSCode-style split view (editor groups) for the main tab column.
 //
 // The model is deliberately FLAT: `groups` is an ordered list of group ids laid
-// out along ONE axis (`splitDir`), not VSCode's recursive grid. Two or three
-// panes side-by-side (or stacked) is what the gesture is actually used for, and
-// a flat list keeps every invariant checkable in a single pass.
+// out along ONE axis (`splitDir`), not VSCode's recursive grid. At most TWO
+// panes (side-by-side or stacked) — orientation flips in place via setSplitDir.
+// A flat list keeps every invariant checkable in a single pass.
 //
 // Membership lives in `tabGroup` (tab id -> group id) rather than on the Tab
 // objects themselves, so the ~20 `open*Tab` actions keep appending to `ui.tabs`
@@ -24,9 +24,10 @@ export type SplitDir = 'row' | 'col'
 /** The group every tab starts in — the "no split" state is `groups: [DEFAULT_GROUP]`. */
 export const DEFAULT_GROUP: EditorGroupId = 'g0'
 
-// A flat single-axis layout stops being useful well before it stops being
-// representable; three panes is the practical ceiling on a laptop screen.
-export const MAX_GROUPS = 3
+// Two panes is the product ceiling: one split, one axis, one toggle. Nested
+// grids and three-way layouts are out of scope (and the drop overlay refuses
+// edge zones once a split already exists).
+export const MAX_GROUPS = 2
 
 /** Width of the draggable divider between two groups, in px. */
 export const GRIP_PX = 5
@@ -192,9 +193,8 @@ export function reorderTab<T extends { id: string }>(
 }
 
 /**
- * Insert a new group next to `targetId` and return it. `dir` is global (one
- * axis for the whole column), so splitting sideways while a stacked split is
- * open re-orients the existing panes rather than nesting a grid.
+ * Insert a new group next to `targetId` and return it. Only valid from a single
+ * pane (MAX_GROUPS = 2). `dir` sets the global axis for that two-pane layout.
  */
 export function insertGroup(
   ui: GroupLayout,
@@ -215,16 +215,43 @@ export function insertGroup(
   return { groups, groupSizes: { ...ui.groupSizes, [id]: avg }, splitDir: dir, id }
 }
 
+/**
+ * Flip or set the layout axis while two panes are open. No-op when unsplit —
+ * orientation only matters once a second group exists. Group order and sizes
+ * stay put; only the CSS axis changes.
+ */
+export function setSplitDir(
+  ui: GroupLayout,
+  dir: SplitDir,
+): Pick<GroupLayout, 'splitDir'> | null {
+  if (ui.groups.length < 2 || ui.splitDir === dir) return null
+  return { splitDir: dir }
+}
+
+/** Toggle row ↔ col when already split. */
+export function toggleSplitDir(ui: GroupLayout): Pick<GroupLayout, 'splitDir'> | null {
+  if (ui.groups.length < 2) return null
+  return { splitDir: ui.splitDir === 'row' ? 'col' : 'row' }
+}
+
 /** Where a drag would land inside a group's content box. */
 export type DropZone = 'center' | 'left' | 'right' | 'top' | 'bottom'
 
 // Matches VSCode's feel: the outer fifth of each side splits, the middle just
-// moves the tab into that group.
+// moves the tab into that group. Callers pass `allowEdges: false` once a split
+// already exists so the overlay never promises a third pane / nested grid.
 const EDGE_RATIO = 0.2
 
 /** Classify a drop point (offset within a `w`x`h` box) into a drop zone. */
-export function dropZoneFor(x: number, y: number, w: number, h: number): DropZone {
+export function dropZoneFor(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  opts?: { allowEdges?: boolean },
+): DropZone {
   if (w <= 0 || h <= 0) return 'center'
+  if (opts?.allowEdges === false) return 'center'
   const fx = x / w
   const fy = y / h
   const near = Math.min(fx, 1 - fx, fy, 1 - fy)

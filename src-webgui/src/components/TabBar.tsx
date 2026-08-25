@@ -16,6 +16,7 @@ import {
   PanelBottom,
   PanelRight,
   Puzzle,
+  Rows2,
   Settings,
   SquareTerminal,
   Terminal,
@@ -149,16 +150,20 @@ function TabContextMenu({
   state,
   groupId,
   canSplit,
+  canToggle,
   onRequestClose,
   onClose,
 }: {
   state: MenuState
   groupId: EditorGroupId
   canSplit: boolean
+  canToggle: boolean
   onRequestClose: (tabId: string) => void
   onClose: () => void
 }) {
   const splitTab = useKoma((s) => s.splitTab)
+  const toggleSplitDir = useKoma((s) => s.toggleSplitDir)
+  const splitDir = useKoma((s) => s.ui.splitDir)
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ left: state.x, top: state.y })
 
@@ -194,33 +199,47 @@ function TabContextMenu({
       className="overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm"
       onContextMenu={(e) => e.preventDefault()}
     >
-      <button
-        type="button"
-        disabled={!canSplit}
-        className={item}
-        onClick={() => {
-          splitTab(state.tabId, groupId, 'after', 'row')
-          onClose()
-        }}
-      >
-        <PanelRight size={13} />
-        Split Right
-      </button>
-      <button
-        type="button"
-        disabled={!canSplit}
-        className={item}
-        onClick={() => {
-          splitTab(state.tabId, groupId, 'after', 'col')
-          onClose()
-        }}
-      >
-        <PanelBottom size={13} />
-        Split Down
-      </button>
+      {canSplit ? (
+        <>
+          <button
+            type="button"
+            className={item}
+            onClick={() => {
+              splitTab(state.tabId, groupId, 'after', 'row')
+              onClose()
+            }}
+          >
+            <PanelRight size={13} />
+            Split Right
+          </button>
+          <button
+            type="button"
+            className={item}
+            onClick={() => {
+              splitTab(state.tabId, groupId, 'after', 'col')
+              onClose()
+            }}
+          >
+            <PanelBottom size={13} />
+            Split Down
+          </button>
+        </>
+      ) : canToggle ? (
+        <button
+          type="button"
+          className={item}
+          onClick={() => {
+            toggleSplitDir()
+            onClose()
+          }}
+        >
+          {splitDir === 'row' ? <Rows2 size={13} /> : <Columns2 size={13} />}
+          {splitDir === 'row' ? 'Stack Vertically' : 'Split Horizontally'}
+        </button>
+      ) : null}
       {state.tabId !== 'chat' && (
         <>
-          <div className="my-1 border-t border-koma-border" />
+          {(canSplit || canToggle) && <div className="my-1 border-t border-koma-border" />}
           <button
             type="button"
             className={item}
@@ -260,6 +279,7 @@ export function TabBar({ groupId, focused }: Props) {
   const closeTab = useKoma((s) => s.closeTab)
   const moveTabToGroup = useKoma((s) => s.moveTabToGroup)
   const splitTab = useKoma((s) => s.splitTab)
+  const toggleSplitDir = useKoma((s) => s.toggleSplitDir)
   const openCodingFile = useKoma((s) => s.openCodingFile)
   const focusGroup = useKoma((s) => s.focusEditorGroup)
   const codingDirty = useKoma(
@@ -407,7 +427,24 @@ export function TabBar({ groupId, focused }: Props) {
   }
 
   const canSplit = ui.groups.length < MAX_GROUPS
+  const canToggle = ui.groups.length >= 2
   const activeCanSplit = activeTabId !== 'chat' && canSplit
+  // Split when alone; flip axis when already two panes. Only the focused strip
+  // shows the control so we don't double the chrome across both bars.
+  const showLayoutBtn = focused
+  const layoutEnabled = canToggle || activeCanSplit
+  const LayoutIcon = canToggle
+    ? ui.splitDir === 'row'
+      ? Rows2
+      : Columns2
+    : Columns2
+  const layoutLabel = canToggle
+    ? ui.splitDir === 'row'
+      ? 'Stack editors vertically'
+      : 'Split editors horizontally'
+    : activeCanSplit
+      ? 'Split editor right'
+      : 'Select a non-chat tab to split'
 
   return (
     <div
@@ -499,24 +536,31 @@ export function TabBar({ groupId, focused }: Props) {
           <ChevronRight size={14} />
         </button>
       )}
-      <button
-        type="button"
-        disabled={!activeCanSplit}
-        onClick={(e) => {
-          e.stopPropagation()
-          if (activeCanSplit) splitTab(activeTabId, groupId, 'after', 'row')
-        }}
-        aria-label="Split editor right"
-        title={activeCanSplit ? 'Split Editor Right' : 'Select a non-chat tab to split'}
-        className="flex w-7 flex-none items-center justify-center text-koma-dim opacity-70 hover:bg-koma-hover hover:text-koma-fg hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-25"
-      >
-        <Columns2 size={13} />
-      </button>
+      {showLayoutBtn && (
+        <button
+          type="button"
+          disabled={!layoutEnabled}
+          onClick={(e) => {
+            e.stopPropagation()
+            if (canToggle) {
+              toggleSplitDir()
+              return
+            }
+            if (activeCanSplit) splitTab(activeTabId, groupId, 'after', 'row')
+          }}
+          aria-label={layoutLabel}
+          title={layoutLabel}
+          className="flex w-7 flex-none items-center justify-center text-koma-dim opacity-70 hover:bg-koma-hover hover:text-koma-fg hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-25"
+        >
+          <LayoutIcon size={13} />
+        </button>
+      )}
       {menu && (
         <TabContextMenu
           state={menu}
           groupId={groupId}
           canSplit={menu.tabId !== 'chat' && canSplit}
+          canToggle={canToggle}
           onRequestClose={(tabId) => {
             const tab = rawUi.tabs.find((candidate) => candidate.id === tabId)
             if (tab) requestClose(tab)

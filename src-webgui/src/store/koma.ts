@@ -28,6 +28,8 @@ import {
   normalizeGroups,
   reorderTab,
   resizeGroups,
+  setSplitDir as applySplitDir,
+  toggleSplitDir as flipSplitDir,
   type EditorGroupId,
   type SplitDir,
 } from './editorGroups'
@@ -2633,14 +2635,18 @@ type KomaState = {
   // Move/reorder one tab into an existing pane. `beforeId: null` appends it to
   // that pane's strip. The permanent chat tab cannot be moved.
   moveTabToGroup: (tabId: string, groupId: EditorGroupId, beforeId?: string | null) => void
-  // Create an adjacent pane and move one tab into it. A flat layout supports
-  // up to three groups; a split on the other axis re-orients the whole layout.
+  // Create the second pane and move one tab into it (max two groups). Prefer
+  // toggleSplitDir once already split — a second split is refused.
   splitTab: (
     tabId: string,
     targetGroupId: EditorGroupId,
     side: 'before' | 'after',
     dir: SplitDir,
   ) => void
+  // Flip the two-pane axis in place (row ↔ col). No-op when unsplit.
+  toggleSplitDir: () => void
+  // Set the two-pane axis explicitly. No-op when unsplit or already that dir.
+  setSplitDir: (dir: SplitDir) => void
   // Resize the divider between group[index] and group[index + 1].
   resizeEditorGroups: (index: number, deltaPx: number, totalPx: number) => void
   // The UsageFooter PLAN badge click (Plan mode only): bump `focusPlanTick` so
@@ -6164,6 +6170,20 @@ export const useKoma = create<KomaState>((set, get) => ({
     })
     get().syncStreamView()
   },
+  toggleSplitDir: () =>
+    set((s) => {
+      const ui = normalizeGroups(s.ui)
+      const next = flipSplitDir(ui)
+      if (!next) return s
+      return { ui: { ...ui, splitDir: next.splitDir } }
+    }),
+  setSplitDir: (dir) =>
+    set((s) => {
+      const ui = normalizeGroups(s.ui)
+      const next = applySplitDir(ui, dir)
+      if (!next) return s
+      return { ui: { ...ui, splitDir: next.splitDir } }
+    }),
   resizeEditorGroups: (index, deltaPx, totalPx) =>
     set((s) => {
       const ui = normalizeGroups(s.ui)
