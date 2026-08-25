@@ -267,9 +267,40 @@ type Props = {
 // between strips (or reorders inside one); right-click and the split button
 // create adjacent panes. All tab kinds share this renderer so the interaction
 // grammar cannot drift between file, diff, terminal, settings, and extension tabs.
+const CHEVRON_ON =
+  'flex w-6 flex-none items-center justify-center text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100'
+const CHEVRON_OFF =
+  'flex w-6 flex-none items-center justify-center text-koma-fg pointer-events-none opacity-0'
+
 export function TabBar({ groupId, focused }: Props) {
-  const rawUi = useKoma((s) => s.ui)
-  const ui = useMemo(() => normalizeGroups(rawUi), [rawUi])
+  // Subscribe to strip-relevant ui fields only. groupSizes is deliberately
+  // excluded so grip-drag pixels do not repaint both TabBars.
+  const layoutBits = useKoma(
+    useShallow((s) => ({
+      tabs: s.ui.tabs,
+      groups: s.ui.groups,
+      tabGroup: s.ui.tabGroup,
+      groupActive: s.ui.groupActive,
+      activeGroupId: s.ui.activeGroupId,
+      activeTabId: s.ui.activeTabId,
+      splitDir: s.ui.splitDir,
+    })),
+  )
+  const ui = useMemo(
+    () =>
+      normalizeGroups({
+        tabs: layoutBits.tabs,
+        groups: layoutBits.groups,
+        tabGroup: layoutBits.tabGroup,
+        groupActive: layoutBits.groupActive,
+        activeGroupId: layoutBits.activeGroupId,
+        activeTabId: layoutBits.activeTabId,
+        splitDir: layoutBits.splitDir,
+        // Sizes are unused for strip paint; empty map is fine (normalize fills 1s).
+        groupSizes: {},
+      }),
+    [layoutBits],
+  )
   const tabs = useMemo(
     () => ui.tabs.filter((t) => groupOf(ui, t.id) === groupId),
     [groupId, ui],
@@ -282,24 +313,41 @@ export function TabBar({ groupId, focused }: Props) {
   const toggleSplitDir = useKoma((s) => s.toggleSplitDir)
   const openCodingFile = useKoma((s) => s.openCodingFile)
   const focusGroup = useKoma((s) => s.focusEditorGroup)
-  const codingDirty = useKoma(
-    useShallow((s) => {
-      const out: Record<string, CodingDirtyFlags> = {}
-      for (const [k, f] of Object.entries(s.coding.files)) {
-        if (!f || !(f.dirty || f.conflict || f.saving)) continue
-        out[k] = {
-          dirty: !!f.dirty,
-          conflict: !!f.conflict,
-          error: !!f.error,
-          binary: !!f.binary,
-          tooLarge: !!f.tooLarge,
-          saving: !!f.saving,
-          savedContentNull: f.savedContent === null,
-        }
+  // Compact dirty signature string — avoids allocating nested objects every
+  // coding.files tick (useShallow would still see new child refs each time).
+  const codingDirtySig = useKoma((s) => {
+    const parts: string[] = []
+    for (const [k, f] of Object.entries(s.coding.files)) {
+      if (!f || !(f.dirty || f.conflict || f.saving)) continue
+      parts.push(
+        `${k}:${f.dirty ? 1 : 0}${f.conflict ? 1 : 0}${f.error ? 1 : 0}${f.binary ? 1 : 0}${
+          f.tooLarge ? 1 : 0
+        }${f.saving ? 1 : 0}${f.savedContent === null ? 1 : 0}`,
+      )
+    }
+    parts.sort()
+    return parts.join('|')
+  })
+  const codingDirty = useMemo(() => {
+    const out: Record<string, CodingDirtyFlags> = {}
+    if (!codingDirtySig) return out
+    for (const part of codingDirtySig.split('|')) {
+      const colon = part.indexOf(':')
+      if (colon < 0) continue
+      const k = part.slice(0, colon)
+      const f = part.slice(colon + 1)
+      out[k] = {
+        dirty: f[0] === '1',
+        conflict: f[1] === '1',
+        error: f[2] === '1',
+        binary: f[3] === '1',
+        tooLarge: f[4] === '1',
+        saving: f[5] === '1',
+        savedContentNull: f[6] === '1',
       }
-      return out
-    }),
-  )
+    }
+    return out
+  }, [codingDirtySig])
   const codingAutosave = useKoma((s) => !!s.settingsValues?.codingAutosave)
   const saveCodingFile = useKoma((s) => s.saveCodingFile)
   const [menu, setMenu] = useState<MenuState | null>(null)
@@ -309,9 +357,12 @@ export function TabBar({ groupId, focused }: Props) {
     title: string
   } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const leftBtnRef = useRef<HTMLButtonElement>(null)
+  const rightBtnRef = useRef<HTMLButtonElement>(null)
   const tabRefs = useRef<Map<string, HTMLDivElement | HTMLButtonElement | null>>(new Map())
-  const [canScrollLeft, setCanScrollLeft] = useState(false)
-  const [canScrollRight, setCanScrollRight] = useState(false)
+  // Last overflow flags applied via DOM — NEVER React state. ResizeObserver →
+  // setCanScroll* was still the #185 site (componentStack → TabBar) on split.
+  const overflowRef = useRef({ left: false, right: false })
 
   const requestClose = useCallback(
     (tab: Tab, e?: ReactMouseEvent) => {
@@ -336,7 +387,7 @@ export function TabBar({ groupId, focused }: Props) {
 
   useEffect(() => {
     if (!awaitingAutosaveClose) return
-    const tab = rawUi.tabs.find((t) => t.id === awaitingAutosaveClose.id)
+    const tab = ui.tabs.find((t) => t.id === awaitingAutosaveClose.id)
     if (!tab || tab.kind !== 'codingFile') {
       setAwaitingAutosaveClose(null)
       return
@@ -352,41 +403,61 @@ export function TabBar({ groupId, focused }: Props) {
       setAwaitingAutosaveClose(null)
       closeTab(tab.id, { force: true })
     }
-  }, [awaitingAutosaveClose, closeTab, codingDirty, rawUi.tabs])
+  }, [awaitingAutosaveClose, closeTab, codingDirty, ui.tabs])
+
+  const applyOverflowDom = useCallback((left: boolean, right: boolean) => {
+    const prev = overflowRef.current
+    if (prev.left === left && prev.right === right) return
+    overflowRef.current = { left, right }
+    const lb = leftBtnRef.current
+    const rb = rightBtnRef.current
+    if (lb) {
+      lb.disabled = !left
+      lb.tabIndex = left ? 0 : -1
+      lb.setAttribute('aria-hidden', left ? 'false' : 'true')
+      lb.className = left ? CHEVRON_ON : CHEVRON_OFF
+    }
+    if (rb) {
+      rb.disabled = !right
+      rb.tabIndex = right ? 0 : -1
+      rb.setAttribute('aria-hidden', right ? 'false' : 'true')
+      rb.className = right ? CHEVRON_ON : CHEVRON_OFF
+    }
+  }, [])
 
   const checkOverflow = useCallback(() => {
     const el = containerRef.current
     if (!el) return
-    // Epsilon + functional setState: chevron mount/unmount used to change the
-    // strip width by 24px and re-fire ResizeObserver into a setState storm
-    // (React #185) near the overflow boundary.
-    const nextLeft = el.scrollLeft > 1
-    const nextRight = el.scrollWidth - el.clientWidth - el.scrollLeft > 1
-    setCanScrollLeft((v) => (v === nextLeft ? v : nextLeft))
-    setCanScrollRight((v) => (v === nextRight ? v : nextRight))
-  }, [])
+    const left = el.scrollLeft > 1
+    const right = el.scrollWidth - el.clientWidth - el.scrollLeft > 1
+    applyOverflowDom(left, right)
+  }, [applyOverflowDom])
 
-  // Size/scroll only — never scrollIntoView here (that mutates scrollLeft and
-  // can flip overflow flags every RO callback).
+  // DOM-only overflow paint. No setState — RO under dual TabBars on split was
+  // still able to exceed React's update depth when chevrons/layout chrome reflowed.
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
-    const observer = new ResizeObserver(() => {
-      requestAnimationFrame(checkOverflow)
-    })
+    let raf = 0
+    const schedule = () => {
+      if (raf) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        checkOverflow()
+      })
+    }
+    const observer = new ResizeObserver(schedule)
     observer.observe(el)
-    el.addEventListener('scroll', checkOverflow, { passive: true })
-    checkOverflow()
+    el.addEventListener('scroll', schedule, { passive: true })
+    schedule()
     return () => {
       observer.disconnect()
-      el.removeEventListener('scroll', checkOverflow)
+      el.removeEventListener('scroll', schedule)
+      if (raf) cancelAnimationFrame(raf)
     }
-  }, [checkOverflow, tabs.length])
+  }, [checkOverflow, tabs.length, ui.groups.length])
 
   // Reveal the active tab once when selection or strip membership changes.
-  // Only scroll when the chip is outside the visible strip — unconditional
-  // scrollIntoView mutates scrollLeft and can thrash overflow flags under
-  // dual TabBars during split/resize.
   useEffect(() => {
     const strip = containerRef.current
     const active = tabRefs.current.get(activeTabId)
@@ -453,22 +524,23 @@ export function TabBar({ groupId, focused }: Props) {
   const canSplit = ui.groups.length < MAX_GROUPS
   const canToggle = ui.groups.length >= 2
   const activeCanSplit = activeTabId !== 'chat' && canSplit
-  // Split when alone; flip axis when already two panes. Only the focused strip
-  // shows the control so we don't double the chrome across both bars.
-  const showLayoutBtn = focused
-  const layoutEnabled = canToggle || activeCanSplit
+  // Always mount the layout control slot (both strips) so focus swaps never
+  // change strip width by 28px and re-fire overflow RO on the neighbour bar.
+  const layoutEnabled = focused && (canToggle || activeCanSplit)
   const LayoutIcon = canToggle
     ? ui.splitDir === 'row'
       ? Rows2
       : Columns2
     : Columns2
-  const layoutLabel = canToggle
-    ? ui.splitDir === 'row'
-      ? 'Stack editors vertically'
-      : 'Split editors horizontally'
-    : activeCanSplit
-      ? 'Split editor right'
-      : 'Select a non-chat tab to split'
+  const layoutLabel = !focused
+    ? 'Focus this group to change layout'
+    : canToggle
+      ? ui.splitDir === 'row'
+        ? 'Stack editors vertically'
+        : 'Split editors horizontally'
+      : activeCanSplit
+        ? 'Split editor right'
+        : 'Select a non-chat tab to split'
 
   return (
     <div
@@ -481,19 +553,16 @@ export function TabBar({ groupId, focused }: Props) {
       onDragOver={acceptStripDrag}
       onDrop={(e) => dropBefore(e, null)}
     >
-      {/* Always reserve chevron width so showing/hiding never reflows the strip. */}
+      {/* Always reserve chevron width; enable/disable via DOM only (no setState). */}
       <button
+        ref={leftBtnRef}
         type="button"
         onClick={() => scroll(-1)}
-        disabled={!canScrollLeft}
+        disabled
         aria-label="Scroll tabs left"
-        aria-hidden={!canScrollLeft}
-        tabIndex={canScrollLeft ? 0 : -1}
-        className={`flex w-6 flex-none items-center justify-center text-koma-fg ${
-          canScrollLeft
-            ? 'opacity-60 hover:bg-koma-hover hover:opacity-100'
-            : 'pointer-events-none opacity-0'
-        }`}
+        aria-hidden="true"
+        tabIndex={-1}
+        className={CHEVRON_OFF}
       >
         <ChevronLeft size={14} />
       </button>
@@ -559,39 +628,40 @@ export function TabBar({ groupId, focused }: Props) {
         })}
       </div>
       <button
+        ref={rightBtnRef}
         type="button"
         onClick={() => scroll(1)}
-        disabled={!canScrollRight}
+        disabled
         aria-label="Scroll tabs right"
-        aria-hidden={!canScrollRight}
-        tabIndex={canScrollRight ? 0 : -1}
-        className={`flex w-6 flex-none items-center justify-center text-koma-fg ${
-          canScrollRight
-            ? 'opacity-60 hover:bg-koma-hover hover:opacity-100'
-            : 'pointer-events-none opacity-0'
-        }`}
+        aria-hidden="true"
+        tabIndex={-1}
+        className={CHEVRON_OFF}
       >
         <ChevronRight size={14} />
       </button>
-      {showLayoutBtn && (
-        <button
-          type="button"
-          disabled={!layoutEnabled}
-          onClick={(e) => {
-            e.stopPropagation()
-            if (canToggle) {
-              toggleSplitDir()
-              return
-            }
-            if (activeCanSplit) splitTab(activeTabId, groupId, 'after', 'row')
-          }}
-          aria-label={layoutLabel}
-          title={layoutLabel}
-          className="flex w-7 flex-none items-center justify-center text-koma-dim opacity-70 hover:bg-koma-hover hover:text-koma-fg hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-25"
-        >
-          <LayoutIcon size={13} />
-        </button>
-      )}
+      <button
+        type="button"
+        disabled={!layoutEnabled}
+        onClick={(e) => {
+          e.stopPropagation()
+          if (!focused) {
+            focusGroup(groupId)
+            return
+          }
+          if (canToggle) {
+            toggleSplitDir()
+            return
+          }
+          if (activeCanSplit) splitTab(activeTabId, groupId, 'after', 'row')
+        }}
+        aria-label={layoutLabel}
+        title={layoutLabel}
+        className={`flex w-7 flex-none items-center justify-center text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:cursor-not-allowed ${
+          focused ? 'opacity-70 hover:opacity-100' : 'opacity-25'
+        } disabled:opacity-25`}
+      >
+        <LayoutIcon size={13} />
+      </button>
       {menu && (
         <TabContextMenu
           state={menu}
@@ -599,7 +669,7 @@ export function TabBar({ groupId, focused }: Props) {
           canSplit={menu.tabId !== 'chat' && canSplit}
           canToggle={canToggle}
           onRequestClose={(tabId) => {
-            const tab = rawUi.tabs.find((candidate) => candidate.id === tabId)
+            const tab = ui.tabs.find((candidate) => candidate.id === tabId)
             if (tab) requestClose(tab)
           }}
           onClose={() => setMenu(null)}
