@@ -253,6 +253,16 @@ fn parse_resize_dir(dir: &str) -> Option<tao::window::ResizeDirection> {
     }
 }
 
+/// Peek the `"k"` tag from a serialized push envelope without a full parse.
+fn peek_push_kind(json: &str) -> Option<&str> {
+    const KEY: &str = "\"k\":";
+    let i = json.find(KEY)?;
+    let rest = json[i + KEY.len()..].trim_start();
+    let rest = rest.strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
 pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
@@ -569,9 +579,28 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
             Event::MainEventsCleared => {
                 let now = Instant::now();
                 if next_push_at.is_some_and(|at| now >= at) && !pending_pushes.is_empty() {
-                    let n = pending_pushes.len();
-                    let mut batch = String::from("[");
+                    // Switching/Loading must reach WebKit before Snapshot so the
+                    // overlay can paint. A fat Snapshot in the same evaluate_script
+                    // freezes the UI thread (and CSS braille) until parse returns.
+                    let mut batch_jsons: Vec<String> = Vec::new();
+                    let mut hold_rest = false;
                     while let Some(json) = pending_pushes.pop_front() {
+                        let is_snapshot = peek_push_kind(&json) == Some("Snapshot");
+                        if is_snapshot && !batch_jsons.is_empty() {
+                            pending_pushes.push_front(json);
+                            hold_rest = true;
+                            break;
+                        }
+                        batch_jsons.push(json);
+                        if is_snapshot {
+                            // Snapshot rides alone; leave later envelopes for next frame.
+                            hold_rest = !pending_pushes.is_empty();
+                            break;
+                        }
+                    }
+                    let n = batch_jsons.len();
+                    let mut batch = String::from("[");
+                    for json in batch_jsons {
                         if batch.len() > 1 {
                             batch.push(',');
                         }
@@ -605,7 +634,11 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         );
                     }
                     last_push_at = Some(now);
-                    next_push_at = None;
+                    next_push_at = if hold_rest {
+                        Some(now + PUSH_FRAME_BUDGET)
+                    } else {
+                        None
+                    };
                 }
             }
             // Custom-titlebar window commands: the window is undecorated, so

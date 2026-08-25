@@ -620,8 +620,16 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
     let (remote_ready_tx, remote_ready_rx) =
         std::sync::mpsc::channel::<super::remote_ctl::ReadyRemote>();
     let remote_shared = std::sync::Arc::new(super::remote_ctl::RemoteSessionShared::new());
+    let (hub_tx, hub_rx) = std::sync::mpsc::channel::<crate::app::mode::SessionHub>();
+    let mut hub_inflight = false;
 
     loop {
+        while let Ok(hub) = hub_rx.try_recv() {
+            hub_inflight = false;
+            push_state.reset();
+            push_hub(&hub, push, push_state);
+            push_swapper_config(push, push_state);
+        }
         // Push worker state first so `ready` clears the GUI's connection
         // overlay before the remote hub starts rendering.
         while let Ok(update) = remote_state_rx.try_recv() {
@@ -666,11 +674,18 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // (`ToSwapper` — a cancel that lands while already detached — is a harmless
             // hub re-push here: we are already showing the hub.)
             Ok(HostCtl::Ready) | Ok(HostCtl::RefreshHub) | Ok(HostCtl::ToSwapper) => {
-                let hub = build_local_hub(current);
-                push_state.reset();
-                push_hub(&hub, push, push_state);
-                // Re-emit config too (a `Ready` reload re-mounts the panels).
-                push_swapper_config(push, push_state);
+                // First hub on swapper entry is sync. Ready/refresh must not
+                // block this ctl loop on per-socket Status probes — that stalls
+                // the first inject after the page boots.
+                if !hub_inflight {
+                    hub_inflight = true;
+                    let tx = hub_tx.clone();
+                    let cur = current.map(str::to_string);
+                    std::thread::spawn(move || {
+                        let hub = build_local_hub(cur.as_deref());
+                        let _ = tx.send(hub);
+                    });
+                }
             }
             // Pre-session config mutation (onboarding theme/provider/model): apply it
             // directly to `~/.koma/config.json` and re-push `Config` so the panels + theme
@@ -1591,6 +1606,9 @@ fn host_attached(
     terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
     lsp_manager: &std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
 ) -> HostStep {
+    // Drop previous session's language servers so a switch cannot leave
+    // rust-analyzer / vtsls indexing the old workdir.
+    let _ = lsp_manager.lock().map(|mut mgr| mgr.cleanup_all());
     let mut conn = match attach_session_headless_async(handle, &id, workdir) {
         Ok(c) => c,
         Err(e) => {
@@ -2132,6 +2150,7 @@ fn host_remote_attach(
     terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
     lsp_manager: &std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
 ) -> HostStep {
+    let _ = lsp_manager.lock().map(|mut mgr| mgr.cleanup_all());
     let (remote_state_tx, remote_state_rx) =
         std::sync::mpsc::channel::<super::remote_ctl::RemoteStateUpdate>();
     let (remote_connected_tx, remote_connected_rx) =

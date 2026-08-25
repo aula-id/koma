@@ -146,6 +146,7 @@ function RootLayout() {
       k === 'Loading' ||
       k === 'Snapshot' ||
       k === 'SnapshotTail' ||
+      k === 'SnapshotHead' ||
       k === 'Config' ||
       k === 'SettingsValues' ||
       k === 'RepoList'
@@ -265,17 +266,12 @@ function RootLayout() {
       }
     }
     useKoma.getState().req({ r: 'Ready' })
-    // Also kick off an initial git-status fetch so the chat footer's branch
-    // indicator has data on load, without requiring the Source Control panel
-    // to ever be opened.
-    useKoma.getState().req({ r: 'GitStatus' })
-    // Prefetch saved remote hosts so NewSessionMenu / hub remote entries are
-    // populated on first paint — same host-local read as RemotePanel's mount
-    // fetch, without requiring the Remote sidebar to be opened first.
-    useKoma.getState().req({ r: 'GetRemoteHosts' })
-    // Also refresh installed extensions so the sidebar is populated without
-    // requiring the Store panel to ever be opened.
-    useKoma.getState().refreshInstalled()
+    // Defer host-local side fetches until after the first Hub/Config paint.
+    requestAnimationFrame(() => {
+      useKoma.getState().req({ r: 'GitStatus' })
+      useKoma.getState().req({ r: 'GetRemoteHosts' })
+      useKoma.getState().refreshInstalled()
+    })
     // Extension panel bridge (W9): single window-level `message` listener
     // that attributes + forwards panel iframe traffic — see
     // lib/panelBridge.ts. Idempotent, but installed here alongside the rest

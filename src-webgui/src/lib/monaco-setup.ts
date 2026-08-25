@@ -44,6 +44,7 @@ export function initMonaco(): void {
     getWorker: () => new EditorWorker(),
   }
   monacoReady = true
+  ;(globalThis as unknown as { __komaMonacoReady?: boolean }).__komaMonacoReady = true
 }
 
 // ext -> Monarch language id (all registered above). JSON has no basic-languages

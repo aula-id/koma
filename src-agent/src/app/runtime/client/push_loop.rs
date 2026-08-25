@@ -57,6 +57,8 @@ pub(super) struct PushState {
     pub(super) snapshot_fp: Option<u64>,
     /// Last full projected messages list (for SnapshotTail / SnapshotSetLast).
     pub(super) last_messages: Option<Vec<PushMsg>>,
+    /// Older prefix to prepend on the next fold after a truncated first Snapshot.
+    pub(super) pending_snapshot_head: Option<(String, Vec<PushMsg>)>,
     /// Fingerprint of non-message Snapshot fields (must match for message patches).
     pub(super) last_meta_fp: Option<u64>,
     /// Last streaming buffer pushed (`None` once cleared).
@@ -90,6 +92,7 @@ impl PushState {
         Self {
             snapshot_fp: None,
             last_messages: None,
+            pending_snapshot_head: None,
             last_meta_fp: None,
             stream: None,
             reasoning: String::new(),

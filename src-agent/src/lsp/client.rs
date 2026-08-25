@@ -552,8 +552,13 @@ impl LspManager {
         }
         // Clear markers for this URI.
         push_diagnostics(&*self.push, uri, Vec::new());
-        // Keep the runtime row (server stays warm) but refresh open-doc counts.
-        self.emit_runtime();
+        let idle = !self.docs.values().any(|d| d.server_id == doc.server_id);
+        if idle {
+            self.shutdown_server(&doc.server_id);
+        } else {
+            // Keep the runtime row (server stays warm) but refresh open-doc counts.
+            self.emit_runtime();
+        }
     }
 
     /// `textDocument/completion`.
@@ -1000,6 +1005,16 @@ impl LspManager {
         Ok(())
     }
 
+    /// Kill a live server after its last document closed (idle shutdown).
+    fn shutdown_server(&mut self, server_id: &str) {
+        if let Some(mut session) = self.servers.remove(server_id) {
+            let _ = session.notify("shutdown", serde_json::json!(null));
+            let _ = session.child.kill();
+            let _ = session.child.wait();
+        }
+        push_runtime_snapshot(&*self.push, &[], false, &[server_id]);
+    }
+
     /// Kill + remove a dead session. Docs stay so revive can re-open them.
     fn drop_dead_server(&mut self, server_id: &str) {
         if let Some(mut session) = self.servers.remove(server_id) {
@@ -1174,14 +1189,18 @@ impl ServerSession {
                     "workDoneProgress": true
                 },
                 "workspace": {
-                    "workspaceFolders": true
+                    "workspaceFolders": true,
+                    "configuration": true,
+                    "didChangeWatchedFiles": {
+                        "dynamicRegistration": false
+                    }
                 }
             },
             "workspaceFolders": [{
                 "uri": root_uri,
                 "name": root.file_name().and_then(|s| s.to_str()).unwrap_or("workspace")
             }],
-            "initializationOptions": {}
+            "initializationOptions": initialization_options_for(&self.id)
         });
         let _caps = self.request("initialize", init_params)?;
         self.notify("initialized", serde_json::json!({}))?;
@@ -1431,9 +1450,12 @@ fn reader_loop<R: Read>(stdout: R, ctx: ReaderCtx) {
         // Response to a request we sent — OR a server→client request (method + id).
         if let Some(id_val) = msg.get("id").cloned() {
             if let Some(method) = msg.get("method").and_then(|m| m.as_str()) {
-                // Server→client request. Acknowledge workDoneProgress/create; ignore rest.
+                // Server→client request. Acknowledge workDoneProgress/create;
+                // workspace/configuration gets exclude-heavy defaults.
                 let result = if method == "window/workDoneProgress/create" {
                     serde_json::Value::Null
+                } else if method == "workspace/configuration" {
+                    configuration_reply(&msg, &server_id)
                 } else {
                     // Unsupported server request — null result is the least-bad ack.
                     serde_json::Value::Null
@@ -2094,9 +2116,67 @@ fn parse_locations(result: &serde_json::Value) -> Vec<LspLocation> {
         return Vec::new();
     }
     if let Some(arr) = result.as_array() {
-        return arr.iter().filter_map(parse_one_location).collect();
+        return arr.iter().filter_map(parse_one_location).take(200).collect();
     }
     parse_one_location(result).into_iter().collect()
+}
+
+fn initialization_options_for(server_id: &str) -> serde_json::Value {
+    let exclude_dirs = serde_json::json!([
+        "target",
+        "node_modules",
+        ".git",
+        "dist",
+        ".venv",
+        "venv",
+        "__pycache__"
+    ]);
+    if server_id == "rust-analyzer" || server_id.starts_with("rust-analyzer") {
+        return serde_json::json!({
+            "files": { "excludeDirs": exclude_dirs },
+            "checkOnSave": { "command": "check" }
+        });
+    }
+    if server_id == "vtsls" || server_id.starts_with("vtsls") {
+        return serde_json::json!({
+            "typescript": {
+                "tsserver": { "maxTsServerMemory": 3072 }
+            },
+            "javascript": {
+                "tsserver": { "maxTsServerMemory": 3072 }
+            }
+        });
+    }
+    serde_json::json!({
+        "files": { "exclude": ["**/target/**", "**/node_modules/**", "**/.git/**", "**/dist/**", "**/.venv/**"] }
+    })
+}
+
+fn configuration_reply(msg: &serde_json::Value, server_id: &str) -> serde_json::Value {
+    let defaults = initialization_options_for(server_id);
+    let items = msg
+        .get("params")
+        .and_then(|p| p.get("items"))
+        .and_then(|i| i.as_array());
+    let Some(items) = items else {
+        return serde_json::json!([defaults]);
+    };
+    serde_json::Value::Array(
+        items
+            .iter()
+            .map(|item| {
+                let section = item.get("section").and_then(|s| s.as_str()).unwrap_or("");
+                if section.is_empty() {
+                    return defaults.clone();
+                }
+                defaults
+                    .get(section)
+                    .cloned()
+                    .or_else(|| defaults.get(section.strip_prefix("rust-analyzer.").unwrap_or(section)).cloned())
+                    .unwrap_or_else(|| serde_json::json!({}))
+            })
+            .collect(),
+    )
 }
 
 fn parse_one_location(v: &serde_json::Value) -> Option<LspLocation> {
