@@ -60,6 +60,7 @@ export function StartScreen() {
   const dyingSessions = useKoma((s) => s.dyingSessions)
   const remoteState = useKoma((s) => s.remoteState)
   const remotePathState = useKoma((s) => s.remotePath.state)
+  const switchingTo = useKoma((s) => s.ui.switchingTo)
   const [ref, width] = useContainerWidth<HTMLDivElement>()
   const wide = width >= 760
   // The single armed row (kill/delete confirm pill) across BOTH lists — arming
@@ -69,12 +70,15 @@ export function StartScreen() {
 
   // The host only discovers live sessions on demand — nudge a fresh Hub on
   // mount and on a short interval so recent/live rows stay current (same cadence
-  // as ResumePalette).
+  // as ResumePalette). Pause while a swap is in flight: RefreshHub replies are
+  // real Hub envelopes and must not race the attach path (StartScreen stays
+  // mounted until Snapshot sets session.id).
   useEffect(() => {
+    if (switchingTo) return
     req({ r: 'RefreshHub' })
     const id = window.setInterval(() => req({ r: 'RefreshHub' }), 2000)
     return () => window.clearInterval(id)
-  }, [req])
+  }, [req, switchingTo])
 
   // Escape: clear multi-select first, then cancel an armed row.
   const multiHas = multi.hasSelection

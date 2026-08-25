@@ -3490,21 +3490,27 @@ export const useKoma = create<KomaState>((set, get) => ({
             env.cooking.map((c) => c.id).filter((id): id is string => !!id),
           )
           const historyIds = new Set<string>(env.history.map((h) => h.id))
+          // Hub while switching: only clear switch chrome when the swap truly
+          // bounced back to the swapper. StartScreen (and ResumePalette) poll
+          // RefreshHub on an interval; those replies can land mid-attach and
+          // must NOT tear down switchingTo / Loading / bootstrap. Treat Hub as
+          // a bounce only when we are still detached (no session id) AND not
+          // already in post-attach warm-up (loading/bootstrap). Real
+          // attach-failure paths re-enter host_swapper with session.id still
+          // null and no Loading frame, so they still clear correctly.
+          const midAttach =
+            !!s.ui.switchingTo &&
+            (!!s.session.id || !!s.ui.loading?.active || !!s.ui.bootstrap)
           return {
             hub: { ...s.hub, state: env.state, cooking: env.cooking, history: env.history },
             dyingSessions: s.dyingSessions.filter((d) =>
               d.kind === 'kill' ? cookingIds.has(d.id) : historyIds.has(d.id),
             ),
-            // Deterministic failure-recovery clear: host_swapper pushes a fresh
-            // Hub on EVERY path back to the swapper, including the
-            // attach-failure/degrade path (which never emits a Snapshot). A
-            // valid in-flight swap can't produce a spurious Hub here either —
-            // ResumePalette (the only source of RefreshHub) is unmounted by
-            // startSwitching's caller before the request is sent, so its
-            // RefreshHub polling interval is already torn down. Net: any Hub
-            // that arrives while switchingTo is set means the swap bounced
-            // back to the hub, so clear the loader unconditionally.
-            ui: { ...s.ui, switchingTo: null, loading: null, bootstrap: null },
+            ...(midAttach || !s.ui.switchingTo
+              ? {}
+              : {
+                  ui: { ...s.ui, switchingTo: null, loading: null, bootstrap: null },
+                }),
           }
         })
         break

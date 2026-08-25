@@ -19,14 +19,15 @@ type SwitchingOverlayProps = {
   onCancel: () => void
 }
 
-// After this long still switching, surface a "taking longer than expected"
-// hint so a genuinely-stuck swap (the deterministic Hub-clear in koma.ts
-// missing some future degrade path, or a wedged daemon) doesn't leave the
-// user staring at a silent spinner with no signal. A legit build-skew daemon
-// restart can take ~8s, so this must not fire before that.
+// After this long still in pure "switching to …" (no Snapshot / Loading yet),
+// surface a "taking longer than expected" hint so a wedged attach doesn't leave
+// the user staring at a silent spinner. A legit build-skew daemon restart can
+// take ~8s, so this must not fire before that.
 const STUCK_HINT_MS = 10_000
-// Last-resort auto-cancel so the UI can never be trapped behind this overlay
-// forever, even if the user never notices the hint or clicks Cancel.
+// Last-resort auto-cancel ONLY for the pre-attach "switching to …" branch.
+// Healthy Loading/indexing can legitimately run longer than this (large
+// workspaces); auto-cancel must not fire there — that was detaching a live
+// session and reopening the resume palette on every slow new-session.
 const AUTO_CANCEL_MS = 25_000
 
 // Danger/error palette role tint — same lookup ToastContainer/SessionRowActions
@@ -127,6 +128,7 @@ function LoadingSplash({
 // after the in-flight attach returns).
 export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
   const to = useKoma((s) => s.ui.switchingTo)
+  const sessionId = useKoma((s) => s.session.id)
   const remoteState = useKoma((s) => s.remoteState)
   const remoteConnecting =
     !!to?.startsWith('remote ') &&
@@ -140,25 +142,26 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
   // trailing config/settings/repos — those were jamming chat behind the overlay.
   const showSplash =
     showWarm || (!!bootstrap && bootstrap.session !== 'done' && bootstrap.session !== 'skipped')
+  // Pre-attach only: still waiting on the host, no Snapshot/Loading progress yet.
+  // Once attach lands (session id set) or warm-up splash is up, auto-cancel must
+  // not fire — CancelSwitch would detach a healthy session and reopen resume.
+  const preAttachWaiting = !!to && !sessionId && !showSplash
   const [stuck, setStuck] = useState(false)
-  const timersRef = useRef<{ hint: number; autoCancel: number } | null>(null)
   const onCancelRef = useRef(onCancel)
   onCancelRef.current = onCancel
 
   useEffect(() => {
-    if (!to) {
+    if (!preAttachWaiting) {
       setStuck(false)
       return
     }
     const hint = window.setTimeout(() => setStuck(true), STUCK_HINT_MS)
     const autoCancel = window.setTimeout(() => onCancelRef.current(), AUTO_CANCEL_MS)
-    timersRef.current = { hint, autoCancel }
     return () => {
       window.clearTimeout(hint)
       window.clearTimeout(autoCancel)
-      timersRef.current = null
     }
-  }, [to])
+  }, [preAttachWaiting])
 
   // If settings/repos never reply, force-complete bootstrap and log why.
   // Depend on presence only — resetting on every phase tick would never fire.
