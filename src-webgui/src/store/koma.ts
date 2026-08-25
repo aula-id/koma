@@ -6193,12 +6193,9 @@ export const useKoma = create<KomaState>((set, get) => ({
   resizeEditorGroups: (index, deltaPx, totalPx) =>
     set((s) => {
       const ui = normalizeGroups(s.ui)
-      return {
-        ui: {
-          ...ui,
-          groupSizes: resizeGroups(ui.groups, ui.groupSizes, index, deltaPx, totalPx),
-        },
-      }
+      const groupSizes = resizeGroups(ui.groups, ui.groupSizes, index, deltaPx, totalPx)
+      if (groupSizes === ui.groupSizes) return s
+      return { ui: { ...ui, groupSizes } }
     }),
   focusPlanSection: () => set((s) => ({ ui: { ...s.ui, focusPlanTick: s.ui.focusPlanTick + 1 } })),
   setUsageScope: (scope) => set((s) => ({ ui: { ...s.ui, usageScope: scope } })),

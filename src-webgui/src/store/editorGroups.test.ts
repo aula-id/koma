@@ -144,14 +144,18 @@ const layout = (partial: Partial<GroupLayout> = {}): GroupLayout => ({
 }
 
 // Resize trades only between adjacent groups and clamps away from zero.
+// Identity is stable at the clamp edge (same object returned).
 {
   const sizes = resizeGroups(['g0', 'g1'], { g0: 1, g1: 1 }, 0, 100, 600)
   assert.ok(sizes.g0 > 1)
   assert.ok(sizes.g1 < 1)
 
-  const clamped = resizeGroups(['g0', 'g1'], { g0: 1, g1: 1 }, 0, -10_000, 600)
+  const base = { g0: 1, g1: 1 }
+  const clamped = resizeGroups(['g0', 'g1'], base, 0, -10_000, 600)
   assert.ok(clamped.g0 > 0)
   assert.ok(clamped.g1 < 2)
+  // Further delta at the min clamp must not allocate a new map.
+  assert.equal(resizeGroups(['g0', 'g1'], clamped, 0, -10_000, 600), clamped)
 }
 
 // Grid cells put strips above their content and grips between panes.

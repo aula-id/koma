@@ -33,7 +33,10 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelRef = useRef<monaco.editor.ITextModel | null>(null)
-  const applyingRef = useRef(false)
+  // Generation counter: each store→model apply bumps this; didChange is ignored
+  // while applyGenRef !== 0 (sync) AND until the matching clear runs after Monaco
+  // flushes. A plain boolean + rAF was still losing races on split/layout.
+  const applyGenRef = useRef(0)
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lspChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lspOpenedRef = useRef(false)
@@ -51,6 +54,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   const lspInstall = useKoma((s) => s.lspInstall)
   const req = useKoma((s) => s.req)
   const [bannerDismissed, setBannerDismissed] = useState<Record<string, boolean>>({})
+  // Boolean only — avoid re-render on every ui.groupSizes / toast tick.
   const isActive = useKoma((s) => isTabVisible(normalizeGroups(s.ui), tab.id))
 
   useEffect(() => {
@@ -246,7 +250,8 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
 
     let codeLensIdleTimer: ReturnType<typeof setTimeout> | null = null
     const sub = editor.onDidChangeModelContent(() => {
-      if (applyingRef.current) return
+      // Ignore while a store→model apply is in flight (incl. post-flush window).
+      if (applyGenRef.current !== 0) return
       const model = editor.getModel()
       if (!model) return
       // Always LF so store ↔ model never thrash on CRLF (React #185).
@@ -255,9 +260,9 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       const prev = useKoma.getState().coding.files[key]
       if (prev?.content === text) {
         // External setValue / setEOL can still emit didChange; don't write back.
-      } else {
-        useKoma.getState().updateCodingContent(tab.root, tab.path, text)
+        return
       }
+      useKoma.getState().updateCodingContent(tab.root, tab.path, text)
       if (lspChangeTimerRef.current) clearTimeout(lspChangeTimerRef.current)
       lspChangeTimerRef.current = setTimeout(() => {
         lspChangeTimerRef.current = null
@@ -342,7 +347,8 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     // Host/store always uses \n; pin Monaco the same way so getValue() never
     // disagrees with store and retriggers this effect (React #185).
     const next = fileState.content.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-    applyingRef.current = true
+    const gen = applyGenRef.current + 1
+    applyGenRef.current = gen
     try {
       const uri = monacoUriFromPath(tab.root, tab.path)
       let model = monaco.editor.getModel(uri)
@@ -350,23 +356,26 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
         model = monaco.editor.createModel(next, lang, uri)
         model.setEOL(monaco.editor.EndOfLineSequence.LF)
       } else {
-        model.setEOL(monaco.editor.EndOfLineSequence.LF)
         const cur = model.getValue(monaco.editor.EndOfLinePreference.LF)
+        // Only touch the model when text actually differs — bare setEOL on every
+        // save/fingerprint tick was still emitting didChange on some WebKit builds.
         if (cur !== next) {
           const pos = editor.getPosition()
           model.setValue(next)
           model.setEOL(monaco.editor.EndOfLineSequence.LF)
           if (pos) editor.setPosition(pos)
+        } else if (model.getEndOfLineSequence() !== monaco.editor.EndOfLineSequence.LF) {
+          model.setEOL(monaco.editor.EndOfLineSequence.LF)
         }
       }
       stampModelPath(model, tab.root, tab.path)
       if (editor.getModel() !== model) editor.setModel(model)
       modelRef.current = model
     } finally {
-      // Suppress didChange until after Monaco flushes setValue/setEOL events.
+      // Clear only this generation after Monaco has flushed model events.
       queueMicrotask(() => {
         requestAnimationFrame(() => {
-          applyingRef.current = false
+          if (applyGenRef.current === gen) applyGenRef.current = 0
         })
       })
     }
@@ -390,15 +399,14 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       // Second pass after layout / late model attach.
       setTimeout(apply, 50)
     }
-    // Intentionally omit `loading` — openCodingFile used to flip loading true
-    // while content was already present, which re-entered setValue for free.
+    // Intentionally omit `loading` and `fingerprint` — both flip without content
+    // changes and used to re-enter setValue/setEOL for free (React #185 on split).
   }, [
     fileState?.content,
     fileState?.binary,
     fileState?.tooLarge,
     fileState?.error,
     fileState?.conflict,
-    fileState?.fingerprint,
     tab.path,
     tab.root,
   ])

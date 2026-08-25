@@ -282,7 +282,11 @@ export function resizeGroups(
   const pair = (sizes[a] ?? 1) + (sizes[b] ?? 1)
   const wanted = (sizes[a] ?? 1) + (deltaPx / totalPx) * total
   const next = Math.min(Math.max(wanted, min), pair - min)
-  return { ...sizes, [a]: next, [b]: pair - next }
+  const other = pair - next
+  // Identity-stable at the clamp edge so mousemove spam does not replace
+  // groupSizes (and re-render both TabBars + every pane) every pixel.
+  if (sizes[a] === next && sizes[b] === other) return sizes
+  return { ...sizes, [a]: next, [b]: other }
 }
 
 /** A grid-placement pair, spread straight onto a style prop. */

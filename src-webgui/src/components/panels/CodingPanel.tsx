@@ -557,7 +557,7 @@ export function CodingPanel() {
     } catch {
       /* ignore */
     }
-    setDropTargetPath(dirPath)
+    setDropTargetPath((cur) => (cur === dirPath ? cur : dirPath))
   }
 
   const onExternalDragLeave = (e: DragEvent, dirPath: string) => {
