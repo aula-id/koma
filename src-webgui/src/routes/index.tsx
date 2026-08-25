@@ -1,5 +1,5 @@
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ChatView } from '../components/ChatView'
 import { TAB_DRAG_MIME, TabBar } from '../components/TabBar'
 import { StartScreen } from '../components/StartScreen'
@@ -563,90 +563,36 @@ function TabBody({ tab }: { tab: Exclude<Tab, { kind: 'chat' }> }) {
   )
 }
 
-function EditorDropTarget({
+type DropHover = { groupId: EditorGroupId; zone: DropZone }
+
+function zoneHighlightClass(zone: DropZone): string {
+  switch (zone) {
+    case 'left':
+      return 'inset-y-2 left-2 w-[48%]'
+    case 'right':
+      return 'inset-y-2 right-2 w-[48%]'
+    case 'top':
+      return 'inset-x-2 top-2 h-[48%]'
+    case 'bottom':
+      return 'inset-x-2 bottom-2 h-[48%]'
+    default:
+      return 'inset-2'
+  }
+}
+
+/** Paint-only drop affordance — never receives pointer events. */
+function EditorDropHighlight({
   groupId,
-  dragging,
+  hover,
 }: {
   groupId: EditorGroupId
-  dragging: boolean
+  hover: DropHover | null
 }) {
-  const rawUi = useKoma((s) => s.ui)
-  const ui = useMemo(() => normalizeGroups(rawUi), [rawUi])
-  const moveTab = useKoma((s) => s.moveTabToGroup)
-  const splitTab = useKoma((s) => s.splitTab)
-  const openCodingFile = useKoma((s) => s.openCodingFile)
-  const [zone, setZone] = useState<DropZone>('center')
-
-  const updateZone = (e: ReactDragEvent<HTMLDivElement>) => {
-    if (!isEditorBodyDrag(e.dataTransfer)) return
-    e.preventDefault()
-    e.stopPropagation()
-    e.dataTransfer.dropEffect = e.dataTransfer.types.includes(TAB_DRAG_MIME) ? 'move' : 'copy'
-    const r = e.currentTarget.getBoundingClientRect()
-    // Edges only when unsplit (1 → 2). Once two panes exist, center = move only —
-    // the model cannot nest or grow a third group.
-    const next = dropZoneFor(e.clientX - r.left, e.clientY - r.top, r.width, r.height, {
-      allowEdges: ui.groups.length < MAX_GROUPS,
-    })
-    // Equality guard — dragover fires continuously; avoid a setState storm.
-    setZone((prev) => (prev === next ? prev : next))
-  }
-
-  const drop = (e: ReactDragEvent<HTMLDivElement>) => {
-    const side = zone === 'left' || zone === 'top' ? 'before' : 'after'
-    const dir = zone === 'left' || zone === 'right' ? 'row' : 'col'
-    const split = zone === 'center' ? undefined : { side: side as 'before' | 'after', dir: dir as 'row' | 'col' }
-
-    const coding = readCodingPathDragData(e.dataTransfer)
-    if (coding) {
-      e.preventDefault()
-      e.stopPropagation()
-      if (!coding.isDir) {
-        openCodingFile(coding.root, coding.path, {
-          groupId,
-          split,
-        })
-      }
-      setZone('center')
-      return
-    }
-
-    const tabId = e.dataTransfer.getData(TAB_DRAG_MIME)
-    if (!tabId) return
-    e.preventDefault()
-    e.stopPropagation()
-    if (zone === 'center') {
-      moveTab(tabId, groupId)
-    } else {
-      splitTab(tabId, groupId, side, dir)
-    }
-    setZone('center')
-  }
-
-  const highlight =
-    zone === 'left'
-      ? 'inset-y-2 left-2 w-[48%]'
-      : zone === 'right'
-        ? 'inset-y-2 right-2 w-[48%]'
-        : zone === 'top'
-          ? 'inset-x-2 top-2 h-[48%]'
-          : zone === 'bottom'
-            ? 'inset-x-2 bottom-2 h-[48%]'
-            : 'inset-2'
-
+  if (hover?.groupId !== groupId) return null
   return (
     <div
-      className={`relative z-40 h-full w-full min-h-0 min-w-0 ${dragging ? 'pointer-events-auto' : 'pointer-events-none'}`}
-      onDragEnter={updateZone}
-      onDragOver={updateZone}
-      onDrop={drop}
-    >
-      {dragging && (
-        <div
-          className={`pointer-events-none absolute ${highlight} rounded border border-koma-accent bg-koma-accent/15`}
-        />
-      )}
-    </div>
+      className={`pointer-events-none absolute ${zoneHighlightClass(hover.zone)} rounded border border-koma-accent bg-koma-accent/15`}
+    />
   )
 }
 
@@ -662,7 +608,15 @@ function TabbedMain() {
   const toggleSplitDir = useKoma((s) => s.toggleSplitDir)
   const resizeGroups = useKoma((s) => s.resizeEditorGroups)
   const gridRef = useRef<HTMLDivElement>(null)
-  const [dragging, setDragging] = useState(false)
+  // Pane content boxes registered by group id — used for document-level hit
+  // testing so we never mount a pointer-events layer over Monaco/xterm.
+  const paneEls = useRef(new Map<EditorGroupId, HTMLElement>())
+  const [dropHover, setDropHover] = useState<DropHover | null>(null)
+  const dropHoverRef = useRef<DropHover | null>(null)
+  const sessionRef = useRef(false)
+  const moveTab = useKoma((s) => s.moveTabToGroup)
+  const openCodingFile = useKoma((s) => s.openCodingFile)
+  // splitTab already selected above for the keyboard shortcut.
   const layout = useMemo(
     () => gridLayout(ui.groups, ui.groupSizes, ui.splitDir),
     [ui.groupSizes, ui.groups, ui.splitDir],
@@ -673,22 +627,149 @@ function TabbedMain() {
   )
   const chatGroupId = groupOf(ui, 'chat')
 
+  const setPaneEl = (id: EditorGroupId, el: HTMLElement | null) => {
+    if (el) paneEls.current.set(id, el)
+    else paneEls.current.delete(id)
+  }
+
+  const endDragSession = () => {
+    sessionRef.current = false
+    dropHoverRef.current = null
+    setDropHover(null)
+  }
+
+  const hitTestPane = (clientX: number, clientY: number): DropHover | null => {
+    for (const cell of layout.cells) {
+      const el = paneEls.current.get(cell.id)
+      if (!el) continue
+      const r = el.getBoundingClientRect()
+      if (
+        clientX < r.left ||
+        clientX >= r.right ||
+        clientY < r.top ||
+        clientY >= r.bottom
+      ) {
+        continue
+      }
+      const zone = dropZoneFor(clientX - r.left, clientY - r.top, r.width, r.height, {
+        allowEdges: ui.groups.length < MAX_GROUPS,
+      })
+      return { groupId: cell.id, zone }
+    }
+    return null
+  }
+
   useEffect(() => {
-    const start = (e: DragEvent) => {
-      // Tab moves and coding-tree file opens both light the pane drop overlays
-      // so Monaco never sees the bare text/plain path fallback.
-      if (isEditorBodyDrag(e.dataTransfer)) setDragging(true)
+    const arm = (e: DragEvent) => {
+      // Tab moves and coding-tree file opens arm document-level drop handling
+      // so Monaco never sees the bare text/plain path fallback — and so we never
+      // need a full-pane hit layer that can stick and steal focus.
+      if (!isEditorBodyDrag(e.dataTransfer)) return
+      sessionRef.current = true
+      dropHoverRef.current = null
+      setDropHover(null)
     }
-    const stop = () => setDragging(false)
-    window.addEventListener('dragstart', start)
+
+    const stop = () => {
+      if (!sessionRef.current && dropHoverRef.current == null) return
+      endDragSession()
+    }
+
+    const onDragOver = (e: DragEvent) => {
+      if (!sessionRef.current || !isEditorBodyDrag(e.dataTransfer)) return
+      const hit = hitTestPane(e.clientX, e.clientY)
+      if (!hit) {
+        if (dropHoverRef.current != null) {
+          dropHoverRef.current = null
+          setDropHover(null)
+        }
+        return
+      }
+      // Accept the drop so the OS cursor shows move/copy over the pane.
+      e.preventDefault()
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = e.dataTransfer.types.includes(TAB_DRAG_MIME)
+          ? 'move'
+          : 'copy'
+      }
+      const prev = dropHoverRef.current
+      if (prev?.groupId === hit.groupId && prev.zone === hit.zone) return
+      dropHoverRef.current = hit
+      setDropHover(hit)
+    }
+
+    const onDrop = (e: DragEvent) => {
+      if (!sessionRef.current || !isEditorBodyDrag(e.dataTransfer)) {
+        stop()
+        return
+      }
+      // Geometry only — never fall back to the last hover. A strip drop leaves
+      // dropHoverRef pointing at a pane the pointer already left.
+      const hit = hitTestPane(e.clientX, e.clientY)
+      if (!hit) {
+        stop()
+        return
+      }
+      e.preventDefault()
+      e.stopPropagation()
+
+      const dropZone = hit.zone
+      const side = dropZone === 'left' || dropZone === 'top' ? 'before' : 'after'
+      const dir = dropZone === 'left' || dropZone === 'right' ? 'row' : 'col'
+      const split =
+        dropZone === 'center'
+          ? undefined
+          : { side: side as 'before' | 'after', dir: dir as 'row' | 'col' }
+
+      const dt = e.dataTransfer
+      if (!dt) {
+        endDragSession()
+        return
+      }
+      const coding = readCodingPathDragData(dt)
+      if (coding) {
+        if (!coding.isDir) {
+          openCodingFile(coding.root, coding.path, {
+            groupId: hit.groupId,
+            split,
+          })
+        }
+        endDragSession()
+        return
+      }
+
+      const tabId = dt.getData(TAB_DRAG_MIME)
+      if (tabId) {
+        if (dropZone === 'center') {
+          moveTab(tabId, hit.groupId)
+        } else {
+          splitTab(tabId, hit.groupId, side, dir)
+        }
+      }
+      endDragSession()
+    }
+
+    // WebKitGTK sometimes skips dragend after Esc / cancelled drags. Escape and
+    // blur hard-clear the paint so a ghost highlight never lingers.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') stop()
+    }
+
+    window.addEventListener('dragstart', arm)
     window.addEventListener('dragend', stop)
-    window.addEventListener('drop', stop)
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('drop', onDrop)
+    window.addEventListener('blur', stop)
+    window.addEventListener('keydown', onKey)
     return () => {
-      window.removeEventListener('dragstart', start)
+      window.removeEventListener('dragstart', arm)
       window.removeEventListener('dragend', stop)
-      window.removeEventListener('drop', stop)
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('drop', onDrop)
+      window.removeEventListener('blur', stop)
+      window.removeEventListener('keydown', onKey)
     }
-  }, [])
+  }, [layout.cells, moveTab, openCodingFile, splitTab, ui.groups.length])
 
   // Split (Ctrl/Cmd+\): create the second pane, or flip axis when already split.
   // Group focus is Ctrl/Cmd+1..2 only (max two panes).
@@ -795,13 +876,16 @@ function TabbedMain() {
           )
         })}
 
+        {/* Measure + paint only. Never pointer-events — document drag listeners
+            hit-test these boxes so a stuck session cannot block Monaco typing. */}
         {layout.cells.map((cell) => (
           <div
             key={`drop:${cell.id}`}
+            ref={(el) => setPaneEl(cell.id, el)}
             style={cell.content}
             className="pointer-events-none relative z-40 min-h-0 min-w-0"
           >
-            <EditorDropTarget groupId={cell.id} dragging={dragging} />
+            <EditorDropHighlight groupId={cell.id} hover={dropHover} />
           </div>
         ))}
 
