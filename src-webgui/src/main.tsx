@@ -4,6 +4,29 @@ import { RouterProvider } from '@tanstack/react-router'
 import { router } from './router'
 import './styles.css'
 
+// Monaco cancels in-flight async work (completion/hover/definition, model
+// dispose on tab close / session switch) by rejecting with CancellationError
+// whose message is the single-l spelling "Canceled". Nothing in the app awaits
+// those promises, so WebKit reports Unhandled Promise Rejection on every
+// coding teardown. Swallow only that known cancellation shape.
+function isMonacoCanceled(reason: unknown): boolean {
+  if (reason == null || typeof reason !== 'object') return false
+  const r = reason as { name?: unknown; message?: unknown; code?: unknown }
+  if (r.name === 'Canceled' || r.name === 'CancellationError') return true
+  if (r.message === 'Canceled' || r.message === 'Cancelled') return true
+  // vscode-jsonrpc / monaco sometimes use numeric Cancellation code 1
+  if (r.code === 1 && (r.name === 'Canceled' || r.message === 'Canceled')) return true
+  return false
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('unhandledrejection', (ev) => {
+    if (isMonacoCanceled(ev.reason)) {
+      ev.preventDefault()
+    }
+  })
+}
+
 // First paint must not wait on webfonts — the static #koma-boot-splash in
 // index.html is already on screen. React replaces #root as soon as the
 // module graph is ready. Fonts keep loading in the background.

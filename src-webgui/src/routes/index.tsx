@@ -441,13 +441,18 @@ function RootLayout() {
       {omnisearchOpen && <OmniSearchPalette onClose={closeOmniSearch} />}
       <SwitchingOverlay
         onCancel={() => {
-          // Best-effort bail: the in-flight swap can't be interrupted, so
-          // tell the host to drop back to the swapper once the target lands
-          // (Rust GuiReq::CancelSwitch), then drop the loader and reopen the
-          // hub locally so the user can pick again.
-          req({ r: 'CancelSwitch' })
+          // Best-effort bail of a pre-attach swap. If Snapshot already landed
+          // (session.id set), do NOT CancelSwitch — that would detach a live
+          // session just because the user dismissed chrome. Only reopen the
+          // resume palette when we actually bounced back to the hub.
+          const attached = !!useKoma.getState().session.id
+          if (!attached) {
+            req({ r: 'CancelSwitch' })
+          }
           cancelSwitching()
-          setOverlay('resume')
+          if (!attached) {
+            setOverlay('resume')
+          }
         }}
       />
       <RemotePasswordPrompt

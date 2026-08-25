@@ -42,6 +42,7 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
   const dyingSessions = useKoma((s) => s.dyingSessions)
   const remoteState = useKoma((s) => s.remoteState)
   const remotePathState = useKoma((s) => s.remotePath.state)
+  const switchingTo = useKoma((s) => s.ui.switchingTo)
   const [query, setQuery] = useState('')
   // The single armed row (kill/delete confirm pill) across BOTH lists — arming
   // a different row disarms whichever was armed before.
@@ -76,14 +77,16 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
   // Live-session-listing fix: the host only discovers live sessions on
   // demand. Ask for a fresh Hub the moment this overlay opens, then keep
   // nudging it on a short interval while it stays open so newly-cooked
-  // sessions show up without needing to close/reopen the palette.
+  // sessions show up without needing to close/reopen the palette. Pause
+  // while a swap is in flight (same race as StartScreen).
   useEffect(() => {
+    if (switchingTo) return
     req({ r: 'RefreshHub' })
     const interval = window.setInterval(() => {
       req({ r: 'RefreshHub' })
     }, 1500)
     return () => window.clearInterval(interval)
-  }, [req])
+  }, [req, switchingTo])
 
   // Clear multi-select when the search query changes (visible order / membership
   // shifts — range anchors would otherwise point at stale rows).
