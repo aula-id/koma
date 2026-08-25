@@ -309,7 +309,9 @@ export function reduceFileRead(coding: CodingSlice, env: FileReadPush): CodingSl
       },
     }
   }
-  const content = env.content ?? ''
+  // Pin LF at the store boundary so Monaco CRLF never becomes a distinct buffer
+  // and retriggers setValue ↔ updateCodingContent (React #185).
+  const content = (env.content ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
   return {
     ...coding,
     files: {

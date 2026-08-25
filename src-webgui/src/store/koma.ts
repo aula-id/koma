@@ -6285,8 +6285,13 @@ export const useKoma = create<KomaState>((set, get) => ({
   openCodingFile: (root, path, opts) => {
     const id = `coding:${root}:${path}`
     const key = fileKey(root, path)
-    const requestId = mintRequestId()
     const force = !!opts?.force
+    // Reuse an already-loaded buffer for activate/split/move. Forcing a FileRead
+    // + loading:true on every open remounted Monaco against a thrashing buffer
+    // (setValue ↔ updateCodingContent → React #185) during edge-drop splits.
+    const cached = get().coding.files[key]
+    const reuseBuffer = !force && cached?.content != null && !cached.loading
+    const requestId = reuseBuffer ? null : mintRequestId()
     set((s) => {
       const baseUi = normalizeGroups(s.ui)
       const exists = baseUi.tabs.some((t) => t.id === id)
@@ -6339,6 +6344,19 @@ export const useKoma = create<KomaState>((set, get) => ({
           activeGroupId: targetGroup,
           activeTabId: id,
         }
+      } else if (exists) {
+        // Plain activate: keep the tab in its current group, just focus it.
+        const gid = ui.tabGroup[id] ?? ui.activeGroupId
+        ui = {
+          ...ui,
+          groupActive: { ...ui.groupActive, [gid]: id },
+          activeGroupId: gid,
+          activeTabId: id,
+        }
+      }
+
+      if (reuseBuffer) {
+        return { ui: normalizeGroups(ui) }
       }
 
       const prev = s.coding.files[key]
@@ -6364,7 +6382,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         ui: normalizeGroups(ui),
         coding: {
           ...s.coding,
-          _readReq: { ...s.coding._readReq, [key]: requestId },
+          _readReq: { ...s.coding._readReq, [key]: requestId! },
           files: {
             ...s.coding.files,
             [key]: nextFile,
@@ -6372,7 +6390,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         },
       }
     })
-    get().req({ r: 'FileRead', root, path, requestId })
+    if (requestId) get().req({ r: 'FileRead', root, path, requestId })
     if (opts?.groupId || opts?.split) get().syncStreamView()
   },
   saveCodingFile: (root, path) => {
@@ -6400,15 +6418,20 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
   updateCodingContent: (root, path, content) => {
     const key = fileKey(root, path)
+    // Pin LF so Monaco CRLF never becomes a distinct store write.
+    const normalized = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
     set((s) => {
       const prev = s.coding.files[key]
       if (!prev) return s
-      const dirty = content !== (prev.savedContent ?? '')
-      if (prev.content === content && prev.dirty === dirty) return s
+      const dirty = normalized !== (prev.savedContent ?? '')
+      if (prev.content === normalized && prev.dirty === dirty) return s
       return {
         coding: {
           ...s.coding,
-          files: { ...s.coding.files, [key]: { ...prev, content, dirty, conflict: false } },
+          files: {
+            ...s.coding.files,
+            [key]: { ...prev, content: normalized, dirty, conflict: false },
+          },
         },
       }
     })
