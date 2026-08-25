@@ -129,6 +129,9 @@ declare global {
     // refill the composer input); a non-user / out-of-range index is a clean
     // no-op host-side. The GUI mirrors the refill locally via refillComposer.
     | { r: 'RewindTo'; index: number }
+    // Pull older transcript held after a windowed first Snapshot.
+    // `before` = current oldest display idx on the FE (exclusive).
+    | { r: 'HistoryPage'; before?: number }
     // Kill a single running subagent by its host-projected id (Explore panel
     // Agents row kill button). Numeric to match the daemon's `usize`.
     | { r: 'KillSubagent'; id: number }

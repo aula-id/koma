@@ -78,6 +78,10 @@ export type ToolCallView = {
 }
 
 export type ChatMessage = {
+  // Stable display index in the projected transcript (host-assigned).
+  // Used for React keys, RewindTo, and HistoryPage cursors. Optional so older
+  // hosts / synthetic tests still work (FE falls back to array position).
+  idx?: number
   role: 'user' | 'assistant'
   // Special render kind for a USER message — the host strips the invisible
   // sentinel and tags it: 'shell' (a `!`-shell `$ cmd`+output entry) or
@@ -894,6 +898,8 @@ export type PushEnvelope =
       session: string
       state: string
       messages: ChatMessage[]
+      // Full projected transcript length (incl. not-yet-pushed older head).
+      messageCount?: number
       title: string
       palette: PaletteColors
       subagents: SubAgentEntry[]
@@ -940,7 +946,21 @@ export type PushEnvelope =
   // Append-only transcript growth (same session); concat onto messages.
   | { k: 'SnapshotTail'; session: string; messages: ChatMessage[] }
   // Prepend older history after a truncated first Snapshot (same session).
-  | { k: 'SnapshotHead'; session: string; messages: ChatMessage[] }
+  // Host may chunk: `more` means further SnapshotHead frames will follow.
+  | {
+      k: 'SnapshotHead'
+      session: string
+      messages: ChatMessage[]
+      more?: boolean
+      totalOlder?: number | null
+    }
+  // On-demand older history page (pull). Prepend like SnapshotHead.
+  | {
+      k: 'HistoryPage'
+      session: string
+      messages: ChatMessage[]
+      hasMore?: boolean
+    }
   // In-place last-message update (tool result join, etc.).
   | { k: 'SnapshotSetLast'; session: string; message: ChatMessage }
   | { k: 'StreamMsg'; session: string; text: string }
@@ -1614,6 +1634,11 @@ type SessionSlice = {
   id: string | null
   state: string | null
   messages: ChatMessage[]
+  // Host-reported full projected length. When > messages.length (or hasMoreOlder),
+  // ChatView can pull HistoryPage for the rest.
+  messageCount: number
+  // True while host still holds older history beyond the FE store.
+  hasMoreOlder: boolean
   title: string
   working: boolean
   stream: string
@@ -2381,6 +2406,8 @@ type KomaState = {
   stageRewind: (index: number) => void
   // Clear a staged rewind (send committed it, or the user emptied the composer).
   clearRewind: () => void
+  // Pull one page of older history held on the host after a windowed Snapshot.
+  requestHistoryPage: () => void
   // Bump scrollTick to force ChatView to jump to the bottom (on send).
   requestScrollBottom: () => void
   // Optimistically raise the session-swap overlay with the target's display
@@ -2692,6 +2719,8 @@ const initialSession: SessionSlice = {
   id: null,
   state: null,
   messages: [],
+  messageCount: 0,
+  hasMoreOlder: false,
   title: '',
   working: false,
   stream: '',
@@ -3092,7 +3121,18 @@ export const useKoma = create<KomaState>((set, get) => ({
               ...s.session,
               id: env.session,
               state: env.state,
-              messages: env.messages,
+              messages: (env.messages ?? []).map((m: any) => ({
+                ...m,
+                toolCalls: m.toolCalls ?? m.tool_calls,
+              })),
+              messageCount:
+                typeof env.messageCount === 'number'
+                  ? env.messageCount
+                  : (env.messages ?? []).length,
+              hasMoreOlder:
+                typeof env.messageCount === 'number'
+                  ? env.messageCount > (env.messages ?? []).length
+                  : false,
               title: env.title,
               subagents: env.subagents,
               bash: env.bash,
@@ -3251,6 +3291,10 @@ export const useKoma = create<KomaState>((set, get) => ({
           session: {
             ...s.session,
             messages: s.session.messages.concat(mapped),
+            messageCount: Math.max(
+              s.session.messageCount,
+              s.session.messages.length + mapped.length,
+            ),
           },
         }))
         break
@@ -3262,12 +3306,56 @@ export const useKoma = create<KomaState>((set, get) => ({
           toolCalls: m.toolCalls ?? m.tool_calls,
         }))
         if (mapped.length === 0) break
-        set((s) => ({
-          session: {
-            ...s.session,
-            messages: mapped.concat(s.session.messages),
-          },
+        // Prepend one host chunk. Multi-chunk heads arrive on later frames;
+        // ChatView shifts renderFrom on large length jumps so the tail stays put.
+        set((s) => {
+          const seen = new Set<number>()
+          for (const m of s.session.messages) {
+            if (typeof m.idx === 'number') seen.add(m.idx)
+          }
+          const fresh = mapped.filter(
+            (m: ChatMessage) => typeof m.idx !== 'number' || !seen.has(m.idx as number),
+          )
+          const messages =
+            fresh.length === 0 ? s.session.messages : fresh.concat(s.session.messages)
+          const hasMoreOlder =
+            env.more === true ||
+            messages.length < (s.session.messageCount || messages.length)
+          return {
+            session: {
+              ...s.session,
+              messages,
+              hasMoreOlder,
+            },
+          }
+        })
+        break
+      }
+      case 'HistoryPage': {
+        if (env.session !== get().session.id) break
+        const mapped = (env.messages ?? []).map((m: any) => ({
+          ...m,
+          toolCalls: m.toolCalls ?? m.tool_calls,
         }))
+        set((s) => {
+          const seen = new Set<number>()
+          for (const m of s.session.messages) {
+            if (typeof m.idx === 'number') seen.add(m.idx)
+          }
+          const fresh = mapped.filter(
+            (m: ChatMessage) => typeof m.idx !== 'number' || !seen.has(m.idx as number),
+          )
+          const messages =
+            fresh.length === 0 ? s.session.messages : fresh.concat(s.session.messages)
+          return {
+            session: {
+              ...s.session,
+              messages,
+              hasMoreOlder: !!env.hasMore,
+              messageCount: Math.max(s.session.messageCount, messages.length),
+            },
+          }
+        })
         break
       }
       case 'SnapshotSetLast': {
@@ -4966,6 +5054,14 @@ export const useKoma = create<KomaState>((set, get) => ({
   consumeComposerRefill: () => set((s) => ({ ui: { ...s.ui, composerRefill: null } })),
   stageRewind: (index) => set((s) => ({ ui: { ...s.ui, pendingRewindIndex: index } })),
   clearRewind: () => set((s) => ({ ui: { ...s.ui, pendingRewindIndex: null } })),
+  requestHistoryPage: () => {
+    const s = get().session
+    if (!s.id || !s.hasMoreOlder) return
+    const oldest = s.messages[0]
+    const before =
+      oldest && typeof oldest.idx === 'number' ? oldest.idx : undefined
+    get().req({ r: 'HistoryPage', before })
+  },
   requestScrollBottom: () => set((s) => ({ ui: { ...s.ui, scrollTick: s.ui.scrollTick + 1 } })),
   startSwitching: (name) =>
     set((s) => ({
