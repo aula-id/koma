@@ -2086,16 +2086,13 @@ function saveActivityBarLayout(layout: ActivityBarLayout) {
 // Shared by ActivityBar (bar + overflow menu) and SettingsTab (the Sidebar
 // section's toggle list) so both always agree on the effective order.
 export function resolveActivityBarOrder(savedOrder: string[], allIds: string[]): string[] {
-  // Enforce the canonical ACTIVITY_BAR_ITEMS order for all known built-in ids.
-  // Extension ids (ext:*) keep their saved relative order and are appended after
-  // built-ins.  This ensures the default layout is respected even when a stale
-  // order is persisted in localStorage.
-  const canonicalIndex = new Map(allIds.map((id, i) => [id, i]))
+  // Keep the user's saved relative order (drag-reorder / localStorage). Only
+  // filter unknown ids and append anything new (fresh install → empty saved
+  // order → allIds as-is; newly added built-in or ext:* → tail).
+  // Do NOT re-sort to ACTIVITY_BAR_ITEMS — that nullifies intentional reorder
+  // (regression from bcb33ca2).
   const known = savedOrder.filter((id) => allIds.includes(id))
   const missing = allIds.filter((id) => !known.includes(id))
-  // Sort known items by their canonical position in allIds (ACTIVITY_BAR_ITEMS
-  // order), so the authoritative layout always wins over a stale save.
-  known.sort((a, b) => (canonicalIndex.get(a) ?? 0) - (canonicalIndex.get(b) ?? 0))
   return [...known, ...missing]
 }
 
