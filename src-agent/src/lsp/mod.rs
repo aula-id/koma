@@ -28,9 +28,9 @@ pub mod resolve;
 pub use catalog::{find, find_by_extension, ServerSpec, CATALOG};
 #[allow(unused_imports)]
 pub use client::{
-    language_id_for_path, DidOpenPrep, LspCompletionItem, LspDiagnostic, LspDocumentSymbol,
-    LspHover, LspLocation, LspManager, LspPendingRequest, LspRange, LspRuntimeServer, LspTextEdit,
-    ServerSession, UninitializedSession,
+    language_id_for_path, DidOpenPrep, LspCompletionItem, LspCompletionList, LspDiagnostic,
+    LspDocumentSymbol, LspHover, LspLocation, LspManager, LspPendingRequest, LspRange,
+    LspRuntimeServer, LspTextEdit, ServerSession, UninitializedSession,
 };
 #[allow(unused_imports)]
 pub use install::{install_all, install_one, print_status, uninstall_one, ProgressFn};

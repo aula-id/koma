@@ -92,6 +92,22 @@ pub struct LspCompletionItem {
     /// Opaque server token required for `completionItem/resolve`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
+    /// Characters that accept the item when typed (Monaco commitCharacters).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit_characters: Option<Vec<String>>,
+    /// Prefer this item in the suggest widget when true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preselect: Option<bool>,
+}
+
+/// `textDocument/completion` result — items plus the incomplete flag Monaco needs
+/// to re-query on the next keystroke (path completion like `use std::collections::`).
+#[derive(Debug, Clone, Default)]
+pub struct LspCompletionList {
+    pub items: Vec<LspCompletionItem>,
+    /// When true, Monaco must re-issue completion on the next typed character
+    /// instead of client-filtering this snapshot forever.
+    pub is_incomplete: bool,
 }
 
 /// Hover payload for Monaco.
@@ -240,7 +256,7 @@ impl LspPendingRequest {
         self.io.request(self.method, self.params)
     }
 
-    pub fn wait_completions(self) -> Result<Vec<LspCompletionItem>, String> {
+    pub fn wait_completions(self) -> Result<LspCompletionList, String> {
         Ok(parse_completions(&self.wait_raw()?))
     }
 
@@ -565,21 +581,39 @@ impl LspManager {
     ///
     /// Returns a pending request — caller must `.wait()` **after** dropping
     /// the `LspManager` lock so hover/didChange are not serialized behind RPC.
+    ///
+    /// `trigger_kind` is LSP CompletionTriggerKind (1 Invoked, 2 TriggerCharacter,
+    /// 3 TriggerForIncompleteCompletions). `trigger_character` is set when kind is 2.
     pub fn completion(
         &mut self,
         root: &str,
         path: &str,
         line: u32,
         character: u32,
+        trigger_kind: u32,
+        trigger_character: Option<&str>,
     ) -> Result<LspPendingRequest, String> {
         let (uri, io) = self.uri_io(root, path)?;
+        let kind = match trigger_kind {
+            2 | 3 => trigger_kind,
+            _ => 1,
+        };
+        let mut context = serde_json::json!({ "triggerKind": kind });
+        if kind == 2 {
+            if let Some(ch) = trigger_character.filter(|s| !s.is_empty()) {
+                context
+                    .as_object_mut()
+                    .expect("context object")
+                    .insert("triggerCharacter".into(), serde_json::Value::String(ch.to_string()));
+            }
+        }
         Ok(LspPendingRequest {
             io,
             method: "textDocument/completion",
             params: serde_json::json!({
                 "textDocument": { "uri": uri },
                 "position": { "line": line, "character": character },
-                "context": { "triggerKind": 1 }
+                "context": context,
             }),
         })
     }
@@ -1951,19 +1985,33 @@ pub fn language_id_for_path(path: &str) -> &'static str {
 
 // ─── Result parsers ──────────────────────────────────────────────────────────
 
-fn parse_completions(result: &serde_json::Value) -> Vec<LspCompletionItem> {
-    let items = if let Some(arr) = result.as_array() {
-        arr.clone()
+/// Safety cap — VS Code does not truncate, but an unbounded wire payload can
+/// stall the GUI. Incomplete lists re-query per keystroke so a higher cap is
+/// enough for path completion without shipping thousands of auto-import rows.
+const COMPLETION_ITEM_CAP: usize = 2000;
+
+fn parse_completions(result: &serde_json::Value) -> LspCompletionList {
+    let (raw_items, is_incomplete) = if let Some(arr) = result.as_array() {
+        // Bare array ⇒ complete list (LSP).
+        (arr.clone(), false)
     } else if let Some(arr) = result.get("items").and_then(|i| i.as_array()) {
-        arr.clone()
+        let incomplete = result
+            .get("isIncomplete")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        (arr.clone(), incomplete)
     } else {
-        return Vec::new();
+        return LspCompletionList::default();
     };
-    items
+    let items: Vec<LspCompletionItem> = raw_items
         .iter()
         .filter_map(parse_one_completion)
-        .take(200)
-        .collect()
+        .take(COMPLETION_ITEM_CAP)
+        .collect();
+    LspCompletionList {
+        items,
+        is_incomplete,
+    }
 }
 
 fn parse_one_completion(it: &serde_json::Value) -> Option<LspCompletionItem> {
@@ -2026,6 +2074,16 @@ fn parse_one_completion(it: &serde_json::Value) -> Option<LspCompletionItem> {
         })
         .filter(|v| !v.is_empty());
     let data = it.get("data").cloned();
+    let commit_characters = it
+        .get("commitCharacters")
+        .and_then(|a| a.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .filter(|v| !v.is_empty());
+    let preselect = it.get("preselect").and_then(|v| v.as_bool());
     Some(LspCompletionItem {
         label,
         kind,
@@ -2039,6 +2097,8 @@ fn parse_one_completion(it: &serde_json::Value) -> Option<LspCompletionItem> {
         text_edit,
         additional_text_edits,
         data,
+        commit_characters,
+        preselect,
     })
 }
 

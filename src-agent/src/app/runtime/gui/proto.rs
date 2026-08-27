@@ -1092,6 +1092,11 @@ pub(super) enum GuiReq {
         path: String,
         line: u32,
         character: u32,
+        /// LSP CompletionTriggerKind: 1 Invoked, 2 TriggerCharacter, 3 Incomplete.
+        #[serde(default, rename = "triggerKind")]
+        trigger_kind: Option<u32>,
+        #[serde(default, rename = "triggerCharacter")]
+        trigger_character: Option<String>,
         #[serde(rename = "requestId")]
         request_id: String,
     },
