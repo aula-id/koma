@@ -25,6 +25,7 @@ import {
   trackReferences,
   uriToPath,
   type LspCompletionItem,
+  type LspCompletionList,
   type LspDiagnostic,
   type LspDocumentSymbol,
   type LspHover,
@@ -47,6 +48,7 @@ export {
   splitRootPath,
   uriToPath,
   type LspCompletionItem,
+  type LspCompletionList,
   type LspDiagnostic,
   type LspDocumentSymbol,
   type LspHover,
@@ -66,6 +68,42 @@ type ReqFn = (body: object) => void
 type RootsFn = () => string[]
 /** Open a coding tab at 0-based line/character (go-to only; not peek). */
 type OpenLocationFn = (uri: string, line: number, character: number) => void
+
+// ─── Pending didChange flush (completion / resolve must see current buffer) ──
+// CodeEditorTab debounces LspDidChange; completion fires immediately. Register
+// a flusher per open file so provideCompletionItems / resolve can push the
+// latest text before the RPC.
+const pendingDidChangeFlush = new Map<string, () => void>()
+
+function didChangeFlushKey(root: string, path: string): string {
+  return `${root.replace(/\\/g, '/')}\0${path.replace(/\\/g, '/')}`
+}
+
+/** Called from CodeEditorTab while a coding file is mounted. Pass null to clear. */
+export function registerLspDidChangeFlusher(
+  root: string,
+  path: string,
+  flush: (() => void) | null,
+): void {
+  const key = didChangeFlushKey(root, path)
+  if (flush) pendingDidChangeFlush.set(key, flush)
+  else pendingDidChangeFlush.delete(key)
+}
+
+/**
+ * Run the registered flusher (if any) and yield one macrotask so the host
+ * notify worker can coalesce/send didChange before completion/resolve RPC.
+ */
+export async function flushPendingLspDidChange(root: string, path: string): Promise<void> {
+  const flush = pendingDidChangeFlush.get(didChangeFlushKey(root, path))
+  if (!flush) return
+  flush()
+  // Host notify worker coalesces didChange on a short quiet window (~16ms) and
+  // always flushes pending changes before other notify jobs. One frame is not
+  // enough when the request pool races the notify thread; wait a tick past the
+  // coalesce window so the server buffer is current.
+  await new Promise<void>((r) => setTimeout(r, 20))
+}
 
 // ─── CodeLens reference-count cache ──────────────────────────────────────────
 // Survives tab close/reopen so "N references" does not re-hit the language
@@ -430,6 +468,8 @@ function toMonacoCompletion(
     sortText: it.sortText ?? String(index).padStart(5, '0'),
     filterText: it.filterText,
     additionalTextEdits: additionalTextEdits.length ? additionalTextEdits : undefined,
+    commitCharacters: it.commitCharacters,
+    preselect: it.preselect,
     ...({ __koma: it, __loc: loc } as object),
   } as monaco.languages.CompletionItem
 }
@@ -455,23 +495,45 @@ export function ensureLspProviders(
 
   const selector: monaco.languages.LanguageSelector = { language: '*' }
 
+  // Union of common server trigger chars. Per-server caps aren't stored yet;
+  // this set covers rust-analyzer / tsserver / clangd / gopls without waiting
+  // on initialize plumbing. Spurious RPCs for rare chars are cheap vs missing
+  // path completion after `::`.
   monaco.languages.registerCompletionItemProvider(selector, {
-    triggerCharacters: ['.', ':', '<', '"', "'", '/', '@'],
-    provideCompletionItems: async (model, position) => {
+    triggerCharacters: ['.', ':', '<', '>', '"', "'", '/', '@', '(', '#', '`', '\\'],
+    provideCompletionItems: async (model, position, context) => {
       const loc = modelToRootPath(model, getRoots())
       if (!loc) return { suggestions: [] }
+      // Flush pending didChange so the server sees the buffer Monaco is completing on.
+      // Without this, 500ms-debounced LspDidChange races completion and breaks
+      // path completion + resolve hash matching (auto-import).
+      await flushPendingLspDidChange(loc.root, loc.path)
       const requestId = mintId('cmp')
       const p = trackCompletion(requestId)
+      // Monaco CompletionTriggerKind: Invoke=0, TriggerCharacter=1, TriggerForIncompleteCompletions=2
+      // LSP: Invoked=1, TriggerCharacter=2, TriggerForIncompleteCompletions=3
+      let triggerKind = 1
+      let triggerCharacter: string | undefined
+      if (context.triggerKind === monaco.languages.CompletionTriggerKind.TriggerCharacter) {
+        triggerKind = 2
+        triggerCharacter = context.triggerCharacter || undefined
+      } else if (
+        context.triggerKind === monaco.languages.CompletionTriggerKind.TriggerForIncompleteCompletions
+      ) {
+        triggerKind = 3
+      }
       req({
         r: 'LspCompletion',
         root: loc.root,
         path: loc.path,
         line: position.lineNumber - 1,
         character: position.column - 1,
+        triggerKind,
+        triggerCharacter,
         requestId,
       })
       try {
-        const items = await p
+        const list = await p
         const word = model.getWordUntilPosition(position)
         const defaultRange = {
           startLineNumber: position.lineNumber,
@@ -479,10 +541,10 @@ export function ensureLspProviders(
           endLineNumber: position.lineNumber,
           endColumn: word?.endColumn ?? position.column,
         }
-        const suggestions: monaco.languages.CompletionItem[] = items.map((it, i) =>
+        const suggestions: monaco.languages.CompletionItem[] = list.items.map((it, i) =>
           toMonacoCompletion(it, defaultRange, i, loc),
         )
-        return { suggestions }
+        return { suggestions, incomplete: list.isIncomplete }
       } catch {
         return { suggestions: [] }
       }
@@ -498,6 +560,9 @@ export function ensureLspProviders(
       }
       // No data token → server has nothing more to resolve.
       if (src.data == null) return item
+      // Ensure buffer is current before resolve — rust-analyzer re-runs completion
+      // at the stored position and hash-matches; stale text drops additionalTextEdits.
+      await flushPendingLspDidChange(loc.root, loc.path)
       const requestId = mintId('cmpr')
       const p = trackCompletionResolve(requestId)
       req({

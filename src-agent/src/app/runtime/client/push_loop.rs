@@ -1050,16 +1050,27 @@ pub(super) fn push_loop(
 
                 }
 
-                Ok(super::HostCtl::LspCompletion { root, path, line, character, request_id }) => {
-
+                Ok(super::HostCtl::LspCompletion {
+                    root,
+                    path,
+                    line,
+                    character,
+                    trigger_kind,
+                    trigger_character,
+                    request_id,
+                }) => {
                     super::lsp_host::handle_client_ctl(
-
-                        super::HostCtl::LspCompletion { root, path, line, character, request_id },
-
+                        super::HostCtl::LspCompletion {
+                            root,
+                            path,
+                            line,
+                            character,
+                            trigger_kind,
+                            trigger_character,
+                            request_id,
+                        },
                         std::sync::Arc::clone(lsp_manager),
-
                     );
-
                 }
 
                 Ok(super::HostCtl::LspCompletionResolve { root, path, item, request_id }) => {

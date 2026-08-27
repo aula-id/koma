@@ -1049,6 +1049,8 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             path,
             line,
             character,
+            trigger_kind,
+            trigger_character,
             request_id,
         } => {
             let _ = ctx.ctl.send(HostCtl::LspCompletion {
@@ -1056,6 +1058,8 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 path,
                 line,
                 character,
+                trigger_kind: trigger_kind.unwrap_or(1),
+                trigger_character,
                 request_id,
             });
         }

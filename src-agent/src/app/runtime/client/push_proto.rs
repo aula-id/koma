@@ -817,6 +817,9 @@ pub(super) enum PushEnvelope {
     LspCompletion {
         request_id: String,
         items: Vec<crate::lsp::LspCompletionItem>,
+        /// When true Monaco re-queries on the next keystroke (path completion).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        is_incomplete: bool,
         error: Option<String>,
     },
     /// Reply to `LspCompletionResolve`.
@@ -1291,6 +1294,7 @@ pub(super) fn push_lsp_completion(
     push: &dyn Fn(String),
     request_id: String,
     items: Vec<crate::lsp::LspCompletionItem>,
+    is_incomplete: bool,
     error: Option<String>,
 ) {
     super::render::emit(
@@ -1298,6 +1302,7 @@ pub(super) fn push_lsp_completion(
         &PushEnvelope::LspCompletion {
             request_id,
             items,
+            is_incomplete,
             error,
         },
     );

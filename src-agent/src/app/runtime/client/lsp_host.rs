@@ -464,23 +464,32 @@ fn run_request_job(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
             path,
             line,
             character,
+            trigger_kind,
+            trigger_character,
             request_id,
         } => {
             // Phase 1: resolve SessionIo under the lock (fast).
             // Phase 2: wait on the RPC with the lock released so concurrent
             // hover/didChange/CodeLens do not serialize on Mutex<LspManager>.
             let pending = match mgr.lock() {
-                Ok(mut g) => g.completion(&root, &path, line, character),
+                Ok(mut g) => g.completion(
+                    &root,
+                    &path,
+                    line,
+                    character,
+                    trigger_kind,
+                    trigger_character.as_deref(),
+                ),
                 Err(_) => Err("lsp manager lock poisoned".into()),
             };
-            let (items, error) = match pending {
+            let (items, is_incomplete, error) = match pending {
                 Ok(p) => match p.wait_completions() {
-                    Ok(items) => (items, None),
-                    Err(e) => (Vec::new(), Some(e)),
+                    Ok(list) => (list.items, list.is_incomplete, None),
+                    Err(e) => (Vec::new(), false, Some(e)),
                 },
-                Err(e) => (Vec::new(), Some(e)),
+                Err(e) => (Vec::new(), false, Some(e)),
             };
-            push_lsp_completion(&*push, request_id, items, error);
+            push_lsp_completion(&*push, request_id, items, is_incomplete, error);
         }
         HostCtl::LspCompletionResolve {
             root,

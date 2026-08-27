@@ -568,7 +568,7 @@ declare global {
     | { r: 'LspDidChange'; root: string; path: string; text: string }
     | { r: 'LspDidSave'; root: string; path: string; text?: string | null }
     | { r: 'LspDidClose'; root: string; path: string }
-    | { r: 'LspCompletion'; root: string; path: string; line: number; character: number; requestId: string }
+    | { r: 'LspCompletion'; root: string; path: string; line: number; character: number; triggerKind?: number; triggerCharacter?: string; requestId: string }
     | { r: 'LspCompletionResolve'; root: string; path: string; item: LspCompletionItem; requestId: string }
     | { r: 'LspHover'; root: string; path: string; line: number; character: number; requestId: string }
     | { r: 'LspDefinition'; root: string; path: string; line: number; character: number; requestId: string }
@@ -716,7 +716,7 @@ declare global {
     | { k: 'LspStatus'; servers: LspServerStatus[] }
     | { k: 'LspInstall'; id: string; pct: number; error: string | null }
     | { k: 'LspDiagnostics'; uri: string; diagnostics: LspDiagnostic[] }
-    | { k: 'LspCompletion'; requestId: string; items: LspCompletionItem[]; error: string | null }
+    | { k: 'LspCompletion'; requestId: string; items: LspCompletionItem[]; isIncomplete?: boolean; error: string | null }
     | { k: 'LspCompletionResolve'; requestId: string; item: LspCompletionItem | null; error: string | null }
     | { k: 'LspHover'; requestId: string; hover: LspHover | null; error: string | null }
     | { k: 'LspDefinition'; requestId: string; locations: LspLocation[]; error: string | null }
@@ -761,6 +761,8 @@ declare global {
     textEdit?: LspTextEdit
     additionalTextEdits?: LspTextEdit[]
     data?: unknown
+    commitCharacters?: string[]
+    preselect?: boolean
   }
 
   type LspHover = {

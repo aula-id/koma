@@ -820,6 +820,9 @@ pub(super) enum HostCtl {
         path: String,
         line: u32,
         character: u32,
+        /// LSP CompletionTriggerKind: 1 Invoked, 2 TriggerCharacter, 3 Incomplete.
+        trigger_kind: u32,
+        trigger_character: Option<String>,
         request_id: String,
     },
     /// `completionItem/resolve` — reply `LspCompletionResolve` with `request_id`.

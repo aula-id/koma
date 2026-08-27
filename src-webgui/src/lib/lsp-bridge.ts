@@ -41,6 +41,17 @@ export type LspCompletionItem = {
   additionalTextEdits?: LspTextEdit[]
   /** Opaque server token for completionItem/resolve. */
   data?: unknown
+  /** Characters that accept the item when typed. */
+  commitCharacters?: string[]
+  /** Prefer this item in the suggest widget. */
+  preselect?: boolean
+}
+
+/** Result of textDocument/completion — items + incomplete re-query flag. */
+export type LspCompletionList = {
+  items: LspCompletionItem[]
+  /** When true Monaco re-queries on the next keystroke (path completion). */
+  isIncomplete: boolean
 }
 
 export type LspHover = {
@@ -88,7 +99,7 @@ type Pending<T> = {
 
 const PENDING_MS = 12_000
 
-const pendingCompletion = new Map<string, Pending<LspCompletionItem[]>>()
+const pendingCompletion = new Map<string, Pending<LspCompletionList>>()
 const pendingCompletionResolve = new Map<string, Pending<LspCompletionItem>>()
 const pendingHover = new Map<string, Pending<LspHover | null>>()
 const pendingDefinition = new Map<string, Pending<LspLocation[]>>()
@@ -126,7 +137,7 @@ function settle<T>(
   else p.resolve(value)
 }
 
-export function trackCompletion(id: string): Promise<LspCompletionItem[]> {
+export function trackCompletion(id: string): Promise<LspCompletionList> {
   return track(pendingCompletion, id)
 }
 export function trackCompletionResolve(id: string): Promise<LspCompletionItem> {
@@ -152,8 +163,14 @@ export function resolveLspCompletion(
   requestId: string,
   items: LspCompletionItem[],
   error: string | null,
+  isIncomplete?: boolean | null,
 ): void {
-  settle(pendingCompletion, requestId, items ?? [], error)
+  settle(
+    pendingCompletion,
+    requestId,
+    { items: items ?? [], isIncomplete: !!isIncomplete },
+    error,
+  )
 }
 
 export function resolveLspCompletionResolve(

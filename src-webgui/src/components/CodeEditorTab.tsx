@@ -12,6 +12,7 @@ import {
   monacoUriFromPath,
   setGoToDefinitionHandler,
   warmCodeLensCache,
+  registerLspDidChangeFlusher,
 } from '../lib/monaco-lsp'
 import { codingAskInChatPayload } from '../lib/codingRef'
 import { viewerKindForPath, type ViewerKind } from '../lib/viewerKind'
@@ -24,7 +25,9 @@ import { CodingFileViewer } from './CodingFileViewer'
 type CodingTab = Extract<Tab, { kind: 'codingFile' }>
 
 const AUTOSAVE_MS = 750
-const LSP_CHANGE_MS = 500
+// Diagnostics / CodeLens can lag typing; completion flushes pending didChange
+// immediately via registerLspDidChangeFlusher so the server stays current.
+const LSP_CHANGE_MS = 120
 // CodeLens ref-counts are expensive (documentSymbol + N references RPCs) and
 // share the host LSP mutex with hover/completion. Only warm on open / save idle.
 const CODELENS_IDLE_MS = 2500
@@ -296,6 +299,27 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       }, CODELENS_IDLE_MS)
     })
 
+    // Completion/resolve call this to push didChange before the RPC so the
+    // server buffer matches Monaco (debounced path alone is too late).
+    const flushDidChange = () => {
+      if (lspChangeTimerRef.current) {
+        clearTimeout(lspChangeTimerRef.current)
+        lspChangeTimerRef.current = null
+      }
+      if (!lspOpenedRef.current) return
+      const latest = editor
+        .getModel()
+        ?.getValue(monaco.editor.EndOfLinePreference.LF)
+      if (latest == null) return
+      useKoma.getState().req({
+        r: 'LspDidChange',
+        root: tab.root,
+        path: tab.path,
+        text: latest,
+      })
+    }
+    registerLspDidChangeFlusher(tab.root, tab.path, flushDidChange)
+
     const onReveal = (ev: Event) => {
       const detail = (ev as CustomEvent).detail as
         | { root: string; path: string; line: number; column: number }
@@ -315,6 +339,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     return () => {
       window.removeEventListener('koma-reveal-line', onReveal)
       sub.dispose()
+      registerLspDidChangeFlusher(tab.root, tab.path, null)
       if (lspChangeTimerRef.current) clearTimeout(lspChangeTimerRef.current)
       if (codeLensIdleTimer) clearTimeout(codeLensIdleTimer)
       // Detach only — keep the file:// model alive for peek widgets / reopen.

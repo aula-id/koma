@@ -1029,9 +1029,25 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
-            Ok(HostCtl::LspCompletion { root, path, line, character, request_id }) => {
+            Ok(HostCtl::LspCompletion {
+                root,
+                path,
+                line,
+                character,
+                trigger_kind,
+                trigger_character,
+                request_id,
+            }) => {
                 super::lsp_host::handle_client_ctl(
-                    HostCtl::LspCompletion { root, path, line, character, request_id },
+                    HostCtl::LspCompletion {
+                        root,
+                        path,
+                        line,
+                        character,
+                        trigger_kind,
+                        trigger_character,
+                        request_id,
+                    },
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
@@ -2056,9 +2072,25 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
-            Ok(HostCtl::LspCompletion { root, path, line, character, request_id }) => {
+            Ok(HostCtl::LspCompletion {
+                root,
+                path,
+                line,
+                character,
+                trigger_kind,
+                trigger_character,
+                request_id,
+            }) => {
                 super::lsp_host::handle_client_ctl(
-                    HostCtl::LspCompletion { root, path, line, character, request_id },
+                    HostCtl::LspCompletion {
+                        root,
+                        path,
+                        line,
+                        character,
+                        trigger_kind,
+                        trigger_character,
+                        request_id,
+                    },
                     std::sync::Arc::clone(lsp_manager),
                 );
             }

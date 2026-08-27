@@ -1368,6 +1368,7 @@ export type PushEnvelope =
       k: 'LspCompletion'
       requestId: string
       items: import('../lib/lsp-bridge').LspCompletionItem[]
+      isIncomplete?: boolean
       error: string | null
     }
   | {
@@ -4590,7 +4591,7 @@ export const useKoma = create<KomaState>((set, get) => ({
           })
         break
       case 'LspCompletion':
-        resolveLspCompletion(env.requestId, env.items ?? [], env.error)
+        resolveLspCompletion(env.requestId, env.items ?? [], env.error, env.isIncomplete)
         break
       case 'LspCompletionResolve':
         resolveLspCompletionResolve(env.requestId, env.item ?? null, env.error)
