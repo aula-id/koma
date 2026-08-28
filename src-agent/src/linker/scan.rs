@@ -859,7 +859,7 @@ fn collect_source_files(
         let mut n = 0usize;
         for dent in walker.flatten() {
             n += 1;
-            if n % 64 == 0 && cancelled() {
+            if n.is_multiple_of(64) && cancelled() {
                 return None;
             }
             if !dent.file_type().is_some_and(|t| t.is_file()) {

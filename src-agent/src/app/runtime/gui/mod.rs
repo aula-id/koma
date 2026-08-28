@@ -615,10 +615,13 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         // evaluate_script; React JSON.parse's one queued bootstrap
                         // envelope per animation frame instead of parsing the fat
                         // Snapshot together with every sibling push.
-                        batch.push_str(
-                            &serde_json::to_string(&json)
-                                .expect("serialising an owned JSON string cannot fail"),
-                        );
+                        // `json` is already a JSON text string; re-encode as a JSON
+                        // string literal for the outer batch array.
+                        let encoded = match serde_json::to_string(&json) {
+                            Ok(s) => s,
+                            Err(_) => continue,
+                        };
+                        batch.push_str(&encoded);
                     }
                     batch.push(']');
                     let script = format!(

@@ -684,7 +684,7 @@ fn scan_worker_loop(state: Arc<DaemonState>) {
 
             let still_current =
                 coord.in_flight == Some(scan_rev) && coord.desired_revision == scan_rev;
-            let cancelled = cancel.load(Ordering::SeqCst) || matches!(outcome, None);
+            let cancelled = cancel.load(Ordering::SeqCst) || outcome.is_none();
 
             if still_current {
                 if let Some((graph, pi)) = outcome {

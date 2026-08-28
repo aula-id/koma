@@ -239,29 +239,33 @@ enum NotifyJob {
     },
 }
 
+/// One request-pool job: control message + manager handle.
+type LspRequestJob = (HostCtl, Arc<Mutex<LspManager>>);
+type LspRequestRx = Arc<Mutex<mpsc::Receiver<LspRequestJob>>>;
+/// Pending didChange text keyed by (root, path).
+type PendingDidChange = HashMap<(String, String), (Arc<Mutex<LspManager>>, String)>;
+
 struct LspWorkers {
     notify_tx: Mutex<Sender<NotifyJob>>,
-    request_tx: Mutex<Sender<(HostCtl, Arc<Mutex<LspManager>>)>>,
+    request_tx: Mutex<Sender<LspRequestJob>>,
 }
 
 fn lsp_workers() -> &'static LspWorkers {
     static WORKERS: OnceLock<LspWorkers> = OnceLock::new();
     WORKERS.get_or_init(|| {
         let (notify_tx, notify_rx) = mpsc::channel::<NotifyJob>();
-        std::thread::Builder::new()
+        // Process-lifetime workers; spawn failure is unrecoverable for LSP.
+        let _ = std::thread::Builder::new()
             .name("lsp-notify".into())
-            .spawn(move || notify_worker_loop(notify_rx))
-            .expect("spawn lsp-notify");
+            .spawn(move || notify_worker_loop(notify_rx));
 
-        let (request_tx, request_rx) =
-            mpsc::channel::<(HostCtl, Arc<Mutex<LspManager>>)>();
+        let (request_tx, request_rx) = mpsc::channel::<LspRequestJob>();
         let request_rx = Arc::new(Mutex::new(request_rx));
         for i in 0..LSP_REQUEST_POOL {
             let rx = Arc::clone(&request_rx);
-            std::thread::Builder::new()
+            let _ = std::thread::Builder::new()
                 .name(format!("lsp-req-{i}"))
-                .spawn(move || request_worker_loop(rx))
-                .expect("spawn lsp-req");
+                .spawn(move || request_worker_loop(rx));
         }
 
         LspWorkers {
@@ -274,8 +278,7 @@ fn lsp_workers() -> &'static LspWorkers {
 fn notify_worker_loop(rx: mpsc::Receiver<NotifyJob>) {
     // Latest didChange text per (root, path); flushed before non-change jobs and
     // after a short quiet window so bursts collapse to one notify.
-    let mut pending_change: HashMap<(String, String), (Arc<Mutex<LspManager>>, String)> =
-        HashMap::new();
+    let mut pending_change: PendingDidChange = HashMap::new();
     let coalesce = Duration::from_millis(16);
 
     loop {
@@ -329,9 +332,7 @@ fn notify_worker_loop(rx: mpsc::Receiver<NotifyJob>) {
     }
 }
 
-fn flush_pending_changes(
-    pending: &mut HashMap<(String, String), (Arc<Mutex<LspManager>>, String)>,
-) {
+fn flush_pending_changes(pending: &mut PendingDidChange) {
     for ((root, path), (mgr, text)) in pending.drain() {
         if let Ok(mut g) = mgr.lock() {
             let _ = g.did_change(&root, &path, &text);
@@ -410,7 +411,7 @@ fn run_did_open(
             text,
             root_path,
         } => {
-            let session = match uninit.handshake() {
+            let session = match (*uninit).handshake() {
                 Ok(s) => s,
                 Err(e) => {
                     if let Ok(mut g) = mgr.lock() {
@@ -437,7 +438,7 @@ fn run_did_open(
     }
 }
 
-fn request_worker_loop(rx: Arc<Mutex<mpsc::Receiver<(HostCtl, Arc<Mutex<LspManager>>)>>>) {
+fn request_worker_loop(rx: LspRequestRx) {
     loop {
         let job = {
             let guard = match rx.lock() {
