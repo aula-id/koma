@@ -316,7 +316,7 @@ pub enum DidOpenPrep {
     Done,
     /// Caller must handshake outside the lock, then [`LspManager::finish_did_open`].
     NeedsHandshake {
-        uninit: UninitializedSession,
+        uninit: Box<UninitializedSession>,
         spawn_id: String,
         uri: String,
         language_id: String,
@@ -601,10 +601,12 @@ impl LspManager {
         let mut context = serde_json::json!({ "triggerKind": kind });
         if kind == 2 {
             if let Some(ch) = trigger_character.filter(|s| !s.is_empty()) {
-                context
-                    .as_object_mut()
-                    .expect("context object")
-                    .insert("triggerCharacter".into(), serde_json::Value::String(ch.to_string()));
+                if let Some(obj) = context.as_object_mut() {
+                    obj.insert(
+                        "triggerCharacter".into(),
+                        serde_json::Value::String(ch.to_string()),
+                    );
+                }
             }
         }
         Ok(LspPendingRequest {
@@ -949,7 +951,7 @@ impl LspManager {
             }
         };
         Ok(DidOpenPrep::NeedsHandshake {
-            uninit,
+            uninit: Box::new(uninit),
             spawn_id,
             uri,
             language_id: language_id.to_string(),
@@ -1634,10 +1636,10 @@ fn handle_progress(
                     st.phase = "working".into();
                 }
                 // Throttle mid-report pushes (≥100 ms) to cut IPC storms during RA index.
-                match st.last_progress_push {
-                    Some(t) if t.elapsed() < Duration::from_millis(100) => false,
-                    _ => true,
-                }
+                !matches!(
+                    st.last_progress_push,
+                    Some(t) if t.elapsed() < Duration::from_millis(100)
+                )
             }
             "end" => {
                 if let Some(m) = value.get("message").and_then(|t| t.as_str()) {
