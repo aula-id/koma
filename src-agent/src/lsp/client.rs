@@ -2350,15 +2350,17 @@ mod tests {
     #[test]
     fn parse_completion_list() {
         let v = serde_json::json!({
+            "isIncomplete": true,
             "items": [
                 { "label": "foo", "kind": 3, "detail": "fn" },
                 { "label": "bar" }
             ]
         });
-        let items = parse_completions(&v);
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].label, "foo");
-        assert_eq!(items[0].kind, Some(3));
+        let list = parse_completions(&v);
+        assert!(list.is_incomplete);
+        assert_eq!(list.items.len(), 2);
+        assert_eq!(list.items[0].label, "foo");
+        assert_eq!(list.items[0].kind, Some(3));
     }
 
     #[test]
