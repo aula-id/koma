@@ -1,8 +1,9 @@
 # Architecture
 
-A ratatui TUI coding **agent** over the OpenRouter API, built to make budget and
-weak models (4B instruct, gpt-oss, GLM, Qwen, Gemini Flash) usable for real work.
-Two pillars drive it:
+A ratatui TUI coding **agent** (optional wry GUI) over **multi-provider** HTTP APIs
+(OpenAI-compatible, Anthropic Messages, Codex, Koma Free, CommandCode, … — often
+via OpenRouter or a direct endpoint). Built to make budget and weak models usable
+for real work. Two pillars drive it:
 
 1. **Agentic tool-use loop** — the model can call a rich filesystem/shell tool set;
    a three-layer safety harness (workspace check + prompt classifier + tool-call
@@ -10,7 +11,9 @@ Two pillars drive it:
 2. **Token efficiency** — prompt caching plus a non-destructive "short-send"
    summarisation rail keep cheap models inside budget without losing context.
 
-Sessions are per-directory, resumable, and independently configured.
+Sessions are per-directory, resumable, and independently configured. Default
+launch is **daemon + thin client**; `koma alone` / `--local` is the standalone path.
+
 
 ---
 
@@ -18,21 +21,20 @@ Sessions are per-directory, resumable, and independently configured.
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  ratatui TUI (main thread, synchronous event loop)  │
-│                                                     │
-│  KeyInput  SessionPicker  Chat  Settings  Effort    │  ← five modes
+│  ratatui TUI (main thread, sync event loop)         │
+│  Mode: Chat, SessionHub, Settings, Agents, Bash, …  │  ← many mutually exclusive modes
 └──────────────────────┬──────────────────────────────┘
-                       │ mpsc channel (per request)
+                       │ mpsc / IPC (local or daemon)
 ┌──────────────────────▼──────────────────────────────┐
-│  tokio runtime (background thread)                  │
-│  · stream_complete  (SSE → StreamEvent)             │
+│  tokio (stream, classifiers, sub-agents, …)         │
+│  · stream_complete  (provider-specific wire)        │
 │  · shortsend::shape (API-bound payload only)        │
 │  · classify_prompt / classify_toolcall              │
 │  · awareness::summarize                             │
 └──────────────────────┬──────────────────────────────┘
-                       │ HTTPS (OpenRouter)
+                       │ HTTPS
                   ┌────▼────┐
-                  │ models  │  cheap budget / reasoning
+                  │ models  │  multi-provider
                   └─────────┘
 ```
 
@@ -43,9 +45,9 @@ short-send rail; display and storage are always the full conversation (dual rail
 
 ## 2. Event Loop
 
-**File:** `src-agent/src/app/runtime/event_loop.rs::run_loop`
+**File:** `src-agent/src/app/runtime/event_loop/` (`run_loop` and session drains)
 
-`runtime/` is a **module** (`app/runtime/mod.rs`), not a single file. The entry
+`runtime/` is a **module tree** (`app/runtime/mod.rs`), not a single file. The entry
 point `run_loop` runs the synchronous main-thread loop:
 
 ```
@@ -83,16 +85,16 @@ tick
 
 ```
 KeyEvent
-  → controller/input.rs::handle_key()      →  Action
-  → app/runtime/actions.rs::apply_action() →  state mutation
-  → view/mod.rs::draw()                    →  terminal frame
+  → controller/input/                 →  Action
+  → app/runtime/actions/              →  state mutation
+  → view/mod.rs::draw()               →  terminal frame
 
 Slash input:
-  → controller/command.rs::parse()         →  Command
-  → app/runtime/commands.rs::apply_slash() →  state mutation / task spawn
+  → controller/command.rs::parse()    →  Command
+  → app/runtime/commands/             →  state mutation / task spawn
 ```
 
-`controller/input.rs` is purely a translation layer; it returns `Action` values
+`controller/input` is purely a translation layer; it returns `Action` values
 and never mutates state. `apply_action` owns all state changes and async spawns.
 The view is read-only with respect to state.
 
@@ -161,16 +163,19 @@ pub trait Tool: Send + Sync {
 
 | Tool | Source | Notes |
 |---|---|---|
-| `read` | `tool/fs.rs` | Read file contents |
-| `grep` | `tool/search.rs` | Regex search over files |
-| `glob` | `tool/search.rs` | Pattern-match file names |
-| `write` | `tool/fs.rs` | Create/overwrite a file (risky) |
-| `edit` | `tool/fs.rs` | Patch file content (risky) |
-| `delete` | `tool/fs.rs` | Delete a file (risky) |
-| `bash` | `tool/shell.rs` | Run a shell command (risky) |
-| `dir_list` | `tool/fs.rs` | List directory children |
-| `dir_cache_update` | `tool/dircache.rs` | Trigger a background reindex |
-| `pong` | `tool/pong.rs` | Heartbeat / connectivity probe |
+| `read` / `write` / `edit` / `delete` / `dir_list` | `tool/fs/` | Filesystem (risky write path) |
+| `grep` / `glob` | `tool/search.rs` | Search |
+| `bash` / `bash_output` / `bash_kill` | `tool/shell.rs` + `app/bgbash` | Shell as job; FG parks turn; BG / Ctrl+B detach |
+| `git_operator` / `git_cred` / `git_worktree` | `tool/git_*.rs` | Git (prefer over bash) |
+| `task` / `task_output` / `task_kill` / `task_send` | `tool/task.rs` + subagent | Sub-agents |
+| `remember` / `forget` / `recall` | memory tools | Project memory |
+| `web_*` / `browser_*` | internet tools | Fetch / full browser (feature-gated) |
+| `plan_enter` / checklist / SDLC tools | plan + `tool/sdlc*` | Plan / mission modes |
+| `graph_query` | `tool/graph.rs` | Import graph (when enabled) |
+| … | `tool/mod.rs` `all_tools()` | Canonical registry |
+
+Paths: there is **no** `tool/fs.rs` — use `tool/fs/{read,write,edit,delete,dirlist,mod}.rs`.
+
 
 **Sandboxing.** `resolve(workspaces, path)` canonicalises the path and checks
 containment inside the target workspace. `resolve_read` is forgiving: a bare
@@ -233,18 +238,16 @@ The model's `delta.reasoning` field is a **separate streaming channel** from
 these fragments; they accumulate in a parallel buffer in `AppStateRest` and are
 rendered dim/italic above the answer.
 
-**Display-only, never persisted:**
+**Persisted for display; stripped on the wire for most model roles:**
 
-- `ChatMessage.reasoning` is `#[serde(skip)]` in `dto/chat.rs` — never
-  serialised into `messages.json` or a `ChatRequest` body.
-- `take_reasoning()` drains the buffer at assistant-commit time; the text is
-  attached to the `ChatMessage` in memory only for rendering.
-- The reasoning buffer is also drained unconditionally on interrupt and on every
-  tool-round boundary so it can never bleed into the next turn or into the
-  short-send fold.
-
-This prevents CoT bleed from contaminating the classifier verdicts, the summary
-fold, or the model's next-turn context.
+- `ChatMessage.reasoning` is stored with the message (see `dto/chat/message.rs`) so
+  the transcript can show thinking after reload. Provider-specific
+  `reasoning_details` stay `#[serde(skip)]` / non-persisted wire junk.
+- `take_reasoning()` drains the live stream buffer at assistant-commit time.
+- The buffer is also drained on interrupt and tool-round boundaries so it cannot
+  bleed into the next turn or the short-send fold.
+- Secondary calls (classifier, fold, …) still use `reasoning: {exclude: true}` so
+  CoT does not contaminate utility replies.
 
 When a model streams its entire answer into `reasoning` and leaves `content`
 empty (e.g. deepseek-v4-flash with reasoning on), `final_answer()` promotes the
@@ -254,7 +257,7 @@ reasoning text to become the content so it shows in the foreground and persists.
 
 ## 8. Short-Send (Non-Destructive Token Efficiency)
 
-**File:** `src-agent/src/app/runtime/shortsend.rs`
+**File:** `src-agent/src/app/runtime/shortsend/`
 
 The differentiator for budget models. `shape()` is a **pure transform** over the
 API-bound history clone; the stored conversation, `messages.json`, and the
@@ -382,29 +385,31 @@ cache hits, the flag is never reset — used by the short-send warmth calculatio
 
 **File:** `src-agent/src/app/mode/mod.rs`
 
-Five modes, exactly one active at a time:
+Exactly one `Mode` is active. Variants include (not exhaustive — see the enum):
 
-| Variant | Source | Description |
-|---|---|---|
-| `KeyInput(KeyInputForm)` | `mode/key_input.rs` | Credentials form (api key, model, provider) |
-| `SessionPicker(PickerState)` | `mode/picker.rs` | `--resume` session list with live search |
-| `Chat` | — | Normal conversation view (no extra inline state) |
-| `Settings(Box<SettingsState>)` | `mode/settings/` | In-app `/settings` overlay on chat (boxed: large struct) |
-| `Effort(Box<EffortPickerState>)` | `mode/effort.rs` | `/effort` reasoning-effort picker overlay (boxed) |
+| Variant | Role |
+|---|---|
+| `Onboard` / `OnboardProvider` | First-run chooser / provider OAuth wizard |
+| `KeyInput` | Credentials form |
+| `SessionPicker` | Legacy `--resume` list (startup flag) |
+| `SessionHub` | `/resume` live + history two-pane hub |
+| `Chat` | Normal conversation |
+| `Loading` | Warming splash |
+| `Settings` | `/settings` |
+| `Agents` / `Mcp` / `Extensions` / `Store` / `Security` | Full-screen managers |
+| `Bash` / `Todo` / `Remote` / `Help` | Overlays / panels |
+| `Effort` / model cmd / skill / rewind / quit confirm / … | Other overlays |
+| `ExtScreen` | Extension-driven TUI screen |
 
-Key transitions:
+Key transitions (simplified):
 
 ```
-First run                → KeyInput
---resume flag            → SessionPicker
-SaveCreds                → Chat
-PickerSelect (key set)   → Chat (via warm_session)
-PickerSelect (no key)    → KeyInput (prefilled, from_picker=true)
-Esc in KeyInput          → Chat (CancelKeyInput) or SessionPicker (CancelKeyInputToPicker)
-/settings                → Settings
-/effort                  → Effort
-SaveSettings / SaveEffort → Chat
-/resume                  → SessionPicker
+First run                     → Onboard / KeyInput
+--resume flag                 → SessionPicker (or hub path)
+/resume                       → SessionHub
+SaveCreds / warm complete     → Chat
+/settings /agents /mcp /bash… → matching Mode
+Esc from overlay              → Chat (or prior detail)
 ```
 
 ---
@@ -517,9 +522,13 @@ multiple workdirs are configured) is documented in `src-misc/system-tools.txt`.
 | App | `src-agent/src/app/harness.rs` | `classify_prompt`, `classify_toolcall`, `workspace_allowed`, `Verdict` |
 | App | `src-agent/src/app/awareness.rs` | `summarize` (project-awareness secondary call) |
 | Tool | `src-agent/src/tool/mod.rs` | `Tool` trait, `ToolCtx`, `all_tools()`, `resolve`, `resolve_read` |
-| Tool | `src-agent/src/tool/fs.rs` | Read, Write, Edit, Delete, DirList |
+| Tool | `src-agent/src/tool/fs/` | Read, Write, Edit, Delete, DirList |
+| Tool | `src-agent/src/tool/shell.rs` | Bash tool defs |
+| App | `src-agent/src/app/bgbash/` | Bash job registry (FG + BG) |
+| App | `src-agent/src/lsp/` | Host LSP for GUI coding panel |
 | Tool | `src-agent/src/tool/search.rs` | Grep, Glob |
-| Tool | `src-agent/src/tool/shell.rs` | Bash |
+| Tool | `src-agent/src/tool/shell.rs` | Bash tool defs + `capture_raw` (non-intercept callers) |
+| App | `src-agent/src/app/bgbash/` | Bash job registry: every model `bash` is a `BashJob`; Ctrl+B promote |
 | Tool | `src-agent/src/tool/dircache.rs` | `DirCache`, `DirCacheUpdate`, `reindex` |
 | Tool | `src-agent/src/tool/pong.rs` | Pong (heartbeat) |
 | Resources | `src-agent/src/resources.rs` | Compile-time embed of `src-misc/`; `build_system_prompt`, `wanderer_word` |

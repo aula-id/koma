@@ -126,6 +126,8 @@ The React app calls `window.ipc.postMessage(JSON.stringify(msg))`. Messages are 
 { t: "req", r: "Compact" }
 { t: "req", r: "RewindTo", index: 3 }
 { t: "req", r: "KillSubagent", id: 1 }
+{ t: "req", r: "BackgroundSubagent", id: 1 }
+{ t: "req", r: "BackgroundAll" }   // composer Ctrl+B: SAs + still-blocking FG bash
 { t: "req", r: "KillBash", id: 2 }
 { t: "req", r: "SetSessionMain", modelUuid: "..." }
 { t: "req", r: "SetMode", mode: "auto" | "normal" | "plan" | "yolo" }
@@ -272,7 +274,7 @@ On Windows these are named pipes instead of unix-domain sockets (`\\.\pipe\koma-
 | Constant | Value | Description |
 |---|---|---|
 | `MAX_FRAME_BYTES` | 64 MiB | Max single IPC frame payload |
-| Default model | `openai/gpt-4o-mini` | Via OpenRouter |
+| Default model | `koma/apple` (koma-free) | Free-tier soft default |
 | Max tool output | 400,000 chars | Truncation limit for tool results |
 | Max sub-agent report | 50,000 chars | Sub-agent completion cap |
 | Approval park timeout | 30 minutes | How long a tool approval waits |

@@ -2,12 +2,12 @@
 //! round — split out of `approval.rs` for file size (pure code motion, no
 //! behaviour change), then split AGAIN into this themed directory module (same
 //! reason): `plan` (Plan-mode blocks + the `build_convo_context` preamble),
-//! `bash` (background-bash blocks), `task` (sub-agent blocks), `guard`
-//! (workspace-mutation guard blocks). Each `intercept_*` fn is exactly one
-//! `process_tools` block (gated on the call's tool name / mode in the CALLER,
-//! unchanged), taking the same locals the block used and returning an
-//! [`InterceptFlow`] that replicates the block's original control flow
-//! one-to-one:
+//! `bash` (every model bash as a BashJob: FG park + BG + output/kill), `task`
+//! (sub-agent blocks), `guard` (workspace-mutation guard blocks). Each
+//! `intercept_*` fn is exactly one `process_tools` block (gated on the call's
+//! tool name / mode in the CALLER, unchanged), taking the same locals the block
+//! used and returning an [`InterceptFlow`] that replicates the block's original
+//! control flow one-to-one:
 //!
 //! - every bare `continue;` in the original block becomes `return
 //!   InterceptFlow::Continue;` (advance to the next `tool_idx`, same as before),

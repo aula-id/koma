@@ -84,11 +84,14 @@ fn ensure_tee_log_is_idempotent_and_reuses_the_same_path() {
         pid: Mutex::new(None),
         ended_at: Mutex::new(None),
         tee_path: Mutex::new(None),
+        deadline: Mutex::new(None),
     });
     let job = BashJob {
         id: 1,
         command: "cargo build".to_string(),
         started_at: Instant::now(),
+        tool_call_id: None,
+        suppress_completion_nudge: false,
         shared,
     };
 
@@ -108,6 +111,108 @@ fn ensure_tee_log_is_idempotent_and_reuses_the_same_path() {
         on_disk, "some output\n",
         "the tee file must not be rewritten on later polls"
     );
+}
+
+#[test]
+fn is_blocking_requires_running_and_call_id() {
+    let shared = Arc::new(BashJobShared {
+        output: Mutex::new(String::new()),
+        status: Mutex::new(BashJobStatus::Running),
+        pid: Mutex::new(None),
+        ended_at: Mutex::new(None),
+        tee_path: Mutex::new(None),
+        deadline: Mutex::new(None),
+    });
+    let mut job = BashJob {
+        id: 7,
+        command: "sleep 1".into(),
+        started_at: Instant::now(),
+        tool_call_id: Some("call-1".into()),
+        suppress_completion_nudge: false,
+        shared: Arc::clone(&shared),
+    };
+    assert!(job.is_blocking());
+
+    // Promote: take call id → no longer blocking.
+    let taken = job.tool_call_id.take();
+    assert_eq!(taken.as_deref(), Some("call-1"));
+    assert!(!job.is_blocking());
+
+    // Second take loses the race (Done path after promote).
+    assert!(job.tool_call_id.take().is_none());
+}
+
+#[test]
+fn format_tool_result_done_includes_exit_code() {
+    let shared = Arc::new(BashJobShared {
+        output: Mutex::new("hello\n".into()),
+        status: Mutex::new(BashJobStatus::Done(0)),
+        pid: Mutex::new(None),
+        ended_at: Mutex::new(None),
+        tee_path: Mutex::new(None),
+        deadline: Mutex::new(None),
+    });
+    let job = BashJob {
+        id: 2,
+        command: "echo hello".into(),
+        started_at: Instant::now(),
+        tool_call_id: None,
+        suppress_completion_nudge: false,
+        shared,
+    };
+    let text = job.format_tool_result(false, None);
+    assert!(
+        text.contains("exit code: 0"),
+        "expected exit code line, got: {text}"
+    );
+    assert!(text.contains("hello"), "expected command output, got: {text}");
+}
+
+#[test]
+fn format_tool_result_timeout_error_is_plain_message() {
+    let shared = Arc::new(BashJobShared {
+        output: Mutex::new(String::new()),
+        status: Mutex::new(BashJobStatus::Error(
+            "command timed out after 120000ms".into(),
+        )),
+        pid: Mutex::new(None),
+        ended_at: Mutex::new(None),
+        tee_path: Mutex::new(None),
+        deadline: Mutex::new(None),
+    });
+    let job = BashJob {
+        id: 3,
+        command: "sleep 999".into(),
+        started_at: Instant::now(),
+        tool_call_id: Some("c".into()),
+        suppress_completion_nudge: false,
+        shared,
+    };
+    let text = job.format_tool_result(true, None);
+    assert_eq!(text, "command timed out after 120000ms");
+}
+
+#[test]
+fn clear_deadline_drops_fg_timeout() {
+    let shared = Arc::new(BashJobShared {
+        output: Mutex::new(String::new()),
+        status: Mutex::new(BashJobStatus::Running),
+        pid: Mutex::new(None),
+        ended_at: Mutex::new(None),
+        tee_path: Mutex::new(None),
+        deadline: Mutex::new(Some(Instant::now())),
+    });
+    let job = BashJob {
+        id: 4,
+        command: "x".into(),
+        started_at: Instant::now(),
+        tool_call_id: Some("c".into()),
+        suppress_completion_nudge: false,
+        shared: Arc::clone(&shared),
+    };
+    job.clear_deadline();
+    let d = shared.deadline.lock().unwrap();
+    assert!(d.is_none());
 }
 
 /// A unique path under the OS temp root for a single test, removed

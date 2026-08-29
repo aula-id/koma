@@ -101,10 +101,10 @@ fn resolved_main_model(rest: &AppStateRest) -> String {
     if let Some(r) = resolve_turn_model(&rest.config, &session.settings, rest.agent_mode()) {
         // Standalone: trust the live resolver. Suppress only the pure soft-
         // fallback case where the answer is still the unused serde default
-        // (`openai/gpt-4o-mini`) AND a real Main ModelEntry exists in the
+        // (`koma/apple` / DEFAULT_MODEL) AND a real Main ModelEntry exists in the
         // catalogue — that means the entry's provider is dangling and the
         // legacy string is lying about the active model. Prefer empty over a
-        // phantom gpt label the user never configured.
+        // phantom free-tier label when a configured Main exists but is broken.
         if r.model_id == crate::config::DEFAULT_MODEL
             && session.settings.model == crate::config::DEFAULT_MODEL
         {

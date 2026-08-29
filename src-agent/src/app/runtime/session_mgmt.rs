@@ -169,8 +169,7 @@ fn warm_session_impl(
     crate::tool::dircache::reindex(workdirs, state.rest.fg().dir_cache.clone());
 
     // Decide the warm work. Awareness runs only when the setting is on. It needs a
-    // client AND a routable resolved route (an Anthropic-typed provider can't be
-    // dispatched by the OpenAI-compatible client — native Anthropic is deferred).
+    // client AND a routable resolved route (`Resolved::is_routable`).
     // "wanted but not routable" becomes a Skipped step (no task spawned).
     let want_awareness = settings.awareness_enabled;
     let aware_route = client.as_ref().and_then(|_| {

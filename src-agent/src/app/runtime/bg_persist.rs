@@ -101,6 +101,9 @@ pub(crate) fn restore_bg_records(
             id,
             command: rec.command,
             started_at: Instant::now(),
+            // Restored jobs are never mid-park of a live turn.
+            tool_call_id: None,
+            suppress_completion_nudge: false,
             // No worker thread — the shared state is pre-baked from the record, so
             // `snapshot_status()` returns the restored (terminal) status. Mirrors
             // `client_shadow::session::shadow_bash_job`.
@@ -110,6 +113,7 @@ pub(crate) fn restore_bg_records(
                 pid: Mutex::new(None),
                 ended_at: Mutex::new(None),
                 tee_path: Mutex::new(None),
+                deadline: Mutex::new(None),
             }),
         });
     }

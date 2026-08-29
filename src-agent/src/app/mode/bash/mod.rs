@@ -1,7 +1,8 @@
-//! Bash mode state: the working state for the `/bash` background-job panel.
+//! Bash mode state: the working state for the `/bash` job panel.
 //!
 //! A READ-ONLY master/detail panel (modelled on `Mode::Agents`'s two-pane look):
-//! the LEFT pane lists every background bash job registered this session; the
+//! the LEFT pane lists every bash job registered this session (foreground park
+//! and true background); the
 //! RIGHT pane shows the selected job's command + status + live output tail. The
 //! only mutating action is killing a running job (`k`); there is no editing, no
 //! create/delete, no pickers, and no sub-modes.
@@ -15,14 +16,14 @@
 
 use crate::ipc::proto::BashJobView;
 
-/// Working state for the `/bash` background-job panel.
+/// Working state for the `/bash` job panel.
 ///
 /// Holds the (already-projected) job list + the LIST cursor. No drafts, no
 /// sub-modes — read-only + kill only.
 #[derive(Debug, Clone, Default)]
 pub struct BashState {
-    /// Snapshot of the background bash jobs (one row per job), re-read live each
-    /// frame from the foreground session's registry.
+    /// Snapshot of bash jobs (one row per job), re-read live each frame from the
+    /// foreground session's registry (FG + background).
     pub jobs: Vec<BashJobView>,
     /// Selected index into `jobs` (the LIST cursor).
     pub selected: usize,

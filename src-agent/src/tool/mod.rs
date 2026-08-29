@@ -665,7 +665,7 @@ pub const DEFERRED_TOOLS: &[&str] = &[
     "write",
     "edit",
     "delete",
-    "bash",
+    // bash is always intercepted as a BashJob (FG or BG) — never deferred.
     "grep",
     "glob",
     "remember",

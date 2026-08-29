@@ -297,13 +297,14 @@ pub(crate) async fn classify(
             "classifier not configured (no safeguard model) — set one in /settings".to_string(),
         );
     };
-    // Call-boundary gate (fail-CLOSED): an Anthropic-typed safeguard provider can't
-    // be dispatched against the OpenAI-compatible client (native Anthropic is
-    // deferred). Treat it as UNAVAILABLE rather than POSTing a doomed body — the
-    // caller degrades that to a human prompt (TAC) / advisory toast (PC), never a
-    // silent allow.
+    // Call-boundary gate (fail-CLOSED): a non-routable safeguard route is
+    // UNAVAILABLE rather than POSTing a doomed body — the caller degrades that
+    // to a human prompt (TAC) / advisory toast (PC), never a silent allow.
     if !route.is_routable() {
-        return unavailable("safeguard provider not wired (Anthropic)".to_string());
+        return unavailable(format!(
+            "safeguard provider not routable ({:?})",
+            route.api_type
+        ));
     }
     // Defense in depth: a route can be routable yet still carry no usable auth —
     // e.g. an EXPLICITLY configured Safeguard connection with an empty key (not

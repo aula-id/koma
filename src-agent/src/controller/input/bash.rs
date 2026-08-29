@@ -1,4 +1,4 @@
-//! Key handler for the `/bash` background-job panel (`Mode::Bash`).
+//! Key handler for the `/bash` job panel (`Mode::Bash`).
 //!
 //! A read-only master/detail panel — no sub-modes and no editing, so the
 //! dispatch is simple: navigate the job list, view the selected job's output,
@@ -18,10 +18,10 @@ use crate::app::state::AppStateRest;
 
 use super::{is_ctrl, Action};
 
-/// Handle a key press inside the `/bash` background-job panel.
+/// Handle a key press inside the `/bash` job panel.
 ///
 /// Re-reads the LIVE job registry from the foreground session BEFORE handling
-/// navigation so the cursor clamps to the current jobs (a background job may have
+/// navigation so the cursor clamps to the current jobs (a job may have
 /// finished — or a new one started — since the last frame), exactly like the
 /// agents/security panels re-read their live state on each key.
 pub fn handle_bash(s: &mut BashState, rest: &mut AppStateRest, key: KeyEvent) -> Action {

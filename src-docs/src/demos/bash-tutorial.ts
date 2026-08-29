@@ -1,8 +1,10 @@
 /**
- * Tutorial screens for `/bash` — the background jobs panel.
+ * Tutorial screens for `/bash` — the bash jobs panel (FG + background).
  *
- * The bash panel is a bordered popup anchored above the input box,
- * drawn on top of the chat transcript. Two-pane layout inside the box:
+ * Every model `bash` is a job listed here: foreground parks the turn until exit
+ * or Ctrl+B promote; `run_in_background` starts true BG. The panel is a bordered
+ * popup anchored above the input box, drawn on top of the chat transcript.
+ * Two-pane layout inside the box:
  *   LEFT  — narrow list (18 cols) of jobs with id, status, elapsed time
  *   RIGHT — wide detail pane with command, status line, output tail
  *
@@ -253,19 +255,22 @@ export function getBashSteps(rows = 24): TutorialStep[] {
   return [
     {
       title: 'Type /bash',
-      narration: 'From normal chat, type /bash in the composer and press Enter to open the read-only background jobs panel.',
+      narration:
+        'From normal chat, type /bash in the composer and press Enter to open the bash jobs panel (foreground and background).',
       screen: commandEntryScreen(rows, '/bash'),
     },
     {
       title: 'Running Job',
       narration:
-        'Type /bash to open the background jobs panel \u2014 a bordered popup anchored above the ' +
-        'input. The left pane lists all active and completed jobs; the right pane shows the ' +
-        'selected job\u2019s command, status, and streaming output.',
+        'Type /bash to open the jobs panel \u2014 a bordered popup anchored above the ' +
+        'input. The left pane lists all active and completed jobs (including FG bash that ' +
+        'still parks the turn); the right pane shows the selected job\u2019s command, status, and streaming output. ' +
+        'Composer Ctrl+B promotes still-blocking FG jobs without killing them.',
       points: [
         'Running jobs show accent color; elapsed time updates live',
         'The right pane displays the command, status line, and output tail',
         'Each job is numbered (bash-1, bash-2) for easy reference',
+        'Ctrl+B mid-FG-bash unblocks the turn; process keeps running',
       ],
       screen: screenBashRunning(rows),
     },
@@ -278,7 +283,7 @@ export function getBashSteps(rows = 24): TutorialStep[] {
       points: [
         '"done" jobs show output in accent-free text for easy reading',
         '"error" jobs display the error output for quick debugging',
-        'Run multiple background tasks in parallel and review them here',
+        'Run multiple jobs in parallel and review them here',
       ],
       screen: screenBashDone(rows),
     },

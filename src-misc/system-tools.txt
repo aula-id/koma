@@ -227,21 +227,30 @@ forget — delete a saved memory by its "slug" (as listed in the memory index).
   Example:   forget({"slug": "deploy-uses-make-ship"})
   No-op if the slug doesn't exist.
 
-message_find — search the session's chat history (messages.sqlite) for past
-  conversation turns matching the query. SQLite FTS5 only. Query max 5 words
-  (extra terms dropped). Times out at 20s and runs a deterministic FTS/panic
-  repair. Returns up to 10 results with [role] prefix, message id, and the first
-  300 characters of matching content for coherent context.
+message_find — search chat history (messages.sqlite) via SQLite FTS5 for past
+  conversation turns matching the query. Default scope is the **current session
+  only**. Pass scope "project" to search all sessions sharing this working-
+  directory bucket. Query max 5 words (extra terms dropped). Times out at 20s
+  and runs a deterministic FTS/panic repair on the current session only.
+  Returns up to 10 results with [role] prefix, message id, and the first 300
+  characters of matching content. Project-scope hits are tagged with session
+  name/id (message ids are per-session).
   Arguments: { "query": "search terms" }
   Optional: { "role": "user|assistant|tool" } — filter to a specific role.
+  Optional: { "scope": "session|project" } — omit or "session" = this session
+    only (default); "project" = all sessions in this pwd bucket.
   Example:   message_find({"query": "FS5"})
-  Example:   message_find({"query": "blocking code", "role": "assistant"})
+  Example:   message_find({"query": "attach freeze", "scope": "project"})
+  Example:   message_find({"query": "blocking code", "role": "assistant", "scope": "project"})
   WHEN TO USE:
   - You are confused, missing context, or unsure about a past decision, error,
     tradeoff, or fact that may have scrolled out of the context window — call
-    this before guessing.
+    this before guessing (default session scope).
   - The user explicitly asks you to recall, look up, find, or check something
     from earlier in the conversation.
+  - Use scope "project" when the user asks about prior sessions in this project,
+    or when session-only search misses something that may live in a sibling
+    session under the same working directory.
   Prefer short precise queries (≤5 words). Multi-word queries are OR'd as
   prefix matches (e.g. "foo bar" matches messages containing "foo*" or "bar*").
 

@@ -573,9 +573,9 @@ pub(super) enum GuiReq {
     BackgroundSubagent {
         id: usize,
     },
-    /// The global Ctrl+B shortcut: background EVERY eligible running sub-agent at once
-    /// (mirrors the TUI composer's Ctrl+B). Forwarded as
-    /// [`ClientRequest::BackgroundAllSubagents`].
+    /// The global Ctrl+B shortcut: background EVERY eligible running sub-agent **and**
+    /// promote every still-blocking FG bash job at once (mirrors the TUI composer's
+    /// Ctrl+B). Forwarded as [`ClientRequest::BackgroundAllSubagents`].
     BackgroundAll,
     /// The Explore sidepanel bash-row KILL button: kill bg-bash job `id` (the numeric part
     /// of the row's `bash-<id>`). Forwarded as [`ClientRequest::BashKill`].

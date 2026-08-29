@@ -97,7 +97,7 @@ const PRODUCTS: ProductDef[] = [
           {
             label: 'Tools',
             items: [
-              { label: '/bash', to: '/tui/commands-bash', desc: 'background jobs' },
+              { label: '/bash', to: '/tui/commands-bash', desc: 'bash jobs' },
               { label: '/todo', to: '/tui/commands-todo', desc: 'task list' },
               { label: '/cd', to: '/tui/commands-cd', desc: 'working directory' },
               { label: '/adddir', to: '/tui/commands-adddir', desc: 'add workspace root' },

@@ -3,7 +3,8 @@
 //! Exposes the sub-modules that together own the application's lifecycle:
 //!
 //! - [`awareness`] – project-doc summarisation for the self-awareness block
-//! - [`bgbash`] – background-bash registry: run a shell command detached, poll it
+//! - [`bgbash`] – bash job registry: every model `bash` (FG or BG) runs as a
+//!   [`BashJob`](bgbash::BashJob); FG parks the turn, Ctrl+B promotes to true BG
 //!   with `bash_output`, stop it with `bash_kill`
 //! - [`ext`] – extension host: install + verify signed extension packages and
 //!   spawn/supervise them, talking the duplex extension protocol over a per-

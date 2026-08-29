@@ -1,7 +1,17 @@
-//! Background-bash interceptor blocks (`bash` with `run_in_background`,
-//! `bash_output`, `bash_kill`) — split out of `intercepts.rs` for file size
-//! (pure code motion, no behaviour change; see the parent module doc for the
-//! `InterceptFlow` control-flow contract every `intercept_*` fn here follows).
+//! Bash interceptor blocks (`bash` FG + `run_in_background`, `bash_output`,
+//! `bash_kill`) — split out of `intercepts.rs` for file size (see the parent
+//! module doc for the `InterceptFlow` control-flow contract).
+//!
+//! Every model `bash` call is handled here as a [`crate::app::bgbash::BashJob`]:
+//! - `run_in_background: true` → job with `tool_call_id: None`, immediate result
+//! - foreground (default) → job with `tool_call_id: Some(call.id)`, park on
+//!   `pending_tool_tasks` until Done or Ctrl+B promote
+//!
+//! Bash never falls through to `dispatch_deferred` / `capture_raw`.
+
+use std::sync::OnceLock;
+
+use regex::Regex;
 
 use crate::app::state::AppState;
 use crate::dto::chat::ToolCall;
@@ -10,6 +20,12 @@ use super::InterceptFlow;
 use crate::app::runtime::stream::tools::approval::{
     bash_status_line, filter_bash_output, parse_bash_id,
 };
+
+/// Same git-word pattern as [`crate::tool::shell::Bash::run`] — keep in sync.
+fn git_command_re() -> &'static Regex {
+    static GIT_RE: OnceLock<Regex> = OnceLock::new();
+    GIT_RE.get_or_init(|| crate::re_util::static_re(r"(?:^|[\s;&|(])git\b"))
+}
 
 pub(in crate::app::runtime::stream::tools) fn intercept_bash_background(
     state: &mut AppState,
@@ -23,54 +39,106 @@ pub(in crate::app::runtime::stream::tools) fn intercept_bash_background(
         .get("run_in_background")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    if background {
-        let command = args
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let result = if command.trim().is_empty() {
-            "error: bash requires a non-empty 'command'".to_string()
-        } else {
-            // Fail-closed: same writable-root gate as inline bash via build_tool_ctx.
-            let ctx = crate::app::runtime::stream::spawn::build_tool_ctx(state, sess_idx);
-            if ctx.workspaces.is_empty() || ctx.workspace.as_os_str().is_empty() {
-                "error: no writable workspace root — SDLC execute/integrate binding \
-                 missing or invalid; cannot run bash against primary"
-                    .to_string()
-            } else {
-                // Lazily create THIS session's completion channel once, then
-                // reuse it (mirrors the deferred tool-task channel). The worker
-                // fires the finished job id over `bash_done_tx`; the event-loop
-                // deferred drain reads `bash_done_rx` to pop a toast.
-                if state.rest.sessions[sess_idx].bash_done_tx.is_none() {
-                    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                    state.rest.sessions[sess_idx].bash_done_tx = Some(tx);
-                    state.rest.sessions[sess_idx].bash_done_rx = Some(rx);
-                }
-                let id = state.rest.sessions[sess_idx].next_bash_id();
-                // Prefer the sandboxed tool cwd (bound worktree), not raw effective_cwd.
-                let cwd = ctx.workspace.clone();
-                let done_tx = state.rest.sessions[sess_idx].bash_done_tx.clone();
-                let job = crate::app::bgbash::spawn_bash_job(id, command, cwd, done_tx);
-                state.rest.sessions[sess_idx].bash_jobs.push(job);
-                // Persist the new job record so it survives close/reopen (#25).
-                crate::app::runtime::bg_persist::persist_bash_jobs(&state.rest.sessions[sess_idx]);
-                format!(
-                    "started background job bash-{id} (running). Poll with \
-                     bash_output{{\"job_id\":\"bash-{id}\"}}, stop with \
-                     bash_kill{{\"job_id\":\"bash-{id}\"}}."
-                )
-            }
-        };
+    let command = args
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let timeout_ms: u64 = args
+        .get("timeout_ms")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(120_000);
+
+    // Shared validation for FG and BG — push an error tool result and continue.
+    let err = if command.trim().is_empty() {
+        Some("error: bash requires a non-empty 'command'".to_string())
+    } else if git_command_re().is_match(command.trim()) {
+        Some(
+            "error: use the git_operator tool for git commands, not bash. \
+             git_operator runs git directly (no shell-injection risk), injects the \
+             session SSH key automatically, and gates destructive operations. \
+             Example: git_operator({\"args\": [\"log\", \"--oneline\", \"-5\"]})"
+                .to_string(),
+        )
+    } else {
+        None
+    };
+    if let Some(result) = err {
         state.rest.sessions[sess_idx]
             .tool_results
             .push((call.id.clone(), result));
         state.rest.sessions[sess_idx].tool_idx += 1;
         return InterceptFlow::Continue;
     }
-    // Not a background bash — fall through to the normal path below.
-    InterceptFlow::Fallthrough
+
+    // Fail-closed: same writable-root gate as inline bash via build_tool_ctx.
+    let ctx = crate::app::runtime::stream::spawn::build_tool_ctx(state, sess_idx);
+    if ctx.workspaces.is_empty() || ctx.workspace.as_os_str().is_empty() {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            "error: no writable workspace root — SDLC execute/integrate binding \
+             missing or invalid; cannot run bash against primary"
+                .to_string(),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    // Lazily create THIS session's completion channel once, then reuse it
+    // (mirrors the deferred tool-task channel).
+    if state.rest.sessions[sess_idx].bash_done_tx.is_none() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        state.rest.sessions[sess_idx].bash_done_tx = Some(tx);
+        state.rest.sessions[sess_idx].bash_done_rx = Some(rx);
+    }
+    let id = state.rest.sessions[sess_idx].next_bash_id();
+    let cwd = ctx.workspace.clone();
+    let done_tx = state.rest.sessions[sess_idx].bash_done_tx.clone();
+
+    if background {
+        let job = crate::app::bgbash::spawn_bash_job(
+            id,
+            command,
+            cwd,
+            done_tx,
+            None, // true BG — no park
+            None, // no FG timeout
+        );
+        state.rest.sessions[sess_idx].bash_jobs.push(job);
+        crate::app::runtime::bg_persist::persist_bash_jobs(&state.rest.sessions[sess_idx]);
+        let result = format!(
+            "started background job bash-{id} (running). Poll with \
+             bash_output{{\"job_id\":\"bash-{id}\"}}, stop with \
+             bash_kill{{\"job_id\":\"bash-{id}\"}}."
+        );
+        state.rest.sessions[sess_idx]
+            .tool_results
+            .push((call.id.clone(), result));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    // Foreground: park the turn on this job until Done or Ctrl+B promote.
+    let job = crate::app::bgbash::spawn_bash_job(
+        id,
+        command,
+        cwd,
+        done_tx,
+        Some(call.id.clone()),
+        Some(timeout_ms),
+    );
+    state.rest.sessions[sess_idx].bash_jobs.push(job);
+    crate::app::runtime::bg_persist::persist_bash_jobs(&state.rest.sessions[sess_idx]);
+
+    state.rest.sessions[sess_idx]
+        .pending_tool_tasks
+        .push(call.id.clone());
+    state.rest.sessions[sess_idx].awaiting_tool_tasks = true;
+    state.rest.sessions[sess_idx].status = format!("running bash-{id}");
+    state.rest.sessions[sess_idx].tool_idx += 1;
+    // Park: return from process_tools so the resume gate waits on pending_tool_tasks.
+    // Mirrors dispatch_deferred's early return for heavy tools.
+    InterceptFlow::Return
 }
 
 pub(in crate::app::runtime::stream::tools) fn intercept_bash_output(

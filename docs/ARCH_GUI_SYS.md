@@ -110,8 +110,7 @@ src-webgui/
         connector/
           ConnectorListView.tsx       # 3-accordion list (Providers/OAuth/Models)
           ModelForm.tsx               # Model create/edit with route picker
-          OAuthConnect.tsx            # OAuth stub
-          ProviderForm.tsx            # Provider create/edit with presets
+          OAuthConnect.tsx            # OAuth connect flow (Connector)          ProviderForm.tsx            # Provider create/edit with presets
         mcp/
           McpEditView.tsx             # MCP server form
           McpListView.tsx             # MCP server list with toggle/delete
@@ -123,7 +122,9 @@ src-webgui/
 
 1. **`src/main.tsx`**: `ReactDOM.createRoot` on `#root`, renders `<StrictMode>` wrapping `<RouterProvider>`.
 
-2. **`src/router.tsx`**: Creates a TanStack Router with `createHashHistory()` and two routes (`/` = `RootLayout`, `/settings` = stub).
+2. **`src/router.tsx`**: TanStack Router with hash history; primary route is
+   `RootLayout` / session chrome. Settings open as a **main-area tab**
+   (`openSettingsTab`), not a dead `/settings` stub route.
 
 3. **`src/routes/index.tsx` — `RootLayout`**:
    - Resolves `window.__komaOS` once (platform detection, injected by Rust host before boot).
@@ -211,7 +212,8 @@ Defined in `src/koma.d.ts:4-126` as a discriminated union on `r` (33 variants):
 
 **Attachments:** `AttachFile{name, bytesB64, mime?}`, `AttachPath{path}`, `FileSearch{query}`, `RemoveAttachment{markerN}`
 
-**Sub-agent/bash:** `KillSubagent{id}`, `KillBash{id}`
+**Sub-agent/bash:** `KillSubagent{id}`, `BackgroundSubagent{id}`, `BackgroundAll`, `KillBash{id}`  
+(`BackgroundAll` = composer Ctrl+B: all blocking sub-agents **and** still-blocking FG bash jobs.)
 
 **Config CRUD:** `SetProvider`, `DeleteProvider`, `SetModel`, `DeleteModel`, `SetMcpServer`, `DeleteMcpServer`, `EnableMcpServer`
 
@@ -385,25 +387,30 @@ The page is a frameless window rendered inside `#app` (a transparent-background 
 
 A 48px-wide vertical icon strip on the left edge, VSCode-style:
 
-| Icon | View | Tooltip |
+| Icon | View | Notes |
 |------|------|---------|
-| `Files` | explore | Explore panel |
-| `Blocks` | mcp | MCP panel |
-| `Plug` | connector | Connector panel |
-| `Settings` | (reserved) | Settings (stub) |
+| Files | explore | Plan / files / bash / agents |
+| Code2 | coding | File tree + Monaco coding tabs + host LSP |
+| GitBranch | git | Source control |
+| VectorSquare | mcp | MCP servers |
+| Brain | connector | Providers / models / OAuth |
+| Network | importGraph | Import graph |
+| Bot | agents | Agent definitions |
+| ChartColumn | usage | Usage |
+| Blocks | store | Extension marketplace |
+| Server | remote | Remote SSH hosts |
+| (footer) | Settings / Help / Tutorial | Not SidebarView — open settings/help tabs or tutorial |
 
-**Navigation logic** (`selectView` in RootLayout, routes/index.tsx:79-86):
-- Clicking the **active** view toggles the sidebar open/closed.
-- Clicking a **different** view switches to it and ensures the sidebar is open.
-- Active view gets a 2px left indicator bar in the accent color + full opacity; inactive icons are dimmed.
+**Navigation:** clicking the active view toggles the sidebar; a different view
+switches and opens the sidebar. Extension panel icons can share the bar’s
+order/hidden/overflow machinery.
 
 ### Sidebar (`Sidebar.tsx`)
 
-A fixed-width panel (150–500px, resizable) with a header bar showing the current view title. Renders one of three panels:
+Resizable panel (≈150–500px) with header title. Renders the panel for
+`SidebarView`:
 
-- `'explore'` → `<ExplorePanel />`
-- `'mcp'` → `<McpPanel />`
-- `'connector'` → `<ConnectorPanel />`
+`explore` · `coding` · `git` · `mcp` · `connector` · `importGraph` · `agents` · `usage` · `store` · `remote`
 
 ---
 
@@ -693,14 +700,16 @@ When `pendingCall.name === 'plan_ready'`:
 ### Bash
 
 - **Reversed order** (newest first).
-- **Items**: `BashJobEntry[]` with terminal icon, command, status badge.
+- **Items**: `BashJobEntry[]` with terminal icon, command, status badge — includes **foreground** jobs that park the turn as well as true background jobs.
 - **Kill button** (while running) → sends `KillBash` with parsed numeric ID.
+- Composer / global **Ctrl+B** (`BackgroundAll`) promotes still-blocking FG bash without killing the process.
 
 ### Agents
 
 - **Reversed order**.
 - **Items**: `SubAgentEntry[]` with bot icon, name, status badge.
 - **Kill button** (while running, requires `id`) → sends `KillSubagent`.
+- **Background button** / Ctrl+B on a row → `BackgroundSubagent{id}` (detach without kill).
 
 ---
 
@@ -874,7 +883,8 @@ Lazy-loaded via `React.lazy()` — the Monaco chunk never loads until the first 
 2. **Connect** (step 2): Three tiles:
    - **Koma Free** (keyless) → sends `SetupKomaFree` → daemon mints provider + model → Config push flips `firstRun` → onboarding unmounts.
    - **Provider** (API key) → opens Provider sub-step.
-   - **OAuth** (stubbed/greyed).
+   - **OAuth** — may be session-gated (greyed until a session exists); Connector
+     `OAuthConnect` is a real multi-phase flow, not a placeholder stub.
 
 3. **Pick Provider** (sub-step): Marketplace list from `PREDEFINED` presets + Custom.
 
@@ -1060,7 +1070,12 @@ No app-wide Cmd+K, Cmd+P, or chord shortcuts.
 | `ConnectorListView` | `panels/connector/ConnectorListView.tsx` | 3-accordion list |
 | `ProviderForm` | `panels/connector/ProviderForm.tsx` | Provider create/edit with marketplace presets |
 | `ModelForm` | `panels/connector/ModelForm.tsx` | Model create/edit with live route picker |
-| `OAuthConnect` | `panels/connector/OAuthConnect.tsx` | OAuth stub (OpenAI/Kilo/Anthropic) |
+| `OAuthConnect` | `panels/connector/OAuthConnect.tsx` | OAuth connect flow (OpenAI / Kilo / Anthropic / …) |
+| `CodingPanel` | `panels/CodingPanel.tsx` | Workspace file tree |
+| `CodeEditorTab` | `CodeEditorTab.tsx` | Monaco coding tabs + host LSP |
+| `GitPanel` | `panels/GitPanel.tsx` | Source control |
+| `TerminalTab` | `TerminalTab.tsx` | Integrated terminal tabs |
+| `ProblemsDrawer` / `LspDrawer` | drawers | Diagnostics + language-server runtime |
 | `McpListView` | `panels/mcp/McpListView.tsx` | MCP server list with toggle/delete |
 | `McpEditView` | `panels/mcp/McpEditView.tsx` | MCP server create/edit form |
 | `form.tsx` | `panels/form.tsx` | Form primitives: Field, TextInput, Toggle, Segmented, Chips, Select, Combobox |

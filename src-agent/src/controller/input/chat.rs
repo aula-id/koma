@@ -359,16 +359,17 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
     }
 
     // Ctrl+B (main composer, NOT the `$` panel): background ALL running blocking
-    // sub-agents of the foreground session at once, unblocking the parked turn.
-    // The `$` panel's Ctrl+B handler above returns early when the panel is open,
-    // so this arm is only reached when the panel is CLOSED (normal composer mode).
-    // Only fires when at least one eligible agent exists; otherwise falls through.
+    // sub-agents AND still-blocking foreground bash jobs of the foreground
+    // session at once, unblocking the parked turn. The `$` panel's Ctrl+B
+    // handler above returns early when the panel is open, so this arm is only
+    // reached when the panel is CLOSED (normal composer mode). Only fires when
+    // at least one eligible SA or bash job exists; otherwise falls through.
     if is_ctrl(&key, 'b')
-        && rest.fg().subagents.iter().any(|sa| {
+        && (rest.fg().subagents.iter().any(|sa| {
             matches!(sa.status, crate::app::subagent::SubAgentStatus::Running)
                 && !sa.detached
                 && sa.tool_call_id.is_some()
-        })
+        }) || rest.fg().bash_jobs.iter().any(|j| j.is_blocking()))
     {
         return Action::BackgroundAllSubagents;
     }

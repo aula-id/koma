@@ -52,7 +52,7 @@ const ALL_ENTRIES: HelpEntry[] = [
   { key: '/remote',        desc: 'Manage remote SSH hosts and sessions',                       isCommand: true },
   { key: '/task',          desc: 'Run an agent on a task, or open the sub-agents viewer (no args)', isCommand: true },
   { key: '/model',         desc: 'Switch session / agent model  (/model for help)',            isCommand: true },
-  { key: '/bash',          desc: 'Manage background bash jobs',                                isCommand: true },
+  { key: '/bash',          desc: 'Manage bash jobs (FG + background)',                         isCommand: true },
   { key: '/todo',          desc: 'View the session task list',                                 isCommand: true },
   { key: '/skill',         desc: 'Load or unload agent skills',                                isCommand: true },
   { key: '/attach',        desc: 'Attach a .screenshoot/*.png to the next message',           isCommand: true },
@@ -72,11 +72,12 @@ const ALL_ENTRIES: HelpEntry[] = [
   { key: 'Ctrl+E',         desc: 'toggle internet mode (simple / full)',                       isCommand: false },
   { key: 'Ctrl+J',         desc: 'insert a newline',                                          isCommand: false },
   { key: 'Ctrl+V',         desc: 'paste an image from the clipboard',                         isCommand: false },
+  { key: 'Ctrl+B',         desc: 'background blocking sub-agent(s) / FG bash job(s)',         isCommand: false },
   { key: 'Ctrl+X',         desc: 'kill the selected bash job / sub-agent',                    isCommand: false },
-  { key: 'Esc',            desc: 'interrupt while busy',                                      isCommand: false },
+  { key: 'Esc',            desc: 'interrupt while busy (kills still-blocking FG bash)',       isCommand: false },
   { key: 'Esc Esc',        desc: 'edit a previous message (rewind)',                          isCommand: false },
   { key: 'Up/Down/wheel',  desc: 'scroll the transcript',                                     isCommand: false },
-  { key: '$',              desc: 'open the sub-agents panel \u2014 Ctrl+X kills the selected',     isCommand: false },
+  { key: '$',              desc: 'open the sub-agents panel \u2014 Ctrl+B backgrounds, Ctrl+X kills', isCommand: false },
 ]
 
 // ─── Screen Builder ───────────────────────────────────────────────────

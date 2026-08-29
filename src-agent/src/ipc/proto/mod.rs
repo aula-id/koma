@@ -317,10 +317,10 @@ pub enum ClientRequest {
     BackgroundSubagent {
         id: usize,
     },
-    /// Background EVERY eligible running sub-agent of the foreground session at once (the
-    /// GUI's global Ctrl+B). Mirrors the TUI's Ctrl+B-in-composer. Reuses
-    /// [`Action::BackgroundAllSubagents`] daemon-side, which is itself a no-op when no
-    /// sub-agent is eligible. gui-gated.
+    /// Background EVERY eligible running sub-agent of the foreground session **and**
+    /// promote every still-blocking foreground bash job (the GUI's global Ctrl+B).
+    /// Mirrors the TUI's Ctrl+B-in-composer. Reuses [`Action::BackgroundAllSubagents`]
+    /// daemon-side, which is a no-op when nothing is eligible. gui-gated.
     BackgroundAllSubagents,
     /// Kill a single background-bash job of the foreground session by its numeric id (the
     /// GUI bash-row kill button). Reuses [`Action::BashKillJob`] daemon-side (SIGTERM +

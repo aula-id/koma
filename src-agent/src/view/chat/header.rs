@@ -186,10 +186,10 @@ pub(super) fn render_model_row(
 ) {
     let row_inner_w = chunk.width.saturating_sub(4) as usize; // 2+2 padding
     let display_model = if resolved_model.is_empty() {
-        // Prefer a blank label over the dead serde default (`openai/gpt-4o-mini`)
-        // when the live resolver returned nothing. Surfacing DEFAULT_MODEL here
-        // made it look like Main had been swapped to gpt after an OAuth/provider
-        // drift, even though the user never configured that model.
+        // Prefer a blank label over a stale soft-default when the live resolver
+        // returned nothing. Surfacing DEFAULT_MODEL (`koma/apple`) here used to
+        // look like Main had been swapped after OAuth/provider drift even when
+        // the user never configured that model.
         ""
     } else {
         resolved_model

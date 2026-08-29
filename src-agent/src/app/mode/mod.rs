@@ -1,22 +1,12 @@
 //! App – UI mode enum and associated state types.
 //!
-//! The app is always in exactly one of five modes, represented by [`Mode`]:
+//! Exactly one [`Mode`] is active. Variants include Chat, SessionHub, Settings,
+//! Agents, Mcp, Extensions, Bash, Todo, Remote, Store, Security, Help, onboarding,
+//! Loading, Effort, and other overlays — see the enum. Non-`Chat` variants carry
+//! the working state for that screen; `Chat` uses `AppStateRest` only.
 //!
-//! | Variant          | Meaning                                       |
-//! |-----------------|-----------------------------------------------|
-//! | `KeyInput`       | Credentials form (api key + model)            |
-//! | `SessionPicker`  | `--resume` session list with live search      |
-//! | `Chat`           | Normal conversation view                      |
-//! | `Settings`       | In-app `/settings` dashboard                  |
-//! | `Effort`         | `/effort` reasoning-effort picker overlay     |
-//! | `Usage`          | `/usage` cost and token dashboard             |
-//!
-//! Mode-specific state is stored inline in the variant so the type system
-//! ensures the runtime can only access data that is relevant to the active
-//! mode.  [`KeyInputForm`], [`PickerState`], [`SettingsState`], and
-//! [`EffortPickerState`] live here; `Chat` carries no extra state beyond
-//! `AppStateRest`.
-
+//! Mode-specific state is stored inline (often boxed) so the type system only
+//! exposes data relevant to the active mode.
 pub mod agents;
 pub mod bash;
 pub mod editor;
@@ -289,13 +279,13 @@ pub enum Mode {
     /// [`SecurityState`] holds the daemon status snapshot + the tool-list cursor.
     /// Boxed to keep `Mode` small, consistent with the other full-screen variants.
     Security(Box<SecurityState>),
-    /// Background bash-job panel (`/bash`): a READ-ONLY master/detail view of the
-    /// foreground session's background bash jobs (the LEFT pane lists them, the
-    /// RIGHT pane shows the selected job's command + status + live output tail).
-    /// The only mutating action is killing a running job (`k`) — no editing, no
-    /// create/delete, no pickers, no sub-modes. The inner [`BashState`] holds the
-    /// (live-projected) job list + the LIST cursor. Boxed to keep `Mode` small,
-    /// consistent with the other full-screen variants.
+    /// Bash job panel (`/bash`): a READ-ONLY master/detail view of the
+    /// foreground session's bash jobs — FG park + true background (the LEFT pane
+    /// lists them, the RIGHT pane shows the selected job's command + status +
+    /// live output tail). The only mutating action is killing a running job (`k`)
+    /// — no editing, no create/delete, no pickers, no sub-modes. The inner
+    /// [`BashState`] holds the (live-projected) job list + the LIST cursor. Boxed
+    /// to keep `Mode` small, consistent with the other full-screen variants.
     Bash(Box<BashState>),
     /// Task/TODO panel (`/todo`): a READ-ONLY master/detail view of the session's
     /// todo items. The LEFT pane lists items with status indicators; the RIGHT pane
