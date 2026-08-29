@@ -77,3 +77,10 @@ html, body, #root, .xterm {
   color: var(--color-koma-accent);
   background: var(--color-koma-hover);
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .fixed.transition-transform,
+  .fixed.transition-opacity {
+    transition: none !important;
+  }
+}

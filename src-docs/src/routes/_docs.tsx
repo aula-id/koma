@@ -1,13 +1,12 @@
 import { createFileRoute, Outlet } from '@tanstack/react-router'
 
-import { Sidebar } from '../components/Sidebar'
+import { DesktopSidebar } from '../components/Sidebar'
 
 function DocsLayout() {
   return (
-    <div className="mx-auto flex h-full w-full max-w-[1100px]">
-      <Sidebar />
-      <main className="min-w-0 flex-1 overflow-y-auto px-8 py-12 sm:px-10 sm:py-14">
-        {/* Landing DocPage-like article column */}
+    <div className="relative mx-auto flex h-full w-full max-w-[1100px]">
+      <DesktopSidebar />
+      <main className="min-w-0 flex-1 overflow-y-auto px-4 py-10 sm:px-8 sm:py-12 md:px-10 md:py-14">
         <div className="mx-auto max-w-[680px] text-[0.875rem] leading-relaxed [&_article>h1]:mb-3 [&_article>h1]:text-2xl [&_article>h1]:font-normal [&_article>h1]:text-koma-fg sm:[&_article>h1]:text-3xl [&_article_h2]:mt-10 [&_article_h2]:mb-3 [&_article_h2]:text-lg [&_article_h2]:font-normal [&_article_h2]:text-koma-fg [&_article_p]:mb-4 [&_article_p]:leading-relaxed">
           <Outlet />
         </div>
