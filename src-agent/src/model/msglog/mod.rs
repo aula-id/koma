@@ -69,7 +69,7 @@ pub use query::{
     append, fetch_messages_since, max_message_id, message_count, search_messages, totals,
     truncate_after, user_message_ids,
 };
-pub use schema::open;
+pub use schema::{diagnose_and_repair_message_find, invalidate_schema_ready, open};
 // Wave-5 per-session record persistence (file-change log + inert bash/sub-agent records).
 pub use records::{
     read_bash_jobs, read_file_baseline, read_file_changes, read_subagents, record_file_baseline,

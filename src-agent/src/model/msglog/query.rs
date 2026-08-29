@@ -264,7 +264,8 @@ pub fn truncate_after(session_dir: &Path, cut_id: i64) -> Result<()> {
 
 /// Max tokens kept from a multi-word query. Extra tokens are dropped so a
 /// long natural-language prompt cannot explode into a huge OR of prefixes.
-const SEARCH_MAX_TERMS: usize = 8;
+/// Hard-capped at 5 so the model cannot junk the tool with a paragraph.
+const SEARCH_MAX_TERMS: usize = 5;
 /// Tokens shorter than this are matched exactly (no `*`). One/two-char
 /// prefixes like `a*` / `to*` scan nearly the whole FTS index on large
 /// tool-heavy archives and were a primary hang source for `message_find`.
