@@ -10,7 +10,7 @@ export const Route = createFileRoute('/_docs/tui/commands-model')({
 function CommandsModelPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Command: /model</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Command: /model</h1>
       <p className="mb-6 text-koma-fg">
         The <code className="text-koma-fg">/model</code> command switches the
         active model for a specific role or agent — right from the chat input.

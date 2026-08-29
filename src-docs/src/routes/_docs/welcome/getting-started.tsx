@@ -7,7 +7,7 @@ export const Route = createFileRoute('/_docs/welcome/getting-started')({
 function GettingStarted() {
   return (
     <article className="prose-koma">
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Getting Started</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Getting Started</h1>
       <p className="mb-4 text-koma-fg">
         Install koma with a single command:
       </p>
@@ -18,7 +18,7 @@ function GettingStarted() {
         This will download the latest binary for your platform and add it to your PATH.
       </p>
 
-      <h2 className="mb-3 text-lg font-semibold text-koma-fg">Next steps</h2>
+      <h2 className="mb-3 text-lg font-normal text-koma-fg">Next steps</h2>
       <ul className="space-y-2 text-koma-fg">
         <li>
           Run <code className="text-koma-accent">koma</code> to open the terminal UI.

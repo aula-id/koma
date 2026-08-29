@@ -7,7 +7,7 @@ export const Route = createFileRoute('/_docs/tui/keyboard-shortcuts')({
 function KeyboardShortcutsPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Keyboard Shortcuts</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Keyboard Shortcuts</h1>
       <p className="mb-6 text-koma-fg">
         Keyboard shortcuts are documented in the real <code className="text-koma-fg">/help</code>{' '}
         reference; there is no separate keyboard-shortcuts TUI page.

@@ -10,7 +10,7 @@ export const Route = createFileRoute('/_docs/tui/settings-provider')({
 function SettingsProviderPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Settings: Providers</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Settings: Providers</h1>
       <p className="mb-6 text-koma-fg">
         Providers store your API connections (endpoint + key) so koma can talk to
         any OpenAI-compatible API. Open{' '}

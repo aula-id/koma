@@ -7,7 +7,7 @@ export const Route = createFileRoute('/_docs/gui/extensions')({
 function GuiExtensionsPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Extensions</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Extensions</h1>
       <p className="mb-6 text-koma-fg">
         The Extensions panel lets you browse, install, and manage extensions
         that add capabilities to koma.

@@ -10,7 +10,7 @@ export const Route = createFileRoute('/_docs/tui/commands-resume')({
 function CommandsResumePage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Command: /resume</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Command: /resume</h1>
       <p className="mb-6 text-koma-fg">
         The <code className="text-koma-fg">/resume</code> command opens the session hub
         — a full-screen view split into live “cooking” sessions and past “history”

@@ -10,7 +10,7 @@ export const Route = createFileRoute('/_docs/tui/settings-model')({
 function SettingsModelPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Settings: Add Model</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Settings: Add Model</h1>
       <p className="mb-6 text-koma-fg">
         Models define which AI model koma uses for each role. Add global models
         (shared across sessions) or local models (session-only). Open{' '}

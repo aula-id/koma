@@ -10,7 +10,7 @@ export const Route = createFileRoute('/_docs/tui/commands-task')({
 function CommandsTaskPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Command: /task</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Command: /task</h1>
       <p className="mb-6 text-koma-fg">
         Bare <code className="text-koma-fg">/task</code> opens the sub-agents viewer —
         a bordered overlay showing running and completed sub-agents. Use{' '}

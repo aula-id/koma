@@ -7,7 +7,7 @@ export const Route = createFileRoute('/_docs/gui/chat-composer')({
 function GuiChatComposerPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Chat &amp; Composer</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Chat &amp; Composer</h1>
       <p className="mb-6 text-koma-fg">
         The chat panel is the primary interface for interacting with the koma
         agent. It renders markdown messages, tool call results, and sub-agent

@@ -10,7 +10,7 @@ export const Route = createFileRoute('/_docs/tui/commands-todo')({
 function CommandsTodoPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Command: /todo</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Command: /todo</h1>
       <p className="mb-6 text-koma-fg">
         The <code className="text-koma-fg">/todo</code> command opens the task panel
         — a model-managed, read-only checklist shown above the input bar with a

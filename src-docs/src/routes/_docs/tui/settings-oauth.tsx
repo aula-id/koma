@@ -10,7 +10,7 @@ export const Route = createFileRoute('/_docs/tui/settings-oauth')({
 function SettingsOAuthPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Settings: OAuth</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Settings: OAuth</h1>
       <p className="mb-6 text-koma-fg">
         OAuth lets you sign in to providers like koma.run, Codex, or Kilo Code
         through your browser — no need to manage API keys manually. Open{' '}

@@ -22,12 +22,10 @@ import { Route as DocsGuiAnalyticsRouteImport } from './routes/_docs/gui/analyti
 import { Route as DocsGuiChatComposerRouteImport } from './routes/_docs/gui/chat-composer'
 import { Route as DocsGuiCodeEditorRouteImport } from './routes/_docs/gui/code-editor'
 import { Route as DocsGuiExtensionsRouteImport } from './routes/_docs/gui/extensions'
-import { Route as DocsGuiFirstRunRouteImport } from './routes/_docs/gui/first-run'
 import { Route as DocsGuiGitDiffRouteImport } from './routes/_docs/gui/git-diff'
 import { Route as DocsGuiImportGraphRouteImport } from './routes/_docs/gui/import-graph'
 import { Route as DocsGuiLayoutRouteImport } from './routes/_docs/gui/layout'
 import { Route as DocsGuiOauthRouteImport } from './routes/_docs/gui/oauth'
-import { Route as DocsGuiProviderModelRouteImport } from './routes/_docs/gui/provider-model'
 import { Route as DocsTuiIndexRouteImport } from './routes/_docs/tui/index'
 import { Route as DocsTuiCommandsAdddirRouteImport } from './routes/_docs/tui/commands-adddir'
 import { Route as DocsTuiCommandsAgentsRouteImport } from './routes/_docs/tui/commands-agents'
@@ -134,11 +132,6 @@ const DocsGuiExtensionsRoute = DocsGuiExtensionsRouteImport.update({
   path: '/extensions',
   getParentRoute: () => DocsGuiRoute,
 } as any)
-const DocsGuiFirstRunRoute = DocsGuiFirstRunRouteImport.update({
-  id: '/first-run',
-  path: '/first-run',
-  getParentRoute: () => DocsGuiRoute,
-} as any)
 const DocsGuiGitDiffRoute = DocsGuiGitDiffRouteImport.update({
   id: '/git-diff',
   path: '/git-diff',
@@ -157,11 +150,6 @@ const DocsGuiLayoutRoute = DocsGuiLayoutRouteImport.update({
 const DocsGuiOauthRoute = DocsGuiOauthRouteImport.update({
   id: '/oauth',
   path: '/oauth',
-  getParentRoute: () => DocsGuiRoute,
-} as any)
-const DocsGuiProviderModelRoute = DocsGuiProviderModelRouteImport.update({
-  id: '/provider-model',
-  path: '/provider-model',
   getParentRoute: () => DocsGuiRoute,
 } as any)
 const DocsTuiIndexRoute = DocsTuiIndexRouteImport.update({
@@ -385,12 +373,10 @@ export interface FileRoutesByFullPath {
   '/gui/chat-composer': typeof DocsGuiChatComposerRoute
   '/gui/code-editor': typeof DocsGuiCodeEditorRoute
   '/gui/extensions': typeof DocsGuiExtensionsRoute
-  '/gui/first-run': typeof DocsGuiFirstRunRoute
   '/gui/git-diff': typeof DocsGuiGitDiffRoute
   '/gui/import-graph': typeof DocsGuiImportGraphRoute
   '/gui/layout': typeof DocsGuiLayoutRoute
   '/gui/oauth': typeof DocsGuiOauthRoute
-  '/gui/provider-model': typeof DocsGuiProviderModelRoute
   '/tui/commands-adddir': typeof DocsTuiCommandsAdddirRoute
   '/tui/commands-agents': typeof DocsTuiCommandsAgentsRoute
   '/tui/commands-all': typeof DocsTuiCommandsAllRoute
@@ -442,12 +428,10 @@ export interface FileRoutesByTo {
   '/gui/chat-composer': typeof DocsGuiChatComposerRoute
   '/gui/code-editor': typeof DocsGuiCodeEditorRoute
   '/gui/extensions': typeof DocsGuiExtensionsRoute
-  '/gui/first-run': typeof DocsGuiFirstRunRoute
   '/gui/git-diff': typeof DocsGuiGitDiffRoute
   '/gui/import-graph': typeof DocsGuiImportGraphRoute
   '/gui/layout': typeof DocsGuiLayoutRoute
   '/gui/oauth': typeof DocsGuiOauthRoute
-  '/gui/provider-model': typeof DocsGuiProviderModelRoute
   '/tui/commands-adddir': typeof DocsTuiCommandsAdddirRoute
   '/tui/commands-agents': typeof DocsTuiCommandsAgentsRoute
   '/tui/commands-all': typeof DocsTuiCommandsAllRoute
@@ -505,12 +489,10 @@ export interface FileRoutesById {
   '/_docs/gui/chat-composer': typeof DocsGuiChatComposerRoute
   '/_docs/gui/code-editor': typeof DocsGuiCodeEditorRoute
   '/_docs/gui/extensions': typeof DocsGuiExtensionsRoute
-  '/_docs/gui/first-run': typeof DocsGuiFirstRunRoute
   '/_docs/gui/git-diff': typeof DocsGuiGitDiffRoute
   '/_docs/gui/import-graph': typeof DocsGuiImportGraphRoute
   '/_docs/gui/layout': typeof DocsGuiLayoutRoute
   '/_docs/gui/oauth': typeof DocsGuiOauthRoute
-  '/_docs/gui/provider-model': typeof DocsGuiProviderModelRoute
   '/_docs/tui/commands-adddir': typeof DocsTuiCommandsAdddirRoute
   '/_docs/tui/commands-agents': typeof DocsTuiCommandsAgentsRoute
   '/_docs/tui/commands-all': typeof DocsTuiCommandsAllRoute
@@ -568,12 +550,10 @@ export interface FileRouteTypes {
     | '/gui/chat-composer'
     | '/gui/code-editor'
     | '/gui/extensions'
-    | '/gui/first-run'
     | '/gui/git-diff'
     | '/gui/import-graph'
     | '/gui/layout'
     | '/gui/oauth'
-    | '/gui/provider-model'
     | '/tui/commands-adddir'
     | '/tui/commands-agents'
     | '/tui/commands-all'
@@ -625,12 +605,10 @@ export interface FileRouteTypes {
     | '/gui/chat-composer'
     | '/gui/code-editor'
     | '/gui/extensions'
-    | '/gui/first-run'
     | '/gui/git-diff'
     | '/gui/import-graph'
     | '/gui/layout'
     | '/gui/oauth'
-    | '/gui/provider-model'
     | '/tui/commands-adddir'
     | '/tui/commands-agents'
     | '/tui/commands-all'
@@ -687,12 +665,10 @@ export interface FileRouteTypes {
     | '/_docs/gui/chat-composer'
     | '/_docs/gui/code-editor'
     | '/_docs/gui/extensions'
-    | '/_docs/gui/first-run'
     | '/_docs/gui/git-diff'
     | '/_docs/gui/import-graph'
     | '/_docs/gui/layout'
     | '/_docs/gui/oauth'
-    | '/_docs/gui/provider-model'
     | '/_docs/tui/commands-adddir'
     | '/_docs/tui/commands-agents'
     | '/_docs/tui/commands-all'
@@ -836,13 +812,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsGuiExtensionsRouteImport
       parentRoute: typeof DocsGuiRoute
     }
-    '/_docs/gui/first-run': {
-      id: '/_docs/gui/first-run'
-      path: '/first-run'
-      fullPath: '/gui/first-run'
-      preLoaderRoute: typeof DocsGuiFirstRunRouteImport
-      parentRoute: typeof DocsGuiRoute
-    }
     '/_docs/gui/git-diff': {
       id: '/_docs/gui/git-diff'
       path: '/git-diff'
@@ -869,13 +838,6 @@ declare module '@tanstack/react-router' {
       path: '/oauth'
       fullPath: '/gui/oauth'
       preLoaderRoute: typeof DocsGuiOauthRouteImport
-      parentRoute: typeof DocsGuiRoute
-    }
-    '/_docs/gui/provider-model': {
-      id: '/_docs/gui/provider-model'
-      path: '/provider-model'
-      fullPath: '/gui/provider-model'
-      preLoaderRoute: typeof DocsGuiProviderModelRouteImport
       parentRoute: typeof DocsGuiRoute
     }
     '/_docs/tui/': {
@@ -1187,12 +1149,10 @@ interface DocsGuiRouteChildren {
   DocsGuiChatComposerRoute: typeof DocsGuiChatComposerRoute
   DocsGuiCodeEditorRoute: typeof DocsGuiCodeEditorRoute
   DocsGuiExtensionsRoute: typeof DocsGuiExtensionsRoute
-  DocsGuiFirstRunRoute: typeof DocsGuiFirstRunRoute
   DocsGuiGitDiffRoute: typeof DocsGuiGitDiffRoute
   DocsGuiImportGraphRoute: typeof DocsGuiImportGraphRoute
   DocsGuiLayoutRoute: typeof DocsGuiLayoutRoute
   DocsGuiOauthRoute: typeof DocsGuiOauthRoute
-  DocsGuiProviderModelRoute: typeof DocsGuiProviderModelRoute
   DocsGuiIndexRoute: typeof DocsGuiIndexRoute
 }
 
@@ -1201,12 +1161,10 @@ const DocsGuiRouteChildren: DocsGuiRouteChildren = {
   DocsGuiChatComposerRoute: DocsGuiChatComposerRoute,
   DocsGuiCodeEditorRoute: DocsGuiCodeEditorRoute,
   DocsGuiExtensionsRoute: DocsGuiExtensionsRoute,
-  DocsGuiFirstRunRoute: DocsGuiFirstRunRoute,
   DocsGuiGitDiffRoute: DocsGuiGitDiffRoute,
   DocsGuiImportGraphRoute: DocsGuiImportGraphRoute,
   DocsGuiLayoutRoute: DocsGuiLayoutRoute,
   DocsGuiOauthRoute: DocsGuiOauthRoute,
-  DocsGuiProviderModelRoute: DocsGuiProviderModelRoute,
   DocsGuiIndexRoute: DocsGuiIndexRoute,
 }
 

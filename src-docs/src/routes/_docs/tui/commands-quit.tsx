@@ -10,7 +10,7 @@ export const Route = createFileRoute('/_docs/tui/commands-quit')({
 function CommandsQuitPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Command: /quit</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Command: /quit</h1>
       <p className="mb-6 text-koma-fg">
         <code className="text-koma-fg">/quit</code> (aliases{' '}
         <code className="text-koma-fg">/q</code>, <code className="text-koma-fg">/exit</code>) and the

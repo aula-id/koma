@@ -37,7 +37,7 @@ const commands = [
 export const Route = createFileRoute('/_docs/tui/commands-all')({
   component: () => (
     <article>
-      <h1 className="mb-2 text-2xl font-bold text-koma-accent">All Commands</h1>
+      <h1 className="mb-2 text-2xl font-normal text-koma-fg">All Commands</h1>
       <p className="mb-6 text-koma-dim">Every slash command available in koma, in display order.</p>
       <div className="overflow-hidden rounded-md border border-koma-border">
         <table className="w-full text-sm">

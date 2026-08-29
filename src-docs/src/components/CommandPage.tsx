@@ -24,11 +24,11 @@ export function CommandPage({
 }: CommandPageProps) {
   return (
     <article>
-      <h1 className="mb-2 text-2xl font-bold text-koma-accent">Command: {name}</h1>
+      <h1 className="mb-2 text-2xl font-normal text-koma-fg">Command: {name}</h1>
       <p className="mb-6 text-koma-fg">{description}</p>
 
       {shortcut && (
-        <div className="mb-6 rounded-md border border-koma-border bg-koma-panel px-4 py-3 text-sm">
+        <div className="mb-6 rounded-lg border border-koma-border bg-koma-panel px-4 py-3 text-[0.8125rem]">
           <span className="text-koma-dim">Keyboard shortcut: </span>
           <code className="font-semibold text-koma-accent">{shortcut}</code>
         </div>

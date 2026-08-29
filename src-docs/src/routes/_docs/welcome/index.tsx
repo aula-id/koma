@@ -7,13 +7,13 @@ export const Route = createFileRoute('/_docs/welcome/')({
 function Overview() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Overview</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Overview</h1>
       <p className="mb-4 text-koma-fg">
         koma is a native AI coding agent that operates in the terminal. Written in
         Rust for speed, it features a TUI for orchestrating AI agents that can read
         code, edit files, run commands, and verify changes.
       </p>
-      <h2 className="mb-2 mt-6 text-lg font-semibold text-koma-fg">Features</h2>
+      <h2 className="mb-2 mt-6 text-lg font-normal text-koma-fg">Features</h2>
       <ul className="list-inside list-disc space-y-1 text-koma-dim">
         <li>Parallel sub-agents</li>
         <li>Background jobs</li>
@@ -24,7 +24,7 @@ function Overview() {
         <li>Self-updating via <code className="text-koma-accent">koma update</code></li>
       </ul>
 
-      <h2 className="mb-3 mt-8 text-lg font-semibold text-koma-fg">Where to next</h2>
+      <h2 className="mb-3 mt-8 text-lg font-normal text-koma-fg">Where to next</h2>
       <ul className="space-y-2 text-koma-fg">
         <li>
           <Link to="/welcome/getting-started" className="text-koma-accent hover:underline">

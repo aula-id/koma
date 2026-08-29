@@ -7,7 +7,7 @@ export const Route = createFileRoute('/_docs/gui/import-graph')({
 function GuiImportGraphPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Import Graph</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Import Graph</h1>
       <p className="mb-6 text-koma-fg">
         The Import Graph panel visualizes dependencies between source files
         in your workspace. It is powered by the linker daemon, which runs

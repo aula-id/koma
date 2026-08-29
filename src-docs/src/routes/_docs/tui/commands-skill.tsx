@@ -10,7 +10,7 @@ export const Route = createFileRoute('/_docs/tui/commands-skill')({
 function CommandsSkillPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Command: /skill</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Command: /skill</h1>
       <p className="mb-6 text-koma-fg">
         The <code className="text-koma-fg">/skill</code> command opens the skill hub
         — a searchable overlay for loading and unloading agent skills. Skills are

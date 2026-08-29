@@ -10,7 +10,7 @@ export const Route = createFileRoute('/_docs/tui/commands-security')({
 function CommandsSecurityPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Command: /security</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Command: /security</h1>
       <p className="mb-6 text-koma-fg">
         <code className="text-koma-fg">/security</code> opens the security daemon control panel —
         a full-screen status view for the optional Python security toolkit. The daemon is not part

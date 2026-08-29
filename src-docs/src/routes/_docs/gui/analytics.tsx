@@ -7,7 +7,7 @@ export const Route = createFileRoute('/_docs/gui/analytics')({
 function GuiAnalyticsPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Analytics</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Analytics</h1>
       <p className="mb-6 text-koma-fg">
         The Analytics panel provides a visual dashboard for tracking token
         usage, costs, and model performance across sessions.

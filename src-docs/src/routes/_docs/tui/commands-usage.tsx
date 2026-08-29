@@ -10,7 +10,7 @@ export const Route = createFileRoute('/_docs/tui/commands-usage')({
 function CommandsUsagePage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Command: /usage</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Command: /usage</h1>
       <p className="mb-6 text-koma-fg">
         The <code className="text-koma-fg">/usage</code> command opens the cost and
         token usage dashboard — a full-screen view with KPI metrics, heatmaps, model

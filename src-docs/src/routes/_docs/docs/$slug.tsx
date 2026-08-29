@@ -24,7 +24,9 @@ const REDIRECT_MAP: Record<string, string> = {
 
   // GUI
   'gui': '/gui',
-  'tutorial-gui-first-run': '/gui/first-run',
+  // Interactive GUI tutorials removed — legacy slugs land on overview
+  'tutorial-gui-first-run': '/gui',
+  'tutorial-gui-provider-model': '/gui',
 }
 
 function LegacyDocsRedirect() {

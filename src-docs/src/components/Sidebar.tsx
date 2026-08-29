@@ -154,14 +154,6 @@ const PRODUCTS: ProductDef[] = [
         items: [{ label: 'Overview', to: '/gui' }],
       },
       {
-        title: 'Tutorials',
-        items: [
-          { label: 'First Run', to: '/gui/first-run' },
-          { label: 'Provider & Model', to: '/gui/provider-model' },
-          { label: 'OAuth', to: '/gui/oauth' },
-        ],
-      },
-      {
         title: 'Interface',
         items: [
           { label: 'GUI Layout', to: '/gui/layout' },
@@ -176,6 +168,7 @@ const PRODUCTS: ProductDef[] = [
           { label: 'Import Graph', to: '/gui/import-graph' },
           { label: 'Extensions', to: '/gui/extensions' },
           { label: 'Analytics', to: '/gui/analytics' },
+          { label: 'OAuth', to: '/gui/oauth' },
         ],
       },
     ],
@@ -212,7 +205,7 @@ function ProductSwitcher({ active }: { active: string }) {
           <Link
             key={p.id}
             to={p.id === 'welcome' ? '/welcome' : `/${p.id}`}
-            className={`flex flex-1 items-center justify-center gap-1.5 rounded-[5px] px-2 py-1.5 text-[11px] font-semibold tracking-wide transition-all ${
+            className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[0.6875rem] font-medium tracking-widest uppercase transition-all ${
               active === p.id
                 ? 'bg-koma-accent/15 text-koma-accent'
                 : 'text-koma-dim hover:text-koma-fg hover:bg-koma-hover'
@@ -230,7 +223,7 @@ function ProductSwitcher({ active }: { active: string }) {
 function SearchBar({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
     <div className="flex-none px-3 pt-3 pb-2">
-      <div className="flex items-center rounded-md border border-koma-border bg-koma-panel px-2.5 py-1.5 text-xs">
+      <div className="flex items-center rounded-lg border border-koma-border bg-koma-panel px-2.5 py-1.5 text-[0.8125rem]">
         <svg className="mr-2 h-3.5 w-3.5 flex-none text-koma-dim" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
         <input
           type="text"
@@ -254,9 +247,9 @@ function NavLink({ item, active, filtered }: { item: SidebarItem; active: boolea
       to={item.to}
       className={`nav-link flex items-baseline gap-2 ${active ? 'nav-link-active' : ''}`}
     >
-      <span className="truncate text-[13px]">{item.label}</span>
+      <span className="truncate text-[0.8125rem]">{item.label}</span>
       {item.desc && (
-        <span className="truncate text-[11px] text-koma-dim/50">{item.desc}</span>
+        <span className="truncate text-[0.6875rem] text-koma-dim/50">{item.desc}</span>
       )}
     </Link>
   )
@@ -294,7 +287,7 @@ function NavSections({
           <div key={section.title} className="mb-4">
             <button
               onClick={() => isCollapsible && onToggle(section.title)}
-              className={`mb-1 flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wider transition-colors ${
+              className={`mb-1 flex w-full items-center gap-1.5 px-2 py-1 text-left text-[0.6875rem] font-medium uppercase tracking-widest transition-colors ${
                 isCollapsible ? 'cursor-pointer hover:text-koma-fg' : 'cursor-default'
               } text-koma-dim`}
             >
@@ -358,7 +351,7 @@ export function Sidebar() {
   }, [location.pathname, product])
 
   return (
-    <aside className="flex h-full w-60 flex-none flex-col overflow-hidden border-r border-koma-border">
+    <aside className="flex h-full w-56 flex-none flex-col overflow-hidden border-r border-koma-border">
       <ProductSwitcher active={product.id} />
       <SearchBar value={query} onChange={setQuery} />
       <NavSections

@@ -10,7 +10,7 @@ export const Route = createFileRoute('/_docs/tui/commands-internet')({
 function CommandsInternetPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Command: /internet</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Command: /internet</h1>
       <p className="mb-6 text-koma-fg">
         <code className="text-koma-fg">/internet</code> toggles the agent's internet mode between{' '}
         <strong className="text-koma-accent">simple</strong> and{' '}

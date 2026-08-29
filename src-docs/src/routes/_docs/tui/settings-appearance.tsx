@@ -5,5 +5,5 @@ import { getSettingsAppearanceSteps } from '../../../demos/settings-appearance-t
 export const Route = createFileRoute('/_docs/tui/settings-appearance')({ component: SettingsAppearancePage })
 
 function SettingsAppearancePage() {
-  return <article><h1 className="mb-4 text-2xl font-bold text-koma-accent">Settings: Appearance</h1><p className="mb-6 text-koma-fg">Open <code className="text-koma-fg">/settings</code> and press <span className="text-koma-accent">1</span> to choose the terminal palette.</p><TuiTutorial steps={getSettingsAppearanceSteps(24)} /></article>
+  return <article><h1 className="mb-4 text-2xl font-normal text-koma-fg">Settings: Appearance</h1><p className="mb-6 text-koma-fg">Open <code className="text-koma-fg">/settings</code> and press <span className="text-koma-accent">1</span> to choose the terminal palette.</p><TuiTutorial steps={getSettingsAppearanceSteps(24)} /></article>
 }

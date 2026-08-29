@@ -7,7 +7,7 @@ export const Route = createFileRoute('/_docs/tui/commands-remote')({
 function CommandsRemotePage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Command: /remote</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Command: /remote</h1>
       <p className="mb-6 text-koma-fg">
         <code className="text-koma-fg">/remote</code> will manage remote SSH hosts and sessions —
         add, edit, or remove saved hosts, then connect to run a session there. Over SSH the agent

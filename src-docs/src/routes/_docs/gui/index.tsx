@@ -7,7 +7,7 @@ export const Route = createFileRoute('/_docs/gui/')({
 function GuiOverview() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Desktop GUI</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Desktop GUI</h1>
       <p className="mb-4 text-koma-fg">
         The optional GUI runs as a native desktop window using wry/tao (Rust
         webview). Built with React 19, Tailwind v4, and Zustand, it provides
@@ -19,14 +19,8 @@ function GuiOverview() {
         interface: panels, tabs, a code editor, and a visual diff viewer.
       </p>
 
-      <h2 className="mb-3 text-lg font-semibold text-koma-fg">Sections</h2>
+      <h2 className="mb-3 text-lg font-normal text-koma-fg">Sections</h2>
       <ul className="space-y-2 text-koma-fg">
-        <li>
-          <Link to="/gui/first-run" className="text-koma-accent hover:underline">
-            Tutorial: First Run
-          </Link>{' '}
-          — step through the onboarding flow.
-        </li>
         <li>
           <Link to="/gui/layout" className="text-koma-accent hover:underline">
             GUI Layout

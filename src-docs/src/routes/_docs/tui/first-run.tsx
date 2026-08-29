@@ -10,7 +10,7 @@ export const Route = createFileRoute('/_docs/tui/first-run')({
 function TutorialFirstRunPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">
         Tutorial: First Run
       </h1>
       <p className="mb-6 text-koma-fg">

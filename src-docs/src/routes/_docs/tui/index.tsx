@@ -10,14 +10,14 @@ export const Route = createFileRoute('/_docs/tui/')({
 function TuiPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Terminal UI</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Terminal UI</h1>
       <p className="mb-6 text-koma-fg">
         The TUI runs in your terminal with ratatui. It provides a full-featured
         chat interface with markdown rendering, tool call visualization, and
         sub-agent management.
       </p>
 
-      <h2 className="mb-3 text-lg font-semibold text-koma-fg">First Run Walkthrough</h2>
+      <h2 className="mb-3 text-lg font-normal text-koma-fg">First Run Walkthrough</h2>
       <p className="mb-4 text-sm text-koma-dim">
         Step through the first-run experience below. Each step shows the actual
         TUI screen with an explanation of what you're seeing. Use the{' '}

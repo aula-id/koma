@@ -3,15 +3,18 @@ import { BookOpen, ExternalLink } from 'lucide-react'
 
 export function TopBar() {
   return (
-    <header className="flex h-10 items-center justify-between border-b border-koma-border px-4 text-sm">
-      <Link to="/welcome" className="flex items-center gap-2 font-bold text-koma-accent no-underline">
-        <BookOpen size={14} />
+    <header className="flex h-14 items-center justify-between border-b border-koma-border px-6 text-[0.8125rem]">
+      <Link
+        to="/welcome"
+        className="flex items-center gap-2 font-medium tracking-wide text-koma-fg no-underline transition-colors hover:text-koma-fg"
+      >
+        <BookOpen size={14} strokeWidth={1.75} />
         koma docs
       </Link>
-      <nav className="flex items-center gap-4">
+      <nav className="flex items-center gap-1">
         <Link
           to="/welcome"
-          className="text-koma-dim transition hover:text-koma-fg no-underline"
+          className="rounded-md px-3 py-1.5 text-koma-dim no-underline transition-colors hover:bg-koma-hover hover:text-koma-fg"
         >
           Docs
         </Link>
@@ -19,7 +22,7 @@ export function TopBar() {
           href="https://koma.run"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-koma-dim transition hover:text-koma-fg no-underline"
+          className="rounded-md px-3 py-1.5 text-koma-dim no-underline transition-colors hover:bg-koma-hover hover:text-koma-fg"
         >
           koma.run
         </a>
@@ -27,9 +30,10 @@ export function TopBar() {
           href="https://github.com/aula-id/koma"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-koma-dim transition hover:text-koma-fg"
+          className="rounded-md px-3 py-1.5 text-koma-dim transition-colors hover:bg-koma-hover hover:text-koma-fg"
+          aria-label="GitHub"
         >
-          <ExternalLink size={14} />
+          <ExternalLink size={14} strokeWidth={1.75} />
         </a>
       </nav>
     </header>

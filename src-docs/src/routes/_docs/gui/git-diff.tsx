@@ -7,7 +7,7 @@ export const Route = createFileRoute('/_docs/gui/git-diff')({
 function GuiGitDiffPage() {
   return (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">Git &amp; Diff</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">Git &amp; Diff</h1>
       <p className="mb-6 text-koma-fg">
         The Source Control panel provides a visual interface for git operations,
         and the Monaco diff viewer shows side-by-side file changes.

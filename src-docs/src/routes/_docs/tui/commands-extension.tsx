@@ -5,7 +5,7 @@ import { getExtensionSteps } from '../../../demos/extension-tutorial'
 export const Route = createFileRoute('/_docs/tui/commands-extension')({
   component: () => (
     <article>
-      <h1 className="mb-4 text-2xl font-bold text-koma-accent">/extension</h1>
+      <h1 className="mb-4 text-2xl font-normal text-koma-fg">/extension</h1>
       <p className="mb-6 text-koma-fg">Open the installed-extension manager to inspect extension metadata, screens, and removal confirmation.</p>
       <TuiTutorial steps={getExtensionSteps(24)} />
     </article>
