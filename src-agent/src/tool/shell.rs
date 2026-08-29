@@ -539,8 +539,9 @@ impl Tool for Bash {
          destructive-operation guards automatically. Output is captured (stdout+stderr). \
          Output of known noisy commands (cargo, git, npm, pip, docker, make) is auto-compressed; a [filter: <name>, N -> M lines] marker shows when. \
          If output was compressed, truncated, or the command failed, the complete output is saved to a file shown on a 'full-output: <path>' line — read that file instead of re-running the command. \
-         For long-running or open-ended commands (dev servers, watches, multi-minute builds you want to continue past), \
-         set run_in_background=true — returns a job id immediately; poll with bash_output, stop with bash_kill."
+         Every bash runs as a job visible in /bash. For long-running or open-ended commands (dev servers, watches, multi-minute builds you want to continue past), \
+         set run_in_background=true — returns a job id immediately; poll with bash_output, stop with bash_kill. \
+         While a foreground bash is in flight, the user may press Ctrl+B to detach it into the background without killing it."
     }
     fn parameters(&self) -> Value {
         json!({

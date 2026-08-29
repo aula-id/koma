@@ -197,7 +197,7 @@ export function getTaskSteps(rows = 24): TutorialStep[] {
       points: [
         'Each sub-agent shows its id, name, status tag, and label',
         'The selected agent (inverse highlight) streams live transcript updates',
-        'Press Ctrl+X to kill a selected sub-agent, Ctrl+B to background it',
+        'Press Ctrl+X to kill a selected sub-agent, Ctrl+B to background it (composer Ctrl+B also promotes FG bash)',
       ],
       screen: screenSubagentsRunning(rows),
     },

@@ -42,21 +42,27 @@ import { TasksPanel } from './panels/TasksPanel'
 
 export type SidebarView =
   | 'explore'
+  | 'coding'
   | 'git'
   | 'mcp'
   | 'connector'
+  | 'importGraph'
   | 'agents'
   | 'usage'
-  | 'tasks'
+  | 'store'
+  | 'remote'
 
 const TITLES: Record<SidebarView, string> = {
   explore: 'Explorer',
+  coding: 'Coding',
   git: 'Source Control',
   mcp: 'MCP Servers',
   connector: 'Connector',
+  importGraph: 'Import Graph',
   agents: 'Agents',
   usage: 'Usage',
-  tasks: 'Tasks',
+  store: 'Extensions',
+  remote: 'Remote',
 }
 ```
 
@@ -66,6 +72,9 @@ Add the panel beside the other panel branches:
 {view === 'tasks' && <TasksPanel />}
 ```
 
+(You must also extend `SidebarView` / `TITLES` with your new literal — the example
+above shows the **current** built-in set; a new view is an additive union member.)
+
 `RootLayout` already stores `activeView` and handles the standard behavior:
 clicking the active icon collapses the Sidebar; clicking another icon selects
 that view and opens the Sidebar. No RootLayout change is required for a normal
@@ -74,18 +83,18 @@ new menu item.
 ## 2. Add the ActivityBar menu item
 
 In `ActivityBar.tsx`, import a suitable `lucide-react` icon and append an item
-to `ITEMS`:
+to `ACTIVITY_BAR_ITEMS`:
 
 ```tsx
 import { ListTodo } from 'lucide-react'
 
-const ITEMS: { view: SidebarView; icon: LucideIcon; label: string }[] = [
+export const ACTIVITY_BAR_ITEMS: ActivityBarItem[] = [
   // existing items...
   { view: 'tasks', icon: ListTodo, label: 'Tasks' },
 ]
 ```
 
-`ITEMS` uses the same `SidebarView` literal, so TypeScript catches a menu item
+`ACTIVITY_BAR_ITEMS` uses the same `SidebarView` literal, so TypeScript catches a menu item
 that does not have a matching Sidebar view.
 
 ## 3. Create the Sidebar panel

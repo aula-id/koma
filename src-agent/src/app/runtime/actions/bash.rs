@@ -1,4 +1,4 @@
-//! Action handlers for the `/bash` background-job panel: CloseBash, BashKillJob.
+//! Action handlers for the `/bash` job panel: CloseBash, BashKillJob.
 //!
 //! A read-only + kill panel — the only state-changing action is killing a running
 //! job. After a kill the panel stays open; its next key refreshes the job list
@@ -17,7 +17,7 @@ pub(super) fn handle_close_bash(state: &mut AppState) -> Result<()> {
     Ok(())
 }
 
-/// Handle `Action::BashKillJob(id)`: terminate the running background bash job with
+/// Handle `Action::BashKillJob(id)`: terminate the running bash job with
 /// the given id in the FOREGROUND session.
 ///
 /// Resolves the job out of the live `rt.bash_jobs` registry by id (never by Vec

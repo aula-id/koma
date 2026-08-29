@@ -35,7 +35,8 @@ function CommandsTaskPage() {
         <p>
           <strong className="text-koma-accent">Kill / Background</strong>{' '}
           Press Ctrl+X to kill the selected agent. Press Ctrl+B to background
-          a running agent so the main chat can continue.
+          a running blocking agent so the main chat can continue (same composer
+          Ctrl+B also promotes still-blocking FG bash jobs).
         </p>
       </div>
     </article>

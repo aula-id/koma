@@ -46,6 +46,27 @@ function GuiCodeEditorPage() {
         </div>
 
         <div>
+          <h3 className="mb-1 text-base font-semibold text-koma-fg">Language servers (LSP)</h3>
+          <p>
+            Host-spawned language servers (not Monaco workers) attach when a matching
+            server is installed: completion, hover, go-to-definition, references,
+            symbols, and diagnostics. Manage installs under Settings → Language
+            servers or <code className="text-koma-fg">koma lsp</code>; binaries live
+            under <code className="text-koma-fg">~/.koma/lsp/</code> or on PATH. The
+            footer Language Servers drawer shows runtime status; Problems lists
+            diagnostics. Diff tabs stay syntax-only (no LSP on the diff path).
+          </p>
+        </div>
+
+        <div>
+          <h3 className="mb-1 text-base font-semibold text-koma-fg">Terminal</h3>
+          <p>
+            Integrated terminal sessions open as main-area tabs (separate from the
+            Coding sidebar tree). Use them for local shells alongside the editor.
+          </p>
+        </div>
+
+        <div>
           <h3 className="mb-1 text-base font-semibold text-koma-fg">Saving &amp; Autosave</h3>
           <p>
             Files show a dirty indicator (dot on the tab) when modified.

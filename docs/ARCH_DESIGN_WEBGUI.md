@@ -21,7 +21,8 @@ no HTTP fetch, no REST API.
 | Icons | lucide-react |
 | Markdown | Streamdown (Vercel) — streaming-safe, per-block memoized |
 | Syntax Highlighting | Custom Shiki plugin (`komaShiki.ts`) — 16 languages, JS regex engine (no WASM) |
-| Diff Editor | Monaco Editor (lazy-loaded, inlined base worker, Monarch tokenizers only) |
+| Diff Editor | Monaco (lazy); Monarch tokenizers on **diff** path |
+| Code editor | Monaco coding tabs + **host LSP** (`monaco-lsp`, `src-agent/src/lsp/`) |
 | Lottie | lottie-react + custom Vite plugin (build-time dotLottie extraction, no WASM) |
 | Fonts | JetBrains Mono (3 weights, 400/500/700) as "KomaMono" — the only font family |
 | Build | Vite 6, TypeScript 5.7, `@vitejs/plugin-react`, `@tailwindcss/vite` |
@@ -39,14 +40,13 @@ no HTTP fetch, no REST API.
 │  └───────────────────────────────────────────────────────┘   │
 │  ┌─ ActivityBar ─┬─ Sidebar ─────────┬─ main ────────────┐  │
 │  │  [Explore]     │  ExplorePanel     │  <Outlet>         │  │
-│  │  [MCP]         │  McpPanel         │   ├─ Onboarding   │  │
-│  │  [Connector]   │  ConnectorPanel   │   ├─ StartScreen  │  │
-│  │  [Settings]    │                   │   └─ TabbedMain   │  │
-│  │                │                   │       ├─ TabBar    │  │
-│  │                │                   │       ├─ ChatView  │  │
-│  │                │                   │       │   ├─ msgs  │  │
-│  │                │                   │       │   ├─ Composer│ │
-│  │                │                   │       │   └─ Footer │  │
+│  │  [Coding]      │  CodingPanel      │   ├─ Onboarding   │  │
+│  │  [Git]         │  GitPanel         │   ├─ StartScreen  │  │
+│  │  [MCP] …       │  …                │   └─ TabbedMain   │  │
+│  │  footer: Help  │                   │       ├─ TabBar    │  │
+│  │  Settings      │                   │       ├─ Chat /   │  │
+│  │                │                   │       │  Code /   │  │
+│  │                │                   │       │  Term /…  │  │
 │  │                │                   │       └─ DiffTab   │  │
 │  └────────────────┴───────────────────┴───────────────────┘  │
 │  ┌─ Overlays (absolute/portaled) ────────────────────────┐   │
@@ -279,7 +279,8 @@ reliably serve WASM blobs. This constraint shapes several key decisions:
 | Component | WASM-free approach |
 |---|---|
 | Shiki (syntax highlight) | JS regex engine instead of oniguruma; 16 trimmed languages |
-| Monaco (diff editor) | Inlined blob URL base worker; Monarch tokenizers only |
+| Monaco (diff editor) | Inlined base worker; Monarch tokenizers (no LSP on diff path) |
+| Monaco (coding) | Host LSP via `monaco-lsp` + `src-agent/src/lsp/` |
 | Lottie (animations) | `lottie-react` (pure JS) instead of `@lottiefiles/dotlottie-react` |
 
 ### Custom Vite Plugin: Lottie
@@ -293,12 +294,12 @@ reliably serve WASM blobs. This constraint shapes several key decisions:
 
 This avoids shipping a WASM dotLottie reader in the runtime.
 
-### Monaco DiffEditor
+### Monaco
 
-Lazy-loaded as a separate chunk via `React.lazy`. The base editor worker is
-inlined via `?worker&inline` (no network fetch). Only Monarch tokenizers are
-used (16 languages), no language server workers. Theme is derived from live
-`--color-koma-*` CSS vars.
+Lazy-loaded. Diff tabs use Monarch tokenizers only (no Monaco language-server
+workers). **Coding** tabs attach **host-spawned LSP** via `monaco-lsp.ts` /
+`lsp-bridge.ts` and `src-agent/src/lsp/` (completion, hover, definition,
+diagnostics, …). Theme follows live `--color-koma-*` CSS vars.
 
 ### Shiki Code Highlighting
 
@@ -444,7 +445,7 @@ src-webgui/
             │   ├── ConnectorListView.tsx  Provider/model accordion list
             │   ├── ProviderForm.tsx        Provider form + marketplace picker
             │   ├── ModelForm.tsx           Model form + catalogue combobox
-            │   └── OAuthConnect.tsx        OAuth stub (OpenAI / Kilo / Anthropic)
+            │   └── OAuthConnect.tsx        OAuth connect flow (OpenAI / Kilo / Anthropic / …)
             └── mcp/
                 ├── McpListView.tsx          MCP server list with toggle/edit/delete
                 └── McpEditView.tsx          MCP server form (transport, command, URL)

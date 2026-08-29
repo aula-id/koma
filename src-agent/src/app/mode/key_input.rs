@@ -18,7 +18,7 @@
 //! controller reads `step` + `field` to know what is focused, and drives
 //! `advance_step` / `back_step` for the step transitions.
 
-use crate::config::{DEFAULT_BASE_URL, DEFAULT_MODEL};
+use crate::config::DEFAULT_BASE_URL;
 
 /// In-progress state of the first-run setup wizard.
 ///
@@ -38,9 +38,10 @@ pub struct KeyInputForm {
     pub endpoint: String,
     /// API key for the provider connection.
     pub api_key: String,
-    /// Main model id. Defaults to [`DEFAULT_MODEL`]. On step 1 with a non-empty
-    /// endpoint this is the PICKED id (set from the highlighted catalogue result
-    /// or the raw `query` fallback); otherwise it is typed in directly.
+    /// Main model id. Empty until the user picks one on step 1 (catalogue or
+    /// typed). On step 1 with a non-empty endpoint this is the PICKED id (set from
+    /// the highlighted catalogue result or the raw `query` fallback); otherwise it
+    /// is typed in directly.
     pub model: String,
     /// Step-1 omnisearch query (the live search box value). Unused for a blank
     /// endpoint (the Model field is a plain text box there).
@@ -65,14 +66,16 @@ impl Default for KeyInputForm {
 
 impl KeyInputForm {
     /// Fresh first-run wizard: step 0 / field 0, endpoint = [`DEFAULT_BASE_URL`],
-    /// empty key, model = [`DEFAULT_MODEL`]. Esc quits (`first_run = true`).
+    /// empty key, **empty model** (user picks from the catalogue on step 1 — do
+    /// not prefill [`DEFAULT_MODEL`] / koma-free here; this path is for a keyed
+    /// OpenAI-compatible provider). Esc quits (`first_run = true`).
     pub fn new() -> Self {
         Self {
             step: 0,
             field: 0,
             endpoint: DEFAULT_BASE_URL.to_string(),
             api_key: String::new(),
-            model: DEFAULT_MODEL.to_string(),
+            model: String::new(),
             query: String::new(),
             result_sel: 0,
             first_run: true,
@@ -83,7 +86,8 @@ impl KeyInputForm {
     /// Construct a wizard pre-populated with existing credentials, starting on
     /// step 0 / field 0. The endpoint defaults to [`DEFAULT_BASE_URL`] (the
     /// legacy/remembered creds carry no endpoint — that path was always
-    /// OpenRouter); an empty `model` falls back to [`DEFAULT_MODEL`].
+    /// OpenRouter). An empty `model` stays empty so the user must pick (or keep)
+    /// a real catalogue id — not auto-filled with the free-tier default.
     ///
     /// - `first_run = true`:   Esc quits (no usable Chat fallback).
     /// - `from_picker = true`: Esc returns to the session picker.
@@ -93,11 +97,7 @@ impl KeyInputForm {
             field: 0,
             endpoint: DEFAULT_BASE_URL.to_string(),
             api_key,
-            model: if model.is_empty() {
-                DEFAULT_MODEL.to_string()
-            } else {
-                model
-            },
+            model,
             query: String::new(),
             result_sel: 0,
             first_run,

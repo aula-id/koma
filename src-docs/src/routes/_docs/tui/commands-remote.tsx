@@ -9,30 +9,35 @@ function CommandsRemotePage() {
     <article>
       <h1 className="mb-4 text-2xl font-bold text-koma-accent">Command: /remote</h1>
       <p className="mb-6 text-koma-fg">
-        <code className="text-koma-fg">/remote</code> will manage remote SSH hosts and sessions —
-        add, edit, or remove saved hosts, then connect to run a session there. Over SSH the agent
-        gets full access to the remote filesystem and tools, with your local chat driving a session
-        daemon on the remote machine.
+        <code className="text-koma-fg">/remote</code> opens the remote host manager —
+        save SSH hosts, then connect so a session runs on the remote machine while
+        your local chat drives it. The agent gets the remote filesystem and tools
+        (same tool surface as a local session, bound to the remote workspace).
       </p>
 
-      <div className="mb-6 rounded border border-koma-border bg-koma-panel p-6 text-center text-koma-dim">
-        /remote — coming soon
-      </div>
-
-      <div className="space-y-3 text-sm text-koma-dim">
-        <h3 className="text-base font-semibold text-koma-fg">What is planned</h3>
+      <div className="mt-2 space-y-3 text-sm text-koma-dim">
+        <h3 className="text-base font-semibold text-koma-fg">Key details</h3>
         <p>
-          <strong className="text-koma-accent">Hosts</strong> — save remote SSH hosts (user@host,
-          port, identity) and pick one from <code className="text-koma-fg">/remote</code> to open a
-          session there.
+          <strong className="text-koma-accent">Hosts</strong> — store user@host, port,
+          and identity; pick a host from the panel to open or resume a remote session
+          (<code className="text-koma-fg">/new remote</code>,{' '}
+          <code className="text-koma-fg">/resume remote</code>).
         </p>
         <p>
-          <strong className="text-koma-accent">Sessions</strong> — a connected remote runs a session
-          daemon so the agent operates on the remote filesystem with the same tools as local chat.
+          <strong className="text-koma-accent">Sessions</strong> — a connected remote
+          runs session work over SSH so tools operate on the remote tree; local TUI/GUI
+          remain the front-end.
         </p>
         <p>
-          <strong className="text-koma-accent">Status</strong> — not yet released. This page documents
-          the intended behaviour; the command is not wired into a running build yet.
+          <strong className="text-koma-accent">GUI</strong> — the Activity Bar{' '}
+          <em>Remote</em> view mirrors host management in the web client.
+        </p>
+        <p>
+          Implementation: <code className="text-koma-fg">Mode::Remote</code>,{' '}
+          <code className="text-koma-fg">view/remote</code>,{' '}
+          <code className="text-koma-fg">app/mode/remote</code>, and the{' '}
+          <code className="text-koma-fg">/remote</code> command in{' '}
+          <code className="text-koma-fg">controller/command.rs</code>.
         </p>
       </div>
     </article>

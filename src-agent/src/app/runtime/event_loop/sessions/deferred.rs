@@ -17,15 +17,16 @@ pub(super) fn drain_deferred_and_resume(
     let mut dirty = false;
 
     // --- drain deferred tool-task results (heavy/blocking tools) ---
-    // Deferred tools (read/write/edit/delete/bash/grep/glob/remember/
-    // web_fetch/web_search) run on a plain std::thread (spawned in
-    // `dispatch_deferred`) and send their `(call_id, result)` back over
-    // `tool_task_rx`. Fold each into the PARKED round's `tool_results` and drop
-    // its id from `pending_tool_tasks`, exactly mirroring the sub-agent deferral
+    // Deferred tools (read/write/edit/delete/grep/glob/remember/
+    // web_fetch/web_search; bash is a BashJob lane, not this channel) run on a plain
+    // std::thread (spawned in `dispatch_deferred`) and send their `(call_id, result)`
+    // back over `tool_task_rx`. Fold each into the PARKED round's `tool_results` and
+    // drop its id from `pending_tool_tasks`, exactly mirroring the sub-agent deferral
     // — so the resume gate below sees the settled set. Done within this same
     // block (before the gate) so both lanes' results are in place when emptiness
     // is tested. A round runs its deferred tools ONE AT A TIME, so at most one
-    // id settles here per resume.
+    // id settles here per resume. (FG bash also parks on `pending_tool_tasks` but
+    // delivers via the bash_done branch below, not this channel.)
     {
         // Drain into a local vec FIRST inside a narrow scope so the `rx` borrow
         // of this session's runtime is released before we touch
@@ -111,15 +112,12 @@ pub(super) fn drain_deferred_and_resume(
         }
     }
 
-    // --- drain background-bash COMPLETION signals (toast only) ---
-    // A `bash` call with `run_in_background: true` runs DETACHED on its own worker
-    // thread (spawned in `process_tools` via `bgbash::spawn_bash_job`); when the
-    // child exits the worker fires the finished job id over `bash_done_tx`. This is
-    // a fire-and-forget completion: the job is NEVER parked on (the tool already
-    // answered with its id immediately), so finishing only pops an info toast so
-    // the user sees it landed. The job STAYS in `bash_jobs` so a later
-    // `bash_output` can still read its final status + output. Non-blocking
-    // try_recv loop. (Chat-line rendering of the completion is a later stage.)
+    // --- drain bash COMPLETION signals ---
+    // Every model `bash` (FG or BG) runs as a BashJob. When the worker exits it
+    // fires the job id over `bash_done_tx`. Branch on remaining `tool_call_id`:
+    //   Some → still-blocking FG: deliver as tool_result (not nudge), clear park
+    //   None → true BG or already promoted: toast + pending_bash_nudges
+    // Race with Ctrl+B: both paths `take()` tool_call_id — only one wins.
     {
         // Drain the finished ids into a local FIRST so the `rx` borrow of this
         // session's runtime is released before we look the jobs back up below.
@@ -131,19 +129,56 @@ pub(super) fn drain_deferred_and_resume(
         }
         let had_finished = !finished.is_empty();
         for id in finished {
-            // Snapshot the final status into a short label for the toast. An id
-            // with no matching job (cleared session) just falls through silently.
-            let label = state.rest.sessions[idx]
+            // Find job index; skip unknown ids (cleared session).
+            let Some(job_idx) = state.rest.sessions[idx]
                 .bash_jobs
                 .iter()
-                .find(|j| j.id == id)
-                .map(|j| match j.snapshot_status() {
+                .position(|j| j.id == id)
+            else {
+                continue;
+            };
+
+            // take() the call id — races promote; only one path delivers the result.
+            let call_id = state.rest.sessions[idx].bash_jobs[job_idx]
+                .tool_call_id
+                .take();
+            let suppress = state.rest.sessions[idx].bash_jobs[job_idx].suppress_completion_nudge;
+
+            if let Some(call_id) = call_id {
+                // Still blocking FG — deliver as tool result, not nudge.
+                let saving = state.rest.sessions[idx]
+                    .session
+                    .as_ref()
+                    .map(|s| s.settings.bash_saving)
+                    .unwrap_or(true);
+                let log_dir = state.rest.sessions[idx]
+                    .session
+                    .as_ref()
+                    .map(|s| s.path.join("opt"));
+                let result = state.rest.sessions[idx].bash_jobs[job_idx]
+                    .format_tool_result(saving, log_dir.as_deref());
+
+                // Only fold if still pending (Esc may have cleared the park set).
+                if let Some(pos) = state.rest.sessions[idx]
+                    .pending_tool_tasks
+                    .iter()
+                    .position(|c| c == &call_id)
+                {
+                    state.rest.sessions[idx].pending_tool_tasks.remove(pos);
+                    state.rest.sessions[idx]
+                        .tool_results
+                        .push((call_id, result));
+                    dirty = true;
+                }
+                // else: turn was interrupted — drop the result silently
+            } else if !suppress {
+                // True BG or already promoted — existing nudge path.
+                let label = match state.rest.sessions[idx].bash_jobs[job_idx].snapshot_status() {
                     crate::app::bgbash::BashJobStatus::Running => "running".to_string(),
                     crate::app::bgbash::BashJobStatus::Done(code) => format!("exit {code}"),
                     crate::app::bgbash::BashJobStatus::Killed => "killed".to_string(),
                     crate::app::bgbash::BashJobStatus::Error(msg) => format!("error: {msg}"),
-                });
-            if let Some(label) = label {
+                };
                 // The bg-bash completion toast is about THIS session's job, and the drain
                 // runs unbracketed (fg() is stale scratch here), so raise it on
                 // `sessions[idx]` itself (C6) — it surfaces only in the client(s) viewing idx.
@@ -153,6 +188,7 @@ pub(super) fn drain_deferred_and_resume(
                     .push((id, label));
                 dirty = true;
             }
+            // else: suppress_completion_nudge (Esc killed still-blocking FG) — no nudge
         }
         // A job just reached a terminal state — re-persist the set so the restored
         // record reflects the final status, not the stale "running" (#25).

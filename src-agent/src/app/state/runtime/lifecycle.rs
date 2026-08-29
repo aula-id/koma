@@ -173,15 +173,43 @@ impl SessionRuntime {
         // pending queue. `abort_running_subagents` also clears
         // `pending_subagent_calls` and `awaiting_subagents`, so the halt path is
         // complete. Detached (background) sub-agents are PRESERVED — they are the
-        // user's independent background jobs and survive Esc exactly as bg-bash
-        // jobs do (bash_jobs is never touched by interrupt()).
+        // user's independent background jobs and survive Esc exactly as true-BG
+        // bash jobs do.
         // include_detached = false: Esc/turn-halt, preserve background agents.
         self.abort_running_subagents(false);
+        // Kill still-blocking foreground bash jobs (tool_call_id Some) so Esc does
+        // not leave orphan children. True BG / already-promoted jobs
+        // (tool_call_id None) are left running. Suppress completion nudges for the
+        // killed FG jobs so an abandoned turn does not auto-wake.
+        {
+            let mut killed_any = false;
+            for job in &mut self.bash_jobs {
+                if job.tool_call_id.is_some()
+                    && matches!(
+                        job.snapshot_status(),
+                        crate::app::bgbash::BashJobStatus::Running
+                    )
+                {
+                    job.tool_call_id = None;
+                    job.suppress_completion_nudge = true;
+                    job.clear_deadline();
+                    crate::app::bgbash::kill_bash_job(job);
+                    killed_any = true;
+                }
+            }
+            if killed_any {
+                // Persist so restored records aren't stuck "running".
+                // Caller may also persist; best-effort here needs session path —
+                // leave to next persist_bash_jobs from drain/done if any remain.
+            }
+        }
         // Abandon any round parked on a deferred tool task. The off-thread worker
         // keeps running but its result lands with no matching pending id, so the
         // next-turn machine reset discards it; it can't resume a turn that was
         // killed. The channel itself is left intact for reuse by later deferred
         // tools. We deliberately do NOT join the worker here.
+        // (FG bash parks reuse pending_tool_tasks; those call ids are cleared here
+        // after the kill loop above already took them off the jobs.)
         self.pending_tool_tasks.clear();
         self.awaiting_tool_tasks = false;
         // Abandon any round parked on the TAC classifier the same way: the

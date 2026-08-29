@@ -1,25 +1,25 @@
-//! Background-bash registry: run a shell command DETACHED and poll it later.
+//! Background-bash registry: run a shell command on a worker thread and poll it.
 //!
-//! The model-callable `bash` tool normally runs INLINE (or on the deferred
-//! `std::thread` lane) and the turn waits for the command to finish. With
-//! `run_in_background: true` the runtime instead registers a [`BashJob`] here:
-//! the command is spawned on its own worker thread, the tool returns a job id
-//! IMMEDIATELY, and the model polls the captured output with `bash_output` /
-//! stops it with `bash_kill` (both intercepted in
-//! `app::runtime::stream::process_tools`, mirroring the `task` tool).
+//! Every model `bash` call (foreground or `run_in_background: true`) registers a
+//! [`BashJob`] here. True background jobs set `tool_call_id: None` and return a
+//! job id immediately; foreground jobs set `tool_call_id: Some(call.id)` and park
+//! the turn on `pending_tool_tasks` until the child exits or the user promotes
+//! with Ctrl+B (clears the call id → synthetic tool result; completion becomes a
+//! nudge like true BG). Both poll via `bash_output` / stop via `bash_kill`.
 //!
 //! Concurrency shape mirrors the rest of the crate's off-thread work: a plain
-//! `std::thread` owns the blocking child wait (NOT a tokio task — the shell
-//! child must run with no tokio runtime in context, same as the deferred lane),
-//! and the job's mutable state lives behind an `Arc<`[`BashJobShared`]`>` shared
-//! between that worker and the registry entry. Completion is signalled over an
-//! `UnboundedSender<usize>` (the job id) so the event loop can surface a toast.
+//! `std::thread` owns the child wait (NOT a tokio task — the shell child must run
+//! with no tokio runtime in context, same as the deferred lane), and the job's
+//! mutable state lives behind an `Arc<`[`BashJobShared`]`>` shared between that
+//! worker and the registry entry. Completion is signalled over an
+//! `UnboundedSender<usize>` (the job id) so the event loop can deliver a tool
+//! result (still-blocking FG) or a toast + nudge (true BG / promoted).
 
 use std::io::{BufRead, BufReader};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -66,6 +66,10 @@ pub struct BashJobShared {
     /// path is reused (never rewritten) once populated, so the model's
     /// full-output pointer for this job never changes out from under it.
     pub tee_path: Mutex<Option<std::path::PathBuf>>,
+    /// Wall deadline for foreground-only timeout. `Some` while the job still
+    /// blocks a main-turn tool call; cleared on Ctrl+B promote (or never set for
+    /// true background). The worker polls this and times out only while set.
+    pub deadline: Mutex<Option<Instant>>,
 }
 
 /// One registered background bash job: its identity, the command, when it
@@ -83,6 +87,14 @@ pub struct BashJob {
     /// later stage) to show how long a job has been running.
     #[allow(dead_code)]
     pub started_at: Instant,
+    /// When `Some`, this job is blocking a main-turn tool call (foreground bash).
+    /// Cleared on Ctrl+B promote or when the Done path consumes it into
+    /// `tool_results`. `None` for true background / already-promoted jobs.
+    /// Main-thread only (event loop + action handlers) — never touched by the worker.
+    pub tool_call_id: Option<String>,
+    /// When true, the drain skips the completion nudge (Esc killed a still-blocking
+    /// FG job; the abandoned turn must not auto-wake). Main-thread only.
+    pub suppress_completion_nudge: bool,
     /// Mutable state shared with the worker thread (output / status / pid).
     pub shared: Arc<BashJobShared>,
 }
@@ -111,6 +123,81 @@ impl BashJob {
     #[allow(dead_code)]
     pub fn is_running(&self) -> bool {
         matches!(self.snapshot_status(), BashJobStatus::Running)
+    }
+
+    /// True while this job still parks a main-turn tool call (foreground bash).
+    pub fn is_blocking(&self) -> bool {
+        self.tool_call_id.is_some() && self.is_running()
+    }
+
+    /// Clear the FG wall deadline so a promoted job no longer times out.
+    pub fn clear_deadline(&self) {
+        if let Ok(mut d) = self.shared.deadline.lock() {
+            *d = None;
+        }
+    }
+
+    /// Format a finished job's output the way synchronous `Bash::run` would via
+    /// [`crate::tool::shell::finalize_output`] — used when FG completion delivers
+    /// a tool result (not a `bash_output` poll).
+    pub fn format_tool_result(
+        &self,
+        saving: bool,
+        log_dir: Option<&std::path::Path>,
+    ) -> String {
+        use crate::tool::shell::{finalize_output, OutputOpts, ShellExit};
+
+        let raw = self.output_snapshot();
+        match self.snapshot_status() {
+            BashJobStatus::Done(code) => {
+                // Worker stores -1 when the OS reported no exit code (signal).
+                let exit = if code < 0 {
+                    ShellExit::Code(None)
+                } else {
+                    ShellExit::Code(Some(code))
+                };
+                finalize_output(
+                    &self.command,
+                    raw,
+                    exit,
+                    &OutputOpts {
+                        saving,
+                        log_dir: log_dir.map(|p| p.to_path_buf()),
+                    },
+                )
+            }
+            BashJobStatus::Killed => {
+                if raw.is_empty() {
+                    "job killed\nexit code: ?".to_string()
+                } else {
+                    finalize_output(
+                        &self.command,
+                        raw,
+                        ShellExit::Code(None),
+                        &OutputOpts {
+                            saving,
+                            log_dir: log_dir.map(|p| p.to_path_buf()),
+                        },
+                    )
+                }
+            }
+            BashJobStatus::Error(msg) => {
+                // Timeout / spawn failure — match capture_raw Early (plain message).
+                if raw.is_empty() {
+                    msg
+                } else {
+                    format!("{raw}\n{msg}")
+                }
+            }
+            BashJobStatus::Running => {
+                // Should not be called while still running; defensive.
+                if raw.is_empty() {
+                    "(still running)".to_string()
+                } else {
+                    raw
+                }
+            }
+        }
     }
 
     /// Elapsed wall-clock seconds for the panel timer: frozen at the terminal
@@ -242,34 +329,46 @@ fn append_capped(shared: &BashJobShared, chunk: &str) {
     }
 }
 
-/// Spawn a background bash job: run `command` via `sh -c` in `cwd`, streaming the
-/// merged stdout+stderr into the returned job's shared buffer, and signal `done_tx`
-/// with the job `id` when the child exits. Returns the [`BashJob`] IMMEDIATELY —
-/// the worker thread owns the blocking wait, so the caller never stalls.
+/// Spawn a bash job: run `command` via `sh -c` in `cwd`, streaming the merged
+/// stdout+stderr into the returned job's shared buffer, and signal `done_tx` with
+/// the job `id` when the child exits (or times out while still FG-blocking).
+/// Returns the [`BashJob`] IMMEDIATELY — the worker thread owns the wait.
+///
+/// - `tool_call_id`: `Some(call.id)` for foreground bash (parks the turn);
+///   `None` for true background.
+/// - `timeout_ms`: FG wall deadline only; `None` / ignored for true BG. Cleared
+///   on promote so a backgrounded job no longer times out.
 ///
 /// Models the exec on [`crate::tool::shell::run_shell_capture`] but WITHOUT the
 /// blocking wait: the child's pid is recorded into `shared.pid` as soon as it is
 /// spawned (so `bash_kill` can reach it), reader threads stream stdout+stderr into
 /// `shared.output` as they arrive, and the worker thread sets the terminal status
 /// once the child exits — leaving a `Killed` status untouched if `bash_kill` won
-/// the race.
+/// the race. FG timeout: if `deadline` elapses while still Running, kill the child
+/// and mark `Error("command timed out after …ms")`.
 pub fn spawn_bash_job(
     id: usize,
     command: String,
     cwd: std::path::PathBuf,
     done_tx: Option<UnboundedSender<usize>>,
+    tool_call_id: Option<String>,
+    timeout_ms: Option<u64>,
 ) -> BashJob {
+    let deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
     let shared = Arc::new(BashJobShared {
         output: Mutex::new(String::new()),
         status: Mutex::new(BashJobStatus::Running),
         pid: Mutex::new(None),
         ended_at: Mutex::new(None),
         tee_path: Mutex::new(None),
+        deadline: Mutex::new(deadline),
     });
     let job = BashJob {
         id,
         command: command.clone(),
         started_at: Instant::now(),
+        tool_call_id,
+        suppress_completion_nudge: false,
         shared: Arc::clone(&shared),
     };
 
@@ -289,6 +388,11 @@ pub fn spawn_bash_job(
             Err(e) => {
                 if let Ok(mut st) = shared.status.lock() {
                     *st = BashJobStatus::Error(format!("failed to spawn command: {e}"));
+                }
+                if let Ok(mut e) = shared.ended_at.lock() {
+                    if e.is_none() {
+                        *e = Some(Instant::now());
+                    }
                 }
                 if let Some(tx) = &done_tx {
                     let _ = tx.send(id);
@@ -316,10 +420,39 @@ pub fn spawn_bash_job(
             readers.push(thread::spawn(move || stream_pipe(err, &sh)));
         }
 
-        // Block until the child exits. The reader threads finish when their pipes
-        // hit EOF (at/after child exit); join them so all output is captured before
-        // we set the terminal status.
-        let wait_result = child.wait();
+        // Poll wait with short sleeps so an FG deadline can fire without blocking
+        // forever. True BG (deadline None) still wakes promptly on child exit.
+        let mut timed_out_ms: Option<u64> = None;
+        let wait_result = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Ok(None) => {
+                    // Still running — check FG deadline (cleared on promote).
+                    let hit = shared
+                        .deadline
+                        .lock()
+                        .ok()
+                        .and_then(|g| *g)
+                        .filter(|d| Instant::now() >= *d);
+                    if hit.is_some() {
+                        // Kill the child so it does not orphan; mark timeout below.
+                        let pid = shared.pid.lock().ok().and_then(|g| *g);
+                        if let Some(pid) = pid {
+                            kill_child(pid);
+                        }
+                        // Drain the wait so we don't zombie.
+                        let _ = child.wait();
+                        timed_out_ms = Some(timeout_ms.unwrap_or(0));
+                        break Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "timeout",
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => break Err(e),
+            }
+        };
         for r in readers {
             let _ = r.join();
         }
@@ -329,11 +462,15 @@ pub fn spawn_bash_job(
         // Done/Error here.
         if let Ok(mut st) = shared.status.lock() {
             if matches!(*st, BashJobStatus::Running) {
-                *st = match wait_result {
-                    // `.code()` is `None` when the process was terminated by a
-                    // signal; report -1 so the status is still a concrete value.
-                    Ok(status) => BashJobStatus::Done(status.code().unwrap_or(-1)),
-                    Err(e) => BashJobStatus::Error(format!("wait failed: {e}")),
+                *st = if let Some(ms) = timed_out_ms {
+                    BashJobStatus::Error(format!("command timed out after {ms}ms"))
+                } else {
+                    match wait_result {
+                        // `.code()` is `None` when the process was terminated by a
+                        // signal; report -1 so the status is still a concrete value.
+                        Ok(status) => BashJobStatus::Done(status.code().unwrap_or(-1)),
+                        Err(e) => BashJobStatus::Error(format!("wait failed: {e}")),
+                    }
                 };
                 if let Ok(mut e) = shared.ended_at.lock() {
                     if e.is_none() {

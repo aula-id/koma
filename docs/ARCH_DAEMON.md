@@ -380,7 +380,9 @@ Per-client mode projections are cached with a 100ms TTL (`MODE_SNAPSHOT_TTL`). T
 | Variant | Description |
 |---|---|
 | `KillSubagent { id }` | Kill running sub-agent |
-| `BashKill { id }` | Kill background bash job |
+| `BackgroundSubagent { id }` | Detach one blocking sub-agent (`$` panel / GUI row Ctrl+B) |
+| `BackgroundAllSubagents` | Detach all blocking SAs **and** promote still-blocking FG bash (composer Ctrl+B) |
+| `BashKill { id }` | Kill a bash job (FG or background) |
 
 **Config (GUI-gated):**
 | Variant | Description |
@@ -737,7 +739,7 @@ The global MCP daemon self-reaps when no session daemons need it:
 | Accept loop | tokio (multi-thread) | Binds socket, accepts connections, spawns per-client tasks |
 | Per-client read | tokio (multi-thread) | `read_loop`: read frames → `HubInbound::Request` |
 | Per-client write | tokio (multi-thread) | `write_loop`: poll channel every 4ms → write frames |
-| Tool execution | `std::thread` | Inline tool runs (read, write, bash, grep, etc.) |
+| Tool execution | `std::thread` | Deferred heavy tools + bash job workers (not on the event loop) |
 | Signal handler | tokio task | Sets `shutting_down` on SIGTERM/SIGINT |
 | Classifier (TAC) | tokio task | Off-thread tool-call risk classification |
 | Sub-agent engine | tokio task | Autonomous LLM-tool loop |
@@ -796,7 +798,7 @@ Two separate tasks (not `select!`) because `std::sync::mpsc::Receiver` is `!Sync
 | `MAX_SUBAGENTS` | 5 | `subagent/mod.rs:54` | Max concurrent sub-agents |
 | `FRAME_POLL` | 4 ms | `ipc/conn.rs` | Per-client write channel poll interval |
 | `MODE_SNAPSHOT_TTL` | 100 ms | `hub/core.rs` | Mode projection cache TTL |
-| `DEFAULT_MODEL` | `openai/gpt-4o-mini` | `config.rs` | Default model via OpenRouter |
+| `DEFAULT_MODEL` | `koma/apple` | `config.rs` | Soft default = koma-free model id (dispatch already routes unusable Main there) |
 | `SPAWN_CONNECT_TIMEOUT` | 3 s | `manage.rs` | Max wait for spawned daemon |
 | `SPAWN_POLL_INTERVAL` | 50 ms | `manage.rs` | Poll interval during spawn wait |
 | `SOCKET_IO_TIMEOUT` | 3 s | `manage.rs` | Socket operation timeout |

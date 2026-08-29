@@ -271,13 +271,14 @@ pub enum Action {
     /// (a Tier-2 download can take seconds), then re-fetches install-health so the
     /// pane's present-flags update.
     SecurityInstall(String),
-    // --- Bash background-job panel actions ---
+    // --- Bash job panel actions ---
     /// Esc from the `/bash` panel — return to Chat.
     CloseBash,
-    /// `k` in the `/bash` panel — kill the selected RUNNING background bash job
-    /// (inner `usize` is its id, `bash-<id>`). The runtime resolves the job in the
-    /// foreground session's live registry and signals it; the panel stays open and
-    /// refreshes on the next key. A no-op when the id is absent or already terminal.
+    /// `k` / Ctrl+X in the `/bash` panel — kill the selected RUNNING bash job
+    /// (inner `usize` is its id, `bash-<id>`; FG or background). The runtime
+    /// resolves the job in the foreground session's live registry and signals it;
+    /// the panel stays open and refreshes on the next key. A no-op when the id is
+    /// absent or already terminal.
     BashKillJob(usize),
     // --- Todo panel actions ---
     /// Esc from the `/todo` panel — return to Chat.
@@ -353,10 +354,11 @@ pub enum Action {
     /// Inner `usize` is the sub-agent's stable session id.
     BackgroundSubagent(usize),
     /// Ctrl+B in the MAIN CHAT composer (not the `$` panel): detach ALL running
-    /// blocking sub-agents of the foreground session at once.  Mirrors
-    /// `BackgroundSubagent` for every eligible agent (Running, !detached,
-    /// tool_call_id present) and lets the park gate in `deferred.rs`
-    /// (`pending_subagent_calls.is_empty()`) resume the turn automatically.
+    /// blocking sub-agents AND promote every still-blocking foreground bash job
+    /// of the foreground session at once. Mirrors `BackgroundSubagent` for every
+    /// eligible agent (Running, !detached, tool_call_id present) and the bash
+    /// promote path (take tool_call_id, clear deadline). The park gate in
+    /// `deferred.rs` resumes the turn automatically when pending lists empty.
     BackgroundAllSubagents,
     // --- Skill hub actions ---
     /// Esc in the `/skill` hub — close it and return to Chat.

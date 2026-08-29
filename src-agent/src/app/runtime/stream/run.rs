@@ -13,7 +13,7 @@ use crate::service::openrouter::OpenRouterClient;
 /// Never persisted — only mutates the local `history` Vec before POST.
 const TOOL_NUDGE: &str = "\n\nIMPORTANT (auto message, ignore if no need):\n\
 - If unsure (for example does not know how to implement, or does not know what is this or you really unsure what does the code mean or there is unclear documentation of certain module or api and other thing that IS UNSURE but NON BLOCKING), USE web_search/web_fetch rather than guessing.\n\
-- If you need prior conversation context, use message_find.\n\
+- If you need prior conversation context, use message_find (add scope project only when searching sibling sessions in this project).\n\
 - If internet and history having zero result, STOP and ASK me.";
 
 /// Names of SDLC lifecycle tools that are INTERNAL_ONLY (never part of
@@ -363,11 +363,10 @@ over sec_remote (stateful socket).\n",
         Option<crate::app::resolve::Resolved>,
     )> = state.rest.sessions[sess_idx].session.as_ref().map(|sess| {
         let user_intent = sess.conversation.last_user_content().unwrap_or_default();
-        // Call-boundary gate for the SECONDARY fold/router calls: an Anthropic-typed
-        // Awareness route can't be dispatched (native Anthropic is deferred), so
-        // downgrade it to `None`. `shape` already treats `None` as "skip the fold +
-        // snippet-router" gracefully (existing summary still applies) — no summary /
-        // no recall, never a crash.
+        // Call-boundary gate for the SECONDARY fold/router calls: only a
+        // routable Awareness route is passed through (`is_routable`). `None`
+        // means skip fold + snippet-router gracefully (existing summary still
+        // applies) — no summary / no recall, never a crash.
         let aware = crate::app::resolve::resolve_role_dispatch(
             &state.rest.config,
             &sess.settings,
@@ -705,15 +704,16 @@ over sec_remote (stateful socket).\n",
         // this task; borrow it for the call. A `None` (no session) can't reach here
         // — the client only exists when Main resolves — but guard defensively.
         if let Some(m) = main {
-            // Call-boundary gate (FAIL LOUD): the OpenAI-compatible client must
-            // never POST its body to an Anthropic-typed provider — that endpoint
-            // speaks a different wire protocol (native Anthropic is deferred), so
-            // the request would 400/404 with an opaque error. Surface a clear
+            // Call-boundary gate (FAIL LOUD): never POST if the resolved Main
+            // route is not routable (`ApiType::is_routable`). Surface a clear
             // error on the stream channel and DON'T dispatch; the drain folds it
             // into the status line + toast exactly like any stream failure.
             if !m.is_routable() {
                 let _ = tx.send(crate::service::StreamEvent::Error(
-                    "Anthropic-compatible providers are not wired yet".to_string(),
+                    format!(
+                        "provider wire type {:?} is not routable",
+                        m.api_type
+                    ),
                 ));
             } else {
                 let _ = c
