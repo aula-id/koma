@@ -9,12 +9,16 @@ import {
   FolderOpen,
   FilePlus,
   FolderPlus,
+  MessageSquarePlus,
   Pencil,
   RefreshCw,
   Trash2,
   X,
 } from 'lucide-react'
 import { useKoma } from '../../store/koma'
+import {
+  setCodingPathDragData,
+} from '../../lib/codingRef'
 import {
   baseName,
   fileKey,
@@ -25,7 +29,8 @@ import {
 } from '../../store/coding'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { Empty, IconBtn } from './helpers'
-import { Select } from './form'
+import { Segmented, Select } from './form'
+import { CodingSearchPanel } from './CodingSearchPanel'
 
 function joinPath(dir: string, name: string): string {
   if (!dir) return name
@@ -63,6 +68,7 @@ type TreeNodeProps = {
   onStartRename: (path: string) => void
   onStartDelete: (path: string, isDir: boolean) => void
   onDownload: (path: string) => void
+  onPutInChat: (path: string, isDir: boolean) => void
   onCancelDraft: () => void
   onSubmitCreate: (dirPath: string, item: 'file' | 'dir', name: string) => void
   onSubmitRename: (path: string, name: string) => void
@@ -185,6 +191,7 @@ function TreeNode({
   onStartRename,
   onStartDelete,
   onDownload,
+  onPutInChat,
   onCancelDraft,
   onSubmitCreate,
   onSubmitRename,
@@ -253,6 +260,19 @@ function TreeNode({
         }`}
         style={{ paddingLeft: pad }}
         data-coding-row=""
+        draggable
+        onDragStart={(e) => {
+          setCodingPathDragData(e.dataTransfer, {
+            root,
+            path: entry.path,
+            isDir: entry.isDir,
+          })
+          try {
+            e.dataTransfer.effectAllowed = 'copy'
+          } catch {
+            /* ignore */
+          }
+        }}
         onDragOver={(e) => onExternalDragOver(e, dropDir)}
         onDrop={(e) => onExternalDrop(e, dropDir)}
         onDragLeave={(e) => onExternalDragLeave(e, dropDir)}
@@ -326,9 +346,17 @@ function TreeNode({
                   </>
                 )}
                 {!entry.isDir && (
-                  <IconBtn label="Download" onClick={() => onDownload(entry.path)}>
-                    <Download size={12} />
-                  </IconBtn>
+                  <>
+                    <IconBtn
+                      label="Put in chat"
+                      onClick={() => onPutInChat(entry.path, false)}
+                    >
+                      <MessageSquarePlus size={12} />
+                    </IconBtn>
+                    <IconBtn label="Download" onClick={() => onDownload(entry.path)}>
+                      <Download size={12} />
+                    </IconBtn>
+                  </>
                 )}
                 <IconBtn label="Rename" onClick={() => onStartRename(entry.path)}>
                   <Pencil size={12} />
@@ -395,6 +423,7 @@ function TreeNode({
                 onStartRename={onStartRename}
                 onStartDelete={onStartDelete}
                 onDownload={onDownload}
+                onPutInChat={onPutInChat}
                 onCancelDraft={onCancelDraft}
                 onSubmitCreate={onSubmitCreate}
                 onSubmitRename={onSubmitRename}
@@ -436,11 +465,13 @@ export function CodingPanel() {
   const deleteCodingItem = useKoma((s) => s.deleteCodingItem)
   const uploadCodingFile = useKoma((s) => s.uploadCodingFile)
   const downloadCodingFile = useKoma((s) => s.downloadCodingFile)
+  const putCodingPathInChat = useKoma((s) => s.putCodingPathInChat)
   const req = useKoma((s) => s.req)
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']))
   const [draft, setDraft] = useState<Draft | null>(null)
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null)
+  const [sideTab, setSideTab] = useState<'files' | 'search'>('files')
   const [ctxMenu, setCtxMenu] = useState<null | {
     x: number
     y: number
@@ -526,7 +557,7 @@ export function CodingPanel() {
     } catch {
       /* ignore */
     }
-    setDropTargetPath(dirPath)
+    setDropTargetPath((cur) => (cur === dirPath ? cur : dirPath))
   }
 
   const onExternalDragLeave = (e: DragEvent, dirPath: string) => {
@@ -590,6 +621,11 @@ export function CodingPanel() {
   const onDownload = (path: string) => {
     if (!activeRoot) return
     downloadCodingFile(activeRoot, path)
+  }
+
+  const onPutInChat = (path: string, isDir: boolean) => {
+    if (!activeRoot) return
+    putCodingPathInChat(activeRoot, path, { isDir })
   }
 
   const onStartCreate = (dirPath: string, item: 'file' | 'dir') => {
@@ -679,7 +715,7 @@ export function CodingPanel() {
             disabled={!!draft}
           />
         </div>
-        {!draft ? <>
+        {sideTab === 'files' && !draft ? <>
           <IconBtn label="Refresh root" onClick={() => activeRoot && refreshCodingDir(activeRoot, '')}>
             <RefreshCw size={12} />
           </IconBtn>
@@ -692,6 +728,22 @@ export function CodingPanel() {
         </> : null}
       </div>
 
+      <div className="flex-none px-2 pb-1.5">
+        <Segmented
+          value={sideTab}
+          options={[
+            { value: 'files', label: 'Files' },
+            { value: 'search', label: 'Search' },
+          ]}
+          onChange={setSideTab}
+        />
+      </div>
+
+      {sideTab === 'search' ? (
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <CodingSearchPanel root={activeRoot} />
+        </div>
+      ) : (
       <div
         className={`min-h-0 flex-1 overflow-y-auto py-1 ${
           dropTargetPath === '' ? 'bg-koma-accent/5' : ''
@@ -741,6 +793,7 @@ export function CodingPanel() {
                   onStartRename={onStartRename}
                   onStartDelete={onStartDelete}
                   onDownload={onDownload}
+                  onPutInChat={onPutInChat}
                   onCancelDraft={onCancelDraft}
                   onSubmitCreate={onSubmitCreate}
                   onSubmitRename={onSubmitRename}
@@ -759,14 +812,26 @@ export function CodingPanel() {
           </>
         )}
       </div>
+      )}
 
-      {ctxMenu && activeRoot ? (
+      {ctxMenu && activeRoot && sideTab === 'files' ? (
         <div
           className="fixed z-[80] min-w-[140px] rounded border border-koma-border bg-koma-panel py-1 shadow-lg"
           style={{ left: ctxMenu.x, top: ctxMenu.y }}
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.preventDefault()}
         >
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-90 hover:bg-koma-hover"
+            onClick={() => {
+              onPutInChat(ctxMenu.path, ctxMenu.isDir)
+              setCtxMenu(null)
+            }}
+          >
+            <MessageSquarePlus size={12} className="opacity-70" />
+            Put in chat
+          </button>
           {!ctxMenu.isDir ? (
             <button
               type="button"

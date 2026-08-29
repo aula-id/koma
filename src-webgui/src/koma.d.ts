@@ -116,6 +116,11 @@ declare global {
     // Composer queued-steer-list clear button: cancel every pending mid-turn
     // steer at once (koma's Ctrl+X-with-pending-steers equivalent).
     | { r: 'CancelSteers' }
+    // Remove one queued follow-up by index.
+    | { r: 'RemoveSteer'; index: number }
+    // Load one queued follow-up into the composer for edit (daemon removes it
+    // from the queue). Pair with local refillComposer(fullText).
+    | { r: 'EditSteer'; index: number }
     // Rewind the conversation TO a user message by its index into
     // SessionSnapshot.messages (Conversation::messages()) — drops everything
     // after it, mirroring the TUI's double-Esc MessageRewind. No id: the daemon
@@ -124,6 +129,9 @@ declare global {
     // refill the composer input); a non-user / out-of-range index is a clean
     // no-op host-side. The GUI mirrors the refill locally via refillComposer.
     | { r: 'RewindTo'; index: number }
+    // Pull older transcript held after a windowed first Snapshot.
+    // `before` = current oldest display idx on the FE (exclusive).
+    | { r: 'HistoryPage'; before?: number }
     // Kill a single running subagent by its host-projected id (Explore panel
     // Agents row kill button). Numeric to match the daemon's `usize`.
     | { r: 'KillSubagent'; id: number }
@@ -517,7 +525,36 @@ declare global {
     // overwrite=false rejects existing paths. Reply: FileWriteBytes.
     | { r: 'FileWriteBytes'; root: string; path: string; bytesB64: string; overwrite?: boolean; requestId: string }
     // Read raw bytes for download / save-as. Reply: FileDownloadBytes.
-    | { r: 'FileDownloadBytes'; root: string; path: string; requestId: string }
+    // saveAs=true → host opens a native save dialog and writes the file
+    // (required in wry; blob <a download> is a no-op there).
+    | { r: 'FileDownloadBytes'; root: string; path: string; requestId: string; saveAs?: boolean }
+    // VS Code-style content search. Reply: FileContentSearch.
+    | {
+        r: 'FileContentSearch'
+        root: string
+        path?: string
+        query: string
+        caseSensitive?: boolean
+        wholeWord?: boolean
+        isRegex?: boolean
+        includeGlob?: string | null
+        excludeGlob?: string | null
+        requestId: string
+      }
+    // Replace-all with the same flags. Reply: FileContentReplace.
+    | {
+        r: 'FileContentReplace'
+        root: string
+        path?: string
+        query: string
+        replacement: string
+        caseSensitive?: boolean
+        wholeWord?: boolean
+        isRegex?: boolean
+        includeGlob?: string | null
+        excludeGlob?: string | null
+        requestId: string
+      }
     // ─── Language servers (Settings + editor banner) ─────────────────────
     // Full catalogue status (managed / PATH / missing). Reply: LspStatus.
     | { r: 'LspStatus' }
@@ -531,7 +568,8 @@ declare global {
     | { r: 'LspDidChange'; root: string; path: string; text: string }
     | { r: 'LspDidSave'; root: string; path: string; text?: string | null }
     | { r: 'LspDidClose'; root: string; path: string }
-    | { r: 'LspCompletion'; root: string; path: string; line: number; character: number; requestId: string }
+    | { r: 'LspCompletion'; root: string; path: string; line: number; character: number; triggerKind?: number; triggerCharacter?: string; requestId: string }
+    | { r: 'LspCompletionResolve'; root: string; path: string; item: LspCompletionItem; requestId: string }
     | { r: 'LspHover'; root: string; path: string; line: number; character: number; requestId: string }
     | { r: 'LspDefinition'; root: string; path: string; line: number; character: number; requestId: string }
     | { r: 'LspReferences'; root: string; path: string; line: number; character: number; includeDeclaration?: boolean; requestId: string }
@@ -628,6 +666,27 @@ declare global {
         size: number
         tooLarge: boolean
         error: string | null
+        /** Host already wrote via native save dialog; bytesB64 is empty. */
+        saved?: boolean
+      }
+    | {
+        k: 'FileContentSearch'
+        root: string
+        path: string
+        requestId: string
+        results: { path: string; matches: { line: number; col: number; text: string }[] }[]
+        error: string | null
+        truncated: boolean
+      }
+    | {
+        k: 'FileContentReplace'
+        root: string
+        path: string
+        requestId: string
+        filesChanged: number
+        matchCount: number
+        error: string | null
+        truncated: boolean
       }
 
   type LspServerStatus = {
@@ -642,15 +701,28 @@ declare global {
     package: string
   }
 
+  type LspRuntimeServer = {
+    id: string
+    name: string
+    root: string
+    phase: string
+    title?: string | null
+    message?: string | null
+    percentage?: number | null
+    openDocs: number
+  }
+
   type LspPush =
     | { k: 'LspStatus'; servers: LspServerStatus[] }
     | { k: 'LspInstall'; id: string; pct: number; error: string | null }
     | { k: 'LspDiagnostics'; uri: string; diagnostics: LspDiagnostic[] }
-    | { k: 'LspCompletion'; requestId: string; items: LspCompletionItem[]; error: string | null }
+    | { k: 'LspCompletion'; requestId: string; items: LspCompletionItem[]; isIncomplete?: boolean; error: string | null }
+    | { k: 'LspCompletionResolve'; requestId: string; item: LspCompletionItem | null; error: string | null }
     | { k: 'LspHover'; requestId: string; hover: LspHover | null; error: string | null }
     | { k: 'LspDefinition'; requestId: string; locations: LspLocation[]; error: string | null }
     | { k: 'LspReferences'; requestId: string; locations: LspLocation[]; error: string | null }
     | { k: 'LspDocumentSymbol'; requestId: string; symbols: LspDocumentSymbol[]; error: string | null }
+    | { k: 'LspRuntime'; servers: LspRuntimeServer[]; replace?: boolean; removed?: string[] }
 
   type LspDiagnostic = {
     uri: string
@@ -664,19 +736,33 @@ declare global {
     code?: string
   }
 
-  type LspCompletionItem = {
-    label: string
-    kind?: number
-    detail?: string
-    insertText?: string
-    documentation?: string
-  }
-
   type LspRange = {
     startLine: number
     startCharacter: number
     endLine: number
     endCharacter: number
+  }
+
+  type LspTextEdit = {
+    range: LspRange
+    newText: string
+  }
+
+  type LspCompletionItem = {
+    label: string
+    kind?: number
+    detail?: string
+    labelDescription?: string
+    insertText?: string
+    insertTextFormat?: number
+    documentation?: string
+    sortText?: string
+    filterText?: string
+    textEdit?: LspTextEdit
+    additionalTextEdits?: LspTextEdit[]
+    data?: unknown
+    commitCharacters?: string[]
+    preselect?: boolean
   }
 
   type LspHover = {
@@ -709,9 +795,12 @@ declare global {
   }
 
   interface KomaClient {
-    // Rust -> JS: host calls this via evaluate_script with a JSON-encoded
-    // push envelope; forwarded straight into the koma store's reducer.
-    push(json: string): void
+    // Rust -> JS: host calls this via evaluate_script. Accepts a JSON string
+    // (legacy) or a pre-parsed envelope object (preferred cheaper path).
+    push(json: string | object): void
+    // Native GUI fast path: Rust batches all pushes from one display-frame
+    // window into a single evaluate_script; the client preserves wire order.
+    pushBatch(items: Array<string | object>): void
   }
 
   interface Window {

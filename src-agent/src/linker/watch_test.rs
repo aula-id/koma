@@ -171,6 +171,41 @@ fn handle_events_noop_batch_no_generation_bump() {
 }
 
 #[test]
+fn collect_watchable_dirs_skips_pruned() {
+    let tmp = TempDir::new("watchable-dirs");
+    let root = tmp.path().to_path_buf();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("target/debug")).unwrap();
+    std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+    std::fs::create_dir_all(root.join("dist")).unwrap();
+    std::fs::write(root.join("src/a.rs"), "// a\n").unwrap();
+    std::fs::write(root.join("target/x.rs"), "// x\n").unwrap();
+    std::fs::write(root.join("node_modules/pkg/y.js"), "// y\n").unwrap();
+
+    let dirs = crate::linker::scan::collect_watchable_dirs(&[root.clone()]);
+    let as_str: Vec<String> = dirs
+        .iter()
+        .map(|d| d.to_string_lossy().replace('\\', "/"))
+        .collect();
+    assert!(
+        as_str.iter().any(|d| d.ends_with("/src") || d == &root.join("src").to_string_lossy().replace('\\', "/")),
+        "src must be watched: {as_str:?}"
+    );
+    assert!(
+        !as_str.iter().any(|d| d.contains("/target")),
+        "target must not be watched: {as_str:?}"
+    );
+    assert!(
+        !as_str.iter().any(|d| d.contains("/node_modules")),
+        "node_modules must not be watched: {as_str:?}"
+    );
+    assert!(
+        !as_str.iter().any(|d| d.contains("/dist")),
+        "dist must not be watched: {as_str:?}"
+    );
+}
+
+#[test]
 fn handle_events_create_delete_recreate_updates_existing_importer() {
     let tmp = TempDir::new("create-delete-recreate");
     let root = tmp.path().to_path_buf();
@@ -187,7 +222,11 @@ fn handle_events_create_delete_recreate_updates_existing_importer() {
     assert_eq!(graph.source_refs[&lib_path].unresolved_count(), 1);
 
     std::fs::write(&later, "// later\n").unwrap();
-    handle_events(std::slice::from_ref(&later), &mut graph, &mut index);
+    let outcome = handle_events(std::slice::from_ref(&later), &mut graph, &mut index);
+    assert!(
+        outcome.full_rebuild_roots.is_empty(),
+        "create should stay incremental, not full rebuild"
+    );
     assert_eq!(graph.dependencies(&lib_path), vec![later_path.as_str()]);
     assert!(graph.check_invariants().is_ok());
 

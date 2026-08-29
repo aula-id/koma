@@ -14,14 +14,29 @@ import {
   reduceFileRename,
   reduceFileDelete,
   reduceFileWriteBytes,
+  reduceFileContentSearch,
+  reduceFileContentReplace,
   remapPath as codingRemapPath,
   type CodingSlice,
   type FileTreeEntry,
+  type ContentSearchFileHit,
 } from './coding'
+import {
+  DEFAULT_GROUP,
+  insertGroup,
+  neighbourInGroup,
+  normalizeGroups,
+  reorderTab,
+  resizeGroups,
+  setSplitDir as applySplitDir,
+  toggleSplitDir as flipSplitDir,
+  type EditorGroupId,
+  type SplitDir,
+} from './editorGroups'
 
 import {
-  applyDiagnosticsToMonaco,
   resolveLspCompletion,
+  resolveLspCompletionResolve,
   resolveLspDefinition,
   resolveLspDocumentSymbol,
   resolveLspHover,
@@ -29,9 +44,10 @@ import {
   resolveLspFileText,
   uriToPath,
   queueReveal,
-  disposeCodingModel,
   type LspDiagnostic,
-} from '../lib/monaco-lsp'
+} from '../lib/lsp-bridge'
+import { resolveFilePreviewBytes } from '../lib/filePreview'
+import { codingRefToken } from '../lib/codingRef'
 
 export type { CodingSlice, CodingFileState, DirState, FileTreeEntry } from './coding'
 export type { LspDiagnostic }
@@ -64,6 +80,10 @@ export type ToolCallView = {
 }
 
 export type ChatMessage = {
+  // Stable display index in the projected transcript (host-assigned).
+  // Used for React keys, RewindTo, and HistoryPage cursors. Optional so older
+  // hosts / synthetic tests still work (FE falls back to array position).
+  idx?: number
   role: 'user' | 'assistant'
   // Special render kind for a USER message — the host strips the invisible
   // sentinel and tags it: 'shell' (a `!`-shell `$ cmd`+output entry) or
@@ -337,6 +357,16 @@ export type SearchResultEntry = {
 // progress, 'done'/'skipped'/'failed' are terminal.
 export type LoadPhase = 'pending' | 'running' | 'done' | 'skipped' | 'failed'
 
+// GUI-only attach hydration. These phases describe work in the native webview
+// bridge, not daemon warm-up: each corresponding envelope is applied on a
+// separate animation frame so WebKit gets a paint between expensive state swaps.
+export type BootstrapState = {
+  session: LoadPhase
+  config: LoadPhase
+  settings: LoadPhase
+  repos: LoadPhase
+}
+
 // The tool call the session is currently PARKED on awaiting a decision (host
 // `pending_tool_calls[tool_idx]` while `awaiting_approval` is set — approval.rs).
 // `name`/`args` are the raw tool name + stringified-JSON arguments; `signature`
@@ -594,6 +624,19 @@ export type LspInstallProgress = {
   id: string
   pct: number
   error: string | null
+}
+
+// Live language-server runtime row (LspRuntime push) — footer Language Servers drawer.
+export type LspRuntimeServer = {
+  id: string
+  name: string
+  root: string
+  /** starting | ready | working | error */
+  phase: string
+  title?: string | null
+  message?: string | null
+  percentage?: number | null
+  openDocs: number
 }
 
 // One entry in the Agents dashboard's model catalogue (host
@@ -857,6 +900,8 @@ export type PushEnvelope =
       session: string
       state: string
       messages: ChatMessage[]
+      // Full projected transcript length (incl. not-yet-pushed older head).
+      messageCount?: number
       title: string
       palette: PaletteColors
       subagents: SubAgentEntry[]
@@ -873,10 +918,10 @@ export type PushEnvelope =
       // the host's process-global agent_mode. Optional-tolerant: a host build
       // that doesn't project it yet leaves the store's current mode untouched.
       mode?: string
-      // Queued mid-turn steer previews (host `SessionSnapshot.pending_steer`):
+      // Queued mid-turn steer messages (host `SessionSnapshot.pending_steer`):
       // messages submitted while the turn is cooking, capped at 5 daemon-side.
-      // Truncated one-line previews. Optional-tolerant: a host build that doesn't
-      // project it yet leaves the store's queue empty.
+      // Full text (clients ellipsize at render). Optional-tolerant: a host build
+      // that doesn't project it yet leaves the store's queue empty.
       pendingSteer?: string[]
       // Approval/plan-decision gate (host `awaiting_approval` — approval.rs).
       // True when the turn is PARKED waiting on a y/a/n decision. The paused
@@ -900,8 +945,31 @@ export type PushEnvelope =
   // `to` is the target session id/uuid — resolved to a friendly hub label,
   // falling back to any optimistic label already raised, then a generic one.
   | { k: 'Switching'; to: string }
+  // Append-only transcript growth (same session); concat onto messages.
+  | { k: 'SnapshotTail'; session: string; messages: ChatMessage[] }
+  // Prepend older history after a truncated first Snapshot (same session).
+  // Host may chunk: `more` means further SnapshotHead frames will follow.
+  | {
+      k: 'SnapshotHead'
+      session: string
+      messages: ChatMessage[]
+      more?: boolean
+      totalOlder?: number | null
+    }
+  // On-demand older history page (pull). Prepend like SnapshotHead.
+  | {
+      k: 'HistoryPage'
+      session: string
+      messages: ChatMessage[]
+      hasMore?: boolean
+    }
+  // In-place last-message update (tool result join, etc.).
+  | { k: 'SnapshotSetLast'; session: string; message: ChatMessage }
   | { k: 'StreamMsg'; session: string; text: string }
+  // Incremental stream: reset replaces the bubble; else append. Empty append+reset clears.
+  | { k: 'StreamDelta'; session: string; reset: boolean; append: string }
   | { k: 'Reasoning'; session: string; text: string }
+  | { k: 'ReasoningDelta'; session: string; reset: boolean; append: string }
   // `toast` is the transient message text (safeguard/harness/classifier notices
   // + generic host toasts). `kind` is the severity token ("error"/"info") the
   // host now carries alongside the text so the GUI can colour error vs info —
@@ -1299,32 +1367,46 @@ export type PushEnvelope =
   | {
       k: 'LspCompletion'
       requestId: string
-      items: import('../lib/monaco-lsp').LspCompletionItem[]
+      items: import('../lib/lsp-bridge').LspCompletionItem[]
+      isIncomplete?: boolean
+      error: string | null
+    }
+  | {
+      k: 'LspCompletionResolve'
+      requestId: string
+      item: import('../lib/lsp-bridge').LspCompletionItem | null
       error: string | null
     }
   | {
       k: 'LspHover'
       requestId: string
-      hover: import('../lib/monaco-lsp').LspHover | null
+      hover: import('../lib/lsp-bridge').LspHover | null
       error: string | null
     }
   | {
       k: 'LspDefinition'
       requestId: string
-      locations: import('../lib/monaco-lsp').LspLocation[]
+      locations: import('../lib/lsp-bridge').LspLocation[]
       error: string | null
     }
   | {
       k: 'LspReferences'
       requestId: string
-      locations: import('../lib/monaco-lsp').LspLocation[]
+      locations: import('../lib/lsp-bridge').LspLocation[]
       error: string | null
     }
   | {
       k: 'LspDocumentSymbol'
       requestId: string
-      symbols: import('../lib/monaco-lsp').LspDocumentSymbol[]
+      symbols: import('../lib/lsp-bridge').LspDocumentSymbol[]
       error: string | null
+    }
+  // Live language-server runtime (starting / indexing / ready / error).
+  | {
+      k: 'LspRuntime'
+      servers: LspRuntimeServer[]
+      replace?: boolean
+      removed?: string[]
     }
   // Reply to GuiReq GitBranchList (G4) — every local + remote-tracking branch
   // for the branch-switcher popover / graph context menu. Carries
@@ -1446,6 +1528,27 @@ export type PushEnvelope =
       size: number
       tooLarge: boolean
       error: string | null
+      /** Host already wrote via native save dialog; bytesB64 is empty. */
+      saved?: boolean
+    }
+  | {
+      k: 'FileContentSearch'
+      root: string
+      path: string
+      requestId: string
+      results: ContentSearchFileHit[]
+      error: string | null
+      truncated: boolean
+    }
+  | {
+      k: 'FileContentReplace'
+      root: string
+      path: string
+      requestId: string
+      filesChanged: number
+      matchCount: number
+      error: string | null
+      truncated: boolean
     }
   // Reply to GuiReq ImportGraphImpact — transitive impact paths.
   | {
@@ -1534,6 +1637,11 @@ type SessionSlice = {
   id: string | null
   state: string | null
   messages: ChatMessage[]
+  // Host-reported full projected length. When > messages.length (or hasMoreOlder),
+  // ChatView can pull HistoryPage for the rest.
+  messageCount: number
+  // True while host still holds older history beyond the FE store.
+  hasMoreOlder: boolean
   title: string
   working: boolean
   stream: string
@@ -1550,10 +1658,10 @@ type SessionSlice = {
   // host's process-global agent_mode via the Snapshot envelope. Drives the
   // composer mode selector. Defaults to "auto".
   mode: string
-  // Queued mid-turn steer previews (host `SessionSnapshot.pending_steer`) —
+  // Queued mid-turn follow-ups (host `SessionSnapshot.pending_steer`) —
   // submits made while the turn is cooking are queued daemon-side (cap 5) rather
-  // than starting a new turn. Drives the composer's pending-steer indicator +
-  // the send cap. REPLACED wholesale on each Snapshot.
+  // than starting a new turn. Full text for edit/remove. REPLACED wholesale on
+  // each Snapshot.
   pendingSteer: string[]
   // Approval gate (host `awaiting_approval`): true while the turn is parked on a
   // y/a/n decision. Drives the ApprovalOverlay modal (risky/classifier pause) +
@@ -1732,8 +1840,18 @@ type UiSlice = {
   // on a genuine session switch (a diff tab is file-change context for the OLD
   // session).
   tabs: Tab[]
-  // The shown tab's id — 'chat' or a `diff:${path}`.
+  // The focused group's shown tab. Other groups have their own entry in
+  // `groupActive` and remain visible while this points elsewhere.
   activeTabId: string
+  // VSCode-style editor groups. Membership is stored separately from Tab so
+  // existing open-tab actions remain additive; normalizeGroups stamps newly
+  // opened tabs into the focused group and repairs stale mappings.
+  groups: EditorGroupId[]
+  tabGroup: Record<string, EditorGroupId>
+  groupActive: Record<EditorGroupId, string>
+  activeGroupId: EditorGroupId
+  splitDir: SplitDir
+  groupSizes: Record<EditorGroupId, number>
   // Monotonic tick bumped by `focusPlanSection` (the UsageFooter PLAN badge
   // click): a cross-tree signal, mirrors `scrollTick`. RootLayout watches it
   // to open the Explore sidebar/panel; ExplorePanel watches it to expand its
@@ -1754,6 +1872,10 @@ type UiSlice = {
   // `switched` branch) and in `detachSession()` so a stale splash from the OLD
   // session/warm-up can never leak into a new attach.
   loading: { active: boolean; workspace: LoadPhase; awareness: LoadPhase } | null
+  // GUI attach hydration shown above `loading`: session Snapshot, Config, then
+  // the SettingsValues/RepoList replies requested by Snapshot. Null once every
+  // phase is terminal. This is deliberately separate from daemon Loading.
+  bootstrap: BootstrapState | null
   // Skip-latch: set true when the user dismisses the cold-start splash via
   // the Skip button. Suppresses splash VISIBILITY only — `loading` itself
   // keeps updating with fresh host `Loading` pushes underneath. Reset to
@@ -1965,16 +2087,13 @@ function saveActivityBarLayout(layout: ActivityBarLayout) {
 // Shared by ActivityBar (bar + overflow menu) and SettingsTab (the Sidebar
 // section's toggle list) so both always agree on the effective order.
 export function resolveActivityBarOrder(savedOrder: string[], allIds: string[]): string[] {
-  // Enforce the canonical ACTIVITY_BAR_ITEMS order for all known built-in ids.
-  // Extension ids (ext:*) keep their saved relative order and are appended after
-  // built-ins.  This ensures the default layout is respected even when a stale
-  // order is persisted in localStorage.
-  const canonicalIndex = new Map(allIds.map((id, i) => [id, i]))
+  // Keep the user's saved relative order (drag-reorder / localStorage). Only
+  // filter unknown ids and append anything new (fresh install → empty saved
+  // order → allIds as-is; newly added built-in or ext:* → tail).
+  // Do NOT re-sort to ACTIVITY_BAR_ITEMS — that nullifies intentional reorder
+  // (regression from bcb33ca2).
   const known = savedOrder.filter((id) => allIds.includes(id))
   const missing = allIds.filter((id) => !known.includes(id))
-  // Sort known items by their canonical position in allIds (ACTIVITY_BAR_ITEMS
-  // order), so the authoritative layout always wins over a stale save.
-  known.sort((a, b) => (canonicalIndex.get(a) ?? 0) - (canonicalIndex.get(b) ?? 0))
   return [...known, ...missing]
 }
 
@@ -2081,8 +2200,14 @@ type KomaState = {
   lspProgress: Record<string, LspInstallProgress>
   // Diagnostics keyed by file URI (latest LspDiagnostics per uri).
   lspDiagnostics: Record<string, LspDiagnostic[]>
+  // Precomputed problem badge counts (updated in LspDiagnostics reducer).
+  lspDiagCounts: { errors: number; warnings: number }
+  // Live language-server processes (starting / indexing / ready). Footer drawer.
+  lspRuntime: LspRuntimeServer[]
   // Cross-tab Problems drawer (above UsageFooter).
   problemsOpen: boolean
+  // Cross-tab Language Servers drawer (twin of Problems).
+  lspDrawerOpen: boolean
   // The SSH Keys section's transient "Copy public key" / "Reveal private key"
   // result (latest KeyReveal push), or `null` when nothing has been revealed
   // yet / the reveal box was dismissed. Kept separate from `keys` (the list
@@ -2265,6 +2390,10 @@ type KomaState = {
   closeOmniSearch: () => void
   // Queue a workspace path for the Composer to insert into its draft text.
   insertToComposer: (path: string) => void
+  /** Insert a coding path/dir `@` token and focus the chat tab + composer. */
+  putCodingPathInChat: (root: string, path: string, opts?: { isDir?: boolean }) => void
+  /** Insert selection ask payload and focus chat. */
+  askCodingSelectionInChat: (payload: string) => void
   // Composer-side ack: clears the one-shot signal after consuming it.
   consumeComposerInsert: () => void
   // Queue text to REPLACE the Composer draft (rewind refill). Called right after
@@ -2277,6 +2406,8 @@ type KomaState = {
   stageRewind: (index: number) => void
   // Clear a staged rewind (send committed it, or the user emptied the composer).
   clearRewind: () => void
+  // Pull one page of older history held on the host after a windowed Snapshot.
+  requestHistoryPage: () => void
   // Bump scrollTick to force ChatView to jump to the bottom (on send).
   requestScrollBottom: () => void
   // Optimistically raise the session-swap overlay with the target's display
@@ -2287,6 +2418,9 @@ type KomaState = {
   // loader — the eventual Snapshot for the target session still lands and is
   // applied normally.
   cancelSwitching: () => void
+  // Force any still-pending GUI bootstrap phases to `skipped` so a hung
+  // settings/repos reply cannot keep attach chrome alive forever.
+  skipBootstrapRemaining: () => void
   // Open the remote folder picker. Optimistic `listing` so the overlay + braille
   // spinner appear on the first click (SSH list_dirs can lag). No-ops while the
   // picker is already open so double-clicks don't spawn duplicate SSH listings.
@@ -2464,6 +2598,9 @@ type KomaState = {
   // Toggle the cross-tab Problems drawer above the footer.
   setProblemsOpen: (open: boolean) => void
   toggleProblemsOpen: () => void
+  // Toggle the cross-tab Language Servers drawer (mutually exclusive with Problems).
+  setLspDrawerOpen: (open: boolean) => void
+  toggleLspDrawerOpen: () => void
   // Open coding file at a diagnostic location (uri may be file://).
   openDiagnostic: (uri: string, line: number, character: number) => void
   // Open (or focus) a read-only STREAM tab for a sub-agent (`kind:'subagent'`) or bash
@@ -2491,6 +2628,25 @@ type KomaState = {
   // freshness (contents may have changed since it was opened) while keeping the
   // stale diff on screen so the editor doesn't flash.
   activateTab: (id: string) => void
+  // Focus a pane without changing which tab that pane shows.
+  focusEditorGroup: (groupId: EditorGroupId) => void
+  // Move/reorder one tab into an existing pane. `beforeId: null` appends it to
+  // that pane's strip. The permanent chat tab cannot be moved.
+  moveTabToGroup: (tabId: string, groupId: EditorGroupId, beforeId?: string | null) => void
+  // Create the second pane and move one tab into it (max two groups). Prefer
+  // toggleSplitDir once already split — a second split is refused.
+  splitTab: (
+    tabId: string,
+    targetGroupId: EditorGroupId,
+    side: 'before' | 'after',
+    dir: SplitDir,
+  ) => void
+  // Flip the two-pane axis in place (row ↔ col). No-op when unsplit.
+  toggleSplitDir: () => void
+  // Set the two-pane axis explicitly. No-op when unsplit or already that dir.
+  setSplitDir: (dir: SplitDir) => void
+  // Resize the divider between group[index] and group[index + 1].
+  resizeEditorGroups: (index: number, deltaPx: number, totalPx: number) => void
   // The UsageFooter PLAN badge click (Plan mode only): bump `focusPlanTick` so
   // RootLayout opens the Explore sidebar/panel and ExplorePanel expands its
   // PLAN section in response.
@@ -2537,7 +2693,18 @@ type KomaState = {
   clearAgentSaving: (seq?: number) => void
   // ─── Coding panel ──────────────────────────────────────────────────────
   setActiveCodingRoot: (root: string | null) => void
-  openCodingFile: (root: string, path: string, opts?: { force?: boolean }) => void
+  // Open (or focus) a coding file tab. Optional placement drives explorer DnD:
+  // drop on a pane center / tab strip → that group; drop on a pane edge → split.
+  openCodingFile: (
+    root: string,
+    path: string,
+    opts?: {
+      force?: boolean
+      groupId?: EditorGroupId
+      beforeId?: string | null
+      split?: { side: 'before' | 'after'; dir: SplitDir }
+    },
+  ) => void
   saveCodingFile: (root: string, path: string) => void
   revertCodingFile: (root: string, path: string) => void
   updateCodingContent: (root: string, path: string, content: string) => void
@@ -2550,12 +2717,25 @@ type KomaState = {
   downloadCodingFile: (root: string, path: string) => void
   refreshCodingDir: (root: string, path: string) => void
   clearCodingConflict: (root: string, path: string) => void
+  // Content search pane
+  setCodingSearchQuery: (query: string) => void
+  setCodingSearchReplace: (replace: string) => void
+  setCodingSearchFlag: (
+    flag: 'caseSensitive' | 'wholeWord' | 'isRegex' | 'replaceOpen' | 'filtersOpen',
+    value: boolean,
+  ) => void
+  setCodingSearchGlobs: (includeGlob: string, excludeGlob: string) => void
+  searchCodingContent: (root: string) => void
+  replaceCodingContentAll: (root: string) => void
+  openCodingSearchHit: (root: string, path: string, line: number, col?: number) => void
 }
 
 const initialSession: SessionSlice = {
   id: null,
   state: null,
   messages: [],
+  messageCount: 0,
+  hasMoreOlder: false,
   title: '',
   working: false,
   stream: '',
@@ -2592,6 +2772,26 @@ const initialHub: HubSlice = {
 // factory (not a shared const) so every reset gets a fresh array/object.
 const makeChatTab = (): Tab => ({ id: 'chat', kind: 'chat' })
 
+const makeBootstrapState = (): BootstrapState => ({
+  session: 'running',
+  config: 'pending',
+  settings: 'pending',
+  repos: 'pending',
+})
+
+function updateBootstrap(ui: UiSlice, patch: Partial<BootstrapState>): UiSlice {
+  if (!ui.bootstrap) return ui
+  const bootstrap = { ...ui.bootstrap, ...patch }
+  const complete = Object.values(bootstrap).every(
+    (phase) => phase === 'done' || phase === 'skipped' || phase === 'failed',
+  )
+  return {
+    ...ui,
+    bootstrap: complete ? null : bootstrap,
+    ...(complete && !ui.loading?.active ? { switchingTo: null } : {}),
+  }
+}
+
 const initialUi: UiSlice = {
   omnisearchOpen: false,
   composerInsert: null,
@@ -2603,9 +2803,16 @@ const initialUi: UiSlice = {
   toastSeq: 0,
   tabs: [makeChatTab()],
   activeTabId: 'chat',
+  groups: [DEFAULT_GROUP],
+  tabGroup: { chat: DEFAULT_GROUP },
+  groupActive: { [DEFAULT_GROUP]: 'chat' },
+  activeGroupId: DEFAULT_GROUP,
+  splitDir: 'row',
+  groupSizes: { [DEFAULT_GROUP]: 1 },
   focusPlanTick: 0,
   usageScope: 'all',
   loading: null,
+  bootstrap: null,
   loadingDismissed: false,
 }
 
@@ -2805,6 +3012,18 @@ function applyPaletteVars(palette: PaletteColors) {
   // the CSS-var repaint, so a live panel's colours track the daemon exactly
   // like the chat chrome does (see docs/EXTENSIONS.md "Theme").
   broadcastThemeToPanels(palette)
+  // Do not import monaco-setup here — that parsed the 4MB editor on the first
+  // Config/Snapshot. Coding/diff tabs call applyKomaTheme on mount; if monaco
+  // is already loaded, refresh the live theme without forcing the chunk.
+  const monacoReady = (globalThis as unknown as { __komaMonacoReady?: boolean })
+    .__komaMonacoReady
+  if (monacoReady) {
+    void import('../lib/monaco-setup')
+      .then((m) => m.refreshKomaThemes())
+      .catch(() => {
+        /* ignore */
+      })
+  }
 }
 
 // Basename of a path — a diff tab's title (TabBar disambiguates colliding
@@ -2886,7 +3105,10 @@ export const useKoma = create<KomaState>((set, get) => ({
   lspServers: [],
   lspProgress: {},
   lspDiagnostics: {},
+  lspDiagCounts: { errors: 0, warnings: 0 },
+  lspRuntime: [],
   problemsOpen: false,
+  lspDrawerOpen: false,
   keyRevealResult: null,
   branches: [],
   branchesLoading: false,
@@ -2905,13 +3127,27 @@ export const useKoma = create<KomaState>((set, get) => ({
         // reasoning (it belongs to the old session — don't let it bleed into the new
         // view until the next send clears it) + reset the editor tabs.
         const switched = env.session !== get().session.id
+        // Re-attaching the same session id is still a GUI bootstrap even though
+        // it must not discard that session's existing tabs/slices.
+        const bootstrapping = !!get().ui.bootstrap
         set((s) => {
           return {
             session: {
               ...s.session,
               id: env.session,
               state: env.state,
-              messages: env.messages,
+              messages: (env.messages ?? []).map((m: any) => ({
+                ...m,
+                toolCalls: m.toolCalls ?? m.tool_calls,
+              })),
+              messageCount:
+                typeof env.messageCount === 'number'
+                  ? env.messageCount
+                  : (env.messages ?? []).length,
+              hasMoreOlder:
+                typeof env.messageCount === 'number'
+                  ? env.messageCount > (env.messages ?? []).length
+                  : false,
               title: env.title,
               subagents: env.subagents,
               bash: env.bash,
@@ -2950,21 +3186,36 @@ export const useKoma = create<KomaState>((set, get) => ({
               ...(switched ? { stream: '', reasoning: '' } : {}),
             },
             palette: env.palette,
-            // Any Snapshot is authoritative proof the swap (if one was in
-            // flight) has landed — clear the loader. A genuine session SWITCH
-            // additionally resets the editor tabs back to just the chat tab: a
-            // diff tab is file-change context for the OLD session, so it must
-            // not bleed across.
+            // Snapshot proves attach landed, but cold sessions still push a
+            // Loading splash AFTER this. Keep `switchingTo` until Loading
+            // settles (active→false) so we never flash a blank/washed frame
+            // between attach and warm-up. Hub bounce still clears it.
             ui: {
               ...s.ui,
-              switchingTo: null,
-              // A genuine switch also drops any stale startup splash — it
-              // described the OLD attach's warm-up, and must not bleed into
-              // the new session's view (the host will push a fresh `Loading`
-              // for the new session if it's cold too).
-              ...(switched
-                ? { tabs: [makeChatTab(), ...get().ui.tabs.filter((t) => t.kind === 'terminal')], activeTabId: 'chat', loading: null, loadingDismissed: false }
-                : {}),
+              // Same-session Snapshot: clear switch chrome (normal refresh).
+              // Cross-session: keep switchingTo until Loading settles so we never
+              // flash a blank frame between attach and warm-up splash.
+              ...(switched || bootstrapping
+                ? {
+                    ...(switched
+                      ? {
+                          tabs: [makeChatTab(), ...get().ui.tabs.filter((t) => t.kind === 'terminal')],
+                          activeTabId: 'chat',
+                        }
+                      : {}),
+                    loadingDismissed: false,
+                    loading: s.ui.loading?.active
+                      ? s.ui.loading
+                      : { active: true, workspace: 'pending' as const, awareness: 'pending' as const },
+                    bootstrap: {
+                      ...(s.ui.bootstrap ?? makeBootstrapState()),
+                      session: 'done',
+                      config: s.ui.bootstrap?.config === 'done' ? 'done' : 'running',
+                      settings: s.ui.bootstrap?.settings === 'done' ? 'done' : 'running',
+                      repos: s.ui.bootstrap?.repos === 'done' ? 'done' : 'running',
+                    },
+                  }
+                : { switchingTo: null }),
             },
             // A genuine switch also drops the OLD session's git/graph/activity
             // slices — they're host-driven for the PREVIOUS repo/session and
@@ -3011,13 +3262,14 @@ export const useKoma = create<KomaState>((set, get) => ({
         // session's sub-agent/bash target (the new session's daemon starts with none
         // anyway). Fired AFTER the set so it reads the reset tab state.
         if (switched) get().syncStreamView()
-        // A genuine switch also invalidates `settingsValues` — it's the OLD
-        // session's name/workdir/toggles/effort, never refreshed by the Snapshot
-        // envelope itself. Re-fetch so the (always-visible) EffortPicker trigger
-        // pill and the Settings tab (if open) rehydrate for the NEW session
-        // instead of showing the old one's values until Settings is reopened.
-        if (switched) get().req({ r: 'GetSettings' })
-        if (switched) get().refreshRepos()
+        // Settings / repos after the Snapshot turn so they cannot join the fat
+        // apply and freeze the overlay paint.
+        if (switched || bootstrapping) {
+          requestAnimationFrame(() => {
+            get().req({ r: 'GetSettings' })
+            get().refreshRepos()
+          })
+        }
         break
       }
       case 'Switching':
@@ -3027,18 +3279,138 @@ export const useKoma = create<KomaState>((set, get) => ({
           // against the hub rows; else fall back to a generic label (e.g. a
           // daemon-driven new session with no hub row yet). Never clobber a
           // nicer label with a raw uuid.
-          if (s.ui.switchingTo) return s
+          if (s.ui.switchingTo && s.ui.bootstrap) return s
           const row =
             s.hub.cooking.find((c) => c.id === env.to) ??
             s.hub.history.find((h) => h.id === env.to)
-          return { ui: { ...s.ui, switchingTo: row?.name ?? 'session' } }
+          return {
+            ui: {
+              ...s.ui,
+              switchingTo: s.ui.switchingTo ?? row?.name ?? 'session',
+              bootstrap: s.ui.bootstrap ?? makeBootstrapState(),
+              loadingDismissed: false,
+            },
+          }
         })
         break
+      case 'SnapshotTail': {
+        // Same-session append-only growth. Ignore if session drifted (full
+        // Snapshot will resync). Map planTodos-style fields aren't present.
+        if (env.session !== get().session.id) break
+        const mapped = (env.messages ?? []).map((m: any) => ({
+          ...m,
+          toolCalls: m.toolCalls ?? m.tool_calls,
+        }))
+        if (mapped.length === 0) break
+        set((s) => ({
+          session: {
+            ...s.session,
+            messages: s.session.messages.concat(mapped),
+            messageCount: Math.max(
+              s.session.messageCount,
+              s.session.messages.length + mapped.length,
+            ),
+          },
+        }))
+        break
+      }
+      case 'SnapshotHead': {
+        if (env.session !== get().session.id) break
+        const mapped = (env.messages ?? []).map((m: any) => ({
+          ...m,
+          toolCalls: m.toolCalls ?? m.tool_calls,
+        }))
+        if (mapped.length === 0) break
+        // Prepend one host chunk. Multi-chunk heads arrive on later frames;
+        // ChatView shifts renderFrom on large length jumps so the tail stays put.
+        set((s) => {
+          const seen = new Set<number>()
+          for (const m of s.session.messages) {
+            if (typeof m.idx === 'number') seen.add(m.idx)
+          }
+          const fresh = mapped.filter(
+            (m: ChatMessage) => typeof m.idx !== 'number' || !seen.has(m.idx as number),
+          )
+          const messages =
+            fresh.length === 0 ? s.session.messages : fresh.concat(s.session.messages)
+          const hasMoreOlder =
+            env.more === true ||
+            messages.length < (s.session.messageCount || messages.length)
+          return {
+            session: {
+              ...s.session,
+              messages,
+              hasMoreOlder,
+            },
+          }
+        })
+        break
+      }
+      case 'HistoryPage': {
+        if (env.session !== get().session.id) break
+        const mapped = (env.messages ?? []).map((m: any) => ({
+          ...m,
+          toolCalls: m.toolCalls ?? m.tool_calls,
+        }))
+        set((s) => {
+          const seen = new Set<number>()
+          for (const m of s.session.messages) {
+            if (typeof m.idx === 'number') seen.add(m.idx)
+          }
+          const fresh = mapped.filter(
+            (m: ChatMessage) => typeof m.idx !== 'number' || !seen.has(m.idx as number),
+          )
+          const messages =
+            fresh.length === 0 ? s.session.messages : fresh.concat(s.session.messages)
+          return {
+            session: {
+              ...s.session,
+              messages,
+              hasMoreOlder: !!env.hasMore,
+              messageCount: Math.max(s.session.messageCount, messages.length),
+            },
+          }
+        })
+        break
+      }
+      case 'SnapshotSetLast': {
+        if (env.session !== get().session.id) break
+        const m: any = env.message
+        if (!m) break
+        const mapped = {
+          ...m,
+          toolCalls: m.toolCalls ?? m.tool_calls,
+        }
+        set((s) => {
+          const msgs = s.session.messages
+          if (msgs.length === 0) return s
+          const next = msgs.slice()
+          next[next.length - 1] = mapped
+          return { session: { ...s.session, messages: next } }
+        })
+        break
+      }
       case 'StreamMsg':
         set((s) => ({ session: { ...s.session, stream: env.text } }))
         break
+      case 'StreamDelta':
+        set((s) => ({
+          session: {
+            ...s.session,
+            stream: env.reset ? env.append : s.session.stream + env.append,
+          },
+        }))
+        break
       case 'Reasoning':
         set((s) => ({ session: { ...s.session, reasoning: env.text } }))
+        break
+      case 'ReasoningDelta':
+        set((s) => ({
+          session: {
+            ...s.session,
+            reasoning: env.reset ? env.append : s.session.reasoning + env.append,
+          },
+        }))
         break
       case 'Status':
         set((s) => {
@@ -3116,21 +3488,27 @@ export const useKoma = create<KomaState>((set, get) => ({
             env.cooking.map((c) => c.id).filter((id): id is string => !!id),
           )
           const historyIds = new Set<string>(env.history.map((h) => h.id))
+          // Hub while switching: only clear switch chrome when the swap truly
+          // bounced back to the swapper. StartScreen (and ResumePalette) poll
+          // RefreshHub on an interval; those replies can land mid-attach and
+          // must NOT tear down switchingTo / Loading / bootstrap. Treat Hub as
+          // a bounce only when we are still detached (no session id) AND not
+          // already in post-attach warm-up (loading/bootstrap). Real
+          // attach-failure paths re-enter host_swapper with session.id still
+          // null and no Loading frame, so they still clear correctly.
+          const midAttach =
+            !!s.ui.switchingTo &&
+            (!!s.session.id || !!s.ui.loading?.active || !!s.ui.bootstrap)
           return {
             hub: { ...s.hub, state: env.state, cooking: env.cooking, history: env.history },
             dyingSessions: s.dyingSessions.filter((d) =>
               d.kind === 'kill' ? cookingIds.has(d.id) : historyIds.has(d.id),
             ),
-            // Deterministic failure-recovery clear: host_swapper pushes a fresh
-            // Hub on EVERY path back to the swapper, including the
-            // attach-failure/degrade path (which never emits a Snapshot). A
-            // valid in-flight swap can't produce a spurious Hub here either —
-            // ResumePalette (the only source of RefreshHub) is unmounted by
-            // startSwitching's caller before the request is sent, so its
-            // RefreshHub polling interval is already torn down. Net: any Hub
-            // that arrives while switchingTo is set means the swap bounced
-            // back to the hub, so clear the loader unconditionally.
-            ui: { ...s.ui, switchingTo: null },
+            ...(midAttach || !s.ui.switchingTo
+              ? {}
+              : {
+                  ui: { ...s.ui, switchingTo: null, loading: null, bootstrap: null },
+                }),
           }
         })
         break
@@ -3159,6 +3537,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             palettes: env.palettes && env.palettes.length > 0 ? env.palettes : s.config.palettes,
           },
           ...(env.palette ? { palette: env.palette } : {}),
+          ...(s.ui.bootstrap ? { ui: updateBootstrap(s.ui, { config: 'done' }) } : {}),
         }))
         break
       case 'McpStatus': {
@@ -3222,7 +3601,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         break
       case 'SettingsValues': {
         const prevWorkdir = get().settingsValues?.workdir
-        set(() => ({
+        set((s) => ({
           settingsValues: {
             name: env.name,
             workdir: env.workdir,
@@ -3235,6 +3614,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             effort: env.effort ?? '',
             subagentMaxTurns: env.subagentMaxTurns ?? 500,
           },
+          ...(s.ui.bootstrap ? { ui: updateBootstrap(s.ui, { settings: 'done' }) } : {}),
         }))
         // Prune importGraph state when the workdir list changes (same session).
         // Use canonical availableRoots (backend-provided) as ground truth —
@@ -3309,6 +3689,9 @@ export const useKoma = create<KomaState>((set, get) => ({
             loading: env.active
               ? { active: env.active, workspace: env.workspace, awareness: env.awareness }
               : null,
+            // Warm-up finished — drop switch chrome even if config/settings/repos
+            // bootstrap rows are still finishing. Those must not block chat.
+            ...(env.active ? {} : { switchingTo: null }),
           },
         }))
         break
@@ -4088,7 +4471,11 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         break
       case 'RepoList':
-        set(() => ({ repos: env.repos, activeRepoRoot: env.active }))
+        set((s) => ({
+          repos: env.repos,
+          activeRepoRoot: env.active,
+          ...(s.ui.bootstrap ? { ui: updateBootstrap(s.ui, { repos: 'done' }) } : {}),
+        }))
         break
       case 'StashList':
         set(() => ({ stashes: env.entries }))
@@ -4172,13 +4559,42 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         break
       case 'LspDiagnostics':
-        set((s) => ({
-          lspDiagnostics: { ...s.lspDiagnostics, [env.uri]: env.diagnostics ?? [] },
-        }))
-        applyDiagnosticsToMonaco(env.uri, env.diagnostics ?? [])
+        set((s) => {
+          const prev = s.lspDiagnostics[env.uri] ?? []
+          const next = env.diagnostics ?? []
+          let errors = s.lspDiagCounts.errors
+          let warnings = s.lspDiagCounts.warnings
+          for (const d of prev) {
+            if (d.severity === 1) errors -= 1
+            else if (d.severity === 2) warnings -= 1
+          }
+          for (const d of next) {
+            if (d.severity === 1) errors += 1
+            else if (d.severity === 2) warnings += 1
+          }
+          if (errors < 0) errors = 0
+          if (warnings < 0) warnings = 0
+          return {
+            lspDiagnostics: {
+              ...s.lspDiagnostics,
+              [env.uri]: next,
+            },
+            lspDiagCounts: { errors, warnings },
+          }
+        })
+        // Markers only — coding tabs must not subscribe to the full map.
+        // Lazy: monaco-lsp is not in the boot bundle.
+        void import('../lib/monaco-lsp')
+          .then((m) => m.applyDiagnosticsToMonaco(env.uri, env.diagnostics ?? []))
+          .catch(() => {
+            /* monaco not loaded yet */
+          })
         break
       case 'LspCompletion':
-        resolveLspCompletion(env.requestId, env.items ?? [], env.error)
+        resolveLspCompletion(env.requestId, env.items ?? [], env.error, env.isIncomplete)
+        break
+      case 'LspCompletionResolve':
+        resolveLspCompletionResolve(env.requestId, env.item ?? null, env.error)
         break
       case 'LspHover':
         resolveLspHover(env.requestId, env.hover ?? null, env.error)
@@ -4191,6 +4607,40 @@ export const useKoma = create<KomaState>((set, get) => ({
         break
       case 'LspDocumentSymbol':
         resolveLspDocumentSymbol(env.requestId, env.symbols ?? [], env.error)
+        break
+      case 'LspRuntime':
+        set((s) => {
+          const incoming = (env.servers ?? []).map((row) => ({
+            id: row.id,
+            name: row.name,
+            root: row.root ?? '',
+            phase: row.phase || 'ready',
+            title: row.title ?? null,
+            message: row.message ?? null,
+            percentage: row.percentage ?? null,
+            openDocs: row.openDocs ?? 0,
+          }))
+          const removed = new Set(env.removed ?? [])
+          if (env.replace) {
+            return { lspRuntime: incoming.filter((r) => !removed.has(r.id)) }
+          }
+          const byId = new Map(s.lspRuntime.map((r) => [r.id, r]))
+          for (const id of removed) byId.delete(id)
+          for (const row of incoming) {
+            const prev = byId.get(row.id)
+            // Reader-thread deltas don't know open-doc counts — keep the last
+            // control-loop value when the delta reports 0 and we already have one.
+            const openDocs =
+              row.openDocs > 0 || !prev
+                ? row.openDocs
+                : prev.openDocs
+            byId.set(row.id, { ...row, openDocs })
+          }
+          const next = Array.from(byId.values()).sort((a, b) =>
+            a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
+          )
+          return { lspRuntime: next }
+        })
         break
       case 'FileTree':
         set((s) => ({ coding: reduceFileTree(s.coding, env) }))
@@ -4216,6 +4666,28 @@ export const useKoma = create<KomaState>((set, get) => ({
             path: env.path,
             text: content ?? null,
           })
+        }
+        break
+      case 'FileContentSearch':
+        set((s) => ({ coding: reduceFileContentSearch(s.coding, env) }))
+        break
+      case 'FileContentReplace':
+        set((s) => ({ coding: reduceFileContentReplace(s.coding, env) }))
+        if (!env.error && env.filesChanged > 0) {
+          // Disk changed under open buffers — force-reload open non-dirty files in this root.
+          const root = env.root
+          const open = get().ui.tabs.filter(
+            (t): t is Extract<Tab, { kind: 'codingFile' }> =>
+              t.kind === 'codingFile' && t.root === root,
+          )
+          for (const t of open) {
+            const f = get().coding.files[fileKey(root, t.path)]
+            if (f && !f.dirty) {
+              get().openCodingFile(root, t.path, { force: true })
+            }
+          }
+          // Re-run search so results reflect post-replace state.
+          queueMicrotask(() => get().searchCodingContent(root))
         }
         break
       case 'FileCreate':
@@ -4360,7 +4832,18 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         break
       case 'FileDownloadBytes': {
-        if (env.error || env.tooLarge || !env.bytesB64) {
+        // Preview waiters (CodingFileViewer) consume first — skip save-as UI.
+        if (
+          resolveFilePreviewBytes(
+            env.requestId,
+            env.bytesB64,
+            env.error,
+            env.tooLarge,
+          )
+        ) {
+          break
+        }
+        if (env.error || env.tooLarge) {
           const text =
             env.error ||
             (env.tooLarge ? 'file too large to download' : 'download failed')
@@ -4376,33 +4859,25 @@ export const useKoma = create<KomaState>((set, get) => ({
           })
           break
         }
-        try {
-          const bin = atob(env.bytesB64)
-          const bytes = new Uint8Array(bin.length)
-          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-          const blob = new Blob([bytes])
+        // Host-native save-as (saveAs:true on the request) already wrote the
+        // file via rfd. Blob <a download> is a no-op in wry, so this is the
+        // only path that actually lands a file on disk.
+        if (env.saved) {
           const name = codingBaseName(env.path) || 'download'
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url
-          a.download = name
-          a.rel = 'noopener'
-          document.body.appendChild(a)
-          a.click()
-          a.remove()
-          URL.revokeObjectURL(url)
-        } catch {
           set((s) => {
             const seq = s.ui.toastSeq + 1
             return {
               ui: {
                 ...s.ui,
                 toastSeq: seq,
-                toast: { id: seq, text: 'failed to save download', kind: 'error' },
+                toast: { id: seq, text: `saved ${name}`, kind: 'info' },
               },
             }
           })
+          break
         }
+        // Cancelled dialog, or a non-saveAs reply that nobody claimed —
+        // nothing to do (no toast on cancel).
         break
       }
       case 'AgentOp': {
@@ -4531,7 +5006,9 @@ export const useKoma = create<KomaState>((set, get) => ({
       g.r === 'FileRename' ||
       g.r === 'FileDelete' ||
       g.r === 'FileWriteBytes' ||
-      g.r === 'FileDownloadBytes'
+      g.r === 'FileDownloadBytes' ||
+      g.r === 'FileContentSearch' ||
+      g.r === 'FileContentReplace'
     const ipc = window.ipc
     if (!ipc || typeof ipc.postMessage !== 'function') {
       if (isCodingReq) {
@@ -4570,14 +5047,71 @@ export const useKoma = create<KomaState>((set, get) => ({
   openOmniSearch: () => set((s) => ({ ui: { ...s.ui, omnisearchOpen: true } })),
   closeOmniSearch: () => set((s) => ({ ui: { ...s.ui, omnisearchOpen: false } })),
   insertToComposer: (path) => set((s) => ({ ui: { ...s.ui, composerInsert: path } })),
+  putCodingPathInChat: (root, path, opts) => {
+    const workdirs = (get().settingsValues?.workdir ?? []).filter(Boolean)
+    const token = codingRefToken(root, path, workdirs, { isDir: !!opts?.isDir })
+    get().insertToComposer(token)
+    get().activateTab('chat')
+    queueMicrotask(() => {
+      const el = document.querySelector(
+        '[data-tour="composer"] textarea',
+      ) as HTMLTextAreaElement | null
+      el?.focus()
+    })
+  },
+  askCodingSelectionInChat: (payload) => {
+    get().insertToComposer(payload)
+    get().activateTab('chat')
+    queueMicrotask(() => {
+      const el = document.querySelector(
+        '[data-tour="composer"] textarea',
+      ) as HTMLTextAreaElement | null
+      el?.focus()
+    })
+  },
+
   consumeComposerInsert: () => set((s) => ({ ui: { ...s.ui, composerInsert: null } })),
   refillComposer: (text) => set((s) => ({ ui: { ...s.ui, composerRefill: text } })),
   consumeComposerRefill: () => set((s) => ({ ui: { ...s.ui, composerRefill: null } })),
   stageRewind: (index) => set((s) => ({ ui: { ...s.ui, pendingRewindIndex: index } })),
   clearRewind: () => set((s) => ({ ui: { ...s.ui, pendingRewindIndex: null } })),
+  requestHistoryPage: () => {
+    const s = get().session
+    if (!s.id || !s.hasMoreOlder) return
+    const oldest = s.messages[0]
+    const before =
+      oldest && typeof oldest.idx === 'number' ? oldest.idx : undefined
+    get().req({ r: 'HistoryPage', before })
+  },
   requestScrollBottom: () => set((s) => ({ ui: { ...s.ui, scrollTick: s.ui.scrollTick + 1 } })),
-  startSwitching: (name) => set((s) => ({ ui: { ...s.ui, switchingTo: name } })),
-  cancelSwitching: () => set((s) => ({ ui: { ...s.ui, switchingTo: null } })),
+  startSwitching: (name) =>
+    set((s) => ({
+      ui: {
+        ...s.ui,
+        switchingTo: name,
+        loadingDismissed: false,
+        bootstrap: makeBootstrapState(),
+      },
+    })),
+  cancelSwitching: () =>
+    set((s) => ({
+      ui: { ...s.ui, switchingTo: null, loading: null, bootstrap: null },
+    })),
+  skipBootstrapRemaining: () =>
+    set((s) => {
+      if (!s.ui.bootstrap) return s
+      const b = s.ui.bootstrap
+      const term = (p: LoadPhase): LoadPhase =>
+        p === 'done' || p === 'skipped' || p === 'failed' ? p : 'skipped'
+      return {
+        ui: updateBootstrap(s.ui, {
+          session: term(b.session),
+          config: term(b.config),
+          settings: term(b.settings),
+          repos: term(b.repos),
+        }),
+      }
+    }),
   requestRemotePath: () => {
     const s = get()
     // Picker already visible / in-flight — drop the duplicate click.
@@ -5338,8 +5872,20 @@ export const useKoma = create<KomaState>((set, get) => ({
   lspUninstall: (id) => {
     get().req({ r: 'LspUninstall', id })
   },
-  setProblemsOpen: (open) => set({ problemsOpen: !!open }),
-  toggleProblemsOpen: () => set((s) => ({ problemsOpen: !s.problemsOpen })),
+  setProblemsOpen: (open) =>
+    set({ problemsOpen: !!open, ...(open ? { lspDrawerOpen: false } : {}) }),
+  toggleProblemsOpen: () =>
+    set((s) => {
+      const next = !s.problemsOpen
+      return { problemsOpen: next, ...(next ? { lspDrawerOpen: false } : {}) }
+    }),
+  setLspDrawerOpen: (open) =>
+    set({ lspDrawerOpen: !!open, ...(open ? { problemsOpen: false } : {}) }),
+  toggleLspDrawerOpen: () =>
+    set((s) => {
+      const next = !s.lspDrawerOpen
+      return { lspDrawerOpen: next, ...(next ? { problemsOpen: false } : {}) }
+    }),
   openDiagnostic: (uri, line, character) => {
     const abs = uriToPath(uri)
     if (!abs) return
@@ -5450,18 +5996,29 @@ export const useKoma = create<KomaState>((set, get) => ({
       // Close-without-save must drop the dirty buffer + Monaco model; otherwise
       // reopen restores unsaved edits (reduceFileRead refuses to clobber dirty).
       if (opts?.force) {
-        disposeCodingModel(closingCoding.root, closingCoding.path)
+        const root = closingCoding.root
+        const path = closingCoding.path
+        void import('../lib/monaco-lsp')
+          .then((m) => m.disposeCodingModel(root, path))
+          .catch(() => {
+            /* monaco not loaded yet */
+          })
       }
     }
     const closedAnalytics = id === 'analytics'
     set((s) => {
-      const idx = s.ui.tabs.findIndex((t) => t.id === id)
+      const normalized = normalizeGroups(s.ui)
+      const idx = normalized.tabs.findIndex((t) => t.id === id)
       if (idx < 0) return s
-      const tabs = s.ui.tabs.filter((t) => t.id !== id)
-      // If the closed tab was active, fall back to the left neighbour. idx-1 is
-      // always valid (tabs[0] is the chat tab), so this never underflows.
+      const tabs = normalized.tabs.filter((t) => t.id !== id)
+      // A split has multiple active tabs. If the closed tab owns focus, stay in
+      // its pane by preferring that pane's left/right neighbour. If it was the
+      // pane's last tab, normalizeGroups collapses the empty pane and selects a
+      // surviving group's active tab.
       const activeTabId =
-        s.ui.activeTabId === id ? s.ui.tabs[idx - 1]?.id ?? 'chat' : s.ui.activeTabId
+        normalized.activeTabId === id
+          ? neighbourInGroup(normalized, id) ?? id
+          : normalized.activeTabId
 
       let coding = s.coding
       if (closingCoding && opts?.force) {
@@ -5472,7 +6029,7 @@ export const useKoma = create<KomaState>((set, get) => ({
       }
 
       return {
-        ui: { ...s.ui, tabs, activeTabId },
+        ui: normalizeGroups({ ...normalized, tabs, activeTabId }),
         coding,
         // Closing the Analytics tab drops its in-flight state so a later reopen
         // starts clean (filters preserved as user preference; data cleared so a
@@ -5499,19 +6056,22 @@ export const useKoma = create<KomaState>((set, get) => ({
     const tab = get().ui.tabs.find((t) => t.id === id)
     if (!tab) return
     const isDiff = tab != null && tab.kind === 'diff'
-    set((s) => ({
-      ui: {
-        ...s.ui,
-        activeTabId: id,
-        // Mark a re-focused diff tab loading for the re-request below, but keep
-        // its existing `diff` so the editor doesn't flash to a spinner.
-        tabs: isDiff
-          ? s.ui.tabs.map((t) =>
-              t.id === id && t.kind === 'diff' ? { ...t, loading: true } : t,
-            )
-          : s.ui.tabs,
-      },
-    }))
+    set((s) => {
+      const normalized = normalizeGroups(s.ui)
+      return {
+        ui: normalizeGroups({
+          ...normalized,
+          activeTabId: id,
+          // Mark a re-focused diff tab loading for the re-request below, but keep
+          // its existing `diff` so the editor doesn't flash to a spinner.
+          tabs: isDiff
+            ? normalized.tabs.map((t) =>
+                t.id === id && t.kind === 'diff' ? { ...t, loading: true } : t,
+              )
+            : normalized.tabs,
+        }),
+      }
+    })
     // A GIT-panel diff tab (has `staged`) re-requests via GitDiff, echoing
     // the SAME staged/unstaged side it was opened for; a plain File-changed
     // diff tab (no `staged`) re-requests via FileDiff — the two paths are
@@ -5558,6 +6118,83 @@ export const useKoma = create<KomaState>((set, get) => ({
     // unchanged view, so activating a non-stream tab repeatedly is cheap.
     get().syncStreamView()
   },
+  focusEditorGroup: (groupId) => {
+    set((s) => {
+      const ui = normalizeGroups(s.ui)
+      if (!ui.groups.includes(groupId)) return s
+      const activeTabId = ui.groupActive[groupId]
+      if (!activeTabId) return s
+      if (ui.activeGroupId === groupId && ui.activeTabId === activeTabId) return s
+      return {
+        ui: normalizeGroups({ ...ui, activeGroupId: groupId, activeTabId }),
+      }
+    })
+    get().syncStreamView()
+  },
+  moveTabToGroup: (tabId, groupId, beforeId = null) => {
+    if (tabId === 'chat') return
+    set((s) => {
+      const ui = normalizeGroups(s.ui)
+      if (!ui.groups.includes(groupId) || !ui.tabs.some((t) => t.id === tabId)) return s
+      const before =
+        beforeId != null && ui.tabGroup[beforeId] === groupId ? beforeId : null
+      const tabs = reorderTab(ui.tabs, tabId, before)
+      return {
+        ui: normalizeGroups({
+          ...ui,
+          tabs,
+          tabGroup: { ...ui.tabGroup, [tabId]: groupId },
+          groupActive: { ...ui.groupActive, [groupId]: tabId },
+          activeGroupId: groupId,
+          activeTabId: tabId,
+        }),
+      }
+    })
+    get().syncStreamView()
+  },
+  splitTab: (tabId, targetGroupId, side, dir) => {
+    if (tabId === 'chat') return
+    set((s) => {
+      const ui = normalizeGroups(s.ui)
+      if (!ui.tabs.some((t) => t.id === tabId)) return s
+      const inserted = insertGroup(ui, targetGroupId, side, dir)
+      if (!inserted) return s
+      return {
+        ui: normalizeGroups({
+          ...ui,
+          groups: inserted.groups,
+          groupSizes: inserted.groupSizes,
+          splitDir: inserted.splitDir,
+          tabGroup: { ...ui.tabGroup, [tabId]: inserted.id },
+          groupActive: { ...ui.groupActive, [inserted.id]: tabId },
+          activeGroupId: inserted.id,
+          activeTabId: tabId,
+        }),
+      }
+    })
+    get().syncStreamView()
+  },
+  toggleSplitDir: () =>
+    set((s) => {
+      const ui = normalizeGroups(s.ui)
+      const next = flipSplitDir(ui)
+      if (!next) return s
+      return { ui: { ...ui, splitDir: next.splitDir } }
+    }),
+  setSplitDir: (dir) =>
+    set((s) => {
+      const ui = normalizeGroups(s.ui)
+      const next = applySplitDir(ui, dir)
+      if (!next) return s
+      return { ui: { ...ui, splitDir: next.splitDir } }
+    }),
+  resizeEditorGroups: (index, deltaPx, totalPx) =>
+    set((s) => {
+      const ui = normalizeGroups(s.ui)
+      const groupSizes = resizeGroups(ui.groups, ui.groupSizes, index, deltaPx, totalPx)
+      if (groupSizes === ui.groupSizes) return s
+      return { ui: { ...ui, groupSizes } }
+    }),
   focusPlanSection: () => set((s) => ({ ui: { ...s.ui, focusPlanTick: s.ui.focusPlanTick + 1 } })),
   setUsageScope: (scope) => set((s) => ({ ui: { ...s.ui, usageScope: scope } })),
   refreshUsagePreview: () => {
@@ -5604,6 +6241,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         // Defensive: also drop any stale startup splash — it described the
         // now-dead session's warm-up and must not linger over StartScreen.
         loading: null,
+        bootstrap: null,
         loadingDismissed: false,
       },
       // Drop session-scoped Analytics result on detach (all-scope data can stay;
@@ -5648,13 +6286,80 @@ export const useKoma = create<KomaState>((set, get) => ({
   openCodingFile: (root, path, opts) => {
     const id = `coding:${root}:${path}`
     const key = fileKey(root, path)
-    const requestId = mintRequestId()
     const force = !!opts?.force
+    // Reuse an already-loaded buffer for activate/split/move. Forcing a FileRead
+    // + loading:true on every open remounted Monaco against a thrashing buffer
+    // (setValue ↔ updateCodingContent → React #185) during edge-drop splits.
+    const cached = get().coding.files[key]
+    const reuseBuffer = !force && cached?.content != null && !cached.loading
+    const requestId = reuseBuffer ? null : mintRequestId()
     set((s) => {
-      const exists = s.ui.tabs.some((t) => t.id === id)
-      const tabs: Tab[] = exists
-        ? s.ui.tabs
-        : [...s.ui.tabs, { id, kind: 'codingFile', root, path, title: codingBaseName(path) }]
+      const baseUi = normalizeGroups(s.ui)
+      const exists = baseUi.tabs.some((t) => t.id === id)
+      let tabs: Tab[] = exists
+        ? baseUi.tabs
+        : [...baseUi.tabs, { id, kind: 'codingFile', root, path, title: codingBaseName(path) }]
+      let ui = { ...baseUi, tabs, activeTabId: id }
+
+      const targetGroup =
+        opts?.groupId && ui.groups.includes(opts.groupId) ? opts.groupId : ui.activeGroupId
+
+      if (opts?.split) {
+        // Edge drop: open the file into a new adjacent pane (or the target
+        // group when we're already at MAX_GROUPS).
+        const inserted = insertGroup(ui, targetGroup, opts.split.side, opts.split.dir)
+        if (inserted) {
+          ui = {
+            ...ui,
+            groups: inserted.groups,
+            groupSizes: inserted.groupSizes,
+            splitDir: inserted.splitDir,
+            tabGroup: { ...ui.tabGroup, [id]: inserted.id },
+            groupActive: { ...ui.groupActive, [inserted.id]: id },
+            activeGroupId: inserted.id,
+            activeTabId: id,
+          }
+        } else {
+          tabs = reorderTab(tabs, id, null)
+          ui = {
+            ...ui,
+            tabs,
+            tabGroup: { ...ui.tabGroup, [id]: targetGroup },
+            groupActive: { ...ui.groupActive, [targetGroup]: id },
+            activeGroupId: targetGroup,
+            activeTabId: id,
+          }
+        }
+      } else if (opts?.groupId) {
+        // Center / tab-strip drop: land in that group (optionally before a tab).
+        const before =
+          opts.beforeId != null && ui.tabGroup[opts.beforeId] === targetGroup
+            ? opts.beforeId
+            : null
+        tabs = reorderTab(tabs, id, before)
+        ui = {
+          ...ui,
+          tabs,
+          tabGroup: { ...ui.tabGroup, [id]: targetGroup },
+          groupActive: { ...ui.groupActive, [targetGroup]: id },
+          activeGroupId: targetGroup,
+          activeTabId: id,
+        }
+      } else if (exists) {
+        // Plain activate: keep the tab in its current group, just focus it.
+        const gid = ui.tabGroup[id] ?? ui.activeGroupId
+        ui = {
+          ...ui,
+          groupActive: { ...ui.groupActive, [gid]: id },
+          activeGroupId: gid,
+          activeTabId: id,
+        }
+      }
+
+      if (reuseBuffer) {
+        return { ui: normalizeGroups(ui) }
+      }
+
       const prev = s.coding.files[key]
       // force (Revert): clear dirty/conflict so FileRead may replace the buffer.
       // Without this, reduceFileRead keeps local edits and Revert is a no-op.
@@ -5675,10 +6380,10 @@ export const useKoma = create<KomaState>((set, get) => ({
             loading: true,
           })
       return {
-        ui: { ...s.ui, tabs, activeTabId: id },
+        ui: normalizeGroups(ui),
         coding: {
           ...s.coding,
-          _readReq: { ...s.coding._readReq, [key]: requestId },
+          _readReq: { ...s.coding._readReq, [key]: requestId! },
           files: {
             ...s.coding.files,
             [key]: nextFile,
@@ -5686,7 +6391,8 @@ export const useKoma = create<KomaState>((set, get) => ({
         },
       }
     })
-    get().req({ r: 'FileRead', root, path, requestId })
+    if (requestId) get().req({ r: 'FileRead', root, path, requestId })
+    if (opts?.groupId || opts?.split) get().syncStreamView()
   },
   saveCodingFile: (root, path) => {
     const key = fileKey(root, path)
@@ -5713,15 +6419,20 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
   updateCodingContent: (root, path, content) => {
     const key = fileKey(root, path)
+    // Pin LF so Monaco CRLF never becomes a distinct store write.
+    const normalized = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
     set((s) => {
       const prev = s.coding.files[key]
       if (!prev) return s
-      const dirty = content !== (prev.savedContent ?? '')
-      if (prev.content === content && prev.dirty === dirty) return s
+      const dirty = normalized !== (prev.savedContent ?? '')
+      if (prev.content === normalized && prev.dirty === dirty) return s
       return {
         coding: {
           ...s.coding,
-          files: { ...s.coding.files, [key]: { ...prev, content, dirty, conflict: false } },
+          files: {
+            ...s.coding.files,
+            [key]: { ...prev, content: normalized, dirty, conflict: false },
+          },
         },
       }
     })
@@ -5788,7 +6499,15 @@ export const useKoma = create<KomaState>((set, get) => ({
     }
   },
   downloadCodingFile: (root, path) => {
-    get().req({ r: 'FileDownloadBytes', root, path, requestId: mintRequestId() })
+    // saveAs:true → host opens a native save dialog and writes the file.
+    // wry cannot honor in-page blob downloads.
+    get().req({
+      r: 'FileDownloadBytes',
+      root,
+      path,
+      requestId: mintRequestId(),
+      saveAs: true,
+    })
   },
   refreshCodingDir: (root, path) => {
     const key = fileKey(root, path)
@@ -5817,5 +6536,141 @@ export const useKoma = create<KomaState>((set, get) => ({
         },
       }
     })
+  },
+  setCodingSearchQuery: (query) => {
+    set((s) => ({
+      coding: { ...s.coding, search: { ...s.coding.search, query, lastReplaceSummary: null } },
+    }))
+  },
+  setCodingSearchReplace: (replace) => {
+    set((s) => ({
+      coding: { ...s.coding, search: { ...s.coding.search, replace } },
+    }))
+  },
+  setCodingSearchFlag: (flag, value) => {
+    set((s) => ({
+      coding: {
+        ...s.coding,
+        search: { ...s.coding.search, [flag]: value, lastReplaceSummary: null },
+      },
+    }))
+  },
+  setCodingSearchGlobs: (includeGlob, excludeGlob) => {
+    set((s) => ({
+      coding: {
+        ...s.coding,
+        search: { ...s.coding.search, includeGlob, excludeGlob, lastReplaceSummary: null },
+      },
+    }))
+  },
+  searchCodingContent: (root) => {
+    const search = get().coding.search
+    const query = search.query
+    if (!root || !query.trim()) {
+      set((s) => ({
+        coding: {
+          ...s.coding,
+          search: {
+            ...s.coding.search,
+            loading: false,
+            error: null,
+            results: [],
+            truncated: false,
+            _searchReq: null,
+          },
+        },
+      }))
+      return
+    }
+    const requestId = mintRequestId()
+    set((s) => ({
+      coding: {
+        ...s.coding,
+        search: {
+          ...s.coding.search,
+          loading: true,
+          error: null,
+          lastReplaceSummary: null,
+          _searchReq: requestId,
+        },
+      },
+    }))
+    get().req({
+      r: 'FileContentSearch',
+      root,
+      path: '',
+      query,
+      caseSensitive: search.caseSensitive,
+      wholeWord: search.wholeWord,
+      isRegex: search.isRegex,
+      includeGlob: search.includeGlob.trim() || null,
+      excludeGlob: search.excludeGlob.trim() || null,
+      requestId,
+    })
+  },
+  replaceCodingContentAll: (root) => {
+    const search = get().coding.search
+    if (!root || !search.query.trim() || search.replacing) return
+    // Skip if any open dirty buffer under this root — replace writes disk and would clobber.
+    const dirtyOpen = get().ui.tabs.some((t) => {
+      if (t.kind !== 'codingFile' || t.root !== root) return false
+      const f = get().coding.files[fileKey(root, t.path)]
+      return !!f?.dirty
+    })
+    if (dirtyOpen) {
+      set((s) => ({
+        coding: {
+          ...s.coding,
+          search: {
+            ...s.coding.search,
+            replaceError: 'Save or discard dirty editor tabs before Replace All',
+            lastReplaceSummary: null,
+          },
+        },
+      }))
+      return
+    }
+    const requestId = mintRequestId()
+    set((s) => ({
+      coding: {
+        ...s.coding,
+        search: {
+          ...s.coding.search,
+          replacing: true,
+          replaceError: null,
+          lastReplaceSummary: null,
+          _replaceReq: requestId,
+        },
+      },
+    }))
+    get().req({
+      r: 'FileContentReplace',
+      root,
+      path: '',
+      query: search.query,
+      replacement: search.replace,
+      caseSensitive: search.caseSensitive,
+      wholeWord: search.wholeWord,
+      isRegex: search.isRegex,
+      includeGlob: search.includeGlob.trim() || null,
+      excludeGlob: search.excludeGlob.trim() || null,
+      requestId,
+    })
+  },
+  openCodingSearchHit: (root, path, line, col = 1) => {
+    const targetLine = Math.max(1, line)
+    const targetCol = Math.max(1, col)
+    queueReveal(root, path, targetLine, targetCol)
+    get().openCodingFile(root, path)
+    const fire = () => {
+      window.dispatchEvent(
+        new CustomEvent('koma-reveal-line', {
+          detail: { root, path, line: targetLine, column: targetCol },
+        }),
+      )
+    }
+    fire()
+    setTimeout(fire, 80)
+    setTimeout(fire, 300)
   },
 }))

@@ -11,21 +11,35 @@ import {
   consumeReveal,
   monacoUriFromPath,
   setGoToDefinitionHandler,
+  warmCodeLensCache,
+  registerLspDidChangeFlusher,
 } from '../lib/monaco-lsp'
+import { codingAskInChatPayload } from '../lib/codingRef'
+import { viewerKindForPath, type ViewerKind } from '../lib/viewerKind'
 import { useKoma, type Tab } from '../store/koma'
 import { fileKey } from '../store/coding'
+import { isTabVisible, normalizeGroups } from '../store/editorGroups'
 import { BrailleSpinner } from './BrailleSpinner'
+import { CodingFileViewer } from './CodingFileViewer'
 
 type CodingTab = Extract<Tab, { kind: 'codingFile' }>
 
 const AUTOSAVE_MS = 750
-const LSP_CHANGE_MS = 300
+// Diagnostics / CodeLens can lag typing; completion flushes pending didChange
+// immediately via registerLspDidChangeFlusher so the server stays current.
+const LSP_CHANGE_MS = 120
+// CodeLens ref-counts are expensive (documentSymbol + N references RPCs) and
+// share the host LSP mutex with hover/completion. Only warm on open / save idle.
+const CODELENS_IDLE_MS = 2500
 
 export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelRef = useRef<monaco.editor.ITextModel | null>(null)
-  const applyingRef = useRef(false)
+  // Generation counter: each store→model apply bumps this; didChange is ignored
+  // while applyGenRef !== 0 (sync) AND until the matching clear runs after Monaco
+  // flushes. A plain boolean + rAF was still losing races on split/layout.
+  const applyGenRef = useRef(0)
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lspChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lspOpenedRef = useRef(false)
@@ -36,11 +50,15 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   const revertCodingFile = useKoma((s) => s.revertCodingFile)
   const lspServers = useKoma((s) => s.lspServers)
   const lspProgress = useKoma((s) => s.lspProgress)
-  const lspDiagnostics = useKoma((s) => s.lspDiagnostics)
+  // Markers are applied in the store push handler — do NOT subscribe to the
+  // whole lspDiagnostics map here (every URI publish would re-render every
+  // mounted coding tab).
   const refreshLsp = useKoma((s) => s.refreshLsp)
   const lspInstall = useKoma((s) => s.lspInstall)
   const req = useKoma((s) => s.req)
   const [bannerDismissed, setBannerDismissed] = useState<Record<string, boolean>>({})
+  // Boolean only — avoid re-render on every ui.groupSizes / toast tick.
+  const isActive = useKoma((s) => isTabVisible(normalizeGroups(s.ui), tab.id))
 
   useEffect(() => {
     if (lspServers.length === 0) refreshLsp()
@@ -165,11 +183,22 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       codeLens: true,
       gotoLocation: {
         multipleDefinitions: 'goto',
+        // Always prefer peek for multi-ref; CodeLens forces peek even for 1 hit.
         multipleReferences: 'peek',
         multipleDeclarations: 'goto',
         multipleImplementations: 'peek',
         multipleTypeDefinitions: 'goto',
       },
+      // Peek chrome tracks koma theme (title actions, tree focus).
+      peekWidgetDefaultFocus: 'tree',
+      renderValidationDecorations: 'on',
+      matchBrackets: 'always',
+      bracketPairColorization: { enabled: true },
+      guides: { indentation: true, bracketPairs: false },
+      stickyScroll: { enabled: true },
+      inlayHints: { enabled: 'off' },
+      // Dim CodeLens to match VS Code secondary chrome.
+      // (color comes from editorCodeLens.foreground theme token)
     })
     monaco.editor.setTheme(theme)
     editorRef.current = editor
@@ -187,24 +216,109 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       void editor.getAction('editor.action.referenceSearch.trigger')?.run()
     })
 
+    // Selection → composer: `@path:start-end` + fenced buffer text, then focus chat.
+    editor.addAction({
+      id: 'koma.askInChat',
+      label: 'Ask in chat',
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 0.5,
+      precondition: 'editorHasSelection',
+      run: (ed) => {
+        const model = ed.getModel()
+        const sel = ed.getSelection()
+        if (!model || !sel || sel.isEmpty()) return
+        let startLine = Math.min(sel.startLineNumber, sel.endLineNumber)
+        let endLine = Math.max(sel.startLineNumber, sel.endLineNumber)
+        // Line-wise selections often end at column 1 of the next line.
+        if (
+          endLine > startLine &&
+          sel.endLineNumber > sel.startLineNumber &&
+          sel.endColumn === 1
+        ) {
+          endLine = endLine - 1
+        }
+        const selectedText = model.getValueInRange(sel)
+        const workdirs = (useKoma.getState().settingsValues?.workdir ?? []).filter(Boolean)
+        const payload = codingAskInChatPayload(
+          tab.root,
+          tab.path,
+          workdirs,
+          startLine,
+          endLine,
+          selectedText,
+        )
+        useKoma.getState().askCodingSelectionInChat(payload)
+      },
+    })
+
+    let codeLensIdleTimer: ReturnType<typeof setTimeout> | null = null
     const sub = editor.onDidChangeModelContent(() => {
-      if (applyingRef.current) return
+      // Ignore while a store→model apply is in flight (incl. post-flush window).
+      if (applyGenRef.current !== 0) return
       const model = editor.getModel()
       if (!model) return
-      const text = model.getValue()
+      // Always LF so store ↔ model never thrash on CRLF (React #185).
+      const text = model.getValue(monaco.editor.EndOfLinePreference.LF)
+      const key = fileKey(tab.root, tab.path)
+      const prev = useKoma.getState().coding.files[key]
+      if (prev?.content === text) {
+        // External setValue / setEOL can still emit didChange; don't write back.
+        return
+      }
       useKoma.getState().updateCodingContent(tab.root, tab.path, text)
       if (lspChangeTimerRef.current) clearTimeout(lspChangeTimerRef.current)
       lspChangeTimerRef.current = setTimeout(() => {
         lspChangeTimerRef.current = null
         if (!lspOpenedRef.current) return
+        // Fresh text at fire time — the closed-over `text` may be stale if the
+        // user kept typing through the debounce window.
+        const latest = editor
+          .getModel()
+          ?.getValue(monaco.editor.EndOfLinePreference.LF)
+        if (latest == null) return
         useKoma.getState().req({
           r: 'LspDidChange',
           root: tab.root,
           path: tab.path,
-          text,
+          text: latest,
         })
       }, LSP_CHANGE_MS)
+      // Defer CodeLens warm until typing goes idle — never on every didChange.
+      if (codeLensIdleTimer) clearTimeout(codeLensIdleTimer)
+      codeLensIdleTimer = setTimeout(() => {
+        codeLensIdleTimer = null
+        if (!lspOpenedRef.current) return
+        const m = editor.getModel()
+        if (!m) return
+        warmCodeLensCache(
+          (body) => useKoma.getState().req(body as never),
+          tab.root,
+          tab.path,
+          m.getVersionId(),
+        )
+      }, CODELENS_IDLE_MS)
     })
+
+    // Completion/resolve call this to push didChange before the RPC so the
+    // server buffer matches Monaco (debounced path alone is too late).
+    const flushDidChange = () => {
+      if (lspChangeTimerRef.current) {
+        clearTimeout(lspChangeTimerRef.current)
+        lspChangeTimerRef.current = null
+      }
+      if (!lspOpenedRef.current) return
+      const latest = editor
+        .getModel()
+        ?.getValue(monaco.editor.EndOfLinePreference.LF)
+      if (latest == null) return
+      useKoma.getState().req({
+        r: 'LspDidChange',
+        root: tab.root,
+        path: tab.path,
+        text: latest,
+      })
+    }
+    registerLspDidChangeFlusher(tab.root, tab.path, flushDidChange)
 
     const onReveal = (ev: Event) => {
       const detail = (ev as CustomEvent).detail as
@@ -225,7 +339,9 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     return () => {
       window.removeEventListener('koma-reveal-line', onReveal)
       sub.dispose()
+      registerLspDidChangeFlusher(tab.root, tab.path, null)
       if (lspChangeTimerRef.current) clearTimeout(lspChangeTimerRef.current)
+      if (codeLensIdleTimer) clearTimeout(codeLensIdleTimer)
       // Detach only — keep the file:// model alive for peek widgets / reopen.
       editor.setModel(null)
       editor.dispose()
@@ -234,6 +350,14 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       lspOpenedRef.current = false
     }
   }, [tab.root, tab.path])
+
+  // Parent uses display:none for inactive panes; force layout on reveal so the
+  // editor isn't stuck at 0×0 after WebKit skips ResizeObserver.
+  useEffect(() => {
+    if (!isActive) return
+    const raf = requestAnimationFrame(() => editorRef.current?.layout())
+    return () => cancelAnimationFrame(raf)
+  }, [isActive])
 
   useEffect(() => {
     if (!fileState || !editorRef.current) return
@@ -245,24 +369,39 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     }
 
     const lang = langFromPath(tab.path)
-    const next = fileState.content
-    applyingRef.current = true
+    // Host/store always uses \n; pin Monaco the same way so getValue() never
+    // disagrees with store and retriggers this effect (React #185).
+    const next = fileState.content.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    const gen = applyGenRef.current + 1
+    applyGenRef.current = gen
     try {
       const uri = monacoUriFromPath(tab.root, tab.path)
       let model = monaco.editor.getModel(uri)
       if (!model) {
         model = monaco.editor.createModel(next, lang, uri)
-      } else if (model.getValue() !== next) {
-        const pos = editor.getPosition()
-        model.setValue(next)
-        if (pos) editor.setPosition(pos)
+        model.setEOL(monaco.editor.EndOfLineSequence.LF)
+      } else {
+        const cur = model.getValue(monaco.editor.EndOfLinePreference.LF)
+        // Only touch the model when text actually differs — bare setEOL on every
+        // save/fingerprint tick was still emitting didChange on some WebKit builds.
+        if (cur !== next) {
+          const pos = editor.getPosition()
+          model.setValue(next)
+          model.setEOL(monaco.editor.EndOfLineSequence.LF)
+          if (pos) editor.setPosition(pos)
+        } else if (model.getEndOfLineSequence() !== monaco.editor.EndOfLineSequence.LF) {
+          model.setEOL(monaco.editor.EndOfLineSequence.LF)
+        }
       }
       stampModelPath(model, tab.root, tab.path)
       if (editor.getModel() !== model) editor.setModel(model)
       modelRef.current = model
     } finally {
+      // Clear only this generation after Monaco has flushed model events.
       queueMicrotask(() => {
-        applyingRef.current = false
+        requestAnimationFrame(() => {
+          if (applyGenRef.current === gen) applyGenRef.current = 0
+        })
       })
     }
 
@@ -285,44 +424,104 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       // Second pass after layout / late model attach.
       setTimeout(apply, 50)
     }
-
-    if (
-      !lspOpenedRef.current &&
-      !fileState.binary &&
-      !fileState.tooLarge &&
-      !fileState.error &&
-      fileState.content != null
-    ) {
-      lspOpenedRef.current = true
-      req({
-        r: 'LspDidOpen',
-        root: tab.root,
-        path: tab.path,
-        languageId: languageIdForPath(tab.path),
-        text: fileState.content,
-      })
-      const uri = pathToUri(tab.root, tab.path)
-      const diags = useKoma.getState().lspDiagnostics[uri]
-      if (diags) applyDiagnosticsToMonaco(uri, diags)
-    }
+    // Intentionally omit `loading` and `fingerprint` — both flip without content
+    // changes and used to re-enter setValue/setEOL for free (React #185 on split).
   }, [
     fileState?.content,
-    fileState?.loading,
     fileState?.binary,
     fileState?.tooLarge,
     fileState?.error,
     fileState?.conflict,
-    fileState?.fingerprint,
     tab.path,
     tab.root,
-    req,
   ])
 
+  // Attach LSP when content is ready AND the matching server is installed.
+  // Do not mark opened while source === 'missing' — install updates lspServers
+  // without remounting the tab, so this effect must re-run and send LspDidOpen.
   useEffect(() => {
+    if (lspOpenedRef.current) return
+    if (
+      !fileState ||
+      fileState.content == null ||
+      fileState.binary ||
+      fileState.tooLarge ||
+      fileState.error
+    ) {
+      return
+    }
+    const file = tab.path.split('/').pop() ?? tab.path
+    const dot = file.lastIndexOf('.')
+    const ext = dot > 0 ? file.slice(dot + 1).toLowerCase() : ''
+    if (!ext) return
+    // Wait for catalogue so we don't burn the one-shot open while status is
+    // unknown. If refreshLsp never lands (empty forever), fail open after a
+    // short grace so LSP still attaches for managed/path servers.
+    if (lspServers.length === 0) {
+      // Effect re-runs when lspServers updates; only schedule a late retry once.
+      const t = window.setTimeout(() => {
+        if (lspOpenedRef.current) return
+        if (useKoma.getState().lspServers.length > 0) return
+        // Catalogue still empty — try didOpen anyway (host no-ops missing servers).
+        lspOpenedRef.current = true
+        useKoma.getState().req({
+          r: 'LspDidOpen',
+          root: tab.root,
+          path: tab.path,
+          languageId: languageIdForPath(tab.path),
+          text: fileState.content!,
+        })
+        const uri = pathToUri(tab.root, tab.path)
+        const diags = useKoma.getState().lspDiagnostics[uri]
+        if (diags) applyDiagnosticsToMonaco(uri, diags)
+        {
+          const m =
+            monaco.editor.getModel(monacoUriFromPath(tab.root, tab.path)) ??
+            modelRef.current
+          warmCodeLensCache(
+            (body) => useKoma.getState().req(body as never),
+            tab.root,
+            tab.path,
+            m?.getVersionId() ?? 1,
+          )
+        }
+      }, 2500)
+      return () => window.clearTimeout(t)
+    }
+    const match = lspServers.find((s) => s.extensions.includes(ext))
+    if (!match || match.source === 'missing') return
+
+    lspOpenedRef.current = true
+    req({
+      r: 'LspDidOpen',
+      root: tab.root,
+      path: tab.path,
+      languageId: languageIdForPath(tab.path),
+      text: fileState.content,
+    })
     const uri = pathToUri(tab.root, tab.path)
-    const diags = lspDiagnostics[uri]
+    const diags = useKoma.getState().lspDiagnostics[uri]
     if (diags) applyDiagnosticsToMonaco(uri, diags)
-  }, [lspDiagnostics, tab.root, tab.path])
+    {
+      const m =
+        monaco.editor.getModel(monacoUriFromPath(tab.root, tab.path)) ?? modelRef.current
+      warmCodeLensCache(
+        (body) => useKoma.getState().req(body as never),
+        tab.root,
+        tab.path,
+        m?.getVersionId() ?? 1,
+      )
+    }
+  }, [
+    fileState?.content,
+    fileState?.binary,
+    fileState?.tooLarge,
+    fileState?.error,
+    tab.path,
+    tab.root,
+    lspServers,
+    req,
+  ])
 
   if (fileState?.conflict) {
     return (
@@ -349,12 +548,45 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       </div>
     )
   }
+  // Known media / office types always use the binary viewer (even if FileRead
+  // returned text, e.g. SVG without NULs). Don't wait for FileRead — the viewer
+  // fetches bytes itself via FileDownloadBytes.
+  const viewKind = viewerKindForPath(tab.path)
+  if (viewKind !== 'text' && !fileState?.error && !fileState?.tooLarge) {
+    return (
+      <div className="flex h-full w-full flex-col">
+        <EditorChrome
+          path={tab.path}
+          status={fileState?.binary ? status : kindStatus(viewKind)}
+          canSave={false}
+          canRevert={false}
+          saving={false}
+          onSave={() => {}}
+          onRevert={() => {}}
+        />
+        <CodingFileViewer
+          root={tab.root}
+          path={tab.path}
+          onDownload={() => useKoma.getState().downloadCodingFile(tab.root, tab.path)}
+        />
+      </div>
+    )
+  }
+
   if (fileState?.binary) {
     return (
       <div className="flex h-full w-full flex-col">
         <EditorChrome path={tab.path} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
-        <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-[12px] text-koma-dim">
-          Binary file — no preview
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-[12px] text-koma-dim">
+          <div>Binary file — no preview</div>
+          <button
+            type="button"
+            onClick={() => useKoma.getState().downloadCodingFile(tab.root, tab.path)}
+            className="flex items-center gap-1 rounded border border-koma-border px-2 py-1 text-[11.5px] text-koma-fg hover:bg-koma-hover"
+          >
+            <Download size={12} />
+            Download
+          </button>
         </div>
       </div>
     )
@@ -432,6 +664,25 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   )
 }
 
+function kindStatus(kind: ViewerKind): string {
+  switch (kind) {
+    case 'image':
+      return 'Image'
+    case 'pdf':
+      return 'PDF'
+    case 'video':
+      return 'Video'
+    case 'sqlite':
+      return 'SQLite'
+    case 'docx':
+      return 'Word'
+    case 'excel':
+      return 'Excel'
+    default:
+      return 'Preview'
+  }
+}
+
 function EditorChrome({
   path,
   status,
@@ -449,13 +700,20 @@ function EditorChrome({
   onSave: () => void
   onRevert: () => void
 }) {
+  // Density via container query — no RO/setState. Narrow split panes hide the
+  // full path (title still has it) and drop the status text so Save/Revert stay.
   return (
-    <div className="flex h-8 flex-none items-center gap-2 border-b border-koma-border bg-koma-panel px-3 text-[12px]">
+    <div className="@container/pathbar flex h-8 min-w-0 flex-none items-center gap-2 border-b border-koma-border bg-koma-panel px-3 text-[12px] @max-xs/pathbar:gap-1.5 @max-xs/pathbar:px-2 @max-[12rem]/pathbar:px-1.5">
       <Code2 size={13} className="flex-none text-koma-dim" />
-      <span className="min-w-0 flex-1 truncate font-mono text-koma-fg" title={path}>
+      <span
+        className="min-w-0 flex-1 truncate font-mono text-koma-fg @max-[12rem]/pathbar:hidden"
+        title={path}
+      >
         {path}
       </span>
-      <span className="flex-none text-[11px] text-koma-dim">{status}</span>
+      <span className="min-w-0 flex-none truncate text-[11px] text-koma-dim @max-xs/pathbar:max-w-[5rem] @max-[12rem]/pathbar:hidden">
+        {status}
+      </span>
       <button
         type="button"
         onClick={onRevert}

@@ -8,6 +8,7 @@ import {
   type AnalyticsSeriesPoint,
 } from '../store/koma'
 import { BrailleSpinner } from './BrailleSpinner'
+import { isTabVisible, normalizeGroups } from '../store/editorGroups'
 
 // Human-compact token count (mirrors UsagePanel).
 function fmtTokens(n: number): string {
@@ -198,7 +199,7 @@ export default function AnalyticsTab() {
   const setAnalyticsScope = useKoma((s) => s.setAnalyticsScope)
   const setAnalyticsRange = useKoma((s) => s.setAnalyticsRange)
   const setAnalyticsMetric = useKoma((s) => s.setAnalyticsMetric)
-  const isActiveTab = useKoma((s) => s.ui.activeTabId === 'analytics')
+  const isActiveTab = useKoma((s) => isTabVisible(normalizeGroups(s.ui), 'analytics'))
 
   // Fetch on mount + whenever the attached session changes while this tab is
   // open (session-scope must not keep showing the old session's numbers).
@@ -263,7 +264,7 @@ export default function AnalyticsTab() {
             title="Refresh"
             className="flex h-7 w-7 items-center justify-center rounded border border-koma-border text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
           >
-            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+            {loading ? <BrailleSpinner size={13} /> : <RefreshCw size={13} />}
           </button>
         </div>
       </div>

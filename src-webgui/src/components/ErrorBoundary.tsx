@@ -24,7 +24,11 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     const label = this.props.label ?? 'ErrorBoundary'
-    logError(label, error)
+    const stack = errorInfo.componentStack?.trim()
+    const detail = stack
+      ? `${error.message}\n${error.stack ?? ''}\ncomponentStack:${stack}`
+      : error
+    logError(label, detail)
     console.error(`[${label}]`, error, errorInfo)
   }
 

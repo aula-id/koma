@@ -442,6 +442,20 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 }
             }
         }
+        GuiReq::RemoveSteer { index } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::RemoveSteer { index });
+                }
+            }
+        }
+        GuiReq::EditSteer { index } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::EditSteer { index });
+                }
+            }
+        }
         // Status-footer Compact action: summarise + trim the foreground
         // session's history on the attached daemon. No session attached →
         // silent no-op (compacting nothing is meaningless).
@@ -459,6 +473,10 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                     let _ = tx.send(ClientRequest::RewindTo { index });
                 }
             }
+        }
+        // Pull older chat history held after a windowed first Snapshot (host-local).
+        GuiReq::HistoryPage { before } => {
+            let _ = ctx.ctl.send(HostCtl::HistoryPage { before });
         }
         // Kill one sub-agent by id (Explore agent-row kill button).
         GuiReq::KillSubagent { id } => {
@@ -937,10 +955,60 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             root,
             path,
             request_id,
+            save_as,
         } => {
             let _ = ctx.ctl.send(HostCtl::FileDownloadBytes {
                 root,
                 path,
+                request_id,
+                save_as,
+            });
+        }
+        GuiReq::FileContentSearch {
+            root,
+            path,
+            query,
+            case_sensitive,
+            whole_word,
+            is_regex,
+            include_glob,
+            exclude_glob,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::FileContentSearch {
+                root,
+                path,
+                query,
+                case_sensitive,
+                whole_word,
+                is_regex,
+                include_glob,
+                exclude_glob,
+                request_id,
+            });
+        }
+        GuiReq::FileContentReplace {
+            root,
+            path,
+            query,
+            replacement,
+            case_sensitive,
+            whole_word,
+            is_regex,
+            include_glob,
+            exclude_glob,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::FileContentReplace {
+                root,
+                path,
+                query,
+                replacement,
+                case_sensitive,
+                whole_word,
+                is_regex,
+                include_glob,
+                exclude_glob,
                 request_id,
             });
         }
@@ -981,6 +1049,8 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             path,
             line,
             character,
+            trigger_kind,
+            trigger_character,
             request_id,
         } => {
             let _ = ctx.ctl.send(HostCtl::LspCompletion {
@@ -988,6 +1058,21 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 path,
                 line,
                 character,
+                trigger_kind: trigger_kind.unwrap_or(1),
+                trigger_character,
+                request_id,
+            });
+        }
+        GuiReq::LspCompletionResolve {
+            root,
+            path,
+            item,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::LspCompletionResolve {
+                root,
+                path,
+                item,
                 request_id,
             });
         }

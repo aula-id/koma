@@ -116,7 +116,7 @@ fn search_messages_single_term_finds_match() {
     )
     .unwrap();
 
-    let hits = search_messages(dir.path(), "hello", 10, None);
+    let hits = search_messages(dir.path(), "hello", 10, None).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].role, "user");
     assert!(
@@ -140,8 +140,8 @@ fn search_messages_multi_term_or_finds_any_match() {
     .unwrap();
     append(dir.path(), Role::User, "unrelated text here", None, None).unwrap();
 
-    // "fox zebra" -> fox* OR zebra* -> should match message 1 but not 2 or 3.
-    let hits = search_messages(dir.path(), "fox zebra", 10, None);
+    // "fox zebra" -> "fox"* OR "zebra"* -> should match message 1 but not 2 or 3.
+    let hits = search_messages(dir.path(), "fox zebra", 10, None).unwrap();
     assert_eq!(hits.len(), 1, "only fox matches");
     assert_eq!(hits[0].role, "user");
 }
@@ -167,7 +167,7 @@ fn search_messages_or_ranks_multiple_hits() {
     .unwrap();
     append(dir.path(), Role::User, "nothing to see here", None, None).unwrap();
 
-    let hits = search_messages(dir.path(), "security", 10, None);
+    let hits = search_messages(dir.path(), "security", 10, None).unwrap();
     assert_eq!(hits.len(), 2);
     for h in &hits {
         assert!(
@@ -182,7 +182,7 @@ fn search_messages_no_match_returns_empty() {
     let dir = TempDir::new("fts-nomatch");
     append(dir.path(), Role::User, "hello", None, None).unwrap();
 
-    let hits = search_messages(dir.path(), "zzznotexist", 10, None);
+    let hits = search_messages(dir.path(), "zzznotexist", 10, None).unwrap();
     assert!(hits.is_empty());
 }
 
@@ -199,7 +199,7 @@ fn search_messages_strips_fts5_syntax_chars() {
     .unwrap();
 
     // Parentheses and asterisks should be stripped so the query doesn't error.
-    let hits = search_messages(dir.path(), "FOO*", 10, None);
+    let hits = search_messages(dir.path(), "FOO*", 10, None).unwrap();
     assert!(!hits.is_empty());
     assert!(hits[0].snippet.contains("FOO"));
 }
@@ -228,7 +228,7 @@ fn append_stores_and_fetch_reasoning() {
     assert!(msgs[1].reasoning.is_none());
 
     // FTS search still matches on content (not reasoning).
-    let hits = search_messages(dir.path(), "answer", 10, None);
+    let hits = search_messages(dir.path(), "answer", 10, None).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].role, "assistant");
     // The reasoning snippet is populated in search results.
@@ -299,7 +299,7 @@ fn search_still_works_after_reasoning_column() {
     append(dir.path(), Role::User, "great, go ahead", None, None).unwrap();
 
     // FTS matches on content, not reasoning.
-    let hits = search_messages(dir.path(), "parser", 10, None);
+    let hits = search_messages(dir.path(), "parser", 10, None).unwrap();
     assert_eq!(hits.len(), 1);
     assert!(hits[0].snippet.contains("parser"));
     assert_eq!(
@@ -308,6 +308,82 @@ fn search_still_works_after_reasoning_column() {
     );
 
     // Reasoning-only terms don't match via FTS.
-    let hits = search_messages(dir.path(), "stack trace", 10, None);
+    let hits = search_messages(dir.path(), "stack trace", 10, None).unwrap();
     assert!(hits.is_empty(), "FTS should not index reasoning");
+}
+
+#[test]
+fn search_messages_repairs_empty_fts_after_false_backfill_flag() {
+    let dir = TempDir::new("fts-repair");
+    append(dir.path(), Role::User, "unique_repair_token_xyz", None, None).unwrap();
+
+    // Simulate a failed prior backfill: flag set, FTS wiped.
+    {
+        let conn = crate::model::msglog::schema::open(dir.path()).unwrap();
+        conn.execute("DELETE FROM messages_fts", []).unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('fts_backfilled', 1)",
+            [],
+        )
+        .unwrap();
+    }
+    // Drop process-level ready cache by using a fresh path identity — open()
+    // still re-runs ensure_schema only when the path is not in SCHEMA_READY.
+    // Force re-open after clearing the in-process cache is not public; instead
+    // call ensure path via search which opens the same path. If the path is
+    // already marked ready from append, repair won't run until next process.
+    // Clear by writing a sentinel through open after deleting ready is hard;
+    // so invoke the public repair path by re-opening in a way that hits schema:
+    // the SCHEMA_READY set still contains this path from append. Manually
+    // trigger repair by calling open after removing the path is not exposed.
+    // Workaround: create a *new* connection via open after we also clear the
+    // meta+empty FTS — but SCHEMA_READY skips ensure_schema. Verify via a
+    // subprocess-equivalent: call ensure through a duplicated dir is overkill.
+    //
+    // Direct unit coverage of the SQL repair: open a brand-new session dir
+    // where we seed messages without going through append's FTS insert.
+    let dir2 = TempDir::new("fts-repair2");
+    {
+        let conn = crate::model::msglog::schema::open(dir2.path()).unwrap();
+        conn.execute(
+            "INSERT INTO messages(role, content, created_at) VALUES ('user', 'repair_me_token_abc', 1)",
+            [],
+        )
+        .unwrap();
+        // Flag set + empty FTS (messages row present) — next open must rebuild.
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('fts_backfilled', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM messages_fts", []).unwrap();
+    }
+    // SCHEMA_READY already has dir2 from the open above. Clear it by searching
+    // after a process-local reopen isn't possible; instead delete from the
+    // static set by using open on a path that re-runs only if not ready.
+    // For this test, call search_messages which opens again — if ready-skip
+    // prevents repair, hits stay empty. Force by removing ready entry via
+    // another open of a copy is messy; call the public API after renaming.
+    //
+    // Practical approach: reopen under a path clone by copying the sqlite file
+    // to a fresh dir so SCHEMA_READY misses it.
+    let dir3 = TempDir::new("fts-repair3");
+    std::fs::copy(
+        dir2.path().join("messages.sqlite"),
+        dir3.path().join("messages.sqlite"),
+    )
+    .unwrap();
+    // Copy WAL/SHM if present.
+    let _ = std::fs::copy(
+        dir2.path().join("messages.sqlite-wal"),
+        dir3.path().join("messages.sqlite-wal"),
+    );
+    let _ = std::fs::copy(
+        dir2.path().join("messages.sqlite-shm"),
+        dir3.path().join("messages.sqlite-shm"),
+    );
+
+    let hits = search_messages(dir3.path(), "repair_me_token_abc", 10, None).unwrap();
+    assert_eq!(hits.len(), 1, "repair backfill should reindex messages");
+    assert!(hits[0].snippet.contains("repair_me_token_abc"));
 }

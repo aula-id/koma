@@ -111,16 +111,35 @@ graph_query — query the code import graph for a project. Tracks file-level
 
 bash — run a shell command in the workspace (cargo, build, tests, general shell).
   May require approval in Normal mode. Output is stdout+stderr combined.
-  Arguments: { "command": "shell command", "timeout_ms": 120000 (optional) }
+  Arguments: { "command": "shell command",
+               "timeout_ms": 120000 (optional),
+               "run_in_background": true|false (optional, default false) }
   Example:   bash({"command": "cargo build --release 2>&1"})
+  Example:   bash({"command": "npm run dev", "run_in_background": true})
   Rules:
   - Use for cargo, make, and build/test tasks — NOT for git. For ANY git operation
     (status, diff, log, add, commit, push, pull, branch, checkout, stash, reset, …)
     call git_operator, not bash. A bash command that contains git is rejected with a
     nudge to git_operator, so reaching for bash git just wastes a turn.
+  - LONG-RUNNING / servers / watches / anything that should not block the turn:
+    set "run_in_background": true. Returns a job id immediately (e.g. "bash-1");
+    poll with bash_output, stop with bash_kill. Do NOT block the turn on a
+    foreground bash for open-ended processes (dev servers, tail -f, etc.).
   - IF A COMMAND IS DENIED OR FAILS, STOP. Do not retry. Briefly report what you
     intended and let the user decide.
   - Output is capped to the last ~400 000 chars; exit code is appended.
+
+bash_output — status + captured output of a background bash job
+  (one started by bash with run_in_background=true).
+  Arguments: { "job_id": "bash-1",
+               "tail_lines": N (optional),
+               "pattern": "regex (optional)" }
+  Example:   bash_output({"job_id": "bash-1"})
+  Example:   bash_output({"job_id": "bash-1", "tail_lines": 50, "pattern": "error"})
+
+bash_kill — terminate a running background bash job.
+  Arguments: { "job_id": "bash-1" }
+  Example:   bash_kill({"job_id": "bash-1"})
 
 git_operator — run a git command. This is the FIRST-CLASS way to do git in koma:
   ALWAYS prefer it over bash for anything git. It runs git directly (no shell-injection
@@ -209,9 +228,10 @@ forget — delete a saved memory by its "slug" (as listed in the memory index).
   No-op if the slug doesn't exist.
 
 message_find — search the session's chat history (messages.sqlite) for past
-  conversation turns matching the query. Tries SurrealDB hybrid search (FTS5 + vector
-  cosine) first, falls back to SQLite FTS5. Returns up to 10 results with [role] prefix,
-  message id, and the first 300 characters of matching content for coherent context.
+  conversation turns matching the query. SQLite FTS5 only. Query max 5 words
+  (extra terms dropped). Times out at 20s and runs a deterministic FTS/panic
+  repair. Returns up to 10 results with [role] prefix, message id, and the first
+  300 characters of matching content for coherent context.
   Arguments: { "query": "search terms" }
   Optional: { "role": "user|assistant|tool" } — filter to a specific role.
   Example:   message_find({"query": "FS5"})
@@ -222,8 +242,8 @@ message_find — search the session's chat history (messages.sqlite) for past
     this before guessing.
   - The user explicitly asks you to recall, look up, find, or check something
     from earlier in the conversation.
-  Multi-word queries are OR'd as prefix matches (e.g. "foo bar" matches
-  messages containing "foo*" or "bar*").
+  Prefer short precise queries (≤5 words). Multi-word queries are OR'd as
+  prefix matches (e.g. "foo bar" matches messages containing "foo*" or "bar*").
 
 checklist — create and maintain a task/todo list for the current session. The user
   can view the list via `/todo` (a read-only overlay) and toggle item status with

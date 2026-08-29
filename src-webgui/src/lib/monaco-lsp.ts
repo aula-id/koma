@@ -8,217 +8,275 @@
 //   Go-to (F12 / Ctrl+click) routes through registerEditorOpener → open coding tab.
 
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
+// Side-effect: load CodeLens + peek/goto contribs before providers register.
 import { langFromPath } from './monaco-setup'
+import {
+  consumeReveal,
+  mintId,
+  pathToUri,
+  queueReveal,
+  splitRootPath,
+  trackCompletion,
+  trackCompletionResolve,
+  trackDefinition,
+  trackDocumentSymbol,
+  trackFileText,
+  trackHover,
+  trackReferences,
+  uriToPath,
+  type LspCompletionItem,
+  type LspCompletionList,
+  type LspDiagnostic,
+  type LspDocumentSymbol,
+  type LspHover,
+  type LspLocation,
+  type LspTextEdit,
+} from './lsp-bridge'
 
-export type LspDiagnostic = {
-  uri: string
-  line: number
-  character: number
-  endLine: number
-  endCharacter: number
-  severity: number
-  message: string
-  source?: string
-  code?: string
+export {
+  consumeReveal,
+  mintId,
+  pathToUri,
+  queueReveal,
+  resolveLspCompletion,
+  resolveLspCompletionResolve,
+  resolveLspDefinition,
+  resolveLspDocumentSymbol,
+  resolveLspFileText,
+  resolveLspHover,
+  resolveLspReferences,
+  splitRootPath,
+  uriToPath,
+  type LspCompletionItem,
+  type LspCompletionList,
+  type LspDiagnostic,
+  type LspDocumentSymbol,
+  type LspHover,
+  type LspLocation,
+  type LspTextEdit,
+} from './lsp-bridge'
+
+// Workspace-wide "N references" CodeLens is off by default — each lens is a
+// full textDocument/references search and can freeze the machine on a large
+// rust-analyzer / vtsls index. Hover / go-to / peek still work.
+const CODELENS_ENABLED = false
+// Cap unique files materialised for peek/go-to so a popular symbol cannot
+// FileRead hundreds of buffers into Monaco.
+const PEEK_FILE_CAP = 24
+
+type ReqFn = (body: object) => void
+type RootsFn = () => string[]
+/** Open a coding tab at 0-based line/character (go-to only; not peek). */
+type OpenLocationFn = (uri: string, line: number, character: number) => void
+
+// ─── Pending didChange flush (completion / resolve must see current buffer) ──
+// CodeEditorTab debounces LspDidChange; completion fires immediately. Register
+// a flusher per open file so provideCompletionItems / resolve can push the
+// latest text before the RPC.
+const pendingDidChangeFlush = new Map<string, () => void>()
+
+function didChangeFlushKey(root: string, path: string): string {
+  return `${root.replace(/\\/g, '/')}\0${path.replace(/\\/g, '/')}`
 }
 
-export type LspCompletionItem = {
-  label: string
-  kind?: number
-  detail?: string
-  insertText?: string
-  documentation?: string
-}
-
-export type LspHover = {
-  contents: string
-  range?: {
-    startLine: number
-    startCharacter: number
-    endLine: number
-    endCharacter: number
-  }
-}
-
-export type LspLocation = {
-  uri: string
-  range: {
-    startLine: number
-    startCharacter: number
-    endLine: number
-    endCharacter: number
-  }
-}
-
-export type LspDocumentSymbol = {
-  name: string
-  kind: number
-  range: {
-    startLine: number
-    startCharacter: number
-    endLine: number
-    endCharacter: number
-  }
-  selectionRange: {
-    startLine: number
-    startCharacter: number
-    endLine: number
-    endCharacter: number
-  }
-}
-
-type Pending<T> = {
-  resolve: (v: T) => void
-  reject: (e: Error) => void
-  timer: ReturnType<typeof setTimeout>
-}
-
-const PENDING_MS = 12_000
-
-const pendingCompletion = new Map<string, Pending<LspCompletionItem[]>>()
-const pendingHover = new Map<string, Pending<LspHover | null>>()
-const pendingDefinition = new Map<string, Pending<LspLocation[]>>()
-const pendingReferences = new Map<string, Pending<LspLocation[]>>()
-const pendingDocumentSymbol = new Map<string, Pending<LspDocumentSymbol[]>>()
-const pendingFileText = new Map<string, Pending<string>>()
-
-let reqCounter = 0
-function mintId(prefix: string): string {
-  reqCounter += 1
-  return `${prefix}-${Date.now().toString(36)}-${reqCounter}`
-}
-
-function track<T>(
-  map: Map<string, Pending<T>>,
-  id: string,
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      map.delete(id)
-      reject(new Error('LSP request timed out'))
-    }, PENDING_MS)
-    map.set(id, { resolve, reject, timer })
-  })
-}
-
-function settle<T>(
-  map: Map<string, Pending<T>>,
-  id: string,
-  value: T,
-  error: string | null | undefined,
+/** Called from CodeEditorTab while a coding file is mounted. Pass null to clear. */
+export function registerLspDidChangeFlusher(
+  root: string,
+  path: string,
+  flush: (() => void) | null,
 ): void {
-  const p = map.get(id)
-  if (!p) return
-  map.delete(id)
-  clearTimeout(p.timer)
-  if (error) p.reject(new Error(error))
-  else p.resolve(value)
-}
-
-/** Called from the store push reducer. */
-export function resolveLspCompletion(
-  requestId: string,
-  items: LspCompletionItem[],
-  error: string | null,
-): void {
-  settle(pendingCompletion, requestId, items ?? [], error)
-}
-
-export function resolveLspHover(
-  requestId: string,
-  hover: LspHover | null,
-  error: string | null,
-): void {
-  settle(pendingHover, requestId, hover, error)
-}
-
-export function resolveLspDefinition(
-  requestId: string,
-  locations: LspLocation[],
-  error: string | null,
-): void {
-  settle(pendingDefinition, requestId, locations ?? [], error)
-}
-
-export function resolveLspReferences(
-  requestId: string,
-  locations: LspLocation[],
-  error: string | null,
-): void {
-  settle(pendingReferences, requestId, locations ?? [], error)
-}
-
-export function resolveLspDocumentSymbol(
-  requestId: string,
-  symbols: LspDocumentSymbol[],
-  error: string | null,
-): void {
-  settle(pendingDocumentSymbol, requestId, symbols ?? [], error)
+  const key = didChangeFlushKey(root, path)
+  if (flush) pendingDidChangeFlush.set(key, flush)
+  else pendingDidChangeFlush.delete(key)
 }
 
 /**
- * Resolve a FileRead that was issued for peek model materialization.
- * Store still applies reduceFileRead; this only settles the bridge Promise.
+ * Run the registered flusher (if any) and yield one macrotask so the host
+ * notify worker can coalesce/send didChange before completion/resolve RPC.
  */
-export function resolveLspFileText(
-  requestId: string,
-  content: string | null,
-  error: string | null,
-  binary?: boolean,
-  tooLarge?: boolean,
-): void {
-  if (!pendingFileText.has(requestId)) return
-  if (error) {
-    settle(pendingFileText, requestId, '', error)
-    return
-  }
-  if (binary || tooLarge) {
-    settle(pendingFileText, requestId, '', binary ? 'binary file' : 'file too large')
-    return
-  }
-  settle(pendingFileText, requestId, content ?? '', null)
+export async function flushPendingLspDidChange(root: string, path: string): Promise<void> {
+  const flush = pendingDidChangeFlush.get(didChangeFlushKey(root, path))
+  if (!flush) return
+  flush()
+  // Host notify worker coalesces didChange on a short quiet window (~16ms) and
+  // always flushes pending changes before other notify jobs. One frame is not
+  // enough when the request pool races the notify thread; wait a tick past the
+  // coalesce window so the server buffer is current.
+  await new Promise<void>((r) => setTimeout(r, 20))
 }
 
-// ─── URI helpers ─────────────────────────────────────────────────────────────
+// ─── CodeLens reference-count cache ──────────────────────────────────────────
+// Survives tab close/reopen so "N references" does not re-hit the language
+// server for every open of an unchanged file. Keyed by root+path+content hash.
+const LENS_KINDS = new Set([5, 6, 9, 10, 11, 12, 23]) // Class..Struct
+// Cap lenses so CodeLens warm stays bounded. Each lens is a references RPC;
+// with host lock released during wait, concurrency is safe but still costly.
+// Prefer earlier document-order symbols (usually types/functions near top).
+// Symbols past the cap simply omit the "N references" lens — hover/goto still work.
+const LENS_MAX = 24
+const LENS_REF_CONCURRENCY = 3
 
-/** file:// URI matching the host's path_to_uri. */
-export function pathToUri(root: string, path: string): string {
-  const abs = path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
-    ? path
-    : `${root.replace(/\/$/, '')}/${path.replace(/^\//, '')}`
-  const norm = abs.replace(/\\/g, '/')
-  if (norm.startsWith('/')) return `file://${norm}`
-  return `file:///${norm}`
+type CachedLens = {
+  /** 0-based symbol range start line (decoration line). */
+  rangeLine: number
+  /** 0-based selection position used for references + peek. */
+  selLine: number
+  selCharacter: number
+  count: number
 }
 
-/** Best-effort parse of file:// URI → absolute filesystem path. */
-export function uriToPath(uri: string): string | null {
-  if (!uri.startsWith('file://')) return null
-  let rest = uri.slice('file://'.length)
-  // Windows file:///C:/...
-  if (/^\/[A-Za-z]:\//.test(rest)) rest = rest.slice(1)
-  try {
-    return decodeURIComponent(rest)
-  } catch {
-    return rest
-  }
+type CodeLensCacheEntry = {
+  hash: string
+  lenses: CachedLens[]
 }
 
-/** Split absolute path into workspace root + relative path using open roots. */
-export function splitRootPath(
-  absPath: string,
-  roots: string[],
-): { root: string; path: string } | null {
-  const norm = absPath.replace(/\\/g, '/')
-  const sorted = [...roots].sort((a, b) => b.length - a.length)
-  for (const root of sorted) {
-    const r = root.replace(/\\/g, '/').replace(/\/$/, '')
-    if (norm === r) return { root, path: '' }
-    if (norm.startsWith(r + '/')) {
-      return { root, path: norm.slice(r.length + 1) }
+const codeLensCache = new Map<string, CodeLensCacheEntry>()
+/** In-flight compute promises so concurrent provideCodeLenses share one fetch. */
+const codeLensInflight = new Map<string, Promise<CachedLens[]>>()
+
+function fileCacheKey(root: string, path: string): string {
+  return `${root.replace(/\\/g, '/')}\0${path.replace(/\\/g, '/')}`
+}
+
+function formatRefTitle(count: number): string {
+  if (count === 0) return '0 references'
+  if (count === 1) return '1 reference'
+  return `${count} references`
+}
+
+function lensesFromCache(
+  cached: CachedLens[],
+  modelUri: string,
+  commandId: string,
+): monaco.languages.CodeLens[] {
+  return cached.map((c) => ({
+    range: {
+      startLineNumber: c.rangeLine + 1,
+      startColumn: 1,
+      endLineNumber: c.rangeLine + 1,
+      endColumn: 1,
+    },
+    command: {
+      id: commandId,
+      title: formatRefTitle(c.count),
+      arguments: [
+        {
+          uri: modelUri,
+          line: c.selLine + 1,
+          column: Math.max(1, c.selCharacter + 1),
+        },
+      ],
+    },
+  }))
+}
+
+async function computeCodeLensCounts(
+  req: ReqFn,
+  root: string,
+  path: string,
+  hash: string,
+): Promise<CachedLens[]> {
+  const cacheKey = fileCacheKey(root, path)
+  const hit = codeLensCache.get(cacheKey)
+  if (hit && hit.hash === hash) return hit.lenses
+
+  const inflightKey = `${cacheKey}\0${hash}`
+  const existing = codeLensInflight.get(inflightKey)
+  if (existing) return existing
+
+  const work = (async () => {
+    const symId = mintId('sym')
+    const symP = trackDocumentSymbol(symId)
+    req({
+      r: 'LspDocumentSymbol',
+      root,
+      path,
+      requestId: symId,
+    })
+    let symbols: LspDocumentSymbol[] = []
+    try {
+      symbols = await symP
+    } catch {
+      return []
     }
+
+    const candidates = symbols.filter((s) => LENS_KINDS.has(s.kind)).slice(0, LENS_MAX)
+    const out: CachedLens[] = []
+    // Bounded concurrency — never stampede the host mutex with 40 parallel refs.
+    for (let i = 0; i < candidates.length; i += LENS_REF_CONCURRENCY) {
+      const batch = candidates.slice(i, i + LENS_REF_CONCURRENCY)
+      await Promise.all(
+        batch.map(async (sym) => {
+          const refId = mintId('rlen')
+          const refP = trackReferences(refId)
+          req({
+            r: 'LspReferences',
+            root,
+            path,
+            line: sym.selectionRange.startLine,
+            character: sym.selectionRange.startCharacter,
+            includeDeclaration: false,
+            requestId: refId,
+          })
+          let count = 0
+          try {
+            const refs = await refP
+            count = refs.length
+          } catch {
+            return
+          }
+          out.push({
+            rangeLine: sym.range.startLine,
+            selLine: sym.selectionRange.startLine,
+            selCharacter: sym.selectionRange.startCharacter,
+            count,
+          })
+        }),
+      )
+    }
+    out.sort((a, b) => a.rangeLine - b.rangeLine || a.selLine - b.selLine)
+    // Don't poison the cache when every references RPC failed (server still
+    // starting / indexing) — leave miss so the next provide retries.
+    if (candidates.length > 0 && out.length === 0) {
+      return out
+    }
+    codeLensCache.set(cacheKey, { hash, lenses: out })
+    return out
+  })()
+
+  codeLensInflight.set(inflightKey, work)
+  try {
+    return await work
+  } finally {
+    codeLensInflight.delete(inflightKey)
   }
-  return null
+}
+
+/**
+ * Eagerly warm the "N references" CodeLens cache after didOpen / didChange.
+ * Safe to call often; no-ops when version already cached. Does not block the UI.
+ * `versionId` is Monaco `ITextModel.getVersionId()` (O(1) identity).
+ */
+export function warmCodeLensCache(
+  req: ReqFn,
+  root: string,
+  path: string,
+  versionId: number,
+): void {
+  if (!CODELENS_ENABLED) return
+  if (!root || !path) return
+  const hash = String(versionId)
+  const cacheKey = fileCacheKey(root, path)
+  const hit = codeLensCache.get(cacheKey)
+  if (hit && hit.hash === hash) return
+  void computeCodeLensCounts(req, root, path, hash).catch(() => {
+    /* ignore warm failures */
+  })
+}
+
+/** Drop cached lenses for a file (content rewrite / dispose). */
+export function invalidateCodeLensCache(root: string, path: string): void {
+  codeLensCache.delete(fileCacheKey(root, path))
 }
 
 export function monacoUriFromPath(root: string, path: string): monaco.Uri {
@@ -264,47 +322,10 @@ function lspSeverityToMonaco(s: number): monaco.MarkerSeverity {
   return monaco.MarkerSeverity.Hint
 }
 
-// ─── Pending go-to reveal (tab open path) ────────────────────────────────────
-
-/** Pending go-to / diagnostic reveal applied when the target tab's model is ready. */
-let pendingReveal: {
-  root: string
-  path: string
-  line: number
-  column: number
-} | null = null
-
-/** Queue a 1-based line/column reveal for a coding tab (consumed on model ready). */
-export function queueReveal(
-  root: string,
-  path: string,
-  line: number,
-  column: number,
-): void {
-  pendingReveal = { root, path, line, column }
-}
-
-/** If a reveal is queued for this tab, take it (once). */
-export function consumeReveal(
-  root: string,
-  path: string,
-): { line: number; column: number } | null {
-  const p = pendingReveal
-  if (!p) return null
-  if (p.root !== root || p.path !== path) return null
-  pendingReveal = null
-  return { line: p.line, column: p.column }
-}
-
 // ─── Provider registration (once) ────────────────────────────────────────────
 
 let providersReady = false
 let openerReady = false
-
-type ReqFn = (body: object) => void
-type RootsFn = () => string[]
-/** Open a coding tab at 0-based line/character (go-to only; not peek). */
-type OpenLocationFn = (uri: string, line: number, character: number) => void
 
 /**
  * Get-or-create a Monaco text model for a workspace file URI.
@@ -318,9 +339,14 @@ export async function ensureModelForUri(
 ): Promise<monaco.editor.ITextModel | null> {
   const existing = monaco.editor.getModel(monaco.Uri.parse(uriStr))
   if (existing) {
-    if (preferText != null && existing.getValue() !== preferText) {
-      // Tab content is authoritative when provided.
-      existing.setValue(preferText)
+    if (preferText != null) {
+      const next = preferText.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+      existing.setEOL(monaco.editor.EndOfLineSequence.LF)
+      if (existing.getValue(monaco.editor.EndOfLinePreference.LF) !== next) {
+        // Tab content is authoritative when provided.
+        existing.setValue(next)
+        existing.setEOL(monaco.editor.EndOfLineSequence.LF)
+      }
     }
     return existing
   }
@@ -334,7 +360,7 @@ export async function ensureModelForUri(
   let text = preferText ?? null
   if (text == null) {
     const requestId = mintId('ftxt')
-    const p = track(pendingFileText, requestId)
+    const p = trackFileText(requestId)
     req({ r: 'FileRead', root: split.root, path: split.path, requestId })
     try {
       text = await p
@@ -344,15 +370,22 @@ export async function ensureModelForUri(
   }
 
   const uri = monaco.Uri.parse(uriStr)
+  const normalized = (text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+
   // Another concurrent ensure may have created it.
   const raced = monaco.editor.getModel(uri)
   if (raced) {
-    if (raced.getValue() !== text) raced.setValue(text)
+    raced.setEOL(monaco.editor.EndOfLineSequence.LF)
+    if (raced.getValue(monaco.editor.EndOfLinePreference.LF) !== normalized) {
+      raced.setValue(normalized)
+      raced.setEOL(monaco.editor.EndOfLineSequence.LF)
+    }
     stampModelPath(raced, split.root, split.path)
     return raced
   }
 
-  const model = monaco.editor.createModel(text, langFromPath(split.path), uri)
+  const model = monaco.editor.createModel(normalized, langFromPath(split.path), uri)
+  model.setEOL(monaco.editor.EndOfLineSequence.LF)
   stampModelPath(model, split.root, split.path)
   return model
 }
@@ -375,10 +408,11 @@ async function materializeLocations(
   getRoots: RootsFn,
 ): Promise<monaco.languages.Location[]> {
   const out: monaco.languages.Location[] = []
-  // Dedupe URI loads.
+  // Dedupe URI loads. Cap unique files so a popular symbol cannot stampede FileRead.
   const seen = new Set<string>()
   for (const l of locations) {
     if (!seen.has(l.uri)) {
+      if (seen.size >= PEEK_FILE_CAP) continue
       seen.add(l.uri)
       await ensureModelForUri(l.uri, req, getRoots)
     }
@@ -387,6 +421,57 @@ async function materializeLocations(
     }
   }
   return out
+}
+
+function lspRangeToMonaco(r: {
+  startLine: number
+  startCharacter: number
+  endLine: number
+  endCharacter: number
+}): monaco.IRange {
+  return {
+    startLineNumber: r.startLine + 1,
+    startColumn: r.startCharacter + 1,
+    endLineNumber: r.endLine + 1,
+    endColumn: r.endCharacter + 1,
+  }
+}
+
+function toMonacoCompletion(
+  it: LspCompletionItem,
+  defaultRange: monaco.IRange,
+  index: number,
+  loc?: { root: string; path: string },
+): monaco.languages.CompletionItem {
+  const range = it.textEdit ? lspRangeToMonaco(it.textEdit.range) : defaultRange
+  const insertText = it.textEdit?.newText ?? it.insertText ?? it.label
+  const isSnippet = it.insertTextFormat === 2
+  const additionalTextEdits = (it.additionalTextEdits ?? []).map((e) => ({
+    range: lspRangeToMonaco(e.range),
+    text: e.newText,
+  }))
+  const detail = it.detail || it.labelDescription
+  const label: string | monaco.languages.CompletionItemLabel =
+    it.labelDescription
+      ? { label: it.label, description: it.labelDescription }
+      : it.label
+  return {
+    label,
+    kind: lspCompletionKind(it.kind),
+    detail,
+    documentation: it.documentation,
+    insertText,
+    insertTextRules: isSnippet
+      ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+      : undefined,
+    range,
+    sortText: it.sortText ?? String(index).padStart(5, '0'),
+    filterText: it.filterText,
+    additionalTextEdits: additionalTextEdits.length ? additionalTextEdits : undefined,
+    commitCharacters: it.commitCharacters,
+    preselect: it.preselect,
+    ...({ __koma: it, __loc: loc } as object),
+  } as monaco.languages.CompletionItem
 }
 
 /**
@@ -410,48 +495,99 @@ export function ensureLspProviders(
 
   const selector: monaco.languages.LanguageSelector = { language: '*' }
 
+  // Union of common server trigger chars. Per-server caps aren't stored yet;
+  // this set covers rust-analyzer / tsserver / clangd / gopls without waiting
+  // on initialize plumbing. Spurious RPCs for rare chars are cheap vs missing
+  // path completion after `::`.
   monaco.languages.registerCompletionItemProvider(selector, {
-    triggerCharacters: ['.', ':', '<', '"', "'", '/', '@'],
-    provideCompletionItems: async (model, position) => {
+    triggerCharacters: ['.', ':', '<', '>', '"', "'", '/', '@', '(', '#', '`', '\\'],
+    provideCompletionItems: async (model, position, context) => {
       const loc = modelToRootPath(model, getRoots())
       if (!loc) return { suggestions: [] }
+      // Flush pending didChange so the server sees the buffer Monaco is completing on.
+      // Without this, 500ms-debounced LspDidChange races completion and breaks
+      // path completion + resolve hash matching (auto-import).
+      await flushPendingLspDidChange(loc.root, loc.path)
       const requestId = mintId('cmp')
-      const p = track(pendingCompletion, requestId)
+      const p = trackCompletion(requestId)
+      // Monaco CompletionTriggerKind: Invoke=0, TriggerCharacter=1, TriggerForIncompleteCompletions=2
+      // LSP: Invoked=1, TriggerCharacter=2, TriggerForIncompleteCompletions=3
+      let triggerKind = 1
+      let triggerCharacter: string | undefined
+      if (context.triggerKind === monaco.languages.CompletionTriggerKind.TriggerCharacter) {
+        triggerKind = 2
+        triggerCharacter = context.triggerCharacter || undefined
+      } else if (
+        context.triggerKind === monaco.languages.CompletionTriggerKind.TriggerForIncompleteCompletions
+      ) {
+        triggerKind = 3
+      }
       req({
         r: 'LspCompletion',
         root: loc.root,
         path: loc.path,
         line: position.lineNumber - 1,
         character: position.column - 1,
+        triggerKind,
+        triggerCharacter,
         requestId,
       })
       try {
-        const items = await p
-        const suggestions: monaco.languages.CompletionItem[] = items.map((it, i) => {
-          const range = {
-            startLineNumber: position.lineNumber,
-            startColumn: position.column,
-            endLineNumber: position.lineNumber,
-            endColumn: position.column,
-          }
-          const word = model.getWordUntilPosition(position)
-          if (word) {
-            range.startColumn = word.startColumn
-            range.endColumn = word.endColumn
-          }
-          return {
-            label: it.label,
-            kind: lspCompletionKind(it.kind),
-            detail: it.detail,
-            documentation: it.documentation,
-            insertText: it.insertText ?? it.label,
-            range,
-            sortText: String(i).padStart(5, '0'),
-          }
-        })
-        return { suggestions }
+        const list = await p
+        const word = model.getWordUntilPosition(position)
+        const defaultRange = {
+          startLineNumber: position.lineNumber,
+          startColumn: word?.startColumn ?? position.column,
+          endLineNumber: position.lineNumber,
+          endColumn: word?.endColumn ?? position.column,
+        }
+        const suggestions: monaco.languages.CompletionItem[] = list.items.map((it, i) =>
+          toMonacoCompletion(it, defaultRange, i, loc),
+        )
+        return { suggestions, incomplete: list.isIncomplete }
       } catch {
         return { suggestions: [] }
+      }
+    },
+    resolveCompletionItem: async (item) => {
+      const raw = (item as monaco.languages.CompletionItem & { __koma?: LspCompletionItem; __loc?: { root: string; path: string } })
+      const src = raw.__koma
+      const loc = raw.__loc
+      if (!src || !loc) return item
+      // Already resolved with import edits — skip the round-trip.
+      if (src.additionalTextEdits && src.additionalTextEdits.length > 0) {
+        return item
+      }
+      // No data token → server has nothing more to resolve.
+      if (src.data == null) return item
+      // Ensure buffer is current before resolve — rust-analyzer re-runs completion
+      // at the stored position and hash-matches; stale text drops additionalTextEdits.
+      await flushPendingLspDidChange(loc.root, loc.path)
+      const requestId = mintId('cmpr')
+      const p = trackCompletionResolve(requestId)
+      req({
+        r: 'LspCompletionResolve',
+        root: loc.root,
+        path: loc.path,
+        item: src,
+        requestId,
+      })
+      try {
+        const resolved = await p
+        const range =
+          item.range && !('insert' in (item.range as object))
+            ? (item.range as monaco.IRange)
+            : {
+                startLineNumber: 1,
+                startColumn: 1,
+                endLineNumber: 1,
+                endColumn: 1,
+              }
+        const next = toMonacoCompletion(resolved, range as monaco.IRange, 0, loc)
+        // Preserve Monaco's internal bookkeeping fields.
+        return { ...item, ...next, __koma: resolved, __loc: loc } as monaco.languages.CompletionItem
+      } catch {
+        return item
       }
     },
   })
@@ -461,7 +597,7 @@ export function ensureLspProviders(
       const loc = modelToRootPath(model, getRoots())
       if (!loc) return null
       const requestId = mintId('hov')
-      const p = track(pendingHover, requestId)
+      const p = trackHover(requestId)
       req({
         r: 'LspHover',
         root: loc.root,
@@ -496,7 +632,7 @@ export function ensureLspProviders(
       const loc = modelToRootPath(model, getRoots())
       if (!loc) return null
       const requestId = mintId('def')
-      const p = track(pendingDefinition, requestId)
+      const p = trackDefinition(requestId)
       req({
         r: 'LspDefinition',
         root: loc.root,
@@ -523,7 +659,7 @@ export function ensureLspProviders(
       const loc = modelToRootPath(model, getRoots())
       if (!loc) return null
       const requestId = mintId('ref')
-      const p = track(pendingReferences, requestId)
+      const p = trackReferences(requestId)
       req({
         r: 'LspReferences',
         root: loc.root,
@@ -544,13 +680,12 @@ export function ensureLspProviders(
     },
   })
 
-  // VS Code-style "N references" CodeLens above symbols.
-  // Click sets cursor then peeks references (stock trigger uses current position).
+  // VS Code-style "N references" CodeLens above symbols — off by default.
+  if (!CODELENS_ENABLED) return
   const CODELENS_PEEK_REFS = 'koma.codelens.peekReferences'
   monaco.editor.registerCommand(
     CODELENS_PEEK_REFS,
-    (accessor, ...args: unknown[]) => {
-      void accessor
+    (_accessor, ...args: unknown[]) => {
       const payload = args[0] as
         | { uri?: string; line?: number; column?: number }
         | undefined
@@ -561,9 +696,49 @@ export function ensureLspProviders(
         editors.find((e) => e.hasTextFocus()) ??
         editors[0]
       if (!ed) return
-      ed.setPosition({ lineNumber: payload.line, column: payload.column })
+      const model = ed.getModel()
+      if (!model) return
+      const pos = { lineNumber: payload.line, column: payload.column }
+      ed.setPosition(pos)
+      ed.revealPositionInCenterIfOutsideViewport(pos)
       ed.focus()
-      void ed.getAction('editor.action.referenceSearch.trigger')?.run()
+
+      const openPeek = () => {
+        // Prefer stock Peek References (openInPeek: true even for 1 hit).
+        // Never fall back to goToReferences — that jumps on single results.
+        const peek =
+          ed.getAction('editor.action.referenceSearch.trigger')
+        if (peek) {
+          void peek.run()
+          return
+        }
+        // Contrib missing — build locations ourselves and force peek via goToLocations.
+        void (async () => {
+          const loc = modelToRootPath(model, getRoots())
+          if (!loc) return
+          const requestId = mintId('refclick')
+          const p = trackReferences(requestId)
+          req({
+            r: 'LspReferences',
+            root: loc.root,
+            path: loc.path,
+            line: payload.line! - 1,
+            character: payload.column! - 1,
+            includeDeclaration: false,
+            requestId,
+          })
+          try {
+            const locations = await p
+            if (!locations.length) return
+            const mapped = await materializeLocations(locations, req, getRoots)
+            if (!mapped.length) return
+            await forcePeekReferences(ed, model.uri, pos, mapped)
+          } catch {
+            /* ignore */
+          }
+        })()
+      }
+      window.setTimeout(openPeek, 0)
     },
   )
 
@@ -572,87 +747,42 @@ export function ensureLspProviders(
       const loc = modelToRootPath(model, getRoots())
       if (!loc) return { lenses: [], dispose: () => {} }
 
-      const symId = mintId('sym')
-      const symP = track(pendingDocumentSymbol, symId)
-      req({
-        r: 'LspDocumentSymbol',
-        root: loc.root,
-        path: loc.path,
-        requestId: symId,
-      })
+      // Prefer Monaco version id (O(1)) over hashing the full buffer twice.
+      const hash = String(model.getVersionId())
+      const cacheKey = fileCacheKey(loc.root, loc.path)
+      const hit = codeLensCache.get(cacheKey)
+      const modelUri = model.uri.toString()
+      if (hit && hit.hash === hash) {
+        return {
+          lenses: lensesFromCache(hit.lenses, modelUri, CODELENS_PEEK_REFS),
+          dispose: () => {},
+        }
+      }
 
-      let symbols: LspDocumentSymbol[] = []
       try {
-        symbols = await symP
+        const cached = await computeCodeLensCounts(req, loc.root, loc.path, hash)
+        // Model may have changed while we waited — only return if still matching.
+        if (model.isDisposed() || String(model.getVersionId()) !== hash) {
+          return { lenses: [], dispose: () => {} }
+        }
+        return {
+          lenses: lensesFromCache(cached, modelUri, CODELENS_PEEK_REFS),
+          dispose: () => {},
+        }
       } catch {
         return { lenses: [], dispose: () => {} }
       }
-
-      // Class, Method, Constructor, Enum, Interface, Function, Struct
-      const LENS_KINDS = new Set([5, 6, 9, 10, 11, 12, 23])
-      const candidates = symbols
-        .filter((s) => LENS_KINDS.has(s.kind))
-        .slice(0, 40)
-
-      const lenses: monaco.languages.CodeLens[] = []
-      const modelUri = model.uri.toString()
-      await Promise.all(
-        candidates.map(async (sym) => {
-          const refId = mintId('rlen')
-          const refP = track(pendingReferences, refId)
-          req({
-            r: 'LspReferences',
-            root: loc.root,
-            path: loc.path,
-            line: sym.selectionRange.startLine,
-            character: sym.selectionRange.startCharacter,
-            includeDeclaration: false,
-            requestId: refId,
-          })
-          let count = 0
-          try {
-            const refs = await refP
-            count = refs.length
-          } catch {
-            return
-          }
-          const title =
-            count === 0
-              ? '0 references'
-              : count === 1
-                ? '1 reference'
-                : `${count} references`
-          lenses.push({
-            range: {
-              startLineNumber: sym.range.startLine + 1,
-              startColumn: 1,
-              endLineNumber: sym.range.startLine + 1,
-              endColumn: 1,
-            },
-            command: {
-              id: CODELENS_PEEK_REFS,
-              title,
-              arguments: [
-                {
-                  uri: modelUri,
-                  line: sym.selectionRange.startLine + 1,
-                  column: Math.max(1, sym.selectionRange.startCharacter + 1),
-                },
-              ],
-            },
-          })
-        }),
-      )
-
-      lenses.sort((a, b) => a.range.startLineNumber - b.range.startLineNumber)
-      return { lenses, dispose: () => {} }
     },
   })
 }
 
 /**
  * Go-to-definition for cross-file targets: open a coding tab instead of
- * swapping the current editor model. Peek never calls this path.
+ * swapping the current editor model.
+ *
+ * Peek's embedded preview editor is an EmbeddedCodeEditorWidget — we must NOT
+ * hijack those opens or the peek widget never paints its preview and selection
+ * can look like a jump.
  */
 export function ensureEditorOpener(req: ReqFn, getRoots: RootsFn): void {
   if (openerReady) return
@@ -660,6 +790,11 @@ export function ensureEditorOpener(req: ReqFn, getRoots: RootsFn): void {
 
   monaco.editor.registerEditorOpener({
     openCodeEditor(source, resource, selectionOrPosition) {
+      // Peek / embedded editors handle their own navigation.
+      if (isEmbeddedEditor(source)) {
+        return false
+      }
+
       const uriStr = resource.toString()
       const abs = uriToPath(uriStr)
       if (!abs) return false
@@ -685,8 +820,6 @@ export function ensureEditorOpener(req: ReqFn, getRoots: RootsFn): void {
       // Ensure model exists (peek already did; go-to may race).
       void ensureModelForUri(uriStr, req, getRoots)
 
-      // Dynamic import avoided — store is passed via openDiagnostic in ensureLspProviders call site.
-      // Call through a global hook set by the store bootstrap.
       const open = goToHook
       if (open) {
         open(uriStr, line, character)
@@ -695,6 +828,48 @@ export function ensureEditorOpener(req: ReqFn, getRoots: RootsFn): void {
       return false
     },
   })
+}
+
+/** Detect Monaco EmbeddedCodeEditorWidget (peek preview) without importing its type. */
+function isEmbeddedEditor(ed: monaco.editor.ICodeEditor): boolean {
+  const anyEd = ed as unknown as { getParentEditor?: () => unknown }
+  return typeof anyEd.getParentEditor === 'function'
+}
+
+/**
+ * Force the references peek widget open for the given locations (even if only one).
+ * Uses Monaco's `editor.action.goToLocations` with openInPeek=true.
+ */
+async function forcePeekReferences(
+  ed: monaco.editor.ICodeEditor,
+  uri: monaco.Uri,
+  pos: { lineNumber: number; column: number },
+  locations: monaco.languages.Location[],
+): Promise<void> {
+  try {
+    const { StandaloneServices } = await import(
+      'monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js'
+    )
+    const { ICommandService } = await import(
+      'monaco-editor/esm/vs/platform/commands/common/commands.js'
+    )
+    const cmd = StandaloneServices.get(ICommandService) as {
+      executeCommand: (...args: unknown[]) => Promise<unknown>
+    }
+    await cmd.executeCommand(
+      'editor.action.goToLocations',
+      uri,
+      pos,
+      locations,
+      'peek',
+      'No references',
+      true, // openInPeek — always peek, never jump
+    )
+    ed.focus()
+  } catch {
+    // Last resort: still do not jump — run stock peek action if it appeared late.
+    void ed.getAction('editor.action.referenceSearch.trigger')?.run()
+  }
 }
 
 /** Set by the store so the editor opener can open coding tabs without a cycle. */
@@ -823,6 +998,13 @@ export function languageIdForPath(path: string): string {
       return 'zig'
     case 'nix':
       return 'nix'
+    case 'php':
+    case 'phtml':
+    case 'php3':
+    case 'php4':
+    case 'php5':
+    case 'phps':
+      return 'php'
     case 'md':
     case 'markdown':
       return 'markdown'
@@ -838,7 +1020,9 @@ export function languageIdForPath(path: string): string {
 export function disposeCodingModel(root: string, path: string): void {
   const uri = monacoUriFromPath(root, path)
   const model = monaco.editor.getModel(uri)
-  if (!model) return
-  monaco.editor.setModelMarkers(model, MARKER_OWNER, [])
-  model.dispose()
+  if (model) {
+    monaco.editor.setModelMarkers(model, MARKER_OWNER, [])
+    model.dispose()
+  }
+  // Keep CodeLens cache so reopen of unchanged content is instant.
 }

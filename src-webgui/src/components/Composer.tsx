@@ -8,8 +8,11 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react'
-import { ArrowUp, CornerDownRight, Layers, Paperclip, Search, Square, X } from 'lucide-react'
+import { ArrowUp, Layers, Paperclip, Search, Square, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import {
+  readCodingPathDragData,
+} from '../lib/codingRef'
 import { ModelPicker } from './ModelPicker'
 import { EffortPicker } from './EffortPicker'
 import { ModeSelector } from './ModeSelector'
@@ -113,16 +116,34 @@ function chipRangeForDelete(
   return ranges.find(([s, e]) => pos >= s && pos < e) ?? null
 }
 
+// Shared typography for the transparent textarea + its mirrored chip overlay.
+// MUST stay identical on both layers — any padding/line-height/wrap mismatch
+// drifts the caret vs painted text. Integer line-height (not leading-relaxed's
+// 1.625 × 14px = 22.75) avoids cumulative subpixel rounding that shows up as
+// caret misalignment after ~8–10 lines.
+const COMPOSER_FIELD_CLASS =
+  'm-0 box-border w-full whitespace-pre-wrap break-words p-0 text-[14px] leading-[22px] [overflow-wrap:anywhere] [tab-size:4]'
+
 // Overlay renderer: walks the chip ranges in order, emitting the untouched
 // in-between text verbatim and wrapping each range's slice in a tinted pill
 // span. The plain-text pieces + pill contents concatenate back to EXACTLY
 // `text` — this must stay character-identical (same glyphs, same wrapping),
 // since it paints directly behind the transparent textarea and has to line
 // up with the real caret/selection pixel-for-pixel.
+//
+// A trailing `\n` does not paint an empty line in a normal block box the way
+// a textarea does, so we append a zero-width space after the content. That
+// keeps line boxes (and caret row) aligned without changing visible glyphs.
 function renderComposerOverlay(text: string, pickedTokens: Set<string>): ReactNode {
   if (text === '') return null
   const ranges = findChipRanges(text, pickedTokens)
-  if (ranges.length === 0) return text
+  const tail = '\u200b'
+  if (ranges.length === 0) return (
+    <>
+      {text}
+      {tail}
+    </>
+  )
   const nodes: ReactNode[] = []
   let cursor = 0
   ranges.forEach(([start, end], i) => {
@@ -147,6 +168,7 @@ function renderComposerOverlay(text: string, pickedTokens: Set<string>): ReactNo
     cursor = end
   })
   if (cursor < text.length) nodes.push(text.slice(cursor))
+  nodes.push(tail)
   return nodes
 }
 
@@ -158,7 +180,12 @@ export function Composer() {
   const working = useKoma((s) => s.session.working)
   const attachments = useKoma((s) => s.session.attachments)
   const pendingSteer = useKoma((s) => s.session.pendingSteer)
+  const refillComposer = useKoma((s) => s.refillComposer)
   const req = useKoma((s) => s.req)
+  // Local selection index for the follow-ups list (client-only; daemon keeps
+  // its own for the TUI). Clamped whenever the queue shrinks.
+  const [steerSel, setSteerSel] = useState(0)
+  const [steerFocus, setSteerFocus] = useState(false)
   const openOmniSearch = useKoma((s) => s.openOmniSearch)
   const omnisearchOpen = useKoma((s) => s.ui.omnisearchOpen)
   const composerInsert = useKoma((s) => s.ui.composerInsert)
@@ -222,8 +249,8 @@ export function Composer() {
       caretToEndRef.current = false
     }
     // Height just changed (auto-grow above); keep the chip overlay's scroll
-    // glued to the textarea's own scrollTop.
-    syncOverlayScroll()
+    // glued to the textarea (rAF catches post-keystroke caret auto-scroll).
+    syncOverlayScrollSoon()
   }, [input])
 
   // Keep the composer correct across REFLOWS — not just keystrokes (the
@@ -245,7 +272,7 @@ export function Composer() {
       if (width === lastWidthRef.current) return
       lastWidthRef.current = width
       autosizeTextarea()
-      syncOverlayScroll()
+      syncOverlayScrollSoon()
     }
     handleReflow()
     const observer = wrapper ? new ResizeObserver(handleReflow) : null
@@ -307,6 +334,32 @@ export function Composer() {
   // dropped host-side with a toast, so gate send at the cap.
   const atSteerCap = pendingSteer.length >= 5
 
+  // Keep list selection in range as the queue shrinks (drain / remove / clear).
+  useEffect(() => {
+    if (pendingSteer.length === 0) {
+      setSteerSel(0)
+      setSteerFocus(false)
+      return
+    }
+    setSteerSel((s) => Math.min(s, pendingSteer.length - 1))
+  }, [pendingSteer.length])
+
+  const editSteerAt = (index: number) => {
+    const text = pendingSteer[index]
+    if (text === undefined) return
+    // GUI composer does not reconcile InputChanged — refill locally, then tell
+    // the daemon to drop that queue slot (mirrors TUI EditSteer).
+    refillComposer(text)
+    req({ r: 'EditSteer', index })
+    setSteerFocus(false)
+    textareaRef.current?.focus()
+  }
+
+  const removeSteerAt = (index: number) => {
+    if (index < 0 || index >= pendingSteer.length) return
+    req({ r: 'RemoveSteer', index })
+  }
+
   // Up/Down composer history recall (client-side only, no daemon round-trip —
   // mirrors the TUI's hist_idx + input_stash, state/runtime.rs:887-906).
   // histIdxRef is -1 when not currently recalling; stashRef holds the
@@ -332,11 +385,19 @@ export function Composer() {
   // Keep the chip overlay's scroll position glued to the textarea's — has to
   // track both user scrolling (wheel/keys inside a >200px-tall draft, once
   // the textarea itself scrolls internally) and programmatic height changes
-  // (the autosize effect above).
+  // (the autosize effect above). Also re-sync on the next frame: after a
+  // keystroke the browser may auto-scroll the caret into view *after* our
+  // layout effect, and without a follow-up the overlay lags one paint.
   const syncOverlayScroll = () => {
-    if (overlayRef.current && textareaRef.current) {
-      overlayRef.current.scrollTop = textareaRef.current.scrollTop
-    }
+    const overlay = overlayRef.current
+    const ta = textareaRef.current
+    if (!overlay || !ta) return
+    overlay.scrollTop = ta.scrollTop
+    overlay.scrollLeft = ta.scrollLeft
+  }
+  const syncOverlayScrollSoon = () => {
+    syncOverlayScroll()
+    requestAnimationFrame(syncOverlayScroll)
   }
 
   // Read straight off the store (no subscription — this only runs on an
@@ -392,9 +453,54 @@ export function Composer() {
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Follow-ups list focus: when the queue owns keys, Enter edits, arrows move,
+    // Delete removes, Esc unfocuses (does not clear). Ctrl+X clears all below.
+    if (steerFocus && pendingSteer.length > 0) {
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSteerSel((s) => Math.max(0, s - 1))
+        return
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSteerSel((s) => {
+          if (s + 1 < pendingSteer.length) return s + 1
+          setSteerFocus(false)
+          return s
+        })
+        return
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        editSteerAt(steerSel)
+        return
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault()
+        removeSteerAt(steerSel)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSteerFocus(false)
+        return
+      }
+      // Any printable char drops focus and falls through to the textarea.
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        setSteerFocus(false)
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       submit()
+      return
+    }
+    // Ctrl/Cmd+X clears every queued follow-up (TUI Ctrl+X parity).
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'x' || e.key === 'X') && pendingSteer.length > 0) {
+      e.preventDefault()
+      req({ r: 'CancelSteers' })
+      setSteerFocus(false)
       return
     }
     // Atomic chip delete: Backspace/Delete next to (or inside) a chip-eligible
@@ -432,6 +538,13 @@ export function Composer() {
       const ta = e.currentTarget
       const firstLine = !ta.value.slice(0, ta.selectionStart ?? 0).includes('\n')
       const lastLine = !ta.value.slice(ta.selectionEnd ?? ta.value.length).includes('\n')
+      // From the first composer line, ↑ enters the follow-ups list when non-empty.
+      if (e.key === 'ArrowUp' && firstLine && pendingSteer.length > 0) {
+        e.preventDefault()
+        setSteerFocus(true)
+        setSteerSel(pendingSteer.length - 1)
+        return
+      }
       if (e.key === 'ArrowUp' && firstLine) {
         const history = recallCandidates()
         if (histIdxRef.current === -1) {
@@ -504,12 +617,26 @@ export function Composer() {
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     setDragOver(false)
+    // Coding tree path reference (not a file upload).
+    const coding = readCodingPathDragData(e.dataTransfer)
+    if (coding) {
+      useKoma.getState().putCodingPathInChat(coding.root, coding.path, {
+        isDir: coding.isDir,
+      })
+      return
+    }
     if (e.dataTransfer.files.length > 0) void attachFiles(e.dataTransfer.files)
   }
 
   const onDragOver = (e: DragEvent<HTMLDivElement>) => {
+    // Accept coding-tree path drags and external image files.
     e.preventDefault()
     setDragOver(true)
+    try {
+      e.dataTransfer.dropEffect = 'copy'
+    } catch {
+      /* ignore */
+    }
   }
 
   const onDragLeave = () => setDragOver(false)
@@ -530,35 +657,82 @@ export function Composer() {
     // (textarea on top, an action bar below) that grows with its content. Drag
     // a file anywhere over the card to attach; the card rings on drag-over.
     <div className="px-2 pb-3 pt-1" data-tour="composer">
-      {/* Pending-steer queue: submits made while the turn is cooking are queued
-          daemon-side (cap 5) rather than starting a new turn. Show the queued
-          previews above the composer so the user knows they're stacked up. */}
+      {/* Follow-ups queue: submits made while the turn is cooking are queued
+          daemon-side (cap 5). Selectable list — click or ↑ from composer. */}
       {pendingSteer.length > 0 && (
-        <div className="mb-1.5 flex flex-col gap-1 rounded-xl border border-koma-border bg-koma-panel px-2.5 py-2">
+        <div
+          className={`mb-1.5 flex flex-col gap-1 rounded-xl border bg-koma-panel px-2.5 py-2 ${
+            steerFocus ? 'border-koma-accent' : 'border-koma-border'
+          }`}
+        >
           <div className="flex items-center gap-1.5 text-[11px] text-koma-dim">
             <Layers size={12} className="flex-none" />
             <span>
-              Queued {pendingSteer.length}/5
+              follow-ups {pendingSteer.length}/5
             </span>
             <button
-              onClick={() => req({ r: 'CancelSteers' })}
-              aria-label="Clear queued messages"
-              title="Clear queued messages"
+              onClick={() => {
+                req({ r: 'CancelSteers' })
+                setSteerFocus(false)
+              }}
+              aria-label="Clear all follow-ups"
+              title="Clear all follow-ups"
               className="ml-auto flex-none opacity-60 transition-opacity hover:text-koma-fg hover:opacity-100"
             >
               <X size={12} />
             </button>
           </div>
           <div className="flex flex-col gap-0.5">
-            {pendingSteer.map((s, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-1.5 text-[11.5px] text-koma-fg opacity-80"
-              >
-                <CornerDownRight size={11} className="flex-none text-koma-dim" />
-                <span className="truncate">{s}</span>
-              </div>
-            ))}
+            {pendingSteer.map((s, i) => {
+              const selected = steerFocus && i === steerSel
+              const oneLine = s.replace(/\n/g, ' ').trim()
+              return (
+                <div
+                  key={i}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => {
+                    setSteerFocus(true)
+                    setSteerSel(i)
+                    editSteerAt(i)
+                  }}
+                  onKeyDown={(ev) => {
+                    if (ev.key === 'Enter' || ev.key === ' ') {
+                      ev.preventDefault()
+                      setSteerFocus(true)
+                      setSteerSel(i)
+                      editSteerAt(i)
+                    }
+                  }}
+                  className={`flex cursor-pointer items-center gap-1.5 rounded-md px-1 py-0.5 text-[11.5px] ${
+                    selected
+                      ? 'bg-koma-hover text-koma-accent'
+                      : 'text-koma-fg opacity-80 hover:bg-koma-hover/60'
+                  }`}
+                  title="Click to edit in composer"
+                >
+                  <span className="flex-none text-[10px]">{selected ? '●' : '○'}</span>
+                  <span className="truncate">{oneLine}</span>
+                  <button
+                    type="button"
+                    onClick={(ev) => {
+                      ev.stopPropagation()
+                      removeSteerAt(i)
+                    }}
+                    aria-label="Remove follow-up"
+                    title="Remove"
+                    className="ml-auto flex-none opacity-50 transition-opacity hover:opacity-100"
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+          <div className="text-[10px] text-koma-dim">
+            {steerFocus
+              ? 'enter edit · ↑↓ select · del remove · esc unfocus · ctrl+x clear'
+              : '↑ or click to select · ctrl+x clear all'}
           </div>
         </div>
       )}
@@ -566,7 +740,7 @@ export function Composer() {
         onDrop={onDrop}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
-        className={`relative flex flex-col gap-2 rounded-2xl border bg-koma-panel px-3 py-2.5 shadow-sm transition-colors ${
+        className={`relative flex flex-col gap-2 rounded-2xl border bg-koma-panel px-3 py-2.5 shadow-sm transition-colors @max-xs/chat:gap-1.5 @max-xs/chat:rounded-xl @max-xs/chat:px-2 @max-xs/chat:py-2 @max-[14rem]/chat:px-1.5 @max-[14rem]/chat:py-1.5 ${
           dragOver ? 'border-koma-accent bg-koma-hover' : 'border-koma-border'
         }`}
       >
@@ -631,11 +805,14 @@ export function Composer() {
               renderComposerOverlay above), painting chip-eligible `@label`
               tokens as tinted pills. pointer-events-none so it never steals
               clicks/caret placement from the (visually transparent, but very
-              much alive) textarea layered on top of it. */}
+              much alive) textarea layered on top of it.
+              Same field class + overflow-y:auto + stable gutter as the
+              textarea so wrap width and line boxes stay pixel-aligned once
+              the draft hits max-height and a scrollbar appears. */}
           <div
             ref={overlayRef}
             aria-hidden="true"
-            className="pointer-events-none absolute inset-0 z-0 w-full overflow-hidden whitespace-pre-wrap break-words text-[14px] leading-relaxed text-koma-fg"
+            className={`pointer-events-none absolute inset-0 z-0 overflow-x-hidden overflow-y-auto text-koma-fg [scrollbar-gutter:stable] ${COMPOSER_FIELD_CLASS}`}
           >
             {renderComposerOverlay(input, pickedTokensRef.current)}
           </div>
@@ -648,14 +825,14 @@ export function Composer() {
             onScroll={syncOverlayScroll}
             placeholder="Message koma…"
             rows={1}
-            className={`relative z-10 max-h-[200px] min-h-[24px] w-full resize-none bg-transparent text-[14px] leading-relaxed outline-none caret-koma-fg placeholder:text-koma-fg placeholder:opacity-40 ${
+            className={`relative z-10 max-h-[200px] min-h-[22px] resize-none overflow-x-hidden overflow-y-auto bg-transparent outline-none [scrollbar-gutter:stable] caret-koma-fg placeholder:text-koma-fg placeholder:opacity-40 ${COMPOSER_FIELD_CLASS} ${
               input === '' ? 'text-koma-fg' : 'text-transparent'
             }`}
           />
         </div>
 
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1">
+        <div className="flex min-w-0 items-center justify-between gap-1">
+          <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden @max-xs/chat:gap-0">
             <input
               ref={fileInputRef}
               type="file"
@@ -668,7 +845,7 @@ export function Composer() {
               onClick={() => fileInputRef.current?.click()}
               aria-label="Attach file"
               title="Attach file"
-              className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+              className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100 @max-[14rem]/chat:h-7 @max-[14rem]/chat:w-7"
             >
               <Paperclip size={16} />
             </button>
@@ -676,7 +853,7 @@ export function Composer() {
               onClick={openOmniSearch}
               aria-label="Search workspace files"
               title="Search workspace files"
-              className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+              className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100 @max-[14rem]/chat:h-7 @max-[14rem]/chat:w-7"
             >
               <Search size={16} />
             </button>
@@ -688,7 +865,7 @@ export function Composer() {
             <ModeSelector />
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-none items-center gap-1.5 @max-xs/chat:gap-1">
             {/* STOP is a SEPARATE control from send (not a morph): while the turn
                 runs, both are shown — send stays LIVE so a submit QUEUES as a
                 steer, and stop aborts the in-flight turn (GuiReq Interrupt). */}
@@ -697,7 +874,7 @@ export function Composer() {
                 onClick={() => req({ r: 'Interrupt' })}
                 aria-label="Stop"
                 title="Stop"
-                className="flex h-8 w-8 flex-none items-center justify-center rounded-full border border-koma-border text-koma-fg opacity-80 transition-colors hover:bg-koma-hover hover:opacity-100"
+                className="flex h-8 w-8 flex-none items-center justify-center rounded-full border border-koma-border text-koma-fg opacity-80 transition-colors hover:bg-koma-hover hover:opacity-100 @max-[14rem]/chat:h-7 @max-[14rem]/chat:w-7"
               >
                 <Square size={13} className="fill-current" />
               </button>
@@ -713,7 +890,7 @@ export function Composer() {
                     ? 'Queue while working'
                     : 'Send'
               }
-              className={`flex h-8 w-8 flex-none items-center justify-center rounded-full transition-colors ${
+              className={`flex h-8 w-8 flex-none items-center justify-center rounded-full transition-colors @max-[14rem]/chat:h-7 @max-[14rem]/chat:w-7 ${
                 canSend
                   ? 'bg-koma-accent text-koma-bg hover:opacity-90'
                   : 'bg-koma-hover text-koma-fg opacity-40'

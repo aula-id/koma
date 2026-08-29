@@ -46,6 +46,10 @@ pub(super) enum PushEnvelope {
         session: String,
         state: &'static str,
         messages: Vec<PushMsg>,
+        /// Full projected transcript length (including not-yet-pushed older head).
+        /// Lets the FE know `hasMoreOlder` without stuffing the archive into the store.
+        #[serde(rename = "messageCount", default)]
+        message_count: usize,
         title: String,
         palette: PushPalette,
         /// Foreground session's sub-agents (list + status). Authoritative full array —
@@ -71,9 +75,9 @@ pub(super) enum PushEnvelope {
         /// fingerprint) so the composer mode selector shows + reflects the live mode; a
         /// `SetMode` round-trip flips this on the next snapshot.
         mode: String,
-        /// Foreground session's QUEUED mid-turn steer previews (koma's `pending_steer`).
-        /// Authoritative full array — React REPLACES on each Snapshot; the composer
-        /// renders it as the "Queued N/5" preview list while a turn is in flight.
+        /// Foreground session's QUEUED mid-turn follow-ups (koma's `pending_steer`).
+        /// Authoritative full array (full text) — React REPLACES on each Snapshot; the
+        /// composer renders it as the follow-ups list while a turn is in flight.
         /// Folded into the fingerprint so queuing/consuming a steer re-emits the Snapshot.
         #[serde(rename = "pendingSteer")]
         pending_steer: Vec<String>,
@@ -120,11 +124,64 @@ pub(super) enum PushEnvelope {
     /// naturally by the next `Snapshot { state:"attached" }` — whose `session` equals `to`
     /// on a resolved swap.
     Switching { to: String },
+    /// Append-only transcript growth: new committed messages after a shared prefix with
+    /// the last Snapshot. Same session; React concatenates onto `messages`.
+    SnapshotTail {
+        session: String,
+        messages: Vec<PushMsg>,
+    },
+    /// Prepend older committed messages after a truncated first Snapshot.
+    /// Same session; React concatenates onto the front of `messages`.
+    /// May arrive as multiple chunks (`more: true` until the auto-backfill
+    /// prefix is exhausted). `total_older` is optional telemetry.
+    SnapshotHead {
+        session: String,
+        messages: Vec<PushMsg>,
+        /// More auto-backfill chunks will follow on later folds.
+        #[serde(default)]
+        more: bool,
+        /// Original older-prefix length when known (first chunk only).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total_older: Option<usize>,
+    },
+    /// On-demand older history page (pull). Prepend like SnapshotHead.
+    /// `before` is the display idx the FE already has as its oldest message;
+    /// host returns messages with idx < before, newest-of-page last.
+    HistoryPage {
+        session: String,
+        messages: Vec<PushMsg>,
+        /// More held history remains on the host for further pulls.
+        #[serde(default)]
+        has_more: bool,
+    },
+    /// In-place update of the last committed message (tool result join, content tweak).
+    /// React replaces `messages[messages.length-1]` when lengths still match.
+    SnapshotSetLast {
+        session: String,
+        message: PushMsg,
+    },
     /// The FULL live streaming buffer (React REPLACES the live bubble). Emitted every
     /// frame the buffer changes; an empty `text` clears the bubble on commit.
+    /// Prefer [`StreamDelta`] for steady growth; this full-replace path remains for
+    /// clear-on-commit and any host that still ships whole buffers.
     StreamMsg { session: String, text: String },
+    /// Incremental live stream update. `reset: true` replaces the bubble with `append`
+    /// (empty `append` clears). `reset: false` appends bytes onto the existing bubble.
+    /// Host emits this when `last.stream` is a prefix of the new buffer.
+    StreamDelta {
+        session: String,
+        reset: bool,
+        append: String,
+    },
     /// The FULL live reasoning buffer (React REPLACES). Empty `text` clears it.
+    /// Prefer [`ReasoningDelta`] for steady growth.
     Reasoning { session: String, text: String },
+    /// Incremental live reasoning update (same semantics as [`StreamDelta`]).
+    ReasoningDelta {
+        session: String,
+        reset: bool,
+        append: String,
+    },
     /// Working flag + optional toast. React animates the spinner locally; the host
     /// only says whether the session is working and what toast (if any) to show.
     /// `toastKind` carries the toast SEVERITY (`"error"` / `"info"`) so React can colour
@@ -700,6 +757,8 @@ pub(super) enum PushEnvelope {
         error: Option<String>,
     },
     /// Coding panel: binary download reply. `bytes_b64` is standard base64.
+    /// When `saved` is true the host already wrote the file via a native dialog
+    /// and `bytes_b64` is omitted.
     #[serde(rename_all = "camelCase")]
     FileDownloadBytes {
         root: String,
@@ -709,6 +768,29 @@ pub(super) enum PushEnvelope {
         size: u64,
         too_large: bool,
         error: Option<String>,
+        #[serde(default)]
+        saved: bool,
+    },
+    /// Coding panel: content-search reply (grouped by file).
+    #[serde(rename_all = "camelCase")]
+    FileContentSearch {
+        root: String,
+        path: String,
+        request_id: String,
+        results: Vec<super::content_search::ContentSearchFileHit>,
+        error: Option<String>,
+        truncated: bool,
+    },
+    /// Coding panel: content-replace-all reply.
+    #[serde(rename_all = "camelCase")]
+    FileContentReplace {
+        root: String,
+        path: String,
+        request_id: String,
+        files_changed: u32,
+        match_count: u32,
+        error: Option<String>,
+        truncated: bool,
     },
     /// Settings "Language servers": full catalogue status (managed / PATH / missing).
     #[serde(rename_all = "camelCase")]
@@ -735,6 +817,16 @@ pub(super) enum PushEnvelope {
     LspCompletion {
         request_id: String,
         items: Vec<crate::lsp::LspCompletionItem>,
+        /// When true Monaco re-queries on the next keystroke (path completion).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        is_incomplete: bool,
+        error: Option<String>,
+    },
+    /// Reply to `LspCompletionResolve`.
+    #[serde(rename_all = "camelCase")]
+    LspCompletionResolve {
+        request_id: String,
+        item: Option<crate::lsp::LspCompletionItem>,
         error: Option<String>,
     },
     /// Reply to `LspHover`.
@@ -1202,6 +1294,7 @@ pub(super) fn push_lsp_completion(
     push: &dyn Fn(String),
     request_id: String,
     items: Vec<crate::lsp::LspCompletionItem>,
+    is_incomplete: bool,
     error: Option<String>,
 ) {
     super::render::emit(
@@ -1209,6 +1302,24 @@ pub(super) fn push_lsp_completion(
         &PushEnvelope::LspCompletion {
             request_id,
             items,
+            is_incomplete,
+            error,
+        },
+    );
+}
+
+/// Emit `LspCompletionResolve` reply.
+pub(super) fn push_lsp_completion_resolve(
+    push: &dyn Fn(String),
+    request_id: String,
+    item: Option<crate::lsp::LspCompletionItem>,
+    error: Option<String>,
+) {
+    super::render::emit(
+        push,
+        &PushEnvelope::LspCompletionResolve {
+            request_id,
+            item,
             error,
         },
     );

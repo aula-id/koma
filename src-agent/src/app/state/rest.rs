@@ -83,6 +83,13 @@ pub struct AppStateRest {
     pub spawn_prev_fg: usize,
     /// Selected row in the `/` command palette (index into the filtered list).
     pub palette_sel: usize,
+    /// Selected row in the pending follow-ups / steer list (`fg.pending_steer`).
+    /// Clamped to the live queue length on render and when items are removed.
+    pub pending_steer_sel: usize,
+    /// When true, Chat Up/Down/Enter/Esc target the follow-ups list instead of
+    /// the composer (history / interrupt). Cleared when the queue empties or the
+    /// user types into the composer.
+    pub pending_steer_focus: bool,
     pub should_quit: bool,
     /// Max scroll offset (content_lines - viewport) from the LAST render. The
     /// renderer writes it (via interior mutability through a shared ref); the
@@ -537,6 +544,8 @@ impl AppStateRest {
             spawn_pending: false,
             spawn_prev_fg: 0,
             palette_sel: 0,
+            pending_steer_sel: 0,
+            pending_steer_focus: false,
             should_quit: false,
             last_max_scroll: std::cell::Cell::new(0),
             palette_offset: std::cell::Cell::new(0),

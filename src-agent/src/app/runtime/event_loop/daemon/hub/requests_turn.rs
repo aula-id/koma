@@ -176,6 +176,30 @@ impl DaemonHub {
         self.ack_or_error(idx, result);
     }
 
+    pub(super) fn remove_steer(
+        &mut self,
+        idx: usize,
+        state: &mut AppState,
+        client: &mut Option<Arc<OpenRouterClient>>,
+        handle: &tokio::runtime::Handle,
+        index: usize,
+    ) {
+        let result = apply_action(Action::RemoveSteer(index), state, client, handle);
+        self.ack_or_error(idx, result);
+    }
+
+    pub(super) fn edit_steer(
+        &mut self,
+        idx: usize,
+        state: &mut AppState,
+        client: &mut Option<Arc<OpenRouterClient>>,
+        handle: &tokio::runtime::Handle,
+        index: usize,
+    ) {
+        let result = apply_action(Action::EditSteer(index), state, client, handle);
+        self.ack_or_error(idx, result);
+    }
+
     // GUI hover-edit pencil on a USER chat bubble: rewind the foreground
     // session to JUST BEFORE the message at `index` — the non-key equivalent
     // of the TUI's double-Esc `Mode::MessageRewind` + Enter. Reuses the exact

@@ -5,6 +5,7 @@
 //! [`super::client::file_ops`] result types / `PushEnvelope` File* bodies so the
 //! host can forward replies without remapping.
 
+use super::client::content_search::{FileContentReplaceResult, FileContentSearchResult};
 use super::client::file_ops::{
     FileCreateResult, FileDeleteResult, FileDownloadBytesResult, FileReadResult, FileRenameResult,
     FileSaveResult, FileTreeResult, FileWriteBytesResult,
@@ -64,6 +65,29 @@ pub(crate) enum RemoteFsReq {
         path: String,
         request_id: String,
     },
+    ContentSearch {
+        root: String,
+        path: String,
+        query: String,
+        case_sensitive: bool,
+        whole_word: bool,
+        is_regex: bool,
+        include_glob: Option<String>,
+        exclude_glob: Option<String>,
+        request_id: String,
+    },
+    ContentReplace {
+        root: String,
+        path: String,
+        query: String,
+        replacement: String,
+        case_sensitive: bool,
+        whole_word: bool,
+        is_regex: bool,
+        include_glob: Option<String>,
+        exclude_glob: Option<String>,
+        request_id: String,
+    },
 }
 
 /// Reply from remote-fs. Bodies mirror PushEnvelope File* fields.
@@ -86,6 +110,8 @@ pub(crate) enum RemoteFsRep {
     Delete(FileDeleteResult),
     WriteBytes(FileWriteBytesResult),
     DownloadBytes(FileDownloadBytesResult),
+    ContentSearch(FileContentSearchResult),
+    ContentReplace(FileContentReplaceResult),
     /// Catch-all for protocol/parse errors on a request that had no op body.
     Error {
         error: String,

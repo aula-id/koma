@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Clipboard, ClipboardPaste, RotateCcw } from 'lucide-react'
+import { Bug, Clipboard, ClipboardPaste, RotateCcw } from 'lucide-react'
 
 type Props = {
   onResume: () => void
@@ -14,6 +14,24 @@ type ContextTarget = {
   inputSelection: { start: number; end: number } | null
   contentRange: Range | null
   copyText: string | null
+}
+
+function postWin(a: string) {
+  try {
+    window.ipc?.postMessage(JSON.stringify({ t: 'win', a }))
+  } catch {
+    /* ipc unavailable */
+  }
+}
+
+/** Open the native WebView inspector (host WinCmd::OpenDevTools). */
+function openDevTools() {
+  postWin('devtools')
+}
+
+function isMonacoTarget(el: EventTarget | null): boolean {
+  if (!(el instanceof Element)) return false
+  return !!el.closest('.monaco-editor, .monaco-diff-editor')
 }
 
 // Clamp after mount so the menu never renders off-screen.
@@ -99,6 +117,23 @@ export function GlobalContextMenu({ onResume, hidden }: Props) {
   const canCopy = target?.copyText != null
 
   const close = useCallback(() => setOpen(false), [])
+
+  // --- DevTools: Ctrl+Shift+I always; F12 outside Monaco (Monaco owns F12 go-to) ---
+  useEffect(() => {
+    if (hidden) return
+    const onKey = (e: KeyboardEvent) => {
+      const isInspectChord =
+        (e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'I' || e.key === 'i')
+      const isF12 = e.key === 'F12' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey
+      if (!isInspectChord && !isF12) return
+      if (isF12 && isMonacoTarget(e.target)) return
+      e.preventDefault()
+      e.stopPropagation()
+      openDevTools()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [hidden])
 
   // --- Open on right-click (bubbling-phase, respects defaultPrevented) ---
   useEffect(() => {
@@ -249,6 +284,11 @@ export function GlobalContextMenu({ onResume, hidden }: Props) {
     onResume()
   }, [close, onResume])
 
+  const handleInspect = useCallback(() => {
+    close()
+    openDevTools()
+  }, [close])
+
   if (hidden) return null
   if (!open) return null
 
@@ -280,9 +320,9 @@ export function GlobalContextMenu({ onResume, hidden }: Props) {
         Resume
       </MenuItem>
       <Separator />
-      <SectionLabel>Per page</SectionLabel>
-      <MenuItem icon={<span className="w-[13px]" />} onClick={() => {}} disabled>
-        Soon
+      <SectionLabel>Debug</SectionLabel>
+      <MenuItem icon={<Bug size={13} />} onClick={handleInspect}>
+        Inspect
       </MenuItem>
     </div>,
     document.body,

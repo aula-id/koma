@@ -98,6 +98,10 @@ pub(super) fn handle_submit(
         // starting fresh. Mirrors the reset below for the immediate-kickoff path.
         state.rest.fg_mut().ext_injected_turns = 0;
         state.rest.fg_mut().pending_steer.push(steer_text);
+        // Keep selection on the newest item and leave focus on the composer so
+        // the user can keep typing more follow-ups; they can ↑ into the list.
+        let n = state.rest.fg().pending_steer.len();
+        state.rest.pending_steer_sel = n.saturating_sub(1);
         return Ok(());
     }
     // Real user activity (immediate-kickoff path): reset the extension-injection

@@ -14,7 +14,6 @@ import {
   UserCircle,
   X,
   Download,
-  Loader2,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useKoma, resolveActivityBarOrder, type PaletteInfo } from '../store/koma'
@@ -1148,7 +1147,7 @@ function LspSettings() {
                         className="flex items-center gap-1 rounded border border-koma-accent/40 bg-koma-accent/10 px-2 py-0.5 text-[11.5px] text-koma-accent hover:bg-koma-accent/20 disabled:opacity-40"
                       >
                         {installing ? (
-                          <Loader2 size={12} className="animate-spin" />
+                          <BrailleSpinner size={12} />
                         ) : (
                           <Download size={12} />
                         )}

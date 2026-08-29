@@ -185,6 +185,36 @@ fn attach_session_headless(
     Ok(conn)
 }
 
+/// Run [`attach_session_headless`] on a worker thread so the host client-thread
+/// is not stuck inside ensure/handshake/restart.
+///
+/// Do **not** heartbeat via `evaluate_script` while waiting: each inject runs on
+/// the tao/WebKit main thread and freezes CSS overlay animations (BootBraille).
+/// The overlay is already raised by optimistic `startSwitching` / the first
+/// `Switching` push before this is called — silence is correct until attach
+/// finishes and Loading/Snapshot land.
+fn attach_session_headless_async(
+    handle: &tokio::runtime::Handle,
+    session_id: &str,
+    workdir: Option<std::path::PathBuf>,
+) -> anyhow::Result<Connection> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let sid = session_id.to_string();
+    let h = handle.clone();
+    std::thread::Builder::new()
+        .name("koma-gui-attach".into())
+        .spawn(move || {
+            let r = attach_session_headless(&h, &sid, workdir.as_deref());
+            let _ = tx.send(r);
+        })
+        .map_err(|e| anyhow::anyhow!("could not spawn attach worker: {e}"))?;
+
+    // Block this client-thread only (not tao). No UI pushes here.
+    rx.recv().map_err(|_| {
+        anyhow::anyhow!("attach worker dropped without a result for session {session_id}")
+    })?
+}
+
 /// Run the host-relay client on a background thread: own a tokio runtime and run the
 /// two-state machine (swapper / attached) that PUSHES the shadow state into the
 /// webview. The `push` sink hands a ready JSON envelope to the main tao thread;
@@ -590,8 +620,16 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
     let (remote_ready_tx, remote_ready_rx) =
         std::sync::mpsc::channel::<super::remote_ctl::ReadyRemote>();
     let remote_shared = std::sync::Arc::new(super::remote_ctl::RemoteSessionShared::new());
+    let (hub_tx, hub_rx) = std::sync::mpsc::channel::<crate::app::mode::SessionHub>();
+    let mut hub_inflight = false;
 
     loop {
+        while let Ok(hub) = hub_rx.try_recv() {
+            hub_inflight = false;
+            push_state.reset();
+            push_hub(&hub, push, push_state);
+            push_swapper_config(push, push_state);
+        }
         // Push worker state first so `ready` clears the GUI's connection
         // overlay before the remote hub starts rendering.
         while let Ok(update) = remote_state_rx.try_recv() {
@@ -636,11 +674,18 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // (`ToSwapper` — a cancel that lands while already detached — is a harmless
             // hub re-push here: we are already showing the hub.)
             Ok(HostCtl::Ready) | Ok(HostCtl::RefreshHub) | Ok(HostCtl::ToSwapper) => {
-                let hub = build_local_hub(current);
-                push_state.reset();
-                push_hub(&hub, push, push_state);
-                // Re-emit config too (a `Ready` reload re-mounts the panels).
-                push_swapper_config(push, push_state);
+                // First hub on swapper entry is sync. Ready/refresh must not
+                // block this ctl loop on per-socket Status probes — that stalls
+                // the first inject after the page boots.
+                if !hub_inflight {
+                    hub_inflight = true;
+                    let tx = hub_tx.clone();
+                    let cur = current.map(str::to_string);
+                    std::thread::spawn(move || {
+                        let hub = build_local_hub(cur.as_deref());
+                        let _ = tx.send(hub);
+                    });
+                }
             }
             // Pre-session config mutation (onboarding theme/provider/model): apply it
             // directly to `~/.koma/config.json` and re-push `Config` so the panels + theme
@@ -689,14 +734,33 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             | Ok(ctl @ HostCtl::FileRename { .. })
             | Ok(ctl @ HostCtl::FileDelete { .. })
             | Ok(ctl @ HostCtl::FileWriteBytes { .. })
-            | Ok(ctl @ HostCtl::FileDownloadBytes { .. }) => {
+            | Ok(ctl @ HostCtl::FileDownloadBytes { .. })
+            | Ok(ctl @ HostCtl::FileContentSearch { .. })
+            | Ok(ctl @ HostCtl::FileContentReplace { .. }) => {
                 let push2 = P::clone(push);
                 let workdirs = current
                     .and_then(super::diff::session_workdirs_for)
                     .unwrap_or_default();
                 let session = current.map(str::to_string);
                 std::thread::spawn(move || {
-                    super::file_ops::handle_file_ctl(&ctl, &push2, &workdirs, session.as_deref());
+                    match &ctl {
+                        HostCtl::FileContentSearch { .. } | HostCtl::FileContentReplace { .. } => {
+                            super::content_search::handle_content_ctl(
+                                &ctl,
+                                &push2,
+                                &workdirs,
+                                session.as_deref(),
+                            );
+                        }
+                        _ => {
+                            super::file_ops::handle_file_ctl(
+                                &ctl,
+                                &push2,
+                                &workdirs,
+                                session.as_deref(),
+                            );
+                        }
+                    }
                 });
             }
             #[cfg(feature = "linker")]
@@ -965,9 +1029,31 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
-            Ok(HostCtl::LspCompletion { root, path, line, character, request_id }) => {
+            Ok(HostCtl::LspCompletion {
+                root,
+                path,
+                line,
+                character,
+                trigger_kind,
+                trigger_character,
+                request_id,
+            }) => {
                 super::lsp_host::handle_client_ctl(
-                    HostCtl::LspCompletion { root, path, line, character, request_id },
+                    HostCtl::LspCompletion {
+                        root,
+                        path,
+                        line,
+                        character,
+                        trigger_kind,
+                        trigger_character,
+                        request_id,
+                    },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspCompletionResolve { root, path, item, request_id }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspCompletionResolve { root, path, item, request_id },
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
@@ -1509,6 +1595,8 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     mgr.kill(&id);
                 }
             }
+            // History pull only meaningful while attached (PushState stash).
+            Ok(HostCtl::HistoryPage { .. }) => {}
             // The ipc side hung up (window gone) — leave the host.
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return HostStep::Done,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
@@ -1536,7 +1624,10 @@ fn host_attached(
     terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
     lsp_manager: &std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
 ) -> HostStep {
-    let mut conn = match attach_session_headless(handle, &id, workdir.as_deref()) {
+    // Drop previous session's language servers so a switch cannot leave
+    // rust-analyzer / vtsls indexing the old workdir.
+    let _ = lsp_manager.lock().map(|mut mgr| mgr.cleanup_all());
+    let mut conn = match attach_session_headless_async(handle, &id, workdir) {
         Ok(c) => c,
         Err(e) => {
             crate::model::store::append_global_error_log(
@@ -1547,7 +1638,19 @@ fn host_attached(
             return HostStep::Swapper;
         }
     };
-    *current = Some(id);
+    *current = Some(id.clone());
+
+    // Seed a warm-up splash BEFORE the first Snapshot so React never paints a
+    // blank gap between attach and Mode::Loading. If the session is already
+    // warm, the first serialize_and_push emits Loading{active:false} and clears it.
+    super::render::emit(
+        push,
+        &super::push_proto::PushEnvelope::Loading {
+            active: true,
+            workspace: "pending".into(),
+            awareness: "pending".into(),
+        },
+    );
 
     // Publish this connection's request sender so the ipc handler's `Submit` lands on
     // the CURRENT daemon; take the handshake's prebuffered frames for the fold.
@@ -1556,6 +1659,9 @@ fn host_attached(
     }
     let prebuffered = std::mem::take(&mut conn.prebuffered);
     push_state.reset();
+    // Remember we already told the webview a splash is up so serialize_and_push
+    // will emit the terminal active:false if Mode::Loading never engages.
+    push_state.last_loading = Some((true, "pending".into(), "pending".into()));
 
     // Enter the runtime context ONLY for the fold loop (a reconstructed shadow
     // sub-agent mints an inert AbortHandle, which needs a runtime in scope) — SCOPED
@@ -1940,6 +2046,7 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                     mgr.kill(&id);
                 }
             }
+            Ok(HostCtl::HistoryPage { .. }) => {}
 
             Ok(HostCtl::LspDidOpen { root, path, language_id, text }) => {
                 super::lsp_host::handle_client_ctl(
@@ -1965,9 +2072,31 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
-            Ok(HostCtl::LspCompletion { root, path, line, character, request_id }) => {
+            Ok(HostCtl::LspCompletion {
+                root,
+                path,
+                line,
+                character,
+                trigger_kind,
+                trigger_character,
+                request_id,
+            }) => {
                 super::lsp_host::handle_client_ctl(
-                    HostCtl::LspCompletion { root, path, line, character, request_id },
+                    HostCtl::LspCompletion {
+                        root,
+                        path,
+                        line,
+                        character,
+                        trigger_kind,
+                        trigger_character,
+                        request_id,
+                    },
+                    std::sync::Arc::clone(lsp_manager),
+                );
+            }
+            Ok(HostCtl::LspCompletionResolve { root, path, item, request_id }) => {
+                super::lsp_host::handle_client_ctl(
+                    HostCtl::LspCompletionResolve { root, path, item, request_id },
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
@@ -2056,6 +2185,7 @@ fn host_remote_attach(
     terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
     lsp_manager: &std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
 ) -> HostStep {
+    let _ = lsp_manager.lock().map(|mut mgr| mgr.cleanup_all());
     let (remote_state_tx, remote_state_rx) =
         std::sync::mpsc::channel::<super::remote_ctl::RemoteStateUpdate>();
     let (remote_connected_tx, remote_connected_rx) =

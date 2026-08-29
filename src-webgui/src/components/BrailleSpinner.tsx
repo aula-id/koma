@@ -44,6 +44,10 @@ export function useBrailleFrame(): string {
 // same fixed square footprint (so layout never shifts frame-to-frame), color
 // inherited from `className` (e.g. text-koma-accent) like the Lucide icon it
 // replaces. Do NOT pass `animate-spin` — the braille frames self-animate.
+//
+// Main-thread driven (setInterval + React). Fine for chrome badges. For the
+// session-switch / cold-boot overlay use {@link BootBrailleSpinner} instead —
+// CSS stepped braille (no React ticks) so it keeps moving under Snapshot jank.
 export function BrailleSpinner({
   size = 14,
   className = '',
@@ -62,3 +66,27 @@ export function BrailleSpinner({
     </span>
   )
 }
+
+/**
+ * Braille loader for boot/switch overlays — same glyphs as {@link BrailleSpinner},
+ * but driven by CSS keyframes (no setInterval / React re-render). Prefer this on
+ * full-screen attach loaders; keep BrailleSpinner for small in-app badges.
+ */
+export function BootBrailleSpinner({
+  size = 28,
+  className = '',
+}: {
+  size?: number
+  className?: string
+}) {
+  return (
+    <span
+      aria-hidden
+      className={`koma-boot-braille ${className}`}
+      style={{ width: size, height: size, fontSize: size }}
+    />
+  )
+}
+
+/** @deprecated alias — use {@link BootBrailleSpinner} */
+export const BootBrailleGlyph = BootBrailleSpinner

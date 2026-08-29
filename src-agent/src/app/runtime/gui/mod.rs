@@ -253,8 +253,20 @@ fn parse_resize_dir(dir: &str) -> Option<tao::window::ResizeDirection> {
     }
 }
 
+/// Peek the `"k"` tag from a serialized push envelope without a full parse.
+fn peek_push_kind(json: &str) -> Option<&str> {
+    const KEY: &str = "\"k\":";
+    let i = json.find(KEY)?;
+    let rest = json[i + KEY.len()..].trim_start();
+    let rest = rest.strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
 pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
+    use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
     use tao::{
         dpi::LogicalSize,
         event::{Event, WindowEvent},
@@ -467,6 +479,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         "min" => Some(WinCmd::Minimize),
                         "max" => Some(WinCmd::ToggleMax),
                         "close" => Some(WinCmd::Close),
+                        "devtools" => Some(WinCmd::OpenDevTools),
                         _ => None,
                     };
                     if let Some(cmd) = cmd {
@@ -532,19 +545,110 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     // just exit the loop — the host-relay client-thread's daemon is a SEPARATE
     // detached process that keeps cooking (resumable via the swapper), exactly like
     // closing a terminal; the process exit drops the client-thread with it.
+    // WebKitGTK executes `evaluate_script` on its UI thread. A cold attach emits
+    // several envelopes back-to-back (Loading/Snapshot/Status/Config, followed by
+    // settings/repo replies); injecting each as its own tao user event starves
+    // WebKit's paint pass and visibly freezes even the CSS boot spinner. Collect
+    // everything that arrived in one event-loop turn and inject ONE array at most
+    // once per display frame. The React bridge consumes the array in-order and,
+    // while switching, deliberately applies one envelope per animation frame.
+    const PUSH_FRAME_BUDGET: Duration = Duration::from_millis(16);
+    let mut pending_pushes: VecDeque<String> = VecDeque::new();
+    let mut next_push_at: Option<Instant> = None;
+    let mut last_push_at: Option<Instant> = None;
+
     event_loop.run(move |event, _target, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        *control_flow = next_push_at
+            .map(ControlFlow::WaitUntil)
+            .unwrap_or(ControlFlow::Wait);
         match event {
-            // Host-relay state push: inject the authoritative JSON envelope into the
-            // native-React client. `json` is a complete JSON object; it must be
-            // re-encoded as a quoted, escaped JS string literal (not embedded
-            // verbatim as a raw object) so the JS side's `JSON.parse(j)` receives
-            // an actual string to parse, robust to arbitrary chat content.
+            // Host-relay state push: queue the already-serialised object literal.
+            // `MainEventsCleared` below drains a whole burst through one JS call,
+            // never one synchronous `evaluate_script` per envelope.
             Event::UserEvent(UserEvent::Push(json)) => {
-                let _ = webview.evaluate_script(&format!(
-                    "window.__komaClient.push({})",
-                    serde_json::to_string(&json).unwrap_or_else(|_| "\"\"".to_string())
-                ));
+                pending_pushes.push_back(json);
+                if next_push_at.is_none() {
+                    let now = Instant::now();
+                    next_push_at = Some(
+                        last_push_at
+                            .map(|last| last + PUSH_FRAME_BUDGET)
+                            .filter(|at| *at > now)
+                            .unwrap_or(now),
+                    );
+                }
+            }
+            Event::MainEventsCleared => {
+                let now = Instant::now();
+                if next_push_at.is_some_and(|at| now >= at) && !pending_pushes.is_empty() {
+                    // Switching/Loading must reach WebKit before Snapshot so the
+                    // overlay can paint. A fat Snapshot in the same evaluate_script
+                    // freezes the UI thread (and CSS braille) until parse returns.
+                    let mut batch_jsons: Vec<String> = Vec::new();
+                    let mut hold_rest = false;
+                    while let Some(json) = pending_pushes.pop_front() {
+                        // Fat transcript envelopes ride alone so Switching/Loading
+                        // paint first and WebKit never parses Snapshot+Head together.
+                        let kind = peek_push_kind(&json);
+                        let solo = matches!(
+                            kind,
+                            Some("Snapshot") | Some("SnapshotHead") | Some("HistoryPage")
+                        );
+                        if solo && !batch_jsons.is_empty() {
+                            pending_pushes.push_front(json);
+                            hold_rest = true;
+                            break;
+                        }
+                        batch_jsons.push(json);
+                        if solo {
+                            hold_rest = !pending_pushes.is_empty();
+                            break;
+                        }
+                    }
+                    let n = batch_jsons.len();
+                    let mut batch = String::from("[");
+                    for json in batch_jsons {
+                        if batch.len() > 1 {
+                            batch.push(',');
+                        }
+                        // Keep each envelope as a JSON STRING inside the batch.
+                        // WebKit only parses the cheap outer string array during
+                        // evaluate_script; React JSON.parse's one queued bootstrap
+                        // envelope per animation frame instead of parsing the fat
+                        // Snapshot together with every sibling push.
+                        // `json` is already a JSON text string; re-encode as a JSON
+                        // string literal for the outer batch array.
+                        let encoded = match serde_json::to_string(&json) {
+                            Ok(s) => s,
+                            Err(_) => continue,
+                        };
+                        batch.push_str(&encoded);
+                    }
+                    batch.push(']');
+                    let script = format!(
+                        "window.__komaClient&&(window.__komaClient.pushBatch?window.__komaClient.pushBatch({batch}):{batch}.forEach(x=>window.__komaClient.push(x)))"
+                    );
+                    let bytes = script.len();
+                    let t0 = Instant::now();
+                    let _ = webview.evaluate_script(&script);
+                    let took = t0.elapsed();
+                    // Always log fat/slow injects; sample small ones so we can
+                    // see attach bursts without flooding ~/.koma/error.log.
+                    if took >= Duration::from_millis(8) || bytes >= 32_768 || n > 1 {
+                        crate::model::store::append_global_error_log(
+                            "gui-pace",
+                            &format!(
+                                "inject n={n} bytes={bytes} took_ms={}",
+                                took.as_millis()
+                            ),
+                        );
+                    }
+                    last_push_at = Some(now);
+                    next_push_at = if hold_rest {
+                        Some(now + PUSH_FRAME_BUDGET)
+                    } else {
+                        None
+                    };
+                }
             }
             // Custom-titlebar window commands: the window is undecorated, so
             // drag / minimize / maximize / close / edge-resize all have to be driven
@@ -565,6 +669,11 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 WinCmd::Resize(dir) => {
                     let _ = window.drag_resize_window(dir);
                 }
+                WinCmd::OpenDevTools => {
+                    // with_devtools(true) only enables the inspector; open it
+                    // explicitly (custom context menu swallows the native one).
+                    webview.open_devtools();
+                }
             },
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
@@ -574,6 +683,13 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 *control_flow = ControlFlow::Exit;
             }
             _ => {}
+        }
+        // A push queued during this callback must wake no later than its frame
+        // deadline. Preserve Exit selected by a close event.
+        if *control_flow != ControlFlow::Exit {
+            *control_flow = next_push_at
+                .map(ControlFlow::WaitUntil)
+                .unwrap_or(ControlFlow::Wait);
         }
     });
 }

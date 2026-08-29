@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
-import type { Tab } from '../store/koma'
+import { useKoma, type Tab } from '../store/koma'
+import { isTabVisible, normalizeGroups } from '../store/editorGroups'
 import { BrailleSpinner } from './BrailleSpinner'
 import { initMonaco, applyKomaTheme, readMonoFont, langFromPath } from '../lib/monaco-setup'
 
@@ -27,6 +28,7 @@ export default function DiffTab({ tab }: { tab: DiffTabModel }) {
 
   const diff = tab.diff
   const showEditor = diff != null && (diff.error == null || diff.error === '') && !diff.binary
+  const isActive = useKoma((s) => isTabVisible(normalizeGroups(s.ui), tab.id))
 
   // Create the diff editor once, when it first becomes showable; dispose on
   // unmount (or when it stops being showable, e.g. a re-request returns an
@@ -57,6 +59,14 @@ export default function DiffTab({ tab }: { tab: DiffTabModel }) {
       editorRef.current = null
     }
   }, [showEditor])
+
+  // display:none inactive panes zero the host; WebKit often skips ResizeObserver
+  // on the reveal, so force a layout when this tab becomes the visible one.
+  useEffect(() => {
+    if (!isActive || !showEditor) return
+    const raf = requestAnimationFrame(() => editorRef.current?.layout())
+    return () => cancelAnimationFrame(raf)
+  }, [isActive, showEditor])
 
   // Sync the two models to the current diff payload — initial open AND every
   // re-request on re-activate. The editor persists across these; only the models

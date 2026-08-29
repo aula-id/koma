@@ -351,14 +351,22 @@ svg.animate-spin {
   transform-origin: center;
 }
 
-/* Centered, max-width column for the terminal. The absolute inner xterm
-   container positions against this (position: relative). Side gutters fall
-   back to #app's background. */
+/* Centered, max-width column for chat. Side gutters shrink when the parent
+   chat pane (`@container/chat` on the absolute cell wrapper) is tight. */
 .term-shell {
   position: relative;
-  width: calc(100% - 48px);
-  max-width: 1024px;
+  width: min(1024px, calc(100% - 48px));
   height: 100%;
+}
+@container chat (max-width: 20rem) {
+  .term-shell {
+    width: min(1024px, calc(100% - 16px));
+  }
+}
+@container chat (max-width: 14rem) {
+  .term-shell {
+    width: min(1024px, calc(100% - 8px));
+  }
 }
 
 /* Legacy ::-webkit-scrollbar styling instead of scrollbar-width:thin — the
@@ -421,4 +429,353 @@ svg.animate-spin {
 /* Soften default black overlay toward theme */
 .driver-overlay {
   /* driver paints via SVG; color comes from config.overlayColor — leave alone */
+}
+
+/* Monaco floating chrome — hover / suggest / peek / parameter hints inherit the
+   koma palette even when a stock base theme leaks through before defineTheme.
+   Editor body is fontSize:12; widgets often fall back to browser ~16px or
+   markdown defaults without an explicit size — pin them to the editor. */
+.monaco-editor .monaco-hover,
+.monaco-editor .monaco-hover-content,
+.monaco-hover {
+  background-color: var(--color-koma-panel) !important;
+  border-color: var(--color-koma-border) !important;
+  color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+}
+.monaco-editor .monaco-hover .hover-row,
+.monaco-editor .monaco-hover .hover-contents,
+.monaco-hover .hover-contents,
+.monaco-editor .monaco-hover .markdown-hover,
+.monaco-editor .monaco-hover .hover-contents .rendered-markdown,
+.monaco-hover .rendered-markdown {
+  color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+}
+.monaco-editor .monaco-hover .hover-contents h1,
+.monaco-editor .monaco-hover .hover-contents h2,
+.monaco-editor .monaco-hover .hover-contents h3,
+.monaco-editor .monaco-hover .hover-contents h4,
+.monaco-editor .monaco-hover .hover-contents h5,
+.monaco-editor .monaco-hover .hover-contents h6,
+.monaco-hover .hover-contents h1,
+.monaco-hover .hover-contents h2,
+.monaco-hover .hover-contents h3,
+.monaco-hover .hover-contents h4,
+.monaco-hover .hover-contents h5,
+.monaco-hover .hover-contents h6 {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  line-height: 1.45 !important;
+  margin: 0.35em 0 !important;
+}
+.monaco-editor .monaco-hover .hover-row.status-bar,
+.monaco-hover .hover-row.status-bar {
+  background-color: var(--color-koma-panel2) !important;
+  border-top-color: var(--color-koma-border) !important;
+  color: var(--color-koma-dim) !important;
+  font-size: 11px !important;
+}
+.monaco-editor .monaco-hover a,
+.monaco-hover a {
+  color: var(--color-koma-accent) !important;
+}
+.monaco-editor .monaco-hover code,
+.monaco-hover code,
+.monaco-editor .monaco-hover pre,
+.monaco-hover pre {
+  background-color: var(--color-koma-panel2) !important;
+  color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
+  line-height: 1.4 !important;
+}
+.monaco-editor .codelens-decoration,
+.monaco-editor .codelens-decoration > a,
+.monaco-editor .codelens-decoration > span {
+  color: var(--color-koma-dim) !important;
+  font-size: 11px !important;
+}
+.monaco-editor .codelens-decoration > a:hover {
+  color: var(--color-koma-accent) !important;
+}
+.monaco-editor .suggest-widget,
+.editor-widget.suggest-widget {
+  background-color: var(--color-koma-panel) !important;
+  border-color: var(--color-koma-border) !important;
+  color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
+}
+.monaco-editor .suggest-widget .monaco-list .monaco-list-row.focused,
+.monaco-editor .suggest-widget .monaco-list .monaco-list-row:hover {
+  background-color: var(--color-koma-hover) !important;
+}
+.monaco-editor .suggest-widget .monaco-list .monaco-list-row .highlight,
+.monaco-editor .suggest-widget .monaco-highlighted-label .highlight {
+  color: var(--color-koma-accent) !important;
+}
+.monaco-editor .suggest-widget .suggest-details,
+.monaco-editor .suggest-details-container,
+.monaco-editor .suggest-details {
+  background-color: var(--color-koma-panel) !important;
+  border-color: var(--color-koma-border) !important;
+  color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
+}
+.monaco-editor .suggest-details .header,
+.monaco-editor .suggest-details .type,
+.monaco-editor .suggest-details .docs {
+  color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
+}
+.monaco-editor .suggest-details .docs code,
+.monaco-editor .suggest-details .docs pre {
+  background-color: var(--color-koma-panel2) !important;
+  color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
+}
+.monaco-editor .suggest-widget .monaco-list .monaco-list-row .monaco-icon-label,
+.monaco-editor .suggest-widget .monaco-list .monaco-list-row .label-name {
+  color: var(--color-koma-fg) !important;
+}
+.monaco-editor .suggest-widget .monaco-list .monaco-list-row .label-description,
+.monaco-editor .suggest-widget .monaco-list .monaco-list-row .monaco-icon-label-container > .monaco-icon-description-container {
+  color: var(--color-koma-dim) !important;
+}
+.monaco-editor .parameter-hints-widget {
+  background-color: var(--color-koma-panel) !important;
+  border-color: var(--color-koma-border) !important;
+  color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
+}
+.monaco-editor .parameter-hints-widget .signature {
+  background-color: var(--color-koma-panel) !important;
+  font-size: 12px !important;
+}
+.monaco-editor .parameter-hints-widget .code {
+  color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
+}
+.monaco-editor .parameter-hints-widget .parameter.active {
+  color: var(--color-koma-accent) !important;
+}
+.monaco-editor .find-widget,
+.monaco-editor .rename-box {
+  background-color: var(--color-koma-panel) !important;
+  border-color: var(--color-koma-border) !important;
+  color: var(--color-koma-fg) !important;
+}
+.monaco-editor .find-widget .monaco-inputbox,
+.monaco-editor .rename-box .monaco-inputbox {
+  background-color: var(--color-koma-panel2) !important;
+  border-color: var(--color-koma-border) !important;
+  color: var(--color-koma-fg) !important;
+}
+.monaco-editor .find-widget .button,
+.monaco-editor .find-widget .codicon,
+.monaco-editor .find-widget .matchesCount {
+  color: var(--color-koma-dim) !important;
+}
+.monaco-editor .find-widget .button:hover,
+.monaco-editor .find-widget .button.checked {
+  background-color: var(--color-koma-hover) !important;
+  color: var(--color-koma-fg) !important;
+}
+.monaco-editor .find-widget .button.checked {
+  border-color: var(--color-koma-accent) !important;
+  color: var(--color-koma-accent) !important;
+}
+.monaco-editor .find-widget .find-part .monaco-findInput .controls,
+.monaco-editor .find-widget .replace-part {
+  color: var(--color-koma-fg) !important;
+}
+.monaco-editor .peekview-widget {
+  border-color: var(--color-koma-accent) !important;
+  font-size: 12px !important;
+}
+.monaco-editor .peekview-widget .head,
+.monaco-editor .peekview-widget .body {
+  background-color: var(--color-koma-panel) !important;
+  border-color: var(--color-koma-border) !important;
+  font-size: 12px !important;
+}
+.monaco-editor .peekview-widget .head .peekview-title {
+  color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
+}
+.monaco-editor .peekview-widget .head .peekview-title .dirname,
+.monaco-editor .peekview-widget .head .peekview-title .filename + span,
+.monaco-editor .peekview-widget .head .peekview-title .meta {
+  color: var(--color-koma-dim) !important;
+  font-size: 11px !important;
+}
+.monaco-editor .peekview-widget .head .peekview-actions .action-label,
+.monaco-editor .peekview-widget .head .codicon {
+  color: var(--color-koma-dim) !important;
+}
+.monaco-editor .peekview-widget .head .peekview-actions .action-label:hover {
+  background-color: var(--color-koma-hover) !important;
+  color: var(--color-koma-fg) !important;
+}
+.monaco-editor .peekview-widget .body .ref-tree,
+.monaco-editor .peekview-widget .body .monaco-list,
+.monaco-editor .peekview-widget .body .monaco-tl-row {
+  background-color: var(--color-koma-panel) !important;
+  color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
+}
+.monaco-editor .peekview-widget .body .monaco-list .monaco-list-row {
+  color: var(--color-koma-fg) !important;
+}
+.monaco-editor .peekview-widget .body .monaco-list .monaco-list-row.focused,
+.monaco-editor .peekview-widget .body .monaco-list .monaco-list-row.selected,
+.monaco-editor .peekview-widget .body .monaco-list .monaco-list-row:hover {
+  background-color: var(--color-koma-hover) !important;
+}
+.monaco-editor .peekview-widget .body .monaco-list .monaco-list-row .monaco-highlighted-label .highlight,
+.monaco-editor .peekview-widget .body .match {
+  color: var(--color-koma-accent) !important;
+  background-color: color-mix(in srgb, var(--color-koma-warn) 28%, transparent) !important;
+}
+.monaco-editor .peekview-widget .body .referenceMatch,
+.monaco-editor .peekview-widget .body .monaco-tl-contents {
+  color: var(--color-koma-fg) !important;
+  font-size: 12px !important;
+}
+.monaco-editor .peekview-widget .body .monaco-editor,
+.monaco-editor .peekview-widget .body .monaco-editor-background,
+.monaco-editor .peekview-widget .body .margin {
+  background-color: var(--color-koma-bg) !important;
+}
+.monaco-editor .sticky-widget {
+  background-color: var(--color-koma-bg) !important;
+  border-bottom-color: var(--color-koma-border) !important;
+  color: var(--color-koma-fg) !important;
+}
+/* Context menus mount on document.body (outside .monaco-editor).
+   Monaco sets the *visible* fill on the scroll wrapper that PARENTS
+   `.monaco-menu` (inline backgroundColor: var(--vscode-menu-background)),
+   NOT on .monaco-menu itself. Selectors that only hit .monaco-menu / labels
+   theme the TEXT while the wrapper keeps a transparent or base-theme plate.
+   Force the whole stack with koma panel colors. */
+.context-view,
+.context-view.monaco-menu-container,
+.monaco-menu-container,
+.monaco-menu-container > .monaco-scrollable-element,
+.context-view > .monaco-scrollable-element,
+.monaco-menu,
+.monaco-menu .monaco-action-bar,
+.monaco-menu .monaco-action-bar .actions-container {
+  background: var(--color-koma-panel) !important;
+  background-color: var(--color-koma-panel) !important;
+  color: var(--color-koma-fg) !important;
+  border-color: var(--color-koma-border) !important;
+}
+.monaco-menu .monaco-action-bar .action-item .action-label,
+.monaco-menu .monaco-action-bar .action-item .keybinding,
+.monaco-menu .monaco-action-bar .action-item .submenu-indicator {
+  color: var(--color-koma-fg) !important;
+}
+.monaco-menu .monaco-action-bar .action-item.focused,
+.monaco-menu .monaco-action-bar .action-item:hover,
+.monaco-menu .monaco-action-bar.vertical .action-menu-item:hover,
+.monaco-menu .monaco-action-bar.vertical .action-menu-item.focused,
+.monaco-menu .monaco-action-bar.vertical .action-item.focused,
+.monaco-menu .monaco-action-bar.vertical .action-item:hover {
+  background: var(--color-koma-hover) !important;
+  background-color: var(--color-koma-hover) !important;
+  color: var(--color-koma-fg) !important;
+}
+.monaco-menu .monaco-action-bar .action-item.focused .action-label,
+.monaco-menu .monaco-action-bar .action-item:hover .action-label,
+.monaco-menu .monaco-action-bar .action-item.focused .keybinding,
+.monaco-menu .monaco-action-bar .action-item:hover .keybinding,
+.monaco-menu .monaco-action-bar .action-item.focused .submenu-indicator,
+.monaco-menu .monaco-action-bar .action-item:hover .submenu-indicator {
+  color: var(--color-koma-fg) !important;
+}
+.monaco-menu .monaco-action-bar .action-item .action-menu-item.disabled .action-label,
+.monaco-menu .monaco-action-bar .action-item.disabled .action-label,
+.monaco-menu .monaco-action-bar .action-item.disabled .keybinding,
+.monaco-menu .monaco-action-bar .action-item.disabled .submenu-indicator {
+  color: var(--color-koma-dim) !important;
+  opacity: 0.55;
+}
+.monaco-menu .monaco-action-bar .action-label.separator {
+  border-bottom-color: var(--color-koma-border) !important;
+  background: transparent !important;
+  background-color: transparent !important;
+}
+.monaco-menu .monaco-keybinding > .monaco-keybinding-key {
+  background-color: var(--color-koma-panel2) !important;
+  color: var(--color-koma-dim) !important;
+  border-color: var(--color-koma-border) !important;
+}
+
+/* ── Boot / session-switch loader ─────────────────────────────────────────
+   CSS stepped braille (same glyphs as BrailleSpinner) — no setInterval /
+   React re-render. Survives main-thread Snapshot jank better than JS ticks.
+   No ring spinner: product wants braille only. */
+@keyframes koma-boot-fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes koma-boot-braille {
+  0% {
+    content: '⠋';
+  }
+  10% {
+    content: '⠙';
+  }
+  20% {
+    content: '⠹';
+  }
+  30% {
+    content: '⠸';
+  }
+  40% {
+    content: '⠼';
+  }
+  50% {
+    content: '⠴';
+  }
+  60% {
+    content: '⠦';
+  }
+  70% {
+    content: '⠧';
+  }
+  80% {
+    content: '⠇';
+  }
+  90%,
+  100% {
+    content: '⠏';
+  }
+}
+.koma-boot-braille {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  color: inherit;
+}
+.koma-boot-braille::before {
+  content: '⠋';
+  animation: koma-boot-braille 0.8s steps(1, end) infinite;
+}
+.koma-boot-panel {
+  animation: koma-boot-fade-in 0.16s ease-out both;
+}
+.koma-boot-overlay {
+  /* Fully opaque — transparent wry window + 92% mix read as a frozen white wash. */
+  background-color: var(--color-koma-bg, var(--koma-bg, #0b0e14));
 }

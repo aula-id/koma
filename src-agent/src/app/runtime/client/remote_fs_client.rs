@@ -139,12 +139,25 @@ impl RemoteFsClient {
 
     /// Map a File* HostCtl to a remote-fs request, await the reply, push the
     /// matching PushEnvelope. Always pushes so the webview never hangs.
+    ///
+    /// Download save-as runs the native dialog on THIS host after the remote
+    /// bytes arrive — the remote thin client only reads; the laptop writes.
     pub fn handle_file_ctl(&self, ctl: &super::HostCtl, push: &dyn Fn(String)) {
+        let save_as = matches!(
+            ctl,
+            super::HostCtl::FileDownloadBytes { save_as: true, .. }
+        );
         let req = match hostctl_to_req(ctl) {
             Some(r) => r,
             None => return,
         };
         let rep = self.request(req);
+        let rep = match rep {
+            RemoteFsRep::DownloadBytes(r) if save_as => {
+                RemoteFsRep::DownloadBytes(super::file_ops::finalize_download_bytes(r, true))
+            }
+            other => other,
+        };
         push_rep(push, rep);
     }
 
@@ -172,7 +185,9 @@ fn req_id_of(req: &RemoteFsReq) -> Option<String> {
         | RemoteFsReq::Rename { request_id, .. }
         | RemoteFsReq::Delete { request_id, .. }
         | RemoteFsReq::WriteBytes { request_id, .. }
-        | RemoteFsReq::DownloadBytes { request_id, .. } => Some(request_id.clone()),
+        | RemoteFsReq::DownloadBytes { request_id, .. }
+        | RemoteFsReq::ContentSearch { request_id, .. }
+        | RemoteFsReq::ContentReplace { request_id, .. } => Some(request_id.clone()),
         _ => None,
     }
 }
@@ -258,9 +273,54 @@ fn hostctl_to_req(ctl: &super::HostCtl) -> Option<RemoteFsReq> {
             root,
             path,
             request_id,
+            save_as: _,
         } => Some(RemoteFsReq::DownloadBytes {
             root: root.clone(),
             path: path.clone(),
+            request_id: request_id.clone(),
+        }),
+        super::HostCtl::FileContentSearch {
+            root,
+            path,
+            query,
+            case_sensitive,
+            whole_word,
+            is_regex,
+            include_glob,
+            exclude_glob,
+            request_id,
+        } => Some(RemoteFsReq::ContentSearch {
+            root: root.clone(),
+            path: path.clone(),
+            query: query.clone(),
+            case_sensitive: *case_sensitive,
+            whole_word: *whole_word,
+            is_regex: *is_regex,
+            include_glob: include_glob.clone(),
+            exclude_glob: exclude_glob.clone(),
+            request_id: request_id.clone(),
+        }),
+        super::HostCtl::FileContentReplace {
+            root,
+            path,
+            query,
+            replacement,
+            case_sensitive,
+            whole_word,
+            is_regex,
+            include_glob,
+            exclude_glob,
+            request_id,
+        } => Some(RemoteFsReq::ContentReplace {
+            root: root.clone(),
+            path: path.clone(),
+            query: query.clone(),
+            replacement: replacement.clone(),
+            case_sensitive: *case_sensitive,
+            whole_word: *whole_word,
+            is_regex: *is_regex,
+            include_glob: include_glob.clone(),
+            exclude_glob: exclude_glob.clone(),
             request_id: request_id.clone(),
         }),
         _ => None,
@@ -326,6 +386,24 @@ fn push_rep(push: &dyn Fn(String), rep: RemoteFsRep) {
             size: r.size,
             too_large: r.too_large,
             error: r.error,
+            saved: r.saved,
+        },
+        RemoteFsRep::ContentSearch(r) => PushEnvelope::FileContentSearch {
+            root: r.root,
+            path: r.path,
+            request_id: r.request_id,
+            results: r.results,
+            error: r.error,
+            truncated: r.truncated,
+        },
+        RemoteFsRep::ContentReplace(r) => PushEnvelope::FileContentReplace {
+            root: r.root,
+            path: r.path,
+            request_id: r.request_id,
+            files_changed: r.files_changed,
+            match_count: r.match_count,
+            error: r.error,
+            truncated: r.truncated,
         },
         RemoteFsRep::Error { error, request_id } => {
             // No op context — emit a FileTree-shaped error if we have a request id,

@@ -117,6 +117,8 @@ pub fn diff(
         || prev.global.subagents_open != next.global.subagents_open
         || prev.global.subagent_sel != next.global.subagent_sel
         || prev.global.palette_sel != next.global.palette_sel
+        || prev.global.pending_steer_sel != next.global.pending_steer_sel
+        || prev.global.pending_steer_focus != next.global.pending_steer_focus
     {
         return DiffResult::full();
     }

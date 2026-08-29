@@ -76,13 +76,15 @@ export function GraphBreadcrumb() {
   }, [refreshStashes, refreshBranches])
 
   return (
-    <div className="flex flex-none items-center gap-2 border-b border-koma-border px-3 py-1.5 text-[12px]">
+    <div className="@container/graphbar flex min-w-0 flex-none items-center gap-2 border-b border-koma-border px-3 py-1.5 text-[12px] @max-xs/graphbar:gap-1.5 @max-xs/graphbar:px-2 @max-[14rem]/graphbar:px-1.5">
       {/* Light git context (LEFT) — the breadcrumb seed; GK4 enriches this. */}
       <GitBranch size={13} className="flex-none text-koma-dim opacity-70" />
-      <span className="truncate font-mono text-koma-dim">{branchLabel}</span>
+      <span className="min-w-0 truncate font-mono text-koma-dim @max-[14rem]/graphbar:hidden" title={branchLabel}>
+        {branchLabel}
+      </span>
 
       {/* GitKraken-style action toolbar (GK4c): Fetch / Push / Branch / Stash / Pop */}
-      <div className="flex flex-none items-center gap-0.5 rounded border border-koma-border p-0.5">
+      <div className="flex min-w-0 flex-none items-center gap-0.5 overflow-x-auto rounded border border-koma-border p-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <ToolbarButton title="Fetch" onClick={gitFetch} disabled={!!remoteBusy}>
           <RefreshCw size={12} />
         </ToolbarButton>
@@ -104,7 +106,7 @@ export function GraphBreadcrumb() {
         </ToolbarButton>
       </div>
 
-      <span className="flex-1" />
+      <span className="min-w-0 flex-1" />
 
       {/* Rail-line / Bubble mode switch (RIGHT) */}
       <div className="flex flex-none rounded border border-koma-border p-0.5">
@@ -114,14 +116,14 @@ export function GraphBreadcrumb() {
           title="Rail-line view"
           aria-label="Rail-line view"
           aria-pressed={graphMode === 'rail'}
-          className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors ${
+          className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors @max-xs/graphbar:px-1.5 ${
             graphMode === 'rail'
               ? 'bg-koma-accent text-koma-bg opacity-100'
               : 'text-koma-fg opacity-55 hover:opacity-80'
           }`}
         >
           <GitBranch size={12} className="flex-none" />
-          Rail-line
+          <span className="@max-xs/graphbar:hidden">Rail-line</span>
         </button>
         <button
           type="button"
@@ -129,14 +131,14 @@ export function GraphBreadcrumb() {
           title="Bubble view"
           aria-label="Bubble view"
           aria-pressed={graphMode === 'bubble'}
-          className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors ${
+          className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors @max-xs/graphbar:px-1.5 ${
             graphMode === 'bubble'
               ? 'bg-koma-accent text-koma-bg opacity-100'
               : 'text-koma-fg opacity-55 hover:opacity-80'
           }`}
         >
           <Activity size={12} className="flex-none" />
-          Bubble
+          <span className="@max-xs/graphbar:hidden">Bubble</span>
         </button>
       </div>
     </div>

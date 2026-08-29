@@ -118,19 +118,9 @@ pub fn session_snapshot(
             .map(pending_subagent_snapshot)
             .collect(),
         resolved_model_id,
-        pending_steer: rt
-            .pending_steer
-            .iter()
-            .map(|s| {
-                let one_line = s.replace('\n', " ");
-                let t = one_line.trim().to_string();
-                if t.chars().count() > 48 {
-                    format!("{}…", t.chars().take(48).collect::<String>())
-                } else {
-                    t
-                }
-            })
-            .collect(),
+        // Full text (not truncated): clients need it for select/edit. TUI/GUI still
+        // ellipsize at render time for the row width.
+        pending_steer: rt.pending_steer.clone(),
         // Background-bash jobs (identity + raw status; no output) so the GUI sidepanel's
         // `bash[]` shows them. Reads the LIVE registry the jobs actually land in — the
         // same `bash_jobs` vec `bash_output`/`bash_kill` mutate — so finished/failed jobs
@@ -320,6 +310,8 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
         subagents_open: state.rest.subagents_open,
         subagent_sel: state.rest.subagent_sel,
         palette_sel: state.rest.palette_sel,
+        pending_steer_sel: state.rest.pending_steer_sel,
+        pending_steer_focus: state.rest.pending_steer_focus,
         pending_attachments: state.rest.fg().pending_attachments.clone(),
         file_palette: file_palette_matches(state),
         agent_mode: match state.rest.agent_mode() {

@@ -460,8 +460,58 @@ pub(in crate::app::runtime) fn apply_action(
         Action::CancelSteers => {
             let n = state.rest.fg().pending_steer.len();
             state.rest.fg_mut().pending_steer.clear();
+            state.rest.pending_steer_sel = 0;
+            state.rest.pending_steer_focus = false;
             if n > 0 {
-                state.rest.fg_mut().status = "steering queue cleared".into();
+                state.rest.fg_mut().status = "follow-ups cleared".into();
+            }
+        }
+
+        Action::RemoveSteer(idx) => {
+            let steers = &mut state.rest.fg_mut().pending_steer;
+            if idx < steers.len() {
+                steers.remove(idx);
+                let n = steers.len();
+                if n == 0 {
+                    state.rest.pending_steer_sel = 0;
+                    state.rest.pending_steer_focus = false;
+                    state.rest.fg_mut().status = "follow-up removed".into();
+                } else {
+                    if state.rest.pending_steer_sel >= n {
+                        state.rest.pending_steer_sel = n - 1;
+                    }
+                    state.rest.fg_mut().status = "follow-up removed".into();
+                }
+            }
+        }
+
+        Action::EditSteer(idx) => {
+            let text = {
+                let steers = &mut state.rest.fg_mut().pending_steer;
+                if idx < steers.len() {
+                    Some(steers.remove(idx))
+                } else {
+                    None
+                }
+            };
+            if let Some(text) = text {
+                let n = state.rest.fg().pending_steer.len();
+                if n == 0 {
+                    state.rest.pending_steer_sel = 0;
+                    state.rest.pending_steer_focus = false;
+                } else if state.rest.pending_steer_sel >= n {
+                    state.rest.pending_steer_sel = n - 1;
+                }
+                {
+                    let fg = state.rest.fg_mut();
+                    fg.input = text;
+                    fg.hist_idx = None;
+                    fg.input_stash.clear();
+                }
+                state.rest.cursor_end();
+                state.rest.palette_sel = 0;
+                state.rest.fg_mut().status =
+                    "follow-up loaded — edit and Enter to re-queue".into();
             }
         }
 

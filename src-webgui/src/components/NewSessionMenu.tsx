@@ -134,7 +134,7 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
       return
     }
     startSwitching(`remote ${name}`)
-    req({ r: 'ConnectRemoteHost', hostId })
+    requestAnimationFrame(() => req({ r: 'ConnectRemoteHost', hostId }))
     setOpen(false)
     afterPick?.()
   }
