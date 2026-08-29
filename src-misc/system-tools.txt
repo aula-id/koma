@@ -111,16 +111,35 @@ graph_query — query the code import graph for a project. Tracks file-level
 
 bash — run a shell command in the workspace (cargo, build, tests, general shell).
   May require approval in Normal mode. Output is stdout+stderr combined.
-  Arguments: { "command": "shell command", "timeout_ms": 120000 (optional) }
+  Arguments: { "command": "shell command",
+               "timeout_ms": 120000 (optional),
+               "run_in_background": true|false (optional, default false) }
   Example:   bash({"command": "cargo build --release 2>&1"})
+  Example:   bash({"command": "npm run dev", "run_in_background": true})
   Rules:
   - Use for cargo, make, and build/test tasks — NOT for git. For ANY git operation
     (status, diff, log, add, commit, push, pull, branch, checkout, stash, reset, …)
     call git_operator, not bash. A bash command that contains git is rejected with a
     nudge to git_operator, so reaching for bash git just wastes a turn.
+  - LONG-RUNNING / servers / watches / anything that should not block the turn:
+    set "run_in_background": true. Returns a job id immediately (e.g. "bash-1");
+    poll with bash_output, stop with bash_kill. Do NOT block the turn on a
+    foreground bash for open-ended processes (dev servers, tail -f, etc.).
   - IF A COMMAND IS DENIED OR FAILS, STOP. Do not retry. Briefly report what you
     intended and let the user decide.
   - Output is capped to the last ~400 000 chars; exit code is appended.
+
+bash_output — status + captured output of a background bash job
+  (one started by bash with run_in_background=true).
+  Arguments: { "job_id": "bash-1",
+               "tail_lines": N (optional),
+               "pattern": "regex (optional)" }
+  Example:   bash_output({"job_id": "bash-1"})
+  Example:   bash_output({"job_id": "bash-1", "tail_lines": 50, "pattern": "error"})
+
+bash_kill — terminate a running background bash job.
+  Arguments: { "job_id": "bash-1" }
+  Example:   bash_kill({"job_id": "bash-1"})
 
 git_operator — run a git command. This is the FIRST-CLASS way to do git in koma:
   ALWAYS prefer it over bash for anything git. It runs git directly (no shell-injection
