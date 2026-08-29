@@ -28,8 +28,9 @@ pub mod resolve;
 pub use catalog::{find, find_by_extension, ServerSpec, CATALOG};
 #[allow(unused_imports)]
 pub use client::{
-    language_id_for_path, LspCompletionItem, LspDiagnostic, LspDocumentSymbol, LspHover,
-    LspLocation, LspManager, LspRange,
+    language_id_for_path, DidOpenPrep, LspCompletionItem, LspCompletionList, LspDiagnostic,
+    LspDocumentSymbol, LspHover, LspLocation, LspManager, LspPendingRequest, LspRange,
+    LspRuntimeServer, LspTextEdit, ServerSession, UninitializedSession,
 };
 #[allow(unused_imports)]
 pub use install::{install_all, install_one, print_status, uninstall_one, ProgressFn};
@@ -118,7 +119,7 @@ pub fn print_usage() -> i32 {
          \n\
          managed ids:\n\
          \x20 rust-analyzer, vtsls, basedpyright, gopls, clangd,\n\
-         \x20 vscode-langservers, bash-language-server, taplo\n\
+         \x20 vscode-langservers, bash-language-server, intelephense, taplo\n\
          \x20 (lua-language-server, zls, nil: PATH discovery only for now)"
     );
     1

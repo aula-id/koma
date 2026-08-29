@@ -88,8 +88,8 @@ pub(crate) fn layout_chunks(rest: &AppStateRest, area: Rect) -> std::rc::Rc<[Rec
     let pending_h = if n == 0 {
         Constraint::Length(0)
     } else {
-        // +1 for the header row; n is capped at 5 daemon-side so max is 6 rows.
-        Constraint::Length((n as u16) + 1)
+        // +1 header, +1 footer hint; n capped at 5 daemon-side → max 7 rows.
+        Constraint::Length((n as u16) + 2)
     };
     Layout::default()
         .direction(Direction::Vertical)
@@ -104,33 +104,41 @@ pub(crate) fn layout_chunks(rest: &AppStateRest, area: Rect) -> std::rc::Rc<[Rec
         .split(area)
 }
 
-/// Render the pending-steer panel between the transcript and the model row.
+/// Render the pending follow-ups panel between the transcript and the model row.
 ///
 /// Header: a full-width top-border line with the label inline as a Block title,
 /// plus horizontal padding so the rows align with the composer content. Mirrors
 /// the composer block style (view/chat/input.rs): Borders::TOP only + horizontal
-/// padding of 2. One row per queued steer: an animated braille spinner glyph +
-/// the truncated preview text. Dim styling, left-aligned. Skipped entirely when
-/// the area is zero-height (no queued steers).
+/// padding of 2. One row per queued follow-up with a radio marker (● selected /
+/// ○ idle). Footer hint when focused. Skipped entirely when the area is
+/// zero-height (no queued steers).
 fn draw_pending_steers(frame: &mut Frame, area: Rect, rest: &AppStateRest, palette: &Palette) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
     let dim = Style::default().fg(palette.dim);
+    let focused = rest.pending_steer_focus;
+    let title_style = if focused {
+        Style::default().fg(palette.accent)
+    } else {
+        dim
+    };
+    let n = rest.fg().pending_steer.len();
+    let sel = if n == 0 {
+        0
+    } else {
+        rest.pending_steer_sel.min(n - 1)
+    };
 
-    // Full-width top border with an inline title + horizontal padding, matching the
-    // composer block (view/chat/input.rs): Borders::TOP spans the whole width and the
-    // title rides the border line; Padding::horizontal(2) insets the rows so they
-    // line up with the composer content.
+    let title = if focused {
+        " follow-ups "
+    } else {
+        " follow-ups (↑ to select) "
+    };
     let block = Block::new()
         .borders(Borders::TOP)
-        .border_style(dim)
-        .title(Span::styled(" pending (ctrl+x to cancel all) ", dim))
+        .border_style(title_style)
+        .title(Span::styled(title, title_style))
         .padding(Padding::horizontal(2));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -139,13 +147,33 @@ fn draw_pending_steers(frame: &mut Frame, area: Rect, rest: &AppStateRest, palet
     }
 
     let mut lines: Vec<Line> = Vec::new();
-    for (i, preview) in rest.fg().pending_steer.iter().enumerate() {
-        let glyph = SPINNER[((now_ms / 80 + i as u128) as usize) % SPINNER.len()];
-        let text = helpers::truncate_chars(preview, inner.width.saturating_sub(2) as usize);
+    let text_budget = inner.width.saturating_sub(2) as usize;
+    for (i, full) in rest.fg().pending_steer.iter().enumerate() {
+        let one_line = full.replace('\n', " ");
+        let text = helpers::truncate_chars(one_line.trim(), text_budget);
+        let is_sel = focused && i == sel;
+        let marker = if is_sel { "●" } else { "○" };
+        let style = if is_sel {
+            Style::default().fg(palette.accent)
+        } else {
+            dim
+        };
         lines.push(Line::from(vec![
-            Span::styled(format!("{glyph} "), dim),
-            Span::styled(text, dim),
+            Span::styled(format!("{marker} "), style),
+            Span::styled(text, style),
         ]));
+    }
+    // Footer hint row (fits in the +1 height reserved by layout_chunks).
+    if inner.height as usize > lines.len() {
+        let hint = if focused {
+            "enter edit · ↑↓ select · del remove · esc / ctrl+x clear"
+        } else {
+            "↑ select · ctrl+x clear all"
+        };
+        lines.push(Line::from(Span::styled(
+            helpers::truncate_chars(hint, inner.width as usize),
+            dim,
+        )));
     }
     frame.render_widget(Paragraph::new(lines), inner);
 }

@@ -1,5 +1,6 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef } from 'react'
 import { useKoma } from '../store/koma'
+import { isTabVisible, normalizeGroups } from '../store/editorGroups'
 
 // xterm.js is loaded dynamically to avoid bloating the initial bundle.
 // The actual Terminal class and addons are imported from @xterm/xterm.
@@ -19,6 +20,7 @@ export function TerminalTab({ tab }: TerminalTabProps) {
   const fitRef = useRef<FitAddon | null>(null)
   const req = useKoma((s) => s.req)
   const palette = useKoma((s) => s.palette)
+  const isActive = useKoma((s) => isTabVisible(normalizeGroups(s.ui), tab.id))
 
   const terminalId = tab.terminalId
 
@@ -143,6 +145,21 @@ export function TerminalTab({ tab }: TerminalTabProps) {
 
     return () => observer.disconnect()
   }, [terminalId, req])
+
+  // display:none inactive panes: refit when this terminal becomes visible again.
+  useEffect(() => {
+    if (!isActive) return
+    const fit = fitRef.current
+    if (!fit) return
+    const raf = requestAnimationFrame(() => {
+      fit.fit()
+      const dims = fit.proposeDimensions()
+      if (dims) {
+        req({ r: 'TerminalResize', id: terminalId, cols: dims.cols, rows: dims.rows })
+      }
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [isActive, terminalId, req])
 
   return (
     <div

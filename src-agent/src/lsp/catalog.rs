@@ -115,6 +115,15 @@ pub const CATALOG: &[ServerSpec] = &[
         args: &["start"],
     },
     ServerSpec {
+        id: "intelephense",
+        name: "Intelephense (PHP)",
+        binary: "intelephense",
+        extensions: &["php", "phtml", "php3", "php4", "php5", "phps"],
+        kind: InstallKind::Npm,
+        package: "intelephense",
+        args: &["--stdio"],
+    },
+    ServerSpec {
         id: "taplo",
         name: "Taplo (TOML)",
         binary: "taplo",
@@ -193,6 +202,13 @@ mod tests {
     fn find_by_extension_typescript() {
         let s = find_by_extension("tsx").expect("tsx");
         assert_eq!(s.id, "vtsls");
+    }
+
+    #[test]
+    fn find_by_extension_php() {
+        let s = find_by_extension("php").expect("php");
+        assert_eq!(s.id, "intelephense");
+        assert_eq!(find_by_extension("phtml").map(|s| s.id), Some("intelephense"));
     }
 
     #[test]

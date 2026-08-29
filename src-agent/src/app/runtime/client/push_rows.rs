@@ -12,9 +12,10 @@
 // envelopes the React client consumes and pushes them through
 // `window.__komaClient.push(...)`. These structs are the Rust half of the bridge
 // contract — `#[serde(tag = "k")]` names each envelope, matching the JS `push`
-// dispatcher's `k` switch EXACTLY. The host always pushes AUTHORITATIVE full values
-// (React REPLACES on `StreamMsg` / `Reasoning`, never appends); [`PushState`] dedups
-// so an unchanged frame emits nothing.
+// dispatcher's `k` switch EXACTLY. The host pushes AUTHORITATIVE values; live stream
+// / reasoning prefer `StreamDelta` / `ReasoningDelta` (append when prefix-stable),
+// with full `StreamMsg` / `Reasoning` kept for clear-on-commit and reload. [`PushState`]
+// dedups so an unchanged frame emits nothing.
 
 /// One committed conversation turn in a [`PushEnvelope::Snapshot`].
 ///
@@ -24,9 +25,12 @@
 /// can render the TUI's `● call → inline result box` grammar 1:1 without accumulating
 /// (the host pushes the AUTHORITATIVE full array; React REPLACES). Empty for non-tool
 /// turns (skipped from the wire) and for user messages.
-#[derive(serde::Serialize)]
+#[derive(Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct PushMsg {
+    /// Stable display index in the projected (System/Tool-filtered) transcript.
+    /// Used for React keys, RewindTo, and HistoryPage cursors.
+    pub(super) idx: usize,
     pub(super) role: &'static str,
     /// Special render kind for a USER message, detected daemon-side from its
     /// invisible sentinel prefix and STRIPPED out of `content` so React never
@@ -60,7 +64,7 @@ pub(super) struct PushMsg {
 /// - `status` = `"done"` once a matching `Role::Tool` result exists, else `"pending"`
 ///   (drives the ⚙→✓ glyph flip; resolved fresh each Snapshot so a late-landing result
 ///   re-emits — see the folded fingerprint).
-#[derive(serde::Serialize)]
+#[derive(Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct PushToolCall {
     pub(super) id: String,
@@ -78,7 +82,7 @@ pub(super) struct PushToolCall {
 /// `RemoveAttachment`; `name` is the on-disk basename; `kind` is `"image"`/`"file"`
 /// derived from the sniffed mime. Authoritative full array — React REPLACES on each
 /// Snapshot (a stage/drop re-emits the Snapshot via the folded fingerprint).
-#[derive(serde::Serialize)]
+#[derive(Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct PushAttachment {
     pub(super) marker_n: usize,

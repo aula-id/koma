@@ -20,6 +20,7 @@ import { RebaseDropConfirm } from './RebaseDropConfirm'
 import { GraphBreadcrumb } from './GraphBreadcrumb'
 import { GraphRefTree } from './GraphRefTree'
 import GraphBubble from './GraphBubble'
+import { isTabVisible, normalizeGroups } from '../store/editorGroups'
 
 // Rows outside the viewport rendered as a buffer above/below (smooth fast scroll).
 const OVERSCAN = 8
@@ -63,7 +64,7 @@ export default function GraphTab() {
   // tabs via a `hidden` class, it never unmounts them) — used below to
   // re-measure `viewportH` on the display:none -> visible flip, since a
   // ResizeObserver frequently misses that transition on WebKitGTK.
-  const isActiveTab = useKoma((s) => s.ui.activeTabId === 'graph')
+  const isActiveTab = useKoma((s) => isTabVisible(normalizeGroups(s.ui), 'graph'))
   const sessionId = useKoma((s) => s.session.id)
   const activeRepoRoot = useKoma((s) => s.activeRepoRoot)
 

@@ -639,33 +639,204 @@ fn watcher_supersede_bumps_desired_revision() {
         coord.desired_revision
     };
 
-    // Simulate a watcher event arriving while a scan is in_flight:
-    // set in_flight artificially.
+    // Simulate a watcher event after a successful full index (applied > 0).
     {
         let mut coord = state.scan_coordinator.lock().unwrap();
+        coord.applied_revision = coord.desired_revision.max(1);
         coord.in_flight = Some(coord.desired_revision);
     }
 
-    // Now the watcher_loop would bump desired_revision.  We simulate
-    // the relevant section of watcher_loop here:
+    // watcher_loop cancels only when applied_revision > 0.
     let superseded = {
         let mut coord = state.scan_coordinator.lock().unwrap();
         let was_in_flight = coord.in_flight.is_some();
-        if was_in_flight {
-            coord.desired_revision += 1;
+        if was_in_flight && coord.applied_revision > 0 {
+            coord.desired_revision = coord.desired_revision.saturating_add(1);
+            coord.cancel.store(true, Ordering::SeqCst);
+            true
+        } else {
+            false
         }
-        was_in_flight
     };
-    assert!(superseded, "should detect in-flight scan");
+    assert!(superseded, "should supersede after first index published");
 
     let after = {
         let coord = state.scan_coordinator.lock().unwrap();
+        assert!(coord.cancel.load(Ordering::SeqCst));
         coord.desired_revision
     };
     assert!(
         after > before,
         "desired_revision should advance after supersede: before={before}, after={after}"
     );
+}
+
+#[test]
+fn watcher_does_not_cancel_first_scan() {
+    // Under a sustained event stream, cancelling applied_revision==0 restarts
+    // forever and the first index never lands.
+    let state = test_state();
+    register(&state, "s1", &["/a"]);
+    std::thread::sleep(std::time::Duration::from_millis(10));
+
+    let before = {
+        let mut coord = state.scan_coordinator.lock().unwrap();
+        coord.applied_revision = 0;
+        coord.in_flight = Some(coord.desired_revision.max(1));
+        coord.cancel.store(false, Ordering::SeqCst);
+        coord.desired_revision
+    };
+
+    let superseded = {
+        let mut coord = state.scan_coordinator.lock().unwrap();
+        let was_in_flight = coord.in_flight.is_some();
+        if was_in_flight && coord.applied_revision > 0 {
+            coord.desired_revision = coord.desired_revision.saturating_add(1);
+            coord.cancel.store(true, Ordering::SeqCst);
+            true
+        } else {
+            false
+        }
+    };
+    assert!(!superseded, "first scan must not be cancelled by watcher");
+    let coord = state.scan_coordinator.lock().unwrap();
+    assert!(!coord.cancel.load(Ordering::SeqCst));
+    assert_eq!(coord.desired_revision, before);
+}
+
+#[test]
+fn watcher_supersede_reschedules_full_scan() {
+    // After a published full index, supersede must request_scan (coalesced).
+    let state = test_state();
+    register(&state, "s1", &["/nonexistent_for_supersede_reschedule"]);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    {
+        let mut coord = state.scan_coordinator.lock().unwrap();
+        coord.applied_revision = coord.desired_revision.max(1);
+        coord.in_flight = Some(coord.desired_revision.max(1));
+        coord.pending = None;
+        state.scanning.store(true, Ordering::SeqCst);
+    }
+
+    let superseded = {
+        let mut coord = state.scan_coordinator.lock().unwrap();
+        let was = coord.in_flight.is_some();
+        if was && coord.applied_revision > 0 {
+            coord.desired_revision = coord.desired_revision.saturating_add(1);
+            coord.cancel.store(true, Ordering::SeqCst);
+            true
+        } else {
+            false
+        }
+    };
+    assert!(superseded);
+    let all_roots = collect_all_roots(&state);
+    let rev = request_scan(&state, all_roots);
+
+    let (pending, desired) = {
+        let coord = state.scan_coordinator.lock().unwrap();
+        (coord.pending.is_some(), coord.desired_revision)
+    };
+    assert!(
+        pending || state.scanning.load(Ordering::SeqCst),
+        "supersede must leave a pending or running full scan"
+    );
+    assert_eq!(desired, rev);
+
+    // first_scan_needed gate uses applied_revision, not generation.
+    {
+        let mut coord = state.scan_coordinator.lock().unwrap();
+        coord.applied_revision = 0;
+    }
+    {
+        let mut g = state.graph.write().unwrap();
+        g.generation = 5; // watcher incremental bump must not hide missing full scan
+    }
+    let first_scan_needed = {
+        let coord = state.scan_coordinator.lock().unwrap();
+        coord.applied_revision == 0
+    };
+    assert!(
+        first_scan_needed,
+        "applied_revision==0 must still demand a full scan even if generation>0"
+    );
+}
+
+#[test]
+fn request_scan_single_flight_no_stacked_spawns() {
+    let state = test_state();
+    // Seed a root so rescan has something to target.
+    register(&state, "s1", &["/nonexistent_for_single_flight"]);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    let spawns_before = {
+        let coord = state.scan_coordinator.lock().unwrap();
+        coord.spawn_count
+    };
+
+    // Thrash: many supersede requests while a worker may be running.
+    for _ in 0..20 {
+        request_scan(&state, vec![PathBuf::from("/nonexistent_for_single_flight")]);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let (spawns_after, desired) = {
+        let coord = state.scan_coordinator.lock().unwrap();
+        (coord.spawn_count, coord.desired_revision)
+    };
+    // At most one additional worker beyond whatever the register started
+    // (pending coalesce means thrash does not stack threads).
+    assert!(
+        spawns_after <= spawns_before + 1,
+        "thrash must not stack scan workers: before={spawns_before} after={spawns_after}"
+    );
+    assert!(desired >= 20, "each request_scan bumps desired_revision");
+}
+
+#[test]
+fn request_scan_coalesce_pending_newest_wins() {
+    let state = test_state();
+    // Force idle coordinator with no running worker by waiting out any scan.
+    for _ in 0..50 {
+        if !state.scanning.load(Ordering::SeqCst) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    // Artificially hold a fake in-flight so request_scan only queues pending.
+    {
+        let mut coord = state.scan_coordinator.lock().unwrap();
+        coord.in_flight = Some(coord.desired_revision.max(1));
+        coord.pending = None;
+        state.scanning.store(true, Ordering::SeqCst);
+    }
+
+    request_scan(&state, vec![PathBuf::from("/old")]);
+    request_scan(&state, vec![PathBuf::from("/new")]);
+
+    let pending_roots = {
+        let coord = state.scan_coordinator.lock().unwrap();
+        coord
+            .pending
+            .as_ref()
+            .map(|p| p.roots.clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        pending_roots,
+        vec![PathBuf::from("/new")],
+        "newest pending roots must win"
+    );
+
+    // Release fake in-flight so the test doesn't leave scanning stuck.
+    {
+        let mut coord = state.scan_coordinator.lock().unwrap();
+        coord.in_flight = None;
+        coord.pending = None;
+        state.scanning.store(false, Ordering::SeqCst);
+    }
 }
 
 #[test]

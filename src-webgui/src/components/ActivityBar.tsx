@@ -149,7 +149,10 @@ export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onH
       // because some item is config-hidden (it must be reachable somewhere).
       const needsMenu = configVisible.length > fitsAll || configHiddenItems.length > 0
       const available = needsMenu ? Math.max(0, availableNoMenu - ITEM_H) : availableNoMenu
-      setFitCount(Math.max(0, Math.floor(available / ITEM_H)))
+      const next = Math.max(0, Math.floor(available / ITEM_H))
+      // Equality guard: mounting the "…" slot changes layout and can re-fire RO
+      // near the overflow boundary (same class of React #185 as TabBar chevrons).
+      setFitCount((v) => (v === next ? v : next))
     }
     compute()
     const ro = new ResizeObserver(compute)

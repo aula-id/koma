@@ -1,763 +1,698 @@
-import { MessageSquare, FileDiff, Settings, CircleHelp, GraduationCap, Bot, Terminal, GitGraph, BarChart3, Blocks, Puzzle, Code2, X, ChevronLeft, ChevronRight, Package, Network, SquareTerminal } from 'lucide-react'
-import { useKoma } from '../store/koma'
-import { useRef, useEffect, useState, useCallback, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  BarChart3,
+  Blocks,
+  Bot,
+  ChevronLeft,
+  ChevronRight,
+  CircleHelp,
+  Code2,
+  Columns2,
+  FileDiff,
+  GitGraph,
+  GraduationCap,
+  MessageSquare,
+  Network,
+  Package,
+  PanelBottom,
+  PanelRight,
+  Puzzle,
+  Rows2,
+  Settings,
+  SquareTerminal,
+  Terminal,
+  X,
+  type LucideIcon,
+} from 'lucide-react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent as ReactDragEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from 'react'
+import { createPortal } from 'react-dom'
+import { useShallow } from 'zustand/react/shallow'
+import { hasCodingPathDrag, readCodingPathDragData } from '../lib/codingRef'
 import { fileKey } from '../store/coding'
+import {
+  MAX_GROUPS,
+  groupOf,
+  normalizeGroups,
+  type EditorGroupId,
+} from '../store/editorGroups'
+import { useKoma, type Tab } from '../store/koma'
 import { DirtyCloseConfirm } from './DirtyCloseConfirm'
 
-// Parent directory of a path — used to disambiguate two open tabs that share a
-// basename (VSCode-style dim suffix).
+/** Native drag payload shared with the pane drop targets in routes/index.tsx. */
+export const TAB_DRAG_MIME = 'application/x-koma-tab'
+
+export function draggedTabId(e: Pick<DragEvent, 'dataTransfer'>): string | null {
+  return e.dataTransfer?.getData(TAB_DRAG_MIME) || null
+}
+
 function parentDir(path: string): string {
   const parts = path.split('/').filter(Boolean)
   return parts.length > 1 ? parts[parts.length - 2] : ''
 }
 
-// VSCode-style tab strip over the main content column. tabs[0] is the permanent,
-// uncloseable chat tab; diff tabs open from the Explorer's File-changed rows.
-// Hidden entirely until at least one diff tab exists (zero chrome cost until the
-// feature is used). Styling matches the app chrome idiom (ActivityBar): panel2
-// strip, active row raised onto the canvas bg with a top accent line in fg.
-export function TabBar() {
-  const tabs = useKoma((s) => s.ui.tabs)
-  const activeTabId = useKoma((s) => s.ui.activeTabId)
+type CodingDirtyFlags = {
+  dirty: boolean
+  conflict: boolean
+  error: boolean
+  binary: boolean
+  tooLarge: boolean
+  saving: boolean
+  savedContentNull: boolean
+}
+
+type TabVisual = {
+  Icon: LucideIcon
+  label: ReactNode
+  title: string
+  suffix?: string
+}
+
+function tabVisual(
+  tab: Tab,
+  counts: Map<string, number>,
+  dirty: CodingDirtyFlags | undefined,
+): TabVisual {
+  switch (tab.kind) {
+    case 'chat':
+      return { Icon: MessageSquare, label: 'chat', title: 'Chat' }
+    case 'settings':
+      return { Icon: Settings, label: 'Settings', title: 'Settings' }
+    case 'help':
+      return { Icon: CircleHelp, label: 'Help', title: 'Help' }
+    case 'tutorial':
+      return { Icon: GraduationCap, label: 'Tutorial', title: 'Tutorial' }
+    case 'graph':
+      return { Icon: GitGraph, label: 'Graph', title: 'Commit Graph' }
+    case 'importGraph':
+      return { Icon: Network, label: 'Import Graph', title: 'Import Graph' }
+    case 'analytics':
+      return { Icon: BarChart3, label: 'Analytics', title: 'Analytics' }
+    case 'store':
+      return { Icon: Blocks, label: 'Extensions', title: 'Extensions' }
+    case 'installedExtension':
+      return {
+        Icon: Package,
+        label: tab.title || tab.extId.split('.').pop() || tab.extId,
+        title: tab.extId,
+      }
+    case 'extension':
+      return { Icon: Puzzle, label: tab.title, title: tab.title }
+    case 'codingFile': {
+      const isNew = !!dirty?.dirty && !!dirty.savedContentNull
+      return {
+        Icon: Code2,
+        title: tab.path,
+        label: (
+          <>
+            {dirty?.dirty ? (
+              <span
+                className={`mr-0.5 font-mono text-[10px] font-semibold ${
+                  isNew ? 'text-koma-success' : 'text-koma-accent'
+                }`}
+              >
+                {isNew ? 'A' : 'M'}
+              </span>
+            ) : null}
+            {tab.title}
+          </>
+        ),
+      }
+    }
+    case 'agent':
+      return { Icon: Bot, label: tab.agentId ?? 'new agent', title: tab.agentId ?? 'new agent' }
+    case 'subagent':
+      return { Icon: Bot, label: tab.title, title: tab.title }
+    case 'bash':
+      return { Icon: Terminal, label: tab.title, title: tab.title }
+    case 'terminal':
+      return { Icon: SquareTerminal, label: tab.title, title: tab.title }
+    case 'diff':
+      return {
+        Icon: FileDiff,
+        label: tab.title,
+        title: tab.path,
+        suffix: (counts.get(tab.title) ?? 0) > 1 ? parentDir(tab.path) : '',
+      }
+  }
+}
+
+type MenuState = { x: number; y: number; tabId: string }
+
+function TabContextMenu({
+  state,
+  groupId,
+  canSplit,
+  canToggle,
+  onRequestClose,
+  onClose,
+}: {
+  state: MenuState
+  groupId: EditorGroupId
+  canSplit: boolean
+  canToggle: boolean
+  onRequestClose: (tabId: string) => void
+  onClose: () => void
+}) {
+  const splitTab = useKoma((s) => s.splitTab)
+  const toggleSplitDir = useKoma((s) => s.toggleSplitDir)
+  const splitDir = useKoma((s) => s.ui.splitDir)
+  const ref = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState({ left: state.x, top: state.y })
+
+  useEffect(() => {
+    const el = ref.current
+    if (el) {
+      setPos({
+        left: Math.max(4, Math.min(state.x, window.innerWidth - el.offsetWidth - 4)),
+        top: Math.max(4, Math.min(state.y, window.innerHeight - el.offsetHeight - 4)),
+      })
+    }
+    const outside = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) onClose()
+    }
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('mousedown', outside, true)
+    window.addEventListener('keydown', key)
+    return () => {
+      window.removeEventListener('mousedown', outside, true)
+      window.removeEventListener('keydown', key)
+    }
+  }, [onClose, state.x, state.y])
+
+  const item =
+    'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-80 transition-colors hover:bg-koma-hover hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-35'
+
+  return createPortal(
+    <div
+      ref={ref}
+      style={{ position: 'fixed', ...pos, width: 210, zIndex: 95 }}
+      className="overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm"
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {canSplit ? (
+        <>
+          <button
+            type="button"
+            className={item}
+            onClick={() => {
+              splitTab(state.tabId, groupId, 'after', 'row')
+              onClose()
+            }}
+          >
+            <PanelRight size={13} />
+            Split Right
+          </button>
+          <button
+            type="button"
+            className={item}
+            onClick={() => {
+              splitTab(state.tabId, groupId, 'after', 'col')
+              onClose()
+            }}
+          >
+            <PanelBottom size={13} />
+            Split Down
+          </button>
+        </>
+      ) : canToggle ? (
+        <button
+          type="button"
+          className={item}
+          onClick={() => {
+            toggleSplitDir()
+            onClose()
+          }}
+        >
+          {splitDir === 'row' ? <Rows2 size={13} /> : <Columns2 size={13} />}
+          {splitDir === 'row' ? 'Stack Vertically' : 'Split Horizontally'}
+        </button>
+      ) : null}
+      {state.tabId !== 'chat' && (
+        <>
+          {(canSplit || canToggle) && <div className="my-1 border-t border-koma-border" />}
+          <button
+            type="button"
+            className={item}
+            onClick={() => {
+              onRequestClose(state.tabId)
+              onClose()
+            }}
+          >
+            <X size={13} />
+            Close
+          </button>
+        </>
+      )}
+    </div>,
+    document.body,
+  )
+}
+
+type Props = {
+  groupId: EditorGroupId
+  focused: boolean
+}
+
+// One VSCode-style tab strip PER editor group. Native drag/drop moves tabs
+// between strips (or reorders inside one); right-click and the split button
+// create adjacent panes. All tab kinds share this renderer so the interaction
+// grammar cannot drift between file, diff, terminal, settings, and extension tabs.
+const CHEVRON_ON =
+  'flex w-6 flex-none items-center justify-center text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100'
+const CHEVRON_OFF =
+  'flex w-6 flex-none items-center justify-center text-koma-fg pointer-events-none opacity-0'
+
+export function TabBar({ groupId, focused }: Props) {
+  // Subscribe to strip-relevant ui fields only. groupSizes is deliberately
+  // excluded so grip-drag pixels do not repaint both TabBars.
+  const layoutBits = useKoma(
+    useShallow((s) => ({
+      tabs: s.ui.tabs,
+      groups: s.ui.groups,
+      tabGroup: s.ui.tabGroup,
+      groupActive: s.ui.groupActive,
+      activeGroupId: s.ui.activeGroupId,
+      activeTabId: s.ui.activeTabId,
+      splitDir: s.ui.splitDir,
+    })),
+  )
+  const ui = useMemo(
+    () =>
+      normalizeGroups({
+        tabs: layoutBits.tabs,
+        groups: layoutBits.groups,
+        tabGroup: layoutBits.tabGroup,
+        groupActive: layoutBits.groupActive,
+        activeGroupId: layoutBits.activeGroupId,
+        activeTabId: layoutBits.activeTabId,
+        splitDir: layoutBits.splitDir,
+        // Sizes are unused for strip paint; empty map is fine (normalize fills 1s).
+        groupSizes: {},
+      }),
+    [layoutBits],
+  )
+  const tabs = useMemo(
+    () => ui.tabs.filter((t) => groupOf(ui, t.id) === groupId),
+    [groupId, ui],
+  )
+  const activeTabId = ui.groupActive[groupId]
   const activateTab = useKoma((s) => s.activateTab)
   const closeTab = useKoma((s) => s.closeTab)
-  const codingFiles = useKoma((s) => s.coding.files)
+  const moveTabToGroup = useKoma((s) => s.moveTabToGroup)
+  const splitTab = useKoma((s) => s.splitTab)
+  const toggleSplitDir = useKoma((s) => s.toggleSplitDir)
+  const openCodingFile = useKoma((s) => s.openCodingFile)
+  const focusGroup = useKoma((s) => s.focusEditorGroup)
+  // Compact dirty signature string — avoids allocating nested objects every
+  // coding.files tick (useShallow would still see new child refs each time).
+  const codingDirtySig = useKoma((s) => {
+    const parts: string[] = []
+    for (const [k, f] of Object.entries(s.coding.files)) {
+      if (!f || !(f.dirty || f.conflict || f.saving)) continue
+      parts.push(
+        `${k}:${f.dirty ? 1 : 0}${f.conflict ? 1 : 0}${f.error ? 1 : 0}${f.binary ? 1 : 0}${
+          f.tooLarge ? 1 : 0
+        }${f.saving ? 1 : 0}${f.savedContent === null ? 1 : 0}`,
+      )
+    }
+    parts.sort()
+    return parts.join('|')
+  })
+  const codingDirty = useMemo(() => {
+    const out: Record<string, CodingDirtyFlags> = {}
+    if (!codingDirtySig) return out
+    for (const part of codingDirtySig.split('|')) {
+      const colon = part.indexOf(':')
+      if (colon < 0) continue
+      const k = part.slice(0, colon)
+      const f = part.slice(colon + 1)
+      out[k] = {
+        dirty: f[0] === '1',
+        conflict: f[1] === '1',
+        error: f[2] === '1',
+        binary: f[3] === '1',
+        tooLarge: f[4] === '1',
+        saving: f[5] === '1',
+        savedContentNull: f[6] === '1',
+      }
+    }
+    return out
+  }, [codingDirtySig])
   const codingAutosave = useKoma((s) => !!s.settingsValues?.codingAutosave)
   const saveCodingFile = useKoma((s) => s.saveCodingFile)
-  const [dirtyClose, setDirtyClose] = useState<{
-    id: string
-    title: string
-  } | null>(null)
+  const [menu, setMenu] = useState<MenuState | null>(null)
+  const [dirtyClose, setDirtyClose] = useState<{ id: string; title: string } | null>(null)
   const [awaitingAutosaveClose, setAwaitingAutosaveClose] = useState<{
     id: string
     title: string
   } | null>(null)
-
   const containerRef = useRef<HTMLDivElement>(null)
+  const leftBtnRef = useRef<HTMLButtonElement>(null)
+  const rightBtnRef = useRef<HTMLButtonElement>(null)
   const tabRefs = useRef<Map<string, HTMLDivElement | HTMLButtonElement | null>>(new Map())
-  const [canScrollLeft, setCanScrollLeft] = useState(false)
-  const [canScrollRight, setCanScrollRight] = useState(false)
+  // Last overflow flags applied via DOM — NEVER React state. ResizeObserver →
+  // setCanScroll* was still the #185 site (componentStack → TabBar) on split.
+  const overflowRef = useRef({ left: false, right: false })
 
   const requestClose = useCallback(
-    (id: string, title: string, e: ReactMouseEvent) => {
-      const tab = tabs.find((t) => t.id === id)
-      if (tab?.kind === 'codingFile') {
-        const fs = codingFiles[fileKey(tab.root, tab.path)]
+    (tab: Tab, e?: ReactMouseEvent) => {
+      if (tab.kind === 'codingFile') {
+        const fs = codingDirty[fileKey(tab.root, tab.path)]
         if (fs?.dirty) {
-          e.stopPropagation()
+          e?.stopPropagation()
           if (codingAutosave && !fs.conflict && !fs.error && !fs.binary && !fs.tooLarge) {
-            // Trigger a save and defer close until it completes.
-            setAwaitingAutosaveClose({ id, title })
+            setAwaitingAutosaveClose({ id: tab.id, title: tab.title })
             if (!fs.saving) saveCodingFile(tab.root, tab.path)
           } else {
-            setDirtyClose({ id, title })
+            setDirtyClose({ id: tab.id, title: tab.title })
           }
           return
         }
       }
-      e.stopPropagation()
-      closeTab(id)
+      e?.stopPropagation()
+      closeTab(tab.id)
     },
-    [tabs, codingFiles, codingAutosave, closeTab, saveCodingFile],
+    [closeTab, codingAutosave, codingDirty, saveCodingFile],
   )
 
-  // When awaiting autosave-close, watch the file state:
-  // - dirty cleared → close the tab.
-  // - error/conflict appeared → show the discard popover instead.
   useEffect(() => {
     if (!awaitingAutosaveClose) return
-    const tab = tabs.find((t) => t.id === awaitingAutosaveClose.id)
+    const tab = ui.tabs.find((t) => t.id === awaitingAutosaveClose.id)
     if (!tab || tab.kind !== 'codingFile') {
       setAwaitingAutosaveClose(null)
       return
     }
-    const fs = codingFiles[fileKey(tab.root, tab.path)]
-    if (!fs) { setAwaitingAutosaveClose(null); return }
-    if (fs.error || fs.conflict) {
-      // Save failed — fall back to the discard confirmation.
+    const fs = codingDirty[fileKey(tab.root, tab.path)]
+    if (!fs) {
       setAwaitingAutosaveClose(null)
-      setDirtyClose({ id: awaitingAutosaveClose.id, title: awaitingAutosaveClose.title })
-      return
-    }
-    if (!fs.dirty && !fs.saving) {
-      // Save succeeded — close the tab.
-      const id = awaitingAutosaveClose.id
+      closeTab(tab.id, { force: true })
+    } else if (fs.error || fs.conflict) {
       setAwaitingAutosaveClose(null)
-      closeTab(id, { force: true })
+      setDirtyClose({ id: tab.id, title: tab.title })
+    } else if (!fs.dirty && !fs.saving) {
+      setAwaitingAutosaveClose(null)
+      closeTab(tab.id, { force: true })
     }
-  }, [awaitingAutosaveClose, tabs, codingFiles, closeTab])
+  }, [awaitingAutosaveClose, closeTab, codingDirty, ui.tabs])
 
-  // Check overflow state on mount and whenever tabs change size/content
+  const applyOverflowDom = useCallback((left: boolean, right: boolean) => {
+    const prev = overflowRef.current
+    if (prev.left === left && prev.right === right) return
+    overflowRef.current = { left, right }
+    const lb = leftBtnRef.current
+    const rb = rightBtnRef.current
+    if (lb) {
+      lb.disabled = !left
+      lb.tabIndex = left ? 0 : -1
+      lb.setAttribute('aria-hidden', left ? 'false' : 'true')
+      lb.className = left ? CHEVRON_ON : CHEVRON_OFF
+    }
+    if (rb) {
+      rb.disabled = !right
+      rb.tabIndex = right ? 0 : -1
+      rb.setAttribute('aria-hidden', right ? 'false' : 'true')
+      rb.className = right ? CHEVRON_ON : CHEVRON_OFF
+    }
+  }, [])
+
   const checkOverflow = useCallback(() => {
     const el = containerRef.current
     if (!el) return
-    setCanScrollLeft(el.scrollLeft > 0)
-    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth)
-  }, [])
+    const left = el.scrollLeft > 1
+    const right = el.scrollWidth - el.clientWidth - el.scrollLeft > 1
+    applyOverflowDom(left, right)
+  }, [applyOverflowDom])
 
-  // Scroll the tab strip to reveal the active tab (called after activation)
-  const revealActiveTab = useCallback(() => {
-    const container = containerRef.current
-    const activeTab = tabRefs.current.get(activeTabId)
-    if (!container || !activeTab) return
-
-    const containerRect = container.getBoundingClientRect()
-    const tabRect = activeTab.getBoundingClientRect()
-
-    // If tab is before the visible area, scroll left to show it
-    if (tabRect.left < containerRect.left) {
-      container.scrollLeft += tabRect.left - containerRect.left
-    }
-    // If tab is after the visible area, scroll right to show it
-    else if (tabRect.right > containerRect.right) {
-      container.scrollLeft += tabRect.right - containerRect.right
-    }
-    // Re-check overflow after revealing
-    checkOverflow()
-  }, [activeTabId, checkOverflow])
-
-  // Attach scroll/resize listeners and clean up
+  // DOM-only overflow paint. No setState — RO under dual TabBars on split was
+  // still able to exceed React's update depth when chevrons/layout chrome reflowed.
   useEffect(() => {
-    checkOverflow()
     const el = containerRef.current
     if (!el) return
-
-    const handleScroll = () => {
-      setCanScrollLeft(el.scrollLeft > 0)
-      setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth)
+    let raf = 0
+    const schedule = () => {
+      if (raf) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        checkOverflow()
+      })
     }
-
-    el.addEventListener('scroll', handleScroll)
-    window.addEventListener('resize', checkOverflow)
-    const resizeObserver = new ResizeObserver(checkOverflow)
-    resizeObserver.observe(el)
-
-    // Reveal active tab after initial render + after resize
-    revealActiveTab()
-
+    const observer = new ResizeObserver(schedule)
+    observer.observe(el)
+    el.addEventListener('scroll', schedule, { passive: true })
+    schedule()
     return () => {
-      el.removeEventListener('scroll', handleScroll)
-      window.removeEventListener('resize', checkOverflow)
-      resizeObserver.disconnect()
+      observer.disconnect()
+      el.removeEventListener('scroll', schedule)
+      if (raf) cancelAnimationFrame(raf)
     }
-  }, [checkOverflow, revealActiveTab, tabs.length])
+  }, [checkOverflow, tabs.length, ui.groups.length])
 
-  // Re-reveal when active tab changes
+  // Reveal the active tab once when selection or strip membership changes.
   useEffect(() => {
-    revealActiveTab()
-  }, [activeTabId, revealActiveTab])
+    const strip = containerRef.current
+    const active = tabRefs.current.get(activeTabId)
+    if (!strip || !active) return
+    const raf = requestAnimationFrame(() => {
+      const sRect = strip.getBoundingClientRect()
+      const aRect = active.getBoundingClientRect()
+      const outside = aRect.left < sRect.left - 1 || aRect.right > sRect.right + 1
+      if (outside) {
+        active.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      }
+      checkOverflow()
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [activeTabId, checkOverflow, tabs.length])
 
-  // Scroll by one viewport width (smooth)
-  const scrollByViewport = (direction: 'left' | 'right') => {
-    const el = containerRef.current
-    if (!el) return
-    const delta = direction === 'left' ? -el.clientWidth : el.clientWidth
-    el.scrollBy({ left: delta, behavior: 'smooth' })
-  }
+  if (ui.tabs.length <= 1 && ui.groups.length <= 1) return null
 
-  if (tabs.length <= 1) return null
-
-  // Count basenames so a colliding title can show its parent dir.
   const counts = new Map<string, number>()
-  for (const t of tabs) {
+  for (const t of ui.tabs) {
     if (t.kind === 'diff') counts.set(t.title, (counts.get(t.title) ?? 0) + 1)
   }
 
+  const scroll = (dir: -1 | 1) => {
+    const el = containerRef.current
+    el?.scrollBy({ left: dir * el.clientWidth, behavior: 'smooth' })
+  }
+
+  const startDrag = (e: ReactDragEvent, tabId: string) => {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData(TAB_DRAG_MIME, tabId)
+    e.dataTransfer.setData('text/plain', tabId)
+  }
+
+  const acceptStripDrag = (e: ReactDragEvent) => {
+    if (e.dataTransfer.types.includes(TAB_DRAG_MIME)) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      return
+    }
+    if (hasCodingPathDrag(e.dataTransfer)) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    }
+  }
+
+  const dropBefore = (e: ReactDragEvent, beforeId: string | null) => {
+    const coding = readCodingPathDragData(e.dataTransfer)
+    if (coding) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (!coding.isDir) {
+        openCodingFile(coding.root, coding.path, { groupId, beforeId })
+      }
+      return
+    }
+    const tabId = e.dataTransfer.getData(TAB_DRAG_MIME)
+    if (!tabId) return
+    e.preventDefault()
+    e.stopPropagation()
+    moveTabToGroup(tabId, groupId, beforeId)
+  }
+
+  const canSplit = ui.groups.length < MAX_GROUPS
+  const canToggle = ui.groups.length >= 2
+  const activeCanSplit = activeTabId !== 'chat' && canSplit
+  // Always mount the layout control slot (both strips) so focus swaps never
+  // change strip width by 28px and re-fire overflow RO on the neighbour bar.
+  const layoutEnabled = focused && (canToggle || activeCanSplit)
+  const LayoutIcon = canToggle
+    ? ui.splitDir === 'row'
+      ? Rows2
+      : Columns2
+    : Columns2
+  const layoutLabel = !focused
+    ? 'Focus this group to change layout'
+    : canToggle
+      ? ui.splitDir === 'row'
+        ? 'Stack editors vertically'
+        : 'Split editors horizontally'
+      : activeCanSplit
+        ? 'Split editor right'
+        : 'Select a non-chat tab to split'
+
+  // Density is pure CSS container queries on this strip — no React width state
+  // (RO → setState dual-TabBar loops were the prior #185 class of bug).
+  //   ≥320px  full labels
+  //   <320px  compact padding + tighter max tab width, hide path suffix
+  //   <176px  icon-only tabs (label+suffix hidden; dirty → corner dot)
   return (
-    <div className="flex h-8 flex-none items-stretch border-b border-koma-border bg-koma-panel2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      {canScrollLeft && (
-        <button
-          onClick={() => scrollByViewport('left')}
-          aria-label="Scroll tabs left"
-          className="flex w-6 flex-none items-center justify-center text-koma-fg opacity-60 transition-colors hover:bg-koma-hover hover:opacity-100"
-        >
-          <ChevronLeft size={14} />
-        </button>
-      )}
+    <div
+      className={`@container/tabstrip flex h-8 min-w-0 items-stretch border-b border-koma-border bg-koma-panel2 ${
+        focused ? '' : 'opacity-75'
+      }`}
+      onMouseDown={() => {
+        if (!focused) focusGroup(groupId)
+      }}
+      onDragOver={acceptStripDrag}
+      onDrop={(e) => dropBefore(e, null)}
+    >
+      {/* Always reserve chevron width; enable/disable via DOM only (no setState). */}
+      <button
+        ref={leftBtnRef}
+        type="button"
+        onClick={() => scroll(-1)}
+        disabled
+        aria-label="Scroll tabs left"
+        aria-hidden="true"
+        tabIndex={-1}
+        className={`${CHEVRON_OFF} @max-[11rem]/tabstrip:w-5`}
+      >
+        <ChevronLeft size={14} />
+      </button>
       <div
         ref={containerRef}
         className="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        {tabs.map((t) => {
-          const active = t.id === activeTabId
-          const base =
-            'group relative flex h-full flex-none select-none items-center gap-1.5 border-r border-koma-border text-[12px] transition-colors'
-          const tone = active
-            ? 'bg-koma-bg text-koma-fg'
-            : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'
-          // Active indicator — a top accent line in fg, matching the ActivityBar's
-          // active-view bar.
-          const accent = active ? (
-            <span className="absolute inset-x-0 top-0 h-0.5 bg-koma-fg" />
-          ) : null
-
-          if (t.kind === 'chat') {
-            return (
-              <button
-                key={t.id}
-                ref={(el) => {
-                  tabRefs.current.set(t.id, el)
-                }}
-                onClick={() => activateTab(t.id)}
-                title="Chat"
-                className={`${base} ${tone} px-3`}
-              >
-                {accent}
-                <MessageSquare size={13} className="flex-none" />
-                <span>chat</span>
-              </button>
-            )
-          }
-
-          // Settings tab: closeable like a diff tab, with the gear icon + fixed title.
-          if (t.kind === 'settings') {
-            return (
-              <div
-                key={t.id}
-                ref={(el) => {
-                  tabRefs.current.set(t.id, el)
-                }}
-                role="button"
-                tabIndex={0}
-                onClick={() => activateTab(t.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-                }}
-                title="Settings"
-                className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
-              >
-                {accent}
-                <Settings size={13} className="flex-none opacity-80" />
-                <span className="truncate">Settings</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    closeTab(t.id)
-                  }}
-                  aria-label="Close tab"
-                  title="Close"
-                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                  }`}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            )
-          }
-
-          // Help tab: closeable like a diff tab, with a help icon + fixed title.
-          // Mirrors the Settings tab block exactly.
-          if (t.kind === 'help') {
-            return (
-              <div
-                key={t.id}
-                ref={(el) => {
-                  tabRefs.current.set(t.id, el)
-                }}
-                role="button"
-                tabIndex={0}
-                onClick={() => activateTab(t.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-                }}
-                title="Help"
-                className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
-              >
-                {accent}
-                <CircleHelp size={13} className="flex-none opacity-80" />
-                <span className="truncate">Help</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    closeTab(t.id)
-                  }}
-                  aria-label="Close tab"
-                  title="Close"
-                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                  }`}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            )
-          }
-
-          // Tutorial tab: closeable singleton, graduation icon + fixed title.
-          if (t.kind === 'tutorial') {
-            return (
-              <div
-                key={t.id}
-                ref={(el) => {
-                  tabRefs.current.set(t.id, el)
-                }}
-                role="button"
-                tabIndex={0}
-                onClick={() => activateTab(t.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-                }}
-                title="Tutorial"
-                className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
-              >
-                {accent}
-                <GraduationCap size={13} className="flex-none opacity-80" />
-                <span className="truncate">Tutorial</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    closeTab(t.id)
-                  }}
-                  aria-label="Close tab"
-                  title="Close"
-                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                  }`}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            )
-          }
-
-          // Commit-graph tab: closeable like a diff tab, GitGraph icon + fixed
-          // title. Mirrors the Settings/Help tab blocks exactly.
-          if (t.kind === 'graph') {
-            return (
-              <div
-                key={t.id}
-                ref={(el) => {
-                  tabRefs.current.set(t.id, el)
-                }}
-                role="button"
-                tabIndex={0}
-                onClick={() => activateTab(t.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-                }}
-                title="Commit Graph"
-                className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
-              >
-                {accent}
-                <GitGraph size={13} className="flex-none opacity-80" />
-                <span className="truncate">Graph</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    closeTab(t.id)
-                  }}
-                  aria-label="Close tab"
-                  title="Close"
-                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                  }`}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            )
-          }
-
-          // Import-graph tab: closeable singleton, Network icon + fixed title.
-          if (t.kind === 'importGraph') {
-            return (
-              <div
-                key={t.id}
-                ref={(el) => {
-                  tabRefs.current.set(t.id, el)
-                }}
-                role="button"
-                tabIndex={0}
-                onClick={() => activateTab(t.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-                }}
-                title="Import Graph"
-                className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
-              >
-                {accent}
-                <Network size={13} className="flex-none opacity-80" />
-                <span className="truncate">Import Graph</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    closeTab(t.id)
-                  }}
-                  aria-label="Close tab"
-                  title="Close"
-                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                  }`}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            )
-          }
-
-          // Analytics tab: closeable singleton, BarChart3 icon + fixed title.
-          if (t.kind === 'analytics') {
-            return (
-              <div
-                key={t.id}
-                ref={(el) => {
-                  tabRefs.current.set(t.id, el)
-                }}
-                role="button"
-                tabIndex={0}
-                onClick={() => activateTab(t.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-                }}
-                title="Analytics"
-                className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
-              >
-                {accent}
-                <BarChart3 size={13} className="flex-none opacity-80" />
-                <span className="truncate">Analytics</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    closeTab(t.id)
-                  }}
-                  aria-label="Close tab"
-                  title="Close"
-                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                  }`}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            )
-          }
-
-          // Extension STORE tab: closeable like a diff tab, Store icon + fixed
-          // title. Mirrors the Settings/Help/Graph tab blocks exactly.
-          if (t.kind === 'store') {
-            return (
-              <div
-                key={t.id}
-                ref={(el) => {
-                  tabRefs.current.set(t.id, el)
-                }}
-                role="button"
-                tabIndex={0}
-                onClick={() => activateTab(t.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-                }}
-                title="Extensions"
-                className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
-              >
-                {accent}
-                <Blocks size={13} className="flex-none opacity-80" />
-                <span className="truncate">Extensions</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    closeTab(t.id)
-                  }}
-                  aria-label="Close tab"
-                  title="Close"
-                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                  }`}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            )
-          }
-
-          // Installed-extension detail tab (Tab-B): closeable, Package icon,
-          // manifest title.
-          if (t.kind === 'installedExtension') {
-            const label = t.title || t.extId.split('.').pop() || t.extId
-            return (
-              <div
-                key={t.id}
-                ref={(el) => {
-                  tabRefs.current.set(t.id, el)
-                }}
-                role="button"
-                tabIndex={0}
-                onClick={() => activateTab(t.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-                }}
-                title={t.extId}
-                className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
-              >
-                {accent}
-                <Package size={13} className="flex-none opacity-80" />
-                <span className="truncate">{label}</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    closeTab(t.id)
-                  }}
-                  aria-label="Close tab"
-                  title="Close"
-                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                  }`}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            )
-          }
-
-          // Extension PANEL tab: closeable like a diff tab, Puzzle icon + the
-          // panel's title. Mirrors the Settings/Help/Graph/Store tab blocks
-          // exactly — content is the `<iframe>` TabbedMain renders for `t.kind
-          // === 'extension'`, not anything drawn here.
-          if (t.kind === 'extension') {
-            return (
-              <div
-                key={t.id}
-                ref={(el) => {
-                  tabRefs.current.set(t.id, el)
-                }}
-                role="button"
-                tabIndex={0}
-                onClick={() => activateTab(t.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-                }}
-                title={t.title}
-                className={`${base} ${tone} max-w-[220px] cursor-pointer pl-3 pr-1.5`}
-              >
-                {accent}
-                <Puzzle size={13} className="flex-none opacity-80" />
-                <span className="truncate">{t.title}</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    closeTab(t.id)
-                  }}
-                  aria-label="Close tab"
-                  title="Close"
-                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                  }`}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            )
-          }
-
-          // Coding panel file editor tab: Code2 icon + title, dirty letter badge.
-          if (t.kind === 'codingFile') {
-            const fs = codingFiles[fileKey(t.root, t.path)]
-            const dirty = !!fs?.dirty
-            const isNew = dirty && fs?.savedContent === null
-            return (
-              <div
-                key={t.id}
-                ref={(el) => {
-                  tabRefs.current.set(t.id, el)
-                }}
-                role="button"
-                tabIndex={0}
-                onClick={() => activateTab(t.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-                }}
-                title={t.path}
-                className={`${base} ${tone} max-w-[220px] cursor-pointer pl-3 pr-1.5`}
-              >
-                {accent}
-                <Code2 size={13} className="flex-none opacity-80" />
-                <span className="truncate">
-                  {dirty ? (
-                    <span className={`mr-0.5 font-mono text-[10px] font-semibold ${isNew ? 'text-koma-success' : 'text-koma-accent'}`}>
-                      {isNew ? 'A' : 'M'}
-                    </span>
-                  ) : null}
-                  {t.title}
-                </span>
-                <button
-                  onClick={(e) => requestClose(t.id, t.title, e)}
-                  aria-label="Close tab"
-                  title="Close"
-                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                  }`}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            )
-          }
-
-          // Agent editor tab: closeable like a diff tab, with a Bot icon + the
-          // agent's current name (or "new agent" while agentId is still null,
-          // i.e. an unsaved create). Label tracks `agentId` live, so a rename
-          // mid-edit (before OR after Save rebinds it — see renameAgentTab)
-          // always shows the current name, never a stale one.
-          if (t.kind === 'agent') {
-            return (
-              <div
-                key={t.id}
-                ref={(el) => {
-                  tabRefs.current.set(t.id, el)
-                }}
-                role="button"
-                tabIndex={0}
-                onClick={() => activateTab(t.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-                }}
-                title={t.agentId ?? 'new agent'}
-                className={`${base} ${tone} max-w-[220px] cursor-pointer pl-3 pr-1.5`}
-              >
-                {accent}
-                <Bot size={13} className="flex-none opacity-80" />
-                <span className="truncate">{t.agentId ?? 'new agent'}</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    closeTab(t.id)
-                  }}
-                  aria-label="Close tab"
-                  title="Close"
-                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                  }`}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            )
-          }
-
-          // Stream tabs (read-only sub-agent transcript / bash output): closeable like a
-          // diff tab, with a Bot / Terminal icon + the title (agent name / truncated cmd).
-          if (t.kind === 'subagent' || t.kind === 'bash') {
-            const Icon = t.kind === 'subagent' ? Bot : Terminal
-            return (
-              <div
-                key={t.id}
-                ref={(el) => {
-                  tabRefs.current.set(t.id, el)
-                }}
-                role="button"
-                tabIndex={0}
-                onClick={() => activateTab(t.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-                }}
-                title={t.title}
-                className={`${base} ${tone} max-w-[220px] cursor-pointer pl-3 pr-1.5`}
-              >
-                {accent}
-                <Icon size={13} className="flex-none opacity-80" />
-                <span className="truncate">{t.title}</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    closeTab(t.id)
-                  }}
-                  aria-label="Close tab"
-                  title="Close"
-                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                  }`}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            )
-          }
-
-          // Interactive terminal tab: closeable, SquareTerminal icon + title.
-          if (t.kind === 'terminal') {
-            return (
-              <div
-                key={t.id}
-                ref={(el) => {
-                  tabRefs.current.set(t.id, el)
-                }}
-                role="button"
-                tabIndex={0}
-                onClick={() => activateTab(t.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-                }}
-                title={t.title}
-                className={`${base} ${tone} max-w-[220px] cursor-pointer pl-3 pr-1.5`}
-              >
-                {accent}
-                <SquareTerminal size={13} className="flex-none opacity-80" />
-                <span className="truncate">{t.title}</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    closeTab(t.id)
-                  }}
-                  aria-label="Close tab"
-                  title="Close"
-                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                  }`}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            )
-          }
-
-          const dir = (counts.get(t.title) ?? 0) > 1 ? parentDir(t.path) : ''
-          // A div (not a button) so the close × can nest without invalid
-          // button-in-button markup; keyboard-activatable via role/tabIndex.
+        {tabs.map((tab) => {
+          const active = tab.id === activeTabId
+          const fs =
+            tab.kind === 'codingFile' ? codingDirty[fileKey(tab.root, tab.path)] : undefined
+          const visual = tabVisual(tab, counts, fs)
+          const { Icon } = visual
+          const dirtyDot = !!fs?.dirty
           return (
             <div
-              key={t.id}
+              key={tab.id}
               ref={(el) => {
-                tabRefs.current.set(t.id, el)
+                tabRefs.current.set(tab.id, el)
               }}
-              role="button"
+              role="tab"
+              aria-selected={active}
               tabIndex={0}
-              onClick={() => activateTab(t.id)}
+              draggable={tab.id !== 'chat'}
+              onDragStart={(e) => startDrag(e, tab.id)}
+              onDragOver={acceptStripDrag}
+              onDrop={(e) => dropBefore(e, tab.id)}
+              onClick={() => activateTab(tab.id)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
+                if (e.key === 'Enter' || e.key === ' ') activateTab(tab.id)
               }}
-              title={t.path}
-              className={`${base} ${tone} max-w-[220px] cursor-pointer pl-3 pr-1.5`}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                activateTab(tab.id)
+                setMenu({ x: e.clientX, y: e.clientY, tabId: tab.id })
+              }}
+              title={visual.title}
+              className={`group relative flex h-full max-w-[220px] flex-none cursor-pointer select-none items-center gap-1.5 border-r border-koma-border pl-3 pr-1.5 text-[12px] transition-colors @max-xs/tabstrip:max-w-[148px] @max-xs/tabstrip:gap-1 @max-xs/tabstrip:pl-2 @max-xs/tabstrip:pr-1 @max-[11rem]/tabstrip:max-w-none @max-[11rem]/tabstrip:gap-0 @max-[11rem]/tabstrip:px-1.5 ${
+                active
+                  ? 'bg-koma-bg text-koma-fg'
+                  : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'
+              }`}
             >
-              {accent}
-              <FileDiff size={13} className="flex-none opacity-80" />
-              <span className="truncate">{t.title}</span>
-              {dir && <span className="flex-none truncate text-koma-dim opacity-60">{dir}</span>}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  closeTab(t.id)
-                }}
-                aria-label="Close tab"
-                title="Close"
-                className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                  active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                }`}
-              >
-                <X size={12} />
-              </button>
+              {active && <span className="absolute inset-x-0 top-0 h-0.5 bg-koma-fg" />}
+              <span className="relative flex-none">
+                <Icon size={13} className="opacity-80" />
+                {/* Icon-only density: dirty marker moves off the hidden label. */}
+                {dirtyDot && (
+                  <span
+                    aria-hidden
+                    className="absolute -right-0.5 -bottom-0.5 hidden h-1.5 w-1.5 rounded-full bg-koma-accent @max-[11rem]/tabstrip:block"
+                  />
+                )}
+              </span>
+              <span className="min-w-0 truncate @max-[11rem]/tabstrip:hidden">{visual.label}</span>
+              {visual.suffix && (
+                <span className="flex-none truncate text-koma-dim opacity-60 @max-xs/tabstrip:hidden">
+                  {visual.suffix}
+                </span>
+              )}
+              {tab.id !== 'chat' && (
+                <button
+                  onClick={(e) => requestClose(tab, e)}
+                  aria-label={`Close ${visual.title}`}
+                  title="Close"
+                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 @max-[11rem]/tabstrip:ml-0 ${
+                    active
+                      ? 'opacity-70'
+                      : 'opacity-0 group-hover:opacity-70 @max-[11rem]/tabstrip:opacity-50'
+                  }`}
+                >
+                  <X size={12} />
+                </button>
+              )}
             </div>
           )
         })}
       </div>
-      {canScrollRight && (
-        <button
-          onClick={() => scrollByViewport('right')}
-          aria-label="Scroll tabs right"
-          className="flex w-6 flex-none items-center justify-center text-koma-fg opacity-60 transition-colors hover:bg-koma-hover hover:opacity-100"
-        >
-          <ChevronRight size={14} />
-        </button>
+      <button
+        ref={rightBtnRef}
+        type="button"
+        onClick={() => scroll(1)}
+        disabled
+        aria-label="Scroll tabs right"
+        aria-hidden="true"
+        tabIndex={-1}
+        className={`${CHEVRON_OFF} @max-[11rem]/tabstrip:w-5`}
+      >
+        <ChevronRight size={14} />
+      </button>
+      <button
+        type="button"
+        disabled={!layoutEnabled}
+        onClick={(e) => {
+          e.stopPropagation()
+          if (!focused) {
+            focusGroup(groupId)
+            return
+          }
+          if (canToggle) {
+            toggleSplitDir()
+            return
+          }
+          if (activeCanSplit) splitTab(activeTabId, groupId, 'after', 'row')
+        }}
+        aria-label={layoutLabel}
+        title={layoutLabel}
+        className={`flex w-7 flex-none items-center justify-center text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:cursor-not-allowed @max-[11rem]/tabstrip:w-6 ${
+          focused ? 'opacity-70 hover:opacity-100' : 'opacity-25'
+        } disabled:opacity-25`}
+      >
+        <LayoutIcon size={13} />
+      </button>
+      {menu && (
+        <TabContextMenu
+          state={menu}
+          groupId={groupId}
+          canSplit={menu.tabId !== 'chat' && canSplit}
+          canToggle={canToggle}
+          onRequestClose={(tabId) => {
+            const tab = ui.tabs.find((candidate) => candidate.id === tabId)
+            if (tab) requestClose(tab)
+          }}
+          onClose={() => setMenu(null)}
+        />
       )}
       {dirtyClose && (
         <DirtyCloseConfirm

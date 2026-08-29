@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "agent"
-version = "0.3.27"
+version = "0.3.28"
 dependencies = [
  "aes-gcm",
  "anyhow",

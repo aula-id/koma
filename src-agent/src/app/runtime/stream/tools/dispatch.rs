@@ -57,7 +57,27 @@ pub(crate) fn dispatch_deferred(state: &mut AppState, sess_idx: usize, call: &To
     // shimmering status surfaces what the agent is doing while it's parked.
     state.rest.sessions[sess_idx].status = format!("running {}", call.function.name);
     std::thread::spawn(move || {
-        let result = crate::tool::execute_tool(&ctx, &call_cloned);
+        // Always send a result so a panicking deferred tool cannot leave the
+        // round parked forever on pending_tool_tasks (message_find hang class).
+        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::tool::execute_tool(&ctx, &call_cloned)
+        })) {
+            Ok(s) => s,
+            Err(payload) => {
+                let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                    (*s).to_string()
+                } else if let Some(s) = payload.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".into()
+                };
+                crate::model::store::append_global_error_log(
+                    "dispatch",
+                    &format!("deferred tool panicked: {msg}"),
+                );
+                format!("error: tool panicked: {msg}")
+            }
+        };
         let _ = tx.send((id, result));
     });
     state.rest.sessions[sess_idx]
@@ -265,6 +285,9 @@ pub(super) fn finish_tool_round(
     // continues with its reasoning intact. Drained here = "sent in one window".
     let steers = std::mem::take(&mut state.rest.sessions[sess_idx].pending_steer);
     if !steers.is_empty() {
+        // Queue emptied — drop list focus/selection so a later enqueue starts clean.
+        state.rest.pending_steer_sel = 0;
+        state.rest.pending_steer_focus = false;
         let joined = steers.join("\n\n");
         if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
             let _ = crate::model::msglog::append(&sess.path, Role::User, &joined, None, None);

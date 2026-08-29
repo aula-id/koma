@@ -11,7 +11,7 @@
 //! caller ([`super::host::run_host_relay`]) does next.
 
 use std::sync::mpsc::{Receiver, Sender};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::app::mode::{Mode, SessionHub};
 use crate::app::state::AppState;
@@ -25,12 +25,16 @@ use super::push_intercept;
 use super::push_proto::{
     push_analytics, push_ext_op_result, push_file_diff, push_installed_extensions,
     push_remote_state, push_store_catalogue, push_store_detail, push_switching, push_tutorial_chat_done,
-    push_usage_preview,
+    push_usage_preview, PushMsg,
 };
 use super::render::{advance_local_animations, ConnectRemoteRequest, FRAME_BUDGET};
 use super::shadow::apply_frame;
 use super::store_host;
 use super::tutorial_host;
+
+/// Quiet GUI fold cadence when nothing needs a push (~10 Hz). Busy / dirty frames
+/// still use [`FRAME_BUDGET`] (~60 Hz). GUI-only — TUI `render_loop` keeps 16 ms.
+const GUI_IDLE_BUDGET: Duration = Duration::from_millis(100);
 
 /// Snapshot of the full `Status` envelope payload.
 /// `(working, toast, toast_kind, tokens_in, tokens_cached, tokens_out, cost, mode)`.
@@ -51,6 +55,15 @@ type StatusSnapshot = (
 pub(super) struct PushState {
     /// Fingerprint of the last `Snapshot` (session + messages + title + palette).
     pub(super) snapshot_fp: Option<u64>,
+    /// Last full projected messages list (for SnapshotTail / SnapshotSetLast).
+    pub(super) last_messages: Option<Vec<PushMsg>>,
+    /// Older prefix to prepend on the next fold after a truncated first Snapshot.
+    /// Drained in chunks (see project.rs SNAPSHOT_HEAD_CHUNK).
+    pub(super) pending_snapshot_head: Option<(String, Vec<PushMsg>)>,
+    /// Older-than-auto-backfill prefix; served only via HistoryPage pull.
+    pub(super) held_history_head: Option<(String, Vec<PushMsg>)>,
+    /// Fingerprint of non-message Snapshot fields (must match for message patches).
+    pub(super) last_meta_fp: Option<u64>,
     /// Last streaming buffer pushed (`None` once cleared).
     pub(super) stream: Option<String>,
     /// Last reasoning buffer pushed (empty once cleared).
@@ -81,6 +94,10 @@ impl PushState {
     pub(super) fn new() -> Self {
         Self {
             snapshot_fp: None,
+            last_messages: None,
+            pending_snapshot_head: None,
+            held_history_head: None,
+            last_meta_fp: None,
             stream: None,
             reasoning: String::new(),
             status: None,
@@ -146,9 +163,9 @@ pub(super) enum HostTransition {
 /// `Select`/`New` returns an [`HostTransition::Attach`]; (a) drain every queued
 /// [`DaemonFrame`] and apply it (an `OpenSwapper`/`NewSession` hand-off returns the
 /// matching transition, a closed socket returns [`HostTransition::ToSwapper`]); (b)
-/// advance the local-clock animations + sweep the toast; (c) serialise the shadow and
-/// push whatever changed; then pace to the frame budget. Returns when a transition is
-/// resolved.
+/// advance the local-clock animations + sweep the toast; (c) when dirty, serialise
+/// the shadow and push whatever changed; then pace to a busy (~16ms) or idle (~100ms)
+/// budget. Returns when a transition is resolved.
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub(super) fn push_loop(
     push: &dyn Fn(String),
@@ -375,14 +392,27 @@ pub(super) fn push_loop(
         }
     }
 
+    // Last StreamView the fold pushed with — a tab switch dirties without a daemon frame.
+    let mut last_view = live_view.lock().map(|v| *v).unwrap_or_default();
+    // First live iteration must push so the webview gets the attach baseline even when
+    // prebuffered frames left PushState empty and no further daemon traffic arrives yet.
+    let mut force_push = true;
+
     loop {
         let frame_start = Instant::now();
+        let mut dirty = force_push;
+        let mut need_snapshot = force_push;
+        force_push = false;
 
         // --- (0) control messages from the ipc thread (NON-BLOCKING) ---
         loop {
             match ctl_rx.try_recv() {
                 // The page (re)booted: re-push the full authoritative state this frame.
-                Ok(super::HostCtl::Ready) => last.reset(),
+                Ok(super::HostCtl::Ready) => {
+                    last.reset();
+                    dirty = true;
+                    need_snapshot = true;
+                }
                 // A hub pick / new-session request: signal swap-START (so React raises the
                 // loader BEFORE this attached push_loop returns + the connection is torn
                 // down — the ONLY seam still holding a live socket), then hand back to the
@@ -1020,11 +1050,34 @@ pub(super) fn push_loop(
 
                 }
 
-                Ok(super::HostCtl::LspCompletion { root, path, line, character, request_id }) => {
+                Ok(super::HostCtl::LspCompletion {
+                    root,
+                    path,
+                    line,
+                    character,
+                    trigger_kind,
+                    trigger_character,
+                    request_id,
+                }) => {
+                    super::lsp_host::handle_client_ctl(
+                        super::HostCtl::LspCompletion {
+                            root,
+                            path,
+                            line,
+                            character,
+                            trigger_kind,
+                            trigger_character,
+                            request_id,
+                        },
+                        std::sync::Arc::clone(lsp_manager),
+                    );
+                }
+
+                Ok(super::HostCtl::LspCompletionResolve { root, path, item, request_id }) => {
 
                     super::lsp_host::handle_client_ctl(
 
-                        super::HostCtl::LspCompletion { root, path, line, character, request_id },
+                        super::HostCtl::LspCompletionResolve { root, path, item, request_id },
 
                         std::sync::Arc::clone(lsp_manager),
 
@@ -1140,7 +1193,9 @@ pub(super) fn push_loop(
                 | Ok(ctl @ super::HostCtl::FileRename { .. })
                 | Ok(ctl @ super::HostCtl::FileDelete { .. })
                 | Ok(ctl @ super::HostCtl::FileWriteBytes { .. })
-                | Ok(ctl @ super::HostCtl::FileDownloadBytes { .. }) => {
+                | Ok(ctl @ super::HostCtl::FileDownloadBytes { .. })
+                | Ok(ctl @ super::HostCtl::FileContentSearch { .. })
+                | Ok(ctl @ super::HostCtl::FileContentReplace { .. }) => {
                     if let Some(fs) = remote_fs {
                         fs.handle_file_ctl(&ctl, push);
                     } else if remote_ctx.is_some() {
@@ -1152,12 +1207,25 @@ pub(super) fn push_loop(
                             .as_deref()
                             .and_then(super::diff::session_workdirs_for)
                             .unwrap_or_default();
-                        super::file_ops::handle_file_ctl(
-                            &ctl,
-                            push,
-                            &workdirs,
-                            current_owned.as_deref(),
-                        );
+                        match &ctl {
+                            super::HostCtl::FileContentSearch { .. }
+                            | super::HostCtl::FileContentReplace { .. } => {
+                                super::content_search::handle_content_ctl(
+                                    &ctl,
+                                    push,
+                                    &workdirs,
+                                    current_owned.as_deref(),
+                                );
+                            }
+                            _ => {
+                                super::file_ops::handle_file_ctl(
+                                    &ctl,
+                                    push,
+                                    &workdirs,
+                                    current_owned.as_deref(),
+                                );
+                            }
+                        }
                     }
                 }
                 #[cfg(feature = "linker")]
@@ -1415,6 +1483,10 @@ pub(super) fn push_loop(
                         mgr.kill(&id);
                     }
                 }
+                Ok(super::HostCtl::HistoryPage { before }) => {
+                    let sid = current_owned.as_deref().unwrap_or("");
+                    super::project::serve_history_page(last, sid, before, push);
+                }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.
                 Err(TryRecvError::Disconnected) => return HostTransition::Exit,
@@ -1457,18 +1529,22 @@ pub(super) fn push_loop(
                         let proj = ConfigProjection::from_global(&snap.global);
                         current_config = Some(proj);
                     }
-                    apply_frame(
-                        frame,
-                        &mut shadow,
-                        &mut expected,
-                        &mut seeded,
-                        &mut awaiting_resync,
-                        &mut select_requested,
-                        &mut open_swapper_requested,
-                        &mut new_session_requested,
-                        &mut connect_remote_requested,
-                        req_tx,
-                    );
+                    {
+                        let fx = apply_frame(
+                            frame,
+                            &mut shadow,
+                            &mut expected,
+                            &mut seeded,
+                            &mut awaiting_resync,
+                            &mut select_requested,
+                            &mut open_swapper_requested,
+                            &mut new_session_requested,
+                            &mut connect_remote_requested,
+                            req_tx,
+                        );
+                        dirty |= fx.visual;
+                        need_snapshot |= fx.snapshot;
+                    }
                 }
                 Err(TryRecvError::Empty) => break,
                 // The reader task dropped its sender: the daemon's socket closed. Fall
@@ -1523,6 +1599,8 @@ pub(super) fn push_loop(
             if let Some((_, until, _)) = fg.toast.as_ref() {
                 if Instant::now() >= *until {
                     fg.toast = None;
+                    dirty = true;
+                    // Toast clear only needs Status, not a full Snapshot rebuild.
                 }
             }
         }
@@ -1675,14 +1753,40 @@ pub(super) fn push_loop(
         // Snapshot the current stream view (Copy) out of the shared lock so the fold folds
         // the viewed sub-agent's transcript / viewed bash job's output tail into the push.
         let view = live_view.lock().map(|v| *v).unwrap_or_default();
-        serialize_and_push(&shadow, push, last, view);
+        if view != last_view {
+            last_view = view;
+            dirty = true;
+            // Viewed subagent/bash tails ride Snapshot — force full project.
+            need_snapshot = true;
+        }
+        // Gate the heavy transcript project+hash on dirty. Side channels (hub/git/lsp/
+        // store/…) already push their own envelopes above. `push_config` stays every
+        // iteration — it is JSON-deduped and must re-emit after Ready without waiting
+        // on a daemon frame.
+        //
+        // Loading phase strings only change on daemon warm status (already dirty via
+        // apply_frame); GUI Loading does not need the TUI's local spinner frame tick.
+        // Toast expiry and StreamView tab switches set dirty above.
+        //
+        // Stream-only / status-only ticks set dirty without need_snapshot so we skip
+        // rebuilding+hashing the full messages[] (the hot-path lag fix).
+        if dirty {
+            serialize_and_push(&shadow, push, last, view, need_snapshot);
+        }
         // Config catalogue (Connector + MCP panels): emit whenever it changed since the
         // last frame, or re-emit after a `Ready` reset. Independent of the per-session
         // draw so a page reload always re-pushes the current global config.
         push_config(current_config.as_ref(), push, last);
 
-        // --- frame pacing: sleep the remainder of the ~16ms budget ---
-        if let Some(rem) = FRAME_BUDGET.checked_sub(frame_start.elapsed()) {
+        // --- frame pacing: busy ~16ms when dirty/streaming/working; idle ~100ms ---
+        // GUI-only. TUI `render_loop` keeps unconditional FRAME_BUDGET.
+        let busy = dirty
+            || shadow.rest.fg().waiting
+            || shadow.rest.fg().streaming.is_some()
+            || !shadow.rest.fg().stream_reasoning.is_empty()
+            || matches!(shadow.mode(), Mode::Loading(_));
+        let budget = if busy { FRAME_BUDGET } else { GUI_IDLE_BUDGET };
+        if let Some(rem) = budget.checked_sub(frame_start.elapsed()) {
             std::thread::sleep(rem);
         }
     }
@@ -1929,6 +2033,7 @@ fn push_remote_fs_unavailable(ctl: &super::HostCtl, push: &dyn Fn(String)) {
             root,
             path,
             request_id,
+            save_as: _,
         } => PushEnvelope::FileDownloadBytes {
             root: root.clone(),
             path: path.clone(),
@@ -1937,6 +2042,34 @@ fn push_remote_fs_unavailable(ctl: &super::HostCtl, push: &dyn Fn(String)) {
             size: 0,
             too_large: false,
             error: Some(ERR.into()),
+            saved: false,
+        },
+        super::HostCtl::FileContentSearch {
+            root,
+            path,
+            request_id,
+            ..
+        } => PushEnvelope::FileContentSearch {
+            root: root.clone(),
+            path: path.clone(),
+            request_id: request_id.clone(),
+            results: Vec::new(),
+            error: Some(ERR.into()),
+            truncated: false,
+        },
+        super::HostCtl::FileContentReplace {
+            root,
+            path,
+            request_id,
+            ..
+        } => PushEnvelope::FileContentReplace {
+            root: root.clone(),
+            path: path.clone(),
+            request_id: request_id.clone(),
+            files_changed: 0,
+            match_count: 0,
+            error: Some(ERR.into()),
+            truncated: false,
         },
         _ => return,
     };

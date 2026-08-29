@@ -1,6 +1,6 @@
 [package]
 name = "agent"
-version = "0.3.27"
+version = "0.3.28"
 edition = "2021"
 license = "Apache-2.0"
 
@@ -61,7 +61,9 @@ notify-debouncer-mini = { version = "0.7", optional = true }
 
 # --- feature = "gui": xterm.js + wry desktop client. All optional; the default
 # build pulls NONE of these (headless-safe, lean `cargo install`). ---
-wry = { version = "0.52", optional = true, features = ["transparent"] }
+# `devtools` keeps WebView inspector available in release builds too (debug
+# builds always get it). Needed so F12 / Inspect can call open_devtools().
+wry = { version = "0.52", optional = true, features = ["transparent", "devtools"] }
 tao = { version = "0.35", optional = true }
 rfd = { version = "0.15", optional = true }
 

@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
-import { motion } from 'framer-motion'
 import { Check, Minus, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
-import type { LoadPhase } from '../store/koma'
-import { BrailleSpinner, useBrailleFrame } from './BrailleSpinner'
+import type { BootstrapState, LoadPhase } from '../store/koma'
+import { BootBrailleSpinner } from './BrailleSpinner'
 
 // Duplicated from Titlebar.tsx's private (unexported) `post` helper — this
 // overlay covers the titlebar region too and needs the same win-drag/maximize
@@ -20,14 +19,15 @@ type SwitchingOverlayProps = {
   onCancel: () => void
 }
 
-// After this long still switching, surface a "taking longer than expected"
-// hint so a genuinely-stuck swap (the deterministic Hub-clear in koma.ts
-// missing some future degrade path, or a wedged daemon) doesn't leave the
-// user staring at a silent spinner with no signal. A legit build-skew daemon
-// restart can take ~8s, so this must not fire before that.
+// After this long still in pure "switching to …" (no Snapshot / Loading yet),
+// surface a "taking longer than expected" hint so a wedged attach doesn't leave
+// the user staring at a silent spinner. A legit build-skew daemon restart can
+// take ~8s, so this must not fire before that.
 const STUCK_HINT_MS = 10_000
-// Last-resort auto-cancel so the UI can never be trapped behind this overlay
-// forever, even if the user never notices the hint or clicks Cancel.
+// Last-resort auto-cancel ONLY for the pre-attach "switching to …" branch.
+// Healthy Loading/indexing can legitimately run longer than this (large
+// workspaces); auto-cancel must not fire there — that was detaching a live
+// session and reopening the resume palette on every slow new-session.
 const AUTO_CANCEL_MS = 25_000
 
 // Danger/error palette role tint — same lookup ToastContainer/SessionRowActions
@@ -44,18 +44,13 @@ function useErrorTint(): string {
   }, [palettes, theme])
 }
 
-// One phase row's status glyph: running = TUI-parity braille spinner frame
-// (accent-tinted, monospace so it doesn't wobble across frames — the app is
-// already set in the KomaMono monospace face globally); pending = dim hollow
-// dot; done = dim check; skipped = dim dash; failed = an error-role-tinted x.
-function PhaseGlyph({ phase, frame, errorTint }: { phase: LoadPhase; frame: string; errorTint: string }) {
+// One phase row's status glyph: running = CSS braille (no JS ticker — survives
+// main-thread Snapshot jank); pending = dim hollow dot; done = dim check;
+// skipped = dim dash; failed = an error-role-tinted x.
+function PhaseGlyph({ phase, errorTint }: { phase: LoadPhase; errorTint: string }) {
   switch (phase) {
     case 'running':
-      return (
-        <span className="flex h-[13px] w-[13px] flex-none items-center justify-center text-[13px] leading-none text-koma-accent">
-          {frame}
-        </span>
-      )
+      return <BootBrailleSpinner size={13} className="flex-none" />
     case 'done':
       return <Check size={13} className="flex-none text-koma-fg opacity-50" />
     case 'skipped':
@@ -71,17 +66,15 @@ function PhaseGlyph({ phase, frame, errorTint }: { phase: LoadPhase; frame: stri
 function PhaseRow({
   label,
   phase,
-  frame,
   errorTint,
 }: {
   label: string
   phase: LoadPhase
-  frame: string
   errorTint: string
 }) {
   return (
     <div className="flex items-center gap-2 text-[12px] text-koma-fg opacity-80">
-      <PhaseGlyph phase={phase} frame={frame} errorTint={errorTint} />
+      <PhaseGlyph phase={phase} errorTint={errorTint} />
       <span>{label}</span>
     </div>
   )
@@ -89,79 +82,107 @@ function PhaseRow({
 
 // TUI-parity startup splash — the koma wordmark + the two cold-session warm-up
 // phase lines (indexing workspace / reading project docs), mirroring the TUI's
-// startup screen. The wordmark reuses StartScreen/Onboarding's brand text
-// recipe (font-bold text-koma-fg, no accent on the text itself); the whole app
-// is already set in the KomaMono monospace face globally (#app in styles.css),
-// so the phase labels are monospace with no extra classes needed.
-function LoadingSplash({ workspace, awareness }: { workspace: LoadPhase; awareness: LoadPhase }) {
+// startup screen. Phase "running" glyphs use CSS braille, not the shared JS
+// ticker, so they keep stepping while Snapshot apply blocks the main thread.
+function LoadingSplash({
+  bootstrap,
+  workspace,
+  awareness,
+}: {
+  bootstrap: BootstrapState | null
+  workspace?: LoadPhase
+  awareness?: LoadPhase
+}) {
   const errorTint = useErrorTint()
-  // ONE shared braille frame index for the whole splash (both phase rows
-  // stay in sync, matching the TUI's single cooking spinner) — driven by the
-  // app-wide BrailleSpinner ticker (see useBrailleFrame) instead of its own
-  // interval.
-  const frame = useBrailleFrame()
 
   return (
     <div className="flex flex-col items-center gap-4">
       <span className="text-[22px] font-bold text-koma-fg">koma</span>
       <div className="flex flex-col gap-1.5">
-        <PhaseRow label="indexing workspace" phase={workspace} frame={frame} errorTint={errorTint} />
-        <PhaseRow label="reading project docs" phase={awareness} frame={frame} errorTint={errorTint} />
+        {bootstrap && (
+          <>
+            <PhaseRow label="loading session state" phase={bootstrap.session} errorTint={errorTint} />
+            <PhaseRow label="loading configuration" phase={bootstrap.config} errorTint={errorTint} />
+            <PhaseRow label="loading workspace settings" phase={bootstrap.settings} errorTint={errorTint} />
+            <PhaseRow label="discovering repositories" phase={bootstrap.repos} errorTint={errorTint} />
+          </>
+        )}
+        {workspace && <PhaseRow label="indexing workspace" phase={workspace} errorTint={errorTint} />}
+        {awareness && <PhaseRow label="reading project docs" phase={awareness} errorTint={errorTint} />}
       </div>
     </div>
   )
 }
 
 // Full-screen loader shown while a session swap (SelectSession/NewSession) is
-// in flight. The host gives no reliable "swap started" push on this build —
-// the attach can block synchronously for seconds (build-skew daemon restart,
-// cold session spawn) — and during that window the webview would otherwise
-// keep rendering the stale previous session. Raised optimistically by
-// ResumePalette's startSwitching() the instant the request is sent; cleared
-// by koma.ts the moment the next authoritative Snapshot lands (success) or
-// Hub lands (attach failure/degrade — the host always bounces back to the
-// swapper with a fresh Hub push on that path).
+// in flight, and while cold-session warm-up (`ui.loading`) runs afterward.
+// Raised optimistically by ResumePalette's startSwitching() and/or host
+// Switching pushes. Cleared when Loading goes inactive (or Hub bounce).
 //
-// The in-flight swap itself cannot be interrupted (the client thread blocks
-// synchronously on attach), so Cancel is best-effort: it just dismisses the
-// loader and bails back to the resume hub. Whatever session was being
-// switched to still lands eventually and is applied normally when its
-// Snapshot arrives.
+// Presentation is side-loaded: CSS stepped braille (BootBrailleSpinner), not
+// BrailleSpinner's setInterval — same glyphs, no React tick. Fat Snapshot
+// parse can stall React; CSS keeps stepping. Overlay bg is fully opaque so a
+// transparent wry window never shows through as a white freeze.
 //
-// Also stays mounted (rendering the TUI-parity startup splash) while
-// `ui.loading?.active` is true, even after `ui.switchingTo` has already
-// cleared — the cold-session warm-up (workspace indexing / awareness reading)
-// can outlast the attach itself, so the splash's own condition is ORed in
-// alongside the classic switch-spinner condition.
+// Attach runs off the UI thread; Cancel is best-effort (HostCtl::ToSwapper
+// after the in-flight attach returns).
 export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
   const to = useKoma((s) => s.ui.switchingTo)
+  const sessionId = useKoma((s) => s.session.id)
   const remoteState = useKoma((s) => s.remoteState)
   const remoteConnecting =
     !!to?.startsWith('remote ') &&
     !['ready', 'connected', 'error', 'disconnected'].includes(remoteState.state)
   const loading = useKoma((s) => s.ui.loading)
+  const bootstrap = useKoma((s) => s.ui.bootstrap)
   const loadingDismissed = useKoma((s) => s.ui.loadingDismissed)
   const dismissLoading = useKoma((s) => s.dismissLoading)
-  const showSplash = !!loading?.active && !loadingDismissed
+  const showWarm = !!loading?.active && !loadingDismissed
+  // Once Snapshot marks session done, don't keep the full-screen splash up for
+  // trailing config/settings/repos — those were jamming chat behind the overlay.
+  const showSplash =
+    showWarm || (!!bootstrap && bootstrap.session !== 'done' && bootstrap.session !== 'skipped')
+  // Pre-attach only: still waiting on the host, no Snapshot/Loading progress yet.
+  // Once attach lands (session id set) or warm-up splash is up, auto-cancel must
+  // not fire — CancelSwitch would detach a healthy session and reopen resume.
+  const preAttachWaiting = !!to && !sessionId && !showSplash
   const [stuck, setStuck] = useState(false)
-  const timersRef = useRef<{ hint: number; autoCancel: number } | null>(null)
   const onCancelRef = useRef(onCancel)
   onCancelRef.current = onCancel
 
   useEffect(() => {
-    if (!to) {
+    if (!preAttachWaiting) {
       setStuck(false)
       return
     }
     const hint = window.setTimeout(() => setStuck(true), STUCK_HINT_MS)
     const autoCancel = window.setTimeout(() => onCancelRef.current(), AUTO_CANCEL_MS)
-    timersRef.current = { hint, autoCancel }
     return () => {
       window.clearTimeout(hint)
       window.clearTimeout(autoCancel)
-      timersRef.current = null
     }
-  }, [to])
+  }, [preAttachWaiting])
+
+  // If settings/repos never reply, force-complete bootstrap and log why.
+  // Depend on presence only — resetting on every phase tick would never fire.
+  const bootstrapping = !!bootstrap
+  useEffect(() => {
+    if (!bootstrapping) return
+    const t = window.setTimeout(() => {
+      const b = useKoma.getState().ui.bootstrap
+      if (!b) return
+      try {
+        window.komaIpc?.({
+          r: 'WriteErrorLog',
+          message: `[ui-pace] bootstrap timeout session=${b.session} config=${b.config} settings=${b.settings} repos=${b.repos}`,
+        })
+      } catch {
+        /* ignore */
+      }
+      useKoma.getState().skipBootstrapRemaining()
+    }, 8000)
+    return () => window.clearTimeout(t)
+  }, [bootstrapping])
 
   if (!to && !showSplash) return null
 
@@ -184,42 +205,38 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
 
   return (
     <div
-      className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-4 bg-koma-bg/90 backdrop-blur-sm"
+      className="koma-boot-overlay absolute inset-0 z-[60] flex flex-col items-center justify-center gap-4"
       onMouseDown={handleMouseDown}
     >
-      <motion.div
-        initial={{ opacity: 0, scale: 0.96 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.16, ease: 'easeOut' }}
-        className="flex flex-col items-center gap-4"
-      >
-        {showSplash && loading ? (
+      <div className="koma-boot-panel flex flex-col items-center gap-4">
+        {showSplash ? (
           <>
-            <LoadingSplash workspace={loading.workspace} awareness={loading.awareness} />
-            <button
-              onClick={dismissLoading}
-              className="mt-6 rounded-md border border-koma-border bg-koma-panel px-3 py-1.5 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
-            >
-              Skip
-            </button>
+            <LoadingSplash
+              bootstrap={bootstrap}
+              workspace={showWarm ? loading?.workspace : undefined}
+              awareness={showWarm ? loading?.awareness : undefined}
+            />
+            {showWarm && (
+              <button
+                onClick={dismissLoading}
+                className="mt-6 rounded-md border border-koma-border bg-koma-panel px-3 py-1.5 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+              >
+                Skip
+              </button>
+            )}
           </>
         ) : (
           <>
-            <BrailleSpinner size={28} className="text-koma-accent" />
+            <BootBrailleSpinner size={28} className="text-koma-accent" />
             <div className="text-[13px] text-koma-fg opacity-70">
               {remoteConnecting
                 ? `${remoteState.state.replace('_', ' ')} ${to?.replace(/^remote /, '')}…`
                 : `switching to ${to}…`}
             </div>
             {stuck && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 0.16, ease: 'easeOut' }}
-                className="text-[12px] text-koma-fg opacity-50"
-              >
+              <div className="text-[12px] text-koma-fg opacity-50">
                 Taking longer than expected…
-              </motion.div>
+              </div>
             )}
             {remoteState.state === 'auth_required' ? (
               <div className="text-[12px] text-koma-fg opacity-50">
@@ -246,7 +263,7 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
             )}
           </>
         )}
-      </motion.div>
+      </div>
     </div>
   )
 }

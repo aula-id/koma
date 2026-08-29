@@ -12,6 +12,7 @@ use super::project::ProjectIndex;
 use super::reference::{ImportKind, ImportRef, Resolution, SourceRefs, UnresolvedReason};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Directory basenames pruned from the walk regardless of .gitignore.
 /// Mirrors the DirCache prune list for consistency.
@@ -136,7 +137,29 @@ struct ModuleContext {
 /// gets an `ImportRef` + `Resolution` installed atomically with graph edges.
 ///
 /// Returns the graph and the `ProjectIndex` built during the scan.
+#[allow(dead_code)] // public API for tests/tools; daemon uses cancellable path
 pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
+    match scan_roots_cancellable(roots, None) {
+        Some(pair) => pair,
+        // Uncancellable path never returns None; keep a defined empty graph
+        // rather than panicking under deny(clippy::expect_used).
+        None => (ImportGraph::new(), ProjectIndex::new()),
+    }
+}
+
+/// Like [`scan_roots`], but cooperatively cancels when `cancel` is set.
+///
+/// Returns `None` if cancelled mid-scan. Callers must not publish a cancelled
+/// partial graph.
+pub fn scan_roots_cancellable(
+    roots: &[PathBuf],
+    cancel: Option<&AtomicBool>,
+) -> Option<(ImportGraph, ProjectIndex)> {
+    let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
+    if cancelled() {
+        return None;
+    }
+
     let mut graph = ImportGraph::new();
     // NOTE: graph.generation is NOT set here. The daemon owns the monotonic
     // generation counter and assigns it at publication time so the published
@@ -145,14 +168,23 @@ pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
     // Build ProjectIndex from normalized roots.
     let mut index = ProjectIndex::new();
     for root in roots {
+        if cancelled() {
+            return None;
+        }
         let normalized = normalize_lexical(&root.to_string_lossy().replace('\\', "/"));
         let _ = index.register_root(normalized);
     }
 
     // Collect all source files across all roots and register in ProjectIndex.
-    let source_files = collect_source_files(roots);
+    let source_files = collect_source_files(roots, cancel)?;
+    if cancelled() {
+        return None;
+    }
 
     for sf in &source_files {
+        if cancelled() {
+            return None;
+        }
         let lang = detect_lang(&sf.rel_path);
         if lang == Lang::Unknown {
             continue;
@@ -167,6 +199,9 @@ pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
         .map(|r| normalize_lexical(&r.to_string_lossy().replace('\\', "/")))
         .collect();
     for root_str in &root_strings {
+        if cancelled() {
+            return None;
+        }
         index.rebuild_root_config(root_str);
     }
 
@@ -180,6 +215,9 @@ pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
     {
         let mut reclassifications: Vec<(String, Lang)> = Vec::new();
         for sf in &source_files {
+            if cancelled() {
+                return None;
+            }
             if !sf.abs_path.ends_with(".h") {
                 continue;
             }
@@ -212,7 +250,12 @@ pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
 
     let known_files = index.known_file_set();
 
-    for sf in &source_files {
+    // Checkpoint every N files during the heavy extract/resolve loop.
+    const CANCEL_CHECKPOINT: usize = 32;
+    for (i, sf) in source_files.iter().enumerate() {
+        if i % CANCEL_CHECKPOINT == 0 && cancelled() {
+            return None;
+        }
         let lang = detect_lang(&sf.rel_path);
         if lang == Lang::Unknown {
             continue;
@@ -490,9 +533,13 @@ pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
         graph.set_edges_and_refs(&sf.abs_path, lang, edges, refs);
     }
 
+    if cancelled() {
+        return None;
+    }
+
     graph.file_count = graph.nodes.len();
     graph.workspace_roots = index.roots().to_vec();
-    (graph, index)
+    Some((graph, index))
 }
 
 /// Scan a single file and return its path, language, outgoing edges, and
@@ -776,10 +823,19 @@ struct SourceFile {
 }
 
 /// Walk all roots and collect source files.
-fn collect_source_files(roots: &[PathBuf]) -> Vec<SourceFile> {
+///
+/// Returns `None` if `cancel` is set mid-walk.
+fn collect_source_files(
+    roots: &[PathBuf],
+    cancel: Option<&AtomicBool>,
+) -> Option<Vec<SourceFile>> {
+    let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
     let mut files = Vec::new();
 
     for root in roots {
+        if cancelled() {
+            return None;
+        }
         if !root.is_dir() {
             continue;
         }
@@ -800,7 +856,12 @@ fn collect_source_files(roots: &[PathBuf]) -> Vec<SourceFile> {
             })
             .build();
 
+        let mut n = 0usize;
         for dent in walker.flatten() {
+            n += 1;
+            if n.is_multiple_of(64) && cancelled() {
+                return None;
+            }
             if !dent.file_type().is_some_and(|t| t.is_file()) {
                 continue;
             }
@@ -820,7 +881,62 @@ fn collect_source_files(roots: &[PathBuf]) -> Vec<SourceFile> {
         }
     }
 
-    files
+    Some(files)
+}
+
+/// Collect directories that should receive inotify watches.
+///
+/// Mirrors `collect_source_files` filters: gitignore + PRUNE_DIRS. Does not
+/// follow a different symlink policy than the scan walk.
+/// Pruned names (`target`, `node_modules`, …) are never returned.
+pub fn collect_watchable_dirs(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut seen = HashSet::new();
+
+    for root in roots {
+        if !root.is_dir() {
+            continue;
+        }
+        let root_norm = root.to_path_buf();
+        if seen.insert(root_norm.clone()) {
+            dirs.push(root_norm);
+        }
+
+        let walker = ignore::WalkBuilder::new(root)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .require_git(false)
+            .hidden(false)
+            .filter_entry(|dent| {
+                if dent.depth() > 0 && dent.file_type().is_some_and(|t| t.is_dir()) {
+                    if let Some(name) = dent.file_name().to_str() {
+                        return !is_pruned_dir_name(name);
+                    }
+                }
+                true
+            })
+            .build();
+
+        for dent in walker.flatten() {
+            if !dent.file_type().is_some_and(|t| t.is_dir()) {
+                continue;
+            }
+            // Skip the root itself (already added); depth 0 is the root.
+            if dent.depth() == 0 {
+                continue;
+            }
+            let path = dent.path().to_path_buf();
+            if is_pruned_path(&path) {
+                continue;
+            }
+            if seen.insert(path.clone()) {
+                dirs.push(path);
+            }
+        }
+    }
+
+    dirs
 }
 
 /// Check if a relative path has a source file extension.

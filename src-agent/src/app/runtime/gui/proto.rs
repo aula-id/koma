@@ -11,10 +11,11 @@
 pub(super) enum UserEvent {
     /// A custom-titlebar window command posted from the webview.
     Win(WinCmd),
-    /// A ready-to-inject JSON envelope from the host-relay client-thread. The main
-    /// thread hands it to `window.__komaClient.push(...)` via `evaluate_script`. The
-    /// payload is a COMPLETE JSON object (tagged on `k` — `Snapshot`/`StreamMsg`/
-    /// `Reasoning`/`Status`/`Hub`), so it is embedded verbatim (not quoted).
+    /// A ready-to-inject JSON envelope from the host-relay client-thread. The GUI
+    /// event loop frame-batches these as quoted strings through one
+    /// `window.__komaClient.pushBatch(...)` evaluate_script call; React paces only
+    /// heavy attach envelopes (Snapshot/Loading/Config/…) one frame at a time —
+    /// stream/chat traffic is never queued behind them.
     Push(String),
 }
 
@@ -29,6 +30,8 @@ pub(super) enum WinCmd {
     ToggleMax,
     Close,
     Resize(tao::window::ResizeDirection),
+    /// Open the WebView inspector (F12 / context-menu Inspect).
+    OpenDevTools,
 }
 
 /// Messages posted from `koma.js` via `window.ipc.postMessage(JSON.stringify(..))`.
@@ -531,6 +534,18 @@ pub(super) enum GuiReq {
     /// mid-turn steer at once. Forwarded as [`ClientRequest::CancelSteers`],
     /// attached-only, like `Interrupt`.
     CancelSteers,
+    /// Remove one queued follow-up by list index. Forwarded as
+    /// [`ClientRequest::RemoveSteer`].
+    RemoveSteer {
+        index: usize,
+    },
+    /// Load one queued follow-up into the composer for edit (removes it from
+    /// the queue). Forwarded as [`ClientRequest::EditSteer`]. The GUI should
+    /// also `refillComposer` locally with the known full text, since the web
+    /// composer does not reconcile `InputChanged`.
+    EditSteer {
+        index: usize,
+    },
     /// The chat hover-edit PENCIL on a user bubble: rewind the conversation TO that
     /// message by its `index` into `SessionSnapshot.messages` (Conversation::messages()).
     /// Forwarded as [`ClientRequest::RewindTo`], which runs koma's `RewindToMessage`
@@ -538,6 +553,13 @@ pub(super) enum GuiReq {
     /// non-user / out-of-range index is a clean daemon-side no-op.
     RewindTo {
         index: usize,
+    },
+    /// Pull older transcript held after a windowed first Snapshot.
+    /// `before` = current oldest display idx on the FE (exclusive). Host replies
+    /// with `HistoryPage` push. Host-local (uses PushState stash), not the daemon.
+    HistoryPage {
+        #[serde(default)]
+        before: Option<usize>,
     },
     /// The Explore sidepanel agent-row KILL button: kill sub-agent `id`. Forwarded as
     /// [`ClientRequest::KillSubagent`].
@@ -963,9 +985,54 @@ pub(super) enum GuiReq {
         request_id: String,
     },
     /// Coding panel: read raw bytes for download / save-as.
+    /// `saveAs: true` asks the host to open a native save dialog and write the
+    /// file (required in wry — blob `<a download>` is a no-op).
     FileDownloadBytes {
         root: String,
         path: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        /// Default false keeps preview loads (CodingFileViewer) byte-returning.
+        #[serde(default, rename = "saveAs")]
+        save_as: bool,
+    },
+    /// Coding panel: VS Code-style content search across a workspace root/subdir.
+    FileContentSearch {
+        root: String,
+        /// Subdir relative to root (empty = whole root).
+        #[serde(default)]
+        path: String,
+        query: String,
+        #[serde(default, rename = "caseSensitive")]
+        case_sensitive: bool,
+        #[serde(default, rename = "wholeWord")]
+        whole_word: bool,
+        #[serde(default, rename = "isRegex")]
+        is_regex: bool,
+        #[serde(default, rename = "includeGlob")]
+        include_glob: Option<String>,
+        #[serde(default, rename = "excludeGlob")]
+        exclude_glob: Option<String>,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    /// Coding panel: replace-all with the same flags as FileContentSearch.
+    FileContentReplace {
+        root: String,
+        #[serde(default)]
+        path: String,
+        query: String,
+        replacement: String,
+        #[serde(default, rename = "caseSensitive")]
+        case_sensitive: bool,
+        #[serde(default, rename = "wholeWord")]
+        whole_word: bool,
+        #[serde(default, rename = "isRegex")]
+        is_regex: bool,
+        #[serde(default, rename = "includeGlob")]
+        include_glob: Option<String>,
+        #[serde(default, rename = "excludeGlob")]
+        exclude_glob: Option<String>,
         #[serde(rename = "requestId")]
         request_id: String,
     },
@@ -1025,6 +1092,21 @@ pub(super) enum GuiReq {
         path: String,
         line: u32,
         character: u32,
+        /// LSP CompletionTriggerKind: 1 Invoked, 2 TriggerCharacter, 3 Incomplete.
+        #[serde(default, rename = "triggerKind")]
+        trigger_kind: Option<u32>,
+        #[serde(default, rename = "triggerCharacter")]
+        trigger_character: Option<String>,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    /// Monaco completionItem/resolve (auto-import additionalTextEdits).
+    /// Reply: `LspCompletionResolve`.
+    LspCompletionResolve {
+        root: String,
+        path: String,
+        /// Boxed — CompletionItem carries opaque `data` JSON and edit lists.
+        item: Box<crate::lsp::LspCompletionItem>,
         #[serde(rename = "requestId")]
         request_id: String,
     },

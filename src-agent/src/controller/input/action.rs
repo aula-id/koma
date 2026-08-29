@@ -340,6 +340,11 @@ pub enum Action {
     /// Clear the foreground session's queued mid-turn steer messages (Ctrl+X in the
     /// composer while steers are pending). No-op if the queue is empty.
     CancelSteers,
+    /// Remove one queued follow-up by index into `pending_steer`. No-op if OOB.
+    RemoveSteer(usize),
+    /// Pull one queued follow-up into the composer for edit (remove from queue +
+    /// refill input). No-op if OOB.
+    EditSteer(usize),
     /// Ctrl+B in the `$` sub-agents panel: detach the selected RUNNING BLOCKING
     /// sub-agent without killing it. Flips `detached = true`, removes its
     /// `tool_call_id` from `pending_subagent_calls`, and injects an immediate

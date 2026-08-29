@@ -41,9 +41,9 @@ pub struct SessionSnapshot {
     pub subagents: Vec<SubAgentSnapshot>,
     pub pending_subagents: Vec<PendingSubagentSnapshot>,
     pub resolved_model_id: String,
-    /// Truncated previews of the foreground session's queued mid-turn steer messages
-    /// (full text lives daemon-side). Drives the pending panel between transcript +
-    /// composer. Empty = no panel.
+    /// Queued mid-turn follow-up / steer messages (full text). Drives the pending
+    /// panel between transcript + composer and lets clients edit/remove per item.
+    /// Empty = no panel. Cap is enforced daemon-side (5).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_steer: Vec<String>,
     /// The session's background-bash jobs (list + RAW status only — no output/elapsed).

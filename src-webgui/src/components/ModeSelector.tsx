@@ -55,15 +55,15 @@ export function ModeSelector() {
         type="button"
         onClick={() => setOpen((o) => !o)}
         title="Agent mode"
-        className="flex h-8 flex-none items-center gap-1 rounded-lg px-2 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+        className="flex h-8 flex-none items-center gap-1 rounded-lg px-2 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100 @max-[14rem]/chat:px-1.5"
       >
         <TriggerIcon size={15} className="flex-none" />
-        <span className="min-w-0 truncate">{active.label}</span>
-        <ChevronDown size={12} className="flex-none opacity-60" />
+        <span className="min-w-0 truncate @max-[14rem]/chat:hidden">{active.label}</span>
+        <ChevronDown size={12} className="flex-none opacity-60 @max-[14rem]/chat:hidden" />
       </button>
       {open && (
         // Opens UPWARD — sits just above the composer at the bottom of the chat.
-        <div className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[180px] overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm">
+        <div className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[min(180px,calc(100cqw-1rem))] max-w-[calc(100vw-1rem)] overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm">
           {MODES.map((m) => {
             const isActive = m.value === mode
             const RowIcon = m.Icon

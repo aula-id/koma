@@ -4,6 +4,7 @@ import { useKoma, type ImportGraphNode, type ImportGraphRootInfo } from '../stor
 import { BrailleSpinner } from './BrailleSpinner'
 import { ImportGraphFlow } from './ImportGraphFlow'
 import { sourceLanguage } from '../lib/importGraphLanguages'
+import { isTabVisible, normalizeGroups } from '../store/editorGroups'
 
 // Detail pane width constants.
 const DETAIL_W_MIN = 260
@@ -194,7 +195,7 @@ export default function ImportGraphTab() {
   const setImportGraphLanguageFilter = useKoma((s) => s.setImportGraphLanguageFilter)
   const requestImportGraphImpact = useKoma((s) => s.requestImportGraphImpact)
 
-  const isActiveTab = useKoma((s) => s.ui.activeTabId === 'import-graph')
+  const isActiveTab = useKoma((s) => isTabVisible(normalizeGroups(s.ui), 'import-graph'))
   const sessionId = useKoma((s) => s.session.id)
 
   // Use backend-scoped availableRoots directly — the Rust linker daemon
@@ -502,7 +503,7 @@ export default function ImportGraphTab() {
             aria-label="Reindex configured workspaces"
             className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100 disabled:cursor-default disabled:opacity-40"
           >
-            <RefreshCw size={13} className={reindexBusy ? 'animate-spin' : ''} />
+            {reindexBusy ? <BrailleSpinner size={13} /> : <RefreshCw size={13} />}
           </button>
         </div>
       </div>

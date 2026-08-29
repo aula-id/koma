@@ -28,6 +28,107 @@ use super::push_proto::{
     PushPendingCall, PushPlanTodo, PushSubAgent, PushToolCall,
 };
 
+// First-attach transcript window. Keep in lockstep with FE `CHAT_WINDOW` in
+// ChatView.tsx — both are "about one screen of bubbles", not a hard protocol.
+pub(super) const SNAPSHOT_WINDOW: usize = 40;
+/// Soft byte budget for the first Snapshot tail (content-ish estimate).
+const SNAPSHOT_TAIL_BYTES: usize = 256 * 1024;
+/// Max messages drained per SnapshotHead fold (Phase 2 chunks the rest).
+pub(super) const SNAPSHOT_HEAD_CHUNK: usize = 40;
+/// Soft byte budget per SnapshotHead chunk.
+const SNAPSHOT_HEAD_CHUNK_BYTES: usize = 256 * 1024;
+/// Auto-backfill ceiling: after this many older bytes, stop and wait for
+/// `HistoryPage` pull (monster sessions must not refill the store unbidden).
+const SNAPSHOT_AUTO_HEAD_BYTES: usize = 1024 * 1024;
+
+/// Rough content weight for window/chunk budgets (not full JSON size).
+fn push_msg_weight(m: &PushMsg) -> usize {
+    let mut n = m.content.len();
+    if let Some(r) = &m.reasoning {
+        n = n.saturating_add(r.len());
+    }
+    for tc in &m.tool_calls {
+        n = n.saturating_add(tc.signature.len());
+        if let Some(o) = &tc.output {
+            n = n.saturating_add(o.len().min(8_192));
+        }
+    }
+    n.saturating_add(64)
+}
+
+/// Split `messages` into (tail_for_first_snapshot, older_prefix).
+/// Prefers at least one message; grows the tail backward under count+byte caps.
+fn split_first_snapshot(messages: Vec<PushMsg>) -> (Vec<PushMsg>, Option<Vec<PushMsg>>) {
+    if messages.len() <= SNAPSHOT_WINDOW {
+        let mut bytes = 0usize;
+        for m in &messages {
+            bytes = bytes.saturating_add(push_msg_weight(m));
+        }
+        if bytes <= SNAPSHOT_TAIL_BYTES || messages.len() <= 1 {
+            return (messages, None);
+        }
+    }
+    let mut tail_bytes = 0usize;
+    let mut tail_count = 0usize;
+    for m in messages.iter().rev() {
+        let w = push_msg_weight(m);
+        if tail_count > 0
+            && (tail_count >= SNAPSHOT_WINDOW || tail_bytes.saturating_add(w) > SNAPSHOT_TAIL_BYTES)
+        {
+            break;
+        }
+        tail_bytes = tail_bytes.saturating_add(w);
+        tail_count += 1;
+        if tail_count >= messages.len() {
+            break;
+        }
+    }
+    if tail_count == 0 {
+        tail_count = 1;
+    }
+    if tail_count >= messages.len() {
+        return (messages, None);
+    }
+    let split = messages.len() - tail_count;
+    let older = messages[..split].to_vec();
+    let windowed = messages[split..].to_vec();
+    (windowed, Some(older))
+}
+
+/// Take one SnapshotHead chunk from the front of `older` (oldest-first order).
+/// Returns (chunk, rest). Chunk is chronological (same order as full prefix).
+fn take_head_chunk(older: &mut Vec<PushMsg>) -> Vec<PushMsg> {
+    if older.is_empty() {
+        return Vec::new();
+    }
+    // older is [oldest … newest_before_tail]. Drain from the END (closest to
+    // the already-loaded tail) so each prepend lands adjacent to current head
+    // without needing reverse on the FE — wait: FE does mapped.concat(current),
+    // so chunk must be older-than-current as a contiguous older prefix.
+    // First auto chunk should be the newest part of older (just above tail);
+    // subsequent chunks go further back. So drain from the END of `older`.
+    let mut chunk_bytes = 0usize;
+    let mut n = 0usize;
+    for m in older.iter().rev() {
+        let w = push_msg_weight(m);
+        if n > 0
+            && (n >= SNAPSHOT_HEAD_CHUNK || chunk_bytes.saturating_add(w) > SNAPSHOT_HEAD_CHUNK_BYTES)
+        {
+            break;
+        }
+        chunk_bytes = chunk_bytes.saturating_add(w);
+        n += 1;
+        if n >= older.len() {
+            break;
+        }
+    }
+    if n == 0 {
+        n = 1;
+    }
+    let start = older.len() - n;
+    older.split_off(start)
+}
+
 /// Serialise the foreground session of `shadow` into the push envelopes and emit any
 /// that changed since the last call, through `push` (the host's
 /// `window.__komaClient.push` sink). This is the headless twin of `terminal.draw`:
@@ -37,11 +138,15 @@ use super::push_proto::{
 /// palette), a `StreamMsg` (full live buffer, or empty to clear on commit), a
 /// `Reasoning` (full live thinking, or empty to clear), and a `Status` (working +
 /// toast). `PushState` holds the last-pushed values so a quiescent frame is silent.
+///
+/// `need_snapshot`: when false, skip building/hashing the full messages[] Snapshot
+/// payload (stream/status-only tick). Structural frames and force-push pass true.
 pub(super) fn serialize_and_push(
     shadow: &AppState,
     push: &dyn Fn(String),
     last: &mut PushState,
     view: super::StreamView,
+    need_snapshot: bool,
 ) {
     let fg = shadow.rest.fg();
     let session = fg.id.clone();
@@ -50,6 +155,224 @@ pub(super) fn serialize_and_push(
     // composer mode selector. Rides the Snapshot below so a `SetMode` reflects live.
     let mode = shadow.rest.agent_mode().label().to_string();
 
+    // Drain at most one SnapshotHead chunk per fold so WebKit/JS never parse a
+    // multi-MB older prefix in one evaluate_script. Remaining prefix stays stashed.
+    if let Some((sid, mut older)) = last.pending_snapshot_head.take() {
+        if !older.is_empty() {
+            let chunk = take_head_chunk(&mut older);
+            let more = !older.is_empty();
+            let chunk_n = chunk.len();
+            let chunk_w: usize = chunk.iter().map(push_msg_weight).sum();
+            super::render::emit(
+                push,
+                &PushEnvelope::SnapshotHead {
+                    session: sid.clone(),
+                    messages: chunk,
+                    more,
+                    total_older: None,
+                },
+            );
+            crate::model::store::append_global_error_log(
+                "gui-pace",
+                &format!(
+                    "snapshot-head session={sid} chunk_n={chunk_n} chunk_w={chunk_w} more={more} rest_n={}",
+                    older.len()
+                ),
+            );
+            if more {
+                last.pending_snapshot_head = Some((sid, older));
+            }
+        }
+    }
+
+    if need_snapshot {
+        push_snapshot_if_changed(shadow, fg, &session, &mode, push, last, view);
+    }
+
+    // --- Stream: prefer StreamDelta (append) when last is a prefix; else full reset ---
+    match &fg.streaming {
+        Some(text) => {
+            if last.stream.as_deref() != Some(text.as_str()) {
+                let (reset, append) = match last.stream.as_deref() {
+                    Some(prev) if text.starts_with(prev) => (false, text[prev.len()..].to_string()),
+                    _ => (true, text.clone()),
+                };
+                last.stream = Some(text.clone());
+                super::render::emit(
+                    push,
+                    &PushEnvelope::StreamDelta {
+                        session: session.clone(),
+                        reset,
+                        append,
+                    },
+                );
+            }
+        }
+        None => {
+            if last.stream.is_some() {
+                last.stream = None;
+                // Empty full StreamMsg keeps clear-on-commit compatible with older GUIs
+                // and matches the historical contract.
+                super::render::emit(
+                    push,
+                    &PushEnvelope::StreamMsg {
+                        session: session.clone(),
+                        text: String::new(),
+                    },
+                );
+            }
+        }
+    }
+
+    // --- Reasoning: same delta-when-prefix pattern ---
+    if !fg.stream_reasoning.is_empty() {
+        if last.reasoning != fg.stream_reasoning {
+            let (reset, append) = if fg.stream_reasoning.starts_with(&last.reasoning)
+                && !last.reasoning.is_empty()
+            {
+                (
+                    false,
+                    fg.stream_reasoning[last.reasoning.len()..].to_string(),
+                )
+            } else {
+                (true, fg.stream_reasoning.clone())
+            };
+            last.reasoning = fg.stream_reasoning.clone();
+            super::render::emit(
+                push,
+                &PushEnvelope::ReasoningDelta {
+                    session: session.clone(),
+                    reset,
+                    append,
+                },
+            );
+        }
+    } else if !last.reasoning.is_empty() {
+        last.reasoning.clear();
+        super::render::emit(
+            push,
+            &PushEnvelope::Reasoning {
+                session: session.clone(),
+                text: String::new(),
+            },
+        );
+    }
+
+    // --- Status: working flag (waiting or mid-stream) + optional toast (+ severity) ---
+    // The toast TEXT and its `ToastKind` severity both ride here; a safeguard/harness
+    // block surfaces as an Error toast (set_toast), an informational notice as Info.
+    // `waiting` mirrors the daemon's `is_ui_busy()` (SessionSnapshot.working, which
+    // already folds in streaming); do not OR in shadow-derived `fg.streaming.is_some()`
+    // here — that re-derivation is what let a stale `Some("")` shadow buffer (a
+    // zero-token stream error) desync the Status envelope and leave the stop
+    // button / cooking indicator stuck forever. The differ now forces a resync on
+    // any streaming Option flip, so `waiting` alone is authoritative.
+    let working = fg.waiting;
+    let toast = fg.toast.as_ref().map(|(t, _, _)| t.clone());
+    let toast_kind = fg.toast.as_ref().map(|(_, _, k)| match k {
+        crate::app::state::ToastKind::Error => "error",
+        crate::app::state::ToastKind::Info => "info",
+    });
+    // Usage counters: mirror the daemon's `SessionRuntime` totals (rehydrated onto the
+    // shadow verbatim in `client_shadow/session.rs`), folded into the dedupe tuple so a
+    // counter tick alone (no transcript/toast change) still re-emits `Status`.
+    let tokens_in = fg.tokens_in;
+    let tokens_cached = fg.tokens_cached;
+    let tokens_out = fg.tokens_out;
+    let cost = fg.cost;
+    let status = (
+        working,
+        toast,
+        toast_kind,
+        tokens_in,
+        tokens_cached,
+        tokens_out,
+        cost,
+        mode.clone(),
+    );
+    if last.status.as_ref() != Some(&status) {
+        last.status = Some(status.clone());
+        super::render::emit(
+            push,
+            &PushEnvelope::Status {
+                session,
+                working: status.0,
+                toast: status.1,
+                toast_kind: status.2,
+                tokens_in: status.3,
+                tokens_cached: status.4,
+                tokens_out: status.5,
+                cost: status.6,
+                mode: status.7,
+            },
+        );
+    }
+
+    // --- Loading: the TUI startup splash, projected for the GUI's own overlay ---
+    // `Mode::Loading` is per-session (unlike the `agent_mode` label above), so this
+    // reads the SAME foreground mode `view::draw` would switch on locally. Dedup on
+    // the whole `(active, workspace, awareness)` triple (any phase tick re-emits).
+    //
+    // INVARIANT the webview relies on: once a `Loading{active:true, ...}` frame has
+    // gone out, leaving `Mode::Loading` MUST emit exactly one terminal
+    // `Loading{active:false, workspace:"done", awareness:"done"}` frame before this
+    // fn goes quiet again — that single `false` is the ONLY signal telling the
+    // webview to dismiss its overlay (there is no separate "closed" event). This is
+    // why the else-branch below gates on `last.last_loading`'s stored `active` flag
+    // (the last frame WE emitted) rather than on `shadow`'s own prior-tick mode —
+    // it is the single source of truth for "does the webview still think a splash
+    // is showing".
+    match shadow.mode() {
+        Mode::Loading(s) => {
+            let triple = (
+                true,
+                warm_status_label(&s.workspace).to_string(),
+                warm_status_label(&s.awareness).to_string(),
+            );
+            if last.last_loading.as_ref() != Some(&triple) {
+                last.last_loading = Some(triple.clone());
+                super::render::emit(
+                    push,
+                    &PushEnvelope::Loading {
+                        active: triple.0,
+                        workspace: triple.1,
+                        awareness: triple.2,
+                    },
+                );
+            }
+        }
+        _ => {
+            if last
+                .last_loading
+                .as_ref()
+                .is_some_and(|(active, ..)| *active)
+            {
+                let triple = (false, "done".to_string(), "done".to_string());
+                last.last_loading = Some(triple.clone());
+                super::render::emit(
+                    push,
+                    &PushEnvelope::Loading {
+                        active: triple.0,
+                        workspace: triple.1,
+                        awareness: triple.2,
+                    },
+                );
+            }
+        }
+    }
+}
+
+/// Build + fingerprint + maybe emit the structural `Snapshot` envelope.
+/// Extracted so stream-only ticks can skip the O(transcript) work entirely.
+fn push_snapshot_if_changed(
+    shadow: &AppState,
+    fg: &crate::app::state::SessionRuntime,
+    session: &str,
+    mode: &str,
+    push: &dyn Fn(String),
+    last: &mut PushState,
+    view: super::StreamView,
+) {
     // Title: the session's display name, falling back to its id, then a constant.
     let title = fg
         .session
@@ -87,6 +410,7 @@ pub(super) fn serialize_and_push(
                 .filter(|m| m.role == Role::Tool)
                 .filter_map(|m| m.tool_call_id.as_deref().map(|id| (id, m.content.as_str())))
                 .collect();
+            let mut display_idx = 0usize;
             msgs.iter()
                 .filter_map(|m| {
                     let role = match m.role {
@@ -94,6 +418,8 @@ pub(super) fn serialize_and_push(
                         Role::Assistant => "assistant",
                         Role::System | Role::Tool => return None,
                     };
+                    let idx = display_idx;
+                    display_idx += 1;
                     // Resolve the render `kind` + display `content` + `reasoning`,
                     // mirroring what `render_message_block` does per role:
                     // - USER: peel an invisible SHELL_MARK / BASH_NUDGE_MARK prefix
@@ -195,6 +521,7 @@ pub(super) fn serialize_and_push(
                         })
                         .collect();
                     Some(PushMsg {
+                        idx,
                         role,
                         kind,
                         content,
@@ -315,8 +642,9 @@ pub(super) fn serialize_and_push(
         })
         .collect();
 
-    // Queued mid-turn steer previews (koma's `pending_steer`, decoded into the shadow):
-    // the composer renders these as the "Queued N/5" list while a turn is in flight.
+    // Queued mid-turn follow-ups (koma's `pending_steer`, decoded into the shadow):
+    // the composer renders these as the follow-ups list while a turn is in flight.
+    // Full text so clients can edit/remove per item.
     let pending_steer: Vec<String> = fg.pending_steer.clone();
 
     // Tool-approval GATE (wave-7): the foreground session parks with `awaiting_approval`
@@ -470,191 +798,308 @@ pub(super) fn serialize_and_push(
         sdlc_sealed.hash(&mut h);
         h.finish()
     };
-    if last.snapshot_fp != Some(fp) {
-        last.snapshot_fp = Some(fp);
-        let env = PushEnvelope::Snapshot {
-            session: session.clone(),
-            state: "attached",
-            messages,
-            title,
-            palette,
-            subagents,
-            bash,
-            file_changes,
-            plan_todos,
-            attachments,
-            // Cloned (not moved): `mode` is re-read below for the `Status` envelope,
-            // which is emitted unconditionally every call, unlike this `Snapshot`
-            // block which only runs when the fingerprint changed.
-            mode: mode.clone(),
-            pending_steer,
-            awaiting_approval,
-            approval_reason,
-            pending_call,
-            sdlc_phase,
-            sdlc_goal,
-            sdlc_branch,
-            sdlc_open,
-            sdlc_sealed,
-        };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+    if last.snapshot_fp == Some(fp) {
+        return;
     }
+    last.snapshot_fp = Some(fp);
 
-    // --- StreamMsg: full live buffer; empty text clears the bubble on commit ---
-    match &fg.streaming {
-        Some(text) => {
-            if last.stream.as_deref() != Some(text.as_str()) {
-                last.stream = Some(text.clone());
-                super::render::emit(
-                    push,
-                    &PushEnvelope::StreamMsg {
-                        session: session.clone(),
-                        text: text.clone(),
-                    },
-                );
-            }
+    // Meta fingerprint excludes messages so we only emit Tail/SetLast when the
+    // rest of the Snapshot payload is unchanged (pending_steer, subagents, …).
+    let meta_fp = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        session.hash(&mut h);
+        title.hash(&mut h);
+        mode.hash(&mut h);
+        palette.bg.hash(&mut h);
+        palette.fg.hash(&mut h);
+        palette.accent.hash(&mut h);
+        palette.dim.hash(&mut h);
+        palette.panel.hash(&mut h);
+        palette.warn.hash(&mut h);
+        palette.success.hash(&mut h);
+        palette.info.hash(&mut h);
+        palette.error.hash(&mut h);
+        subagents.len().hash(&mut h);
+        for sa in &subagents {
+            sa.id.hash(&mut h);
+            sa.name.hash(&mut h);
+            sa.status.hash(&mut h);
+            sa.summary.hash(&mut h);
+            sa.detached.hash(&mut h);
+            sa.blocking.hash(&mut h);
+            sa.transcript.hash(&mut h);
+            sa.live_text.hash(&mut h);
+            sa.thinking.hash(&mut h);
         }
-        None => {
-            if last.stream.is_some() {
-                last.stream = None;
-                super::render::emit(
-                    push,
-                    &PushEnvelope::StreamMsg {
-                        session: session.clone(),
-                        text: String::new(),
-                    },
-                );
-            }
+        bash.len().hash(&mut h);
+        for b in &bash {
+            b.id.hash(&mut h);
+            b.cmd.hash(&mut h);
+            b.status.hash(&mut h);
+            b.output_tail.hash(&mut h);
         }
-    }
+        file_changes.len().hash(&mut h);
+        for c in &file_changes {
+            c.path.hash(&mut h);
+            c.status.hash(&mut h);
+        }
+        plan_todos.len().hash(&mut h);
+        for t in &plan_todos {
+            t.content.hash(&mut h);
+            t.status.hash(&mut h);
+            t.locked.hash(&mut h);
+        }
+        attachments.len().hash(&mut h);
+        for a in &attachments {
+            a.marker_n.hash(&mut h);
+            a.name.hash(&mut h);
+            a.kind.hash(&mut h);
+        }
+        pending_steer.len().hash(&mut h);
+        for s in &pending_steer {
+            s.hash(&mut h);
+        }
+        awaiting_approval.hash(&mut h);
+        approval_reason.hash(&mut h);
+        if let Some(pc) = &pending_call {
+            pc.name.hash(&mut h);
+            pc.args.hash(&mut h);
+        }
+        sdlc_phase.hash(&mut h);
+        sdlc_goal.hash(&mut h);
+        sdlc_branch.hash(&mut h);
+        sdlc_open.hash(&mut h);
+        sdlc_sealed.hash(&mut h);
+        h.finish()
+    };
+    let meta_unchanged = last.last_meta_fp == Some(meta_fp);
+    last.last_meta_fp = Some(meta_fp);
 
-    // --- Reasoning: full live thinking buffer; empty text clears it ---
-    if !fg.stream_reasoning.is_empty() {
-        if last.reasoning != fg.stream_reasoning {
-            last.reasoning = fg.stream_reasoning.clone();
+    // Prefer narrow transcript patches when only messages grew or the last row
+    // changed and Snapshot meta is unchanged. Full Snapshot otherwise.
+    let msg_patch = if meta_unchanged {
+        match last.last_messages.as_ref() {
+            Some(prev) if !messages.is_empty() => {
+                if messages.len() > prev.len() && messages[..prev.len()] == prev[..] {
+                    Some(MsgPatch::Tail(messages[prev.len()..].to_vec()))
+                } else if messages.len() == prev.len()
+                    && !messages.is_empty()
+                    && messages[..messages.len() - 1] == prev[..prev.len() - 1]
+                    && messages[messages.len() - 1] != prev[prev.len() - 1]
+                {
+                    Some(MsgPatch::SetLast(messages[messages.len() - 1].clone()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    match msg_patch {
+        Some(MsgPatch::Tail(tail)) if !tail.is_empty() => {
+            last.last_messages = Some(messages);
             super::render::emit(
                 push,
-                &PushEnvelope::Reasoning {
-                    session: session.clone(),
-                    text: fg.stream_reasoning.clone(),
+                &PushEnvelope::SnapshotTail {
+                    session: session.to_string(),
+                    messages: tail,
                 },
             );
         }
-    } else if !last.reasoning.is_empty() {
-        last.reasoning.clear();
-        super::render::emit(
-            push,
-            &PushEnvelope::Reasoning {
-                session: session.clone(),
-                text: String::new(),
-            },
-        );
-    }
-
-    // --- Status: working flag (waiting or mid-stream) + optional toast (+ severity) ---
-    // The toast TEXT and its `ToastKind` severity both ride here; a safeguard/harness
-    // block surfaces as an Error toast (set_toast), an informational notice as Info.
-    // `waiting` mirrors the daemon's `is_ui_busy()` (SessionSnapshot.working, which
-    // already folds in streaming); do not OR in shadow-derived `fg.streaming.is_some()`
-    // here — that re-derivation is what let a stale `Some("")` shadow buffer (a
-    // zero-token stream error) desync the Status envelope and leave the stop
-    // button / cooking indicator stuck forever. The differ now forces a resync on
-    // any streaming Option flip, so `waiting` alone is authoritative.
-    let working = fg.waiting;
-    let toast = fg.toast.as_ref().map(|(t, _, _)| t.clone());
-    let toast_kind = fg.toast.as_ref().map(|(_, _, k)| match k {
-        crate::app::state::ToastKind::Error => "error",
-        crate::app::state::ToastKind::Info => "info",
-    });
-    // Usage counters: mirror the daemon's `SessionRuntime` totals (rehydrated onto the
-    // shadow verbatim in `client_shadow/session.rs`), folded into the dedupe tuple so a
-    // counter tick alone (no transcript/toast change) still re-emits `Status`.
-    let tokens_in = fg.tokens_in;
-    let tokens_cached = fg.tokens_cached;
-    let tokens_out = fg.tokens_out;
-    let cost = fg.cost;
-    let status = (
-        working,
-        toast,
-        toast_kind,
-        tokens_in,
-        tokens_cached,
-        tokens_out,
-        cost,
-        mode.clone(),
-    );
-    if last.status.as_ref() != Some(&status) {
-        last.status = Some(status.clone());
-        super::render::emit(
-            push,
-            &PushEnvelope::Status {
-                session,
-                working: status.0,
-                toast: status.1,
-                toast_kind: status.2,
-                tokens_in: status.3,
-                tokens_cached: status.4,
-                tokens_out: status.5,
-                cost: status.6,
-                mode: status.7,
-            },
-        );
-    }
-
-    // --- Loading: the TUI startup splash, projected for the GUI's own overlay ---
-    // `Mode::Loading` is per-session (unlike the `agent_mode` label above), so this
-    // reads the SAME foreground mode `view::draw` would switch on locally. Dedup on
-    // the whole `(active, workspace, awareness)` triple (any phase tick re-emits).
-    //
-    // INVARIANT the webview relies on: once a `Loading{active:true, ...}` frame has
-    // gone out, leaving `Mode::Loading` MUST emit exactly one terminal
-    // `Loading{active:false, workspace:"done", awareness:"done"}` frame before this
-    // fn goes quiet again — that single `false` is the ONLY signal telling the
-    // webview to dismiss its overlay (there is no separate "closed" event). This is
-    // why the else-branch below gates on `last.last_loading`'s stored `active` flag
-    // (the last frame WE emitted) rather than on `shadow`'s own prior-tick mode —
-    // it is the single source of truth for "does the webview still think a splash
-    // is showing".
-    match shadow.mode() {
-        Mode::Loading(s) => {
-            let triple = (
-                true,
-                warm_status_label(&s.workspace).to_string(),
-                warm_status_label(&s.awareness).to_string(),
+        Some(MsgPatch::SetLast(message)) => {
+            last.last_messages = Some(messages);
+            super::render::emit(
+                push,
+                &PushEnvelope::SnapshotSetLast {
+                    session: session.to_string(),
+                    message,
+                },
             );
-            if last.last_loading.as_ref() != Some(&triple) {
-                last.last_loading = Some(triple.clone());
-                super::render::emit(
-                    push,
-                    &PushEnvelope::Loading {
-                        active: triple.0,
-                        workspace: triple.1,
-                        awareness: triple.2,
-                    },
-                );
-            }
         }
         _ => {
-            if last
-                .last_loading
-                .as_ref()
-                .is_some_and(|(active, ..)| *active)
-            {
-                let triple = (false, "done".to_string(), "done".to_string());
-                last.last_loading = Some(triple.clone());
-                super::render::emit(
-                    push,
-                    &PushEnvelope::Loading {
-                        active: triple.0,
-                        workspace: triple.1,
-                        awareness: triple.2,
-                    },
+            let is_first = last.last_messages.is_none();
+            last.last_messages = Some(messages.clone());
+            // First attach only: slim the Snapshot so first paint is not the
+            // full archive. Later full Snapshots (meta change / rewind) still
+            // ship everything so FE store stays authoritative for RewindTo.
+            let (windowed, older) = if is_first {
+                split_first_snapshot(messages)
+            } else {
+                (messages, None)
+            };
+            if let Some(older) = older {
+                let older_n = older.len();
+                let older_w: usize = older.iter().map(push_msg_weight).sum();
+                let tail_n = windowed.len();
+                let tail_w: usize = windowed.iter().map(push_msg_weight).sum();
+                // Auto-backfill only the newest slice of older (closest to the
+                // tail) up to SNAPSHOT_AUTO_HEAD_BYTES. Anything further back
+                // waits for HistoryPage pull so monster archives never refill
+                // the FE store unbidden.
+                let (auto_older, held_for_pull) = {
+                    let mut auto_w = 0usize;
+                    let mut auto_n = 0usize;
+                    for m in older.iter().rev() {
+                        let w = push_msg_weight(m);
+                        if auto_n > 0 && auto_w.saturating_add(w) > SNAPSHOT_AUTO_HEAD_BYTES {
+                            break;
+                        }
+                        auto_w = auto_w.saturating_add(w);
+                        auto_n += 1;
+                    }
+                    if auto_n >= older.len() {
+                        (older, Vec::new())
+                    } else {
+                        let split = older.len() - auto_n;
+                        (older[split..].to_vec(), older[..split].to_vec())
+                    }
+                };
+                crate::model::store::append_global_error_log(
+                    "gui-pace",
+                    &format!(
+                        "snapshot-split session={session} tail_n={tail_n} tail_w={tail_w} older_n={older_n} older_w={older_w} auto_n={} held_n={} window={SNAPSHOT_WINDOW} tail_budget={SNAPSHOT_TAIL_BYTES} auto_budget={SNAPSHOT_AUTO_HEAD_BYTES}",
+                        auto_older.len(),
+                        held_for_pull.len(),
+                    ),
                 );
+                if !auto_older.is_empty() {
+                    last.pending_snapshot_head = Some((session.to_string(), auto_older));
+                }
+                last.held_history_head = if held_for_pull.is_empty() {
+                    None
+                } else {
+                    Some((session.to_string(), held_for_pull))
+                };
+            } else {
+                last.held_history_head = None;
+            }
+            let full_count = last
+                .last_messages
+                .as_ref()
+                .map(|m| m.len())
+                .unwrap_or(windowed.len());
+            let env = PushEnvelope::Snapshot {
+                session: session.to_string(),
+                state: "attached",
+                messages: windowed,
+                message_count: full_count,
+                title,
+                palette,
+                subagents,
+                bash,
+                file_changes,
+                plan_todos,
+                attachments,
+                mode: mode.to_string(),
+                pending_steer,
+                awaiting_approval,
+                approval_reason,
+                pending_call,
+                sdlc_phase,
+                sdlc_goal,
+                sdlc_branch,
+                sdlc_open,
+                sdlc_sealed,
+            };
+            if let Ok(json) = serde_json::to_string(&env) {
+                push(json);
             }
         }
     }
+}
+
+enum MsgPatch {
+    Tail(Vec<PushMsg>),
+    SetLast(PushMsg),
+}
+
+/// Serve one HistoryPage chunk from held_history_head (or pending auto head).
+/// `before` is the FE's current oldest display idx; returns messages with idx < before.
+pub(super) fn serve_history_page(
+    last: &mut PushState,
+    session: &str,
+    before: Option<usize>,
+    push: &dyn Fn(String),
+) {
+    // Prefer held (beyond auto-backfill), else remaining pending auto head.
+    let source = if last
+        .held_history_head
+        .as_ref()
+        .is_some_and(|(sid, v)| sid == session && !v.is_empty())
+    {
+        &mut last.held_history_head
+    } else if last
+        .pending_snapshot_head
+        .as_ref()
+        .is_some_and(|(sid, v)| sid == session && !v.is_empty())
+    {
+        &mut last.pending_snapshot_head
+    } else {
+        super::render::emit(
+            push,
+            &PushEnvelope::HistoryPage {
+                session: session.to_string(),
+                messages: Vec::new(),
+                has_more: false,
+            },
+        );
+        return;
+    };
+
+    let Some((sid, older)) = source.as_mut() else {
+        return;
+    };
+    if sid != session {
+        return;
+    }
+    // Drop any messages at/after `before` (already on FE).
+    if let Some(b) = before {
+        older.retain(|m| m.idx < b);
+    }
+    if older.is_empty() {
+        *source = None;
+        super::render::emit(
+            push,
+            &PushEnvelope::HistoryPage {
+                session: session.to_string(),
+                messages: Vec::new(),
+                has_more: false,
+            },
+        );
+        return;
+    }
+    let chunk = take_head_chunk(older);
+    let has_more = !older.is_empty();
+    if !has_more {
+        *source = None;
+    }
+    // Also clear the other stash if empty-ish after pull.
+    if last
+        .held_history_head
+        .as_ref()
+        .is_some_and(|(_, v)| v.is_empty())
+    {
+        last.held_history_head = None;
+    }
+    crate::model::store::append_global_error_log(
+        "gui-pace",
+        &format!(
+            "history-page session={session} before={before:?} chunk_n={} has_more={has_more}",
+            chunk.len()
+        ),
+    );
+    super::render::emit(
+        push,
+        &PushEnvelope::HistoryPage {
+            session: session.to_string(),
+            messages: chunk,
+            has_more,
+        },
+    );
 }
 
 /// Map a [`WarmStatus`] to its lowercase wire token for the `Loading` envelope

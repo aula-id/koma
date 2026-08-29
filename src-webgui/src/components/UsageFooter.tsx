@@ -1,6 +1,7 @@
 import { Activity, AlertCircle, AlertTriangle, FoldVertical, Server } from 'lucide-react'
 import { useKoma, visiblePlanTodos } from '../store/koma'
 import { BranchSwitcher } from './BranchSwitcher'
+import { BrailleSpinner } from './BrailleSpinner'
 
 // Human-compact token count: >=10_000 collapses to "12.4k" (one decimal,
 // trailing ".0" trimmed); below that the raw integer is shown. Local helper —
@@ -36,18 +37,33 @@ export function UsageFooter() {
   const gitDetached = useKoma((s) => s.git.detached)
   const gitError = useKoma((s) => s.git.error)
   const remoteState = useKoma((s) => s.remoteState)
-  const lspDiagnostics = useKoma((s) => s.lspDiagnostics)
+  const errCount = useKoma((s) => s.lspDiagCounts.errors)
+  const warnCount = useKoma((s) => s.lspDiagCounts.warnings)
   const problemsOpen = useKoma((s) => s.problemsOpen)
   const toggleProblemsOpen = useKoma((s) => s.toggleProblemsOpen)
-  let errCount = 0
-  let warnCount = 0
-  for (const list of Object.values(lspDiagnostics)) {
-    for (const d of list) {
-      if (d.severity === 1) errCount += 1
-      else if (d.severity === 2) warnCount += 1
-    }
-  }
+  const lspRuntime = useKoma((s) => s.lspRuntime)
+  const lspProgress = useKoma((s) => s.lspProgress)
+  const lspDrawerOpen = useKoma((s) => s.lspDrawerOpen)
+  const toggleLspDrawerOpen = useKoma((s) => s.toggleLspDrawerOpen)
   const problemTotal = errCount + warnCount
+  const lspBusy =
+    lspRuntime.some((s) => s.phase === 'starting' || s.phase === 'working') ||
+    Object.values(lspProgress).some((p) => p && !p.error && p.pct < 100)
+  const lspError = lspRuntime.some((s) => s.phase === 'error')
+  const lspLive = lspRuntime.length
+  const lspTitle = lspLive
+    ? lspRuntime
+        .map((s) => {
+          const st =
+            s.phase === 'working'
+              ? s.title
+                ? `${s.title}${s.percentage != null ? ` ${s.percentage}%` : ''}`
+                : 'working'
+              : s.phase
+          return `${s.name}: ${st}`
+        })
+        .join('\n')
+    : 'No language servers running'
   // Live remote target for the statusline chip (hub-ready OR attached-connected).
   const remoteTarget =
     (remoteState.state === 'ready' || remoteState.state === 'connected') &&
@@ -69,20 +85,22 @@ export function UsageFooter() {
   // before the first checklist call lands).
   const planLabel = visiblePlan.length > 0 ? `PLAN ${planDone}/${visiblePlan.length}` : 'PLAN'
 
+  // Viewport max-* only — footer spans the whole main column, not a split pane.
+  // Collapse long chips before they shove usage off-screen on narrow windows.
   return (
-    <div className="flex h-5 w-full flex-none items-center gap-2 border-t border-koma-border bg-koma-panel px-3 font-mono text-[11px] text-koma-dim">
+    <div className="flex h-5 w-full min-w-0 flex-none items-center gap-2 overflow-hidden border-t border-koma-border bg-koma-panel px-3 font-mono text-[11px] text-koma-dim max-[720px]:gap-1.5 max-[720px]:px-2 max-[520px]:gap-1 max-[520px]:px-1.5">
       {/* Mode badge — clickable ONLY in Plan mode: opens the Explore sidebar
           panel and expands its PLAN section (see `focusPlanSection`). */}
       {isPlan ? (
         <button
           onClick={focusPlanSection}
           title="Show plan"
-          className="rounded bg-koma-accent/15 px-1 text-koma-accent transition hover:bg-koma-accent/25"
+          className="flex-none rounded bg-koma-accent/15 px-1 text-koma-accent transition hover:bg-koma-accent/25"
         >
           {planLabel}
         </button>
       ) : (
-        <span className="lowercase opacity-80">{mode}</span>
+        <span className="flex-none lowercase opacity-80">{mode}</span>
       )}
 
       {/* Remote host chip — visible across welcome/session whenever the GUI is
@@ -90,10 +108,10 @@ export function UsageFooter() {
       {remoteTarget && (
         <span
           title={`Remote: ${remoteTarget}`}
-          className="flex min-w-0 max-w-[40%] items-center gap-1 truncate rounded bg-koma-accent/10 px-1 text-koma-accent"
+          className="flex min-w-0 max-w-[40%] items-center gap-1 truncate rounded bg-koma-accent/10 px-1 text-koma-accent max-[720px]:max-w-[28%] max-[520px]:max-w-none"
         >
           <Server size={10} className="flex-none opacity-80" />
-          <span className="truncate">{remoteTarget}</span>
+          <span className="truncate max-[520px]:hidden">{remoteTarget}</span>
         </span>
       )}
 
@@ -104,14 +122,26 @@ export function UsageFooter() {
           Hidden entirely outside a git repo (no error tolerance — a
           stale/unresolved branch name is worse than no indicator) and on
           detached HEAD (no branch name to show as the trigger label). */}
-      {!gitError && gitBranch && !gitDetached && <BranchSwitcher variant="footer" />}
+      {!gitError && gitBranch && !gitDetached && (
+        <span className="min-w-0 max-[520px]:hidden">
+          <BranchSwitcher variant="footer" />
+        </span>
+      )}
 
-      <div className="flex-1" />
+      <div className="min-w-0 flex-1" />
 
-      {/* Usage readout */}
-      <span className="truncate">
-        ↑ {fmtTokens(tokensIn)} · cached {fmtTokens(tokensCached)} · ↓ {fmtTokens(tokensOut)} ·{' '}
+      {/* Usage readout — short form under 720px, cost-only under 520px. */}
+      <span className="min-w-0 truncate max-[520px]:hidden" title={`↑ ${fmtTokens(tokensIn)} · cached ${fmtTokens(tokensCached)} · ↓ ${fmtTokens(tokensOut)} · $${cost.toFixed(4)}`}>
+        <span className="max-[720px]:hidden">
+          ↑ {fmtTokens(tokensIn)} · cached {fmtTokens(tokensCached)} · ↓ {fmtTokens(tokensOut)} ·{' '}
+        </span>
+        <span className="hidden max-[720px]:inline">
+          ↑{fmtTokens(tokensIn)} ↓{fmtTokens(tokensOut)}{' '}
+        </span>
         <span className="text-koma-accent">${cost.toFixed(4)}</span>
+      </span>
+      <span className="hidden flex-none text-koma-accent max-[520px]:inline" title={`↑ ${fmtTokens(tokensIn)} · cached ${fmtTokens(tokensCached)} · ↓ ${fmtTokens(tokensOut)} · $${cost.toFixed(4)}`}>
+        ${cost.toFixed(4)}
       </span>
 
       {/* Compact button */}
@@ -125,6 +155,30 @@ export function UsageFooter() {
         }`}
       >
         <FoldVertical size={12} />
+      </button>
+
+      {/* Language Servers badge — live runtime / progress drawer */}
+      <button
+        type="button"
+        onClick={toggleLspDrawerOpen}
+        aria-label="Language servers"
+        title={lspTitle}
+        className={`flex h-4 flex-none items-center gap-1 rounded px-1 transition-colors ${
+          lspDrawerOpen
+            ? 'bg-koma-accent/15 text-koma-accent'
+            : lspError
+              ? 'text-koma-error hover:bg-koma-hover'
+              : lspBusy || lspLive
+                ? 'text-koma-fg hover:bg-koma-hover'
+                : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'
+        }`}
+      >
+        {lspBusy ? (
+          <BrailleSpinner size={11} className="text-koma-accent" />
+        ) : (
+          <Server size={11} className={lspError ? 'text-koma-error' : ''} />
+        )}
+        <span className="tabular-nums">{lspLive}</span>
       </button>
 
       {/* Problems badge — always visible; expands the cross-tab drawer */}
@@ -142,9 +196,9 @@ export function UsageFooter() {
         }`}
       >
         {errCount > 0 ? (
-          <AlertCircle size={11} className="text-red-400" />
+          <AlertCircle size={11} className="text-koma-error" />
         ) : (
-          <AlertTriangle size={11} className={warnCount ? 'text-amber-400' : ''} />
+          <AlertTriangle size={11} className={warnCount ? 'text-koma-warn' : ''} />
         )}
         <span className="tabular-nums">{problemTotal}</span>
       </button>

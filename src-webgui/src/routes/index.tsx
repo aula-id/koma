@@ -1,7 +1,7 @@
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
-import { lazy, Suspense, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ChatView } from '../components/ChatView'
-import { TabBar } from '../components/TabBar'
+import { TAB_DRAG_MIME, TabBar } from '../components/TabBar'
 import { StartScreen } from '../components/StartScreen'
 import { Onboarding } from '../components/Onboarding'
 import { Titlebar, getPlatform } from '../components/Titlebar'
@@ -17,11 +17,30 @@ import { RemotePathPicker } from '../components/RemotePathPicker'
 import { ToastContainer } from '../components/ToastContainer'
 import { UsageFooter } from '../components/UsageFooter'
 import { ProblemsDrawer } from '../components/ProblemsDrawer'
+import { LspDrawer } from '../components/LspDrawer'
 import { useKoma } from '../store/koma'
 import { BrailleSpinner } from '../components/BrailleSpinner'
 import { ExtensionPanelFrame } from '../components/ExtensionPanelFrame'
 import { GlobalContextMenu } from '../components/GlobalContextMenu'
+import { ErrorBoundary } from '../components/ErrorBoundary'
 import { installPanelBridgeListener } from '../lib/panelBridge'
+import { hasCodingPathDrag, readCodingPathDragData } from '../lib/codingRef'
+import {
+  MAX_GROUPS,
+  dropZoneFor,
+  gridLayout,
+  groupOf,
+  isTabVisible,
+  normalizeGroups,
+  type DropZone,
+  type EditorGroupId,
+} from '../store/editorGroups'
+import type { Tab } from '../store/koma'
+
+function isEditorBodyDrag(dt: DataTransfer | null | undefined): boolean {
+  if (!dt?.types) return false
+  return dt.types.includes(TAB_DRAG_MIME) || hasCodingPathDrag(dt)
+}
 
 const SIDEBAR_MIN = 150
 const SIDEBAR_MAX = 500
@@ -116,8 +135,138 @@ function RootLayout() {
   // push (Hub if swapper else Snapshot). Also expose window.komaIpc for
   // fire-and-forget IPC calls (e.g., error logging).
   useEffect(() => {
+    // Coalesce high-frequency Stream/Reasoning/Status envelopes to one store
+    // apply per animation frame. Structural envelopes (Snapshot*, Hub, …) flush
+    // immediately so UI never lags a commit behind a batched token tick.
+    type Env = Parameters<NonNullable<typeof window.__komaClient>['push']> extends
+      never
+      ? never
+      : any
+    let raf = 0
+    const pending: any[] = []
+    let pacedRaf = 0
+    const paced: any[] = []
+    // Only these attach envelopes are frame-paced. Stream/Status/chat traffic
+    // must never sit behind Snapshot — that jammed the composer after switch.
+    const isPacedKind = (k: string) =>
+      k === 'Switching' ||
+      k === 'Loading' ||
+      k === 'Snapshot' ||
+      k === 'SnapshotTail' ||
+      k === 'SnapshotHead' ||
+      k === 'HistoryPage' ||
+      k === 'Config' ||
+      k === 'SettingsValues' ||
+      k === 'RepoList'
+    const isCoalesce = (k: string) =>
+      k === 'StreamDelta' ||
+      k === 'StreamMsg' ||
+      k === 'ReasoningDelta' ||
+      k === 'Reasoning' ||
+      k === 'Status'
+
+    const logPace = (msg: string) => {
+      try {
+        window.komaIpc?.({ r: 'WriteErrorLog', message: `[ui-pace] ${msg}` })
+      } catch {
+        /* fire-and-forget */
+      }
+    }
+
+    const peekKind = (item: string | object): string | null => {
+      if (item && typeof item === 'object' && 'k' in item) {
+        const k = (item as { k?: unknown }).k
+        return typeof k === 'string' ? k : null
+      }
+      if (typeof item === 'string') {
+        const m = item.match(/"k"\s*:\s*"([^"]+)"/)
+        return m?.[1] ?? null
+      }
+      return null
+    }
+
+    const flush = () => {
+      raf = 0
+      if (pending.length === 0) return
+      // Collapse stream/reasoning deltas: apply in order but one React tick
+      // by calling push back-to-back inside the rAF (zustand batches sync sets
+      // in the same event loop turn when using the default path).
+      const batch = pending.splice(0, pending.length)
+      const push = useKoma.getState().push
+      for (const env of batch) push(env)
+    }
+
+    // During a session attach, apply one *heavy* host envelope per browser
+    // frame so Snapshot/Loading/Config don't become one giant React task.
+    // Chat stream envelopes always take the coalesce path — never this queue.
+    const flushPaced = () => {
+      pacedRaf = 0
+      const item = paced.shift()
+      if (!item) return
+      const t0 = performance.now()
+      const env = typeof item === 'string' ? JSON.parse(item) : item
+      const kind = typeof env?.k === 'string' ? env.k : '?'
+      const rawLen = typeof item === 'string' ? item.length : 0
+      useKoma.getState().push(env)
+      const ms = performance.now() - t0
+      if (
+        ms >= 8 ||
+        kind === 'Snapshot' ||
+        kind === 'SnapshotHead' ||
+        kind === 'HistoryPage' ||
+        paced.length > 0
+      ) {
+        logPace(
+          `apply k=${kind} parse+push_ms=${ms.toFixed(1)} raw_bytes=${rawLen} queue_left=${paced.length}`,
+        )
+      }
+      if (paced.length > 0) pacedRaf = requestAnimationFrame(flushPaced)
+    }
+
+    const enqueuePaced = (item: string | object) => {
+      if (pending.length) flush()
+      paced.push(item)
+      if (!pacedRaf) pacedRaf = requestAnimationFrame(flushPaced)
+    }
+
+    const enqueue = (env: any) => {
+      if (env && typeof env === 'object' && typeof env.k === 'string' && isPacedKind(env.k)) {
+        enqueuePaced(env)
+        return
+      }
+      if (env && typeof env === 'object' && isCoalesce(env.k)) {
+        pending.push(env)
+        if (!raf) raf = requestAnimationFrame(flush)
+        return
+      }
+      // Structural: drain any pending light envelopes first so order is preserved
+      // (e.g. last StreamDelta before Snapshot clear).
+      if (pending.length) flush()
+      useKoma.getState().push(env)
+    }
+
     window.__komaClient = {
-      push: (j) => useKoma.getState().push(JSON.parse(j)),
+      // Host may pass a JSON string (legacy double-encode) OR a pre-parsed
+      // object (cheaper inject path).
+      push: (j) => {
+        const env = typeof j === 'string' ? JSON.parse(j) : j
+        enqueue(env)
+      },
+      // Native GUI host path: one evaluate_script carries every envelope that
+      // accumulated in its 16 ms frame window. Rust sends JSON strings so a fat
+      // Snapshot is not parsed until its own paced frame.
+      pushBatch: (items) => {
+        logPace(`batch n=${items.length}`)
+        for (const item of items) {
+          const kind = peekKind(item)
+          if (kind && isPacedKind(kind)) {
+            enqueuePaced(item)
+          } else {
+            const env = typeof item === 'string' ? JSON.parse(item) : item
+            enqueue(env)
+          }
+        }
+      },
     }
     // komaIpc is for fire-and-forget requests that don't need a reply
     window.komaIpc = (g) => {
@@ -131,23 +280,20 @@ function RootLayout() {
       }
     }
     useKoma.getState().req({ r: 'Ready' })
-    // Also kick off an initial git-status fetch so the chat footer's branch
-    // indicator has data on load, without requiring the Source Control panel
-    // to ever be opened.
-    useKoma.getState().req({ r: 'GitStatus' })
-    // Prefetch saved remote hosts so NewSessionMenu / hub remote entries are
-    // populated on first paint — same host-local read as RemotePanel's mount
-    // fetch, without requiring the Remote sidebar to be opened first.
-    useKoma.getState().req({ r: 'GetRemoteHosts' })
-    // Also refresh installed extensions so the sidebar is populated without
-    // requiring the Store panel to ever be opened.
-    useKoma.getState().refreshInstalled()
+    // Defer host-local side fetches until after the first Hub/Config paint.
+    requestAnimationFrame(() => {
+      useKoma.getState().req({ r: 'GitStatus' })
+      useKoma.getState().req({ r: 'GetRemoteHosts' })
+      useKoma.getState().refreshInstalled()
+    })
     // Extension panel bridge (W9): single window-level `message` listener
     // that attributes + forwards panel iframe traffic — see
     // lib/panelBridge.ts. Idempotent, but installed here alongside the rest
     // of the JS<->Rust bridge setup so exactly one listener exists.
     const uninstallPanelBridge = installPanelBridgeListener()
     return () => {
+      if (raf) cancelAnimationFrame(raf)
+      if (pacedRaf) cancelAnimationFrame(pacedRaf)
       window.__komaClient = undefined
       window.komaIpc = undefined
       uninstallPanelBridge()
@@ -296,13 +442,18 @@ function RootLayout() {
       {omnisearchOpen && <OmniSearchPalette onClose={closeOmniSearch} />}
       <SwitchingOverlay
         onCancel={() => {
-          // Best-effort bail: the in-flight swap can't be interrupted, so
-          // tell the host to drop back to the swapper once the target lands
-          // (Rust GuiReq::CancelSwitch), then drop the loader and reopen the
-          // hub locally so the user can pick again.
-          req({ r: 'CancelSwitch' })
+          // Best-effort bail of a pre-attach swap. If Snapshot already landed
+          // (session.id set), do NOT CancelSwitch — that would detach a live
+          // session just because the user dismissed chrome. Only reopen the
+          // resume palette when we actually bounced back to the hub.
+          const attached = !!useKoma.getState().session.id
+          if (!attached) {
+            req({ r: 'CancelSwitch' })
+          }
           cancelSwitching()
-          setOverlay('resume')
+          if (!attached) {
+            setOverlay('resume')
+          }
         }}
       />
       <RemotePasswordPrompt
@@ -382,112 +533,410 @@ function DiffFallback() {
   )
 }
 
-// Tabbed main column: a VSCode-style TabBar over stacked tab contents, with the
-// usage/statusline footer pinned along the bottom — full width, spanning from
-// the sidebar edge to the window edge, visible across every tab (chat + diff).
-// The chat stays MOUNTED at all times (hidden, not unmounted, when a diff tab
-// is active) so its scroll/stream/state survive tab switches; diff tabs mount
-// when opened and stay mounted while open for fast switching, unmounting only
-// on close. The TabBar spans the full main column; the chat keeps its centered
-// reading column, while diff editors use the full width.
+function TabBody({ tab }: { tab: Exclude<Tab, { kind: 'chat' }> }) {
+  return (
+    <Suspense fallback={<DiffFallback />}>
+      {tab.kind === 'diff' ? (
+        <DiffTab tab={tab} />
+      ) : tab.kind === 'settings' ? (
+        <SettingsTab />
+      ) : tab.kind === 'help' ? (
+        <HelpTab />
+      ) : tab.kind === 'tutorial' ? (
+        <TutorialTab />
+      ) : tab.kind === 'agent' ? (
+        <AgentTab tab={tab} />
+      ) : tab.kind === 'subagent' || tab.kind === 'bash' ? (
+        <StreamTab tab={tab} />
+      ) : tab.kind === 'graph' ? (
+        <GraphTab />
+      ) : tab.kind === 'importGraph' ? (
+        <ImportGraphTab />
+      ) : tab.kind === 'analytics' ? (
+        <AnalyticsTab />
+      ) : tab.kind === 'store' ? (
+        <StoreTab />
+      ) : tab.kind === 'installedExtension' ? (
+        <InstalledExtensionTab extId={tab.extId} />
+      ) : tab.kind === 'extension' ? (
+        <ExtensionPanelFrame extId={tab.extId} panelId={tab.panelId} title={tab.title} />
+      ) : tab.kind === 'codingFile' ? (
+        <CodeEditorTab tab={tab} />
+      ) : tab.kind === 'terminal' ? (
+        <TerminalTab tab={tab} />
+      ) : null}
+    </Suspense>
+  )
+}
+
+type DropHover = { groupId: EditorGroupId; zone: DropZone }
+
+function zoneHighlightClass(zone: DropZone): string {
+  switch (zone) {
+    case 'left':
+      return 'inset-y-2 left-2 w-[48%]'
+    case 'right':
+      return 'inset-y-2 right-2 w-[48%]'
+    case 'top':
+      return 'inset-x-2 top-2 h-[48%]'
+    case 'bottom':
+      return 'inset-x-2 bottom-2 h-[48%]'
+    default:
+      return 'inset-2'
+  }
+}
+
+/** Paint-only drop affordance — never receives pointer events. */
+function EditorDropHighlight({
+  groupId,
+  hover,
+}: {
+  groupId: EditorGroupId
+  hover: DropHover | null
+}) {
+  if (hover?.groupId !== groupId) return null
+  return (
+    <div
+      className={`pointer-events-none absolute ${zoneHighlightClass(hover.zone)} rounded border border-koma-accent bg-koma-accent/15`}
+    />
+  )
+}
+
+// A single CSS grid hosts every group strip, every tab body, and every divider.
+// Tab bodies stay siblings even when moved: only their grid coordinates change,
+// so React never remounts chat, Monaco, xterm, streams, or extension iframes.
 function TabbedMain() {
-  const tabs = useKoma((s) => s.ui.tabs)
-  const activeTabId = useKoma((s) => s.ui.activeTabId)
+  const rawUi = useKoma((s) => s.ui)
+  const ui = useMemo(() => normalizeGroups(rawUi), [rawUi])
   const sessionId = useKoma((s) => s.session.id)
-  const chatActive = activeTabId === 'chat'
+  const focusGroup = useKoma((s) => s.focusEditorGroup)
+  const splitTab = useKoma((s) => s.splitTab)
+  const toggleSplitDir = useKoma((s) => s.toggleSplitDir)
+  const resizeGroups = useKoma((s) => s.resizeEditorGroups)
+  const gridRef = useRef<HTMLDivElement>(null)
+  // Pane content boxes registered by group id — used for document-level hit
+  // testing so we never mount a pointer-events layer over Monaco/xterm.
+  const paneEls = useRef(new Map<EditorGroupId, HTMLElement>())
+  const [dropHover, setDropHover] = useState<DropHover | null>(null)
+  const dropHoverRef = useRef<DropHover | null>(null)
+  const sessionRef = useRef(false)
+  const moveTab = useKoma((s) => s.moveTabToGroup)
+  const openCodingFile = useKoma((s) => s.openCodingFile)
+  // splitTab already selected above for the keyboard shortcut.
+  const layout = useMemo(
+    () => gridLayout(ui.groups, ui.groupSizes, ui.splitDir),
+    [ui.groupSizes, ui.groups, ui.splitDir],
+  )
+  const cells = useMemo(
+    () => new Map(layout.cells.map((cell) => [cell.id, cell])),
+    [layout.cells],
+  )
+  const chatGroupId = groupOf(ui, 'chat')
+  // Hit-test reads these from refs so document drag listeners are NOT rebound
+  // on every groupSizes tick (grip drag used to tear down/re-add window listeners
+  // every pixel via layout.cells identity).
+  const layoutCellsRef = useRef(layout.cells)
+  layoutCellsRef.current = layout.cells
+  const groupsLenRef = useRef(ui.groups.length)
+  groupsLenRef.current = ui.groups.length
+  const moveTabRef = useRef(moveTab)
+  moveTabRef.current = moveTab
+  const openCodingFileRef = useRef(openCodingFile)
+  openCodingFileRef.current = openCodingFile
+  const splitTabRef = useRef(splitTab)
+  splitTabRef.current = splitTab
+
+  const setPaneEl = (id: EditorGroupId, el: HTMLElement | null) => {
+    if (el) paneEls.current.set(id, el)
+    else paneEls.current.delete(id)
+  }
+
+  const endDragSession = () => {
+    sessionRef.current = false
+    dropHoverRef.current = null
+    setDropHover(null)
+  }
+
+  const hitTestPane = (clientX: number, clientY: number): DropHover | null => {
+    for (const cell of layoutCellsRef.current) {
+      const el = paneEls.current.get(cell.id)
+      if (!el) continue
+      const r = el.getBoundingClientRect()
+      if (
+        clientX < r.left ||
+        clientX >= r.right ||
+        clientY < r.top ||
+        clientY >= r.bottom
+      ) {
+        continue
+      }
+      const zone = dropZoneFor(clientX - r.left, clientY - r.top, r.width, r.height, {
+        allowEdges: groupsLenRef.current < MAX_GROUPS,
+      })
+      return { groupId: cell.id, zone }
+    }
+    return null
+  }
+
+  useEffect(() => {
+    const arm = (e: DragEvent) => {
+      // Tab moves and coding-tree file opens arm document-level drop handling
+      // so Monaco never sees the bare text/plain path fallback — and so we never
+      // need a full-pane hit layer that can stick and steal focus.
+      if (!isEditorBodyDrag(e.dataTransfer)) return
+      sessionRef.current = true
+      dropHoverRef.current = null
+      setDropHover(null)
+    }
+
+    const stop = () => {
+      if (!sessionRef.current && dropHoverRef.current == null) return
+      endDragSession()
+    }
+
+    const onDragOver = (e: DragEvent) => {
+      if (!sessionRef.current || !isEditorBodyDrag(e.dataTransfer)) return
+      const hit = hitTestPane(e.clientX, e.clientY)
+      if (!hit) {
+        if (dropHoverRef.current != null) {
+          dropHoverRef.current = null
+          setDropHover(null)
+        }
+        return
+      }
+      // Accept the drop so the OS cursor shows move/copy over the pane.
+      e.preventDefault()
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = e.dataTransfer.types.includes(TAB_DRAG_MIME)
+          ? 'move'
+          : 'copy'
+      }
+      const prev = dropHoverRef.current
+      if (prev?.groupId === hit.groupId && prev.zone === hit.zone) return
+      dropHoverRef.current = hit
+      setDropHover(hit)
+    }
+
+    const onDrop = (e: DragEvent) => {
+      if (!sessionRef.current || !isEditorBodyDrag(e.dataTransfer)) {
+        stop()
+        return
+      }
+      // Geometry only — never fall back to the last hover. A strip drop leaves
+      // dropHoverRef pointing at a pane the pointer already left.
+      const hit = hitTestPane(e.clientX, e.clientY)
+      if (!hit) {
+        stop()
+        return
+      }
+      e.preventDefault()
+      e.stopPropagation()
+
+      const dropZone = hit.zone
+      const side = dropZone === 'left' || dropZone === 'top' ? 'before' : 'after'
+      const dir = dropZone === 'left' || dropZone === 'right' ? 'row' : 'col'
+      const split =
+        dropZone === 'center'
+          ? undefined
+          : { side: side as 'before' | 'after', dir: dir as 'row' | 'col' }
+
+      const dt = e.dataTransfer
+      if (!dt) {
+        endDragSession()
+        return
+      }
+      const coding = readCodingPathDragData(dt)
+      if (coding) {
+        if (!coding.isDir) {
+          openCodingFileRef.current(coding.root, coding.path, {
+            groupId: hit.groupId,
+            split,
+          })
+        }
+        endDragSession()
+        return
+      }
+
+      const tabId = dt.getData(TAB_DRAG_MIME)
+      if (tabId) {
+        if (dropZone === 'center') {
+          moveTabRef.current(tabId, hit.groupId)
+        } else {
+          splitTabRef.current(tabId, hit.groupId, side, dir)
+        }
+      }
+      endDragSession()
+    }
+
+    // WebKitGTK sometimes skips dragend after Esc / cancelled drags. Escape and
+    // blur hard-clear the paint so a ghost highlight never lingers.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') stop()
+    }
+
+    window.addEventListener('dragstart', arm)
+    window.addEventListener('dragend', stop)
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('drop', onDrop)
+    window.addEventListener('blur', stop)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('dragstart', arm)
+      window.removeEventListener('dragend', stop)
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('drop', onDrop)
+      window.removeEventListener('blur', stop)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [])
+
+  // Split (Ctrl/Cmd+\): create the second pane, or flip axis when already split.
+  // Group focus is Ctrl/Cmd+1..2 only (max two panes).
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return
+      if (e.key === '\\') {
+        if (ui.groups.length >= 2) {
+          e.preventDefault()
+          toggleSplitDir()
+          return
+        }
+        if (ui.activeTabId === 'chat' || ui.groups.length >= MAX_GROUPS) return
+        e.preventDefault()
+        splitTab(ui.activeTabId, ui.activeGroupId, 'after', 'row')
+        return
+      }
+      const index = Number(e.key) - 1
+      const groupId = ui.groups[index]
+      if (index >= 0 && index < MAX_GROUPS && groupId) {
+        e.preventDefault()
+        focusGroup(groupId)
+      }
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [focusGroup, splitTab, toggleSplitDir, ui.activeGroupId, ui.activeTabId, ui.groups])
+
+  const startResize = (index: number, e: ReactMouseEvent) => {
+    e.preventDefault()
+    const dir = ui.splitDir
+    let prev = dir === 'row' ? e.clientX : e.clientY
+    const total =
+      dir === 'row'
+        ? (gridRef.current?.clientWidth ?? 1)
+        : (gridRef.current?.clientHeight ?? 1)
+    let raf = 0
+    let pending: number | null = null
+    const flush = () => {
+      raf = 0
+      if (pending == null) return
+      const d = pending
+      pending = null
+      resizeGroups(index, d, total)
+    }
+    const move = (ev: MouseEvent) => {
+      const next = dir === 'row' ? ev.clientX : ev.clientY
+      pending = (pending ?? 0) + (next - prev)
+      prev = next
+      if (!raf) raf = requestAnimationFrame(flush)
+    }
+    const up = () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+      if (raf) cancelAnimationFrame(raf)
+      flush()
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    document.body.style.cursor = dir === 'row' ? 'ew-resize' : 'ns-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  }
+
   return (
     <div className="flex h-full w-full min-w-0 flex-col">
-      <TabBar />
-      <div className="relative min-h-0 flex-1">
-        <div className={`absolute inset-0 flex items-stretch justify-center ${chatActive ? '' : 'hidden'}`}>
-          {sessionId === null ? <StartScreen /> : <ChatView />}
+      <div
+        ref={gridRef}
+        className="grid min-h-0 min-w-0 flex-1 overflow-hidden"
+        style={{
+          gridTemplateColumns: layout.gridTemplateColumns,
+          gridTemplateRows: layout.gridTemplateRows,
+        }}
+      >
+        {layout.cells.map((cell) => (
+          <div key={`bar:${cell.id}`} style={cell.bar} className="min-w-0">
+            <TabBar groupId={cell.id} focused={ui.activeGroupId === cell.id} />
+          </div>
+        ))}
+
+        <div
+          style={cells.get(chatGroupId)?.content}
+          className={`relative min-h-0 min-w-0 ${
+            // `hidden` (display:none), not `invisible`: Monaco/xterm canvas layers
+            // on WebKitGTK keep compositing through visibility:hidden and bleed
+            // over the active tab after a git/explorer/coding file open.
+            isTabVisible(ui, 'chat') ? '' : 'hidden'
+          }`}
+          onMouseDown={() => {
+            if (ui.activeGroupId !== chatGroupId) focusGroup(chatGroupId)
+          }}
+        >
+          <div className="absolute inset-0 flex items-stretch justify-center @container/chat">
+            {sessionId === null ? <StartScreen /> : <ChatView />}
+          </div>
         </div>
-        {tabs.map((t) =>
-          t.kind === 'diff' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <DiffTab tab={t} />
-              </Suspense>
+
+        {ui.tabs.map((tab) => {
+          if (tab.kind === 'chat') return null
+          const groupId = groupOf(ui, tab.id)
+          return (
+            <div
+              key={tab.id}
+              style={cells.get(groupId)?.content}
+              className={`relative min-h-0 min-w-0 ${
+                isTabVisible(ui, tab.id) ? '' : 'hidden'
+              }`}
+              onMouseDown={() => {
+                if (ui.activeGroupId !== groupId) focusGroup(groupId)
+              }}
+            >
+              <div className="absolute inset-0">
+                <TabBody tab={tab} />
+              </div>
             </div>
-          ) : t.kind === 'settings' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <SettingsTab />
-              </Suspense>
-            </div>
-          ) : t.kind === 'help' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <HelpTab />
-              </Suspense>
-            </div>
-          ) : t.kind === 'tutorial' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <TutorialTab />
-              </Suspense>
-            </div>
-          ) : t.kind === 'agent' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <AgentTab tab={t} />
-              </Suspense>
-            </div>
-          ) : t.kind === 'subagent' || t.kind === 'bash' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <StreamTab tab={t} />
-              </Suspense>
-            </div>
-          ) : t.kind === 'graph' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <GraphTab />
-              </Suspense>
-            </div>
-          ) : t.kind === 'importGraph' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <ImportGraphTab />
-              </Suspense>
-            </div>
-          ) : t.kind === 'analytics' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <AnalyticsTab />
-              </Suspense>
-            </div>
-          ) : t.kind === 'store' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <StoreTab />
-              </Suspense>
-            </div>
-          ) : t.kind === 'installedExtension' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <InstalledExtensionTab extId={t.extId} />
-              </Suspense>
-            </div>
-          ) : t.kind === 'extension' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <ExtensionPanelFrame extId={t.extId} panelId={t.panelId} title={t.title} />
-            </div>
-          ) : t.kind === 'codingFile' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <CodeEditorTab tab={t} />
-              </Suspense>
-            </div>
-          ) : t.kind === 'terminal' ? (
-            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <Suspense fallback={<DiffFallback />}>
-                <TerminalTab tab={t} />
-              </Suspense>
-            </div>
+          )
+        })}
+
+        {/* Measure + paint only. Never pointer-events — document drag listeners
+            hit-test these boxes so a stuck session cannot block Monaco typing. */}
+        {layout.cells.map((cell) => (
+          <div
+            key={`drop:${cell.id}`}
+            ref={(el) => setPaneEl(cell.id, el)}
+            style={cell.content}
+            className="pointer-events-none relative z-40 min-h-0 min-w-0"
+          >
+            <EditorDropHighlight groupId={cell.id} hover={dropHover} />
+          </div>
+        ))}
+
+        {layout.cells.map((cell, index) =>
+          cell.grip ? (
+            <div
+              key={`grip:${cell.id}`}
+              style={cell.grip}
+              onMouseDown={(e) => startResize(index, e)}
+              className={`z-30 bg-koma-panel2 hover:bg-koma-grip ${
+                ui.splitDir === 'row'
+                  ? 'cursor-ew-resize border-l border-koma-border'
+                  : 'cursor-ns-resize border-t border-koma-border'
+              }`}
+            />
           ) : null,
         )}
       </div>
+      <LspDrawer />
       <ProblemsDrawer />
       <UsageFooter />
     </div>
@@ -501,7 +950,11 @@ function TabbedMain() {
 function IndexPage() {
   const needsOnboarding = useNeedsOnboarding()
   if (needsOnboarding) return <Onboarding />
-  return <TabbedMain />
+  return (
+    <ErrorBoundary label="TabbedMain">
+      <TabbedMain />
+    </ErrorBoundary>
+  )
 }
 
 function SettingsPage() {

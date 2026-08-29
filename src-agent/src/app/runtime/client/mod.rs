@@ -48,6 +48,7 @@
 
 mod bridge;
 mod connect;
+pub(crate) mod content_search;
 pub(crate) mod diff;
 pub(crate) mod file_ops;
 pub(crate) mod git;
@@ -273,7 +274,7 @@ fn teardown_connection(handle: &tokio::runtime::Handle, conn: Connection) {
 /// frame to decide whose transcript / output tail to fold into the push (mirrors the
 /// shared `live_marks`). At most one of the two is `Some` in practice (the active tab).
 /// `Copy` so the fold can snapshot it out of the lock by value each frame.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(in crate::app::runtime) struct StreamView {
     /// The id of the sub-agent being streamed, or `None`.
     pub subagent: Option<usize>,
@@ -738,9 +739,38 @@ pub(super) enum HostCtl {
         request_id: String,
     },
     /// Coding panel: read raw bytes for download / save-as.
+    /// When `save_as` is true the host opens a native save dialog and writes the
+    /// file itself (wry cannot honor in-page blob downloads).
     FileDownloadBytes {
         root: String,
         path: String,
+        request_id: String,
+        /// True for user-facing Download; false for in-app preview loads.
+        save_as: bool,
+    },
+    /// Coding panel: VS Code-style content search across a workspace root.
+    FileContentSearch {
+        root: String,
+        path: String,
+        query: String,
+        case_sensitive: bool,
+        whole_word: bool,
+        is_regex: bool,
+        include_glob: Option<String>,
+        exclude_glob: Option<String>,
+        request_id: String,
+    },
+    /// Coding panel: replace-all matching content_search flags.
+    FileContentReplace {
+        root: String,
+        path: String,
+        query: String,
+        replacement: String,
+        case_sensitive: bool,
+        whole_word: bool,
+        is_regex: bool,
+        include_glob: Option<String>,
+        exclude_glob: Option<String>,
         request_id: String,
     },
     /// Settings "Language servers": resolve every catalogue server (managed /
@@ -790,6 +820,16 @@ pub(super) enum HostCtl {
         path: String,
         line: u32,
         character: u32,
+        /// LSP CompletionTriggerKind: 1 Invoked, 2 TriggerCharacter, 3 Incomplete.
+        trigger_kind: u32,
+        trigger_character: Option<String>,
+        request_id: String,
+    },
+    /// `completionItem/resolve` — reply `LspCompletionResolve` with `request_id`.
+    LspCompletionResolve {
+        root: String,
+        path: String,
+        item: Box<crate::lsp::LspCompletionItem>,
         request_id: String,
     },
     /// `textDocument/hover` — reply `LspHover` with `request_id`.
@@ -912,6 +952,12 @@ pub(super) enum HostCtl {
     TerminalInput { id: String, data: String },
     TerminalResize { id: String, cols: u16, rows: u16 },
     TerminalKill { id: String },
+
+    /// Pull one page of older chat history held after a windowed first Snapshot.
+    /// `before` is the FE's current oldest display idx (exclusive upper bound).
+    HistoryPage {
+        before: Option<usize>,
+    },
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.
