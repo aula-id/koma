@@ -162,6 +162,142 @@ fn ensure_schema_once(path: &Path, conn: &Connection) -> Result<()> {
     }
 }
 
+/// Drop the process-wide "schema ready" mark for this session's archive so the
+/// next [`open`] re-runs ensure/backfill. Used by timeout repair when FTS may be
+/// stale or a prior backfill was interrupted.
+pub fn invalidate_schema_ready(session_dir: &Path) {
+    let path = session_dir.join("messages.sqlite");
+    let Some(pair) = SCHEMA_READY.get() else {
+        return;
+    };
+    let (lock, cvar) = pair;
+    let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    guard.remove(&path);
+    cvar.notify_all();
+}
+
+/// Deterministic post-timeout / post-panic recovery for `message_find`.
+///
+/// No AI: inspects `~/.koma/error.log` for recent `message_find` panics, checks
+/// messages vs FTS row counts, clears a false `fts_backfilled` flag, invalidates
+/// the in-process ready mark, and rebuilds the FTS index when skewed or empty.
+/// Returns a short human report for the tool result string.
+pub fn diagnose_and_repair_message_find(session_dir: &Path) -> String {
+    let mut report: Vec<String> = Vec::new();
+
+    match recent_message_find_panics() {
+        Some(n) if n > 0 => {
+            report.push(format!(
+                "diag: {n} recent message_find/history panic(s) in ~/.koma/error.log \
+                 (stale binary or worker panic — rebuild/reinstall koma if panics persist)"
+            ));
+        }
+        Some(_) => report.push("diag: no recent message_find panics in error.log".into()),
+        None => report.push("diag: could not read ~/.koma/error.log".into()),
+    }
+
+    let db_path = session_dir.join("messages.sqlite");
+    if !db_path.is_file() {
+        report.push("diag: no messages.sqlite yet (nothing to repair)".into());
+        return report.join("\n");
+    }
+
+    // Always drop the ready mark so ensure_schema can run again on this path.
+    invalidate_schema_ready(session_dir);
+
+    let conn = match Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            report.push(format!("diag: open failed: {e}"));
+            return report.join("\n");
+        }
+    };
+    let _ = conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA busy_timeout=5000;
+         PRAGMA temp_store=MEMORY;",
+    );
+
+    let msg_n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+        .unwrap_or(-1);
+    let fts_n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM messages_fts", [], |r| r.get(0))
+        .unwrap_or(-1);
+    report.push(format!("diag: messages={msg_n} fts_rows={fts_n}"));
+
+    let needs_rebuild = msg_n < 0 || fts_n < 0 || (msg_n > 0 && fts_n == 0) || (msg_n != fts_n);
+    if !needs_rebuild {
+        // Still re-run ensure_schema in case meta/flag is inconsistent.
+        invalidate_schema_ready(session_dir);
+        match ensure_schema_once(&db_path, &conn) {
+            Ok(()) => report.push("repair: schema ensure ok (index counts matched)".into()),
+            Err(e) => report.push(format!("repair: schema ensure failed: {e}")),
+        }
+        return report.join("\n");
+    }
+
+    report.push("repair: rebuilding FTS index (count skew or empty FTS)".into());
+    if let Err(e) = conn.execute_batch(
+        "DELETE FROM messages_fts;
+         DELETE FROM schema_meta WHERE key = 'fts_backfilled';",
+    ) {
+        report.push(format!("repair: clear FTS failed: {e}"));
+        return report.join("\n");
+    }
+    invalidate_schema_ready(session_dir);
+    match ensure_schema_once(&db_path, &conn) {
+        Ok(()) => {
+            let fts_after: i64 = conn
+                .query_row("SELECT COUNT(*) FROM messages_fts", [], |r| r.get(0))
+                .unwrap_or(-1);
+            report.push(format!(
+                "repair: FTS rebuild done (fts_rows={fts_after})"
+            ));
+        }
+        Err(e) => report.push(format!("repair: FTS rebuild failed: {e}")),
+    }
+    report.join("\n")
+}
+
+/// Scan the tail of the global error log for recent message_find / history panics.
+fn recent_message_find_panics() -> Option<usize> {
+    let path = crate::model::store::global_error_log_path()?;
+    let data = std::fs::read(&path).ok()?;
+    // Last ~256 KiB is enough; full log can be huge.
+    let start = data.len().saturating_sub(256 * 1024);
+    let tail = String::from_utf8_lossy(&data[start..]);
+    let mut n = 0usize;
+    let mut lines = tail.lines().peekable();
+    while let Some(line) = lines.next() {
+        let is_panic = line.contains("PANIC") || line.contains("panic");
+        if !is_panic {
+            continue;
+        }
+        // Look ahead a few lines for message_find / history breadcrumbs.
+        let mut window = line.to_string();
+        for _ in 0..12 {
+            if let Some(next) = lines.peek() {
+                window.push('\n');
+                window.push_str(next);
+                let _ = lines.next();
+            } else {
+                break;
+            }
+            if window.contains("message_find")
+                || window.contains("tool::history")
+                || window.contains("history::MessageFind")
+                || window.contains("char boundary")
+                || window.contains("end byte index")
+            {
+                n += 1;
+                break;
+            }
+        }
+    }
+    Some(n)
+}
+
 /// Unix-seconds timestamp, or 0 if the clock is before the epoch (won't happen
 /// in practice; keeps the call infallible).
 pub(super) fn now_secs() -> i64 {
