@@ -1,0 +1,64 @@
+# Guard: no AI/bot git identities on mainline
+#
+# Blocks commits whose author, committer, or Co-authored-by / Signed-off-by
+# trailers match scripts/git-identity-blocklist.txt (Cursor, Claude, Copilot,
+# Dependabot-as-author, etc.).
+#
+# Local companion: ./scripts/install-git-hooks.sh
+
+name: git-identity
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: forbid bot authors / trailers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Make checker executable
+        run: chmod +x scripts/check-git-identity.sh
+
+      - name: Determine range
+        id: range
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+            echo "range=${base}..${head}" >> "$GITHUB_OUTPUT"
+          else
+            # push to main: check commits introduced by this push
+            before="${{ github.event.before }}"
+            after="${{ github.event.after }}"
+            if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+              # new branch / first push — check last 50 commits as a bound
+              echo "range=${after}~50..${after}" >> "$GITHUB_OUTPUT"
+            else
+              echo "range=${before}..${after}" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Scan commits
+        run: |
+          set -euo pipefail
+          range="${{ steps.range.outputs.range }}"
+          echo "Scanning $range"
+          # If range is invalid (shallow/orphan), fall back to HEAD only.
+          if ! git rev-list "$range" >/dev/null 2>&1; then
+            echo "Range unresolvable; checking HEAD only"
+            scripts/check-git-identity.sh --commit HEAD
+          else
+            scripts/check-git-identity.sh --range "$range"
+          fi

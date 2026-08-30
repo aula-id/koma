@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# commit-msg — block forbidden authors / Co-authored-by trailers at commit time.
+set -euo pipefail
+MSG_FILE=${1:-}
+[ -n "$MSG_FILE" ] || exit 0
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+CHECK="$REPO_ROOT/scripts/check-git-identity.sh"
+[ -f "$CHECK" ] || exit 0
+
+AUTHOR="${GIT_AUTHOR_NAME:-} <${GIT_AUTHOR_EMAIL:-}>"
+COMMITTER="${GIT_COMMITTER_NAME:-} <${GIT_COMMITTER_EMAIL:-}>"
+
+exec bash "$CHECK" --message-file "$MSG_FILE" --author "$AUTHOR" --committer "$COMMITTER"

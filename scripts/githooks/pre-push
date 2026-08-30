@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# pre-push — reject pushes that introduce blocked identities.
+set -euo pipefail
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+CHECK="$REPO_ROOT/scripts/check-git-identity.sh"
+[ -f "$CHECK" ] || exit 0
+
+zero=0000000000000000000000000000000000000000
+status=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -n "${local_sha:-}" ] || continue
+  case "$local_sha" in
+    "$zero") continue ;; # delete
+  esac
+
+  if [ "$remote_sha" = "$zero" ]; then
+    if git rev-parse --verify origin/main >/dev/null 2>&1; then
+      range="origin/main..$local_sha"
+    else
+      range=$local_sha
+    fi
+  else
+    range="$remote_sha..$local_sha"
+  fi
+
+  if ! bash "$CHECK" --range "$range"; then
+    echo "pre-push: blocked push of $local_ref (forbidden identity in $range)" >&2
+    status=1
+  fi
+done
+
+exit $status

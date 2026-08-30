@@ -1,0 +1,58 @@
+# Forbidden git identities (authors, committers, Co-authored-by / Signed-off-by).
+# One pattern per line. Matching is case-insensitive substring against
+# "Name <email>" (and bare name/email fields).
+# Lines starting with # and blank lines are ignored.
+#
+# Keep this list mean and specific — false positives hurt more than misses
+# once CI is the backstop. Prefer email domains and known bot handles.
+
+# Cursor
+cursoragent
+cursoragent@cursor.com
+cursor.com
+noreply@cursor.com
+
+# Claude / Anthropic tooling
+claude@
+claude code
+anthropic.com
+noreply@anthropic.com
+
+# OpenAI / Codex / ChatGPT agent
+openai.com
+chatgpt
+@openai.com
+codex@
+
+# GitHub Copilot / bot accounts
+copilot
+users.noreply.github.com+copilot
+github-copilot
+copilot-swe-agent
+
+# Google / Gemini agent surfaces
+gemini-code
+gemini@
+bard@
+
+# Other coding agents
+windsurf
+codeium
+amp-agent
+aider@
+devtools-bot
+devin-ai
+swe-agent
+openhands
+gpt-engineer
+
+# Generic CI bot authors that should never be primary authors on main
+github-actions[bot]
+github-actions@github.com
+dependabot[bot]
+dependabot@
+renovate[bot]
+renovate@
+greenkeeper[bot]
+imgbot[bot]
+allcontributors[bot]
