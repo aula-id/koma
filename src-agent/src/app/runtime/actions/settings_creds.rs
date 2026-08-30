@@ -66,10 +66,9 @@ pub(super) fn handle_save_creds(
     } else {
         endpoint
     };
-    // Custom-provider save: leave empty model empty — do not stuff koma/apple
-    // (DEFAULT_MODEL) into an OpenAI-compatible route. Soft-defaults elsewhere still
-    // use DEFAULT_MODEL; dispatch routes unusable Main through koma-free.
-    let model = model;
+    // `model` is used as-is: empty stays empty. Do not stuff koma/apple
+    // (DEFAULT_MODEL) into an OpenAI-compatible custom-provider route. Soft-defaults
+    // elsewhere still use DEFAULT_MODEL; dispatch routes unusable Main through koma-free.
     // Lazy creation: first-run path has no session yet. Create it now,
     // then apply the entered credentials.
     if state.rest.fg().session.is_none() {
