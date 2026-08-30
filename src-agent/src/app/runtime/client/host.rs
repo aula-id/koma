@@ -1640,17 +1640,11 @@ fn host_attached(
     };
     *current = Some(id.clone());
 
-    // Seed a warm-up splash BEFORE the first Snapshot so React never paints a
-    // blank gap between attach and Mode::Loading. If the session is already
-    // warm, the first serialize_and_push emits Loading{active:false} and clears it.
-    super::render::emit(
-        push,
-        &super::push_proto::PushEnvelope::Loading {
-            active: true,
-            workspace: "pending".into(),
-            awareness: "pending".into(),
-        },
-    );
+    // Do not seed a fake Loading splash before the first Snapshot. That made
+    // every reopen show "indexing workspace" while WebKit still parsed the
+    // attach payload — the freeze users report. Real Mode::Loading is projected
+    // by serialize_and_push on the first fold when the session is actually cold.
+    // push_state.last_loading stays None until a real Loading frame goes out.
 
     // Publish this connection's request sender so the ipc handler's `Submit` lands on
     // the CURRENT daemon; take the handshake's prebuffered frames for the fold.
@@ -1659,9 +1653,7 @@ fn host_attached(
     }
     let prebuffered = std::mem::take(&mut conn.prebuffered);
     push_state.reset();
-    // Remember we already told the webview a splash is up so serialize_and_push
-    // will emit the terminal active:false if Mode::Loading never engages.
-    push_state.last_loading = Some((true, "pending".into(), "pending".into()));
+    // last_loading left None — no synthetic Loading seed (see above).
 
     // Enter the runtime context ONLY for the fold loop (a reconstructed shadow
     // sub-agent mints an inert AbortHandle, which needs a runtime in scope) — SCOPED
