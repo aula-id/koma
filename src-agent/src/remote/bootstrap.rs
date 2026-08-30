@@ -133,22 +133,51 @@ fn valid_identifiers(value: &str, reject_numeric_leading_zero: bool) -> bool {
         })
 }
 
-/// Parse the actual CLI format emitted by `koma --version`: `koma <semver>`.
+/// Parse remote `koma --version` stdout. Login shells (`bash -ilc`) often print
+/// MOTD / distro noise (e.g. Raspberry Pi rfkill) on stdout before the real line
+/// `koma <semver>`. Scan every line for that pattern; ignore surrounding junk.
 fn parse_version_output(output: &str) -> RemoteVersion {
     let output = output.trim();
+    if output.is_empty() {
+        return RemoteVersion::Unrecognized(String::new());
+    }
     if output == MISSING {
         return RemoteVersion::Missing;
     }
 
-    let mut words = output.split_whitespace();
-    let parsed = match (words.next(), words.next(), words.next()) {
-        (Some("koma"), Some(version), None) => parse_semantic_version(version),
-        _ => None,
-    };
-    parsed.map_or_else(
-        || RemoteVersion::Unrecognized(output.to_string()),
-        RemoteVersion::Version,
-    )
+    let mut found: Option<SemanticVersion> = None;
+    let mut saw_missing = false;
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line == MISSING {
+            saw_missing = true;
+            continue;
+        }
+        // Accept `koma <semver>` optionally followed by trailing tokens (never
+        // treat the second word as a version unless it parses as semver —
+        // so `koma version 0.3.16` stays unrecognized).
+        let mut words = line.split_whitespace();
+        let Some("koma") = words.next() else {
+            continue;
+        };
+        let Some(version) = words.next() else {
+            continue;
+        };
+        if let Some(v) = parse_semantic_version(version) {
+            found = Some(v);
+        }
+    }
+
+    if let Some(v) = found {
+        return RemoteVersion::Version(v);
+    }
+    if saw_missing {
+        return RemoteVersion::Missing;
+    }
+    RemoteVersion::Unrecognized(output.to_string())
 }
 
 fn check_remote_version<Q>(local: &str, mut query: Q) -> Result<CheckOutcome>

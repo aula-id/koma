@@ -162,3 +162,36 @@ fn parses_and_normalizes_actual_cli_version_output() {
         RemoteVersion::Unrecognized(_)
     ));
 }
+
+#[test]
+fn parses_version_through_login_shell_motd_noise() {
+    // Raspberry Pi / raspi-config often dumps rfkill MOTD on interactive shells
+    // before the real command output (bash -ilc used by remote_command).
+    let noisy = "Wi-Fi is currently blocked by rfkill.\n\
+Use raspi-config to set the country before use.\n\
+\n\
+koma 0.3.31\n";
+    assert_eq!(
+        parse_version_output(noisy),
+        RemoteVersion::Version(SemanticVersion {
+            major: 0,
+            minor: 3,
+            patch: 31,
+            prerelease: None,
+        })
+    );
+}
+
+#[test]
+fn missing_still_detected_when_motd_precedes_marker() {
+    let noisy = "Wi-Fi is currently blocked by rfkill.\nMISSING\n";
+    assert_eq!(parse_version_output(noisy), RemoteVersion::Missing);
+}
+
+#[test]
+fn matching_version_with_motd_skips_install() {
+    let installs = Cell::new(0);
+    let noisy = "Wi-Fi is currently blocked by rfkill.\nkoma 0.3.16\n";
+    assert!(!run_bootstrap(&[noisy], &installs, |_| Ok(true)).unwrap());
+    assert_eq!(installs.get(), 0);
+}
