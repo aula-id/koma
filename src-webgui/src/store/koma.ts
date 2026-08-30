@@ -3186,15 +3186,14 @@ export const useKoma = create<KomaState>((set, get) => ({
               ...(switched ? { stream: '', reasoning: '' } : {}),
             },
             palette: env.palette,
-            // Snapshot proves attach landed, but cold sessions still push a
-            // Loading splash AFTER this. Keep `switchingTo` until Loading
-            // settles (active→false) so we never flash a blank/washed frame
-            // between attach and warm-up. Hub bounce still clears it.
+            // Snapshot proves attach landed — drop switch chrome immediately so
+            // chat can paint. Do NOT invent a synthetic Loading splash here:
+            // that held "indexing workspace" over WebKit while the fat Snapshot
+            // still parsed, freezing Mac/Linux reopen. Real warm-up still shows
+            // when the host emits Loading{active:true}.
             ui: {
               ...s.ui,
-              // Same-session Snapshot: clear switch chrome (normal refresh).
-              // Cross-session: keep switchingTo until Loading settles so we never
-              // flash a blank frame between attach and warm-up splash.
+              switchingTo: null,
               ...(switched || bootstrapping
                 ? {
                     ...(switched
@@ -3203,10 +3202,9 @@ export const useKoma = create<KomaState>((set, get) => ({
                           activeTabId: 'chat',
                         }
                       : {}),
-                    loadingDismissed: false,
-                    loading: s.ui.loading?.active
-                      ? s.ui.loading
-                      : { active: true, workspace: 'pending' as const, awareness: 'pending' as const },
+                    // Keep a real host Loading envelope; never synthesize pending.
+                    loading: s.ui.loading?.active ? s.ui.loading : null,
+                    loadingDismissed: s.ui.loading?.active ? false : s.ui.loadingDismissed,
                     bootstrap: {
                       ...(s.ui.bootstrap ?? makeBootstrapState()),
                       session: 'done',
@@ -3215,7 +3213,7 @@ export const useKoma = create<KomaState>((set, get) => ({
                       repos: s.ui.bootstrap?.repos === 'done' ? 'done' : 'running',
                     },
                   }
-                : { switchingTo: null }),
+                : {}),
             },
             // A genuine switch also drops the OLD session's git/graph/activity
             // slices — they're host-driven for the PREVIOUS repo/session and

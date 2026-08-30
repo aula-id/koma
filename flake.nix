@@ -13,7 +13,7 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
 
-      version = "0.3.31";
+      version = "0.3.32";
 
       mkPackages = system:
         let

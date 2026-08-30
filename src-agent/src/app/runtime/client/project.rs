@@ -37,9 +37,10 @@ const SNAPSHOT_TAIL_BYTES: usize = 256 * 1024;
 pub(super) const SNAPSHOT_HEAD_CHUNK: usize = 40;
 /// Soft byte budget per SnapshotHead chunk.
 const SNAPSHOT_HEAD_CHUNK_BYTES: usize = 256 * 1024;
-/// Auto-backfill ceiling: after this many older bytes, stop and wait for
-/// `HistoryPage` pull (monster sessions must not refill the store unbidden).
-const SNAPSHOT_AUTO_HEAD_BYTES: usize = 1024 * 1024;
+/// Auto-backfill ceiling: after first Snapshot, older history is pull-only
+/// (`HistoryPage`). Auto SnapshotHead used to push up to 1MB of older messages
+/// into WebKit right after attach and freeze Mac/Linux on reopen.
+const SNAPSHOT_AUTO_HEAD_BYTES: usize = 0;
 
 /// Rough content weight for window/chunk budgets (not full JSON size).
 fn push_msg_weight(m: &PushMsg) -> usize {
