@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Check, ChevronDown, Gauge } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { BrailleSpinner } from './BrailleSpinner'
@@ -12,18 +13,45 @@ import { BrailleSpinner } from './BrailleSpinner'
 // "ready" with the option list. Picking a row fires SetEffort{effort}; the
 // trigger-pill label is DERIVED from the authoritative settingsValues.effort
 // the host re-pushes on every pick — no local state beyond the open flag.
+const MENU_W = 200
+
+function useAnchorRect(open: boolean, ref: React.RefObject<HTMLElement | null>) {
+  const [rect, setRect] = useState<DOMRect | null>(null)
+  useEffect(() => {
+    if (!open) {
+      setRect(null)
+      return
+    }
+    const update = () => {
+      if (ref.current) setRect(ref.current.getBoundingClientRect())
+    }
+    update()
+    window.addEventListener('scroll', update, true)
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update, true)
+      window.removeEventListener('resize', update)
+    }
+  }, [open, ref])
+  return rect
+}
+
 export function EffortPicker() {
   const effort = useKoma((s) => s.settingsValues?.effort ?? '')
   const menu = useKoma((s) => s.effortOptions)
   const req = useKoma((s) => s.req)
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
   const retriedRef = useRef(false)
+  const rect = useAnchorRect(open, ref)
 
   useEffect(() => {
     if (!open) return
     const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (ref.current?.contains(t) || menuRef.current?.contains(t)) return
+      setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
@@ -73,6 +101,58 @@ export function EffortPicker() {
     setOpen(false)
   }
 
+  // Body portal drop-up — toolbar overflow-x-auto clips absolute menus.
+  const portalMenu =
+    open &&
+    rect &&
+    createPortal(
+      <div
+        ref={menuRef}
+        style={{
+          position: 'fixed',
+          left: Math.max(8, Math.min(rect.left, window.innerWidth - MENU_W - 8)),
+          bottom: window.innerHeight - rect.top + 6,
+          width: MENU_W,
+          zIndex: 80,
+        }}
+        className="overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm"
+      >
+        {menu == null || menu.state === 'loading' ? (
+          <div className="flex items-center gap-2 px-2 py-1 text-[12px] text-koma-fg opacity-50">
+            <BrailleSpinner size={12} />
+            <span className="min-w-0 flex-1">{menu?.note || 'fetching model capabilities…'}</span>
+          </div>
+        ) : menu.state === 'unsupported' ? (
+          <div className="px-2 py-1 text-[12px] text-koma-fg opacity-40">
+            {menu.note || 'model has no thinking control'}
+          </div>
+        ) : (
+          menu.options.map((opt) => {
+            const isActive = opt === activeToken
+            return (
+              <button
+                key={opt}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  pick(opt)
+                }}
+                className={`flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] transition-colors ${
+                  isActive
+                    ? 'bg-koma-hover text-koma-fg'
+                    : 'text-koma-fg opacity-75 hover:bg-koma-hover hover:opacity-100'
+                }`}
+              >
+                <span className="min-w-0 flex-1 truncate">{opt}</span>
+                {isActive && <Check size={12} className="flex-none text-koma-accent" />}
+              </button>
+            )
+          })
+        )}
+      </div>,
+      document.body,
+    )
+
   return (
     <div ref={ref} className="relative">
       <button
@@ -85,43 +165,7 @@ export function EffortPicker() {
         <span className="min-w-0 truncate @max-[14rem]/chat:hidden">{triggerLabel}</span>
         <ChevronDown size={12} className="flex-none opacity-60 @max-[14rem]/chat:hidden" />
       </button>
-      {open && (
-        // Opens UPWARD — sits just above the composer at the bottom of the chat.
-        <div className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[min(200px,calc(100cqw-1rem))] max-w-[calc(100vw-1rem)] overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm">
-          {menu == null || menu.state === 'loading' ? (
-            <div className="flex items-center gap-2 px-2 py-1 text-[12px] text-koma-fg opacity-50">
-              <BrailleSpinner size={12} />
-              <span className="min-w-0 flex-1">{menu?.note || 'fetching model capabilities…'}</span>
-            </div>
-          ) : menu.state === 'unsupported' ? (
-            <div className="px-2 py-1 text-[12px] text-koma-fg opacity-40">
-              {menu.note || 'model has no thinking control'}
-            </div>
-          ) : (
-            menu.options.map((opt) => {
-              const isActive = opt === activeToken
-              return (
-                <button
-                  key={opt}
-                  type="button"
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    pick(opt)
-                  }}
-                  className={`flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] transition-colors ${
-                    isActive
-                      ? 'bg-koma-hover text-koma-fg'
-                      : 'text-koma-fg opacity-75 hover:bg-koma-hover hover:opacity-100'
-                  }`}
-                >
-                  <span className="min-w-0 flex-1 truncate">{opt}</span>
-                  {isActive && <Check size={12} className="flex-none text-koma-accent" />}
-                </button>
-              )
-            })
-          )}
-        </div>
-      )}
+      {portalMenu}
     </div>
   )
 }

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Bot, Check, ChevronDown, Search, Sparkles } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import type { Model } from '../types/config'
@@ -17,6 +18,29 @@ import type { Model } from '../types/config'
 // REMEMBERS its source global's uuid (`sourceUuid`), so the active global row is
 // matched by that EXACT identity (with a name fallback for pre-`sourceUuid`
 // overrides created on an older daemon).
+const MENU_W = 260
+
+function useAnchorRect(open: boolean, ref: React.RefObject<HTMLElement | null>) {
+  const [rect, setRect] = useState<DOMRect | null>(null)
+  useEffect(() => {
+    if (!open) {
+      setRect(null)
+      return
+    }
+    const update = () => {
+      if (ref.current) setRect(ref.current.getBoundingClientRect())
+    }
+    update()
+    window.addEventListener('scroll', update, true)
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update, true)
+      window.removeEventListener('resize', update)
+    }
+  }, [open, ref])
+  return rect
+}
+
 export function ModelPicker() {
   const models = useKoma((s) => s.config.models)
   const providers = useKoma((s) => s.config.providers)
@@ -25,6 +49,8 @@ export function ModelPicker() {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const ref = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const rect = useAnchorRect(open, ref)
 
   // Resolve a model's `provider` (a provider_uuid) to a human label — either a
   // real config provider (by .id) or an OAuth connection (by .uuid), since the
@@ -74,7 +100,9 @@ export function ModelPicker() {
   useEffect(() => {
     if (!open) return
     const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (ref.current?.contains(t) || menuRef.current?.contains(t)) return
+      setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
@@ -103,6 +131,107 @@ export function ModelPicker() {
     close()
   }
 
+  // Body portal drop-up — composer toolbar overflow-x-auto clips absolute menus.
+  const portalMenu =
+    open &&
+    rect &&
+    createPortal(
+      <div
+        ref={menuRef}
+        style={{
+          position: 'fixed',
+          left: Math.max(8, Math.min(rect.left, window.innerWidth - MENU_W - 8)),
+          bottom: window.innerHeight - rect.top + 6,
+          width: MENU_W,
+          zIndex: 80,
+        }}
+        className="overflow-hidden rounded-md border border-koma-border bg-koma-panel shadow-sm"
+      >
+        <div className="flex h-[26px] items-center gap-2 border-b border-koma-border px-2">
+          <Search size={12} className="flex-none text-koma-fg opacity-50" />
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search models…"
+            className="w-full bg-transparent text-[12px] text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-40"
+          />
+        </div>
+        <div className="max-h-[240px] overflow-y-auto py-1">
+          {/* (inherit) — default: removes the session-local override. */}
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault()
+              pickInherit()
+            }}
+            className={`flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] transition-colors ${
+              !localMain
+                ? 'bg-koma-hover text-koma-fg'
+                : 'text-koma-fg opacity-75 hover:bg-koma-hover hover:opacity-100'
+            }`}
+          >
+            {!localMain ? (
+              <Check size={12} className="flex-none text-koma-accent" />
+            ) : (
+              <span className="w-3 flex-none" />
+            )}
+            <span className="truncate">(inherit) — global main</span>
+          </button>
+          {filtered.length === 0 ? (
+            <div className="px-2 py-1 text-[11px] text-koma-fg opacity-40">No global models</div>
+          ) : (
+            filtered.map((m) => {
+              const active = sameModel(m)
+              // Transparency: the row's primary label can be an opaque
+              // nickname (m.name) — show the REAL model id + resolved
+              // provider as a dim subtitle so "who is this model really?" is
+              // always answerable at a glance. Skip the subtitle's own
+              // modelId repeat when there's no nickname to disambiguate
+              // (m.name empty/equal to modelId) — the primary line already
+              // shows it.
+              const hasNickname = m.name.trim() !== '' && m.name.trim() !== m.modelId
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    pickModel(m)
+                  }}
+                  className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-[12px] transition-colors ${
+                    active
+                      ? 'bg-koma-hover text-koma-fg'
+                      : 'text-koma-fg opacity-75 hover:bg-koma-hover hover:opacity-100'
+                  }`}
+                >
+                  {active ? (
+                    <Check size={12} className="flex-none text-koma-accent" />
+                  ) : (
+                    <span className="w-3 flex-none" />
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{m.name || m.modelId}</span>
+                    {hasNickname && (
+                      <span className="block truncate text-[10px] opacity-50">
+                        {m.modelId} · {providerLabel(m.provider)}
+                      </span>
+                    )}
+                  </span>
+                  {m.free && (
+                    <span className="flex flex-none items-center gap-0.5 rounded bg-koma-accent/15 px-1 text-[9px] uppercase tracking-wide text-koma-accent">
+                      <Sparkles size={9} /> free
+                    </span>
+                  )}
+                </button>
+              )
+            })
+          )}
+        </div>
+      </div>,
+      document.body,
+    )
+
   return (
     <div ref={ref} className="relative" data-tour="model-picker">
       <button
@@ -115,93 +244,7 @@ export function ModelPicker() {
         <span className="min-w-0 truncate @max-[14rem]/chat:hidden">{triggerLabel}</span>
         <ChevronDown size={12} className="flex-none opacity-60 @max-[14rem]/chat:hidden" />
       </button>
-      {open && (
-        // Opens UPWARD — the picker sits just above the composer at the bottom
-        // of the chat.
-        <div className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[min(260px,calc(100cqw-1rem))] max-w-[calc(100vw-1rem)] overflow-hidden rounded-md border border-koma-border bg-koma-panel shadow-sm">
-          <div className="flex h-[26px] items-center gap-2 border-b border-koma-border px-2">
-            <Search size={12} className="flex-none text-koma-fg opacity-50" />
-            <input
-              autoFocus
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search models…"
-              className="w-full bg-transparent text-[12px] text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-40"
-            />
-          </div>
-          <div className="max-h-[240px] overflow-y-auto py-1">
-            {/* (inherit) — default: removes the session-local override. */}
-            <button
-              type="button"
-              onMouseDown={(e) => {
-                e.preventDefault()
-                pickInherit()
-              }}
-              className={`flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] transition-colors ${
-                !localMain
-                  ? 'bg-koma-hover text-koma-fg'
-                  : 'text-koma-fg opacity-75 hover:bg-koma-hover hover:opacity-100'
-              }`}
-            >
-              {!localMain ? (
-                <Check size={12} className="flex-none text-koma-accent" />
-              ) : (
-                <span className="w-3 flex-none" />
-              )}
-              <span className="truncate">(inherit) — global main</span>
-            </button>
-            {filtered.length === 0 ? (
-              <div className="px-2 py-1 text-[11px] text-koma-fg opacity-40">No global models</div>
-            ) : (
-              filtered.map((m) => {
-                const active = sameModel(m)
-                // Transparency: the row's primary label can be an opaque
-                // nickname (m.name) — show the REAL model id + resolved
-                // provider as a dim subtitle so "who is this model really?" is
-                // always answerable at a glance. Skip the subtitle's own
-                // modelId repeat when there's no nickname to disambiguate
-                // (m.name empty/equal to modelId) — the primary line already
-                // shows it.
-                const hasNickname = m.name.trim() !== '' && m.name.trim() !== m.modelId
-                return (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                      pickModel(m)
-                    }}
-                    className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-[12px] transition-colors ${
-                      active
-                        ? 'bg-koma-hover text-koma-fg'
-                        : 'text-koma-fg opacity-75 hover:bg-koma-hover hover:opacity-100'
-                    }`}
-                  >
-                    {active ? (
-                      <Check size={12} className="flex-none text-koma-accent" />
-                    ) : (
-                      <span className="w-3 flex-none" />
-                    )}
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate">{m.name || m.modelId}</span>
-                      {hasNickname && (
-                        <span className="block truncate text-[10px] opacity-50">
-                          {m.modelId} · {providerLabel(m.provider)}
-                        </span>
-                      )}
-                    </span>
-                    {m.free && (
-                      <span className="flex flex-none items-center gap-0.5 rounded bg-koma-accent/15 px-1 text-[9px] uppercase tracking-wide text-koma-accent">
-                        <Sparkles size={9} /> free
-                      </span>
-                    )}
-                  </button>
-                )
-              })
-            )}
-          </div>
-        </div>
-      )}
+      {portalMenu}
     </div>
   )
 }
