@@ -17,7 +17,7 @@ function KeyboardShortcutsPage() {
         <p><strong className="text-koma-accent">Enter</strong> sends a message or runs a slash command; <strong className="text-koma-accent">Tab</strong> completes the selected command.</p>
         <p><strong className="text-koma-accent">Ctrl+R</strong> resends the last message while idle. <strong className="text-koma-accent">Ctrl+E</strong> toggles internet mode, and <strong className="text-koma-accent">Ctrl+J</strong> inserts a newline.</p>
         <p><strong className="text-koma-accent">Ctrl+V</strong> stages an image from the clipboard. <strong className="text-koma-accent">Esc</strong> interrupts while busy; Esc twice opens rewind editing.</p>
-        <p><strong className="text-koma-accent">Up/Down/wheel</strong> scroll the transcript. On an empty composer, <strong className="text-koma-accent">$</strong> opens the sub-agents panel; Ctrl+X kills a selected bash job or sub-agent in its panel.</p>
+        <p><strong className="text-koma-accent">Up/Down/wheel</strong> scroll the transcript. On an empty composer, <strong className="text-koma-accent">$</strong> opens the sub-agents panel; Ctrl+B backgrounds the selected blocking agent, Ctrl+X kills. Composer <strong className="text-koma-accent">Ctrl+B</strong> backgrounds all blocking sub-agents and still-blocking FG bash jobs.</p>
       </div>
     </article>
   )

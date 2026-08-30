@@ -168,6 +168,8 @@ pub(crate) fn shadow_bash_job(v: &BashJobSnapshot) -> BashJob {
         id: v.id,
         command: v.command.clone(),
         started_at: Instant::now(),
+        tool_call_id: None,
+        suppress_completion_nudge: false,
         shared: Arc::new(BashJobShared {
             // Baked from the projection: the viewed job's captured output tail, else empty.
             output: Mutex::new(v.output_tail.clone().unwrap_or_default()),
@@ -175,6 +177,7 @@ pub(crate) fn shadow_bash_job(v: &BashJobSnapshot) -> BashJob {
             pid: Mutex::new(None),
             ended_at: Mutex::new(None),
             tee_path: Mutex::new(None),
+            deadline: Mutex::new(None),
         }),
     }
 }

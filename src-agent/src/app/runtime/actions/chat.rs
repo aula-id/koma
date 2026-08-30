@@ -272,8 +272,7 @@ pub(super) fn handle_submit(
 /// here would freeze the local TUI render loop or — in the daemon — the single
 /// event loop that services EVERY session, stalling all sessions for the whole
 /// command duration. So we spawn the blocking work on a plain `std::thread` (the
-/// same shape `dispatch_deferred` uses for the model-callable `bash` tool, which
-/// is exactly why `bash` lives in `DEFERRED_TOOLS`), mark the session
+/// same shape `dispatch_deferred` uses for heavy I/O tools), mark the session
 /// `awaiting_shell`, and return immediately. The event-loop drain
 /// (`event_loop::sessions`) folds the captured `(command, output)` into the
 /// conversation when it lands.

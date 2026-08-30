@@ -19,7 +19,7 @@ koma is a fast, native AI coding agent that lives in your terminal — reading y
 
 **Parallel sub-agents.** Hand a chunk of work to agents that run side by side, then fold their results back in. Big refactors, broad audits, multi-file sweeps — fanned out, not serialized.
 
-**Background jobs.** Fire off long-running commands and keep working. koma watches them, lets the agent grep and tail their output, and nudges it the moment they finish.
+**Background jobs.** Every model `bash` is a live job you can watch in `/bash`. Long-running work can start as true background (`run_in_background`), or you can press **Ctrl+B** mid-flight to detach a foreground bash (or blocking sub-agent) without killing it — the turn unblocks; koma nudges the agent when the job finishes.
 
 **Multi-session, detachable.** Run many sessions at once, each in its own tab. Detach the daemon, close the laptop, come back later — your work is exactly where you left it.
 

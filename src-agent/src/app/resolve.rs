@@ -81,10 +81,10 @@ pub struct Resolved {
     pub endpoint: String,
     pub api_key: String,
     // The provider's wire type. Consumed at the call boundary via
-    // [`Resolved::is_routable`]: only `OpenAiCompatible` dispatches; an
-    // `AnthropicCompatible` route fails/skips (native Anthropic is deferred — see
-    // the `model/app_config` `ApiType` docs). The client itself never branches on
-    // this; the gate lives ONE level up, here at resolution.
+    // [`Resolved::is_routable`]: all live `ApiType` variants that the runtime
+    // can POST (OpenAI-compat, Anthropic Messages, Codex, KomaFree, CommandCode)
+    // return true — see [`ApiType::is_routable`]. The client branches on
+    // `api_type` at the transport layer; this gate lives one level up at resolution.
     pub api_type: ApiType,
     pub route: Option<String>,
     // Consumed by the MAIN streaming path (passed as the `effort` param of
@@ -128,12 +128,11 @@ impl Resolved {
         self.route.as_deref().unwrap_or("")
     }
 
-    /// Whether this route can actually be dispatched against the OpenAI-compatible
-    /// client. `false` for an `AnthropicCompatible` provider (native Anthropic is
-    /// deferred — see [`ApiType`]). The call boundary checks this BEFORE dispatch:
+    /// Whether this route can actually be dispatched. Delegates to
+    /// [`ApiType::is_routable`] (OpenAI-compat, Anthropic Messages, Codex,
+    /// KomaFree, CommandCode). The call boundary checks this BEFORE dispatch:
     /// the interactive Main path emits a [`crate::service::StreamEvent::Error`] and
-    /// does not POST; secondary roles (awareness / shortsend fold+router /
-    /// safeguard) skip the call gracefully (no summary / no recall / fail-closed).
+    /// does not POST if false; secondary roles skip gracefully.
     pub fn is_routable(&self) -> bool {
         self.api_type.is_routable()
     }

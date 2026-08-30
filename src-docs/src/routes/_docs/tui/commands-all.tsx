@@ -19,7 +19,7 @@ const commands = [
   { name: '/remote', desc: 'Remote SSH hosts' },
   { name: '/task', desc: 'Sub-agents panel / task runner' },
   { name: '/model', desc: 'Switch session / agent model' },
-  { name: '/bash', desc: 'Background bash jobs' },
+  { name: '/bash', desc: 'Bash jobs (FG + background)' },
   { name: '/todo', desc: 'Session task list' },
   { name: '/skill', desc: 'Load/unload agent skills' },
   { name: '/attach', desc: 'Attach screenshot' },

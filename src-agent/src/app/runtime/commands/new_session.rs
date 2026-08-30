@@ -161,7 +161,7 @@ pub(crate) fn apply_new_session_local(
         state.rest.spawn_pending = true;
         *state.mode_mut() = Mode::KeyInput(KeyInputForm::prefilled(
             String::new(),
-            DEFAULT_MODEL.to_string(),
+            String::new(), // catalogue pick — not free-tier id in custom-key wizard
             false, // Esc -> CancelKeyInput (which pops the spawned session)
             false, // not from picker
         ));

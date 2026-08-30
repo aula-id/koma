@@ -1,4 +1,4 @@
-//! View — `/bash` background-job panel overlay.
+//! View — `/bash` job panel overlay (FG + background).
 //!
 //! Rendered as a bordered overlay anchored above the input box (mirroring the
 //! sub-agents panel), NOT as a full-screen replacement. The chat transcript

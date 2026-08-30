@@ -360,31 +360,32 @@ pub struct SessionRuntime {
     /// here so later `!` commands in the same session reuse the one channel.
     /// `None` until the first `!` runs.
     pub shell_task_tx: Option<UnboundedSender<(String, String)>>,
-    // --- background-bash lane (model `bash` with run_in_background=true) ---
-    /// All background bash jobs registered this session (running + finished).
-    /// A `bash` call with `run_in_background: true` is intercepted in
-    /// `process_tools`, spawned via [`crate::app::bgbash::spawn_bash_job`], and
-    /// pushed here; finished jobs STAY in the list so a later `bash_output` poll
-    /// can still read their final status + captured output. Addressed by the model
-    /// as `bash-<id>` (the id below), never by Vec position.
+    // --- bash job lane (model `bash` FG + run_in_background) ---
+    /// All bash jobs registered this session (running + finished), FG and BG.
+    /// Every model `bash` is intercepted in `process_tools`, spawned via
+    /// [`crate::app::bgbash::spawn_bash_job`], and pushed here; finished jobs STAY
+    /// so a later `bash_output` poll can still read final status + output.
+    /// Addressed by the model as `bash-<id>`, never by Vec position. FG jobs carry
+    /// `tool_call_id: Some` until Done or Ctrl+B promote.
     pub bash_jobs: Vec<crate::app::bgbash::BashJob>,
-    /// Monotonic counter: the id assigned to the NEXT background bash job (starts
-    /// at 1, so job ids read as `bash-1`, `bash-2`, …). Never reused.
+    /// Monotonic counter: the id assigned to the NEXT bash job (starts at 1, so
+    /// job ids read as `bash-1`, `bash-2`, …). Never reused.
     pub next_bash_job_id: usize,
-    /// Receiver for background-bash COMPLETION signals: the job id of a finished
-    /// job. The worker thread fires the id over `bash_done_tx` when its child
-    /// exits; the event-loop deferred drain reads it to pop a completion toast.
-    /// Lazily created (with `bash_done_tx`) the first time a bg job is spawned in a
-    /// session, then reused. `None` until the first bg job runs.
+    /// Receiver for bash COMPLETION signals: the job id of a finished job. The
+    /// worker fires the id over `bash_done_tx` when its child exits; the event-loop
+    /// deferred drain reads it to deliver a tool_result (still-blocking FG) or a
+    /// toast + nudge (true BG / promoted). Lazily created with `bash_done_tx` on
+    /// the first job in a session. `None` until the first job runs.
     pub bash_done_rx: Option<UnboundedReceiver<usize>>,
-    /// Sender half of the background-bash completion channel. Cloned into each
-    /// spawned bg-bash worker thread (the sender is `Send`, so it can fire from a
-    /// non-tokio thread). `None` until the first bg job runs.
+    /// Sender half of the bash completion channel. Cloned into each spawned worker
+    /// (the sender is `Send`, so it can fire from a non-tokio thread). `None` until
+    /// the first job runs.
     pub bash_done_tx: Option<UnboundedSender<usize>>,
-    /// Background bash jobs that have finished but whose completion has not yet
-    /// been delivered to the model as a nudge. Buffered here while the agent is
-    /// busy; drained into ONE injected user turn when the session next goes idle.
-    /// Each entry is `(job_id, status_label)`.
+    /// Bash jobs that finished as true BG (or after promote) but whose completion
+    /// has not yet been delivered to the model as a nudge. Buffered while the agent
+    /// is busy; drained into ONE injected user turn when the session next goes idle.
+    /// Each entry is `(job_id, status_label)`. FG completions that still held
+    /// `tool_call_id` never land here — they become tool_results instead.
     pub pending_bash_nudges: Vec<(usize, String)>,
     /// Detached (`task` `run_in_background`) sub-agents that reached a terminal
     /// state but whose completion has not yet been delivered to the model as a

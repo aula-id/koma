@@ -1,5 +1,5 @@
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ChatView } from '../components/ChatView'
 import { TAB_DRAG_MIME, TabBar } from '../components/TabBar'
 import { StartScreen } from '../components/StartScreen'
@@ -627,6 +627,22 @@ function TabbedMain() {
     () => gridLayout(ui.groups, ui.groupSizes, ui.splitDir),
     [ui.groupSizes, ui.groups, ui.splitDir],
   )
+
+  // After 2→1 collapse, some WebViews keep the previous multi-track paint until
+  // a forced reflow. Nudge when the live group count drops to one.
+  const groupCount = ui.groups.length
+  useLayoutEffect(() => {
+    if (groupCount !== 1) return
+    const el = gridRef.current
+    if (!el) return
+    // Read layout → write a no-op style toggle to flush stale tracks.
+    void el.offsetWidth
+    const prev = el.style.gridTemplateColumns
+    el.style.gridTemplateColumns = 'minmax(0, 1fr)'
+    void el.offsetWidth
+    el.style.gridTemplateColumns = prev
+  }, [groupCount, layout.gridTemplateColumns, layout.gridTemplateRows])
+
   const cells = useMemo(
     () => new Map(layout.cells.map((cell) => [cell.id, cell])),
     [layout.cells],

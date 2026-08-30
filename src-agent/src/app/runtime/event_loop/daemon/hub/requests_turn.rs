@@ -340,8 +340,9 @@ impl DaemonHub {
         self.ack_or_error(idx, result);
     }
 
-    // GUI global Ctrl+B: background EVERY eligible sub-agent via the SAME
-    // `Action::BackgroundAllSubagents` the TUI's composer Ctrl+B runs.
+    // GUI global Ctrl+B: background EVERY eligible sub-agent AND promote
+    // still-blocking FG bash via the SAME `Action::BackgroundAllSubagents`
+    // the TUI's composer Ctrl+B runs.
     // `handle_background_all_subagents` is a no-op when nothing is eligible.
     pub(super) fn background_all_subagents(
         &mut self,

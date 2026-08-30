@@ -7,8 +7,16 @@
 /// Base URL of the OpenRouter API endpoint.
 pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
-/// Model identifier sent to OpenRouter when the user hasn't specified one.
-pub const DEFAULT_MODEL: &str = "openai/gpt-4o-mini";
+/// Legacy soft-default model id written into `settings.model` when nothing is
+/// configured yet. **Must match** [`crate::service::koma_free::KOMA_FREE_MODEL`]
+/// (`koma/apple`): real turns already auto-route empty/unusable Main through the
+/// keyless koma-free tier (`resolve_role_dispatch`); this string is the on-disk /
+/// UI mirror of that default — **not** a random OpenRouter model.
+///
+/// Custom-provider first-run (KeyInput with a real endpoint + API key) should
+/// leave the model field empty and force a catalogue pick — do not treat this
+/// constant as an OpenRouter chat default.
+pub const DEFAULT_MODEL: &str = "koma/apple";
 
 /// Default OpenRouter provider slug (empty = use OpenRouter's default routing).
 ///

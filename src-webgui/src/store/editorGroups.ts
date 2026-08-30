@@ -133,8 +133,22 @@ export function normalizeGroups<S extends GroupLayout>(ui: S): S {
     activeTabId = groupActive[activeGroupId] ?? activeTabId
   }
 
+  // Single-pane collapse: drop the second group's size weight and reset the
+  // survivor to 1. Leaving a post-resize weight (e.g. 0.3fr or 1.7fr) is
+  // theoretically fine for one track, but WebKit/Edge have painted leftover
+  // empty regions after 2→1 collapse when stale multi-track geometry lingered
+  // alongside non-unit fr weights. Unit weight + explicit single-track layout
+  // (see gridLayout) is the reliable unsplit state.
   const groupSizes: Record<EditorGroupId, number> = {}
-  for (const g of live) groupSizes[g] = ui.groupSizes[g] ?? 1
+  if (live.length === 1) {
+    groupSizes[live[0]] = 1
+  } else {
+    for (const g of live) groupSizes[g] = ui.groupSizes[g] ?? 1
+  }
+
+  // Orientation only matters with ≥2 panes; pin back to the default axis so the
+  // next split starts from a known row layout rather than a leftover 'col'.
+  const splitDir: SplitDir = live.length < 2 ? 'row' : ui.splitDir
 
   const same =
     sameList(live, ui.groups) &&
@@ -142,10 +156,20 @@ export function normalizeGroups<S extends GroupLayout>(ui: S): S {
     sameMap(groupActive, ui.groupActive) &&
     sameMap(groupSizes, ui.groupSizes) &&
     nextActiveGroup === ui.activeGroupId &&
-    activeTabId === ui.activeTabId
+    activeTabId === ui.activeTabId &&
+    splitDir === ui.splitDir
   if (same) return ui
 
-  return { ...ui, groups: live, tabGroup, groupActive, groupSizes, activeGroupId: nextActiveGroup, activeTabId }
+  return {
+    ...ui,
+    groups: live,
+    tabGroup,
+    groupActive,
+    groupSizes,
+    splitDir,
+    activeGroupId: nextActiveGroup,
+    activeTabId,
+  }
 }
 
 function sameList(a: readonly string[], b: readonly string[]): boolean {
@@ -280,7 +304,10 @@ export function resizeGroups(
   const total = groups.reduce((sum, g) => sum + (sizes[g] ?? 1), 0)
   const min = MIN_FRACTION * total
   const pair = (sizes[a] ?? 1) + (sizes[b] ?? 1)
-  const wanted = (sizes[a] ?? 1) + (deltaPx / totalPx) * total
+  // totalPx is the full grid axis (includes the 5px grip). Map delta against
+  // the pane-only span so a drag matches the visible content columns/rows.
+  const panePx = Math.max(1, totalPx - GRIP_PX)
+  const wanted = (sizes[a] ?? 1) + (deltaPx / panePx) * total
   const next = Math.min(Math.max(wanted, min), pair - min)
   const other = pair - next
   // Identity-stable at the clamp edge so mousemove spam does not replace
@@ -319,6 +346,25 @@ export function gridLayout(
 ): { gridTemplateColumns: string; gridTemplateRows: string; cells: GroupCells[] } {
   const fr = (g: EditorGroupId) => `minmax(0, ${sizes[g] ?? 1}fr)`
   const last = groups.length - 1
+
+  // Unsplit: one explicit track pair — never emit a grip track or multi-fr
+  // template left over from a prior split. WebKitGTK / WebView2 have kept a
+  // phantom empty column/row after 2→1 when templates only changed fr weights.
+  if (groups.length <= 1) {
+    const id = groups[0] ?? DEFAULT_GROUP
+    return {
+      gridTemplateColumns: 'minmax(0, 1fr)',
+      gridTemplateRows: 'auto minmax(0, 1fr)',
+      cells: [
+        {
+          id,
+          bar: { gridColumn: '1', gridRow: '1' },
+          content: { gridColumn: '1', gridRow: '2' },
+          grip: null,
+        },
+      ],
+    }
+  }
 
   if (dir === 'row') {
     // Columns alternate pane/grip; the two rows are the strip and the content.

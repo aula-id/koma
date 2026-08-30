@@ -46,7 +46,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "Run an agent on a task, or open the sub-agents viewer (no args)",
     ),
     ("/model", "Switch session / agent model  (/model for help)"),
-    ("/bash", "Manage background bash jobs"),
+    ("/bash", "Manage bash jobs (FG + background)"),
     ("/todo", "View the session task list"),
     ("/skill", "Load or unload agent skills"),
     ("/attach", "Attach a .screenshoot/*.png to the next message"),
@@ -78,11 +78,15 @@ pub const KEYBINDINGS: &[(&str, &str)] = &[
     ("Ctrl+E", "toggle internet mode (simple / full)"),
     ("Ctrl+J", "insert a newline"),
     ("Ctrl+V", "paste an image from the clipboard"),
+    ("Ctrl+B", "background blocking sub-agent(s) / FG bash job(s)"),
     ("Ctrl+X", "kill the selected bash job / sub-agent"),
-    ("Esc", "interrupt while busy"),
+    ("Esc", "interrupt while busy (kills still-blocking FG bash)"),
     ("Esc Esc", "edit a previous message (rewind)"),
     ("Up/Down/wheel", "scroll the transcript"),
-    ("$", "open the sub-agents panel — Ctrl+X kills the selected"),
+    (
+        "$",
+        "open the sub-agents panel — Ctrl+B backgrounds, Ctrl+X kills",
+    ),
 ];
 
 /// True while the user is still typing a command NAME: input starts with `/`
@@ -170,7 +174,7 @@ pub enum Command {
     Remote(String),
     /// Run a named agent on a task in the background. Holds `<agent> <task>`.
     Task(String),
-    /// Open the `/bash` background-job panel (read-only + kill). Takes no args.
+    /// Open the `/bash` job panel (read-only + kill). Takes no args.
     Bash,
     /// Open the `/todo` task-panel (read-only view of session todos). Takes no args.
     Todo,

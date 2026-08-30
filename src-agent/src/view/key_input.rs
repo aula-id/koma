@@ -382,7 +382,7 @@ pub fn draw(
         render_line(frame, rule_line(rule_w, true, palette), row);
         row += 1;
         // Example hint indented to the value column.
-        render_line(frame, hint_line("e.g. openai/gpt-4o-mini", palette), row);
+        render_line(frame, hint_line("e.g. koma/apple or openai/…", palette), row);
     }
 
     // ── Footer ───────────────────────────────────────────────────────────────

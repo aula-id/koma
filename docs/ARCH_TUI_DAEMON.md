@@ -99,7 +99,9 @@ Every message on the socket uses a fixed framing:
 | `Compact` | Summarize and trim history |
 | `FileSearch { query, limit }` | Fuzzy-search workspace file index |
 | `KillSubagent { id }` | Kill a running sub-agent |
-| `BashKill { id }` | Kill a background bash job |
+| `BashKill { id }` | Kill a bash job (FG or background) |
+| `BackgroundSubagent { id }` | Detach one blocking sub-agent (Ctrl+B on `$` selection) |
+| `BackgroundAllSubagents` | Detach all blocking sub-agents **and** promote still-blocking FG bash (composer Ctrl+B) |
 | `SetMcpServer`, `DeleteMcpServer`, `EnableMcpServer` | MCP server config management |
 | `SetProvider`, `DeleteProvider` | Provider config management |
 | `SetModel`, `DeleteModel` | Model config management |
@@ -235,7 +237,7 @@ AppState.mode →
   Mcp         → mcp::draw (MCP server config)
   KeyInput    → key_input::draw (credentials form)
   Todo        → todo::draw (todo list)
-  Bash        → bash::draw (background bash output)
+  Bash        → bash::draw (bash job panel — FG + background)
   Help        → help::draw
   ...etc
 ```
@@ -281,7 +283,7 @@ Session daemons do NOT communicate with each other. Each operates independently.
 | Main thread | None (sync) | `daemon_loop`: services sessions, drives hub, streams deltas |
 | Accept loop | tokio (multi-thread) | Binds socket, accepts connections, spawns per-client tasks |
 | Per-client tasks | tokio (multi-thread) | Read/write frames over Unix socket, bridge to hub via `mpsc` |
-| Tool execution | `std::thread` (NOT tokio) | Inline tool runs (read, write, bash, grep, etc.) to avoid freezing |
+| Tool execution | `std::thread` (NOT tokio) | Deferred heavy tools (read, write, grep, …) and bash job workers — never on the event loop |
 | Signal handler | tokio task | Sets `shutting_down` flag on SIGTERM/SIGINT |
 
 ### Client Side (TUI)
@@ -323,7 +325,8 @@ Working directories are hashed via UUID v5 over the OID namespace to produce a s
 
 | Role | Purpose | Default |
 |---|---|---|
-| Main | Interactive chat | `openai/gpt-4o-mini` via OpenRouter |
+| Main | Interactive chat | `koma/apple` (koma-free) when unconfigured; else catalogue Main |
+
 | Awareness | Project-doc summary | `openai/gpt-oss-20b` via Groq |
 | Safeguard | Safety classifier | `openai/gpt-oss-safeguard-20b` via Groq |
 | Compactor | Conversation compaction | Rides Main |
@@ -337,8 +340,9 @@ Working directories are hashed via UUID v5 over the OID namespace to produce a s
 
 ### Provider Types
 
-- **OpenAICompatible**: Standard OpenAI API format
-- **AnthropicCompatible**: (deferred)
+- **OpenAICompatible**: Standard OpenAI-style chat completions
+- **AnthropicCompatible**: Native Anthropic Messages API (`service/openrouter/anthropic/`)
+- **Codex** / **CommandCode** / other `ApiType` variants: see `model/app_config.rs`
 - **KomaFree**: Keyless tier using `X-Koma` / `X-Session` headers
 
 ### OpenRouter Client
@@ -362,18 +366,27 @@ trait Tool: Send + Sync {
 }
 ```
 
-Built-in tools: filesystem (read/write/edit/delete/list), search (grep/glob), shell (bash/output/kill), memory (remember/forget/recall), internet (fetch/search/download), git (operator/cred/worktree), planning (enter/ready/think), task delegation (task/output/kill), and misc (pong/todo).
+Built-in tools (see `tool/mod.rs` `all_tools()` for the full list): filesystem
+(read/write/edit/delete/list), search (grep/glob), shell (bash/output/kill as
+jobs), memory, skill, history, internet/browser, git, planning + SDLC, task
+delegation, graph_query, cd, seqthink, and misc (pong/todo).
 
-### Inline Tool Execution
+### Tool execution lanes
 
-Deferred tools (read, write, edit, bash, grep, glob, etc.) run on a **`std::thread`** (NOT tokio) to avoid freezing the event loop. Tool results are delivered back via unbounded channels.
+- **Deferred tools** (`DEFERRED_TOOLS`: read, write, edit, delete, grep, glob, remember, web_*, git_operator, … — **not** bash) run on a plain **`std::thread`** and return via `tool_task_rx`. The turn parks on `pending_tool_tasks`.
+- **Bash** is always a [`BashJob`](../src-agent/src/app/bgbash/mod.rs) (`app/bgbash`):
+  - **Foreground** (default): `tool_call_id: Some(call.id)`, optional wall timeout; parks the turn like a deferred tool. Status shows `running bash-N`. Appears in `/bash`.
+  - **`run_in_background: true`**: immediate “started bash-N” tool result; completion → toast + idle nudge.
+  - **Ctrl+B** (composer): promotes still-blocking FG jobs (clears `tool_call_id` + deadline, synthetic “backgrounded bash-N…” result); completion then uses the nudge path. Same key also detaches blocking sub-agents.
+  - **Esc** while FG-blocking: kills those jobs (true BG / already-promoted jobs survive).
+- **Sub-agents** (`task`): blocking parks on `pending_subagent_calls`; `run_in_background` or Ctrl+B → detached + completion nudge.
 
 ### Approval Gate
 
 Three modes:
 
 1. **Normal**: Risky tools (write, edit, delete, bash, git, web_download) pause for `y/n` approval
-2. **Auto**: Risky tools run inline unless the classifier blocks them
+2. **Auto**: Risky tools run unless the classifier blocks them
 3. **Plan**: Only read-only tools allowed (enforced at both advertise and dispatch level)
 
 ### Tool-Call Classifier (TAC)
@@ -412,7 +425,7 @@ An off-thread classifier that:
 | `SELF_EXIT_GRACE_TICKS` | 10 (~1s) | Daemon grace before self-exit |
 | `APPROVAL_PARK_TIMEOUT` | 30 min | Auto-deny if detached too long |
 | `MAX_SUBAGENTS` | 5 | Max concurrent sub-agents |
-| Default model | `openai/gpt-4o-mini` | Via OpenRouter |
+| Default model | `koma/apple` (koma-free free tier) | `config.rs` `DEFAULT_MODEL` |
 | Max tool output | 400,000 chars | Truncation limit |
 | Max sub-agent report | 50,000 chars | Completion cap |
 | Tool poll interval | 4 ms | Per-client write poll |

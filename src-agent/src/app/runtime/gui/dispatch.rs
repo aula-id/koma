@@ -494,7 +494,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 }
             }
         }
-        // Background every eligible running sub-agent (global Ctrl+B).
+        // Background every eligible running sub-agent + still-blocking FG bash (global Ctrl+B).
         GuiReq::BackgroundAll => {
             if let Ok(g) = ctx.req.lock() {
                 if let Some(tx) = g.as_ref() {

@@ -636,8 +636,9 @@ impl DaemonHub {
                 self.background_subagent(idx, state, client, handle, id);
             }
 
-            // GUI global Ctrl+B: background EVERY eligible sub-agent via the SAME
-            // `Action::BackgroundAllSubagents` the TUI's composer Ctrl+B runs.
+            // GUI global Ctrl+B: background EVERY eligible sub-agent AND promote
+            // still-blocking FG bash via the SAME `Action::BackgroundAllSubagents`
+            // the TUI's composer Ctrl+B runs.
             // `handle_background_all_subagents` is a no-op when nothing is eligible.
             ClientRequest::BackgroundAllSubagents => {
                 self.background_all_subagents(idx, state, client, handle);

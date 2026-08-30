@@ -8,7 +8,7 @@ use crate::app::mode::Mode;
 use crate::app::state::AppState;
 use crate::config::{
     DEFAULT_AWARENESS_MODEL, DEFAULT_AWARENESS_PROVIDER, DEFAULT_CLASSIFIER_MODEL,
-    DEFAULT_CLASSIFIER_PROVIDER, DEFAULT_MODEL,
+    DEFAULT_CLASSIFIER_PROVIDER,
 };
 use crate::model::app_config::{ApiType, ModelEntry, ModelRole, ProviderConn};
 use crate::model::store;
@@ -66,11 +66,9 @@ pub(super) fn handle_save_creds(
     } else {
         endpoint
     };
-    let model = if model.is_empty() {
-        DEFAULT_MODEL.to_string()
-    } else {
-        model
-    };
+    // `model` is used as-is: empty stays empty. Do not stuff koma/apple
+    // (DEFAULT_MODEL) into an OpenAI-compatible custom-provider route. Soft-defaults
+    // elsewhere still use DEFAULT_MODEL; dispatch routes unusable Main through koma-free.
     // Lazy creation: first-run path has no session yet. Create it now,
     // then apply the entered credentials.
     if state.rest.fg().session.is_none() {
