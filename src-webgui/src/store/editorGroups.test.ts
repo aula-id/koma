@@ -77,7 +77,20 @@ const layout = (partial: Partial<GroupLayout> = {}): GroupLayout => ({
   assert.deepEqual(next.groups, ['g0'])
   assert.equal(next.activeGroupId, 'g0')
   assert.deepEqual(next.tabGroup, { chat: 'g0', a: 'g0', b: 'g0' })
-  assert.deepEqual(next.groupSizes, { g0: 2 })
+  // Collapse resets the survivor to unit weight (not the pre-split 2).
+  assert.deepEqual(next.groupSizes, { g0: 1 })
+  assert.equal(next.splitDir, 'row')
+}
+
+// Unsplit grid is always a single explicit 1fr track (no grip, ignore sizes/dir).
+{
+  const laid = gridLayout(['g0'], { g0: 1.7 }, 'col')
+  assert.equal(laid.gridTemplateColumns, 'minmax(0, 1fr)')
+  assert.equal(laid.gridTemplateRows, 'auto minmax(0, 1fr)')
+  assert.equal(laid.cells.length, 1)
+  assert.equal(laid.cells[0].grip, null)
+  assert.deepEqual(laid.cells[0].bar, { gridColumn: '1', gridRow: '1' })
+  assert.deepEqual(laid.cells[0].content, { gridColumn: '1', gridRow: '2' })
 }
 
 // Closing fallback stays within its own group.

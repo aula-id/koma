@@ -6233,17 +6233,26 @@ export const useKoma = create<KomaState>((set, get) => ({
       // just-killed session is worth preserving, mirrors initialSession's
       // shape exactly.
       session: { ...initialSession },
-      ui: {
+      // Terminals may survive detach, but editor-group split state must not:
+      // leaving groups/groupSizes from a prior 2-pane layout painted empty
+      // tracks on macOS/Windows WebViews after the session died.
+      ui: normalizeGroups({
         ...s.ui,
         tabs: [makeChatTab(), ...s.ui.tabs.filter((t) => t.kind === 'terminal')],
         activeTabId: 'chat',
+        groups: [DEFAULT_GROUP],
+        tabGroup: {},
+        groupActive: { [DEFAULT_GROUP]: 'chat' },
+        activeGroupId: DEFAULT_GROUP,
+        splitDir: 'row' as const,
+        groupSizes: { [DEFAULT_GROUP]: 1 },
         switchingTo: null,
         // Defensive: also drop any stale startup splash — it described the
         // now-dead session's warm-up and must not linger over StartScreen.
         loading: null,
         bootstrap: null,
         loadingDismissed: false,
-      },
+      }),
       // Drop session-scoped Analytics result on detach (all-scope data can stay;
       // filters are a user preference and are preserved).
       analytics: {
