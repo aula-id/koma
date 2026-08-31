@@ -222,7 +222,15 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             chat::draw(frame, &state.rest, &resolved_model, &palette);
             let chunks = chat::layout_chunks(&state.rest, frame.area());
             // chunks[4] = input box, chunks[1] = transcript (6-chunk layout)
-            bash::render_bash_overlay(frame, chunks[4], chunks[1], &b.jobs, b.selected, &palette);
+            bash::render_bash_overlay(
+                frame,
+                chunks[4],
+                chunks[1],
+                &b.jobs,
+                b.selected,
+                &state.rest.bash_list_offset,
+                &palette,
+            );
         }
         Mode::Todo(t) => {
             let resolved_model = resolved_main_model(&state.rest);

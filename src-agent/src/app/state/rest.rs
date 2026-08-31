@@ -128,6 +128,8 @@ pub struct AppStateRest {
     pub effort_offset: std::cell::Cell<usize>,
     pub settings_models_offset: std::cell::Cell<usize>,
     pub subagent_list_offset: std::cell::Cell<usize>,
+    /// Persisted scroll offset for the `/bash` job list overlay (left pane).
+    pub bash_list_offset: std::cell::Cell<usize>,
     pub last_key: Option<String>,
     /// Instant of the most-recent IDLE Esc press in Chat, used to detect a
     /// double-Esc (two idle Escs within ~400ms) that opens the message-rewind
@@ -566,6 +568,7 @@ impl AppStateRest {
             effort_offset: std::cell::Cell::new(0),
             settings_models_offset: std::cell::Cell::new(0),
             subagent_list_offset: std::cell::Cell::new(0),
+            bash_list_offset: std::cell::Cell::new(0),
             last_key: None,
             last_esc: None,
             last_model: None,

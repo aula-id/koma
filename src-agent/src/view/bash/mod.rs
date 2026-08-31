@@ -115,12 +115,17 @@ fn detail_lines<'a>(j: &BashJobView, width: usize, palette: &Palette) -> Vec<Lin
 /// Render the `/bash` panel as a bordered overlay anchored just above
 /// `input_chunk`, drawn on top of the chat transcript. Mirrors the
 /// sub-agents overlay layout (list LEFT + detail RIGHT).
+///
+/// `list_offset` is a render-owned scrolloff cursor (lives on `AppStateRest`)
+/// so the left job list keeps the selection visible without pinning it to
+/// the bottom edge when the list is longer than the pane.
 pub fn render_bash_overlay(
     frame: &mut Frame,
     input_chunk: Rect,
     transcript_chunk: Rect,
     jobs: &[BashJobView],
     selected: usize,
+    list_offset: &std::cell::Cell<usize>,
     palette: &Palette,
 ) {
     // Box sizing: up to ~12 rows, clamped to the space above the input.
@@ -147,6 +152,7 @@ pub fn render_bash_overlay(
     }
 
     if jobs.is_empty() {
+        list_offset.set(0);
         frame.render_widget(
             Paragraph::new(Span::styled(
                 "(no background jobs)",
@@ -167,7 +173,8 @@ pub fn render_bash_overlay(
         .constraints([Constraint::Length(LIST_W), Constraint::Min(0)])
         .split(inner);
 
-    // LEFT: one row per job, selected row highlighted.
+    // LEFT: one row per job, selected row highlighted; windowed so selection
+    // stays visible (highlight at top → push top; at bottom → push bottom).
     let list_block = Block::new()
         .borders(Borders::RIGHT)
         .border_style(Style::default().fg(palette.dim));
@@ -176,10 +183,13 @@ pub fn render_bash_overlay(
 
     let sel = selected.min(jobs.len().saturating_sub(1));
     let list_w = list_inner.width as usize;
-    let list_lines: Vec<Line> = jobs
+    let list_h = list_inner.height as usize;
+    let (start, end) =
+        crate::view::scroll::scroll_window(list_offset, sel, jobs.len(), list_h);
+    let list_lines: Vec<Line> = jobs[start..end]
         .iter()
         .enumerate()
-        .map(|(i, j)| job_row(j, i == sel, list_w, palette))
+        .map(|(i, j)| job_row(j, start + i == sel, list_w, palette))
         .collect();
     frame.render_widget(Paragraph::new(list_lines), list_inner);
 
