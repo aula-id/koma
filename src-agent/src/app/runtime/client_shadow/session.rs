@@ -164,10 +164,17 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
 /// `None` otherwise) is baked into the output `Mutex` — the viewed job carries its live
 /// tail, every other job stays empty. Mirrors how [`shadow_subagent`] mints inert sub-agents.
 pub(crate) fn shadow_bash_job(v: &BashJobSnapshot) -> BashJob {
+    let started = Instant::now();
+    // Terminal jobs must freeze the /bash elapsed timer. Without ended_at the
+    // counter climbs from Instant::now() forever (restored/shadow path bug).
+    let ended = match &v.status {
+        crate::app::bgbash::BashJobStatus::Running => None,
+        _ => Some(started),
+    };
     BashJob {
         id: v.id,
         command: v.command.clone(),
-        started_at: Instant::now(),
+        started_at: started,
         tool_call_id: None,
         suppress_completion_nudge: false,
         shared: Arc::new(BashJobShared {
@@ -175,7 +182,7 @@ pub(crate) fn shadow_bash_job(v: &BashJobSnapshot) -> BashJob {
             output: Mutex::new(v.output_tail.clone().unwrap_or_default()),
             status: Mutex::new(v.status.clone()),
             pid: Mutex::new(None),
-            ended_at: Mutex::new(None),
+            ended_at: Mutex::new(ended),
             tee_path: Mutex::new(None),
             deadline: Mutex::new(None),
         }),

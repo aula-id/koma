@@ -202,12 +202,19 @@ impl BashJob {
 
     /// Elapsed wall-clock seconds for the panel timer: frozen at the terminal
     /// instant once the job finished/was killed, else live since start.
+    ///
+    /// Defense in depth: if status is already terminal but `ended_at` was never
+    /// stamped (restored/shadow jobs historically left it `None`), freeze at
+    /// `started_at` rather than letting the counter climb forever in `/bash`.
     pub fn elapsed_secs(&self) -> u64 {
         let ended = self.shared.ended_at.lock().ok().and_then(|g| *g);
-        match ended {
-            Some(end) => end.saturating_duration_since(self.started_at).as_secs(),
-            None => self.started_at.elapsed().as_secs(),
+        if let Some(end) = ended {
+            return end.saturating_duration_since(self.started_at).as_secs();
         }
+        if !self.is_running() {
+            return 0;
+        }
+        self.started_at.elapsed().as_secs()
     }
 
     /// Idempotently tee this job's full captured `raw` output to `log_dir`,

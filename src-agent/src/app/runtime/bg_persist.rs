@@ -97,10 +97,14 @@ pub(crate) fn restore_bg_records(
             Ok(BashJobStatus::Running) | Err(_) => BashJobStatus::Killed,
             Ok(s) => s,
         };
+        // Restored records are always terminal (Running is coerced to Killed
+        // above). Stamp ended_at = started_at so `/bash` elapsed freezes at 0s
+        // instead of climbing from Instant::now() forever.
+        let started = Instant::now();
         rt.bash_jobs.push(BashJob {
             id,
             command: rec.command,
-            started_at: Instant::now(),
+            started_at: started,
             // Restored jobs are never mid-park of a live turn.
             tool_call_id: None,
             suppress_completion_nudge: false,
@@ -111,7 +115,7 @@ pub(crate) fn restore_bg_records(
                 output: Mutex::new(String::new()),
                 status: Mutex::new(status),
                 pid: Mutex::new(None),
-                ended_at: Mutex::new(None),
+                ended_at: Mutex::new(Some(started)),
                 tee_path: Mutex::new(None),
                 deadline: Mutex::new(None),
             }),

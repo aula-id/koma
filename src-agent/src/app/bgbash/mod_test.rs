@@ -193,6 +193,57 @@ fn format_tool_result_timeout_error_is_plain_message() {
 }
 
 #[test]
+fn elapsed_secs_freezes_for_terminal_without_ended_at() {
+    // Historical restore/shadow path left ended_at = None on Done/Killed jobs;
+    // the panel must not keep climbing from started_at.elapsed().
+    let started = Instant::now() - std::time::Duration::from_secs(60);
+    let shared = Arc::new(BashJobShared {
+        output: Mutex::new(String::new()),
+        status: Mutex::new(BashJobStatus::Done(0)),
+        pid: Mutex::new(None),
+        ended_at: Mutex::new(None),
+        tee_path: Mutex::new(None),
+        deadline: Mutex::new(None),
+    });
+    let job = BashJob {
+        id: 9,
+        command: "true".into(),
+        started_at: started,
+        tool_call_id: None,
+        suppress_completion_nudge: false,
+        shared,
+    };
+    assert_eq!(
+        job.elapsed_secs(),
+        0,
+        "terminal + missing ended_at must freeze (not keep ticking)"
+    );
+}
+
+#[test]
+fn elapsed_secs_uses_ended_at_when_stamped() {
+    let started = Instant::now() - std::time::Duration::from_secs(30);
+    let ended = started + std::time::Duration::from_secs(7);
+    let shared = Arc::new(BashJobShared {
+        output: Mutex::new(String::new()),
+        status: Mutex::new(BashJobStatus::Killed),
+        pid: Mutex::new(None),
+        ended_at: Mutex::new(Some(ended)),
+        tee_path: Mutex::new(None),
+        deadline: Mutex::new(None),
+    });
+    let job = BashJob {
+        id: 10,
+        command: "sleep 99".into(),
+        started_at: started,
+        tool_call_id: None,
+        suppress_completion_nudge: false,
+        shared,
+    };
+    assert_eq!(job.elapsed_secs(), 7);
+}
+
+#[test]
 fn clear_deadline_drops_fg_timeout() {
     let shared = Arc::new(BashJobShared {
         output: Mutex::new(String::new()),
