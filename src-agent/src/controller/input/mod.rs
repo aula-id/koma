@@ -14,6 +14,7 @@
 
 mod action;
 mod agents;
+mod attachments;
 mod bash;
 mod chat;
 mod clipboard;
@@ -113,6 +114,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         Mode::Security(s) => security::handle_security(s, &mut state.rest, key),
         Mode::Bash(b) => bash::handle_bash(b, &mut state.rest, key),
         Mode::Todo(t) => todo::handle_todo(t, &mut state.rest, key),
+        Mode::Attachments(a) => attachments::handle_attachments(a, &mut state.rest, key),
         Mode::Skill(s) => skill_cmd::handle_skill_cmd(s, &mut state.rest, key),
         Mode::Remote(m) => remote::handle_remote(m, key),
         Mode::Help(h) => help::handle_help(h, &mut state.rest, key),

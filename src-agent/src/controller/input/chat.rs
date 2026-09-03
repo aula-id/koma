@@ -301,6 +301,10 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             }
         }
     }
+    // Ctrl+P: open staged attachments list (pastes + images).
+    if is_ctrl(&key, 'p') {
+        return Action::OpenAttachments;
+    }
     // Ctrl+R: resend (only when idle).
     if is_ctrl(&key, 'r') {
         return if rest.fg().waiting {

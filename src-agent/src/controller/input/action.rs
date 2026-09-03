@@ -283,6 +283,13 @@ pub enum Action {
     // --- Todo panel actions ---
     /// Esc from the `/todo` panel — return to Chat.
     CloseTodo,
+    // --- Attachments panel (Ctrl+P) ---
+    /// Open the staged attachments list from Chat.
+    OpenAttachments,
+    /// Esc from the attachments panel — return to Chat.
+    CloseAttachments,
+    /// Remove the selected staged attachment + strip its composer marker.
+    AttachmentsRemoveSelected,
     // --- Help reference + launcher actions ---
     /// Esc in the `/help` screen (or Enter on a non-launchable keybinding row) —
     /// close the reference and return to Chat unchanged.

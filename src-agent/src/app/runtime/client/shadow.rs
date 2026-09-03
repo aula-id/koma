@@ -442,6 +442,7 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
         ModeSnapshot::Security(s) => Mode::Security(Box::new(shadow_security(*s))),
         ModeSnapshot::Bash(b) => Mode::Bash(Box::new(shadow_bash(*b))),
         ModeSnapshot::Todo(t) => Mode::Todo(Box::new(shadow_todo(*t))),
+        ModeSnapshot::Attachments(a) => Mode::Attachments(Box::new(shadow_attachments(*a))),
         ModeSnapshot::Help(h) => Mode::Help(Box::new(shadow_help(*h))),
         ModeSnapshot::Skill(s) => Mode::Skill(Box::new(shadow_skill_cmd(*s))),
         ModeSnapshot::Remote(s) => Mode::Remote(Box::new(shadow_remote(*s))),

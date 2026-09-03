@@ -15,6 +15,7 @@ use crate::controller::input::Action;
 use crate::service::openrouter::OpenRouterClient;
 
 mod agents;
+mod attachments;
 mod background;
 mod bash;
 mod chat;
@@ -375,6 +376,18 @@ pub(in crate::app::runtime) fn apply_action(
 
         Action::CloseTodo => {
             todo::handle_close_todo(state)?;
+        }
+
+        Action::OpenAttachments => {
+            attachments::handle_open_attachments(state)?;
+        }
+
+        Action::CloseAttachments => {
+            attachments::handle_close_attachments(state)?;
+        }
+
+        Action::AttachmentsRemoveSelected => {
+            attachments::handle_attachments_remove_selected(state)?;
         }
 
         Action::BashKillJob(id) => {

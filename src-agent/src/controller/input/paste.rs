@@ -215,6 +215,14 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
         // No text entry on the connection chooser, effort picker, loading splash,
         // usage dashboard, the message-rewind picker, the session hub, or the
         // quit-confirm overlay — paste is a no-op in all of them.
+        Mode::Attachments(a) => {
+            // Nested paste editor: insert as plain text into the buffer only
+            // (no second chip — collapse-to-chip is main-composer only).
+            if let Some((_, ed)) = a.editor.as_mut() {
+                let cleaned = text.replace("\r\n", "\n").replace('\r', "\n");
+                ed.insert_str(&cleaned);
+            }
+        }
         Mode::Onboard(_)
         | Mode::Effort(_)
         | Mode::Model(_)
