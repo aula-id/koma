@@ -181,14 +181,14 @@ impl AppStateRest {
     }
 
     /// Recall the previous (older) sent user message into the input. `users` is
-    /// the session's user messages oldest-first.
-    pub fn history_prev(&mut self, users: &[String]) {
+    /// the session's user messages oldest-first (fence-collapsed + attachments).
+    pub fn history_prev(&mut self, users: &[crate::app::state::HistoryRecallEntry]) {
         self.fg_mut().history_prev(users);
     }
 
     /// Recall the next (newer) sent user message; past the newest, restore the
     /// stashed live input and leave recall mode.
-    pub fn history_next(&mut self, users: &[String]) {
+    pub fn history_next(&mut self, users: &[crate::app::state::HistoryRecallEntry]) {
         self.fg_mut().history_next(users);
     }
 }

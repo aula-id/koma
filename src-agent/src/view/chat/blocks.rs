@@ -21,78 +21,191 @@ pub(super) fn render_user_message(
     palette: &Palette,
     wrap_w: usize,
 ) -> Vec<Line<'static>> {
-    let display = collapse_paste_fences_for_display(content);
-    render_user_message_raw(&display, palette, wrap_w)
-}
+    let band = Style::default().bg(palette.panel);
+    let rail = Style::default().fg(palette.accent).bg(palette.panel);
+    let text = Style::default().fg(palette.accent).bg(palette.panel);
+    let dim_quote = Style::default()
+        .fg(palette.accent)
+        .bg(palette.panel)
+        .add_modifier(Modifier::DIM);
+    let full_w = wrap_w + 2;
+    // Text sits after the 1-col rail AND a 1-col gap, so it wraps to `full_w - 2`.
+    let inner = full_w.saturating_sub(2).max(1);
 
-/// Max preview lines shown inside a collapsed paste quote in the transcript.
-const PASTE_QUOTE_MAX_LINES: usize = 4;
+    let mut out: Vec<Line<'static>> = Vec::new();
+    out.push(band_row(&rail, &band, full_w, Vec::new()));
 
-/// Replace `<<<pasted_text…>>>…<<<end…>>>` fences with a compact quote-ish block.
-fn collapse_paste_fences_for_display(text: &str) -> String {
+    // Walk content, expanding paste fences inline so quote body lines can keep a
+    // `│` prefix on EVERY visual wrap row (plain string collapse loses the rail
+    // when soft-wrap continues past the first segment).
+    let mut cursor = 0usize;
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
         crate::re_util::static_re(
             r#"(?s)<<<pasted_text n=(\d+) path="([^"]*)">>>(.*?)<<<end_pasted_text n=\d+>>>"#,
         )
     });
-    re.replace_all(text, |caps: &regex::Captures| {
-        let n = &caps[1];
-        let path = &caps[2];
-        let body = caps[3].trim_matches('\n');
-        let mut lines: Vec<&str> = body.lines().collect();
-        let truncated = lines.len() > PASTE_QUOTE_MAX_LINES;
-        if truncated {
-            lines.truncate(PASTE_QUOTE_MAX_LINES);
-        }
-        let mut out = format!("[Pasted Text #{n}] ({path})");
-        for line in lines {
-            out.push('\n');
-            out.push_str("  │ ");
-            out.push_str(line);
-        }
-        if truncated {
-            out.push_str("\n  │ …");
-        }
-        out
-    })
-    .into_owned()
-}
-
-fn render_user_message_raw(
-    content: &str,
-    palette: &Palette,
-    wrap_w: usize,
-) -> Vec<Line<'static>> {
-    let band = Style::default().bg(palette.panel);
-    let rail = Style::default().fg(palette.accent).bg(palette.panel);
-    let text = Style::default().fg(palette.accent).bg(palette.panel);
-    let full_w = wrap_w + 2;
-    // Text sits after the 1-col rail AND a 1-col gap, so it wraps to `full_w - 2`.
-    let inner = full_w.saturating_sub(2).max(1);
-
-    let mut out: Vec<Line<'static>> = Vec::new();
-    // Top padding: a blank band row (rail + gap + band fill).
-    out.push(band_row(&rail, &band, full_w, Vec::new()));
-    for logical in content.split('\n') {
-        let wrapped =
-            crate::view::markdown::wrap_spans(&[Span::styled(logical.to_string(), text)], inner);
-        for visual in wrapped {
-            // wrap_spans inserts word-separator spaces with the DEFAULT style (no bg),
-            // which would punch dark holes through the band — flatten each visual line
-            // into ONE span carrying the band `text` style so spaces inherit the bg.
-            let line_text: String = visual.iter().map(|s| s.content.as_ref()).collect();
-            out.push(band_row(
+    for caps in re.captures_iter(content) {
+        let Some(m) = caps.get(0) else {
+            continue;
+        };
+        // Plain text before this fence.
+        if m.start() > cursor {
+            push_plain_band_lines(
+                &mut out,
+                &content[cursor..m.start()],
                 &rail,
                 &band,
+                &text,
                 full_w,
-                vec![Span::styled(line_text, text)],
+                inner,
+            );
+        }
+        let n = caps.get(1).map(|c| c.as_str()).unwrap_or("?");
+        let body = caps
+            .get(3)
+            .map(|c| c.as_str().trim_matches('\n'))
+            .unwrap_or("");
+        push_paste_quote_band_lines(
+            &mut out,
+            PasteQuoteDraw {
+                n,
+                body,
+                rail: &rail,
+                band: &band,
+                text: &text,
+                dim_quote: &dim_quote,
+                full_w,
+                inner,
+            },
+        );
+        cursor = m.end();
+    }
+    if cursor < content.len() {
+        push_plain_band_lines(
+            &mut out,
+            &content[cursor..],
+            &rail,
+            &band,
+            &text,
+            full_w,
+            inner,
+        );
+    } else if cursor == 0 {
+        // No fences at all — whole body is plain.
+        push_plain_band_lines(&mut out, content, &rail, &band, &text, full_w, inner);
+    }
+
+    out.push(band_row(&rail, &band, full_w, Vec::new()));
+    out
+}
+
+/// Max preview lines shown inside a collapsed paste quote in the transcript.
+const PASTE_QUOTE_MAX_LINES: usize = 4;
+
+fn push_plain_band_lines(
+    out: &mut Vec<Line<'static>>,
+    content: &str,
+    rail: &Style,
+    band: &Style,
+    text: &Style,
+    full_w: usize,
+    inner: usize,
+) {
+    if content.is_empty() {
+        return;
+    }
+    for logical in content.split('\n') {
+        let wrapped =
+            crate::view::markdown::wrap_spans(&[Span::styled(logical.to_string(), *text)], inner);
+        for visual in wrapped {
+            let line_text: String = visual.iter().map(|s| s.content.as_ref()).collect();
+            out.push(band_row(
+                rail,
+                band,
+                full_w,
+                vec![Span::styled(line_text, *text)],
             ));
         }
     }
-    // Bottom padding.
-    out.push(band_row(&rail, &band, full_w, Vec::new()));
-    out
+}
+
+/// Bundle of styles + geometry for paste-quote band rows (keeps the helper
+/// under clippy's too-many-arguments limit).
+struct PasteQuoteDraw<'a> {
+    n: &'a str,
+    body: &'a str,
+    rail: &'a Style,
+    band: &'a Style,
+    text: &'a Style,
+    dim_quote: &'a Style,
+    full_w: usize,
+    inner: usize,
+}
+
+/// Paste quote: chip label, then ≤4 body lines. Each body logical line is wrapped
+/// with a dedicated width so **every** visual row is prefixed with `│ ` — no bleed
+/// when the body soft-wraps past the first segment.
+fn push_paste_quote_band_lines(out: &mut Vec<Line<'static>>, d: PasteQuoteDraw<'_>) {
+    let PasteQuoteDraw {
+        n,
+        body,
+        rail,
+        band,
+        text,
+        dim_quote,
+        full_w,
+        inner,
+    } = d;
+    // Label row.
+    let label = format!("[Pasted Text #{n}]");
+    let wrapped =
+        crate::view::markdown::wrap_spans(&[Span::styled(label, *text)], inner);
+    for visual in wrapped {
+        let line_text: String = visual.iter().map(|s| s.content.as_ref()).collect();
+        out.push(band_row(
+            rail,
+            band,
+            full_w,
+            vec![Span::styled(line_text, *text)],
+        ));
+    }
+
+    const PREFIX: &str = "│ ";
+    let prefix_cols = 2usize; // │ + space
+    let body_inner = inner.saturating_sub(prefix_cols).max(1);
+
+    let mut lines: Vec<&str> = body.lines().collect();
+    let truncated = lines.len() > PASTE_QUOTE_MAX_LINES;
+    if truncated {
+        lines.truncate(PASTE_QUOTE_MAX_LINES);
+    }
+    for logical in lines {
+        let wrapped = crate::view::markdown::wrap_spans(
+            &[Span::styled(logical.to_string(), *dim_quote)],
+            body_inner,
+        );
+        for visual in wrapped {
+            let line_text: String = visual.iter().map(|s| s.content.as_ref()).collect();
+            out.push(band_row(
+                rail,
+                band,
+                full_w,
+                vec![
+                    Span::styled(PREFIX.to_string(), *dim_quote),
+                    Span::styled(line_text, *dim_quote),
+                ],
+            ));
+        }
+    }
+    if truncated {
+        out.push(band_row(
+            rail,
+            band,
+            full_w,
+            vec![Span::styled(format!("{PREFIX}…"), *dim_quote)],
+        ));
+    }
 }
 
 /// Assemble one band row: a solid-accent rail cell in column 0, a band-colored

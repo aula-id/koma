@@ -146,49 +146,60 @@ impl SessionRuntime {
             .retain(|a| present.contains(&(a.kind, a.marker_n)));
         std::mem::take(&mut self.pending_attachments)
     }
+}
 
+/// One user-turn entry for bash-style Up/Down composer recall.
+///
+/// `content` is already fence-collapsed to `[Pasted Text #N]` markers so the
+/// composer never loads raw `<<<pasted_text…>>>` machine fences. `attachments`
+/// is the structured record list to re-stage as chips (disk still holds bodies).
+#[derive(Debug, Clone)]
+pub struct HistoryRecallEntry {
+    pub content: String,
+    pub attachments: Vec<crate::dto::chat::Attachment>,
+}
+
+impl SessionRuntime {
     /// Recall the previous (older) sent user message into the input. `users` is
-    /// the session's user messages oldest-first.
+    /// the session's user messages oldest-first (fence-collapsed + attachments).
     ///
-    /// Clears `pending_attachments`: history-up only restores text, not chips
-    /// (avoids stale image/paste cards from the live composer).
-    pub fn history_prev(&mut self, users: &[String]) {
+    /// On first entry, stashes live input **and** pending attachments so leaving
+    /// recall restores both. Loading a history entry restores its chips too
+    /// (parity with double-Esc rewind).
+    pub fn history_prev(&mut self, users: &[HistoryRecallEntry]) {
         if users.is_empty() {
             return;
         }
         let next = match self.hist_idx {
             None => {
                 self.input_stash = self.input.clone();
+                self.pending_stash = self.pending_attachments.clone();
                 users.len() - 1
             }
             Some(0) => return, // already at the oldest
             Some(i) => i - 1,
         };
         self.hist_idx = Some(next);
-        self.input = users[next].clone();
+        self.input = users[next].content.clone();
+        self.pending_attachments = users[next].attachments.clone();
         self.cursor = self.char_len();
-        self.pending_attachments.clear();
     }
 
     /// Recall the next (newer) sent user message; past the newest, restore the
-    /// stashed live input and leave recall mode.
-    ///
-    /// Clears `pending_attachments` on each step (same rationale as
-    /// [`Self::history_prev`]). Restoring the live stash also clears — the stash
-    /// path never stored attachments.
-    pub fn history_next(&mut self, users: &[String]) {
+    /// stashed live input + pending attachments and leave recall mode.
+    pub fn history_next(&mut self, users: &[HistoryRecallEntry]) {
         match self.hist_idx {
             Some(i) if i + 1 < users.len() => {
                 self.hist_idx = Some(i + 1);
-                self.input = users[i + 1].clone();
+                self.input = users[i + 1].content.clone();
+                self.pending_attachments = users[i + 1].attachments.clone();
                 self.cursor = self.char_len();
-                self.pending_attachments.clear();
             }
             Some(_) => {
                 self.hist_idx = None;
                 self.input = std::mem::take(&mut self.input_stash);
+                self.pending_attachments = std::mem::take(&mut self.pending_stash);
                 self.cursor = self.char_len();
-                self.pending_attachments.clear();
             }
             None => {}
         }
