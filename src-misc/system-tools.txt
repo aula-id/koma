@@ -235,8 +235,10 @@ message_find — search chat history (messages.sqlite) via SQLite FTS5 for past
   Returns up to 10 results with [role] prefix, message id, and the first 300
   characters of matching content. When a hit snippet contains [Image #N], the
   result includes a reload path — call load_image with that path (or image_n)
-  to re-inspect. Project-scope hits are tagged with session name/id (message
-  ids are per-session).
+  to re-inspect. When a hit snippet contains [Pasted Text #N] or a paste fence
+  (<<<pasted_text n=N…>>>), the result includes the session pastes/ path —
+  call read (not load_image) to reload the text body. Project-scope hits are
+  tagged with session name/id (message ids are per-session).
   Arguments: { "query": "search terms" }
   Optional: { "role": "user|assistant|tool" } — filter to a specific role.
   Optional: { "scope": "session|project" } — omit or "session" = this session

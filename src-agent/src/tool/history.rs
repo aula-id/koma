@@ -441,6 +441,7 @@ fn format_labeled_matches(matches: &[LabeledMatch]) -> String {
             }
         }
         append_image_reload_lines(&mut out, &m.session_path, m.snippet.as_str());
+        append_paste_reload_lines(&mut out, &m.session_path, m.snippet.as_str());
         out.push('\n');
         if let Some(thinking) = m.reasoning.as_deref() {
             let thinking = thinking.trim();
@@ -473,6 +474,48 @@ fn append_image_reload_lines(out: &mut String, session_path: &Path, snippet: &st
             path.display(),
             path.display()
         ));
+    }
+}
+
+/// When a hit snippet mentions `[Pasted Text #N]` or a paste fence `n=N`,
+/// resolve the session `pastes/NN-paste.txt` path and hint `read` (not vision).
+fn append_paste_reload_lines(out: &mut String, session_path: &Path, snippet: &str) {
+    let mut ns: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    // Composer-style markers.
+    const PREFIX: &str = "[Pasted Text #";
+    for (i, _) in snippet.match_indices(PREFIX) {
+        let after = &snippet[i + PREFIX.len()..];
+        let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() || !after[digits.len()..].starts_with(']') {
+            continue;
+        }
+        if let Ok(n) = digits.parse::<usize>() {
+            ns.insert(n);
+        }
+    }
+    // Fence form: <<<pasted_text n=N
+    const FENCE: &str = "<<<pasted_text n=";
+    for (i, _) in snippet.match_indices(FENCE) {
+        let after = &snippet[i + FENCE.len()..];
+        let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(n) = digits.parse::<usize>() {
+            ns.insert(n);
+        }
+    }
+    for n in ns {
+        let name = format!("{n:02}-paste.txt");
+        let path = session_path.join("pastes").join(&name);
+        if path.is_file() {
+            out.push_str(&format!(
+                "  paste: [Pasted Text #{n}] {} — call read({{\"path\":\"{}\"}}) to reload the body\n",
+                path.display(),
+                path.display()
+            ));
+        } else {
+            out.push_str(&format!(
+                "  paste: [Pasted Text #{n}] (file missing under this session's pastes/)\n"
+            ));
+        }
     }
 }
 
