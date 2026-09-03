@@ -27,6 +27,31 @@ fn answer_plan_ready(state: &mut AppState, result: String) {
     }
 }
 
+/// Skip every tool call that still follows `plan_ready` / `mission_ready` in the
+/// same parallel assistant batch.
+///
+/// Models often emit `plan_ready` **and** premature `edit`/`bash` in one turn.
+/// Plain approve used to leave Plan, then `process_tools` ran those trailing
+/// mutators as Auto — implementing before a deliberate execution turn. Compact
+/// approve already flushed them; plain approve and deny now do the same so
+/// execution only starts on a fresh model turn (or stays in Plan after deny).
+fn skip_trailing_after_plan_ready(state: &mut AppState, reason: &str) {
+    let fgi = state.rest.foreground;
+    let idx = state.rest.sessions[fgi].tool_idx;
+    let trailing: Vec<String> = state.rest.sessions[fgi]
+        .pending_tool_calls
+        .iter()
+        .skip(idx)
+        .map(|c| c.id.clone())
+        .collect();
+    for id in trailing {
+        state.rest.sessions[fgi]
+            .tool_results
+            .push((id, reason.to_string()));
+        state.rest.sessions[fgi].tool_idx += 1;
+    }
+}
+
 /// Leave Plan mode on plan approval, ALWAYS returning to `Auto` (the default
 /// execution mode) regardless of the pre-plan mode — the one exception is an armed
 /// `Yolo` stashed on entry, which is preserved. Consumes `plan_return_mode`.
@@ -76,6 +101,14 @@ pub(super) fn handle_approve_plan(
         }
     };
     answer_plan_ready(state, approve_text);
+    // Drop premature sibling tools from the same batch as plan_ready (edit/bash
+    // queued "already" by the model). Execution belongs on the NEXT model turn
+    // after this approval result is visible — not as leftover Auto tools.
+    skip_trailing_after_plan_ready(
+        state,
+        "skipped — plan approved; do not run pre-approval tool calls. \
+         Follow the approved plan on this turn (read plan body above).",
+    );
     // Make the tool-call classifier PLAN-AWARE for the execution that follows: stash
     // the approved plan text (truncated) on the fg session so `process_tools`
     // prepends it to the classifier context. The classifier keeps running (safety net
@@ -238,6 +271,13 @@ pub(super) fn handle_deny_plan(
     state.rest.fg_mut().awaiting_approval = false;
     state.rest.fg_mut().approval_reason = None;
     answer_plan_ready(state, crate::tool::plan::plan_denied_text().to_string());
+    // Same-batch siblings of plan_ready (often premature edit/bash) must not run
+    // even while we stay in Plan — the gate would deny mutators, but skipping
+    // avoids a wasteful deny loop and keeps the revise turn clean.
+    skip_trailing_after_plan_ready(
+        state,
+        "skipped — plan not approved yet; stay in plan mode, revise, then plan_ready again",
+    );
     // Mode stays Plan — deny means "keep discussing", so the plan checklist is
     // DELIBERATELY preserved (the model revises it in place via checklist). It is
     // cleared only on a real exit from Plan (approve / mode-switch), in

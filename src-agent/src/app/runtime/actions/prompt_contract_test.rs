@@ -147,4 +147,16 @@ fn plan_mode_prompt_has_plan_guidance() {
         prompt.contains("Plan mode"),
         "Plan mode prompt must contain Plan guidance"
     );
+    assert!(
+        prompt.contains("READ-ONLY"),
+        "Plan mode prompt must stress read-only"
+    );
+    assert!(
+        prompt.contains("plan_ready"),
+        "Plan mode prompt must mention plan_ready"
+    );
+    assert!(
+        prompt.contains("DO NOT call write"),
+        "Plan mode prompt must explicitly forbid write/edit/bash"
+    );
 }

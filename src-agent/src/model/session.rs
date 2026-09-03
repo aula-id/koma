@@ -487,12 +487,18 @@ Multiple workspace roots are configured. Paths written as [N]… (for example fr
             }
         }
 
-        // Plan mode: append a soft nudge (no MUST, no protocol walls — weak
-        // models over-obey rigid instructions). `plan_mode_hint` is mirrored in
-        // from `AppStateRest::set_agent_mode` right before it calls this method.
+        // Plan mode: hard read-only contract. Soft wording used to let models still
+        // reach for edit/bash "to explore"; the gate denies those, but the deny
+        // round-trips burn tokens and the model often keeps trying. Be explicit.
         if self.plan_mode_hint {
             sys.push_str(
-                "\n\n# Plan mode\nPlan mode is active. Tools are read-only: explore the codebase and gather what you need, and use the seqthink tool to structure your reasoning. Build the plan as a todo list with the checklist tool — one item per step (two locked rail items are managed for you). When the plan is complete, call plan_ready with `highlights` (the key changes, decisions, and risks the user needs to approve) and `plan` (the full detailed plan — files, exact changes, reasoning — saved to plan.md). The user will approve it or discuss further."
+                "\n\n# Plan mode\n\
+Plan mode is active — READ-ONLY until the user approves.\n\
+- DO explore: read, grep, glob, dir_list, web_*, git_operator (read-only subcommands), task (explore agents), seqthink, message_find, recall, graph_query, browser inspect/tabs, load_image/show_image.\n\
+- DO structure: checklist (plan steps), then plan_ready with `highlights` + full `plan` when ready.\n\
+- DO NOT call write, edit, delete, bash, web_download, remember, git_worktree, or any mutating git (commit/push/checkout/…). Those are blocked until approval; calling them wastes the turn.\n\
+- DO NOT start implementing \"just a little\" while planning. When the plan is complete, call plan_ready and STOP — wait for the user (y / a / n). Do not queue edit/bash in the same tool batch as plan_ready.\n\
+The user will approve the plan or discuss further before any implementation.",
             );
         }
 

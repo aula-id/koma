@@ -54,9 +54,10 @@ pub(in crate::app::runtime::stream::tools) fn intercept_plan_enter(
             // Index-targeted: stream-owned `sess_idx` must never transition the
             // unrelated foreground session (background streams / multi-session).
             state.rest.set_agent_mode_at(sess_idx, AgentMode::Plan);
-            "entered plan mode - tools are read-only; explore, structure your \
-             reasoning with seqthink, build the checklist with checklist, and \
-             call plan_ready with highlights + the full plan when confident"
+            "entered plan mode — READ-ONLY until the user approves. Explore with \
+             read/search/git-read tools; structure with seqthink + checklist; call \
+             plan_ready with highlights + full plan when ready — then STOP. Do not \
+             call write/edit/delete/bash (or other mutators) while planning."
                 .to_string()
         }
     } else {
