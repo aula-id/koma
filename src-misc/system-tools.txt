@@ -233,8 +233,10 @@ message_find — search chat history (messages.sqlite) via SQLite FTS5 for past
   directory bucket. Query max 5 words (extra terms dropped). Times out at 20s
   and runs a deterministic FTS/panic repair on the current session only.
   Returns up to 10 results with [role] prefix, message id, and the first 300
-  characters of matching content. Project-scope hits are tagged with session
-  name/id (message ids are per-session).
+  characters of matching content. When a hit snippet contains [Image #N], the
+  result includes a reload path — call load_image with that path (or image_n)
+  to re-inspect. Project-scope hits are tagged with session name/id (message
+  ids are per-session).
   Arguments: { "query": "search terms" }
   Optional: { "role": "user|assistant|tool" } — filter to a specific role.
   Optional: { "scope": "session|project" } — omit or "session" = this session
@@ -251,8 +253,26 @@ message_find — search chat history (messages.sqlite) via SQLite FTS5 for past
   - Use scope "project" when the user asks about prior sessions in this project,
     or when session-only search misses something that may live in a sibling
     session under the same working directory.
+  - After compact / plan approve&compact, if you need a past image listed in the
+    session-images inventory footer or in a find hit, call load_image — do not
+    guess pixels from text alone.
   Prefer short precise queries (≤5 words). Multi-word queries are OR'd as
   prefix matches (e.g. "foo bar" matches messages containing "foo*" or "bar*").
+
+load_image — load an existing image into the next model message for visual
+  inspection. Allowed roots: configured workspaces, this session's exact scratch
+  directory, and this session's images/ attachment directory only.
+  Arguments: { "path": "..." } and/or { "image_n": N }
+  - path: workspace-relative, absolute under an allowed root, or session-relative
+    `images/NN-name.ext` (also bare `NN-name.ext`).
+  - image_n: marker number from [Image #N]; resolves under this session's images/.
+  Example:   load_image({"path": "images/03-foo.png"})
+  Example:   load_image({"image_n": 3})
+  WHEN TO USE:
+  - message_find returned an image: reload line for a past attachment.
+  - Compact / plan-seed inventory listed session images still on disk.
+  - User asks you to re-look at an earlier attached image no longer in live context.
+  Not available inside sub-agents (main runtime interceptor only).
 
 checklist — create and maintain a task/todo list for the current session. The user
   can view the list via `/todo` (a read-only overlay) and toggle item status with

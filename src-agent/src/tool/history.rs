@@ -57,6 +57,8 @@ struct LabeledMatch {
     /// `Some` when the hit should show `@ name (uuid-short)` (project scope).
     session_label: Option<(String, String)>,
     is_current: bool,
+    /// Session directory this hit came from (for image path resolution).
+    session_path: PathBuf,
 }
 
 /// Search the session's `messages.sqlite` full-text index for past
@@ -74,14 +76,15 @@ impl Tool for MessageFind {
          session only; pass scope \"project\" to search all sessions sharing \
          this working-directory bucket. Returns up to 10 results with message \
          id, role, and the first 300 characters of the matching message. \
-         Project-scope hits are tagged with session name/id (message ids are \
-         per-session). Query is limited to 5 words (extra terms dropped). \
-         Times out at 20s. Optionally filter by role (user, assistant, tool). \
-         Call this when you are confused or missing context about a past \
-         decision, error, tradeoff, or fact that may have scrolled out of the \
-         context window — before guessing. Use scope project when the user \
-         asks about prior sessions in this project or session-only search \
-         misses something that may live in a sibling session."
+         When a hit snippet contains [Image #N], appends a reload path so you \
+         can call load_image to re-inspect. Project-scope hits are tagged with \
+         session name/id (message ids are per-session). Query is limited to 5 \
+         words (extra terms dropped). Times out at 20s. Optionally filter by \
+         role (user, assistant, tool). Call this when you are confused, missing \
+         context about a past decision, error, tradeoff, or fact that may have \
+         scrolled out of the context window — before guessing. Use scope \
+         project when the user asks about prior sessions in this project or \
+         session-only search misses something that may live in a sibling session."
     }
 
     fn parameters(&self) -> Value {
@@ -347,6 +350,7 @@ fn search_targets(
                         reasoning: h.reasoning,
                         session_label: label.clone(),
                         is_current: target.is_current,
+                        session_path: target.path.clone(),
                     });
                 }
             }
@@ -428,14 +432,16 @@ fn format_labeled_matches(matches: &[LabeledMatch]) -> String {
                 };
                 let id_part = short_uuid(uuid);
                 out.push_str(&format!(
-                    "{} #{} @ {} ({}): {}\n\n",
+                    "{} #{} @ {} ({}): {}\n",
                     role_prefix, m.id, name, id_part, snippet
                 ));
             }
             _ => {
-                out.push_str(&format!("{} #{}: {}\n\n", role_prefix, m.id, snippet));
+                out.push_str(&format!("{} #{}: {}\n", role_prefix, m.id, snippet));
             }
         }
+        append_image_reload_lines(&mut out, &m.session_path, m.snippet.as_str());
+        out.push('\n');
         if let Some(thinking) = m.reasoning.as_deref() {
             let thinking = thinking.trim();
             if !thinking.is_empty() {
@@ -445,6 +451,29 @@ fn format_labeled_matches(matches: &[LabeledMatch]) -> String {
         }
     }
     out
+}
+
+/// When a hit snippet mentions `[Image #N]`, resolve N under that hit's session
+/// dir and append a reload hint. Only markers present in the snippet; never
+/// dumps the whole session images dir.
+fn append_image_reload_lines(out: &mut String, session_path: &Path, snippet: &str) {
+    let markers =
+        crate::tool::internet::load_image::marker_numbers_in_text(snippet);
+    for n in markers {
+        let Some(path) =
+            crate::tool::internet::load_image::resolve_image_marker_in_session(session_path, n)
+        else {
+            out.push_str(&format!(
+                "  image: [Image #{n}] (file missing under this session's images/) — try load_image({{\"image_n\":{n}}}) if it still exists\n"
+            ));
+            continue;
+        };
+        out.push_str(&format!(
+            "  image: [Image #{n}] {} — call load_image({{\"path\":\"{}\"}}) to re-inspect\n",
+            path.display(),
+            path.display()
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -512,6 +541,7 @@ mod tests {
             reasoning: None,
             session_label: None,
             is_current: true,
+            session_path: PathBuf::from("/tmp/fake-sess"),
         }];
         let out = format_labeled_matches(&hits);
         assert_eq!(out, "[user] #7: hello world\n\n");
@@ -528,10 +558,39 @@ mod tests {
             reasoning: Some("thinking about webkit".into()),
             session_label: Some(("feature-chat".into(), "abcdef12-9999-0000".into())),
             is_current: false,
+            session_path: PathBuf::from("/tmp/fake-sess"),
         }];
         let out = format_labeled_matches(&hits);
         assert!(out.contains("[assistant] #3 @ feature-chat (abcdef12): attach freeze fix"));
         assert!(out.contains("thinking: thinking about webkit"));
+    }
+
+    #[test]
+    fn format_match_with_image_marker_appends_reload_path() {
+        let dir = TempDir::new("img-hit");
+        let images = dir.path().join("images");
+        std::fs::create_dir_all(&images).unwrap();
+        let img = images.join("03-shot.png");
+        std::fs::write(
+            &img,
+            b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89",
+        )
+        .unwrap();
+        let hits = vec![LabeledMatch {
+            id: 9,
+            role: "user".into(),
+            snippet: "look at [Image #3] please".into(),
+            created_at: 1,
+            reasoning: None,
+            session_label: None,
+            is_current: true,
+            session_path: dir.path().to_path_buf(),
+        }];
+        let out = format_labeled_matches(&hits);
+        assert!(out.contains("[user] #9: look at [Image #3] please"));
+        assert!(out.contains("image: [Image #3]"));
+        assert!(out.contains("load_image"));
+        assert!(out.contains(&img.display().to_string()));
     }
 
     #[test]
@@ -545,6 +604,7 @@ mod tests {
                 reasoning: None,
                 session_label: Some(("S".into(), "sib".into())),
                 is_current: false,
+                session_path: PathBuf::from("/tmp/sib"),
             },
             LabeledMatch {
                 id: 2,
@@ -554,6 +614,7 @@ mod tests {
                 reasoning: None,
                 session_label: Some(("C".into(), "cur".into())),
                 is_current: true,
+                session_path: PathBuf::from("/tmp/cur"),
             },
             LabeledMatch {
                 id: 3,
@@ -563,6 +624,7 @@ mod tests {
                 reasoning: None,
                 session_label: Some(("S".into(), "sib".into())),
                 is_current: false,
+                session_path: PathBuf::from("/tmp/sib"),
             },
             LabeledMatch {
                 id: 4,
@@ -572,6 +634,7 @@ mod tests {
                 reasoning: None,
                 session_label: Some(("C".into(), "cur".into())),
                 is_current: true,
+                session_path: PathBuf::from("/tmp/cur"),
             },
         ];
         let ranked = merge_and_cap(hits, 10);
