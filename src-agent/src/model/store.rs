@@ -447,6 +447,14 @@ pub fn session_images_dir(pwd_hash: &str, uuid: &str) -> Result<PathBuf> {
     Ok(session_dir(pwd_hash, uuid)?.join("images"))
 }
 
+/// A session's pasted-text attachment directory: `<session_dir>/pastes/`.
+/// Holds collapsed composer pastes as `pastes/NN-paste.txt` (parity with
+/// `images/`). Lives INSIDE the session dir, so deleting a session already
+/// removes its pastes — no separate cleanup is needed.
+pub fn session_pastes_dir(pwd_hash: &str, uuid: &str) -> Result<PathBuf> {
+    Ok(session_dir(pwd_hash, uuid)?.join("pastes"))
+}
+
 /// A session's media directory: `<pwd_bucket_dir>/media/`. Holds downloaded
 /// files from the `web_download` tool. Lives inside the pwd bucket so
 /// downloads are shared across sessions in the same working directory.
@@ -459,6 +467,14 @@ pub fn session_media_dir(pwd_hash: &str) -> Result<PathBuf> {
 /// ingest will retry the create.
 pub fn ensure_session_images_dir(pwd_hash: &str, uuid: &str) {
     if let Ok(dir) = session_images_dir(pwd_hash, uuid) {
+        let _ = std::fs::create_dir_all(&dir);
+    }
+}
+
+/// Create a session's `pastes/` dir (and parents) if absent. Best-effort,
+/// same lifecycle as [`ensure_session_images_dir`].
+pub fn ensure_session_pastes_dir(pwd_hash: &str, uuid: &str) {
+    if let Ok(dir) = session_pastes_dir(pwd_hash, uuid) {
         let _ = std::fs::create_dir_all(&dir);
     }
 }

@@ -149,6 +149,7 @@ fn sample_global_snapshot() -> GlobalSnapshot {
         // A staged attachment + a populated `@`-file palette so the round-trip
         // proves both new global projections survive serialize -> deserialize.
         pending_attachments: vec![crate::dto::chat::Attachment {
+            kind: crate::dto::chat::AttachmentKind::Image,
             marker_n: 1,
             rel_path: "images/01-shot.png".to_string(),
             mime: "image/png".to_string(),

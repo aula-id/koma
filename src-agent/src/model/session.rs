@@ -240,9 +240,10 @@ impl Session {
             );
         }
 
-        // Ensure the image-attachment dir exists so resumed sessions can ingest
-        // pastes immediately and re-read previously attached images. Best-effort.
+        // Ensure the image- and paste-attachment dirs exist so resumed sessions
+        // can ingest immediately and re-read previously attached files. Best-effort.
         crate::model::store::ensure_session_images_dir(&session.pwd_hash, &session.id);
+        crate::model::store::ensure_session_pastes_dir(&session.pwd_hash, &session.id);
 
         // Overwrite the stored system message with the live one so that
         // changes to the embedded prompt or MEMORY.md take effect on resume.
@@ -291,6 +292,17 @@ impl Session {
     pub fn images_dir(&self) -> std::path::PathBuf {
         crate::model::store::session_images_dir(&self.pwd_hash, &self.id)
             .unwrap_or_else(|_| self.path.join("images"))
+    }
+
+    /// The pasted-text attachment directory for this session:
+    /// `<session.path>/pastes/`.
+    ///
+    /// Uses [`crate::model::store::session_pastes_dir`] as the canonical source,
+    /// falling back to `self.path.join("pastes")` when the store helper fails.
+    /// All callers should use this method rather than constructing the path inline.
+    pub fn pastes_dir(&self) -> std::path::PathBuf {
+        crate::model::store::session_pastes_dir(&self.pwd_hash, &self.id)
+            .unwrap_or_else(|_| self.path.join("pastes"))
     }
 
     /// The session's working directory: the FIRST non-empty entry of the

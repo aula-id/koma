@@ -158,6 +158,28 @@ impl AppStateRest {
         }
     }
 
+    /// Ingest pasted `text` into the active session's `pastes/` dir, stage the
+    /// produced [`Attachment`](crate::dto::chat::Attachment), and insert its
+    /// `[Pasted Text #N]` marker at the caret. Returns `true` on success.
+    ///
+    /// Returns `false` (composer untouched) when there is no active session or
+    /// ingest fails (e.g. soft-cap). Callers should only invoke this after
+    /// [`crate::model::attachment::should_collapse_paste`] is true; small pastes
+    /// stay inline via the normal `push_str` path.
+    pub fn try_attach_paste_text(&mut self, text: &str) -> bool {
+        let Some(pastes_dir) = self.fg().session.as_ref().map(|s| s.pastes_dir()) else {
+            return false;
+        };
+        match crate::model::attachment::ingest_paste_text(&pastes_dir, text) {
+            Ok((att, marker)) => {
+                self.insert_marker(&marker);
+                self.fg_mut().pending_attachments.push(att);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// Recall the previous (older) sent user message into the input. `users` is
     /// the session's user messages oldest-first.
     pub fn history_prev(&mut self, users: &[String]) {

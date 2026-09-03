@@ -57,6 +57,7 @@ fn small_image_passes_through_byte_identical() {
     let bytes = encode_test_png(4, 4);
     std::fs::write(images_dir.join("01-small.png"), &bytes).unwrap();
     let att = crate::dto::chat::Attachment {
+        kind: crate::dto::chat::AttachmentKind::Image,
         marker_n: 1,
         rel_path: "images/01-small.png".to_string(),
         mime: "image/png".to_string(),
@@ -86,6 +87,7 @@ fn oversized_image_is_downscaled() {
     let bytes = encode_test_png(3000, 100);
     std::fs::write(images_dir.join("01-big.png"), &bytes).unwrap();
     let att = crate::dto::chat::Attachment {
+        kind: crate::dto::chat::AttachmentKind::Image,
         marker_n: 1,
         rel_path: "images/01-big.png".to_string(),
         mime: "image/png".to_string(),
@@ -130,6 +132,7 @@ fn cache_file_created_and_reused() {
     let bytes = encode_test_png(3000, 100);
     std::fs::write(images_dir.join("01-cache.png"), &bytes).unwrap();
     let att = crate::dto::chat::Attachment {
+        kind: crate::dto::chat::AttachmentKind::Image,
         marker_n: 1,
         rel_path: "images/01-cache.png".to_string(),
         mime: "image/png".to_string(),
