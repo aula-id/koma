@@ -19,7 +19,7 @@
 //! are `impl SessionRuntime` blocks on the SAME type defined here — no
 //! behaviour or visibility change from the pre-split single-file layout.
 
-mod attach;
+pub(crate) mod attach;
 mod composer;
 mod lifecycle;
 

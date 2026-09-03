@@ -65,6 +65,11 @@ pub(crate) fn is_ctrl(key: &KeyEvent, c: char) -> bool {
     key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char(x) if x == c)
 }
 
+/// True when `key` is Alt+`c` (case-insensitive on the char match).
+pub(crate) fn is_alt(key: &KeyEvent, c: char) -> bool {
+    key.modifiers.contains(KeyModifiers::ALT) && matches!(key.code, KeyCode::Char(x) if x == c)
+}
+
 /// Translate a raw key event into an [`Action`] based on the current [`Mode`].
 ///
 /// # Borrow-checker note

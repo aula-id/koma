@@ -13,12 +13,53 @@ use crate::view::theme::Palette;
 
 use super::helpers::render_block;
 
-/// Render a `★`-less user message as a full-width band: a solid accent rail in
-/// column 0, a 1-column band-colored gap in column 1, then the message text
-/// (accent on the gray band) starting in column 2, each visual line padded with
-/// band-colored spaces out to the full body width so the band runs edge to edge.
-/// One blank band row is emitted above and below the text (vertical padding).
+/// Render a user message body for the transcript. Paste machine fences are
+/// collapsed to a short quote block (label + ≤4 lines of body) so huge dumps
+/// don't flood the chat view; full body stays on disk / in the editor.
 pub(super) fn render_user_message(
+    content: &str,
+    palette: &Palette,
+    wrap_w: usize,
+) -> Vec<Line<'static>> {
+    let display = collapse_paste_fences_for_display(content);
+    render_user_message_raw(&display, palette, wrap_w)
+}
+
+/// Max preview lines shown inside a collapsed paste quote in the transcript.
+const PASTE_QUOTE_MAX_LINES: usize = 4;
+
+/// Replace `<<<pasted_text…>>>…<<<end…>>>` fences with a compact quote-ish block.
+fn collapse_paste_fences_for_display(text: &str) -> String {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        crate::re_util::static_re(
+            r#"(?s)<<<pasted_text n=(\d+) path="([^"]*)">>>(.*?)<<<end_pasted_text n=\d+>>>"#,
+        )
+    });
+    re.replace_all(text, |caps: &regex::Captures| {
+        let n = &caps[1];
+        let path = &caps[2];
+        let body = caps[3].trim_matches('\n');
+        let mut lines: Vec<&str> = body.lines().collect();
+        let truncated = lines.len() > PASTE_QUOTE_MAX_LINES;
+        if truncated {
+            lines.truncate(PASTE_QUOTE_MAX_LINES);
+        }
+        let mut out = format!("[Pasted Text #{n}] ({path})");
+        for line in lines {
+            out.push('\n');
+            out.push_str("  │ ");
+            out.push_str(line);
+        }
+        if truncated {
+            out.push_str("\n  │ …");
+        }
+        out
+    })
+    .into_owned()
+}
+
+fn render_user_message_raw(
     content: &str,
     palette: &Palette,
     wrap_w: usize,
@@ -129,9 +170,9 @@ pub(super) fn render_bash_nudge_block(body: &str, palette: &Palette) -> Vec<Line
 }
 
 /// Render the warn-coloured attachment folder-tree lines for a user message
-/// that carries image attachments. Minimalist design: an "images" root line,
-/// then one tree branch per attachment (├─ for non-last, └─ for the last).
-/// Returns an empty `Vec` when there are no attachments.
+/// that carries attachments (images and/or pasted text). Minimalist design: an
+/// "attachments" root line, then one tree branch per attachment (├─ for non-last,
+/// └─ for the last). Returns an empty `Vec` when there are no attachments.
 ///
 /// Uses `palette.warn`, matching the approval card in overlays.rs, so it
 /// always reads as a warn cue.
@@ -148,10 +189,10 @@ pub(super) fn render_attachment_card(
         .add_modifier(Modifier::DIM);
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    // Root: "  images"
+    // Root: "  attachments"
     lines.push(Line::from(vec![
         Span::raw("  "),
-        Span::styled("images", style),
+        Span::styled("attachments", style),
     ]));
 
     // One line per attachment, using tree connectors.
@@ -162,13 +203,15 @@ pub(super) fn render_attachment_card(
         } else {
             Span::styled("\u{251C}\u{2500} ", dim) // ├─
         };
+        let label = if att.is_pasted_text() {
+            format!("[Pasted Text #{}] {}", att.marker_n, att.file_name())
+        } else {
+            format!("[Image #{}] {}", att.marker_n, att.file_name())
+        };
         lines.push(Line::from(vec![
             Span::raw("  "),
             connector,
-            Span::styled(
-                format!("[Image #{}] {}", att.marker_n, att.file_name()),
-                style,
-            ),
+            Span::styled(label, style),
         ]));
     }
     lines

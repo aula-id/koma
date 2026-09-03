@@ -286,6 +286,8 @@ pub enum Action {
     // --- Attachments panel (Ctrl+P) ---
     /// Open the staged attachments list from Chat.
     OpenAttachments,
+    /// Alt+E: open editor/viewer for the caret-nearest composer chip.
+    EditNearestAttachment,
     /// Esc from the attachments panel — return to Chat.
     CloseAttachments,
     /// Remove the selected staged attachment + strip its composer marker.

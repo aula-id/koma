@@ -164,13 +164,15 @@ pub(super) fn rewind_to_vec_index(state: &mut AppState, idx: usize) -> Result<()
     //    the history-recall load: replace input, caret to end, and leave recall /
     //    palette state clean so the editor starts fresh. The composer fields live
     //    on the foreground session now; `palette_sel` stays rest-global.
+    //    Paste fences in the stored body collapse back to `[Pasted Text #N]` chips
+    //    so the composer shows markers (not the full fenced dump / quote chrome).
     {
         let fg = state.rest.fg_mut();
-        fg.input = text;
+        fg.input = crate::app::state::collapse_paste_fences_to_markers(&text);
         // Restore the rewound message's attachments into the composer so the
-        // user can resend with the same images. If the user edits out an
-        // [Image #N] marker, reconcile_attachments() will drop the orphaned
-        // attachment on the next backspace/delete.
+        // user can resend with the same images/pastes. If the user edits out a
+        // marker, reconcile_attachments() will drop the orphaned attachment on
+        // the next backspace/delete.
         fg.pending_attachments = saved_attachments;
         fg.hist_idx = None;
         fg.input_stash.clear();

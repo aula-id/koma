@@ -5,6 +5,100 @@
 use super::SessionRuntime;
 use crate::dto::chat::AttachmentKind;
 
+/// One marker span in composer text: byte range + kind + N.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MarkerSpan {
+    pub kind: AttachmentKind,
+    pub n: usize,
+    /// Inclusive start byte index into the source text.
+    pub start: usize,
+    /// Exclusive end byte index (past the closing `]`).
+    pub end: usize,
+}
+
+/// Find every `[Image #N]` / `[Pasted Text #N]` span in `text` (byte offsets).
+pub fn find_marker_spans(text: &str) -> Vec<MarkerSpan> {
+    let mut out = Vec::new();
+    collect_prefix_spans(text, "[Image #", AttachmentKind::Image, &mut out);
+    collect_prefix_spans(text, "[Pasted Text #", AttachmentKind::PastedText, &mut out);
+    out.sort_by_key(|s| s.start);
+    out
+}
+
+fn collect_prefix_spans(
+    text: &str,
+    prefix: &str,
+    kind: AttachmentKind,
+    out: &mut Vec<MarkerSpan>,
+) {
+    for (i, _) in text.match_indices(prefix) {
+        let after_prefix = &text[i + prefix.len()..];
+        let digits: String = after_prefix
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if digits.is_empty() || !after_prefix[digits.len()..].starts_with(']') {
+            continue;
+        }
+        let Ok(n) = digits.parse::<usize>() else {
+            continue;
+        };
+        let end = i + prefix.len() + digits.len() + 1;
+        out.push(MarkerSpan {
+            kind,
+            n,
+            start: i,
+            end,
+        });
+    }
+}
+
+/// Char-index of the caret → nearest marker span.
+///
+/// Preference: span containing the caret; else the closest span by distance
+/// to midpoint. `None` if there are no markers.
+pub fn nearest_marker_span(text: &str, caret_chars: usize) -> Option<MarkerSpan> {
+    let spans = find_marker_spans(text);
+    if spans.is_empty() {
+        return None;
+    }
+    let caret_byte = text
+        .char_indices()
+        .nth(caret_chars)
+        .map(|(b, _)| b)
+        .unwrap_or(text.len());
+    if let Some(hit) = spans
+        .iter()
+        .find(|s| caret_byte >= s.start && caret_byte < s.end)
+    {
+        return Some(*hit);
+    }
+    let caret_c = caret_chars as isize;
+    spans.into_iter().min_by_key(|s| {
+        let start_c = text[..s.start].chars().count() as isize;
+        let end_c = text[..s.end].chars().count() as isize;
+        let mid = (start_c + end_c) / 2;
+        (caret_c - mid).unsigned_abs()
+    })
+}
+
+/// Collapse machine paste fences in `text` back to `[Pasted Text #N]` markers
+/// for composer restore (rewind). Body bytes stay on disk via the attachment.
+pub fn collapse_paste_fences_to_markers(text: &str) -> String {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        // No backref: end tag's n is captured separately and we trust the open n.
+        crate::re_util::static_re(
+            r#"(?s)<<<pasted_text n=(\d+) path="[^"]*">>>.*?<<<end_pasted_text n=\d+>>>"#,
+        )
+    });
+    re.replace_all(text, |caps: &regex::Captures| {
+        let n = &caps[1];
+        format!("[Pasted Text #{n}]")
+    })
+    .into_owned()
+}
+
 impl SessionRuntime {
     /// Re-sync `pending_attachments` to the `[Image #N]` / `[Pasted Text #N]`
     /// markers still present in `input`: drop any staged attachment whose
@@ -29,10 +123,10 @@ impl SessionRuntime {
     /// token in `text`. Kind-aware so image #1 and paste #1 (independent seq
     /// spaces) do not collide during reconcile/take.
     fn marker_keys(text: &str) -> std::collections::HashSet<(AttachmentKind, usize)> {
-        let mut out = std::collections::HashSet::new();
-        scan_markers(text, "[Image #", AttachmentKind::Image, &mut out);
-        scan_markers(text, "[Pasted Text #", AttachmentKind::PastedText, &mut out);
-        out
+        find_marker_spans(text)
+            .into_iter()
+            .map(|s| (s.kind, s.n))
+            .collect()
     }
 
     /// Move the staged composer attachments out for the message being submitted,
@@ -55,6 +149,9 @@ impl SessionRuntime {
 
     /// Recall the previous (older) sent user message into the input. `users` is
     /// the session's user messages oldest-first.
+    ///
+    /// Clears `pending_attachments`: history-up only restores text, not chips
+    /// (avoids stale image/paste cards from the live composer).
     pub fn history_prev(&mut self, users: &[String]) {
         if users.is_empty() {
             return;
@@ -70,45 +167,30 @@ impl SessionRuntime {
         self.hist_idx = Some(next);
         self.input = users[next].clone();
         self.cursor = self.char_len();
+        self.pending_attachments.clear();
     }
 
     /// Recall the next (newer) sent user message; past the newest, restore the
     /// stashed live input and leave recall mode.
+    ///
+    /// Clears `pending_attachments` on each step (same rationale as
+    /// [`Self::history_prev`]). Restoring the live stash also clears — the stash
+    /// path never stored attachments.
     pub fn history_next(&mut self, users: &[String]) {
         match self.hist_idx {
             Some(i) if i + 1 < users.len() => {
                 self.hist_idx = Some(i + 1);
                 self.input = users[i + 1].clone();
                 self.cursor = self.char_len();
+                self.pending_attachments.clear();
             }
             Some(_) => {
                 self.hist_idx = None;
                 self.input = std::mem::take(&mut self.input_stash);
                 self.cursor = self.char_len();
+                self.pending_attachments.clear();
             }
             None => {}
-        }
-    }
-}
-
-/// Scan `text` for `PREFIX{digits}]` tokens and insert `(kind, n)` into `out`.
-fn scan_markers(
-    text: &str,
-    prefix: &str,
-    kind: AttachmentKind,
-    out: &mut std::collections::HashSet<(AttachmentKind, usize)>,
-) {
-    for (i, _) in text.match_indices(prefix) {
-        let after_prefix = &text[i + prefix.len()..];
-        let digits: String = after_prefix
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect();
-        if digits.is_empty() || !after_prefix[digits.len()..].starts_with(']') {
-            continue;
-        }
-        if let Ok(n) = digits.parse::<usize>() {
-            out.insert((kind, n));
         }
     }
 }
@@ -150,5 +232,23 @@ mod tests {
         assert_eq!(taken.len(), 1);
         assert!(taken[0].is_pasted_text());
         assert!(rt.pending_attachments.is_empty());
+    }
+
+    #[test]
+    fn nearest_marker_prefers_span_under_caret() {
+        let text = "aa [Pasted Text #1] bb [Image #2] cc";
+        // Caret inside paste marker.
+        let paste_start = text.find("[Pasted Text #1]").unwrap();
+        let caret = text[..paste_start + 5].chars().count();
+        let hit = nearest_marker_span(text, caret).unwrap();
+        assert_eq!(hit.kind, AttachmentKind::PastedText);
+        assert_eq!(hit.n, 1);
+    }
+
+    #[test]
+    fn collapse_fences_to_markers() {
+        let fenced = "hi\n<<<pasted_text n=3 path=\"pastes/03-paste.txt\">>>\nbody here\n<<<end_pasted_text n=3>>>\nbye";
+        let got = collapse_paste_fences_to_markers(fenced);
+        assert_eq!(got, "hi\n[Pasted Text #3]\nbye");
     }
 }

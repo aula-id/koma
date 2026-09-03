@@ -382,6 +382,10 @@ pub(in crate::app::runtime) fn apply_action(
             attachments::handle_open_attachments(state)?;
         }
 
+        Action::EditNearestAttachment => {
+            attachments::handle_edit_nearest_attachment(state)?;
+        }
+
         Action::CloseAttachments => {
             attachments::handle_close_attachments(state)?;
         }

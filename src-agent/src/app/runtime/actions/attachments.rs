@@ -22,6 +22,41 @@ pub(super) fn handle_open_attachments(state: &mut AppState) -> Result<()> {
     Ok(())
 }
 
+/// Alt+E: open the caret-nearest chip. Pasted text → list + nested editor;
+/// image → list focused on that row (path in detail pane).
+pub(super) fn handle_edit_nearest_attachment(state: &mut AppState) -> Result<()> {
+    use crate::app::state::nearest_marker_span;
+    use crate::dto::chat::AttachmentKind;
+
+    let (input, cursor, pending) = {
+        let fg = state.rest.fg();
+        (
+            fg.input.clone(),
+            fg.cursor,
+            fg.pending_attachments.clone(),
+        )
+    };
+    let Some(span) = nearest_marker_span(&input, cursor) else {
+        return handle_open_attachments(state);
+    };
+    let mut st = crate::app::mode::AttachmentsState::from_pending(&pending);
+    if let Some(idx) = st
+        .items
+        .iter()
+        .position(|a| a.kind == span.kind && a.marker_n == span.n)
+    {
+        st.selected = idx;
+    }
+    if span.kind == AttachmentKind::PastedText {
+        if let Some(sess) = state.rest.fg().session.as_ref() {
+            let dir = sess.path.clone();
+            st.open_paste_editor(&dir);
+        }
+    }
+    *state.mode_mut() = Mode::Attachments(Box::new(st));
+    Ok(())
+}
+
 /// Remove the selected attachment: drop from pending, strip marker from input.
 pub(super) fn handle_attachments_remove_selected(state: &mut AppState) -> Result<()> {
     let (kind, n) = {
