@@ -128,14 +128,29 @@ pub(super) fn handle_submit(
     } else {
         (text, Vec::new())
     };
-    // Move the staged composer attachments (from path-paste / @-picker) AND the
-    // scan-backstop attachments onto THIS user message. Ingested bytes are already
-    // on disk under `<session>/images/`; the wire builder re-reads at send time.
-    // Pass the finalised `text` so a deleted / broken `[Image #N]` marker drops its
-    // staged attachment instead of shipping a marker-less image.
+    // Move the staged composer attachments (from path-paste / @-picker / paste
+    // chips) AND the scan-backstop attachments onto THIS user message. Ingested
+    // bytes are already on disk under `<session>/images/` or `pastes/`; the wire
+    // builder re-reads images at send time, and paste markers expand to fences
+    // below so the model sees full bodies in content.
+    // Pass the finalised `text` so a deleted / broken marker drops its staged
+    // attachment instead of shipping a marker-less record.
     let mut attachments = state.rest.take_attachments(&text);
     attachments.extend(scan_attachments);
-    let had_image = !attachments.is_empty();
+    let had_image = attachments.iter().any(|a| a.is_image());
+    // Expand `[Pasted Text #N]` → machine fences BEFORE msglog / push, using the
+    // session dir so disk is SoT for body bytes.
+    let session_dir = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .map(|s| s.path.clone());
+    let text = if let Some(dir) = session_dir.as_ref() {
+        crate::model::attachment::expand_paste_markers(&text, &attachments, dir)
+    } else {
+        text
+    };
     let Some(sess) = state.rest.fg_mut().session.as_mut() else {
         crate::model::store::append_global_error_log(
             "chat",

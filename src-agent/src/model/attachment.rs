@@ -257,7 +257,7 @@ pub fn ingest_paste_text(pastes_dir: &Path, text: &str) -> Result<(Attachment, S
     let dest_path = pastes_dir.join(&dest);
     std::fs::write(&dest_path, text)?;
     let rel_path = format!("pastes/{dest}");
-    let marker = format!("[Pasted Text #{nn}]");
+    let marker = paste_marker(nn);
     Ok((
         Attachment {
             kind: AttachmentKind::PastedText,
@@ -267,6 +267,82 @@ pub fn ingest_paste_text(pastes_dir: &Path, text: &str) -> Result<(Attachment, S
         },
         marker,
     ))
+}
+
+/// Composer marker for pasted text #`n`.
+pub fn paste_marker(n: usize) -> String {
+    format!("[Pasted Text #{n}]")
+}
+
+/// Expand every `[Pasted Text #N]` token in `text` whose `N` matches a
+/// [`AttachmentKind::PastedText`] entry in `attachments` into the stable
+/// machine fence carrying the on-disk body:
+///
+/// ```text
+/// <<<pasted_text n={N} path="{rel_path}">>>
+/// {body}
+/// <<<end_pasted_text n={N}>>>
+/// ```
+///
+/// Disk is preferred for body bytes; if the file is missing the marker is left
+/// unchanged so the user still sees the chip reference. Image markers are
+/// never touched. Order of appearance in `text` is preserved.
+pub fn expand_paste_markers(
+    text: &str,
+    attachments: &[Attachment],
+    session_dir: &Path,
+) -> String {
+    const PREFIX: &str = "[Pasted Text #";
+    // Index pasted-text attachments by marker_n for O(1) lookup.
+    let paste_by_n: std::collections::HashMap<usize, &Attachment> = attachments
+        .iter()
+        .filter(|a| a.is_pasted_text())
+        .map(|a| (a.marker_n, a))
+        .collect();
+    if paste_by_n.is_empty() {
+        return text.to_string();
+    }
+
+    let mut result = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+    for (i, _) in text.match_indices(PREFIX) {
+        if i < cursor {
+            continue; // already consumed (overlapping shouldn't happen)
+        }
+        let after_prefix = &text[i + PREFIX.len()..];
+        let digits: String = after_prefix
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if digits.is_empty() || !after_prefix[digits.len()..].starts_with(']') {
+            continue;
+        }
+        let Ok(n) = digits.parse::<usize>() else {
+            continue;
+        };
+        let end = i + PREFIX.len() + digits.len() + 1; // include ']'
+        let Some(att) = paste_by_n.get(&n) else {
+            continue;
+        };
+        let body = std::fs::read_to_string(session_dir.join(&att.rel_path)).ok();
+        let Some(body) = body else {
+            continue; // missing file → leave marker
+        };
+        result.push_str(&text[cursor..i]);
+        result.push_str(&format_paste_fence(n, &att.rel_path, &body));
+        cursor = end;
+    }
+    if cursor < text.len() {
+        result.push_str(&text[cursor..]);
+    } else if cursor == 0 {
+        return text.to_string();
+    }
+    result
+}
+
+/// Build one paste fence block (body included). Public for rewind/find helpers.
+pub fn format_paste_fence(n: usize, rel_path: &str, body: &str) -> String {
+    format!("<<<pasted_text n={n} path=\"{rel_path}\">>>\n{body}\n<<<end_pasted_text n={n}>>>")
 }
 
 /// Ingest the image file at `src_path` into `images_dir`, returning the

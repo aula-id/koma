@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Defaults to [`AttachmentKind::Image`] so older `messages.json` rows without a
 /// `kind` field keep deserializing as images.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AttachmentKind {
     /// Image under `images/`; drives multimodal wire parts.

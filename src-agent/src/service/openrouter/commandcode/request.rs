@@ -158,6 +158,9 @@ pub(super) fn build_messages(
                             "text": text,
                         })];
                         for att in &m.attachments {
+                            if !att.is_image() {
+                                continue;
+                            }
                             if let Some(url) = data_url_for(&ctx.session_dir, att) {
                                 // Extract mime from the data URL itself —
                                 // data_url_for re-sniffs and may downscale

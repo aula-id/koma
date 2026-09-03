@@ -299,6 +299,11 @@ fn attachment_parts(
             None => return parts,
         };
         for att in attachments {
+            // Pasted-text attachments ride the text/fence body only — never as
+            // multimodal image parts (and data_url_for would mis-read .txt).
+            if !att.is_image() {
+                continue;
+            }
             if let Some(url) = data_url_for(&ctx.session_dir, att) {
                 parts.push(WirePart::Image(ImagePart {
                     kind: "image_url",

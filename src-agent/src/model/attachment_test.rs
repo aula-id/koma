@@ -97,3 +97,39 @@ fn ingest_paste_text_rejects_over_soft_cap() {
     assert!(err.to_string().contains("soft cap"));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn expand_paste_markers_reads_disk_body() {
+    let session = tmp_dir("expand_session");
+    let pastes = session.join("pastes");
+    let body = "line a\nline b\nline c";
+    let (att, marker) = ingest_paste_text(&pastes, body).unwrap();
+    let text = format!("before {marker} after");
+    let expanded = expand_paste_markers(&text, &[att.clone()], &session);
+    assert!(expanded.contains("<<<pasted_text n=1 path=\"pastes/01-paste.txt\">>>"));
+    assert!(expanded.contains(body));
+    assert!(expanded.contains("<<<end_pasted_text n=1>>>"));
+    assert!(!expanded.contains("[Pasted Text #1]"));
+    assert!(expanded.starts_with("before "));
+    assert!(expanded.ends_with(" after"));
+    // Image markers untouched.
+    let with_img = format!("[Image #1] {marker}");
+    let exp2 = expand_paste_markers(&with_img, &[att], &session);
+    assert!(exp2.starts_with("[Image #1] "));
+    std::fs::remove_dir_all(&session).ok();
+}
+
+#[test]
+fn expand_paste_markers_leaves_marker_when_file_missing() {
+    let session = tmp_dir("expand_missing");
+    let att = crate::dto::chat::Attachment {
+        kind: AttachmentKind::PastedText,
+        marker_n: 9,
+        rel_path: "pastes/09-paste.txt".into(),
+        mime: "text/plain".into(),
+    };
+    let text = "x [Pasted Text #9] y";
+    let expanded = expand_paste_markers(text, &[att], &session);
+    assert_eq!(expanded, text);
+    std::fs::remove_dir_all(&session).ok();
+}

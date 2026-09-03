@@ -39,22 +39,30 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
             // image file, route it through the ingest core — copy it into the
             // session's images/ dir, stage the attachment, and insert an
             // `[Image #N]` marker — instead of dumping the raw path into the input.
-            // Non-image / non-path / multi-token pastes fall through to the verbatim
-            // text insert below, exactly as before. (An `if/else` — not an early
-            // `return` — because the surrounding take/put-back must reach `set_mode`.)
+            // Large / multi-line text pastes collapse to `[Pasted Text #N]` chips
+            // (disk under pastes/). Small single-line text stays inline.
+            // (An `if/else` — not an early `return` — because the surrounding
+            // take/put-back must reach `set_mode`.)
             let attached =
                 image_path_paste(text).is_some_and(|path| state.rest.try_attach_image_path(&path));
             if !attached {
-                // Multiline verbatim: '\n' is kept (newline in the input, never a
-                // submit). NORMALIZE line endings first so bracketed paste that
-                // delivers breaks as CRLF or bare CR still lands as real newlines
-                // (a bare `\r` used to be dropped, collapsing the paste onto one line).
-                // Inserted in ONE splice via `push_str` (not a char-by-char
-                // `push_char` loop) — `push_char` locates the caret's byte offset
-                // with an O(N) scan, so looping it over a large paste is O(N^2)
-                // and visibly freezes the UI.
+                // NORMALIZE line endings first so bracketed paste that delivers
+                // breaks as CRLF or bare CR still lands as real newlines.
                 let cleaned = text.replace("\r\n", "\n").replace('\r', "\n");
-                state.rest.push_str(&cleaned);
+                if crate::model::attachment::should_collapse_paste(&cleaned) {
+                    if !state.rest.try_attach_paste_text(&cleaned) {
+                        // Soft-cap / no session / write failure — toast and leave
+                        // the composer untouched (do not dump a multi-MiB body).
+                        state.rest.fg_mut().set_toast(format!(
+                            "paste too large (max {} bytes) or no session",
+                            crate::model::attachment::PASTE_SOFT_MAX_BYTES
+                        ));
+                    }
+                } else {
+                    // Small inline paste: ONE splice via `push_str` (not char-by-char
+                    // `push_char` — that is O(N^2) on large pastes).
+                    state.rest.push_str(&cleaned);
+                }
             }
         }
         Mode::KeyInput(form) => {

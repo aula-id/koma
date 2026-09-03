@@ -507,18 +507,16 @@ fn push_snapshot_if_changed(
                         })
                         .unwrap_or_default();
                     // Image attachments on this (user) message → the warn card in
-                    // React (all attachments are images today; keep `kind` general).
+                    // React. Pasted-text attachments stay TUI/msg body only (GUI
+                    // has no paste chips — filter them out of the push strip).
                     let attachments: Vec<PushAttachment> = m
                         .attachments
                         .iter()
+                        .filter(|a| a.is_image())
                         .map(|a| PushAttachment {
                             marker_n: a.marker_n,
                             name: a.file_name().to_string(),
-                            kind: if a.mime.starts_with("image/") {
-                                "image"
-                            } else {
-                                "file"
-                            },
+                            kind: "image",
                         })
                         .collect();
                     Some(PushMsg {
@@ -626,20 +624,17 @@ fn push_snapshot_if_changed(
         })
         .collect();
 
-    // Staged composer attachments: the foreground session's `pending_attachments` (not
-    // yet sent). `marker_n` ties each chip to its `[Image #N]` marker; `kind` is derived
-    // from the sniffed mime (all attachments are images today, but keep it general).
+    // Staged composer attachments: the foreground session's `pending_attachments`
+    // (not yet sent). GUI chips are image-only — PastedText stays TUI markers in
+    // `input` + pending list for Ctrl+P, but is not pushed as a React chip.
     let attachments: Vec<PushAttachment> = fg
         .pending_attachments
         .iter()
+        .filter(|a| a.is_image())
         .map(|a| PushAttachment {
             marker_n: a.marker_n,
             name: a.file_name().to_string(),
-            kind: if a.mime.starts_with("image/") {
-                "image"
-            } else {
-                "file"
-            },
+            kind: "image",
         })
         .collect();
 
