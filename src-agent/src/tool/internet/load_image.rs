@@ -246,14 +246,8 @@ fn image_workspace_roots(ctx: &ToolCtx) -> Vec<&PathBuf> {
 
 fn session_images_canonical(ctx: &ToolCtx) -> Option<PathBuf> {
     let session = ctx.session_dir.as_ref()?;
-    let images = session.join("images");
-    images.canonicalize().ok().or_else(|| {
-        // Dir may not exist yet — allow the parent session path only if images
-        // would be created under it; callers still require the file to exist
-        // via canonicalize of the candidate. Returning None here is fine when
-        // images/ is missing (no file can live there).
-        None
-    })
+    // None when images/ is missing — no allowed file can live there yet.
+    session.join("images").canonicalize().ok()
 }
 
 fn allowed_canonical_path(ctx: &ToolCtx, canonical: &Path) -> bool {
