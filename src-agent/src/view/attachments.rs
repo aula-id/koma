@@ -164,8 +164,14 @@ fn draw_paste_editor(
     n: usize,
     palette: &Palette,
 ) {
-    // Reuse the agents field-editor layout without depending on AgentsState.
+    // Full-screen opaque surface: chat must not show through empty cells.
     let area = frame.area();
+    crate::view::clear_and_fill(frame, area, palette.bg);
+
+    let bg = Style::default().bg(palette.bg);
+    let dim = Style::default().fg(palette.dim).bg(palette.bg);
+    let fg = Style::default().fg(palette.fg).bg(palette.bg);
+
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -177,14 +183,12 @@ fn draw_paste_editor(
 
     let header_block = Block::new()
         .borders(Borders::BOTTOM)
-        .border_style(Style::default().fg(palette.dim));
+        .border_style(Style::default().fg(palette.dim).bg(palette.bg))
+        .style(bg);
     let header_inner = header_block.inner(outer[0]);
     frame.render_widget(header_block, outer[0]);
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            format!("edit pasted text #{n}"),
-            Style::default().fg(palette.dim),
-        )),
+        Paragraph::new(Span::styled(format!("edit pasted text #{n}"), dim)).style(bg),
         header_inner.inner(Margin {
             horizontal: 1,
             vertical: 0,
@@ -208,8 +212,8 @@ fn draw_paste_editor(
                 "     ".to_string()
             };
             lines.push(Line::from(vec![
-                Span::styled(gutter, Style::default().fg(palette.dim)),
-                Span::styled(text, Style::default().fg(palette.fg)),
+                Span::styled(gutter, dim),
+                Span::styled(text, fg),
             ]));
         }
     }
@@ -240,15 +244,19 @@ fn draw_paste_editor(
     } else if body_h > 0 && cursor_visual >= scroll + body_h {
         scroll = cursor_visual + 1 - body_h;
     }
-    // Can't mutate ed.scroll through & — local only for render window.
-    let visible: Vec<Line> = lines.into_iter().skip(scroll).take(body_h.max(1)).collect();
-    frame.render_widget(Paragraph::new(visible), outer[1]);
+    // Pad to full body height so empty rows still paint theme bg (no chat bleed).
+    let mut visible: Vec<Line> = lines.into_iter().skip(scroll).take(body_h.max(1)).collect();
+    while visible.len() < body_h {
+        visible.push(Line::from(Span::styled("", bg)));
+    }
+    frame.render_widget(Paragraph::new(visible).style(bg), outer[1]);
 
     frame.render_widget(
         Paragraph::new(Span::styled(
             " ↑↓←→ move · Enter newline · Esc save & back ",
-            Style::default().fg(palette.dim),
-        )),
+            dim,
+        ))
+        .style(bg),
         outer[2],
     );
 
