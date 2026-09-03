@@ -1016,6 +1016,7 @@ pub enum ModeSnapshot {
     Security(Box<SecuritySnapshot>),
     Bash(Box<BashSnapshot>),
     Todo(Box<TodoSnapshot>),
+    Attachments(Box<AttachmentsSnapshot>),
     Help(Box<HelpSnapshot>),
     Skill(Box<SkillCmdSnapshot>),
     Effort(EffortSnapshot),

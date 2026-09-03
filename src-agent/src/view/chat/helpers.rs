@@ -15,6 +15,13 @@ use ratatui::{
 /// style (one bar, never a box). The answer + tool lines get no bar.
 pub(super) const THINK_BAR: &str = "▏ ";
 
+/// Max *visual* lines of thinking/reasoning shown in the TUI transcript.
+///
+/// The backend still streams and stores the full CoT; this is display-only — a
+/// fixed-height tail viewport (docker-log style) so long DeepSeek/MiMo thoughts
+/// don't scroll the chat forever. GUI collapses reasoning separately.
+pub(super) const THINKING_VIEWPORT_LINES: usize = 4;
+
 /// Truncate `s` to at most `max` characters (not bytes), appending `…` when it
 /// was cut. Used to keep tool-call / tool-result preview lines on one row.
 pub(super) fn truncate_chars(s: &str, max: usize) -> String {
@@ -236,6 +243,49 @@ pub(super) fn push_thinking_line(
     }
 }
 
+/// Render a full thinking/reasoning body into at most [`THINKING_VIEWPORT_LINES`]
+/// barred visual rows — the **latest** lines only.
+///
+/// Builds the full barred wrap first (same as stacking [`push_thinking_line`]),
+/// then keeps the tail. When truncated, the first kept row is replaced by a
+/// dim `▏ …` marker so it's obvious older thought scrolled off above. Does not
+/// mutate the source string; stream + storage stay complete.
+pub(super) fn push_thinking_viewport(
+    out: &mut Vec<Vec<Span<'static>>>,
+    text: &str,
+    style: Style,
+    bar_style: Style,
+    wrap_w: usize,
+) {
+    if text.is_empty() {
+        return;
+    }
+    let mut full: Vec<Vec<Span<'static>>> = Vec::new();
+    for line in text.lines() {
+        push_thinking_line(&mut full, line, style, bar_style, wrap_w);
+    }
+    // `str::lines` drops a trailing bare newline; keep the rail unbroken if the
+    // buffer ends with `\n` (common while streaming).
+    if text.ends_with('\n') {
+        push_thinking_line(&mut full, "", style, bar_style, wrap_w);
+    }
+    if full.is_empty() {
+        return;
+    }
+    let max = THINKING_VIEWPORT_LINES;
+    if full.len() <= max {
+        out.extend(full);
+        return;
+    }
+    let mut tail: Vec<Vec<Span<'static>>> = full.split_off(full.len() - max);
+    // Marker occupies the top slot of the viewport (still counts toward max).
+    tail[0] = vec![
+        Span::styled(THINK_BAR, bar_style),
+        Span::styled("…", style),
+    ];
+    out.extend(tail);
+}
+
 /// One message's visual lines: bullet on the first line, 2-col indent on the
 /// rest. `wrap` = wrap each logical line with `markdown::wrap_spans` (plain text
 /// / user / streaming); pre-wrapped markdown passes its lines through unwrapped.
@@ -375,4 +425,50 @@ pub(super) fn render_tool_box(
     ]));
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::Style;
+
+    fn span_text(line: &[Span<'_>]) -> String {
+        line.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn thinking_viewport_keeps_short_bodies_intact() {
+        let mut out = Vec::new();
+        push_thinking_viewport(
+            &mut out,
+            "one\ntwo\nthree",
+            Style::default(),
+            Style::default(),
+            80,
+        );
+        assert_eq!(out.len(), 3);
+        assert_eq!(span_text(&out[0]), format!("{THINK_BAR}one"));
+        assert_eq!(span_text(&out[2]), format!("{THINK_BAR}three"));
+    }
+
+    #[test]
+    fn thinking_viewport_tails_to_max_with_ellipsis_marker() {
+        let body = (1..=10)
+            .map(|i| format!("line-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut out = Vec::new();
+        push_thinking_viewport(&mut out, &body, Style::default(), Style::default(), 80);
+        assert_eq!(out.len(), THINKING_VIEWPORT_LINES);
+        assert_eq!(span_text(&out[0]), format!("{THINK_BAR}…"));
+        // Tail is the last (max-1) source lines under the marker.
+        assert_eq!(
+            span_text(&out[THINKING_VIEWPORT_LINES - 1]),
+            format!("{THINK_BAR}line-10")
+        );
+        assert_eq!(
+            span_text(&out[THINKING_VIEWPORT_LINES - 2]),
+            format!("{THINK_BAR}line-9")
+        );
+    }
 }

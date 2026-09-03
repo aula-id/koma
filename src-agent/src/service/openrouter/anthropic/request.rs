@@ -270,6 +270,9 @@ fn user_blocks(m: &ChatMessage, image_ctx: Option<&ImageWireCtx>) -> Vec<Block> 
             None => return blocks,
         };
         for att in &m.attachments {
+            if !att.is_image() {
+                continue;
+            }
             if let Some(url) = crate::dto::openrouter::request::data_url_for(&ctx.session_dir, att)
             {
                 if let Some(source) = image_source_from_data_url(&url) {

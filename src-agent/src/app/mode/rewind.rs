@@ -41,15 +41,19 @@ impl RewindState {
             .iter()
             .enumerate()
             .filter(|(_, m)| m.role == crate::dto::chat::Role::User)
-            .map(|(idx, m)| RewindEntry {
-                vec_index: idx,
-                content: m
+            .map(|(idx, m)| {
+                // List preview only — Enter rewinds via `vec_index`, not this string.
+                // Collapse paste fences so the picker shows `[Pasted Text #N]` chips
+                // instead of raw `<<<pasted_text…>>>` machine markers.
+                let raw = m
                     .content
                     .strip_prefix(crate::dto::chat::BASH_NUDGE_MARK)
                     .or_else(|| m.content.strip_prefix(crate::dto::chat::SHELL_MARK))
                     .or_else(|| m.content.strip_prefix(crate::dto::chat::EXT_PROMPT_MARK))
-                    .map(str::to_string)
-                    .unwrap_or_else(|| m.content.clone()),
+                    .unwrap_or(m.content.as_str());
+                let content =
+                    crate::app::state::collapse_paste_fences_to_markers(raw);
+                RewindEntry { vec_index: idx, content }
             })
             .collect();
         if entries.is_empty() {

@@ -104,7 +104,13 @@ fn complete_file_ref(rest: &mut AppStateRest, matches: &[String]) {
 }
 
 /// This session's sent user messages, oldest-first (for bash-style recall).
-fn user_messages(rest: &AppStateRest) -> Vec<String> {
+///
+/// Content is fence-collapsed to `[Pasted Text #N]` markers (same as double-Esc
+/// rewind) and each entry carries its attachment records so chips re-stage.
+fn user_messages(rest: &AppStateRest) -> Vec<crate::app::state::HistoryRecallEntry> {
+    use crate::app::state::{collapse_paste_fences_to_markers, HistoryRecallEntry};
+    use crate::dto::chat::{BASH_NUDGE_MARK, EXT_PROMPT_MARK, Role, SHELL_MARK};
+
     rest.fg()
         .session
         .as_ref()
@@ -112,8 +118,20 @@ fn user_messages(rest: &AppStateRest) -> Vec<String> {
             s.conversation
                 .messages()
                 .iter()
-                .filter(|m| m.role == crate::dto::chat::Role::User)
-                .map(|m| m.content.clone())
+                .filter(|m| m.role == Role::User)
+                .filter(|m| {
+                    // Skip synthetic shell/nudge/ext injections — not user-typed recall targets.
+                    !m.content.starts_with(BASH_NUDGE_MARK)
+                        && !m.content.starts_with(SHELL_MARK)
+                        && !m.content.starts_with(EXT_PROMPT_MARK)
+                })
+                .map(|m| {
+                    let content = collapse_paste_fences_to_markers(&m.content);
+                    HistoryRecallEntry {
+                        content,
+                        attachments: m.attachments.clone(),
+                    }
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -300,6 +318,14 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                 rest.pending_steer_focus = false;
             }
         }
+    }
+    // Ctrl+P: open staged attachments list (pastes + images).
+    if is_ctrl(&key, 'p') {
+        return Action::OpenAttachments;
+    }
+    // Alt+E: edit nearest composer chip (paste editor or attachments list on image).
+    if super::is_alt(&key, 'e') {
+        return Action::EditNearestAttachment;
     }
     // Ctrl+R: resend (only when idle).
     if is_ctrl(&key, 'r') {

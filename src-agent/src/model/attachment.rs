@@ -1,24 +1,25 @@
-//! Image-attachment ingest core: copy a file into the session's `images/` dir,
-//! sniff its mime type, and return the [`Attachment`] record + `[Image #N]`
-//! marker token.
+//! Attachment ingest core: copy a file into the session's `images/` or
+//! `pastes/` dir and return the [`Attachment`] record + composer marker token.
 //!
-//! ONE ingest core, MANY callers. Every path that wants to attach an image
-//! routes through here so the on-disk layout, the monotonic marker numbering,
-//! and the mime sniff stay identical regardless of entry point:
+//! ONE ingest core, MANY callers. Every path that wants to attach an image or
+//! collapsed paste routes through here so the on-disk layout, the monotonic
+//! marker numbering, and the mime sniff stay identical regardless of entry
+//! point:
 //! - path-paste (the user pastes a text path to an image file),
-//! - the `@`-picker image branch (a later slice),
-//! - the send-time `@`-scan backstop (a later slice),
-//! - clipboard bitmaps via raw bytes (a later slice).
+//! - the `@`-picker image branch,
+//! - the send-time `@`-scan backstop,
+//! - clipboard bitmaps via raw bytes,
+//! - large/multi-line text pastes → `pastes/NN-paste.txt`.
 //!
-//! Layout produced: `<images_dir>/NN-basename.ext`, where `NN` is
-//! `(files already in images_dir) + 1`, zero-padded to two digits. The in-text
-//! marker number MATCHES the filename number (marker `[Image #3]` <-> `03-*`).
+//! Image layout: `<images_dir>/NN-basename.ext` (marker `[Image #N]`).
+//! Paste layout: `<pastes_dir>/NN-paste.txt` (marker `[Pasted Text #N]`).
+//! Each dir has its own `.seq` counter so N spaces are independent.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 
-use crate::dto::chat::Attachment;
+use crate::dto::chat::{Attachment, AttachmentKind};
 
 /// The image extensions koma recognises for attachment (lowercased, no dot).
 /// Used by the extension-first mime sniff AND by the paste/`@` callers to decide
@@ -36,18 +37,37 @@ pub fn has_image_extension(path: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Atomically increment and return the next image sequence number for `images_dir`.
+/// Soft upper bound for a single collapsed paste body (2 MiB). Larger pastes
+/// are rejected at ingest so a runaway clipboard dump cannot fill the session
+/// dir or blow the model context in one shot.
+pub const PASTE_SOFT_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+/// Collapse threshold: pasted text becomes a `[Pasted Text #N]` chip when it
+/// has **≥150 characters** OR **≥2 lines** (a trailing newline alone does not
+/// count as a second line — `"a\n"` is still one line of content).
+pub const PASTE_COLLAPSE_MIN_CHARS: usize = 150;
+
+/// Whether `s` should collapse to a paste chip instead of staying inline in
+/// the composer. Pure predicate — does not touch disk.
 ///
-/// The counter is persisted in `images/.seq` (a plain text file holding the
+/// Collapse when the paste is **≥150 characters** OR contains at least one
+/// newline (product lock: ≥2 lines, including a single line with trailing EOL).
+pub fn should_collapse_paste(s: &str) -> bool {
+    s.chars().count() >= PASTE_COLLAPSE_MIN_CHARS || s.contains('\n')
+}
+
+/// Atomically increment and return the next sequence number for `dir`.
+///
+/// The counter is persisted in `dir/.seq` (a plain text file holding the
 /// last-used integer). On each call: read the current value (0 if absent), add 1,
 /// write back, and return the new value. This is single-writer (the TUI event loop
 /// is single-threaded), so a simple read-modify-write on the `.seq` file is safe
-/// and collision-free even when several images are ingested in a single submit.
+/// and collision-free even when several attachments are ingested in a single submit.
 ///
-/// The `.seq` file lives inside `images/` so it is cleaned up automatically when
-/// the session directory is removed — no separate teardown needed.
-fn next_image_seq(images_dir: &Path) -> usize {
-    let seq_path = images_dir.join(".seq");
+/// The `.seq` file lives inside the attachment dir so it is cleaned up
+/// automatically when the session directory is removed — no separate teardown needed.
+fn next_attach_seq(dir: &Path) -> usize {
+    let seq_path = dir.join(".seq");
     let current: usize = std::fs::read_to_string(&seq_path)
         .ok()
         .and_then(|s| s.trim().parse().ok())
@@ -58,6 +78,16 @@ fn next_image_seq(images_dir: &Path) -> usize {
     // as the old read_dir approach, and equally rare.
     let _ = std::fs::write(&seq_path, next.to_string());
     next
+}
+
+/// Image-dir sequence helper (kept as a thin alias for call-site clarity).
+fn next_image_seq(images_dir: &Path) -> usize {
+    next_attach_seq(images_dir)
+}
+
+/// Pastes-dir sequence helper.
+fn next_paste_seq(pastes_dir: &Path) -> usize {
+    next_attach_seq(pastes_dir)
 }
 
 /// Sniff a mime type from `bytes`' magic numbers first (via the `infer` crate),
@@ -135,6 +165,7 @@ pub fn ingest_image_bytes(
     let marker = format!("[Image #{nn}]");
     Ok((
         Attachment {
+            kind: AttachmentKind::Image,
             marker_n: nn,
             rel_path,
             mime,
@@ -197,12 +228,121 @@ pub fn ingest_image_from_raw_bytes(
     let marker = format!("[Image #{nn}]");
     Ok((
         Attachment {
+            kind: AttachmentKind::Image,
             marker_n: nn,
             rel_path,
             mime: effective_mime,
         },
         marker,
     ))
+}
+
+/// Ingest pasted `text` into `pastes_dir` as `NN-paste.txt`, returning the
+/// [`Attachment`] + its `[Pasted Text #N]` marker token.
+///
+/// Disk is the source of truth for the body (same contract as images). The
+/// caller is expected to have already decided collapse via
+/// [`should_collapse_paste`]. Rejects bodies larger than
+/// [`PASTE_SOFT_MAX_BYTES`].
+pub fn ingest_paste_text(pastes_dir: &Path, text: &str) -> Result<(Attachment, String)> {
+    if text.len() > PASTE_SOFT_MAX_BYTES {
+        return Err(anyhow!(
+            "pasted text exceeds {} byte soft cap",
+            PASTE_SOFT_MAX_BYTES
+        ));
+    }
+    std::fs::create_dir_all(pastes_dir)?;
+    let nn = next_paste_seq(pastes_dir);
+    let dest = format!("{nn:02}-paste.txt");
+    let dest_path = pastes_dir.join(&dest);
+    std::fs::write(&dest_path, text)?;
+    let rel_path = format!("pastes/{dest}");
+    let marker = paste_marker(nn);
+    Ok((
+        Attachment {
+            kind: AttachmentKind::PastedText,
+            marker_n: nn,
+            rel_path,
+            mime: "text/plain".to_string(),
+        },
+        marker,
+    ))
+}
+
+/// Composer marker for pasted text #`n`.
+pub fn paste_marker(n: usize) -> String {
+    format!("[Pasted Text #{n}]")
+}
+
+/// Expand every `[Pasted Text #N]` token in `text` whose `N` matches a
+/// [`AttachmentKind::PastedText`] entry in `attachments` into the stable
+/// machine fence carrying the on-disk body:
+///
+/// ```text
+/// <<<pasted_text n={N} path="{rel_path}">>>
+/// {body}
+/// <<<end_pasted_text n={N}>>>
+/// ```
+///
+/// Disk is preferred for body bytes; if the file is missing the marker is left
+/// unchanged so the user still sees the chip reference. Image markers are
+/// never touched. Order of appearance in `text` is preserved.
+pub fn expand_paste_markers(
+    text: &str,
+    attachments: &[Attachment],
+    session_dir: &Path,
+) -> String {
+    const PREFIX: &str = "[Pasted Text #";
+    // Index pasted-text attachments by marker_n for O(1) lookup.
+    let paste_by_n: std::collections::HashMap<usize, &Attachment> = attachments
+        .iter()
+        .filter(|a| a.is_pasted_text())
+        .map(|a| (a.marker_n, a))
+        .collect();
+    if paste_by_n.is_empty() {
+        return text.to_string();
+    }
+
+    let mut result = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+    for (i, _) in text.match_indices(PREFIX) {
+        if i < cursor {
+            continue; // already consumed (overlapping shouldn't happen)
+        }
+        let after_prefix = &text[i + PREFIX.len()..];
+        let digits: String = after_prefix
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if digits.is_empty() || !after_prefix[digits.len()..].starts_with(']') {
+            continue;
+        }
+        let Ok(n) = digits.parse::<usize>() else {
+            continue;
+        };
+        let end = i + PREFIX.len() + digits.len() + 1; // include ']'
+        let Some(att) = paste_by_n.get(&n) else {
+            continue;
+        };
+        let body = std::fs::read_to_string(session_dir.join(&att.rel_path)).ok();
+        let Some(body) = body else {
+            continue; // missing file → leave marker
+        };
+        result.push_str(&text[cursor..i]);
+        result.push_str(&format_paste_fence(n, &att.rel_path, &body));
+        cursor = end;
+    }
+    if cursor < text.len() {
+        result.push_str(&text[cursor..]);
+    } else if cursor == 0 {
+        return text.to_string();
+    }
+    result
+}
+
+/// Build one paste fence block (body included). Public for rewind/find helpers.
+pub fn format_paste_fence(n: usize, rel_path: &str, body: &str) -> String {
+    format!("<<<pasted_text n={n} path=\"{rel_path}\">>>\n{body}\n<<<end_pasted_text n={n}>>>")
 }
 
 /// Ingest the image file at `src_path` into `images_dir`, returning the

@@ -217,6 +217,9 @@ pub(super) fn build_input(
                             None => return (instructions, input),
                         };
                         for att in &m.attachments {
+                            if !att.is_image() {
+                                continue;
+                            }
                             if let Some(url) =
                                 crate::dto::openrouter::request::data_url_for(&ctx.session_dir, att)
                             {

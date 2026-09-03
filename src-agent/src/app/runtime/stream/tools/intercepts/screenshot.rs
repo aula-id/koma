@@ -61,13 +61,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_load_image(
     call: &ToolCall,
 ) -> InterceptFlow {
     let args = parse_args(call);
-    let requested = match crate::tool::internet::load_image::image_arg(&args) {
-        Ok(v) => v,
-        Err(e) => return tool_error(state, sess_idx, call, &e.to_string()),
-    };
     let ctx = crate::app::runtime::stream::spawn::build_tool_ctx(state, sess_idx);
     let (path, bytes) =
-        match crate::tool::internet::load_image::read_validated_image(&ctx, requested) {
+        match crate::tool::internet::load_image::read_validated_image_from_args(&ctx, &args) {
             Ok(v) => v,
             Err(e) => return tool_error(state, sess_idx, call, &e.to_string()),
         };

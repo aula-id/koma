@@ -8,6 +8,7 @@
 //! Mode-specific state is stored inline (often boxed) so the type system only
 //! exposes data relevant to the active mode.
 pub mod agents;
+pub mod attachments;
 pub mod bash;
 pub mod editor;
 mod effort;
@@ -32,6 +33,7 @@ pub mod store;
 pub mod todo;
 
 pub use agents::{AgentEditField, AgentScope, AgentSubMode, AgentsState};
+pub use attachments::AttachmentsState;
 pub use bash::BashState;
 pub use ext_screen::ExtScreenState;
 pub use extensions::{ExtRow, ExtSubMode, ExtTuiScreen, ExtensionsState};
@@ -292,6 +294,10 @@ pub enum Mode {
     /// shows the selected item's content, status, and priority. The model writes
     /// todos via the `checklist` tool; the user views them here.
     Todo(Box<TodoState>),
+    /// Staged composer attachments panel (`Ctrl+P`): images + collapsed pastes
+    /// for the current composer. Nested paste editor on Enter; `d` removes.
+    /// Boxed to keep `Mode` small, consistent with Bash/Todo.
+    Attachments(Box<AttachmentsState>),
     /// Skill hub overlay (`/skill`): a searchable, filterable list of skills from
     /// the session's registry. Users can toggle skills on/off from the hub. The
     /// inner [`SkillCmdState`] holds the query, chip filter, entry list, and

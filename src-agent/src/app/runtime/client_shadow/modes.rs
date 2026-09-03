@@ -698,6 +698,32 @@ pub(crate) fn shadow_todo(s: crate::ipc::proto::TodoSnapshot) -> crate::app::mod
     }
 }
 
+pub(crate) fn shadow_attachments(
+    s: crate::ipc::proto::AttachmentsSnapshot,
+) -> crate::app::mode::AttachmentsState {
+    use crate::dto::chat::{Attachment, AttachmentKind};
+    crate::app::mode::AttachmentsState {
+        items: s
+            .items
+            .into_iter()
+            .map(|row| Attachment {
+                kind: if row.kind == "pasted_text" {
+                    AttachmentKind::PastedText
+                } else {
+                    AttachmentKind::Image
+                },
+                marker_n: row.marker_n,
+                rel_path: row.rel_path,
+                mime: row.mime,
+            })
+            .collect(),
+        selected: s.selected,
+        editor: s
+            .editor
+            .map(|(n, ed)| (n, shadow_text_editor(ed))),
+    }
+}
+
 /// Rebuild the `/remote` host manager ([`RemoteState`]) from its projection.
 pub(crate) fn shadow_remote(s: RemoteSnapshot) -> crate::app::mode::RemoteState {
     use crate::app::mode::remote::{

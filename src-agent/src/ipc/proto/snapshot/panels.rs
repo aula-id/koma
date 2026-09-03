@@ -273,6 +273,30 @@ pub struct TodoSnapshot {
     pub pwd_hash: String,
 }
 
+/// One row in the Ctrl+P attachments panel projection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct AttachmentRowSnapshot {
+    /// Wire token: "image" | "pasted_text"
+    pub kind: String,
+    pub marker_n: usize,
+    pub rel_path: String,
+    pub mime: String,
+}
+
+/// A serde-safe projection of the Ctrl+P attachments panel.
+///
+/// List + cursor + optional nested paste editor. The client rebuilds
+/// [`crate::app::mode::AttachmentsState`] and renders the same overlay.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct AttachmentsSnapshot {
+    pub items: Vec<AttachmentRowSnapshot>,
+    pub selected: usize,
+    /// Nested editor when open: `(marker_n, TextEditorSnapshot)`.
+    pub editor: Option<(usize, super::settings::TextEditorSnapshot)>,
+}
+
 /// One catalogue row for the `/store` marketplace browser — a slimmed mirror of
 /// [`crate::ipc::proto::StoreItemWire`] plus the LOCALLY-baked `installed` flag (checked
 /// against `config.installed_extensions` at fetch time, since the store API itself has

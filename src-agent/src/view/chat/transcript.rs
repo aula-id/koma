@@ -5,7 +5,7 @@ use super::blocks::{
     render_attachment_card, render_bash_nudge_block, render_shell_block, render_user_message,
 };
 use super::helpers::{
-    push_thinking_line, render_block, render_tool_box, split_thinking, truncate_chars, THINK_BAR,
+    push_thinking_viewport, render_block, render_tool_box, split_thinking, truncate_chars, THINK_BAR,
 };
 use crate::app::state::AppStateRest;
 use crate::dto::chat::Role;
@@ -178,13 +178,17 @@ pub(super) fn render_transcript(
                 .add_modifier(Modifier::ITALIC);
             let bar_style = Style::default().fg(palette.dim);
             let mut logical: Vec<Vec<Span<'static>>> = Vec::new();
-            // Partial reasoning first, dim+italic, each line prefixed with the
-            // blockquote bar (mirrors the committed-message reasoning render).
-            // These are emitted pre-wrapped, so render_block passes them through.
+            // Partial reasoning first, dim+italic, barred — fixed-height tail viewport
+            // so long CoT doesn't grow the transcript forever (full buffer still
+            // streams/stores). Pre-wrapped; render_block passes them through.
             if !partial_reasoning.is_empty() {
-                for line in partial_reasoning.lines() {
-                    push_thinking_line(&mut logical, line, thinking_style, bar_style, wrap_w);
-                }
+                push_thinking_viewport(
+                    &mut logical,
+                    partial_reasoning,
+                    thinking_style,
+                    bar_style,
+                    wrap_w,
+                );
             }
             // Blank line between the barred thinking block and the answer so the
             // transition is clear, when both are present.
@@ -365,20 +369,30 @@ pub(super) fn render_message_block(
                 .add_modifier(Modifier::ITALIC);
             let bar_style = Style::default().fg(palette.dim);
             let mut logical: Vec<Vec<Span<'static>>> = Vec::new();
-            // Native reasoning channel (the model's streamed `reasoning`, captured
-            // separately from `content`). Rendered first, dim + italic, each line
-            // prefixed with the blockquote bar so the whole thinking block reads as
-            // quoted text. Display-only — it never re-enters the conversation or disk.
-            if let Some(reasoning) = msg.reasoning.as_deref() {
-                if !reasoning.is_empty() {
-                    for line in reasoning.lines() {
-                        push_thinking_line(&mut logical, line, thinking_style, bar_style, wrap_w);
+            // Native reasoning + legacy wanderer "thinking" peel: one combined body
+            // through the fixed-height tail viewport. Display-only — never
+            // re-enters the conversation or disk; stream/storage stay full.
+            {
+                let mut thinking_src = String::new();
+                if let Some(reasoning) = msg.reasoning.as_deref() {
+                    if !reasoning.is_empty() {
+                        thinking_src.push_str(reasoning);
                     }
                 }
-            }
-            if let Some(thinking) = thinking_block {
-                for line in thinking.lines() {
-                    push_thinking_line(&mut logical, line, thinking_style, bar_style, wrap_w);
+                if let Some(thinking) = thinking_block {
+                    if !thinking_src.is_empty() && !thinking_src.ends_with('\n') {
+                        thinking_src.push('\n');
+                    }
+                    thinking_src.push_str(thinking);
+                }
+                if !thinking_src.is_empty() {
+                    push_thinking_viewport(
+                        &mut logical,
+                        &thinking_src,
+                        thinking_style,
+                        bar_style,
+                        wrap_w,
+                    );
                 }
             }
             // Blank line between the (barred) thinking block and the answer so the

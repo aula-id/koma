@@ -13,6 +13,7 @@
 //! No logic lives here; all rendering decisions belong to the sub-modules.
 
 pub mod agents;
+pub mod attachments;
 pub mod bash;
 pub mod chat;
 pub mod effort;
@@ -247,6 +248,33 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
                 t.completed_count(),
                 &palette,
             );
+        }
+        Mode::Attachments(a) => {
+            // Nested paste editor is full-screen (Agents-style): do NOT paint chat
+            // underneath — transparent body cells would show transcript/composer
+            // glyphs mixed through. List-only stays a chat overlay.
+            if a.editor.is_some() {
+                attachments::render_attachments_overlay(
+                    frame,
+                    frame.area(),
+                    frame.area(),
+                    a,
+                    &state.rest,
+                    &palette,
+                );
+            } else {
+                let resolved_model = resolved_main_model(&state.rest);
+                chat::draw(frame, &state.rest, &resolved_model, &palette);
+                let chunks = chat::layout_chunks(&state.rest, frame.area());
+                attachments::render_attachments_overlay(
+                    frame,
+                    chunks[4],
+                    chunks[1],
+                    a,
+                    &state.rest,
+                    &palette,
+                );
+            }
         }
         Mode::Skill(s) => {
             let resolved_model = resolved_main_model(&state.rest);

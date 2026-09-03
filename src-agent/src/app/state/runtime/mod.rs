@@ -19,7 +19,7 @@
 //! are `impl SessionRuntime` blocks on the SAME type defined here — no
 //! behaviour or visibility change from the pre-split single-file layout.
 
-mod attach;
+pub(crate) mod attach;
 mod composer;
 mod lifecycle;
 
@@ -159,6 +159,9 @@ pub struct SessionRuntime {
     /// Live input stashed when history recall starts; restored on recall past
     /// the newest entry.
     pub input_stash: String,
+    /// Live `pending_attachments` stashed with [`Self::input_stash`] so exiting
+    /// history recall restores staged chips (not only the text).
+    pub pending_stash: Vec<crate::dto::chat::Attachment>,
     /// Transcript scroll offset (top visual line) used only while NOT following.
     pub scroll: u16,
     /// When true, the transcript stays pinned to the bottom (auto-follows new
@@ -690,6 +693,7 @@ impl SessionRuntime {
             pending_attachments: Vec::new(),
             hist_idx: None,
             input_stash: String::new(),
+            pending_stash: Vec::new(),
             scroll: 0,
             follow: true,
             session: None,

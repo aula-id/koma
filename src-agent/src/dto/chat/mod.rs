@@ -15,7 +15,7 @@ mod message;
 mod role;
 mod tool;
 
-pub use attachment::Attachment;
+pub use attachment::{Attachment, AttachmentKind};
 pub use message::{merge_reasoning_details, ChatMessage, ReasoningDetail};
 pub use role::{
     Role, BASH_NUDGE_MARK, CACHE_SPLIT_MARK, EXT_PROMPT_MARK, PLAN_NUDGE_MARK, SHELL_MARK,

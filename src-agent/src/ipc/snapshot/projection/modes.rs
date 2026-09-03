@@ -36,7 +36,7 @@ use crate::ipc::proto::{
     RewindEntrySnapshot, RewindSnapshot, RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot,
     SessionMetaSnapshot, SettingsSnapshot, SkillCmdSnapshot, SkillEntrySnapshot,
     TextEditorSnapshot, TodoItemSnapshot, TodoSnapshot, ToolPickerSnapshot, UsageSnapshot,
-    WarmStatusWire,
+    WarmStatusWire, AttachmentRowSnapshot, AttachmentsSnapshot,
 };
 
 pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
@@ -83,6 +83,7 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
         // thin client renders the same master/detail view of current jobs.
         Mode::Bash(b) => ModeSnapshot::Bash(Box::new(bash_snapshot(b, &state.rest))),
         Mode::Todo(t) => ModeSnapshot::Todo(Box::new(todo_snapshot(t))),
+        Mode::Attachments(a) => ModeSnapshot::Attachments(Box::new(attachments_snapshot(a))),
         // The `/help` reference projects a full wire snapshot, exactly like `/mcp`:
         // the query + entry list (each entry's kind as a wire token) + filtered subset
         // + cursor, so a thin client rebuilds and renders the searchable help screen
@@ -696,6 +697,27 @@ pub fn todo_snapshot(t: &crate::app::mode::TodoState) -> TodoSnapshot {
             .collect(),
         selected: t.selected,
         pwd_hash: t.pwd_hash.clone(),
+    }
+}
+
+/// Project the Ctrl+P attachments panel.
+pub fn attachments_snapshot(a: &crate::app::mode::AttachmentsState) -> AttachmentsSnapshot {
+    AttachmentsSnapshot {
+        items: a
+            .items
+            .iter()
+            .map(|att| AttachmentRowSnapshot {
+                kind: match att.kind {
+                    crate::dto::chat::AttachmentKind::Image => "image".into(),
+                    crate::dto::chat::AttachmentKind::PastedText => "pasted_text".into(),
+                },
+                marker_n: att.marker_n,
+                rel_path: att.rel_path.clone(),
+                mime: att.mime.clone(),
+            })
+            .collect(),
+        selected: a.selected,
+        editor: a.editor.as_ref().map(|(n, ed)| (*n, text_editor_snapshot(ed))),
     }
 }
 
