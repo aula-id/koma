@@ -1030,13 +1030,22 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_integrate(
     }
 
     // Destination is exclusively frozen target_* on the mission — never workdir_saved.
-    let result = crate::model::sdlc::integrate::try_integrate(&mission, force_branch_only);
+    // Lane ceremony: express defaults to branch-ready finish (no merge pressure);
+    // standard/full merge when clean unless the model passes force_branch_only.
+    let lane_prefers_branch =
+        crate::model::sdlc::lane::prefer_branch_only(&mission.lane);
+    let effective_force = force_branch_only || lane_prefers_branch;
+    let branch_only_completes = effective_force
+        && crate::model::sdlc::lane::branch_ready_completes_mission(&mission.lane);
+    let result = crate::model::sdlc::integrate::try_integrate_ex(
+        &mission,
+        effective_force,
+        branch_only_completes,
+    );
     let mut cleanup_detail = String::new();
 
     if result.success {
-        // A successful merge is the only transition into the terminal done
-        // phase. It remains visible for reporting; checked cleanup runs only
-        // when the human leaves SDLC from that terminal state.
+        // Successful merge OR express branch-ready finish → terminal done.
         match state.rest.apply_sdlc_phase(sess_idx, "done") {
             Ok(()) => {
                 // Leave the shadow worktree before the later done cleanup can
@@ -1058,18 +1067,22 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_integrate(
                     sess.rebuild_system();
                     let _ = sess.save();
                 }
-                cleanup_detail =
+                cleanup_detail = if branch_only_completes {
+                    "\nBranch-ready finish entered terminal sdlc:done. Leave SDLC to run cleanup."
+                        .to_string()
+                } else {
                     "\nIntegrated and entered terminal sdlc:done. Leave SDLC to run cleanup."
-                        .to_string();
+                        .to_string()
+                };
             }
             Err(e) => {
                 cleanup_detail = format!(
-                    "\nIntegrated, but could not persist sdlc:done; cleanup was not attempted: {e}"
+                    "\nIntegrate path succeeded, but could not persist sdlc:done; cleanup was not attempted: {e}"
                 );
             }
         }
     } else if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-        // Branch left ready — stay integrate; preserve dirty-primary behavior.
+        // Branch left ready without completion — stay integrate; preserve dirty-primary behavior.
         sess.rebuild_system();
         let _ = sess.save();
     }

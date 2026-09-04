@@ -541,7 +541,7 @@ NO preference nags; research, decide, ship. Never invent APIs — read the code.
 - Graph is sole authority for SDLC tasks; SEALED nodes must not be re-implemented. TODO.md is ordinary/project todos only.\n\
 - Delegate with `task` only to OPEN leaves; always pass `task.node_id`.\n\
 - Seal only via `mission_verify` with leaf node_id + real evidence (tests/build). Checklist cannot seal. Parents roll up; verify is leaf-only.\n\
-- No auto-commit. When OPEN is empty, acceptance green, leaves verified, binding valid, human gates approved → `mission_integrate` (clean mission WT + commits ahead).\n\
+- No auto-commit. {}\
 - Integrate never force-pushes; main/master auto-merge blocked. Dirty target → leave mission branch ready. Destination is frozen target_worktree_path.\n\
 - Human gates need explicit user y/n via mission_verify(human_gate=...). Model cannot self-approve gates.\n\
 - External shell/MCP is not OS-sandboxed — stay inside the mission tree by discipline.\n\
@@ -552,6 +552,13 @@ NO preference nags; research, decide, ship. Never invent APIs — read the code.
                             "Integrate"
                         } else {
                             "Execute"
+                        },
+                        {
+                            let lane = mission
+                                .as_ref()
+                                .map(|m| m.lane.as_str())
+                                .unwrap_or("standard");
+                            crate::model::sdlc::lane::execute_finish_hint(lane)
                         }
                     ));
                 }

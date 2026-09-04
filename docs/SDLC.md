@@ -40,8 +40,11 @@ keeper reopens false-done leaves.
 4. **Verify:** evidence is recorded per leaf. A passing verification seals the
    leaf and records the commit that produced the evidence.
 5. **Integrate:** requires a valid binding, sealed evidence, a clean mission
-   worktree, commits ahead of the frozen target, and satisfied human gates. A
-   dirty target leaves the mission branch ready rather than disturbing user WIP.
+   worktree (for merge), commits ahead of the frozen target, and satisfied human
+   gates. **Lane ceremony:** `express` defaults to **branch-ready done** (mission
+   branch left for PR/manual merge — no merge pressure; still evidence-gated).
+   `standard` / `full` FF/merge into the frozen non-main target when clean; dirty
+   target leaves the branch ready. `main`/`master` auto-merge stays blocked.
 6. **Leave:** active missions are paused on disk; runtime phase is cleared and
    the prior mode and short-send setting are restored.
 

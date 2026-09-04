@@ -135,11 +135,8 @@ pub fn evaluate(session_dir: &Path) -> KeeperReport {
         let open = graph::list_open(&conn).unwrap_or_default();
         let sealed = graph::list_sealed(&conn).unwrap_or_default();
         if open.is_empty() && !sealed.is_empty() {
-            let inject = "[SDLC keeper]\n\
-                All open nodes are sealed. If acceptance criteria are green and \
-                verify evidence is in place, call mission_integrate to merge the \
-                mission branch."
-                .to_string();
+            let inject =
+                crate::model::sdlc::lane::keeper_ship_hint(&mission.lane).to_string();
             report.inject = Some(inject);
         }
     }

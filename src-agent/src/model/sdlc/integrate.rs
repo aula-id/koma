@@ -48,6 +48,10 @@ pub fn validate_target_immediately_before_merge(mission: &Mission) -> Result<(),
 
 /// Try to integrate the mission branch into the frozen target worktree.
 ///
+/// `force_branch_only`: skip merge and leave the mission branch ready.
+/// `branch_only_completes`: when force_branch_only, treat as successful terminal
+/// finish (express lane) instead of staying in integrate.
+///
 /// Logic:
 /// 1. Require frozen `target_worktree_path` + `target_branch` (never workdir_saved).
 /// 2. Re-validate target path+branch immediately before merge.
@@ -55,10 +59,20 @@ pub fn validate_target_immediately_before_merge(mission: &Mission) -> Result<(),
 /// 4. Dirty mission worktree → fail (commit or stash first).
 /// 5. Zero commits ahead of frozen `target_head` → fail (nothing to land).
 /// 6. Check `git status --porcelain` for dirty on the frozen target.
-/// 7. If dirty OR `force_branch_only` → do NOT merge; return instructions.
+/// 7. If dirty OR `force_branch_only` → do NOT merge; return instructions
+///    (`success` only when `branch_only_completes` and force_branch_only).
 /// 8. If clean: try `git merge --ff-only <branch>`; empty FF / already up to date is ERROR.
 /// 9. On success set mission.phase = "done" (caller) with ship summary.
 pub fn try_integrate(mission: &Mission, force_branch_only: bool) -> IntegrateResult {
+    try_integrate_ex(mission, force_branch_only, false)
+}
+
+/// Like [`try_integrate`] with lane-aware branch-ready completion.
+pub fn try_integrate_ex(
+    mission: &Mission,
+    force_branch_only: bool,
+    branch_only_completes: bool,
+) -> IntegrateResult {
     let target_branch = match mission.target_branch.as_deref().filter(|s| !s.is_empty()) {
         Some(b) => b.to_string(),
         None => {
@@ -93,12 +107,20 @@ pub fn try_integrate(mission: &Mission, force_branch_only: bool) -> IntegrateRes
     // force_branch_only never merges; still requires frozen target_branch name
     // for the status string, but does not touch the worktree.
     if force_branch_only {
-        return IntegrateResult {
-            message: format!(
+        let lane_note = if branch_only_completes {
+            format!(
+                "Branch `{branch}` left ready for PR/manual merge into `{target_branch}` \
+                 (lane branch-ready finish — mission complete, no auto-merge)."
+            )
+        } else {
+            format!(
                 "Branch `{branch}` left ready for manual integration into \
                  `{target_branch}` (force_branch_only)."
-            ),
-            success: false,
+            )
+        };
+        return IntegrateResult {
+            message: lane_note,
+            success: branch_only_completes,
         };
     }
 

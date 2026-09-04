@@ -260,9 +260,11 @@ impl Tool for MissionIntegrate {
 
     fn description(&self) -> &'static str {
         "Enter the integrate phase: merge the mission branch into the frozen target \
-         (target_worktree_path + target_branch captured at approval). \
+         (target_worktree_path + target_branch captured at approval), or complete an \
+         express-lane branch-ready finish (mission branch left for PR — no auto-merge). \
          Requires frozen graph complete, all required leaf evidence verified, valid binding, \
          frozen target present, and approved human gates. Branch-only cannot bypass those gates. \
+         Lane express defaults to branch-ready done; standard/full merge when the target is clean. \
          If the target working tree is dirty, the branch is left ready for manual merge or PR. \
          Never force-pushes. Never infers destination from live cwd."
     }
