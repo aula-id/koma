@@ -19,7 +19,10 @@ fn plan_advertises_seqthink_and_plan_ready() {
 #[test]
 fn sdlc_assess_advertises_seqthink_and_mission_ready() {
     let tools = mode_advertised_lifecycle_tools(AgentMode::Sdlc, Some("assess"));
-    assert_eq!(tools, vec!["seqthink", "mission_ready"]);
+    assert_eq!(
+        tools,
+        vec!["seqthink", "mission_draft", "mission_ready"]
+    );
 }
 
 #[test]
@@ -129,6 +132,7 @@ fn sdlc_execute_integrate_no_prepare() {
 fn all_mission_tools_in_sdlc_lifecycle_set() {
     for name in [
         "mission_ready",
+        "mission_draft",
         "mission_verify",
         "mission_prepare",
         "mission_integrate",

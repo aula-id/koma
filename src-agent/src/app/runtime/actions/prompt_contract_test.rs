@@ -127,6 +127,67 @@ fn sdlc_mode_prompt_has_sdlc_language() {
         prompt.contains("mission_ready"),
         "SDLC mode prompt must reference mission_ready"
     );
+    assert!(
+        prompt.contains("Assess phase (current)"),
+        "default SDLC (no approved mission) must show assess as current"
+    );
+}
+
+/// Phase-true prompt: approved execute mission must not claim Assess is current.
+#[test]
+fn sdlc_execute_prompt_is_phase_true() {
+    let mut sess = mk_session("prompt-sdlc-exec");
+    sess.plan_mode_hint = false;
+    sess.sdlc_mode_hint = true;
+    // Minimal approved mission in execute so rebuild_system branches correctly.
+    let mut m = crate::model::sdlc::Mission {
+        contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
+        id: "m-exec-prompt".into(),
+        goal: "g".into(),
+        non_goals: vec![],
+        acceptance: vec!["a".into()],
+        lane: "express".into(),
+        verify_plan: vec![],
+        human_gates: vec![],
+        human_gates_approved: vec![],
+        risks: vec![],
+        worktree_name: Some("wt".into()),
+        branch: Some("feat/x".into()),
+        worktree_path: Some("/tmp/wt".into()),
+        target_worktree_path: Some("/tmp/repo".into()),
+        target_branch: Some("develop".into()),
+        target_head: Some("abc123".into()),
+        rationale: String::new(),
+        phase: "execute".into(),
+        approved: true,
+        hash: String::new(),
+        graph_hash: Some("gh".into()),
+        needs_reapproval: false,
+        amendment_note: None,
+        draft_locks: Default::default(),
+    };
+    m.hash = m.recompute_hash();
+    m.save(&sess.path).unwrap();
+    sess.rebuild_system();
+    let prompt = sess
+        .conversation
+        .messages()
+        .first()
+        .map(|msg| msg.content.clone())
+        .unwrap_or_default();
+    assert!(
+        prompt.contains("Execute phase (current)"),
+        "execute mission must label execute as current"
+    );
+    assert!(
+        !prompt.contains("Assess phase (current)"),
+        "execute mission must not claim assess is current"
+    );
+    assert!(
+        !prompt.contains("call `mission_prepare` to enter execute")
+            && !prompt.contains("When setup is complete, call `mission_prepare`"),
+        "execute prompt must not push mission_prepare as the next step"
+    );
 }
 
 /// Section 4: Auto mode prompt has no auto-checklist mandate.

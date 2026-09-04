@@ -322,8 +322,22 @@ fn mission_body_for_result(state: &AppState) -> String {
         .unwrap_or_else(|| "the session mission.json".to_string())
 }
 
+/// After a successful bind, advance the mission into **execute** (Plan-speed).
+///
+/// `establish_mission_binding` already writes disk phase `prepare` + approved.
+/// Default post-approve path skips waiting for a model `mission_prepare` call:
+/// prepare is a no-op once the single mission worktree is live. `mission_prepare`
+/// remains available if the runtime is left in prepare without auto-advance
+/// (future multi-WT / explicit topology).
+fn advance_mission_after_bind(state: &mut AppState, sess_idx: usize) -> Result<(), String> {
+    state
+        .rest
+        .apply_sdlc_phase(sess_idx, "execute")
+        .map_err(|e| format!("phase persistence failed: {e}"))
+}
+
 /// Handle `Action::ApprovePlan` when the pending call is `mission_ready`:
-/// establish worktree binding FIRST; only then mark approved+execute.
+/// establish worktree binding FIRST; only then mark approved and enter **execute**.
 /// Failed/mismatched binding leaves the mission unapproved.
 pub(super) fn handle_approve_mission(
     state: &mut AppState,
@@ -336,7 +350,7 @@ pub(super) fn handle_approve_mission(
 
     match establish_mission_binding(state, client, handle) {
         Ok(wt_note) => {
-            if let Err(e) = state.rest.apply_sdlc_phase(fgi, "prepare") {
+            if let Err(detail) = advance_mission_after_bind(state, fgi) {
                 // Phase persistence failed after binding succeeded.
                 // Roll back worktree + unbind mission; use binding failure response.
                 restore_primary_workspace_after_failed_bind(state, fgi);
@@ -350,10 +364,13 @@ pub(super) fn handle_approve_mission(
                 state.rest.force_sdlc_assess_safe(fgi);
                 state.rest.sessions[fgi].approved_mission = None;
                 state.rest.sessions[fgi].sdlc_pending_node_id = None;
-                let detail = format!("phase persistence failed: {e}");
                 answer_plan_ready(
                     state,
                     crate::tool::sdlc::mission_binding_failed_text(&detail),
+                );
+                skip_trailing_after_plan_ready(
+                    state,
+                    "skipped — mission binding/phase failed; stay in assess, revise, mission_ready again",
                 );
                 if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                     sess.rebuild_system();
@@ -377,6 +394,12 @@ pub(super) fn handle_approve_mission(
             body.push_str("\n\n");
             body.push_str(&wt_note);
             answer_plan_ready(state, crate::tool::sdlc::mission_approved_text(&body));
+            // Drop premature sibling tools from the same batch as mission_ready.
+            skip_trailing_after_plan_ready(
+                state,
+                "skipped — mission approved; do not run pre-approval tool calls. \
+                 Execute the approved mission on this turn (bound worktree; see contract above).",
+            );
 
             let approved_mission = mission_body_for_result(state)
                 .chars()
@@ -410,6 +433,10 @@ pub(super) fn handle_approve_mission(
                     crate::tool::sdlc::mission_binding_failed_text(&detail),
                 );
             }
+            skip_trailing_after_plan_ready(
+                state,
+                "skipped — mission not approved (binding failed); stay in assess, fix, mission_ready again",
+            );
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 sess.rebuild_system();
                 let _ = sess.save();
@@ -433,7 +460,7 @@ pub(super) fn handle_approve_mission_compact(
 
     match establish_mission_binding(state, client, handle) {
         Ok(_wt_note) => {
-            if let Err(e) = state.rest.apply_sdlc_phase(fgi, "prepare") {
+            if let Err(detail) = advance_mission_after_bind(state, fgi) {
                 // Phase persistence failed after binding succeeded.
                 // Roll back worktree + unbind mission; use binding failure response.
                 restore_primary_workspace_after_failed_bind(state, fgi);
@@ -447,10 +474,13 @@ pub(super) fn handle_approve_mission_compact(
                 state.rest.force_sdlc_assess_safe(fgi);
                 state.rest.sessions[fgi].approved_mission = None;
                 state.rest.sessions[fgi].sdlc_pending_node_id = None;
-                let detail = format!("phase persistence failed: {e}");
                 answer_plan_ready(
                     state,
                     crate::tool::sdlc::mission_binding_failed_text(&detail),
+                );
+                skip_trailing_after_plan_ready(
+                    state,
+                    "skipped — mission binding/phase failed; stay in assess, revise, mission_ready again",
                 );
                 if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                     sess.rebuild_system();
@@ -482,6 +512,7 @@ pub(super) fn handle_approve_mission_compact(
 
             // Arm the typed mission seed so apply_compaction_result injects the
             // mission capsule as the first post-compaction user turn.
+            // Phase must be execute (auto-advanced after bind), not prepare.
             {
                 let rt = state.rest.fg();
                 let mission_id = rt
@@ -496,7 +527,10 @@ pub(super) fn handle_approve_mission_compact(
                     .and_then(|s| crate::model::sdlc::Mission::load(&s.path))
                     .map(|m| m.hash.clone())
                     .unwrap_or_default();
-                let phase = rt.sdlc_phase.clone().unwrap_or_default();
+                let phase = rt
+                    .sdlc_phase
+                    .clone()
+                    .unwrap_or_else(|| "execute".to_string());
                 state.rest.fg_mut().pending_mission_seed =
                     Some(crate::app::state::MissionSeedArm {
                         session_id: rt.id.clone(),
@@ -569,6 +603,10 @@ pub(super) fn handle_approve_mission_compact(
                     crate::tool::sdlc::mission_binding_failed_text(&detail),
                 );
             }
+            skip_trailing_after_plan_ready(
+                state,
+                "skipped — mission not approved (binding failed); stay in assess, fix, mission_ready again",
+            );
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 sess.rebuild_system();
                 let _ = sess.save();
@@ -596,6 +634,10 @@ pub(super) fn handle_deny_mission(
     state.rest.fg_mut().approval_reason = None;
     apply_mission_denial_rails(state, fgi);
     answer_plan_ready(state, crate::tool::sdlc::mission_denied_text().to_string());
+    skip_trailing_after_plan_ready(
+        state,
+        "skipped — mission not approved yet; stay in assess, revise, then mission_ready again",
+    );
     process_tools(state, fgi, client, handle);
     Ok(())
 }

@@ -51,6 +51,7 @@ fn sample_mission() -> Mission {
         graph_hash,
         needs_reapproval: false,
         amendment_note: None,
+        draft_locks: Default::default(),
     }
 }
 

@@ -84,6 +84,7 @@ fn unapproved_amendment_mission() -> Mission {
         graph_hash,
         needs_reapproval: true,
         amendment_note: Some("contract revised — re-approval required".into()),
+        draft_locks: Default::default(),
     }
 }
 
@@ -494,6 +495,7 @@ fn two_session_sdlc_isolation_regression() {
         graph_hash,
         needs_reapproval: false,
         amendment_note: None,
+        draft_locks: Default::default(),
     };
     mission_a.save(&dir_a).unwrap();
     assert!(crate::model::sdlc::Mission::load(&dir_b).is_none());

@@ -48,6 +48,7 @@ fn sample(branch: &str, target_branch: &str) -> Mission {
         graph_hash: gh,
         needs_reapproval: false,
         amendment_note: None,
+        draft_locks: Default::default(),
     }
 }
 

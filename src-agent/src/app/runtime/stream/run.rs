@@ -21,6 +21,7 @@ const TOOL_NUDGE: &str = "\n\nIMPORTANT (auto message, ignore if no need):\n\
 /// dedup-retain filter in callers.
 pub(crate) const SDLC_LIFECYCLE_TOOLS: &[&str] = &[
     "mission_ready",
+    "mission_draft",
     "mission_verify",
     "mission_prepare",
     "mission_integrate",
@@ -39,7 +40,7 @@ pub(crate) const SDLC_LIFECYCLE_TOOLS: &[&str] = &[
 /// | Normal    | *            | `plan_enter`                                             |
 /// | Yolo      | *            | `plan_enter`                                             |
 /// | Plan      | *            | `seqthink`, `plan_ready`                                 |
-/// | Sdlc      | assess       | `seqthink`, `mission_ready`                              |
+/// | Sdlc      | assess       | `seqthink`, `mission_draft`, `mission_ready`             |
 /// | Sdlc      | prepare      | `mission_ready`, `mission_prepare`                       |
 /// | Sdlc      | execute      | `mission_ready`, `mission_verify`, `mission_integrate`   |
 /// | Sdlc      | integrate    | `mission_ready`, `mission_verify`, `mission_integrate`   |
@@ -59,7 +60,7 @@ pub(crate) fn mode_advertised_lifecycle_tools(
     match mode {
         AgentMode::Plan => vec!["seqthink", "plan_ready"],
         AgentMode::Sdlc => match sdlc_phase {
-            Some("assess") => vec!["seqthink", "mission_ready"],
+            Some("assess") => vec!["seqthink", "mission_draft", "mission_ready"],
             Some("prepare") => vec!["mission_ready", "mission_prepare"],
             Some("execute") | Some("integrate") => {
                 vec!["mission_ready", "mission_verify", "mission_integrate"]

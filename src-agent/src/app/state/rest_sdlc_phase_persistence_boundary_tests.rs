@@ -67,6 +67,7 @@ fn test_mission(phase: &str) -> Mission {
         graph_hash: Some("gh-test".into()),
         needs_reapproval: false,
         amendment_note: None,
+        draft_locks: Default::default(),
     }
 }
 

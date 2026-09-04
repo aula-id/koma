@@ -324,6 +324,13 @@ pub(crate) fn process_tools(
                 InterceptFlow::Fallthrough => {}
             }
         }
+        if call.function.name == "mission_draft" {
+            match intercepts::intercept_mission_draft(state, sess_idx, &call, mode) {
+                InterceptFlow::Continue => continue,
+                InterceptFlow::Return => return,
+                InterceptFlow::Fallthrough => {}
+            }
+        }
         // Intercept `mission_verify` BEFORE the generic dispatch path. Only when mode == Sdlc.
         if call.function.name == "mission_verify" {
             match intercepts::intercept_mission_verify(state, sess_idx, &call, mode) {

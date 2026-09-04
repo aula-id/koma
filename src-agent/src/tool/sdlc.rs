@@ -125,6 +125,51 @@ impl Tool for MissionReady {
     }
 }
 
+/// Assess-only: update waterfall draft locks / field values on mission.json.
+pub struct MissionDraft;
+
+impl Tool for MissionDraft {
+    fn name(&self) -> &'static str {
+        "mission_draft"
+    }
+
+    fn description(&self) -> &'static str {
+        "SDLC assess-only: record progress on the mission contract waterfall. \
+         Set or lock fields (goal, non_goals, acceptance, lane, human_gates, graph, \
+         branch_target, verify_plan, risks, rationale) after each user answer. \
+         Returns remaining UNKNOWN/required locks. Prefer during sequential lock-in; \
+         call mission_ready when required locks are locked (or full one-shot ready)."
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": "string",
+                    "description": "Draft field (goal|non_goals|acceptance|lane|human_gates|graph|branch_target|verify_plan|risks|rationale). Omit for status-only."
+                },
+                "value": {
+                    "description": "New value: string, string array, or graph task list."
+                },
+                "lock": {
+                    "type": "boolean",
+                    "description": "Mark locked after apply (default true). false = proposed."
+                },
+                "status_only": {
+                    "type": "boolean",
+                    "description": "If true, only return lock status."
+                }
+            },
+            "required": []
+        })
+    }
+
+    fn run(&self, _ctx: &ToolCtx, _args: &Value) -> Result<String> {
+        Ok("error: mission_draft must be handled by the runtime".into())
+    }
+}
+
 /// Mark verify_bit on a graph node after running verify steps.
 pub struct MissionVerify;
 
@@ -181,8 +226,9 @@ impl Tool for MissionPrepare {
     }
 
     fn description(&self) -> &'static str {
-        "SDLC-only prepare→execute phase transition. Available only in SDLC prepare phase \
-         after mission approval. Confirms source branch and worktree setup is complete. \
+        "SDLC-only prepare→execute transition. Only needed when the session is still in \
+         prepare (extra worktree/topology setup). Default mission approve already binds the \
+         worktree and enters execute — do not call this after a normal y/a approve. \
          Unrelated to ordinary Plan mode."
     }
 
@@ -413,6 +459,62 @@ pub(crate) fn parse_mission_verify_args(
     Ok((node_id, evidence.to_string(), pass, human_gate))
 }
 
+/// Parse mission_draft args.
+pub(crate) fn parse_mission_draft_args(args: &Value) -> Result<MissionDraftArgs, String> {
+    let status_only = args
+        .get("status_only")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if status_only {
+        return Ok(MissionDraftArgs {
+            status_only: true,
+            field: None,
+            value: None,
+            lock: true,
+        });
+    }
+    let field = args
+        .get("field")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let value = args.get("value").cloned();
+    let lock = args.get("lock").and_then(|v| v.as_bool()).unwrap_or(true);
+    if field.is_none() && value.is_none() {
+        return Ok(MissionDraftArgs {
+            status_only: true,
+            field: None,
+            value: None,
+            lock: true,
+        });
+    }
+    let field = field.ok_or_else(|| {
+        "error: mission_draft requires 'field' when setting a value (or status_only=true)"
+            .to_string()
+    })?;
+    if !crate::model::sdlc::mission::DraftLocks::WATERFALL.contains(&field.as_str()) {
+        return Err(format!(
+            "error: unknown draft field '{field}' — use one of: {}",
+            crate::model::sdlc::mission::DraftLocks::WATERFALL.join(", ")
+        ));
+    }
+    Ok(MissionDraftArgs {
+        status_only: false,
+        field: Some(field),
+        value,
+        lock,
+    })
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct MissionDraftArgs {
+    pub status_only: bool,
+    pub field: Option<String>,
+    pub value: Option<Value>,
+    pub lock: bool,
+}
+
 /// Parse mission_prepare args. Returns the optional `note`.
 pub(crate) fn parse_mission_prepare_args(args: &Value) -> Result<Option<String>, String> {
     let note = args
@@ -476,7 +578,10 @@ pub(crate) struct MissionArgs {
 /// Tool-result text when user approves a mission.
 pub(crate) fn mission_approved_text(body: &str) -> String {
     format!(
-        "mission approved by user — execute it now. Full contract below; follow it exactly.\n\n\
+        "mission approved by user — planning is over; you are in SDLC **execute** \
+         (bound mission worktree). Do not call mission_prepare unless the harness left \
+         you in prepare for extra topology. Claim one OPEN leaf, implement inside the \
+         worktree, seal via mission_verify with evidence. Full contract below; follow it.\n\n\
          --- APPROVED MISSION ---\n{}\n--- END MISSION ---",
         body.trim()
     )
@@ -485,7 +590,8 @@ pub(crate) fn mission_approved_text(body: &str) -> String {
 /// Tool-result text when user approves a mission AND wants to compact.
 pub(crate) fn mission_approved_compact_text() -> &'static str {
     "mission approved by user (with history compaction) — context will be compacted to the \
-     approved mission; execute it now."
+     approved mission; you enter SDLC **execute** in the bound worktree. Do not call \
+     mission_prepare unless still in prepare. Execute OPEN leaves now."
 }
 
 /// Tool-result text when user denies a mission.

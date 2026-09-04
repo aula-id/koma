@@ -359,6 +359,29 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
     };
     let sess_path = sess.path.clone();
 
+    // If assess draft interview was started (any lock != unknown), require
+    // required fields locked before parking approval. Full one-shot mission_ready
+    // with empty draft_locks remains allowed (legacy / no mission_draft usage).
+    if let Some(prior_draft) = crate::model::sdlc::Mission::load(&sess_path) {
+        if !prior_draft.approved && prior_draft.draft_locks.is_active() {
+            let missing = prior_draft.draft_locks.missing_required_locks();
+            if !missing.is_empty() {
+                state.rest.sessions[sess_idx].tool_results.push((
+                    call.id.clone(),
+                    format!(
+                        "mission_ready rejected: draft waterfall still has unlocked required \
+                         fields ({}). Use mission_draft to lock them, or clear the draft and \
+                         supply a complete one-shot contract.\n{}",
+                        missing.join(", "),
+                        prior_draft.draft_locks.status_lines()
+                    ),
+                ));
+                state.rest.sessions[sess_idx].tool_idx += 1;
+                return InterceptFlow::Continue;
+            }
+        }
+    }
+
     // Amendment path: never silently overwrite an approved frozen contract.
     let prior = crate::model::sdlc::Mission::load(&sess_path);
     let amending = prior
@@ -541,6 +564,15 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
                 None
             }
         }),
+        // Successful ready freezes the waterfall locks (one-shot ready locks all).
+        draft_locks: {
+            let mut locks = prior
+                .as_ref()
+                .map(|m| m.draft_locks.clone())
+                .unwrap_or_default();
+            locks.lock_all();
+            locks
+        },
     };
 
     if let Err(e) = mission.save(&sess_path) {
@@ -1173,6 +1205,275 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_prepare(
 
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
+}
+
+/// Intercept `mission_draft` — assess-only waterfall lock updates on mission.json.
+pub(in crate::app::runtime::stream::tools) fn intercept_mission_draft(
+    state: &mut AppState,
+    sess_idx: usize,
+    call: &ToolCall,
+    mode: AgentMode,
+) -> InterceptFlow {
+    use crate::model::sdlc::mission::{DraftLocks, LockState, Mission};
+
+    if mode != AgentMode::Sdlc {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            "mission_draft is only available in SDLC mode".to_string(),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+    let phase = state.rest.sessions[sess_idx].sdlc_phase.clone();
+    if !matches!(phase.as_deref(), Some("assess") | None) {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            format!(
+                "error: mission_draft is only available in assess (current phase: {})",
+                phase.as_deref().unwrap_or("inactive")
+            ),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let args: serde_json::Value =
+        serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+    let draft_args = match crate::tool::sdlc::parse_mission_draft_args(&args) {
+        Ok(a) => a,
+        Err(e) => {
+            state.rest.sessions[sess_idx]
+                .tool_results
+                .push((call.id.clone(), e));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            return InterceptFlow::Continue;
+        }
+    };
+
+    let Some(sess) = state.rest.sessions[sess_idx].session.as_ref() else {
+        state.rest.sessions[sess_idx]
+            .tool_results
+            .push((call.id.clone(), "error: no active session".to_string()));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    };
+    let sess_path = sess.path.clone();
+
+    let mut mission = Mission::load(&sess_path).unwrap_or_else(|| Mission {
+        contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
+        id: format!("draft-{}", uuid_like()),
+        goal: String::new(),
+        non_goals: vec![],
+        acceptance: vec![],
+        lane: "standard".into(),
+        verify_plan: vec![],
+        human_gates: vec![],
+        human_gates_approved: vec![],
+        risks: vec![],
+        worktree_name: None,
+        branch: None,
+        worktree_path: None,
+        target_worktree_path: None,
+        target_branch: None,
+        target_head: None,
+        rationale: String::new(),
+        phase: "assess".into(),
+        approved: false,
+        hash: String::new(),
+        graph_hash: None,
+        needs_reapproval: false,
+        amendment_note: None,
+        draft_locks: DraftLocks::default(),
+    });
+
+    if mission.approved && !mission.needs_reapproval {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            "error: mission is approved — amend via mission_ready (needs_reapproval), not mission_draft"
+                .to_string(),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    if draft_args.status_only {
+        let mut body = mission.draft_locks.status_lines();
+        body.push_str(&format!(
+            "goal: {}\nlane: {}\nacceptance: {:?}\n",
+            if mission.goal.is_empty() {
+                "(empty)"
+            } else {
+                &mission.goal
+            },
+            mission.lane,
+            mission.acceptance
+        ));
+        state.rest.sessions[sess_idx]
+            .tool_results
+            .push((call.id.clone(), body));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    let field = draft_args.field.as_deref().unwrap_or("");
+    if let Some(val) = draft_args.value.as_ref() {
+        if let Err(e) = apply_draft_field_value(&mut mission, field, val) {
+            state.rest.sessions[sess_idx]
+                .tool_results
+                .push((call.id.clone(), e));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            return InterceptFlow::Continue;
+        }
+    }
+    let lock_state = if draft_args.lock {
+        LockState::Locked
+    } else {
+        LockState::Proposed
+    };
+    if let Err(e) = mission.draft_locks.set(field, lock_state) {
+        state.rest.sessions[sess_idx]
+            .tool_results
+            .push((call.id.clone(), e));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    // Keep hash valid for unbound draft fields.
+    if mission.hash.is_empty() || !mission.approved {
+        mission.hash = mission.recompute_hash();
+    }
+    if let Err(e) = mission.save(&sess_path) {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            format!("error: could not save mission draft: {e}"),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    let mut body = format!(
+        "mission_draft: {field} → {}\n{}",
+        lock_state.as_str(),
+        mission.draft_locks.status_lines()
+    );
+    body.push_str(&format!(
+        "goal: {}\nlane: {}\nacceptance: {:?}\n",
+        if mission.goal.is_empty() {
+            "(empty)"
+        } else {
+            &mission.goal
+        },
+        mission.lane,
+        mission.acceptance
+    ));
+    state.rest.sessions[sess_idx]
+        .tool_results
+        .push((call.id.clone(), body));
+    state.rest.sessions[sess_idx].tool_idx += 1;
+    InterceptFlow::Continue
+}
+
+fn uuid_like() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{n:x}")
+}
+
+fn apply_draft_field_value(
+    mission: &mut crate::model::sdlc::Mission,
+    field: &str,
+    val: &serde_json::Value,
+) -> Result<(), String> {
+    match field {
+        "goal" | "lane" | "rationale" => {
+            let s = val
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| format!("error: {field} value must be a non-empty string"))?
+                .to_string();
+            match field {
+                "goal" => mission.goal = s,
+                "lane" => {
+                    if !matches!(s.as_str(), "express" | "standard" | "full") {
+                        return Err("error: lane must be express|standard|full".into());
+                    }
+                    mission.lane = s;
+                }
+                "rationale" => mission.rationale = s,
+                _ => {}
+            }
+        }
+        "non_goals" | "acceptance" | "human_gates" | "verify_plan" | "risks" => {
+            let arr = match val {
+                serde_json::Value::Array(a) => a
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>(),
+                serde_json::Value::String(s) => s
+                    .split(|c| c == '\n' || c == ';')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+                _ => {
+                    return Err(format!(
+                        "error: {field} value must be a string array or newline-separated string"
+                    ))
+                }
+            };
+            match field {
+                "non_goals" => mission.non_goals = arr,
+                "acceptance" => mission.acceptance = arr,
+                "human_gates" => mission.human_gates = arr,
+                "verify_plan" => mission.verify_plan = arr,
+                "risks" => mission.risks = arr,
+                _ => {}
+            }
+        }
+        "branch_target" => {
+            // value: string branch, or {branch?, target_branch?}
+            if let Some(s) = val.as_str() {
+                let s = s.trim();
+                if !s.is_empty() {
+                    mission.branch = Some(s.to_string());
+                }
+            } else if let Some(obj) = val.as_object() {
+                if let Some(b) = obj.get("branch").and_then(|v| v.as_str()) {
+                    let b = b.trim();
+                    if !b.is_empty() {
+                        mission.branch = Some(b.to_string());
+                    }
+                }
+                if let Some(t) = obj.get("target_branch").and_then(|v| v.as_str()) {
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        mission.target_branch = Some(t.to_string());
+                    }
+                }
+            } else {
+                return Err(
+                    "error: branch_target value must be a branch string or {branch?, target_branch?}"
+                        .into(),
+                );
+            }
+        }
+        "graph" => {
+            // Store graph via checklist nodes into sqlite when session has path — caller
+            // already has mission only; graph replace needs conn. Encode titles into
+            // a temporary note on mission until ready replaces graph — use graph_hash none
+            // and leave structural graph to mission_ready / checklist.
+            // Prefer checklist tool for graph structure; locking graph here means "shape agreed".
+            let _ = val; // lock-only is enough for waterfall; structure via checklist
+        }
+        _ => return Err(format!("error: unsupported draft field '{field}'")),
+    }
+    Ok(())
 }
 
 /// Intercept `checklist` while in SDLC mode: write through to sdlc_nodes AND
