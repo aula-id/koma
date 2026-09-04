@@ -255,9 +255,9 @@ message_find — search chat history (messages.sqlite) via SQLite FTS5 for past
   - Use scope "project" when the user asks about prior sessions in this project,
     or when session-only search misses something that may live in a sibling
     session under the same working directory.
-  - After compact / plan approve&compact, if you need a past image listed in the
-    session-images inventory footer or in a find hit, call load_image — do not
-    guess pixels from text alone.
+  - After compact, past images/pastes are not listed automatically. If you need
+    one, message_find for the marker/fence, then load_image (images) or read
+    (pastes) — do not guess pixels or dump session media dirs.
   Prefer short precise queries (≤5 words). Multi-word queries are OR'd as
   prefix matches (e.g. "foo bar" matches messages containing "foo*" or "bar*").
 
@@ -271,8 +271,7 @@ load_image — load an existing image into the next model message for visual
   Example:   load_image({"path": "images/03-foo.png"})
   Example:   load_image({"image_n": 3})
   WHEN TO USE:
-  - message_find returned an image: reload line for a past attachment.
-  - Compact / plan-seed inventory listed session images still on disk.
+  - message_find returned an image reload line for a past attachment.
   - User asks you to re-look at an earlier attached image no longer in live context.
   Not available inside sub-agents (main runtime interceptor only).
 

@@ -229,25 +229,15 @@ pub(super) fn apply_compaction_result(
         .get_mut(idx)
         .and_then(|rt| rt.session.as_mut())
     {
-        // Inventory of session images still on disk after compact. Use
-        // `session.path/images` (the on-disk session dir) rather than
-        // store::session_images_dir alone — path is authoritative for this
-        // Session object (tests and real loads both set it).
-        let image_inventory = crate::tool::internet::load_image::format_session_images_inventory(
-            &sess.path.join("images"),
-        );
-        let summary_with_inventory = match &image_inventory {
-            Some(inv) => format!("{}\n\n{}", summary.trim_end(), inv),
-            None => summary.clone(),
-        };
+        // No session-wide images/pastes inventory footer. Disk files may outlive
+        // context, but dumping every `images/NN-*` confuses the model (and many
+        // are orphans). Attachments stay message-bound; re-discover via
+        // message_find → load_image / read when curious.
+        // Clone: `summary` is still needed below for the compact toast.
         sess.conversation
-            .apply_compaction(summary_with_inventory, kept_tail);
+            .apply_compaction(summary.clone(), kept_tail);
         // Append the approved plan/mission AFTER the summary.
         if let Some(seed) = plan_seed {
-            let seed = match &image_inventory {
-                Some(inv) => format!("{}\n\n{}", seed.trim_end(), inv),
-                None => seed,
-            };
             sess.conversation.push_user(seed);
         }
         if let Some(seed) = mission_seed {
