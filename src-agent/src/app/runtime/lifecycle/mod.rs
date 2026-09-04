@@ -460,16 +460,15 @@ pub(crate) fn install_daemon_session(
     // never running. All best-effort (empty when the session has no such records).
     runtime.file_changes = crate::model::msglog::read_file_changes(&sess_path);
     // Rehydrate the session’s CURRENT todo checklist for the GUI Explore “PLAN”
-    // section. Only plan_todos (from `plan_todos.md`) while in Plan mode;
-    // outside Plan, plan_todos stays empty to avoid leaking cross-mode data.
-    runtime.plan_todos = if state.rest.agent_mode() == crate::app::state::AgentMode::Plan {
-        runtime
+    // section: Plan file or SDLC graph projection.
+    let mode = state.rest.agent_mode();
+    runtime.plan_todos = match mode {
+        crate::app::state::AgentMode::Plan | crate::app::state::AgentMode::Sdlc => runtime
             .session
             .as_ref()
-            .map(|s| crate::app::mode::todo::load_current_todos(s, true))
-            .unwrap_or_default()
-    } else {
-        Vec::new()
+            .map(|s| crate::app::mode::todo::load_current_todos_for_mode(s, mode))
+            .unwrap_or_default(),
+        _ => Vec::new(),
     };
     super::bg_persist::restore_bg_records(&mut runtime, &sess_path, handle);
 

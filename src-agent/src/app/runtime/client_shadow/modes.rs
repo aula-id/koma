@@ -689,11 +689,10 @@ pub(crate) fn shadow_todo(s: crate::ipc::proto::TodoSnapshot) -> crate::app::mod
             .collect(),
         selected: s.selected,
         pwd_hash: s.pwd_hash,
-        // Daemon-only field (the plan-todos path). The client never reads or
-        // writes the backing file directly — every key is forwarded to the
-        // daemon, which owns `refresh_from_disk`/`reset_to_pending` — so it's
-        // intentionally NOT part of `TodoSnapshot` and defaults to `None` here.
+        // Daemon-only fields (backing path / SDLC graph flag). Client never
+        // reads disk directly — every key is forwarded to the daemon.
         plan_path: None,
+        sdlc_graph: false,
         last_refresh: std::time::Instant::now(),
     }
 }

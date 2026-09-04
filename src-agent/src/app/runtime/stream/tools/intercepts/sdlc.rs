@@ -596,6 +596,10 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
         return InterceptFlow::Continue;
     }
 
+    // Contract graph is on disk — project into plan_todos for /todo + Explore.
+    state.rest.sessions[sess_idx].plan_todos =
+        crate::model::sdlc::graph::load_sdlc_todo_items(&sess_path);
+
     // Compose the user-facing digest and swap into the stored tool-call args.
     let mut checklist = format!(
         "Mission ({} task{}{}):",
@@ -1581,8 +1585,8 @@ fn apply_draft_field_value(
     Ok(())
 }
 
-/// Intercept `checklist` while in SDLC mode: write through to sdlc_nodes AND
-/// memory/TODO.md (dual-write). Graph is authority; TODO cannot override it.
+/// Intercept `checklist` while in SDLC mode: write through to sdlc_nodes only.
+/// Graph is authority; TODO.md is not dual-written. /todo projects the graph.
 pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
     state: &mut AppState,
     sess_idx: usize,
@@ -1755,8 +1759,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
     }
 
     // SDLC graph is the sole authority — no dual-write to TODO.md.
-    // Plan mode snapshots to plan_todos.md; ordinary todos use project TODO.md;
-    // SDLC checklist lives exclusively in the L2 graph (sdlc_nodes table).
+    // Refresh runtime plan_todos projection for /todo + Explore.
+    state.rest.sessions[sess_idx].plan_todos =
+        crate::model::sdlc::graph::load_sdlc_todo_items(&sess_path);
     let result = format!("Updated SDLC checklist: {n} task(s) (graph authoritative)");
 
     // Rebuild capsule after graph mutation.

@@ -762,8 +762,7 @@ fn mission_prepare_outside_sdlc_rejects_without_state_or_artifact_mutation() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// plan_todos must be empty outside Plan mode - SDLC checklist does not
-/// populate it (graph is authority for SDLC; plan_todos is Plan-only).
+/// plan_todos outside Plan may be empty; SDLC projects graph into plan_todos at runtime.
 #[test]
 fn plan_todos_empty_outside_plan_mode() {
     use crate::app::mode::Mode;
@@ -775,12 +774,5 @@ fn plan_todos_empty_outside_plan_mode() {
     assert!(
         state.rest.sessions[0].plan_todos.is_empty(),
         "plan_todos must be empty in Auto mode"
-    );
-    // In SDLC mode, plan_todos should also be empty (SDLC uses L2 graph).
-    state.rest.sessions[0].agent_mode = AgentMode::Sdlc;
-    state.rest.sessions[0].sdlc_phase = Some("execute".into());
-    assert!(
-        state.rest.sessions[0].plan_todos.is_empty(),
-        "plan_todos must be empty in SDLC mode"
     );
 }

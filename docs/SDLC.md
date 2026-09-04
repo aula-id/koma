@@ -18,9 +18,13 @@ depth — not in an extra post-y homework phase.
 | L3 evidence | verification evidence, git history, artifacts, and recorded decisions |
 | L0 chat | disposable working context; never the sole record of contract or completion |
 
-The graph is authoritative. `TODO.md` is a projection. A node is sealed only
-by a passing `mission_verify`; a checklist update cannot mark it done. The
-keeper reopens false-done leaves.
+The graph is authoritative. `/todo` and Explore project L2 `sdlc_nodes` while
+in SDLC (not `TODO.md`). A node is sealed only by a passing `mission_verify`;
+a checklist update cannot mark it done. The keeper reopens false-done leaves.
+
+On approve the harness binds the mission worktree (cwd), advances to execute,
+and auto-claims the first OPEN leaf when possible — the model should not
+checkout, cd, or re-claim for the default path.
 
 ## Lifecycle
 

@@ -1061,3 +1061,36 @@ fn handoff_accepted_and_rejected_audits_are_json_and_rejection_is_audit_only() {
     assert_eq!(rejected["outcome"], "rejected");
     assert_eq!(rejected["reason"], "stale claim");
 }
+
+#[test]
+fn auto_claim_first_open_leaf_claims_pending() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_tables(&conn).unwrap();
+    replace_nodes_from_checklist(
+        &conn,
+        &[
+            ChecklistNode {
+                title: "first".into(),
+                status: "pending".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec![],
+            },
+            ChecklistNode {
+                title: "second".into(),
+                status: "pending".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec![],
+            },
+        ],
+    )
+    .unwrap();
+    let claimed = auto_claim_first_open_leaf(&conn).unwrap().expect("claim");
+    assert_eq!(claimed.1, "first");
+    let again = auto_claim_first_open_leaf(&conn).unwrap().expect("adopt");
+    assert_eq!(again.0, claimed.0);
+    let items = graph_as_todo_items(&conn).unwrap();
+    assert!(items.iter().any(|i| i.content == "first" && i.status == crate::app::mode::todo::TodoStatus::InProgress));
+    assert!(items.iter().any(|i| i.content == "second" && i.status == crate::app::mode::todo::TodoStatus::Pending));
+}

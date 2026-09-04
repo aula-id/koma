@@ -553,6 +553,71 @@ pub fn claim_leaf(conn: &Connection, node_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Project non-cancelled graph nodes as UI/todo checklist items (display only).
+/// Status maps: active→in_progress, done→completed, cancelled→cancelled, else pending.
+pub fn graph_as_todo_items(conn: &Connection) -> Result<Vec<crate::app::mode::todo::TodoItem>> {
+    use crate::app::mode::todo::{TodoItem, TodoPriority, TodoStatus};
+    let nodes = snapshot_checklist(conn)?;
+    Ok(nodes
+        .into_iter()
+        .map(|n| {
+            let status = match n.status.as_str() {
+                "active" => TodoStatus::InProgress,
+                "done" => TodoStatus::Completed,
+                "cancelled" => TodoStatus::Cancelled,
+                _ => TodoStatus::Pending,
+            };
+            let content = match n.parent_title {
+                Some(ref p) if !p.is_empty() => format!("{} › {}", p, n.title),
+                _ => n.title,
+            };
+            TodoItem {
+                content,
+                status,
+                priority: TodoPriority::Medium,
+                locked: false,
+            }
+        })
+        .collect())
+}
+
+/// Load SDLC graph as todo items from a session directory. Empty on missing DB/graph.
+pub fn load_sdlc_todo_items(session_dir: &std::path::Path) -> Vec<crate::app::mode::todo::TodoItem> {
+    let Ok(conn) = crate::model::msglog::open(session_dir) else {
+        return Vec::new();
+    };
+    if ensure_tables(&conn).is_err() {
+        return Vec::new();
+    }
+    graph_as_todo_items(&conn).unwrap_or_default()
+}
+
+/// Claim the first claimable OPEN leaf (pending/blocked) when none is active.
+/// Returns `(id, title)` when a new claim was made or an existing active leaf is adopted.
+pub fn auto_claim_first_open_leaf(conn: &Connection) -> Result<Option<(String, String)>> {
+    let leaves = list_open_leaves(conn)?;
+    if let Some(active) = leaves.iter().find(|n| n.status == "active") {
+        return Ok(Some((active.id.clone(), active.title.clone())));
+    }
+    let Some(first) = leaves
+        .iter()
+        .find(|n| n.status == "pending" || n.status == "blocked")
+    else {
+        return Ok(None);
+    };
+    claim_leaf(conn, &first.id)?;
+    Ok(Some((first.id.clone(), first.title.clone())))
+}
+
+/// Session-dir helper: open graph and auto-claim first OPEN leaf.
+pub fn auto_claim_first_open_leaf_at(
+    session_dir: &std::path::Path,
+) -> Option<(String, String)> {
+    let conn = crate::model::msglog::open(session_dir).ok()?;
+    ensure_tables(&conn).ok()?;
+    auto_claim_first_open_leaf(&conn).ok().flatten()
+}
+
 fn depth_of_node(nodes: &[GraphTask], node_id: &str) -> Result<usize> {
     let by_id: std::collections::HashMap<&str, &GraphTask> =
         nodes.iter().map(|node| (node.id.as_str(), node)).collect();

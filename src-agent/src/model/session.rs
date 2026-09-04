@@ -533,14 +533,13 @@ Do not re-open assess interview questions; the contract is frozen.\n",
                     sys.push_str(&format!(
                         "\n## {} phase (current)\n\
 NO preference nags; research, decide, ship. Never invent APIs — read the code.\n\
-- Execute inside the bound mission worktree. Do not thrash the user's main tree.\n\
+- The harness already bound the mission worktree (cwd) and claimed an OPEN leaf when possible. Do NOT git checkout, cd, or git_worktree enter/exit/create/remove.\n\
 - Never force-push; plain push only the mission branch.\n\
-- One OPEN leaf claim at a time (checklist in_progress or task.node_id). Second claim denied until the active leaf is sealed.\n\
-- Path ownership: if the claimed leaf has owned_paths, stay inside them. Write/edit/delete only inside the mission worktree during execute. Do not mutate the primary tree until integrate.\n\
-- Do NOT call git_worktree enter/exit/create/remove during execute/integrate — binding is frozen.\n\
-- Graph is sole authority for SDLC tasks; SEALED nodes must not be re-implemented. TODO.md is ordinary/project todos only.\n\
-- Delegate with `task` only to OPEN leaves; always pass `task.node_id`.\n\
-- Seal only via `mission_verify` with leaf node_id + real evidence (tests/build). Checklist cannot seal. Parents roll up; verify is leaf-only.\n\
+- Work the CLAIMED leaf (see capsule). One claim at a time — do not re-claim unless CLAIMED is empty.\n\
+- Path ownership: if the claimed leaf has owned_paths, stay inside them. Write/edit/delete only inside the mission worktree. Do not mutate the primary tree until integrate.\n\
+- Graph is sole authority for SDLC tasks; SEALED nodes must not be re-implemented. /todo mirrors the graph (not TODO.md).\n\
+- Delegate with `task` only to OPEN leaves; always pass `task.node_id` (claim is automatic on valid node_id).\n\
+- Seal only via `mission_verify` with leaf node_id + real evidence (tests/build). Checklist cannot seal.\n\
 - No auto-commit. {}\
 - Integrate never force-pushes; main/master auto-merge blocked. Dirty target → leave mission branch ready. Destination is frozen target_worktree_path.\n\
 - Human gates need explicit user y/n via mission_verify(human_gate=...). Model cannot self-approve gates.\n\

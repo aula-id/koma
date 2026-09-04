@@ -261,23 +261,19 @@ pub(super) fn finish_tool_round(
         state.rest.sessions[sess_idx].file_changes = crate::model::msglog::read_file_changes(&dir);
     }
 
-    // Refresh the session’s Plan-mode todo mirror (#PLAN section) from
-    // `plan_todos.md` ONLY while in Plan mode. Outside Plan, plan_todos is
-    // kept empty so the GUI Explore "PLAN" section does not project stale
-    // or cross-mode todo data. The TUI `/todo` overlay reads its backing
-    // file directly regardless of mode. SDLC checklist lives in the L2
-    // graph (sdlc_nodes table) and is projected separately if the GUI
-    // needs it - never through plan_todos.
-    let in_plan = state.rest.sessions[sess_idx].agent_mode == crate::app::state::AgentMode::Plan;
-    state.rest.sessions[sess_idx].plan_todos = if in_plan {
-        state.rest.sessions[sess_idx]
+    // Refresh the session’s todo mirror for Explore / GUI:
+    // Plan → plan_todos.md; SDLC → L2 graph projection; else empty (not TODO.md —
+    // ordinary todos are only for the TUI /todo overlay outside Plan/SDLC).
+    let mode = state.rest.sessions[sess_idx].agent_mode;
+    state.rest.sessions[sess_idx].plan_todos = match mode {
+        crate::app::state::AgentMode::Plan | crate::app::state::AgentMode::Sdlc => state
+            .rest
+            .sessions[sess_idx]
             .session
             .as_ref()
-            .map(|sess| crate::app::mode::todo::load_current_todos(sess, true))
-            .unwrap_or_default()
-    } else {
-        // Clear any stale plan_todos when not in Plan mode.
-        Vec::new()
+            .map(|sess| crate::app::mode::todo::load_current_todos_for_mode(sess, mode))
+            .unwrap_or_default(),
+        _ => Vec::new(),
     };
 
     // Inject any queued mid-turn steers as ONE coalesced user message before the
