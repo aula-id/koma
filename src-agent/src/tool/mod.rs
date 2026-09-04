@@ -112,7 +112,8 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
 /// can be parked. Filesystem-mutating workspace tools (`write`/`edit`/`delete`/
 /// `bash`/…) are denied at the runtime gate — not merely by prompt guidance.
 pub(crate) fn tool_allowed_in_sdlc_assess(name: &str) -> bool {
-    matches!(name, "mission_ready" | "mission_draft") || tool_allowed_in_plan(name)
+    matches!(name, "mission_ready" | "mission_draft" | "mission_clear")
+        || tool_allowed_in_plan(name)
 }
 
 /// True when `subcmd` (the first element of a `git_operator` call's `args`
@@ -620,6 +621,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(plan::PlanReady),
         Box::new(sdlc::MissionReady),
         Box::new(sdlc::MissionDraft),
+        Box::new(sdlc::MissionClear),
         Box::new(sdlc::MissionVerify),
         Box::new(sdlc::MissionPrepare),
         Box::new(sdlc::MissionIntegrate),
@@ -656,6 +658,7 @@ const INTERNAL_ONLY: &[&str] = &[
     "plan_ready",
     "mission_ready",
     "mission_draft",
+    "mission_clear",
     "mission_verify",
     "mission_prepare",
     "mission_integrate",

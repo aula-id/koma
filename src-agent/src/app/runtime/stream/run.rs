@@ -22,6 +22,7 @@ const TOOL_NUDGE: &str = "\n\nIMPORTANT (auto message, ignore if no need):\n\
 pub(crate) const SDLC_LIFECYCLE_TOOLS: &[&str] = &[
     "mission_ready",
     "mission_draft",
+    "mission_clear",
     "mission_verify",
     "mission_prepare",
     "mission_integrate",
@@ -40,12 +41,12 @@ pub(crate) const SDLC_LIFECYCLE_TOOLS: &[&str] = &[
 /// | Normal    | *            | `plan_enter`                                             |
 /// | Yolo      | *            | `plan_enter`                                             |
 /// | Plan      | *            | `seqthink`, `plan_ready`                                 |
-/// | Sdlc      | assess       | `seqthink`, `mission_draft`, `mission_ready`             |
-/// | Sdlc      | prepare      | `mission_ready`, `mission_prepare`                       |
-/// | Sdlc      | execute      | `mission_ready`, `mission_verify`, `mission_integrate`   |
-/// | Sdlc      | integrate    | `mission_ready`, `mission_verify`, `mission_integrate`   |
-/// | Sdlc      | done/paused  | `mission_ready`                                          |
-/// | Sdlc      | None/other   | `mission_ready`                                          |
+/// | Sdlc      | assess       | `seqthink`, `mission_draft`, `mission_ready`, `mission_clear` |
+/// | Sdlc      | prepare      | `mission_ready`, `mission_prepare`, `mission_clear`      |
+/// | Sdlc      | execute      | `mission_ready`, `mission_verify`, `mission_integrate`, `mission_clear` |
+/// | Sdlc      | integrate    | `mission_ready`, `mission_verify`, `mission_integrate`, `mission_clear` |
+/// | Sdlc      | done/paused  | `mission_ready`, `mission_clear`                         |
+/// | Sdlc      | None/other   | `mission_ready`, `mission_clear`                         |
 ///
 /// # Uniqueness guarantee
 ///
@@ -60,12 +61,22 @@ pub(crate) fn mode_advertised_lifecycle_tools(
     match mode {
         AgentMode::Plan => vec!["seqthink", "plan_ready"],
         AgentMode::Sdlc => match sdlc_phase {
-            Some("assess") => vec!["seqthink", "mission_draft", "mission_ready"],
-            Some("prepare") => vec!["mission_ready", "mission_prepare"],
+            Some("assess") => vec![
+                "seqthink",
+                "mission_draft",
+                "mission_ready",
+                "mission_clear",
+            ],
+            Some("prepare") => vec!["mission_ready", "mission_prepare", "mission_clear"],
             Some("execute") | Some("integrate") => {
-                vec!["mission_ready", "mission_verify", "mission_integrate"]
+                vec![
+                    "mission_ready",
+                    "mission_verify",
+                    "mission_integrate",
+                    "mission_clear",
+                ]
             }
-            _ => vec!["mission_ready"],
+            _ => vec!["mission_ready", "mission_clear"],
         },
         _ => vec!["plan_enter"],
     }
@@ -644,8 +655,8 @@ over sec_remote (stateful socket).\n",
         if mode == AgentMode::Plan {
             advertise.retain(|n| crate::tool::tool_allowed_in_plan(n) || n.starts_with("mcp__"));
         } else if mode == AgentMode::Sdlc && matches!(sdlc_phase, Some("assess")) {
-            advertise
-                .retain(|n| crate::tool::tool_allowed_in_sdlc_assess(n) || n.starts_with("mcp__"));
+            // Assess is fail-closed: no MCP advertise (runtime also denies mcp__).
+            advertise.retain(|n| crate::tool::tool_allowed_in_sdlc_assess(n));
         }
         for tool_name in lifecycle {
             advertise.push(tool_name.to_string());

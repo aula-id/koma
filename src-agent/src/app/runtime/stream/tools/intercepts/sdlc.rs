@@ -615,6 +615,30 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
         }
     }
     let composed = format!("{}\n\n{}", checklist, highlights_for_digest);
+    // Soft bind preflight: warn in the parked digest; hard fail stays on approve.
+    let preflight_warns = {
+        let repo_root = state.rest.sessions[sess_idx]
+            .session
+            .as_ref()
+            .map(|s| {
+                s.settings
+                    .workdir_saved
+                    .as_ref()
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| s.workdir())
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let tb = mission.target_branch.as_deref();
+        crate::model::sdlc::mission::bind_preflight_warnings(&repo_root, tb)
+    };
+    let composed = if preflight_warns.is_empty() {
+        composed
+    } else {
+        format!(
+            "{composed}\n\n---\n{}",
+            preflight_warns.join("\n")
+        )
+    };
     let mut new_args = args.clone();
     if let Some(obj) = new_args.as_object_mut() {
         obj.insert(
@@ -1048,6 +1072,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_integrate(
         // Successful merge OR express branch-ready finish → terminal done.
         match state.rest.apply_sdlc_phase(sess_idx, "done") {
             Ok(()) => {
+                // TAC mission stash must not bias the next mission / post-done turns.
+                state.rest.sessions[sess_idx].approved_mission = None;
+                state.rest.sessions[sess_idx].invalidate_sdlc_keeper_llm();
                 // Leave the shadow worktree before the later done cleanup can
                 // remove it; its branch and bindings stay persisted for now.
                 let dir_cache = state.rest.sessions[sess_idx].dir_cache.clone();
@@ -1095,6 +1122,71 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_integrate(
         .tool_results
         .push((call.id.clone(), result_text));
 
+    state.rest.sessions[sess_idx].tool_idx += 1;
+    InterceptFlow::Continue
+}
+
+/// Intercept `mission_clear` — drop TAC stash; optional deny-style assess reset.
+pub(in crate::app::runtime::stream::tools) fn intercept_mission_clear(
+    state: &mut AppState,
+    sess_idx: usize,
+    call: &ToolCall,
+    mode: AgentMode,
+) -> InterceptFlow {
+    if mode != AgentMode::Sdlc {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            "mission_clear is only available in SDLC mode".to_string(),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let args: serde_json::Value =
+        serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+    let reset = args.get("reset").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    // Always drop TAC bias + one-shot seed.
+    state.rest.sessions[sess_idx].approved_mission = None;
+    state.rest.sessions[sess_idx].approved_plan = None;
+    state.rest.sessions[sess_idx].invalidate_sdlc_keeper_llm();
+    state.rest.sessions[sess_idx].pending_mission_seed = None;
+    state.rest.sessions[sess_idx].sdlc_pending_node_id = None;
+
+    if reset {
+        // Soft deny rails without answering a parked mission_ready call.
+        state.rest.sessions[sess_idx].sdlc_branch = None;
+        let sess_path = state.rest.sessions[sess_idx]
+            .session
+            .as_ref()
+            .map(|s| s.path.clone());
+        if let Some(path) = sess_path {
+            if let Some(mut m) = crate::model::sdlc::Mission::load(&path) {
+                m.approved = false;
+                m.needs_reapproval = true;
+                let _ = m.try_transition("assess");
+                m.worktree_path = None;
+                m.target_worktree_path = None;
+                m.target_branch = None;
+                m.target_head = None;
+                m.hash = m.recompute_hash();
+                let _ = m.save(&path);
+            }
+        }
+        state.rest.force_sdlc_assess_safe(sess_idx);
+        let _ = state.rest.apply_sdlc_phase(sess_idx, "assess");
+    }
+
+    if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+        sess.rebuild_system();
+        let _ = sess.save();
+    }
+
+    state.rest.sessions[sess_idx].tool_results.push((
+        call.id.clone(),
+        crate::tool::sdlc::mission_clear_result(reset),
+    ));
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
 }

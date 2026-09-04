@@ -83,6 +83,15 @@ execute tooling; this is a rail, not merely a prompt.
 - SDLC does not allow force-push, create a force-push allowlist, or rewrite the
   branch classifier.
 - SDLC does not run a second autonomous keeper model.
+- SDLC assess does not advertise or run MCP tools (fail-closed readonly).
+
+## Hygiene
+
+- `mission_clear` drops the TAC `approved_mission` stash (optional `reset` forces
+  unapproved assess rails). Integrate→done also clears the stash.
+- TAC mission bias applies only in prepare/execute/integrate phases.
+- `mission_ready` parks with soft **BIND PREFLIGHT** warnings when primary is
+  detached or target would be main/master; hard fail remains on approve bind.
 
 ## Verification matrix
 

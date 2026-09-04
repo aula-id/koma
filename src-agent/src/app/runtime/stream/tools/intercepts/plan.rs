@@ -29,9 +29,18 @@ pub(in crate::app::runtime::stream::tools) fn build_convo_context(
         (Some(plan), _) if rt.agent_mode != AgentMode::Sdlc => format!(
             "[The user has APPROVED the following plan and asked to execute it now. ALLOW tool calls that carry out this plan — file writes/edits and shell commands needed to implement it are authorized. Only flag calls that are clearly OFF-PLAN, destructive beyond the plan's scope, or dangerous.]\n\nAPPROVED PLAN:\n{plan}\n\n--- recent conversation ---\n{base}"
         ),
-        (_, Some(mission)) if rt.agent_mode == AgentMode::Sdlc => format!(
+        // Mission TAC bias only while actively executing (not assess/done/paused).
+        (_, Some(mission))
+            if rt.agent_mode == AgentMode::Sdlc
+                && matches!(
+                    rt.sdlc_phase.as_deref(),
+                    Some("prepare") | Some("execute") | Some("integrate")
+                ) =>
+        {
+            format!(
             "[The user has APPROVED an SDLC mission and is executing it. ALLOW tool calls that carry out the mission — file writes/edits, shell commands, and git operations within the bound worktree are authorized. Only flag calls that are clearly OFF-MISSION, destructive beyond the mission scope, or dangerous.]\n\nAPPROVED MISSION:\n{mission}\n\n--- recent conversation ---\n{base}"
-        ),
+        )
+        }
         _ => base,
     }
 }

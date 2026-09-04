@@ -568,6 +568,53 @@ impl Mission {
     }
 }
 
+/// Soft bind preflight warnings for mission_ready park (does not fail closed).
+/// Hard failure remains in establish_mission_binding on approve.
+/// `repo_root` = primary workdir at ready time; `target_branch` optional user intent.
+pub fn bind_preflight_warnings(
+    repo_root: &std::path::Path,
+    target_branch: Option<&str>,
+) -> Vec<String> {
+    let mut warns = Vec::new();
+    let detected = current_git_branch(repo_root);
+    match detected.as_deref() {
+        None => {
+            warns.push(
+                "BIND PREFLIGHT: primary repo is detached HEAD or not on a branch — \
+                 approve will fail until you checkout a non-main feature branch"
+                    .into(),
+            );
+        }
+        Some("main") | Some("master") => {
+            if target_branch.is_none() {
+                warns.push(
+                    "BIND PREFLIGHT: primary is on main/master — approve defaults target to that \
+                     and will fail (SDLC never auto-integrates to main/master). Set target_branch \
+                     to a feature/integration branch before approve"
+                        .into(),
+                );
+            }
+        }
+        Some(_) => {}
+    }
+    if let Some(tb) = target_branch.map(str::trim).filter(|s| !s.is_empty()) {
+        if tb == "main" || tb == "master" {
+            warns.push(
+                "BIND PREFLIGHT: target_branch is main/master — approve will fail \
+                 (use a feature/integration branch; merge to main via PR manually)"
+                    .into(),
+            );
+        }
+    }
+    if current_git_head(repo_root).is_none() {
+        warns.push(
+            "BIND PREFLIGHT: could not read primary HEAD — approve cannot freeze target_head"
+                .into(),
+        );
+    }
+    warns
+}
+
 /// Read `git rev-parse --abbrev-ref HEAD` in dir.
 pub fn current_git_branch(dir: &std::path::Path) -> Option<String> {
     let output = std::process::Command::new("git")

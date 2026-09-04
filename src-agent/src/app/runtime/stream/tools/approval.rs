@@ -272,10 +272,21 @@ pub(crate) fn process_tools(
         // SDLC assess: deny filesystem-mutating workspace tools at runtime
         // (same pattern as Plan's readonly gate). mission_ready / checklist /
         // read-search remain available so the contract can be prepared.
+        // MCP is NOT exempt in assess — mutating MCP would bypass readonly rails.
         if mode == AgentMode::Sdlc
             && state.rest.sessions[sess_idx].sdlc_phase.as_deref() == Some("assess")
-            && !call.function.name.starts_with("mcp__")
         {
+            if call.function.name.starts_with("mcp__") {
+                state.rest.sessions[sess_idx].tool_results.push((
+                    call.id.clone(),
+                    format!(
+                        "SDLC assess is read-only: MCP tool '{}' is unavailable until the mission is approved",
+                        call.function.name
+                    ),
+                ));
+                state.rest.sessions[sess_idx].tool_idx += 1;
+                continue;
+            }
             match intercepts::intercept_sdlc_assess_gate(state, sess_idx, &call) {
                 InterceptFlow::Continue => continue,
                 InterceptFlow::Return => return,
@@ -326,6 +337,13 @@ pub(crate) fn process_tools(
         }
         if call.function.name == "mission_draft" {
             match intercepts::intercept_mission_draft(state, sess_idx, &call, mode) {
+                InterceptFlow::Continue => continue,
+                InterceptFlow::Return => return,
+                InterceptFlow::Fallthrough => {}
+            }
+        }
+        if call.function.name == "mission_clear" {
+            match intercepts::intercept_mission_clear(state, sess_idx, &call, mode) {
                 InterceptFlow::Continue => continue,
                 InterceptFlow::Return => return,
                 InterceptFlow::Fallthrough => {}

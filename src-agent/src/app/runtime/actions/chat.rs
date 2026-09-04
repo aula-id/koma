@@ -228,9 +228,10 @@ pub(super) fn handle_submit(
     // awaiting_classify / pending verdict from a prior halted turn.
     state.rest.fg_mut().awaiting_classify = false;
     state.rest.fg_mut().pending_classify_verdict = None;
-    // NOTE: approved_plan is intentionally NOT cleared here — it must survive
-    // continue-nudges so the classifier stays plan-aware through the whole
-    // execution; it's cleared only when a new plan is entered (set_agent_mode).
+    // NOTE: approved_plan / approved_mission are intentionally NOT cleared here —
+    // they must survive continue-nudges so the classifier stays plan/mission-aware
+    // through execution. approved_plan clears on Plan re-entry; approved_mission
+    // clears on deny, leave/enter SDLC, mission_clear, or integrate→done.
     // Phase label for the comet: a single word the shimmer sweeps across
     // (the elapsed counter is appended by the renderer). No trailing dots —
     // the comet supplies the motion, `· Ns` supplies the elapsed.

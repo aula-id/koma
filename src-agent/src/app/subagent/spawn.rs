@@ -151,12 +151,13 @@ pub fn spawn_subagent(
         });
     } else if mode == AgentMode::Sdlc && ctx.sdlc_assess {
         // SDLC assess: fold to the same read-only surface as the main assess gate.
-        // Execute/integrate leave the agent surface alone — path ownership is
-        // enforced by bound worktree roots + allow_scratch=false on ToolCtx.
+        // MCP is fail-closed (main advertise/gate also deny mcp__ in assess).
         tools.retain(|n| {
-            (crate::tool::tool_allowed_in_sdlc_assess(n)
-                && !matches!(n.as_str(), "seqthink" | "checklist" | "mission_ready"))
-                || n.starts_with("mcp__")
+            crate::tool::tool_allowed_in_sdlc_assess(n)
+                && !matches!(
+                    n.as_str(),
+                    "seqthink" | "checklist" | "mission_ready" | "mission_draft" | "mission_clear"
+                )
         });
     }
     let convo = context::build_seed(

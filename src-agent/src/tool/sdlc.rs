@@ -170,6 +170,39 @@ impl Tool for MissionDraft {
     }
 }
 
+/// Drop TAC mission stash and/or reset unapproved assess draft (user or model).
+pub struct MissionClear;
+
+impl Tool for MissionClear {
+    fn name(&self) -> &'static str {
+        "mission_clear"
+    }
+
+    fn description(&self) -> &'static str {
+        "SDLC: clear mission execution context. Drops the TAC approved_mission stash so the \
+         harness stops biasing tools toward a finished or abandoned mission. Optional reset=true \
+         (default false) also resets an unapproved assess draft on disk (unapprove rails). \
+         Does not hop to Auto. Prefer after done, or when starting a new mission without leaving SDLC."
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "reset": {
+                    "type": "boolean",
+                    "description": "If true, force unapproved assess rails on disk (deny-style). Default false = clear TAC stash only."
+                }
+            },
+            "required": []
+        })
+    }
+
+    fn run(&self, _ctx: &ToolCtx, _args: &Value) -> Result<String> {
+        Ok("error: mission_clear must be handled by the runtime".into())
+    }
+}
+
 /// Mark verify_bit on a graph node after running verify steps.
 pub struct MissionVerify;
 
@@ -600,6 +633,18 @@ pub(crate) fn mission_approved_compact_text() -> &'static str {
 pub(crate) fn mission_denied_text() -> &'static str {
     "mission not approved — the user wants to keep discussing. Stay in SDLC mode, take their \
      feedback, revise the contract, and call mission_ready again when ready."
+}
+
+pub(crate) fn mission_clear_result(reset: bool) -> String {
+    if reset {
+        "mission_clear: TAC stash cleared; mission forced to unapproved assess rails. \
+         Rebuild the contract with mission_draft / mission_ready when ready."
+            .into()
+    } else {
+        "mission_clear: TAC approved_mission stash cleared — classifier is no longer \
+         mission-biased. Mission disk state unchanged."
+            .into()
+    }
 }
 
 /// Tool-result text when approve failed closed (binding).
