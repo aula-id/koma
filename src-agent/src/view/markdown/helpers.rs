@@ -245,3 +245,99 @@ pub(crate) fn wrap_spans(spans: &[Span], width: usize) -> Vec<Vec<Span<'static>>
 
     out
 }
+
+/// Hard-wrap styled spans while **preserving every space and tab**.
+///
+/// Unlike [`wrap_spans`] (word-wrap that collapses whitespace runs), this keeps
+/// the input character sequence — including leading/trailing spaces and tabs —
+/// and only breaks on display width (and embedded `\n`). Tabs expand to
+/// `TAB_COLS` spaces so they occupy real columns in the terminal.
+///
+/// Used for user-message bands in the transcript so what you typed in the
+/// composer still looks the same after send.
+pub(crate) fn wrap_spans_preserve(spans: &[Span], width: usize) -> Vec<Vec<Span<'static>>> {
+    const TAB_COLS: usize = 4;
+    let width = width.max(1);
+
+    let mut chars: Vec<(char, Style)> = Vec::new();
+    for span in spans {
+        for ch in span.content.chars() {
+            if ch == '\t' {
+                for _ in 0..TAB_COLS {
+                    chars.push((' ', span.style));
+                }
+            } else {
+                chars.push((ch, span.style));
+            }
+        }
+    }
+
+    let mut out: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut line: Vec<(char, Style)> = Vec::new();
+    let mut line_len = 0usize;
+
+    for &(ch, style) in &chars {
+        if ch == '\n' {
+            out.push(coalesce(&line));
+            line.clear();
+            line_len = 0;
+            continue;
+        }
+        if line_len >= width {
+            out.push(coalesce(&line));
+            line.clear();
+            line_len = 0;
+        }
+        line.push((ch, style));
+        line_len += 1;
+    }
+    out.push(coalesce(&line));
+    out
+}
+
+#[cfg(test)]
+mod wrap_preserve_tests {
+    use super::*;
+    use ratatui::style::Style;
+    use ratatui::text::Span;
+
+    fn flat(lines: &[Vec<Span<'static>>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|vl| vl.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn preserve_keeps_multi_space_and_leading() {
+        let spans = [Span::styled("a  b   c".to_string(), Style::default())];
+        let out = wrap_spans_preserve(&spans, 80);
+        assert_eq!(flat(&out), vec!["a  b   c".to_string()]);
+
+        let spans = [Span::styled("  indented".to_string(), Style::default())];
+        let out = wrap_spans_preserve(&spans, 80);
+        assert_eq!(flat(&out), vec!["  indented".to_string()]);
+    }
+
+    #[test]
+    fn word_wrap_collapses_spaces() {
+        let spans = [Span::styled("a  b".to_string(), Style::default())];
+        let out = wrap_spans(&spans, 80);
+        assert_eq!(flat(&out), vec!["a b".to_string()]);
+    }
+
+    #[test]
+    fn preserve_expands_tab_to_four_spaces() {
+        let spans = [Span::styled("a\tb".to_string(), Style::default())];
+        let out = wrap_spans_preserve(&spans, 80);
+        assert_eq!(flat(&out), vec!["a    b".to_string()]);
+    }
+
+    #[test]
+    fn preserve_hard_wraps_without_dropping_spaces() {
+        let spans = [Span::styled("ab  cd".to_string(), Style::default())];
+        // width 3 → "ab ", " cd" (space kept on both sides of the break)
+        let out = wrap_spans_preserve(&spans, 3);
+        assert_eq!(flat(&out), vec!["ab ".to_string(), " cd".to_string()]);
+    }
+}

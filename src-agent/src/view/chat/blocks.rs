@@ -116,8 +116,10 @@ fn push_plain_band_lines(
         return;
     }
     for logical in content.split('\n') {
-        let wrapped =
-            crate::view::markdown::wrap_spans(&[Span::styled(logical.to_string(), *text)], inner);
+        let wrapped = crate::view::markdown::wrap_spans_preserve(
+            &[Span::styled(logical.to_string(), *text)],
+            inner,
+        );
         for visual in wrapped {
             let line_text: String = visual.iter().map(|s| s.content.as_ref()).collect();
             out.push(band_row(
@@ -157,10 +159,10 @@ fn push_paste_quote_band_lines(out: &mut Vec<Line<'static>>, d: PasteQuoteDraw<'
         full_w,
         inner,
     } = d;
-    // Label row.
+    // Label row — preserve spaces in chip label path (usually no WS issue).
     let label = format!("[Pasted Text #{n}]");
     let wrapped =
-        crate::view::markdown::wrap_spans(&[Span::styled(label, *text)], inner);
+        crate::view::markdown::wrap_spans_preserve(&[Span::styled(label, *text)], inner);
     for visual in wrapped {
         let line_text: String = visual.iter().map(|s| s.content.as_ref()).collect();
         out.push(band_row(
@@ -181,7 +183,8 @@ fn push_paste_quote_band_lines(out: &mut Vec<Line<'static>>, d: PasteQuoteDraw<'
         lines.truncate(PASTE_QUOTE_MAX_LINES);
     }
     for logical in lines {
-        let wrapped = crate::view::markdown::wrap_spans(
+        // Preserve indent/spaces inside paste quote previews (composer parity).
+        let wrapped = crate::view::markdown::wrap_spans_preserve(
             &[Span::styled(logical.to_string(), *dim_quote)],
             body_inner,
         );
