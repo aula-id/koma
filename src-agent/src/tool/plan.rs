@@ -65,8 +65,10 @@ impl Tool for PlanReady {
          must know to approve (the important changes, decisions, and risks); plan (full detail: \
          files, exact edits, order, risks) is saved to <session>/plan.md. Only call this from \
          plan mode when your plan is complete. Only call this after ALL work is finished - \
-         including background bash jobs and sub-agents; collect their results first. The user \
-         may approve, approve with history compaction, or ask to keep discussing."
+         including background bash jobs and sub-agents; collect their results first. After \
+         calling plan_ready, STOP — do not also call write/edit/bash in the same turn; wait \
+         for the user (approve / compact / discuss). The user may approve, approve with \
+         history compaction, or ask to keep discussing."
     }
 
     fn parameters(&self) -> Value {
@@ -120,8 +122,8 @@ pub(crate) fn parse_plan_ready_args(args: &Value) -> Result<(String, String), St
 /// succeeds.
 pub(crate) fn plan_approved_text(plan_path: &str) -> String {
     format!(
-        "plan approved by user - exit planning and execute it now. Full detail is in \
-         {plan_path}; read it if you need to refresh any part."
+        "plan approved by user — planning is over; execute the approved plan now. \
+         Full detail is in {plan_path}; read it if you need to refresh any part."
     )
 }
 
@@ -135,8 +137,9 @@ pub(crate) fn plan_approved_text(plan_path: &str) -> String {
 /// `event_loop/drains.rs::apply_compaction_result`.
 pub(crate) fn plan_approved_text_with_body(body: &str) -> String {
     format!(
-        "plan approved by user - exit planning and execute it now. Full approved plan below; \
-         follow it exactly.\n\n--- APPROVED PLAN ---\n{}\n--- END PLAN ---",
+        "plan approved by user — planning is over; execute the approved plan now. \
+         Do not re-plan unless the user asks. Full approved plan below; follow it.\n\n\
+         --- APPROVED PLAN ---\n{}\n--- END PLAN ---",
         body.trim()
     )
 }
@@ -152,8 +155,9 @@ pub(crate) fn plan_approved_compact_text() -> &'static str {
 /// Tool-result text answered back to the model when the user DENIES a plan and
 /// wants to keep discussing. Mode stays Plan.
 pub(crate) fn plan_denied_text() -> &'static str {
-    "plan not approved - the user wants to keep discussing. Stay in plan mode, take their \
-     feedback, revise the plan, and call plan_ready again when ready."
+    "plan not approved — the user wants to keep discussing. Stay in plan mode \
+     (still READ-ONLY: no write/edit/delete/bash). Take their feedback, revise the \
+     plan/checklist, and call plan_ready again when ready — do not implement yet."
 }
 
 #[cfg(test)]

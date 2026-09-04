@@ -51,6 +51,7 @@ fn sample_mission() -> Mission {
         graph_hash,
         needs_reapproval: false,
         amendment_note: None,
+        draft_locks: Default::default(),
     }
 }
 
@@ -1501,4 +1502,22 @@ fn verify_path_never_invokes_git_commit() {
     // would have failed and we wouldn't have gotten here.
 
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn bind_preflight_warns_on_main_target() {
+    let warns = bind_preflight_warnings(std::path::Path::new("/nonexistent-repo-xyz"), Some("main"));
+    assert!(
+        warns.iter().any(|w| w.contains("main/master")),
+        "{warns:?}"
+    );
+}
+
+#[test]
+fn bind_preflight_warns_detached_or_missing_repo() {
+    let warns = bind_preflight_warnings(std::path::Path::new("/nonexistent-repo-xyz"), None);
+    assert!(
+        warns.iter().any(|w| w.contains("detached") || w.contains("HEAD")),
+        "{warns:?}"
+    );
 }

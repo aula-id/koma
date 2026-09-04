@@ -213,21 +213,6 @@ fn rejects_disallowed_and_invalid_sources() {
 }
 
 #[test]
-fn inventory_lists_existing_images_with_cap() {
-    let base = std::env::temp_dir().join(format!("koma-load-image-inv-{}", std::process::id()));
-    let images = base.join("images");
-    put(&images.join("01-a.png"), PNG);
-    put(&images.join("02-b.png"), PNG);
-    put(&images.join(".seq"), b"2");
-    let text = format_session_images_inventory(&images).unwrap();
-    assert!(text.contains("[Image #1] images/01-a.png"));
-    assert!(text.contains("[Image #2] images/02-b.png"));
-    assert!(text.contains("load_image"));
-    assert!(format_session_images_inventory(&base.join("missing")).is_none());
-    let _ = std::fs::remove_dir_all(base);
-}
-
-#[test]
 fn marker_numbers_in_text_extracts_unique() {
     let nums = marker_numbers_in_text("see [Image #3] and [Image #1] and [Image #3]");
     assert_eq!(nums, vec![3, 1]);

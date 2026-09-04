@@ -22,55 +22,13 @@ pub const META_LAST_GRAPH_FINGERPRINT: &str = "last_graph_fingerprint";
 
 /// Validate lane against the proposed graph structure.
 ///
-/// - `express`: free form
-/// - `standard`: hard-reject a single flat node with ≥3 acceptance criteria
-/// - `full`: requires a tree (any parent link) OR ≥3 leaves
+/// Delegates to [`super::lane::validate_lane_graph`] (single policy home).
 pub fn validate_lane_graph(
     lane: &str,
     nodes: &[graph::ChecklistNode],
     acceptance_len: usize,
 ) -> Result<(), String> {
-    let lane = lane.trim().to_ascii_lowercase();
-    let leaf_count = count_leaves(nodes);
-    let has_tree = nodes.iter().any(|n| n.parent_title.is_some());
-
-    match lane.as_str() {
-        "express" => Ok(()),
-        "full" => {
-            if has_tree || leaf_count >= 3 {
-                Ok(())
-            } else {
-                Err(
-                    "error: full lane requires a hierarchical graph (parent links) \
-                     or at least 3 leaf tasks"
-                        .into(),
-                )
-            }
-        }
-        // standard (default) and anything else
-        _ => {
-            if nodes.len() == 1 && !has_tree && acceptance_len >= 3 {
-                Err(
-                    "error: standard lane rejects a single megatask with ≥3 acceptance \
-                     criteria — decompose into multiple leaf tasks or a hierarchy"
-                        .into(),
-                )
-            } else {
-                Ok(())
-            }
-        }
-    }
-}
-
-fn count_leaves(nodes: &[graph::ChecklistNode]) -> usize {
-    let parents: std::collections::HashSet<&str> = nodes
-        .iter()
-        .filter_map(|n| n.parent_title.as_deref())
-        .collect();
-    nodes
-        .iter()
-        .filter(|n| !parents.contains(n.title.as_str()))
-        .count()
+    super::lane::validate_lane_graph(lane, nodes, acceptance_len)
 }
 
 /// Result of a successful leaf claim for task delegation.

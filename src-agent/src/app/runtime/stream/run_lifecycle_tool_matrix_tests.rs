@@ -19,13 +19,24 @@ fn plan_advertises_seqthink_and_plan_ready() {
 #[test]
 fn sdlc_assess_advertises_seqthink_and_mission_ready() {
     let tools = mode_advertised_lifecycle_tools(AgentMode::Sdlc, Some("assess"));
-    assert_eq!(tools, vec!["seqthink", "mission_ready"]);
+    assert_eq!(
+        tools,
+        vec![
+            "seqthink",
+            "mission_draft",
+            "mission_ready",
+            "mission_clear"
+        ]
+    );
 }
 
 #[test]
 fn sdlc_prepare_advertises_mission_ready_and_mission_prepare() {
     let tools = mode_advertised_lifecycle_tools(AgentMode::Sdlc, Some("prepare"));
-    assert_eq!(tools, vec!["mission_ready", "mission_prepare"]);
+    assert_eq!(
+        tools,
+        vec!["mission_ready", "mission_prepare", "mission_clear"]
+    );
 }
 
 #[test]
@@ -33,7 +44,12 @@ fn sdlc_execute_advertises_mission_ready_verify_integrate() {
     let tools = mode_advertised_lifecycle_tools(AgentMode::Sdlc, Some("execute"));
     assert_eq!(
         tools,
-        vec!["mission_ready", "mission_verify", "mission_integrate"]
+        vec![
+            "mission_ready",
+            "mission_verify",
+            "mission_integrate",
+            "mission_clear"
+        ]
     );
 }
 
@@ -42,7 +58,12 @@ fn sdlc_integrate_advertises_mission_ready_verify_integrate() {
     let tools = mode_advertised_lifecycle_tools(AgentMode::Sdlc, Some("integrate"));
     assert_eq!(
         tools,
-        vec!["mission_ready", "mission_verify", "mission_integrate"]
+        vec![
+            "mission_ready",
+            "mission_verify",
+            "mission_integrate",
+            "mission_clear"
+        ]
     );
 }
 
@@ -50,7 +71,11 @@ fn sdlc_integrate_advertises_mission_ready_verify_integrate() {
 fn sdlc_done_paused_none_advertise_mission_ready_only() {
     for phase in [None, Some("done"), Some("paused"), Some("unknown")] {
         let tools = mode_advertised_lifecycle_tools(AgentMode::Sdlc, phase);
-        assert_eq!(tools, vec!["mission_ready"], "phase={phase:?}");
+        assert_eq!(
+            tools,
+            vec!["mission_ready", "mission_clear"],
+            "phase={phase:?}"
+        );
     }
 }
 
@@ -129,6 +154,8 @@ fn sdlc_execute_integrate_no_prepare() {
 fn all_mission_tools_in_sdlc_lifecycle_set() {
     for name in [
         "mission_ready",
+        "mission_draft",
+        "mission_clear",
         "mission_verify",
         "mission_prepare",
         "mission_integrate",

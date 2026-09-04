@@ -67,6 +67,157 @@ pub struct Mission {
     /// Optional amendment note.
     #[serde(default)]
     pub amendment_note: Option<String>,
+    /// Assess waterfall lock status. Empty/default = legacy one-shot ready allowed.
+    #[serde(default)]
+    pub draft_locks: DraftLocks,
+}
+
+/// Per-field lock state during SDLC assess waterfall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LockState {
+    #[default]
+    Unknown,
+    Proposed,
+    Locked,
+}
+
+impl LockState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Proposed => "proposed",
+            Self::Locked => "locked",
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "unknown" => Some(Self::Unknown),
+            "proposed" => Some(Self::Proposed),
+            "locked" => Some(Self::Locked),
+            _ => None,
+        }
+    }
+}
+
+/// Assess draft lock map on `mission.json` while unapproved.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DraftLocks {
+    #[serde(default)]
+    pub goal: LockState,
+    #[serde(default)]
+    pub non_goals: LockState,
+    #[serde(default)]
+    pub acceptance: LockState,
+    #[serde(default)]
+    pub lane: LockState,
+    #[serde(default)]
+    pub human_gates: LockState,
+    #[serde(default)]
+    pub graph: LockState,
+    #[serde(default)]
+    pub branch_target: LockState,
+    #[serde(default)]
+    pub verify_plan: LockState,
+    #[serde(default)]
+    pub risks: LockState,
+    #[serde(default)]
+    pub rationale: LockState,
+}
+
+impl DraftLocks {
+    pub const WATERFALL: &'static [&'static str] = &[
+        "goal",
+        "non_goals",
+        "acceptance",
+        "lane",
+        "human_gates",
+        "graph",
+        "branch_target",
+        "verify_plan",
+        "risks",
+        "rationale",
+    ];
+
+    /// Required before mission_ready when the draft interview has started.
+    pub const REQUIRED: &'static [&'static str] = &["goal", "acceptance", "lane", "graph"];
+
+    pub fn get(&self, field: &str) -> LockState {
+        match field {
+            "goal" => self.goal,
+            "non_goals" => self.non_goals,
+            "acceptance" => self.acceptance,
+            "lane" => self.lane,
+            "human_gates" => self.human_gates,
+            "graph" => self.graph,
+            "branch_target" => self.branch_target,
+            "verify_plan" => self.verify_plan,
+            "risks" => self.risks,
+            "rationale" => self.rationale,
+            _ => LockState::Unknown,
+        }
+    }
+
+    pub fn set(&mut self, field: &str, state: LockState) -> std::result::Result<(), String> {
+        match field {
+            "goal" => self.goal = state,
+            "non_goals" => self.non_goals = state,
+            "acceptance" => self.acceptance = state,
+            "lane" => self.lane = state,
+            "human_gates" => self.human_gates = state,
+            "graph" => self.graph = state,
+            "branch_target" => self.branch_target = state,
+            "verify_plan" => self.verify_plan = state,
+            "risks" => self.risks = state,
+            "rationale" => self.rationale = state,
+            _ => {
+                return Err(format!(
+                    "error: unknown draft field '{field}' — use one of: {}",
+                    Self::WATERFALL.join(", ")
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn is_active(&self) -> bool {
+        Self::WATERFALL
+            .iter()
+            .any(|f| self.get(f) != LockState::Unknown)
+    }
+
+    pub fn missing_required_locks(&self) -> Vec<&'static str> {
+        Self::REQUIRED
+            .iter()
+            .copied()
+            .filter(|f| self.get(f) != LockState::Locked)
+            .collect()
+    }
+
+    pub fn lock_all(&mut self) {
+        for f in Self::WATERFALL {
+            let _ = self.set(f, LockState::Locked);
+        }
+    }
+
+    pub fn status_lines(&self) -> String {
+        let mut out = String::from("Draft locks:\n");
+        for f in Self::WATERFALL {
+            out.push_str(&format!("  - {f}: {}\n", self.get(f).as_str()));
+        }
+        let missing = self.missing_required_locks();
+        if missing.is_empty() {
+            out.push_str("Required locks: complete — mission_ready is allowed.\n");
+        } else {
+            out.push_str(&format!(
+                "Required still unlocked: {} — lock via mission_draft or complete one-shot mission_ready.\n",
+                missing.join(", ")
+            ));
+        }
+        out
+    }
 }
 
 /// Frozen fields used to compute a mission contract hash.
@@ -415,6 +566,53 @@ impl Mission {
         crate::model::memory::atomic_write(&path, json.as_bytes())?;
         Ok(())
     }
+}
+
+/// Soft bind preflight warnings for mission_ready park (does not fail closed).
+/// Hard failure remains in establish_mission_binding on approve.
+/// `repo_root` = primary workdir at ready time; `target_branch` optional user intent.
+pub fn bind_preflight_warnings(
+    repo_root: &std::path::Path,
+    target_branch: Option<&str>,
+) -> Vec<String> {
+    let mut warns = Vec::new();
+    let detected = current_git_branch(repo_root);
+    match detected.as_deref() {
+        None => {
+            warns.push(
+                "BIND PREFLIGHT: primary repo is detached HEAD or not on a branch — \
+                 approve will fail until you checkout a non-main feature branch"
+                    .into(),
+            );
+        }
+        Some("main") | Some("master") => {
+            if target_branch.is_none() {
+                warns.push(
+                    "BIND PREFLIGHT: primary is on main/master — approve defaults target to that \
+                     and will fail (SDLC never auto-integrates to main/master). Set target_branch \
+                     to a feature/integration branch before approve"
+                        .into(),
+                );
+            }
+        }
+        Some(_) => {}
+    }
+    if let Some(tb) = target_branch.map(str::trim).filter(|s| !s.is_empty()) {
+        if tb == "main" || tb == "master" {
+            warns.push(
+                "BIND PREFLIGHT: target_branch is main/master — approve will fail \
+                 (use a feature/integration branch; merge to main via PR manually)"
+                    .into(),
+            );
+        }
+    }
+    if current_git_head(repo_root).is_none() {
+        warns.push(
+            "BIND PREFLIGHT: could not read primary HEAD — approve cannot freeze target_head"
+                .into(),
+        );
+    }
+    warns
 }
 
 /// Read `git rev-parse --abbrev-ref HEAD` in dir.

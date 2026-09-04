@@ -487,67 +487,120 @@ Multiple workspace roots are configured. Paths written as [N]… (for example fr
             }
         }
 
-        // Plan mode: append a soft nudge (no MUST, no protocol walls — weak
-        // models over-obey rigid instructions). `plan_mode_hint` is mirrored in
-        // from `AppStateRest::set_agent_mode` right before it calls this method.
+        // Plan mode: hard read-only contract. Soft wording used to let models still
+        // reach for edit/bash "to explore"; the gate denies those, but the deny
+        // round-trips burn tokens and the model often keeps trying. Be explicit.
         if self.plan_mode_hint {
             sys.push_str(
-                "\n\n# Plan mode\nPlan mode is active. Tools are read-only: explore the codebase and gather what you need, and use the seqthink tool to structure your reasoning. Build the plan as a todo list with the checklist tool — one item per step (two locked rail items are managed for you). When the plan is complete, call plan_ready with `highlights` (the key changes, decisions, and risks the user needs to approve) and `plan` (the full detailed plan — files, exact changes, reasoning — saved to plan.md). The user will approve it or discuss further."
+                "\n\n# Plan mode\n\
+Plan mode is active — READ-ONLY until the user approves.\n\
+- DO explore: read, grep, glob, dir_list, web_*, git_operator (read-only subcommands), task (explore agents), seqthink, message_find, recall, graph_query, browser inspect/tabs, load_image/show_image.\n\
+- DO structure: checklist (plan steps), then plan_ready with `highlights` + full `plan` when ready.\n\
+- DO NOT call write, edit, delete, bash, web_download, remember, git_worktree, or any mutating git (commit/push/checkout/…). Those are blocked until approval; calling them wastes the turn.\n\
+- DO NOT start implementing \"just a little\" while planning. When the plan is complete, call plan_ready and STOP — wait for the user (y / a / n). Do not queue edit/bash in the same tool batch as plan_ready.\n\
+The user will approve the plan or discuss further before any implementation.",
             );
         }
 
-        // SDLC mode: comprehensive envelope instruction.
+        // SDLC mode: phase-true envelope instruction (only the *current* phase block).
         if self.sdlc_mode_hint {
+            let mission = crate::model::sdlc::Mission::load(&self.path);
+            let phase = mission
+                .as_ref()
+                .map(|m| m.phase.as_str())
+                .unwrap_or("assess");
+            let approved = mission.as_ref().map(|m| m.approved).unwrap_or(false);
+
             sys.push_str(
                 "\n\n# SDLC mode\n\
-You are PM+tech lead inside an SDLC envelope. The harness (WC/PC/TAC) is fully intact — tool approval works like Auto mode, not Yolo.\n\n\
-Phases: assess → prepare → execute → verify → integrate → done → assess.\n\n\
-## Assess phase (current)\n\
-Assess is runtime-enforced read-only for workspace mutations: write/edit/delete/bash and other \
-mutating tools are denied until mission approval. Explore with read/search/web, build acceptance \
-and a hierarchical graph of tasks (epic→story→task) via the checklist tool, then call mission_ready. \
-Main agent is PM after approval — delegate OPEN leaves only.\n\
-When ready, call `mission_ready` with:\n\
-- `highlights`: the key things the user must know to approve (changes, decisions, risks)\n\
-- `goal`: what this mission achieves\n\
-- `non_goals`: what it explicitly does NOT do\n\
-- `acceptance`: concrete criteria that must be met\n\
-- `lane`: express|standard|full (how much verification; full needs a tree or ≥3 leaves)\n\
-- `verify_plan`: steps to verify correctness\n\
-- `human_gates`: checkpoints requiring human review\n\
-- `risks`: known risks\n\
-- `rationale`: why this approach\n\
-- `graph_tasks`: array of task titles or {title, parent?} objects for the checklist tree\n\
-- `target_branch` (optional): which branch the mission merges into on integrate (defaults to current branch at approval time)\n\n\
-Only call mission_ready when your exploration is complete and you are confident in the contract.\n\
-Amending an approved contract: call mission_ready again (sets needs_reapproval); never silently overwrite.\n\n\
-## Prepare phase\n\
-After mission approval the FSM enters prepare. During `sdlc:prepare`, the source branch and worktree \
-are set up. You have full tool access (bash, git, write, edit, read) — this is the time to establish \
-branch topology and worktree assignments for leaf tasks. You may create additional worktrees for \
-parallel execution. Verify the worktree is bound and the branch is ready before transitioning.\n\
-When setup is complete, call `mission_prepare` to transition to execute.\n\n\
-## Post-prepare (execute phase)\n\
+You are PM+tech lead inside an SDLC envelope. The harness (WC/PC/TAC) is fully intact — tool approval works like Auto mode, not Yolo.\n\
+Lifecycle: assess → (prepare optional) → execute → verify → integrate → done. Stay in SDLC; never hop to Auto/Plan for execution.\n\
+After a normal mission approve, the harness binds the worktree and enters **execute** — do not wait on mission_prepare unless you are still in prepare.\n",
+            );
+
+            match phase {
+                "prepare" if approved => {
+                    sys.push_str(
+                        "\n## Prepare phase (current)\n\
+Mission is approved and bound; you are still in prepare for extra topology only.\n\
+Full tool access (bash, git, write, edit, read) inside the bound mission worktree.\n\
+Establish any additional worktrees/branch topology for leaf tasks if needed.\n\
+When setup is complete, call `mission_prepare` to enter execute.\n\
+Do not re-open assess interview questions; the contract is frozen.\n",
+                    );
+                }
+                "execute" | "integrate" if approved => {
+                    sys.push_str(&format!(
+                        "\n## {} phase (current)\n\
 NO preference nags; research, decide, ship. Never invent APIs — read the code.\n\
-- Execute inside the bound mission worktree (cwd is switched only after binding succeeds). Do not thrash the user's main tree.\n\
+- Execute inside the bound mission worktree. Do not thrash the user's main tree.\n\
 - Never force-push; plain push only the mission branch.\n\
-- One OPEN leaf claim at a time (main: checklist in_progress or task.node_id). Second claim is denied until the active leaf is sealed.\n\
+- One OPEN leaf claim at a time (checklist in_progress or task.node_id). Second claim denied until the active leaf is sealed.\n\
 - Path ownership: if the claimed leaf has owned_paths, stay inside them. Write/edit/delete only inside the mission worktree during execute. Do not mutate the primary tree until integrate.\n\
 - Do NOT call git_worktree enter/exit/create/remove during execute/integrate — binding is frozen.\n\
-- Keep the checklist/graph honest: SEALED done nodes must not be re-implemented. Graph is the sole authority for SDLC tasks; TODO.md is for ordinary/project todos only, not SDLC checklist.\n\
-- Delegate with `task` only to OPEN leaves and always pass `task.node_id`.\n\
-- Seal only via `mission_verify` with leaf node_id + real evidence (tests/build) before treating a node as sealed. Done without verify is false-done — the keeper will reopen it (optional backstop). Parents roll up; verify is leaf-only.\n\
-- No auto-commit. When OPEN is empty, acceptance is green, leaves verified, binding valid, and human gates approved, call `mission_integrate` (needs clean mission WT + commits ahead).\n\
-- Integrate never force-pushes. Integration to main/master is blocked — use a feature/integration branch and merge via PR or manual merge. Dirty target → leave the mission branch ready (or PR); clean target may FF/merge into the frozen target_branch. Branch-only cannot bypass evidence gates. Destination is exclusively frozen target_worktree_path.\n\
-- Human gates on the contract require explicit user y/n via mission_verify(human_gate=...) — the model cannot self-approve gates. Integrate stays gated on persisted approvals.\n\
+- Graph is sole authority for SDLC tasks; SEALED nodes must not be re-implemented. TODO.md is ordinary/project todos only.\n\
+- Delegate with `task` only to OPEN leaves; always pass `task.node_id`.\n\
+- Seal only via `mission_verify` with leaf node_id + real evidence (tests/build). Checklist cannot seal. Parents roll up; verify is leaf-only.\n\
+- No auto-commit. {}\
+- Integrate never force-pushes; main/master auto-merge blocked. Dirty target → leave mission branch ready. Destination is frozen target_worktree_path.\n\
+- Human gates need explicit user y/n via mission_verify(human_gate=...). Model cannot self-approve gates.\n\
 - External shell/MCP is not OS-sandboxed — stay inside the mission tree by discipline.\n\
-- Unsure: web_search → message_find → ask the user.\n\n\
-## On confusion about mission/details\n\
-Re-read mission.json and the OPEN/SEALED capsule. The contract is the source of truth.\n"
-            );
+- Unsure: web_search → message_find → ask the user.\n\
+- On confusion: re-read mission.json and the OPEN/SEALED capsule below — contract is source of truth.\n\
+- Do not call mission_prepare (you are past prepare). Do not re-interview the user for goal/acceptance unless they ask to amend (mission_ready → needs_reapproval).\n",
+                        if phase == "integrate" {
+                            "Integrate"
+                        } else {
+                            "Execute"
+                        },
+                        {
+                            let lane = mission
+                                .as_ref()
+                                .map(|m| m.lane.as_str())
+                                .unwrap_or("standard");
+                            crate::model::sdlc::lane::execute_finish_hint(lane)
+                        }
+                    ));
+                }
+                "done" if approved => {
+                    sys.push_str(
+                        "\n## Done phase (current)\n\
+Mission complete. Do not keep implementing sealed work. Summarize; wait for user next steps or a new assess.\n",
+                    );
+                }
+                "paused" => {
+                    sys.push_str(
+                        "\n## Paused (current)\n\
+Mission is paused on disk. Do not mutate the workspace as if execute were live. Wait for user resume/re-entry guidance.\n",
+                    );
+                }
+                // assess, draft, unapproved, unknown → assess interview
+                _ => {
+                    sys.push_str(
+                        "\n## Assess phase (current)\n\
+Assess is runtime-enforced read-only for workspace mutations: write/edit/delete/bash and other \
+mutating tools are denied until mission approval.\n\
+This phase is a **waterfall lock-in**: ask the user sequential questions as needed to lock \
+goal → non-goals → acceptance → lane → human gates → graph → branch/target intent before coding.\n\
+Explore with read/search/web; build a hierarchical graph (epic→story→task) via checklist when ready.\n\
+After the user replies, call `mission_draft` to lock that field on the contract draft.\n\
+Do not call mission_ready while required locks (goal, acceptance, lane, graph) are still unknown if you started the draft interview.\n\
+When the contract is complete and you are confident, call `mission_ready` with:\n\
+- `highlights`: key things the user must know to approve\n\
+- `goal`, `non_goals`, `acceptance`, `lane` (express|standard|full)\n\
+- `verify_plan`, `human_gates`, `risks`, `rationale`\n\
+- `graph_tasks`: task titles or {title, parent?} objects\n\
+- `target_branch` (optional): integrate destination (defaults to current branch at approval; not main/master auto-merge)\n\n\
+Only call mission_ready when exploration + lock-in are complete — not as the first message.\n\
+Amending an approved contract: call mission_ready again (sets needs_reapproval); never silently overwrite.\n\
+After the user approves (y/a), the harness binds a mission worktree and enters **execute** automatically; you will implement then — not during assess.\n",
+                    );
+                }
+            }
+
             // Mission capsule: when an approved mission exists, inject OPEN+SEALED
             // so sealed work stays sealed across every turn/rebuild.
-            if let Some(mission) = crate::model::sdlc::Mission::load(&self.path) {
+            if let Some(ref mission) = mission {
                 if mission.approved {
                     let (open, sealed, all, sealed_commit_shas) =
                         crate::model::msglog::open(&self.path)
@@ -573,7 +626,7 @@ Re-read mission.json and the OPEN/SEALED capsule. The contract is the source of 
                             .unwrap_or_default();
                     sys.push('\n');
                     sys.push_str(&crate::model::sdlc::mission::build_seed_capsule_with_all(
-                        &mission,
+                        mission,
                         &open,
                         &sealed,
                         &all,

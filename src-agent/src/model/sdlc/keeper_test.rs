@@ -114,6 +114,7 @@ fn write_mission(dir: &std::path::Path, phase: &str, approved: bool) {
         graph_hash,
         needs_reapproval: false,
         amendment_note: None,
+        draft_locks: Default::default(),
     };
     m.save(dir).unwrap();
 }

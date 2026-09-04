@@ -37,7 +37,7 @@ impl super::Tool for LoadImage {
                 },
                 "image_n": {
                     "type": "integer",
-                    "description": "Optional marker number N from [Image #N]. Resolves to the matching file under this session's images/ (NN-*). Prefer when message_find or a compact inventory listed the marker without a full path."
+                    "description": "Optional marker number N from [Image #N]. Resolves to the matching file under this session's images/ (NN-*). Prefer when message_find listed the marker without a full path."
                 }
             },
             "additionalProperties": false
@@ -262,57 +262,6 @@ fn allowed_canonical_path(ctx: &ToolCtx, canonical: &Path) -> bool {
             .unwrap_or(false)
     }) || session_images_canonical(ctx)
         .is_some_and(|images| canonical.starts_with(&images))
-}
-
-/// Build a compact inventory of session images still on disk (for compact/plan seed).
-/// Returns `None` when the dir is missing or empty of image files.
-pub fn format_session_images_inventory(images_dir: &Path) -> Option<String> {
-    const CAP: usize = 20;
-    let rd = std::fs::read_dir(images_dir).ok()?;
-    let mut entries: Vec<(usize, String)> = Vec::new();
-    for ent in rd.filter_map(|e| e.ok()) {
-        let path = ent.path();
-        if !path.is_file() {
-            continue;
-        }
-        let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n,
-            None => continue,
-        };
-        if name.starts_with('.') {
-            continue;
-        }
-        if !crate::model::attachment::has_image_extension(name) {
-            continue;
-        }
-        let marker_n = name
-            .split_once('-')
-            .and_then(|(nn, _)| nn.parse::<usize>().ok())
-            .unwrap_or(0);
-        entries.push((marker_n, name.to_string()));
-    }
-    if entries.is_empty() {
-        return None;
-    }
-    entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-    let total = entries.len();
-    let mut out = String::from(
-        "--- session images still on disk (not in context) ---\n",
-    );
-    for (marker_n, name) in entries.into_iter().take(CAP) {
-        if marker_n > 0 {
-            out.push_str(&format!("[Image #{marker_n}] images/{name}\n"));
-        } else {
-            out.push_str(&format!("images/{name}\n"));
-        }
-    }
-    if total > CAP {
-        out.push_str(&format!("+{} more in images/\n", total - CAP));
-    }
-    out.push_str(
-        "To re-inspect any of these, call load_image with the path above (or image_n).\n---",
-    );
-    Some(out)
 }
 
 /// Extract `[Image #N]` marker numbers from text (same grammar as composer).

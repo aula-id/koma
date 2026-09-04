@@ -1,9 +1,13 @@
 # SDLC mode
 
-SDLC is Koma's opt-in, away-from-desk delivery envelope. It is intentionally
-slower than Auto and keeps the agent inside `AgentMode::Sdlc` for assess,
-approval, execute, integrate, and done. Reusing approval controls must never
-hop the session into Plan or Auto.
+SDLC is Koma's opt-in delivery envelope. It stays inside `AgentMode::Sdlc` for
+assess, approval, execute, integrate, and done. Reusing approval controls must
+never hop the session into Plan or Auto.
+
+**Speed split:** assess is intentionally slower (waterfall lock-in with the
+user). After approve, implementation should feel as direct as Plan→approve→Auto
+while hard rails stay on. Slowness belongs in requirements lock and evidence
+depth — not in an extra post-y homework phase.
 
 ## Rails
 
@@ -20,20 +24,32 @@ keeper reopens false-done leaves.
 
 ## Lifecycle
 
-1. **Assess:** establish the mission, graph, verification plan, human gates, and
-   branch/worktree intent. Workspace mutations are blocked.
-2. **Approve:** freeze the contract and bind a mission worktree and branch.
-   Binding must be live before execute is enabled.
-3. **Execute:** the main agent and subagents operate only in the bound
-   worktree. One open leaf is claimed at a time. If a claim has `owned_paths`,
-   writes stay inside those paths.
+1. **Assess:** sequential lock-in with the user (goal → non-goals → acceptance →
+   lane → gates → graph → branch/target). Workspace mutations are blocked. Use
+   `mission_draft` to lock fields on the draft contract as answers arrive; chat
+   is L0 only. `mission_ready` is blocked if a draft interview was started and
+   required locks (goal, acceptance, lane, graph) are still unlocked. Full
+   one-shot `mission_ready` remains valid when no draft locks were touched.
+2. **Approve (y/a):** freeze the contract, bind a mission worktree and branch,
+   then enter **execute** when bind succeeds (default). Prepare is optional —
+   only for extra topology; `mission_prepare` is not required after a normal
+   approve. Binding must be live before execute tooling matters.
+3. **Execute:** main agent and subagents operate only in the bound worktree.
+   One open leaf is claimed at a time. If a claim has `owned_paths`, writes stay
+   inside those paths.
 4. **Verify:** evidence is recorded per leaf. A passing verification seals the
    leaf and records the commit that produced the evidence.
 5. **Integrate:** requires a valid binding, sealed evidence, a clean mission
-   worktree, commits ahead of the frozen target, and satisfied human gates. A
-   dirty target leaves the mission branch ready rather than disturbing user WIP.
+   worktree (for merge), commits ahead of the frozen target, and satisfied human
+   gates. **Lane ceremony:** `express` defaults to **branch-ready done** (mission
+   branch left for PR/manual merge — no merge pressure; still evidence-gated).
+   `standard` / `full` FF/merge into the frozen non-main target when clean; dirty
+   target leaves the branch ready. `main`/`master` auto-merge stays blocked.
 6. **Leave:** active missions are paused on disk; runtime phase is cleared and
    the prior mode and short-send setting are restored.
+
+Same-batch trailing tools after `mission_ready` are skipped on approve/deny
+(parity with Plan), so premature edit/bash in the approval turn do not run.
 
 ## Authority boundaries
 
@@ -61,11 +77,21 @@ execute tooling; this is a rail, not merely a prompt.
 ## Explicit non-goals
 
 - SDLC does not change Auto, Normal, Plan, or Yolo behavior.
+- SDLC does not hop to Auto after approve (execution stays in Sdlc under rails).
 - SDLC does not auto-resume paused missions.
 - SDLC does not create an assess worktree or operate dual assess worktrees.
 - SDLC does not allow force-push, create a force-push allowlist, or rewrite the
   branch classifier.
 - SDLC does not run a second autonomous keeper model.
+- SDLC assess does not advertise or run MCP tools (fail-closed readonly).
+
+## Hygiene
+
+- `mission_clear` drops the TAC `approved_mission` stash (optional `reset` forces
+  unapproved assess rails). Integrate→done also clears the stash.
+- TAC mission bias applies only in prepare/execute/integrate phases.
+- `mission_ready` parks with soft **BIND PREFLIGHT** warnings when primary is
+  detached or target would be main/master; hard fail remains on approve bind.
 
 ## Verification matrix
 

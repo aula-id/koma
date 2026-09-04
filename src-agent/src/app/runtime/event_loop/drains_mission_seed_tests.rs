@@ -15,7 +15,7 @@ impl Drop for Scratch {
     }
 }
 
-fn bound_prepare_mission() -> Mission {
+fn bound_execute_mission() -> Mission {
     let mut mission = Mission {
         contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
         id: "mission-seed".into(),
@@ -31,15 +31,16 @@ fn bound_prepare_mission() -> Mission {
         branch: Some("sdlc/seed".into()),
         worktree_path: Some("/tmp/wt-seed".into()),
         target_worktree_path: Some("/tmp/target-seed".into()),
-        target_branch: Some("main".into()),
+        target_branch: Some("develop".into()),
         target_head: Some("0123456789012345678901234567890123456789".into()),
         rationale: "test".into(),
-        phase: "prepare".into(),
+        phase: "execute".into(),
         approved: true,
         hash: String::new(),
         graph_hash: Some("graph-seed".into()),
         needs_reapproval: false,
         amendment_note: None,
+        draft_locks: Default::default(),
     };
     mission.hash = mission.recompute_hash();
     mission
@@ -58,19 +59,19 @@ fn armed_state(path: &std::path::Path, mission: &Mission) -> AppState {
     rt.id = "seed-session".into();
     rt.session = Some(session);
     rt.agent_mode = AgentMode::Sdlc;
-    rt.sdlc_phase = Some("prepare".into());
+    rt.sdlc_phase = Some("execute".into());
     rt.pending_mission_seed = Some(MissionSeedArm {
         session_id: rt.id.clone(),
         mission_id: mission.id.clone(),
         mission_hash: mission.hash.clone(),
         generation: rt.sdlc_mission_generation,
-        phase: "prepare".into(),
+        phase: "execute".into(),
     });
     state
 }
 
 #[test]
-fn plan_seed_and_plain_compact_append_image_inventory_when_present() {
+fn plan_seed_compact_does_not_append_session_image_inventory() {
     let path = std::env::temp_dir().join(format!(
         "koma-drains-img-{}-{}",
         std::process::id(),
@@ -123,16 +124,16 @@ fn plan_seed_and_plain_compact_append_image_inventory_when_present() {
         .messages();
     let joined: String = msgs.iter().map(|m| m.content.clone()).collect();
     assert!(
-        joined.contains("session images still on disk"),
-        "inventory missing: {joined}"
+        !joined.contains("session images still on disk"),
+        "must not dump session-wide image inventory: {joined}"
     );
-    assert!(joined.contains("[Image #1] images/01-a.png"));
+    assert!(!joined.contains("[Image #1] images/01-a.png"));
     assert!(joined.contains("Approved plan (execute now)"));
     assert!(!state.rest.fg().pending_plan_seed);
 }
 
 #[test]
-fn prepare_seed_injects_when_bound_and_stale_loaded_phase_is_cleared() {
+fn execute_seed_injects_when_bound_and_stale_loaded_phase_is_cleared() {
     let path = std::env::temp_dir().join(format!(
         "koma-drains-seed-{}-{}",
         std::process::id(),
@@ -143,7 +144,7 @@ fn prepare_seed_injects_when_bound_and_stale_loaded_phase_is_cleared() {
     ));
     std::fs::create_dir_all(&path).unwrap();
     let _scratch = Scratch(path.clone());
-    let mut mission = bound_prepare_mission();
+    let mut mission = bound_execute_mission();
     mission.save(&path).unwrap();
     let runtime = tokio::runtime::Runtime::new().unwrap();
 
@@ -168,7 +169,8 @@ fn prepare_seed_injects_when_bound_and_stale_loaded_phase_is_cleared() {
         .any(|message| message.content.contains("Approved mission (execute now)")));
     assert!(valid.rest.fg().pending_mission_seed.is_none());
 
-    mission.phase = "execute".into();
+    // Disk phase no longer matches the arm (arm still execute from armed_state).
+    mission.phase = "prepare".into();
     mission.save(&path).unwrap();
     let mut stale = armed_state(&path, &mission);
     apply_compaction_result(

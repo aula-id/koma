@@ -562,6 +562,7 @@ fn mission_ready_rejected_when_all_leaves_verified() {
         graph_hash: None,
         needs_reapproval: false,
         amendment_note: None,
+        draft_locks: Default::default(),
     };
     mission.save(&sess_path).expect("save mission");
 

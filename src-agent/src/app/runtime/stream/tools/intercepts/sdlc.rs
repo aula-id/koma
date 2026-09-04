@@ -359,6 +359,29 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
     };
     let sess_path = sess.path.clone();
 
+    // If assess draft interview was started (any lock != unknown), require
+    // required fields locked before parking approval. Full one-shot mission_ready
+    // with empty draft_locks remains allowed (legacy / no mission_draft usage).
+    if let Some(prior_draft) = crate::model::sdlc::Mission::load(&sess_path) {
+        if !prior_draft.approved && prior_draft.draft_locks.is_active() {
+            let missing = prior_draft.draft_locks.missing_required_locks();
+            if !missing.is_empty() {
+                state.rest.sessions[sess_idx].tool_results.push((
+                    call.id.clone(),
+                    format!(
+                        "mission_ready rejected: draft waterfall still has unlocked required \
+                         fields ({}). Use mission_draft to lock them, or clear the draft and \
+                         supply a complete one-shot contract.\n{}",
+                        missing.join(", "),
+                        prior_draft.draft_locks.status_lines()
+                    ),
+                ));
+                state.rest.sessions[sess_idx].tool_idx += 1;
+                return InterceptFlow::Continue;
+            }
+        }
+    }
+
     // Amendment path: never silently overwrite an approved frozen contract.
     let prior = crate::model::sdlc::Mission::load(&sess_path);
     let amending = prior
@@ -541,6 +564,15 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
                 None
             }
         }),
+        // Successful ready freezes the waterfall locks (one-shot ready locks all).
+        draft_locks: {
+            let mut locks = prior
+                .as_ref()
+                .map(|m| m.draft_locks.clone())
+                .unwrap_or_default();
+            locks.lock_all();
+            locks
+        },
     };
 
     if let Err(e) = mission.save(&sess_path) {
@@ -583,6 +615,30 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
         }
     }
     let composed = format!("{}\n\n{}", checklist, highlights_for_digest);
+    // Soft bind preflight: warn in the parked digest; hard fail stays on approve.
+    let preflight_warns = {
+        let repo_root = state.rest.sessions[sess_idx]
+            .session
+            .as_ref()
+            .map(|s| {
+                s.settings
+                    .workdir_saved
+                    .as_ref()
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| s.workdir())
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let tb = mission.target_branch.as_deref();
+        crate::model::sdlc::mission::bind_preflight_warnings(&repo_root, tb)
+    };
+    let composed = if preflight_warns.is_empty() {
+        composed
+    } else {
+        format!(
+            "{composed}\n\n---\n{}",
+            preflight_warns.join("\n")
+        )
+    };
     let mut new_args = args.clone();
     if let Some(obj) = new_args.as_object_mut() {
         obj.insert(
@@ -998,15 +1054,27 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_integrate(
     }
 
     // Destination is exclusively frozen target_* on the mission — never workdir_saved.
-    let result = crate::model::sdlc::integrate::try_integrate(&mission, force_branch_only);
+    // Lane ceremony: express defaults to branch-ready finish (no merge pressure);
+    // standard/full merge when clean unless the model passes force_branch_only.
+    let lane_prefers_branch =
+        crate::model::sdlc::lane::prefer_branch_only(&mission.lane);
+    let effective_force = force_branch_only || lane_prefers_branch;
+    let branch_only_completes = effective_force
+        && crate::model::sdlc::lane::branch_ready_completes_mission(&mission.lane);
+    let result = crate::model::sdlc::integrate::try_integrate_ex(
+        &mission,
+        effective_force,
+        branch_only_completes,
+    );
     let mut cleanup_detail = String::new();
 
     if result.success {
-        // A successful merge is the only transition into the terminal done
-        // phase. It remains visible for reporting; checked cleanup runs only
-        // when the human leaves SDLC from that terminal state.
+        // Successful merge OR express branch-ready finish → terminal done.
         match state.rest.apply_sdlc_phase(sess_idx, "done") {
             Ok(()) => {
+                // TAC mission stash must not bias the next mission / post-done turns.
+                state.rest.sessions[sess_idx].approved_mission = None;
+                state.rest.sessions[sess_idx].invalidate_sdlc_keeper_llm();
                 // Leave the shadow worktree before the later done cleanup can
                 // remove it; its branch and bindings stay persisted for now.
                 let dir_cache = state.rest.sessions[sess_idx].dir_cache.clone();
@@ -1026,18 +1094,22 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_integrate(
                     sess.rebuild_system();
                     let _ = sess.save();
                 }
-                cleanup_detail =
+                cleanup_detail = if branch_only_completes {
+                    "\nBranch-ready finish entered terminal sdlc:done. Leave SDLC to run cleanup."
+                        .to_string()
+                } else {
                     "\nIntegrated and entered terminal sdlc:done. Leave SDLC to run cleanup."
-                        .to_string();
+                        .to_string()
+                };
             }
             Err(e) => {
                 cleanup_detail = format!(
-                    "\nIntegrated, but could not persist sdlc:done; cleanup was not attempted: {e}"
+                    "\nIntegrate path succeeded, but could not persist sdlc:done; cleanup was not attempted: {e}"
                 );
             }
         }
     } else if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-        // Branch left ready — stay integrate; preserve dirty-primary behavior.
+        // Branch left ready without completion — stay integrate; preserve dirty-primary behavior.
         sess.rebuild_system();
         let _ = sess.save();
     }
@@ -1050,6 +1122,71 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_integrate(
         .tool_results
         .push((call.id.clone(), result_text));
 
+    state.rest.sessions[sess_idx].tool_idx += 1;
+    InterceptFlow::Continue
+}
+
+/// Intercept `mission_clear` — drop TAC stash; optional deny-style assess reset.
+pub(in crate::app::runtime::stream::tools) fn intercept_mission_clear(
+    state: &mut AppState,
+    sess_idx: usize,
+    call: &ToolCall,
+    mode: AgentMode,
+) -> InterceptFlow {
+    if mode != AgentMode::Sdlc {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            "mission_clear is only available in SDLC mode".to_string(),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let args: serde_json::Value =
+        serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+    let reset = args.get("reset").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    // Always drop TAC bias + one-shot seed.
+    state.rest.sessions[sess_idx].approved_mission = None;
+    state.rest.sessions[sess_idx].approved_plan = None;
+    state.rest.sessions[sess_idx].invalidate_sdlc_keeper_llm();
+    state.rest.sessions[sess_idx].pending_mission_seed = None;
+    state.rest.sessions[sess_idx].sdlc_pending_node_id = None;
+
+    if reset {
+        // Soft deny rails without answering a parked mission_ready call.
+        state.rest.sessions[sess_idx].sdlc_branch = None;
+        let sess_path = state.rest.sessions[sess_idx]
+            .session
+            .as_ref()
+            .map(|s| s.path.clone());
+        if let Some(path) = sess_path {
+            if let Some(mut m) = crate::model::sdlc::Mission::load(&path) {
+                m.approved = false;
+                m.needs_reapproval = true;
+                let _ = m.try_transition("assess");
+                m.worktree_path = None;
+                m.target_worktree_path = None;
+                m.target_branch = None;
+                m.target_head = None;
+                m.hash = m.recompute_hash();
+                let _ = m.save(&path);
+            }
+        }
+        state.rest.force_sdlc_assess_safe(sess_idx);
+        let _ = state.rest.apply_sdlc_phase(sess_idx, "assess");
+    }
+
+    if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+        sess.rebuild_system();
+        let _ = sess.save();
+    }
+
+    state.rest.sessions[sess_idx].tool_results.push((
+        call.id.clone(),
+        crate::tool::sdlc::mission_clear_result(reset),
+    ));
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
 }
@@ -1173,6 +1310,275 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_prepare(
 
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
+}
+
+/// Intercept `mission_draft` — assess-only waterfall lock updates on mission.json.
+pub(in crate::app::runtime::stream::tools) fn intercept_mission_draft(
+    state: &mut AppState,
+    sess_idx: usize,
+    call: &ToolCall,
+    mode: AgentMode,
+) -> InterceptFlow {
+    use crate::model::sdlc::mission::{DraftLocks, LockState, Mission};
+
+    if mode != AgentMode::Sdlc {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            "mission_draft is only available in SDLC mode".to_string(),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+    let phase = state.rest.sessions[sess_idx].sdlc_phase.clone();
+    if !matches!(phase.as_deref(), Some("assess") | None) {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            format!(
+                "error: mission_draft is only available in assess (current phase: {})",
+                phase.as_deref().unwrap_or("inactive")
+            ),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let args: serde_json::Value =
+        serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+    let draft_args = match crate::tool::sdlc::parse_mission_draft_args(&args) {
+        Ok(a) => a,
+        Err(e) => {
+            state.rest.sessions[sess_idx]
+                .tool_results
+                .push((call.id.clone(), e));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            return InterceptFlow::Continue;
+        }
+    };
+
+    let Some(sess) = state.rest.sessions[sess_idx].session.as_ref() else {
+        state.rest.sessions[sess_idx]
+            .tool_results
+            .push((call.id.clone(), "error: no active session".to_string()));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    };
+    let sess_path = sess.path.clone();
+
+    let mut mission = Mission::load(&sess_path).unwrap_or_else(|| Mission {
+        contract_version: crate::model::sdlc::mission::CURRENT_CONTRACT_VERSION,
+        id: format!("draft-{}", uuid_like()),
+        goal: String::new(),
+        non_goals: vec![],
+        acceptance: vec![],
+        lane: "standard".into(),
+        verify_plan: vec![],
+        human_gates: vec![],
+        human_gates_approved: vec![],
+        risks: vec![],
+        worktree_name: None,
+        branch: None,
+        worktree_path: None,
+        target_worktree_path: None,
+        target_branch: None,
+        target_head: None,
+        rationale: String::new(),
+        phase: "assess".into(),
+        approved: false,
+        hash: String::new(),
+        graph_hash: None,
+        needs_reapproval: false,
+        amendment_note: None,
+        draft_locks: DraftLocks::default(),
+    });
+
+    if mission.approved && !mission.needs_reapproval {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            "error: mission is approved — amend via mission_ready (needs_reapproval), not mission_draft"
+                .to_string(),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    if draft_args.status_only {
+        let mut body = mission.draft_locks.status_lines();
+        body.push_str(&format!(
+            "goal: {}\nlane: {}\nacceptance: {:?}\n",
+            if mission.goal.is_empty() {
+                "(empty)"
+            } else {
+                &mission.goal
+            },
+            mission.lane,
+            mission.acceptance
+        ));
+        state.rest.sessions[sess_idx]
+            .tool_results
+            .push((call.id.clone(), body));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    let field = draft_args.field.as_deref().unwrap_or("");
+    if let Some(val) = draft_args.value.as_ref() {
+        if let Err(e) = apply_draft_field_value(&mut mission, field, val) {
+            state.rest.sessions[sess_idx]
+                .tool_results
+                .push((call.id.clone(), e));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            return InterceptFlow::Continue;
+        }
+    }
+    let lock_state = if draft_args.lock {
+        LockState::Locked
+    } else {
+        LockState::Proposed
+    };
+    if let Err(e) = mission.draft_locks.set(field, lock_state) {
+        state.rest.sessions[sess_idx]
+            .tool_results
+            .push((call.id.clone(), e));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    // Keep hash valid for unbound draft fields.
+    if mission.hash.is_empty() || !mission.approved {
+        mission.hash = mission.recompute_hash();
+    }
+    if let Err(e) = mission.save(&sess_path) {
+        state.rest.sessions[sess_idx].tool_results.push((
+            call.id.clone(),
+            format!("error: could not save mission draft: {e}"),
+        ));
+        state.rest.sessions[sess_idx].tool_idx += 1;
+        return InterceptFlow::Continue;
+    }
+
+    let mut body = format!(
+        "mission_draft: {field} → {}\n{}",
+        lock_state.as_str(),
+        mission.draft_locks.status_lines()
+    );
+    body.push_str(&format!(
+        "goal: {}\nlane: {}\nacceptance: {:?}\n",
+        if mission.goal.is_empty() {
+            "(empty)"
+        } else {
+            &mission.goal
+        },
+        mission.lane,
+        mission.acceptance
+    ));
+    state.rest.sessions[sess_idx]
+        .tool_results
+        .push((call.id.clone(), body));
+    state.rest.sessions[sess_idx].tool_idx += 1;
+    InterceptFlow::Continue
+}
+
+fn uuid_like() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{n:x}")
+}
+
+fn apply_draft_field_value(
+    mission: &mut crate::model::sdlc::Mission,
+    field: &str,
+    val: &serde_json::Value,
+) -> Result<(), String> {
+    match field {
+        "goal" | "lane" | "rationale" => {
+            let s = val
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| format!("error: {field} value must be a non-empty string"))?
+                .to_string();
+            match field {
+                "goal" => mission.goal = s,
+                "lane" => {
+                    if !matches!(s.as_str(), "express" | "standard" | "full") {
+                        return Err("error: lane must be express|standard|full".into());
+                    }
+                    mission.lane = s;
+                }
+                "rationale" => mission.rationale = s,
+                _ => {}
+            }
+        }
+        "non_goals" | "acceptance" | "human_gates" | "verify_plan" | "risks" => {
+            let arr = match val {
+                serde_json::Value::Array(a) => a
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>(),
+                serde_json::Value::String(s) => s
+                    .split(|c| c == '\n' || c == ';')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+                _ => {
+                    return Err(format!(
+                        "error: {field} value must be a string array or newline-separated string"
+                    ))
+                }
+            };
+            match field {
+                "non_goals" => mission.non_goals = arr,
+                "acceptance" => mission.acceptance = arr,
+                "human_gates" => mission.human_gates = arr,
+                "verify_plan" => mission.verify_plan = arr,
+                "risks" => mission.risks = arr,
+                _ => {}
+            }
+        }
+        "branch_target" => {
+            // value: string branch, or {branch?, target_branch?}
+            if let Some(s) = val.as_str() {
+                let s = s.trim();
+                if !s.is_empty() {
+                    mission.branch = Some(s.to_string());
+                }
+            } else if let Some(obj) = val.as_object() {
+                if let Some(b) = obj.get("branch").and_then(|v| v.as_str()) {
+                    let b = b.trim();
+                    if !b.is_empty() {
+                        mission.branch = Some(b.to_string());
+                    }
+                }
+                if let Some(t) = obj.get("target_branch").and_then(|v| v.as_str()) {
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        mission.target_branch = Some(t.to_string());
+                    }
+                }
+            } else {
+                return Err(
+                    "error: branch_target value must be a branch string or {branch?, target_branch?}"
+                        .into(),
+                );
+            }
+        }
+        "graph" => {
+            // Store graph via checklist nodes into sqlite when session has path — caller
+            // already has mission only; graph replace needs conn. Encode titles into
+            // a temporary note on mission until ready replaces graph — use graph_hash none
+            // and leave structural graph to mission_ready / checklist.
+            // Prefer checklist tool for graph structure; locking graph here means "shape agreed".
+            let _ = val; // lock-only is enough for waterfall; structure via checklist
+        }
+        _ => return Err(format!("error: unsupported draft field '{field}'")),
+    }
+    Ok(())
 }
 
 /// Intercept `checklist` while in SDLC mode: write through to sdlc_nodes AND

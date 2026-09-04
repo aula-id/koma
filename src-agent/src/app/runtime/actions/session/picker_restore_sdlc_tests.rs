@@ -84,6 +84,7 @@ fn active_execute_mission(worktree_path: &str) -> Mission {
         graph_hash: None,
         needs_reapproval: false,
         amendment_note: None,
+        draft_locks: Default::default(),
     }
 }
 
@@ -188,6 +189,7 @@ fn mission_with_phase(phase: &str, approved: bool, needs_reapproval: bool) -> Mi
         graph_hash,
         needs_reapproval,
         amendment_note: None,
+        draft_locks: Default::default(),
     }
 }
 

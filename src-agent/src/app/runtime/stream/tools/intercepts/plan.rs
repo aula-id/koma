@@ -29,9 +29,18 @@ pub(in crate::app::runtime::stream::tools) fn build_convo_context(
         (Some(plan), _) if rt.agent_mode != AgentMode::Sdlc => format!(
             "[The user has APPROVED the following plan and asked to execute it now. ALLOW tool calls that carry out this plan — file writes/edits and shell commands needed to implement it are authorized. Only flag calls that are clearly OFF-PLAN, destructive beyond the plan's scope, or dangerous.]\n\nAPPROVED PLAN:\n{plan}\n\n--- recent conversation ---\n{base}"
         ),
-        (_, Some(mission)) if rt.agent_mode == AgentMode::Sdlc => format!(
+        // Mission TAC bias only while actively executing (not assess/done/paused).
+        (_, Some(mission))
+            if rt.agent_mode == AgentMode::Sdlc
+                && matches!(
+                    rt.sdlc_phase.as_deref(),
+                    Some("prepare") | Some("execute") | Some("integrate")
+                ) =>
+        {
+            format!(
             "[The user has APPROVED an SDLC mission and is executing it. ALLOW tool calls that carry out the mission — file writes/edits, shell commands, and git operations within the bound worktree are authorized. Only flag calls that are clearly OFF-MISSION, destructive beyond the mission scope, or dangerous.]\n\nAPPROVED MISSION:\n{mission}\n\n--- recent conversation ---\n{base}"
-        ),
+        )
+        }
         _ => base,
     }
 }
@@ -54,9 +63,10 @@ pub(in crate::app::runtime::stream::tools) fn intercept_plan_enter(
             // Index-targeted: stream-owned `sess_idx` must never transition the
             // unrelated foreground session (background streams / multi-session).
             state.rest.set_agent_mode_at(sess_idx, AgentMode::Plan);
-            "entered plan mode - tools are read-only; explore, structure your \
-             reasoning with seqthink, build the checklist with checklist, and \
-             call plan_ready with highlights + the full plan when confident"
+            "entered plan mode — READ-ONLY until the user approves. Explore with \
+             read/search/git-read tools; structure with seqthink + checklist; call \
+             plan_ready with highlights + full plan when ready — then STOP. Do not \
+             call write/edit/delete/bash (or other mutators) while planning."
                 .to_string()
         }
     } else {

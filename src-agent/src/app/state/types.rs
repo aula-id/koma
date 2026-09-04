@@ -14,14 +14,11 @@ use ratatui::text::Line;
 ///   behaviour.
 /// - `Normal`: *risky* tools (write/delete) pause the turn for a `y/n` user
 ///   approval; *safe* tools (read/dir_list/dir_cache_update) still run inline.
-/// - `Plan`: a read-only planning/exploration mode — the tool surface is
-///   restricted to non-mutating tools (browsing, reasoning) so the model can
-///   investigate freely without risking a change. It is exited either by the
-///   model submitting a plan for approval, or manually via `/mode` /
-///   Shift+Tab; leaving it restores whatever mode was active before entering
-///   (see `SessionRuntime::plan_return_mode`). (Read-only tool enforcement and
-///   the plan-approval flow land in a later wave — this variant currently
-///   only changes the mode label + system-prompt nudge.)
+/// - `Plan`: a read-only planning/exploration mode. Advertise + dispatch enforce
+///   a non-mutating tool allowlist (edit/write/delete/bash denied until the user
+///   approves via `plan_ready`). Exited by plan approval (→ Auto/Yolo) or manually
+///   via `/mode` / Shift+Tab; leaving restores `SessionRuntime::plan_return_mode`
+///   (or Auto on approve). System prompt carries an explicit READ-ONLY contract.
 /// - `Yolo`: *risky* tools run inline with NO classifier call and NO `y/n`
 ///   prompt — the harness is fully bypassed. The deterministic workspace path
 ///   guard (WC) still applies, so writes stay inside the project. This mode is

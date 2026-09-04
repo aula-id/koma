@@ -39,7 +39,7 @@ use render::Renderer;
 
 // Re-export the one pub(crate) item that lives inside helpers so external
 // callers keep the same path: `crate::view::markdown::wrap_spans`.
-pub(crate) use helpers::wrap_spans;
+pub(crate) use helpers::{wrap_spans, wrap_spans_preserve};
 
 // --- public API --------------------------------------------------------------
 

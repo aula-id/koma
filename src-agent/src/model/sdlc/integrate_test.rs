@@ -48,6 +48,7 @@ fn sample(branch: &str, target_branch: &str) -> Mission {
         graph_hash: gh,
         needs_reapproval: false,
         amendment_note: None,
+        draft_locks: Default::default(),
     }
 }
 
@@ -91,6 +92,29 @@ fn force_branch_only_is_not_success_leaves_branch_ready_message() {
         "unexpected: {}",
         r.message
     );
+}
+
+#[test]
+fn express_lane_branch_ready_completes_via_try_integrate_ex() {
+    let m = sample("feat/x", "develop");
+    assert_eq!(m.lane, "express");
+    let r = try_integrate_ex(&m, true, true);
+    assert!(r.success, "express branch-ready should complete: {}", r.message);
+    assert!(
+        r.message.contains("lane branch-ready") || r.message.contains("mission complete"),
+        "unexpected: {}",
+        r.message
+    );
+}
+
+#[test]
+fn standard_lane_force_branch_only_still_not_done() {
+    let mut m = sample("feat/x", "develop");
+    m.lane = "standard".into();
+    m.hash = m.recompute_hash();
+    let r = try_integrate_ex(&m, true, false);
+    assert!(!r.success);
+    assert!(r.message.contains("force_branch_only"), "{}", r.message);
 }
 
 #[test]

@@ -12,6 +12,7 @@ pub mod handoff;
 pub mod history;
 pub mod integrate;
 pub mod keeper;
+pub mod lane;
 pub mod mission;
 
 pub use mission::Mission;
