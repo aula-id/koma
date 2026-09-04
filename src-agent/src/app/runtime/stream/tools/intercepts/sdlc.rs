@@ -1595,6 +1595,15 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
     use crate::app::mode::todo::TodoItem;
     use crate::model::sdlc::graph::ChecklistNode;
 
+    // Match checklist content by bare leaf title (UI may show "parent › title").
+    fn checklist_title_key(content: &str) -> &str {
+        content
+            .rsplit_once(" › ")
+            .map(|(_, leaf)| leaf)
+            .unwrap_or(content)
+            .trim()
+    }
+
     let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
     let args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
@@ -1672,7 +1681,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
                 crate::app::mode::todo::TodoStatus::Pending => "pending",
             };
             ChecklistNode {
-                title: it.content.clone(),
+                title: checklist_title_key(&it.content).to_string(),
                 status: status.to_string(),
                 parent_title: parent.clone(),
                 id: None,
@@ -1695,9 +1704,14 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
                             .cloned()
                             .collect();
                         let existing_titles: std::collections::HashSet<_> =
-                            existing_active.iter().map(|n| n.title.clone()).collect();
-                        let proposed: std::collections::HashSet<_> =
-                            nodes.iter().map(|n| n.title.clone()).collect();
+                            existing_active
+                                .iter()
+                                .map(|n| n.title.as_str())
+                                .collect();
+                        let proposed: std::collections::HashSet<_> = nodes
+                            .iter()
+                            .map(|n| checklist_title_key(&n.title))
+                            .collect();
                         if proposed != existing_titles {
                             Err("error: checklist cannot change frozen graph structure — \
                                  call mission_ready to amend and re-approve"
@@ -1705,8 +1719,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
                         } else {
                             let mut err: Option<String> = None;
                             for n in &nodes {
+                                let key = checklist_title_key(&n.title);
                                 if let Some(ex) =
-                                    existing_active.iter().find(|e| e.title == n.title)
+                                    existing_active.iter().find(|e| e.title == key)
                                 {
                                     if ex.status == n.status {
                                         continue;

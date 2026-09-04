@@ -770,9 +770,11 @@ fn sdlc_to_plan_clears_sdlc_and_preserves_plan() {
     // Session A starts in SDLC
     let snap = crate::ipc::snapshot::projection::build_snapshot(&state);
     assert!(snap.sessions[0].sdlc_phase.is_some());
-    assert!(
-        snap.sessions[0].plan_todos.is_empty(),
-        "Plan todos empty in SDLC mode"
+    // Fixture seeds plan_todos on the runtime; SDLC now projects them (graph mirror).
+    assert_eq!(
+        snap.sessions[0].plan_todos.len(),
+        1,
+        "SDLC mode projects plan_todos (graph checklist mirror)"
     );
 
     // Switch session A to Plan mode

@@ -3179,8 +3179,9 @@ export const useKoma = create<KomaState>((set, get) => ({
               sdlcBranch: env.mode === 'sdlc' ? (env.sdlcBranch ?? null) : null,
               sdlcOpen: env.mode === 'sdlc' ? (env.sdlcOpen ?? null) : null,
               sdlcSealed: env.mode === 'sdlc' ? (env.sdlcSealed ?? null) : null,
-              // Plan todos only valid in plan mode; clear stale rows otherwise.
-              planTodos: env.mode === 'plan'
+              // Plan/SDLC checklist rows: plan mode = plan_todos.md; sdlc = L2 graph projection.
+              // Clear stale rows outside those modes (never leak Auto/Normal).
+              planTodos: (env.mode === 'plan' || env.mode === 'sdlc')
                 ? (env.planTodos ?? []).map((t) => ({ ...t, locked: t.locked ?? false }))
                 : [],
               ...(switched ? { stream: '', reasoning: '' } : {}),
@@ -3448,7 +3449,7 @@ export const useKoma = create<KomaState>((set, get) => ({
                     sdlcBranch: newMode === 'sdlc' ? s.session.sdlcBranch : null,
                     sdlcOpen: newMode === 'sdlc' ? s.session.sdlcOpen : null,
                     sdlcSealed: newMode === 'sdlc' ? s.session.sdlcSealed : null,
-                    planTodos: newMode === 'plan' ? s.session.planTodos : [],
+                    planTodos: (newMode === 'plan' || newMode === 'sdlc') ? s.session.planTodos : [],
                   }
                 : {}),
             },

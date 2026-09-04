@@ -184,7 +184,7 @@ export function ExplorePanel() {
         onToggle={() => setOpen((s) => ({ ...s, plan: !s.plan }))}
       >
         {isSdlc && showSdlcRail ? (
-          // SDLC rail: phase, goal, and graph node progress — only when mode=sdlc.
+          // SDLC: phase/goal/branch/counts + graph task list (host planTodos projection).
           <div className="flex flex-col gap-1">
             <div className="flex min-h-[30px] items-center gap-2.5 px-3 py-1">
               <CircleDot size={12} className="flex-none text-koma-accent" />
@@ -207,6 +207,21 @@ export function ExplorePanel() {
                 <Check size={12} className="flex-none text-koma-success" />
                 <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-koma-fg">{sdlcSealedCount}/{sdlcTotal} sealed</span>
               </div>
+            )}
+            {planTodos.length === 0 ? (
+              <Empty>No mission tasks yet</Empty>
+            ) : (
+              planTodos.map((t, i) => {
+                const Icon = t.locked ? Lock : (PLAN_ICON[t.status] ?? Circle)
+                const tone = t.locked ? 'text-koma-dim opacity-45' : (PLAN_ICON_TONE[t.status] ?? 'text-koma-fg opacity-45')
+                const textTone = t.locked ? 'text-koma-dim opacity-45' : (PLAN_TEXT_TONE[t.status] ?? 'text-koma-fg')
+                return (
+                  <div key={i} className="flex min-h-[30px] items-center gap-2.5 px-3 py-1">
+                    <Icon size={12} className={`flex-none ${tone}`} />
+                    <span className={`min-w-0 flex-1 truncate font-mono text-[12px] font-normal ${textTone}`}>{t.content}</span>
+                  </div>
+                )
+              })
             )}
           </div>
         ) : isPlan ? (
