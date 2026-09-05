@@ -15,10 +15,10 @@ use super::super::helpers::{
 use super::super::Conn;
 use super::super::OpenRouterClient;
 use super::request::{
-    build_input, codex_effort, flatten_tools, ResponsesReasoning, ResponsesRequest,
+    build_input, codex_effort, flatten_tools, freeform_text, ResponsesReasoning, ResponsesRequest,
 };
 use super::sse::{parse_event, OutputItem, ResponsesEvent};
-use super::{codex_headers, error_message, failed_message};
+use super::{codex_header_pairs, codex_headers, error_message, failed_message};
 
 impl OpenRouterClient {
     /// Streaming completion over the ChatGPT Codex Responses API.
@@ -72,8 +72,16 @@ impl OpenRouterClient {
             }),
             include,
             prompt_cache_key: self.codex_session_id().to_string(),
-            text: None,
+            text: freeform_text(model),
+            max_output_tokens: Some(super::super::helpers::OAUTH_LARGE_MAX_TOKENS),
         };
+
+        // Opt-in request dump (KOMA_DEBUG_LLM=1) — redacts Authorization.
+        {
+            let pairs = codex_header_pairs(bearer, account_id, self.codex_session_id());
+            let refs: Vec<(&str, &str)> = pairs.iter().map(|(n, v)| (*n, v.as_str())).collect();
+            super::super::debug_dump::dump_outbound(&url, &refs, &body);
+        }
 
         // ── 5xx / 429 retry with exponential backoff ─────────────────────
         let resp: reqwest::Response = 'retry: {

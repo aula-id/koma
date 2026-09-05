@@ -14,9 +14,9 @@ use crate::service::StreamEvent;
 
 use super::client::OpenRouterClient;
 use super::helpers::{
-    apply_tool_call_delta, auth_headers, backoff_delay, clean_error, emit, is_openrouter,
-    is_retryable_send_err, is_retryable_status, provider_routing_for, reasoning_config,
-    sanitize_tool_acc, wants_openrouter_usage, MAX_ATTEMPTS,
+    apply_tool_call_delta, auth_headers, backoff_delay, clean_error, emit, interactive_max_tokens,
+    is_openrouter, is_retryable_send_err, is_retryable_status, provider_routing_for,
+    reasoning_config, sanitize_tool_acc, wants_openrouter_usage, MAX_ATTEMPTS,
 };
 use super::think_split::{Emit as ThinkEmit, ThinkSplit};
 use super::types::Conn;
@@ -179,9 +179,24 @@ impl OpenRouterClient {
             reasoning: reasoning_config(effort, conn.endpoint),
             // Free-form text reply; structured output is classifier-only.
             response_format: None,
-            // Generous runaway cap for the interactive path.
-            max_tokens: Some(32_000),
+            // Runaway cap: 32k default; raised for direct xAI (see interactive_max_tokens).
+            max_tokens: Some(interactive_max_tokens(conn.endpoint)),
         };
+
+        // Opt-in request dump (KOMA_DEBUG_LLM=1).
+        {
+            let auth = format!("Bearer {bearer}");
+            let mut hdrs: Vec<(&str, &str)> = vec![
+                ("Authorization", auth.as_str()),
+                ("HTTP-Referer", crate::config::HTTP_REFERER),
+                ("X-Title", crate::config::APP_TITLE),
+            ];
+            // account header only meaningful for Kilo-style org id on OpenAI-compat.
+            if conn.api_type == ApiType::OpenAiCompatible && !conn.account_id.is_empty() {
+                hdrs.push(("X-Kilocode-OrganizationID", conn.account_id));
+            }
+            super::debug_dump::dump_outbound(&url, &hdrs, &body);
+        }
 
         // ── 5xx / 429 retry with exponential backoff ─────────────────────
         // Track whether we've already done a 401→force-refresh→retry so we

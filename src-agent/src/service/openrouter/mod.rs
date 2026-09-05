@@ -27,6 +27,7 @@ mod catalogue;
 mod client;
 mod codex;
 mod commandcode;
+mod debug_dump;
 mod helpers;
 mod oneshot;
 mod stream;

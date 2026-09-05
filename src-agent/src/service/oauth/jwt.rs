@@ -27,6 +27,29 @@ pub struct CodexIdentity {
     pub email: String,
 }
 
+/// Extract `chatgpt_compute_residency` from a Codex access/id token.
+///
+/// OpenCode parity: claim lives under `https://api.openai.com/auth` or top-level.
+/// Returns `None` when missing, empty, or the sentinel `no_constraint` (do not
+/// send `x-openai-internal-codex-residency` in those cases).
+pub fn codex_residency(token: &str) -> Option<String> {
+    let payload = decode_payload(token)?;
+    let auth = payload.get("https://api.openai.com/auth");
+    let residency = auth
+        .and_then(|c| c.get("chatgpt_compute_residency"))
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            payload
+                .get("chatgpt_compute_residency")
+                .and_then(|v| v.as_str())
+        })?;
+    if residency.is_empty() || residency == "no_constraint" {
+        None
+    } else {
+        Some(residency.to_string())
+    }
+}
+
 /// Extract the ChatGPT account id / plan / email a Codex login belongs to.
 ///
 /// The canonical location is the `https://api.openai.com/auth` claim

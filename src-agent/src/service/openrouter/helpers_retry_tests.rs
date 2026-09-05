@@ -38,6 +38,52 @@ fn max_attempts_is_three() {
     assert_eq!(MAX_ATTEMPTS, 3);
 }
 
+#[test]
+fn is_xai_detects_host() {
+    assert!(is_xai("https://api.x.ai/v1"));
+    assert!(is_xai("https://API.X.AI/v1"));
+    assert!(!is_xai("https://openrouter.ai/api/v1"));
+    assert!(!is_xai("https://api.openai.com/v1"));
+    assert!(!is_xai("https://api.deepseek.com"));
+}
+
+#[test]
+fn interactive_max_tokens_xai_raised() {
+    assert_eq!(OAUTH_LARGE_MAX_TOKENS, 256_000);
+    assert_eq!(interactive_max_tokens("https://api.x.ai/v1"), 256_000);
+    assert_eq!(interactive_max_tokens("https://openrouter.ai/api/v1"), 32_000);
+    assert_eq!(interactive_max_tokens("https://api.deepseek.com"), 32_000);
+}
+
+#[test]
+fn clamp_effort_xai_only() {
+    let xai = "https://api.x.ai/v1";
+    let or = "https://openrouter.ai/api/v1";
+    assert_eq!(clamp_effort_for_endpoint(xai, "medium"), "high");
+    assert_eq!(clamp_effort_for_endpoint(xai, "xhigh"), "high");
+    assert_eq!(clamp_effort_for_endpoint(xai, "max"), "high");
+    assert_eq!(clamp_effort_for_endpoint(xai, "minimal"), "low");
+    assert_eq!(clamp_effort_for_endpoint(xai, "low"), "low");
+    assert_eq!(clamp_effort_for_endpoint(xai, "high"), "high");
+    assert_eq!(clamp_effort_for_endpoint(xai, ""), "");
+    assert_eq!(clamp_effort_for_endpoint(xai, "off"), "off");
+    // OpenRouter passthrough (including medium).
+    assert_eq!(clamp_effort_for_endpoint(or, "medium"), "medium");
+    assert_eq!(clamp_effort_for_endpoint(or, "minimal"), "minimal");
+}
+
+#[test]
+fn reasoning_config_clamps_xai_effort() {
+    let xai = "https://api.x.ai/v1";
+    let cfg = reasoning_config("medium", xai).unwrap();
+    assert_eq!(cfg.effort.as_deref(), Some("high"));
+    let cfg = reasoning_config("minimal", xai).unwrap();
+    assert_eq!(cfg.effort.as_deref(), Some("low"));
+    // OpenRouter keeps medium.
+    let cfg = reasoning_config("medium", "https://openrouter.ai/api/v1").unwrap();
+    assert_eq!(cfg.effort.as_deref(), Some("medium"));
+}
+
 fn sample_conn(endpoint: &str, api_type: crate::model::app_config::ApiType) -> Conn<'_> {
     Conn {
         endpoint,
