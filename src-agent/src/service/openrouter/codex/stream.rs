@@ -73,7 +73,6 @@ impl OpenRouterClient {
             include,
             prompt_cache_key: self.codex_session_id().to_string(),
             text: freeform_text(model),
-            max_output_tokens: Some(super::super::helpers::OAUTH_LARGE_MAX_TOKENS),
         };
 
         // Opt-in request dump (KOMA_DEBUG_LLM=1) — redacts Authorization.

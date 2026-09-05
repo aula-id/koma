@@ -260,14 +260,13 @@ fn responses_request_serializes_verbosity() {
         include: vec!["reasoning.encrypted_content"],
         prompt_cache_key: "sid".into(),
         text: freeform_text("gpt-5.5"),
-        max_output_tokens: Some(crate::service::openrouter::helpers::OAUTH_LARGE_MAX_TOKENS),
     };
     let v = serde_json::to_value(&body).unwrap();
     assert_eq!(v["text"]["verbosity"], "low");
     assert_eq!(v["store"], false);
-    // Chat-completions field absent; Responses uses max_output_tokens.
+    // Codex backend rejects max_output_tokens — never send either budget field.
     assert!(v.get("max_tokens").is_none());
-    assert_eq!(v["max_output_tokens"], 256_000);
+    assert!(v.get("max_output_tokens").is_none());
 }
 
 #[test]

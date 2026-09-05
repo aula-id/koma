@@ -259,20 +259,20 @@ pub(crate) fn is_xai(endpoint: &str) -> bool {
     endpoint.to_lowercase().contains("api.x.ai")
 }
 
-/// Interactive completion budget for large-context OAuth hosts (xAI Grok +
-/// ChatGPT Codex). ~300k context models; 256k leaves headroom under the window
-/// as a runaway guard without starving hidden reasoning + visible answer.
-pub(crate) const OAUTH_LARGE_MAX_TOKENS: u32 = 256_000;
+/// Interactive completion budget for direct xAI (`api.x.ai`). ~300k-class
+/// context; 256k leaves headroom without starving hidden reasoning + answer.
+/// ChatGPT Codex OAuth does **not** use this — `/responses` rejects
+/// `max_output_tokens` (live unsupported-parameter).
+pub(crate) const XAI_INTERACTIVE_MAX_TOKENS: u32 = 256_000;
 
 /// Interactive-path `max_tokens` runaway cap.
 ///
 /// Direct xAI (`api.x.ai`, OAuth and API key share the body) uses
-/// [`OAUTH_LARGE_MAX_TOKENS`] — reasoning models burn a large share of the
-/// budget on hidden thinking; 32k left empty/truncated visible answers.
-/// DeepSeek/custom OpenAI-compat hosts keep 32k.
+/// [`XAI_INTERACTIVE_MAX_TOKENS`]. DeepSeek/custom OpenAI-compat keep 32k.
+/// Codex Responses: no output-budget field (backend 400s on it).
 pub(super) fn interactive_max_tokens(endpoint: &str) -> u32 {
     if is_xai(endpoint) {
-        OAUTH_LARGE_MAX_TOKENS
+        XAI_INTERACTIVE_MAX_TOKENS
     } else {
         32_000
     }

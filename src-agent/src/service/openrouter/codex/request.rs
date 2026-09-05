@@ -46,11 +46,6 @@ pub(super) struct ResponsesRequest {
     pub prompt_cache_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<serde_json::Value>,
-    /// Responses API output budget (chat-completions' `max_tokens` sibling).
-    /// Set on OAuth Codex interactive/oneshot to
-    /// [`super::super::helpers::OAUTH_LARGE_MAX_TOKENS`] (256k).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u32>,
 }
 
 /// Reasoning directive. Codex REQUIRES this object on every request; the effort

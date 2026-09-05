@@ -13,14 +13,14 @@
 //! (request-shaping in [`request`], SSE parsing in [`sse`], the streaming and
 //! collect drivers in [`stream`] / [`oneshot`]) lives under it.
 //!
-//! ## `max_output_tokens` (large OAuth budget)
+//! ## No `max_output_tokens` / `max_tokens` on Codex
 //!
 //! Chat-completions uses `max_tokens` as a runaway guard (32k default; 256k on
-//! direct xAI). Codex Responses uses the sibling field `max_output_tokens`, set
-//! to [`crate::service::openrouter::helpers::OAUTH_LARGE_MAX_TOKENS`] (256k) so
-//! ChatGPT OAuth gpt-5.* models (~300k context) are not starved on hidden
-//! reasoning + visible answer. The terminal `response.completed` event still
-//! always arrives; this is a soft ceiling, not a substitute for effort.
+//! direct xAI). The ChatGPT Codex `/responses` backend **rejects**
+//! `max_output_tokens` (and has no chat-style `max_tokens`) — verified live:
+//! unsupported-parameter errors. Output length stays governed by reasoning
+//! effort + the model's own limits; `response.completed` still arrives.
+//! Deliberate: do not re-add an output-budget field without a live accept check.
 
 mod oneshot;
 mod request;

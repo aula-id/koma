@@ -77,7 +77,6 @@ impl OpenRouterClient {
                 }
                 None => freeform_text(model),
             },
-            max_output_tokens: Some(super::super::helpers::OAUTH_LARGE_MAX_TOKENS),
         };
 
         {

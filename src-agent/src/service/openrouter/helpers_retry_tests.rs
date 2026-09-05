@@ -49,7 +49,7 @@ fn is_xai_detects_host() {
 
 #[test]
 fn interactive_max_tokens_xai_raised() {
-    assert_eq!(OAUTH_LARGE_MAX_TOKENS, 256_000);
+    assert_eq!(XAI_INTERACTIVE_MAX_TOKENS, 256_000);
     assert_eq!(interactive_max_tokens("https://api.x.ai/v1"), 256_000);
     assert_eq!(interactive_max_tokens("https://openrouter.ai/api/v1"), 32_000);
     assert_eq!(interactive_max_tokens("https://api.deepseek.com"), 32_000);
