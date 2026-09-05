@@ -7,7 +7,8 @@ use super::client::OpenRouterClient;
 use super::codex::to_text_format;
 use super::helpers::{
     accepts_reasoning_exclude, auth_headers, backoff_delay, clean_error, is_retryable_send_err,
-    is_retryable_status, parse_blob_ids, parse_summary, provider_routing_for, MAX_ATTEMPTS,
+    is_retryable_status, parse_blob_ids, parse_summary, provider_routing_for, wants_openrouter_usage,
+    MAX_ATTEMPTS,
 };
 use super::types::Conn;
 use crate::dto::chat::{ChatMessage, Role};
@@ -108,7 +109,9 @@ impl OpenRouterClient {
             messages: to_wire(messages.clone()),
             stream: false,
             provider: provider_routing_for(provider),
-            usage: UsageRequest { include: true },
+            // OpenRouter-dialect only; direct hosts 400 on unknown `usage`.
+            // Oneshot is non-stream — never send stream_options.
+            usage: wants_openrouter_usage(&conn).then_some(UsageRequest { include: true }),
             stream_options: None,
             // /compact summarisation uses no tools.
             tools: None,
@@ -236,7 +239,8 @@ impl OpenRouterClient {
             messages: to_wire(messages.clone()),
             stream: false,
             provider: provider_routing_for(provider),
-            usage: UsageRequest { include: true },
+            // OpenRouter-dialect only; direct hosts 400 on unknown `usage`.
+            usage: wants_openrouter_usage(&conn).then_some(UsageRequest { include: true }),
             stream_options: None,
             // Secondary-model calls use no tools.
             tools: None,
@@ -423,7 +427,8 @@ impl OpenRouterClient {
             messages: to_wire(messages.clone()),
             stream: false,
             provider: provider_routing_for(provider),
-            usage: UsageRequest { include: true },
+            // OpenRouter-dialect only; direct hosts 400 on unknown `usage`.
+            usage: wants_openrouter_usage(&conn).then_some(UsageRequest { include: true }),
             stream_options: None,
             // Classifier calls use no tools.
             tools: None,
@@ -627,7 +632,8 @@ impl OpenRouterClient {
             // `provider_routing_for` treats "" as default routing; a `None`
             // provider behaves the same (no pin).
             provider: provider_routing_for(provider.unwrap_or("")),
-            usage: UsageRequest { include: true },
+            // OpenRouter-dialect only; direct hosts 400 on unknown `usage`.
+            usage: wants_openrouter_usage(&conn).then_some(UsageRequest { include: true }),
             stream_options: None,
             // Fold calls use no tools.
             tools: None,
@@ -834,7 +840,8 @@ impl OpenRouterClient {
             messages: to_wire(messages.clone()),
             stream: false,
             provider: provider_routing_for(provider),
-            usage: UsageRequest { include: true },
+            // OpenRouter-dialect only; direct hosts 400 on unknown `usage`.
+            usage: wants_openrouter_usage(&conn).then_some(UsageRequest { include: true }),
             stream_options: None,
             // Router calls use no tools.
             tools: None,

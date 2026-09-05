@@ -16,7 +16,7 @@ use super::client::OpenRouterClient;
 use super::helpers::{
     apply_tool_call_delta, auth_headers, backoff_delay, clean_error, emit, is_openrouter,
     is_retryable_send_err, is_retryable_status, provider_routing_for, reasoning_config,
-    sanitize_tool_acc, MAX_ATTEMPTS,
+    sanitize_tool_acc, wants_openrouter_usage, MAX_ATTEMPTS,
 };
 use super::think_split::{Emit as ThinkEmit, ThinkSplit};
 use super::types::Conn;
@@ -158,12 +158,15 @@ impl OpenRouterClient {
             ),
             stream: true,
             provider: provider_routing_for(provider),
-            usage: UsageRequest { include: true },
-            // OpenAI-standard streaming usage directive: generic OpenAI-spec
-            // servers (e.g. api.x.ai) ignore `usage:{include:true}` above and
-            // only emit the terminal usage chunk when this is set. Omitted for
-            // OpenRouter/koma-free, which already get cost data via `usage`.
-            stream_options: if is_openrouter(conn.endpoint) || conn.api_type == ApiType::KomaFree {
+            // OpenRouter-dialect only. Direct OpenAI hosts 400 on unknown `usage`.
+            usage: if wants_openrouter_usage(&conn) {
+                Some(UsageRequest { include: true })
+            } else {
+                None
+            },
+            // OpenAI-standard streaming usage for direct hosts only. Mutually
+            // exclusive with OpenRouter `usage` above.
+            stream_options: if wants_openrouter_usage(&conn) {
                 None
             } else {
                 Some(StreamOptions {

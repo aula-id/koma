@@ -276,6 +276,17 @@ pub(super) fn accepts_reasoning_exclude(conn: &Conn<'_>) -> bool {
     is_openrouter(conn.endpoint) || conn.api_type == ApiType::KomaFree
 }
 
+/// True when chat-completions should send OpenRouter's proprietary
+/// `usage: {include: true}` (tokens + cost). OpenRouter URL substring **or**
+/// koma-free (same dialect, endpoint lacks `"openrouter"`).
+///
+/// Direct OpenAI-compatible hosts must **not** get this field — they reject
+/// unknown `usage`. Streaming direct hosts use `stream_options.include_usage`
+/// instead; oneshots omit both.
+pub(super) fn wants_openrouter_usage(conn: &Conn<'_>) -> bool {
+    is_openrouter(conn.endpoint) || conn.api_type == ApiType::KomaFree
+}
+
 /// Map a stored effort token to the request `reasoning` object.
 ///
 /// - `""` / `"default"` → `None`: omit `reasoning` entirely so the model uses
