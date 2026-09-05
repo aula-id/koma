@@ -310,6 +310,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_plan(
                                 status,
                                 priority,
                                 locked: false,
+                                node_id: None,
                             })
                         })
                         .collect()
@@ -324,12 +325,14 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_plan(
                 status: TodoStatus::Pending,
                 priority: TodoPriority::Low,
                 locked: true,
+                node_id: None,
             });
             merged.push(TodoItem {
                 content: PLAN_RAIL_SAVE.to_string(),
                 status: TodoStatus::Pending,
                 priority: TodoPriority::Low,
                 locked: true,
+                node_id: None,
             });
             let saved = todo::save_todos_to(&path, &merged);
             if saved.is_ok() {

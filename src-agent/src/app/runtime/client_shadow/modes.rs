@@ -685,6 +685,7 @@ pub(crate) fn shadow_todo(s: crate::ipc::proto::TodoSnapshot) -> crate::app::mod
                 status: TodoStatus::from_str(&item.status),
                 priority: TodoPriority::from_str(&item.priority),
                 locked: item.locked,
+                node_id: None,
             })
             .collect(),
         selected: s.selected,

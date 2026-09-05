@@ -326,6 +326,8 @@ export type PlanTodoEntry = {
   content: string
   status: 'pending' | 'in_progress' | 'completed' | 'cancelled'
   locked: boolean
+  /** SDLC graph node id when projected from mission graph. */
+  nodeId?: string
 }
 
 // Plan-todo rows that count toward the visible checklist — the locked

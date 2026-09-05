@@ -564,6 +564,7 @@ fn two_session_sdlc_isolation_regression() {
         status: crate::app::mode::todo::TodoStatus::Pending,
         priority: crate::app::mode::todo::TodoPriority::Medium,
         locked: false,
+        node_id: None,
     }];
     rest.foreground = 0;
     rest.set_agent_mode(AgentMode::Sdlc);
@@ -843,4 +844,157 @@ fn set_agent_mode_sdlc_plan_mutual_exclusivity() {
         state.rest.fg().pending_mission_seed.is_none(),
         "leaving SDLC must clear pending_mission_seed"
     );
+}
+
+/// Real binding plus a connection-local fixture: the persistent trigger rejects
+/// only claim writes, leaving mission/session persistence available for rollback.
+fn mission_claim_approval_case(compact: bool, fail_claim: bool) {
+    let (dir, mut sess) = scratch_session("claim-approval");
+    let repo = dir.join("repo");
+    let shadow = dir.join("shadow");
+    std::fs::create_dir_all(&repo).unwrap();
+    for args in [
+        vec!["init", "-b", "integration"],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+    ] {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    sess.settings.workdir = vec![repo.to_string_lossy().into_owned()];
+    let mut m = unapproved_amendment_mission();
+    // An absolute worktree name keeps this fixture's worktree in its scratch dir.
+    m.worktree_name = Some(shadow.to_string_lossy().into_owned());
+    m.branch = Some("feature/claim-test".into());
+    m.hash = m.recompute_hash();
+    m.save(&dir).unwrap();
+    let conn = msglog::open(&dir).unwrap();
+    crate::model::sdlc::graph::ensure_tables(&conn).unwrap();
+    conn.execute_batch("INSERT INTO sdlc_nodes(id,title,status,updated_at) VALUES ('leaf','Implement leaf','pending',0);").unwrap();
+    if fail_claim {
+        conn.execute_batch("CREATE TRIGGER reject_claim BEFORE UPDATE OF status ON sdlc_nodes WHEN NEW.status = 'active' BEGIN SELECT RAISE(ABORT, 'injected claim failure'); END;").unwrap();
+    }
+    let mut state = AppState::new(Mode::Chat);
+    state.rest.fg_mut().session = Some(sess);
+    state.rest.fg_mut().agent_mode = AgentMode::Sdlc;
+    state.rest.fg_mut().sdlc_phase = Some("assess".into());
+    state.rest.fg_mut().sdlc_pending_node_id = Some("stale".into());
+    state.rest.fg_mut().approved_mission = Some("stale approval".into());
+    park_mission_ready(&mut state);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut client = None;
+    if compact {
+        handle_approve_mission_compact(&mut state, &mut client, rt.handle()).unwrap();
+    } else {
+        handle_approve_mission(&mut state, &mut client, rt.handle()).unwrap();
+    }
+    let persisted = Mission::load(&dir).unwrap();
+    assert!(persisted.hash_valid());
+    assert_eq!(
+        state.rest.fg().sdlc_phase.as_deref(),
+        Some(persisted.phase.as_str())
+    );
+    assert!(!state.rest.fg().awaiting_approval);
+    assert!(state.rest.fg().approval_reason.is_none());
+    let leaf = crate::model::sdlc::graph::get_node(&conn, "leaf")
+        .unwrap()
+        .unwrap();
+    if fail_claim {
+        assert_eq!(persisted.phase, "assess");
+        assert!(!persisted.approved);
+        assert!(persisted.needs_reapproval);
+        assert!(persisted.worktree_name.is_none());
+        assert!(persisted.worktree_path.is_none());
+        assert!(persisted.branch.is_none());
+        assert!(persisted.target_worktree_path.is_none());
+        assert!(persisted.target_branch.is_none());
+        assert!(persisted.target_head.is_none());
+        assert!(state.rest.fg().approved_mission.is_none());
+        assert!(state.rest.fg().sdlc_pending_node_id.is_none());
+        assert!(state.rest.fg().pending_mission_seed.is_none());
+        // finish_tool_round re-arms the keeper in assess too; phase guards execution.
+        assert!(state.rest.fg().active_cwd.is_none());
+        let sess = state.rest.fg().session.as_ref().unwrap();
+        assert_eq!(sess.workdir(), repo);
+        assert!(sess.settings.workdir_saved.is_none());
+        assert_eq!(leaf.status, "pending");
+        let history = format!("{:?}", sess.conversation.messages());
+        assert!(
+            history.contains("mission auto-claim failed after binding"),
+            "{history}"
+        );
+        assert!(history.contains("injected claim failure"), "{history}");
+        assert!(shadow.exists(), "rollback must not delete the worktree");
+    } else {
+        assert_eq!(persisted.phase, "execute");
+        assert!(persisted.approved);
+        assert_eq!(leaf.status, "active");
+        assert_eq!(
+            state.rest.fg().sdlc_pending_node_id.as_deref(),
+            Some(leaf.id.as_str())
+        );
+        assert!(state.rest.fg().approved_mission.is_some());
+        assert_eq!(state.rest.fg().session.as_ref().unwrap().workdir(), shadow);
+    }
+    drop(conn);
+    drop(state);
+    drop(rt);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn approve_mission_claim_failure_restores_draft() {
+    mission_claim_approval_case(false, true);
+}
+
+#[test]
+fn compact_approve_mission_claim_failure_restores_draft() {
+    mission_claim_approval_case(true, true);
+}
+
+#[test]
+fn approve_mission_claim_success_matches_disk() {
+    mission_claim_approval_case(false, false);
+}
+
+#[test]
+fn compact_approve_mission_claim_success_matches_disk() {
+    mission_claim_approval_case(true, false);
+}
+
+#[test]
+fn advance_mission_without_leaf_clears_stale_pending_id() {
+    let (dir, sess) = scratch_session("claim-empty");
+    let mut m = unapproved_amendment_mission();
+    m.phase = "prepare".into();
+    m.approved = true;
+    m.save(&dir).unwrap();
+    let mut state = AppState::new(Mode::Chat);
+    state.rest.fg_mut().session = Some(sess);
+    state.rest.fg_mut().sdlc_phase = Some("prepare".into());
+    state.rest.fg_mut().sdlc_pending_node_id = Some("stale".into());
+    advance_mission_after_bind(&mut state, 0).unwrap();
+    assert!(state.rest.fg().sdlc_pending_node_id.is_none());
+    assert_eq!(state.rest.fg().sdlc_phase.as_deref(), Some("execute"));
+    assert_eq!(Mission::load(&dir).unwrap().phase, "execute");
+    let _ = std::fs::remove_dir_all(dir);
 }

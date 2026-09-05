@@ -47,6 +47,10 @@ impl Tool for Checklist {
                             "parent": {
                                 "type": "string",
                                 "description": "Optional parent task title."
+                            },
+                            "id": {
+                                "type": "string",
+                                "description": "Optional stable task id (preferred match key when the list is frozen)."
                             }
                         },
                         "required": ["content", "status", "priority"]

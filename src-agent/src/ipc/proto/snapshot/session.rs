@@ -101,6 +101,9 @@ pub struct PlanTodoSnapshot {
     /// decodes cleanly as `false`.
     #[serde(default)]
     pub locked: bool,
+    /// SDLC graph node id when present; Plan markdown rows omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
 }
 
 /// A serde-safe projection of ONE cumulative file-change entry for the GUI Explore

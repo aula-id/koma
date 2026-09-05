@@ -157,6 +157,7 @@ pub fn session_snapshot(
                     content: it.content.clone(),
                     status: it.status.clone(),
                     locked: it.locked,
+                    node_id: it.node_id.clone(),
                 })
                 .collect()
         } else {

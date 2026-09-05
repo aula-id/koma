@@ -24,7 +24,11 @@ a checklist update cannot mark it done. The keeper reopens false-done leaves.
 
 On approve the harness binds the mission worktree (cwd), advances to execute,
 and auto-claims the first OPEN leaf when possible — the model should not
-checkout, cd, or re-claim for the default path.
+checkout, cd, or re-claim for the default path. After a passing
+`mission_verify`, the harness auto-claims the next OPEN leaf in graph insert
+order (or nudges integrate when OPEN is empty). This is historical SQLite
+`rowid` insertion order: amendments that reorder surviving node IDs do not
+reorder their claims; newly added IDs append after surviving IDs.
 
 ## Lifecycle
 
@@ -42,7 +46,11 @@ checkout, cd, or re-claim for the default path.
    One open leaf is claimed at a time. If a claim has `owned_paths`, writes stay
    inside those paths.
 4. **Verify:** evidence is recorded per leaf. A passing verification seals the
-   leaf and records the commit that produced the evidence.
+   leaf, records the commit that produced the evidence, and the harness claims
+   the next OPEN leaf (stable insert/`rowid` order). The successful seal is a
+   committed boundary: failure to claim the next leaf does not undo the seal or
+   its evidence. Report that claim failure separately; it is not proof that OPEN
+   is empty and must not falsely report completion or nudge integrate.
 5. **Integrate:** requires a valid binding, sealed evidence, a clean mission
    worktree (for merge), commits ahead of the frozen target, and satisfied human
    gates. **Lane ceremony:** `express` defaults to **branch-ready done** (mission
@@ -56,6 +64,20 @@ Same-batch trailing tools after `mission_ready` are skipped on approve/deny
 (parity with Plan), so premature edit/bash in the approval turn do not run.
 
 ## Authority boundaries
+
+Frozen checklist status batches must match the non-cancelled frozen graph
+membership one-to-one: every member exactly once, with no duplicates, omissions,
+or extras. Resolve and validate the entire batch before committing it atomically,
+including statuses, claims, events, and rollups; a failed batch leaves no partial
+progress or pending-claim state. Structural changes require amendment and
+reapproval, not a status update.
+
+An explicit node `id` is authoritative, including in mixed ID/title batches: an
+unknown or invalid ID must fail, never fall back to a title. Without an ID, match
+the exact raw title first, before interpreting a genuine qualified display label.
+Do not strip title text merely because it resembles label syntax. Ambiguous
+matches require explicit IDs; row order or already-matched members must not be
+used to guess identity.
 
 In-scope progress may be recorded automatically. A structured subagent handoff
 may add notes, artifacts, evidence references, decisions, blocked status, or

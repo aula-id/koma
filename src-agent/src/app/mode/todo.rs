@@ -101,6 +101,10 @@ pub struct TodoItem {
     /// the regular working TODO.md; defaults to `false` for back-compat.
     #[serde(default)]
     pub locked: bool,
+    /// SDLC graph node id when projected from the mission graph. Absent for
+    /// Plan-mode markdown TODO.md / rail items (`None` on parse).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
 }
 
 impl TodoItem {
@@ -186,6 +190,7 @@ pub fn parse_todo_file(content: &str) -> Vec<TodoItem> {
             status,
             priority,
             locked,
+            node_id: None,
         });
     }
     items

@@ -76,6 +76,7 @@ fn sample_session_snapshot() -> SessionSnapshot {
                 content: "wire the PLAN section".to_string(),
                 status: crate::app::mode::todo::TodoStatus::InProgress,
                 locked: false,
+                node_id: Some("n1".to_string()),
             },
             // Exercise the locked-rail path too so the round-trip proves the
             // new field survives serialize -> deserialize non-default.
@@ -83,6 +84,7 @@ fn sample_session_snapshot() -> SessionSnapshot {
                 content: "serve plan to user".to_string(),
                 status: crate::app::mode::todo::TodoStatus::Pending,
                 locked: true,
+                node_id: None,
             },
         ],
         // SDLC fields: exercise non-default values so the round-trip proves
@@ -710,6 +712,7 @@ fn build_two_session_state(
         status: crate::app::mode::todo::TodoStatus::Completed,
         priority: crate::app::mode::todo::TodoPriority::Medium,
         locked: false,
+        node_id: None,
     }];
     let mut rt_b = crate::app::state::SessionRuntime::new();
     rt_b.id = "session-b".to_string();

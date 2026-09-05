@@ -2,8 +2,9 @@
 //!
 //! The mission contract (`mission.json`) is the frozen source of truth for an
 //! SDLC session's goals, acceptance criteria, and phase. The graph (`sdlc_nodes`
-//! + `sdlc_events`) lives in `messages.sqlite` alongside the chat log and
-//!   provides the live checklist/status authority (TODO.md is projection only).
+//! + `sdlc_events`) lives in `messages.sqlite` alongside the chat log and is
+//! the sole SDLC checklist authority. `memory/TODO.md` is for ordinary project
+//! todos only — never an SDLC projection.
 
 pub mod branch_name;
 pub mod decompose;

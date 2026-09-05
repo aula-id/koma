@@ -401,9 +401,12 @@ fn mission_lifecycle_tools_are_internal_only_and_not_main_advertised() {
 fn mission_prepare_schema_is_sdlc_only_and_not_ordinary_plan() {
     let tool = sdlc::MissionPrepare;
     let description = tool.description();
-    assert!(description.contains("SDLC-only prepare→execute phase transition"));
-    assert!(description.contains("Available only in SDLC prepare phase"));
+    assert!(description.contains("SDLC-only prepare→execute transition"));
     assert!(description.contains("Unrelated to ordinary Plan mode"));
+    assert!(
+        description.contains("enters execute")
+            || description.contains("prepare (extra worktree/topology setup)")
+    );
 }
 
 #[test]

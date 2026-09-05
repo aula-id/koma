@@ -254,3 +254,20 @@ fn mission_ready_schema_has_target_branch() {
         "schema must mention main/master guard: {tb}"
     );
 }
+
+#[test]
+fn mission_verify_pass_footer_claims_next_or_nudges_integrate() {
+    let with_next = mission_verify_pass_footer(
+        "leaf-a",
+        Some(&("leaf-b".into(), "Second".into())),
+        None,
+    );
+    assert!(with_next.contains("leaf-a"));
+    assert!(with_next.contains("HARNESS claimed next OPEN leaf \"Second\" (leaf-b)"));
+    assert!(with_next.contains("do not re-claim"));
+
+    let empty = mission_verify_pass_footer("leaf-a", None, Some("OPEN empty — integrate"));
+    assert!(empty.contains("leaf-a"));
+    assert!(empty.contains("OPEN empty — integrate"));
+    assert!(!empty.contains("HARNESS claimed"));
+}

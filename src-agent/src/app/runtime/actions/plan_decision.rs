@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::app::state::{AgentMode, AppState};
 use crate::dto::chat::Role;
@@ -342,12 +342,13 @@ fn advance_mission_after_bind(state: &mut AppState, sess_idx: usize) -> Result<(
         .session
         .as_ref()
         .map(|s| s.path.clone());
+    state.rest.sessions[sess_idx].sdlc_pending_node_id = None;
     if let Some(path) = sess_path {
-        if let Some((id, _title)) =
+        state.rest.sessions[sess_idx].sdlc_pending_node_id =
             crate::model::sdlc::graph::auto_claim_first_open_leaf_at(&path)
-        {
-            state.rest.sessions[sess_idx].sdlc_pending_node_id = Some(id);
-        }
+                .context("mission auto-claim failed after binding")
+                .map_err(|e| format!("{e:#}"))?
+                .map(|(id, _title)| id);
         // Project graph into plan_todos so /todo + Explore list mission tasks.
         state.rest.sessions[sess_idx].plan_todos =
             crate::model::sdlc::graph::load_sdlc_todo_items(&path);
@@ -370,8 +371,8 @@ pub(super) fn handle_approve_mission(
     match establish_mission_binding(state, client, handle) {
         Ok(wt_note) => {
             if let Err(detail) = advance_mission_after_bind(state, fgi) {
-                // Phase persistence failed after binding succeeded.
-                // Roll back worktree + unbind mission; use binding failure response.
+                // Phase persistence or auto-claim failed after binding succeeded.
+                // Restore workspace + unbind mission; do not delete the worktree.
                 restore_primary_workspace_after_failed_bind(state, fgi);
                 if let Some(path) = state.rest.sessions[fgi]
                     .session
@@ -505,8 +506,8 @@ pub(super) fn handle_approve_mission_compact(
     match establish_mission_binding(state, client, handle) {
         Ok(_wt_note) => {
             if let Err(detail) = advance_mission_after_bind(state, fgi) {
-                // Phase persistence failed after binding succeeded.
-                // Roll back worktree + unbind mission; use binding failure response.
+                // Phase persistence or auto-claim failed after binding succeeded.
+                // Restore workspace + unbind mission; do not delete the worktree.
                 restore_primary_workspace_after_failed_bind(state, fgi);
                 if let Some(path) = state.rest.sessions[fgi]
                     .session

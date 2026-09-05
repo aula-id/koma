@@ -667,6 +667,33 @@ pub(crate) fn mission_verify_result(node_id: &str, pass: bool) -> String {
     }
 }
 
+/// Append harness next-claim / finish footer after a verify pass.
+pub(crate) fn mission_verify_pass_footer(
+    sealed_node_id: &str,
+    next: Option<&(String, String)>,
+    open_empty_nudge: Option<&str>,
+) -> String {
+    let mut out = mission_verify_result(sealed_node_id, true);
+    match next {
+        Some((id, title)) => {
+            out.push_str(&format!(
+                "\nHARNESS claimed next OPEN leaf \"{title}\" ({id}). Implement {title}; do not re-claim."
+            ));
+        }
+        None => {
+            if let Some(nudge) = open_empty_nudge {
+                out.push('\n');
+                out.push_str(nudge);
+            } else {
+                out.push_str(
+                    "\nOPEN empty — when gates are green call mission_integrate (lane finish).",
+                );
+            }
+        }
+    }
+    out
+}
+
 /// Tool-result text for a successful prepare transition.
 pub(crate) fn mission_prepare_result(note: &str) -> String {
     if note.is_empty() {

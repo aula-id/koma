@@ -1,9 +1,10 @@
 //! SDLC graph: nodes + events in `messages.sqlite`.
 //!
-//! The graph is the session-scoped authority for mission tasks. TODO.md is a
-//! projection only and must never override graph membership or status.
+//! The graph is the sole session-scoped authority for mission checklist
+//! membership and status. `memory/TODO.md` holds ordinary project todos and
+//! must never override graph membership or status.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
@@ -165,6 +166,12 @@ pub const MAX_DEPTH: usize = 3;
 pub fn validate_checklist_nodes(items: &[ChecklistNode]) -> Result<()> {
     use std::collections::{HashMap, HashSet};
 
+    let mut explicit_ids = HashSet::new();
+    for it in items {
+        if let Some(id) = it.id.as_deref().map(str::trim).filter(|id| !id.is_empty()) {
+            if !explicit_ids.insert(id) { bail!("duplicate checklist id '{id}'"); }
+        }
+    }
     let mut titles: HashSet<&str> = HashSet::new();
     for it in items {
         let t = it.title.trim();
@@ -236,9 +243,12 @@ pub fn validate_checklist_nodes(items: &[ChecklistNode]) -> Result<()> {
 /// - Status leaving done clears verify_bit.
 /// - After write, parents roll up from children.
 pub fn replace_nodes_from_checklist(conn: &Connection, items: &[ChecklistNode]) -> Result<()> {
+    // Explicit parent titles must resolve inside this batch. Only an omitted
+    // parent may retain an existing edge, validated against the snapshot below.
     validate_checklist_nodes(items)?;
+    let tx = conn.unchecked_transaction()?;
     let now = now_secs();
-    let all = list_all(conn)?;
+    let all = list_all(&tx)?;
 
     use std::collections::HashMap;
     let mut by_title: HashMap<String, GraphTask> = HashMap::new();
@@ -273,26 +283,44 @@ pub fn replace_nodes_from_checklist(conn: &Connection, items: &[ChecklistNode]) 
         } else {
             stable_id_for_title(&it.title)
         };
-        kept_ids.insert(id.clone());
+        if !kept_ids.insert(id.clone()) { bail!("resolved checklist id collision '{id}'"); }
         assigned.push((it.clone(), id));
     }
 
-    let title_to_id: HashMap<String, String> = assigned
-        .iter()
-        .map(|(it, id)| (it.title.clone(), id.clone()))
-        .collect();
-
-    let tx = conn.unchecked_transaction()?;
+    let mut effective = all.clone();
+    let mut resolved_parents = HashMap::new();
+    for (it, id) in &assigned {
+        let parent = match it.parent_title.as_deref() {
+            None => by_id.get(id).and_then(|n| n.parent_id.clone()),
+            Some(p) if p.trim().is_empty() => None,
+            Some(p) => {
+                let p = p.trim();
+                let mut candidates: Vec<String> = assigned.iter()
+                    .filter(|(n, _)| n.title.trim() == p).map(|(_, id)| id.clone()).collect();
+                if candidates.is_empty() {
+                    candidates = all.iter().filter(|n| n.title.trim() == p)
+                        .map(|n| n.id.clone()).collect();
+                }
+                if candidates.len() != 1 { bail!("unknown or ambiguous parent_title '{p}'"); }
+                candidates.pop()
+            }
+        };
+        resolved_parents.insert(id.clone(), parent.clone());
+        if let Some(n) = effective.iter_mut().find(|n| n.id == *id) {
+            n.parent_id = parent;
+        } else {
+            effective.push(GraphTask { id: id.clone(), parent_id: parent, title: it.title.clone(),
+                status: it.status.clone(), phase: None, notes: String::new(), verify_bit: false,
+                updated_at: now, owned_paths: it.owned_paths.clone() });
+        }
+    }
+    for n in &effective {
+        if depth_of_node(&effective, &n.id)? > MAX_DEPTH { bail!("hierarchy deeper than {MAX_DEPTH} levels"); }
+    }
 
     for (it, id) in &assigned {
-        let parent_id = it
-            .parent_title
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .and_then(|pt| title_to_id.get(pt).cloned());
-
-        let ex = by_id.get(id).or_else(|| by_title.get(&it.title));
+        let parent_id = resolved_parents.get(id).cloned().flatten();
+        let ex = by_id.get(id);
         // Seal only via mission_verify: checklist cannot write bare done.
         if it.status == "done" {
             let existing_verified = ex.map(|e| e.verify_bit).unwrap_or(false);
@@ -315,13 +343,6 @@ pub fn replace_nodes_from_checklist(conn: &Connection, items: &[ChecklistNode]) 
             ex.map(|e| e.owned_paths.clone()).unwrap_or_default()
         } else {
             it.owned_paths.clone()
-        };
-
-        // Prefer preserving an existing unambiguous parent_id when parent_title omitted.
-        let parent_id = match (&parent_id, ex) {
-            (Some(p), _) => Some(p.clone()),
-            (None, Some(e)) if it.parent_title.is_none() => e.parent_id.clone(),
-            _ => parent_id,
         };
 
         tx.execute(
@@ -380,6 +401,80 @@ pub fn replace_nodes_from_checklist(conn: &Connection, items: &[ChecklistNode]) 
     Ok(())
 }
 
+/// Status-only row for an already frozen graph contract. Explicit id is authoritative.
+#[derive(Debug, Clone)]
+pub struct FrozenChecklistUpdate {
+    pub id: Option<String>,
+    pub content: String,
+    pub status: String,
+}
+
+/// Atomically apply complete frozen membership, returning committed active leaf ownership.
+pub fn apply_frozen_checklist(
+    conn: &Connection,
+    items: &[FrozenChecklistUpdate],
+) -> Result<Option<(String, String)>> {
+    let tx = conn.unchecked_transaction()?;
+    let all = list_all(&tx)?;
+    let members: Vec<&GraphTask> = all.iter().filter(|n| n.status != "cancelled").collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut updates = Vec::new();
+    for item in items {
+        if !matches!(item.status.as_str(), "pending" | "active" | "blocked" | "done" | "cancelled") {
+            bail!("unknown graph status '{}'", item.status);
+        }
+        let explicit_id = item.id.as_deref().map(str::trim).filter(|id| !id.is_empty());
+        let matches: Vec<&GraphTask> = if let Some(id) = explicit_id {
+            let node = members.iter().copied().find(|n| n.id == id)
+                .ok_or_else(|| anyhow::anyhow!("unknown or cancelled frozen checklist id '{id}'"))?;
+            vec![node]
+        } else {
+            let exact: Vec<&GraphTask> = members.iter().copied().filter(|n| n.title == item.content).collect();
+            if !exact.is_empty() { exact } else {
+                members.iter().copied().filter(|n| {
+                    n.parent_id.as_ref().and_then(|p| all.iter().find(|a| a.id == *p))
+                        .is_some_and(|p| format!("{} › {}", p.title, n.title) == item.content)
+                }).collect()
+            }
+        };
+        if matches.len() != 1 { bail!("unknown or ambiguous frozen checklist row '{}'", item.content); }
+        let node = matches[0];
+        if !seen.insert(node.id.clone()) { bail!("duplicate frozen checklist alias for '{}'", node.id); }
+        if item.status == "done" && !(node.status == "done" && node.verify_bit) {
+            bail!("cannot seal node '{}' without mission_verify", node.id);
+        }
+        if item.status == "active" && node.status != "active" {
+            if !is_leaf(&tx, &node.id)? || !matches!(node.status.as_str(), "pending" | "blocked") {
+                bail!("node '{}' is not a claimable leaf", node.id);
+            }
+        }
+        updates.push((node, item.status.as_str()));
+    }
+    if seen.len() != members.len() { bail!("frozen checklist must include every non-cancelled node, including sealed nodes"); }
+    let final_status = |id: &str| updates.iter().find(|(n, _)| n.id == id).map(|(_, s)| *s).unwrap_or("cancelled");
+    let active_count = updates.iter().filter(|(n, status)| {
+        *status == "active" && !all.iter().any(|c| c.parent_id.as_deref() == Some(n.id.as_str()) && final_status(&c.id) != "cancelled")
+    }).count();
+    if active_count > 1 { bail!("frozen checklist would leave multiple active leaves"); }
+    // Deactivate before claiming; input order must not affect handover.
+    for (node, status) in &updates {
+        if *status != "active" && node.status != *status {
+            update_node_status_in_tx(&tx, &node.id, status)?;
+        }
+    }
+    for (node, status) in &updates {
+        if *status == "active" && node.status != "active" {
+            claim_leaf_in_tx(&tx, &node.id)?;
+        }
+    }
+    rollup_parents_in_tx(&tx)?;
+    let active: Vec<GraphTask> = list_open_leaves(&tx)?.into_iter().filter(|n| n.status == "active").collect();
+    if active.len() > 1 { bail!("frozen checklist would leave multiple active leaves after rollup"); }
+    let ownership = active.into_iter().next().map(|n| (n.id, n.title));
+    tx.commit()?;
+    Ok(ownership)
+}
+
 /// True when the node has no non-cancelled children.
 pub fn is_leaf(conn: &Connection, node_id: &str) -> Result<bool> {
     let mut stmt = conn.prepare(
@@ -402,11 +497,13 @@ pub fn list_open_leaves(conn: &Connection) -> Result<Vec<GraphTask>> {
 }
 
 /// List all nodes that are NOT done or cancelled (open tasks).
+/// Ordered by `rowid` (insert/contract order) so auto-claim and `/todo` stay stable
+/// when claim/status bumps `updated_at`.
 pub fn list_open(conn: &Connection) -> Result<Vec<GraphTask>> {
     query_nodes(
         conn,
         "SELECT id, parent_id, title, status, phase, notes, verify_bit, updated_at, owned_paths
-         FROM sdlc_nodes WHERE status NOT IN ('done', 'cancelled') ORDER BY updated_at",
+         FROM sdlc_nodes WHERE status NOT IN ('done', 'cancelled') ORDER BY rowid ASC",
     )
 }
 
@@ -415,16 +512,16 @@ pub fn list_sealed(conn: &Connection) -> Result<Vec<GraphTask>> {
     query_nodes(
         conn,
         "SELECT id, parent_id, title, status, phase, notes, verify_bit, updated_at, owned_paths
-         FROM sdlc_nodes WHERE status = 'done' ORDER BY updated_at",
+         FROM sdlc_nodes WHERE status = 'done' ORDER BY rowid ASC",
     )
 }
 
-/// List all graph nodes.
+/// List all graph nodes (insert/contract order via `rowid`).
 pub fn list_all(conn: &Connection) -> Result<Vec<GraphTask>> {
     query_nodes(
         conn,
         "SELECT id, parent_id, title, status, phase, notes, verify_bit, updated_at, owned_paths
-         FROM sdlc_nodes ORDER BY updated_at",
+         FROM sdlc_nodes ORDER BY rowid ASC",
     )
 }
 
@@ -487,9 +584,14 @@ pub fn get_node(conn: &Connection, node_id: &str) -> Result<Option<GraphTask>> {
 /// concurrent/deferred claim fails). Membership + leaf-ness are checked inside
 /// the same transaction as the status CAS so the race window stays closed.
 pub fn claim_leaf(conn: &Connection, node_id: &str) -> Result<()> {
-    let now = now_secs();
     let tx = conn.unchecked_transaction()?;
+    claim_leaf_in_tx(&tx, node_id)?;
+    tx.commit()?;
+    Ok(())
+}
 
+fn claim_leaf_in_tx(tx: &rusqlite::Transaction<'_>, node_id: &str) -> Result<()> {
+    let now = now_secs();
     let status: Option<String> = {
         let mut stmt = tx.prepare("SELECT status FROM sdlc_nodes WHERE id = ?1")?;
         let mut rows = stmt.query(rusqlite::params![node_id])?;
@@ -549,7 +651,6 @@ pub fn claim_leaf(conn: &Connection, node_id: &str) -> Result<()> {
         "INSERT INTO sdlc_events (node_id, kind, detail, created_at) VALUES (?1, 'claim', 'active', ?2)",
         rusqlite::params![node_id, now],
     )?;
-    tx.commit()?;
     Ok(())
 }
 
@@ -576,6 +677,7 @@ pub fn graph_as_todo_items(conn: &Connection) -> Result<Vec<crate::app::mode::to
                 status,
                 priority: TodoPriority::Medium,
                 locked: false,
+                node_id: n.id,
             }
         })
         .collect())
@@ -595,7 +697,11 @@ pub fn load_sdlc_todo_items(session_dir: &std::path::Path) -> Vec<crate::app::mo
 /// Claim the first claimable OPEN leaf (pending/blocked) when none is active.
 /// Returns `(id, title)` when a new claim was made or an existing active leaf is adopted.
 pub fn auto_claim_first_open_leaf(conn: &Connection) -> Result<Option<(String, String)>> {
-    let leaves = list_open_leaves(conn)?;
+    let tx = conn.unchecked_transaction()?;
+    let leaves = list_open_leaves(&tx)?;
+    if leaves.iter().filter(|n| n.status == "active").count() > 1 {
+        bail!("multiple active leaves in graph");
+    }
     if let Some(active) = leaves.iter().find(|n| n.status == "active") {
         return Ok(Some((active.id.clone(), active.title.clone())));
     }
@@ -605,17 +711,18 @@ pub fn auto_claim_first_open_leaf(conn: &Connection) -> Result<Option<(String, S
     else {
         return Ok(None);
     };
-    claim_leaf(conn, &first.id)?;
+    claim_leaf_in_tx(&tx, &first.id)?;
+    tx.commit()?;
     Ok(Some((first.id.clone(), first.title.clone())))
 }
 
 /// Session-dir helper: open graph and auto-claim first OPEN leaf.
 pub fn auto_claim_first_open_leaf_at(
     session_dir: &std::path::Path,
-) -> Option<(String, String)> {
-    let conn = crate::model::msglog::open(session_dir).ok()?;
-    ensure_tables(&conn).ok()?;
-    auto_claim_first_open_leaf(&conn).ok().flatten()
+) -> Result<Option<(String, String)>> {
+    let conn = crate::model::msglog::open(session_dir).context("opening graph for auto-claim")?;
+    ensure_tables(&conn).context("initializing graph for auto-claim")?;
+    auto_claim_first_open_leaf(&conn).context("auto-claiming first open graph leaf")
 }
 
 fn depth_of_node(nodes: &[GraphTask], node_id: &str) -> Result<usize> {
@@ -829,17 +936,21 @@ pub fn set_verify_bit_with_evidence(
     verified: bool,
     evidence: Option<&str>,
 ) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
     let node =
-        get_node(conn, node_id)?.ok_or_else(|| anyhow::anyhow!("unknown node '{node_id}'"))?;
+        get_node(&tx, node_id)?.ok_or_else(|| anyhow::anyhow!("unknown node '{node_id}'"))?;
     if node.status == "cancelled" {
         bail!("cannot verify cancelled node '{node_id}'");
     }
-    if !is_leaf(conn, node_id)? {
+    if !is_leaf(&tx, node_id)? {
         bail!("verify is leaf-only; '{node_id}' has children");
     }
 
     let now = now_secs();
-    let tx = conn.unchecked_transaction()?;
+    if list_open_leaves(&tx)?.iter().any(|n| n.status == "active" && n.id != node_id) {
+        bail!("another leaf is already active — cannot verify '{node_id}'");
+    }
+    depth_of_node(&list_all(&tx)?, node_id)?;
     let bit: i64 = if verified { 1 } else { 0 };
     let n = tx.execute(
         "UPDATE sdlc_nodes SET verify_bit = ?1, updated_at = ?2 WHERE id = ?3",
@@ -916,8 +1027,16 @@ pub fn set_verify_bit_with_evidence(
 /// Atomic status update + event for a known node. Clears verify when leaving done.
 /// Sealing to `done` requires verify_bit already true (mission_verify only path).
 pub fn update_node_status(conn: &Connection, node_id: &str, status: &str) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    update_node_status_in_tx(&tx, node_id, status)?;
+    rollup_parents_in_tx(&tx)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn update_node_status_in_tx(tx: &rusqlite::Transaction<'_>, node_id: &str, status: &str) -> Result<()> {
     let node =
-        get_node(conn, node_id)?.ok_or_else(|| anyhow::anyhow!("unknown node '{node_id}'"))?;
+        get_node(tx, node_id)?.ok_or_else(|| anyhow::anyhow!("unknown node '{node_id}'"))?;
     if node.status == status {
         return Ok(());
     }
@@ -930,7 +1049,6 @@ pub fn update_node_status(conn: &Connection, node_id: &str, status: &str) -> Res
     } else {
         0
     };
-    let tx = conn.unchecked_transaction()?;
     let n = tx.execute(
         "UPDATE sdlc_nodes SET status = ?1, verify_bit = ?2, updated_at = ?3 WHERE id = ?4",
         rusqlite::params![status, verify, now, node_id],
@@ -942,9 +1060,6 @@ pub fn update_node_status(conn: &Connection, node_id: &str, status: &str) -> Res
         "INSERT INTO sdlc_events (node_id, kind, detail, created_at) VALUES (?1, 'status_change', ?2, ?3)",
         rusqlite::params![node_id, status, now],
     )?;
-    // Status change + parent rollup are one transaction.
-    rollup_parents_in_tx(&tx)?;
-    tx.commit()?;
     Ok(())
 }
 
