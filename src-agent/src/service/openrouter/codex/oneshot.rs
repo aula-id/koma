@@ -10,9 +10,11 @@ use super::super::helpers::{
 };
 use super::super::Conn;
 use super::super::OpenRouterClient;
-use super::request::{build_input, codex_effort, ResponsesReasoning, ResponsesRequest};
+use super::request::{
+    build_input, codex_effort, freeform_text, ResponsesReasoning, ResponsesRequest,
+};
 use super::sse::{parse_event, ResponsesEvent};
-use super::{codex_headers, error_message, failed_message};
+use super::{codex_header_pairs, codex_headers, error_message, failed_message};
 
 impl OpenRouterClient {
     /// Non-streaming-shaped call over the streaming wire: POST `stream: true`,
@@ -61,8 +63,27 @@ impl OpenRouterClient {
             }),
             include,
             prompt_cache_key: self.codex_session_id().to_string(),
-            text: text_format,
+            // Merge verbosity into structured format when present; free-form
+            // oneshots (no format) still get verbosity-only text when gated.
+            text: match text_format {
+                Some(mut fmt) => {
+                    if freeform_text(model).is_some() {
+                        if let Some(obj) = fmt.as_object_mut() {
+                            obj.entry("verbosity")
+                                .or_insert_with(|| serde_json::json!("low"));
+                        }
+                    }
+                    Some(fmt)
+                }
+                None => freeform_text(model),
+            },
         };
+
+        {
+            let pairs = codex_header_pairs(bearer, account_id, self.codex_session_id());
+            let refs: Vec<(&str, &str)> = pairs.iter().map(|(n, v)| (*n, v.as_str())).collect();
+            super::super::debug_dump::dump_outbound(&url, &refs, &body);
+        }
 
         let resp: reqwest::Response = 'retry: {
             for attempt in 1u32..=MAX_ATTEMPTS {

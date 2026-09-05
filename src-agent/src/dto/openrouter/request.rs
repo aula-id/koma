@@ -369,21 +369,24 @@ pub struct ProviderRouting {
     pub allow_fallbacks: bool,
 }
 
-/// Request-side usage accounting directive.
+/// OpenRouter-proprietary usage accounting directive.
 ///
 /// Serialises to `{"include": true}`. When present on the request body,
-/// OpenRouter returns token counts AND the total generation `cost` in the
-/// response — including the final streaming chunk (which carries `usage` with
-/// an empty `choices` array).
+/// OpenRouter (and OpenRouter-style proxies like koma-free) return token
+/// counts AND the total generation `cost` — including the final streaming
+/// chunk (empty `choices` + `usage`). **Not** part of the OpenAI chat-
+/// completions schema: strict direct providers (xAI, DeepSeek, custom
+/// gateways) reject unknown `usage` with 400. Only attach via
+/// `ChatRequest.usage` for OpenRouter-dialect endpoints.
 #[derive(Debug, Clone, Serialize)]
 pub struct UsageRequest {
     pub include: bool,
 }
 
 /// OpenAI-standard streaming usage directive. Generic OpenAI-spec servers
-/// (e.g. api.x.ai) only emit the terminal usage chunk when this is present;
-/// they ignore OpenRouter's proprietary `usage:{include:true}`. Sent only to
-/// non-OpenRouter endpoints so we don't duplicate the directive to koma.run.
+/// (e.g. api.x.ai) only emit the terminal usage chunk when this is present.
+/// Sent only on **streaming** requests to non-OpenRouter endpoints — never
+/// together with OpenRouter's proprietary `usage:{include:true}`.
 #[derive(Debug, Clone, Serialize)]
 pub struct StreamOptions {
     pub include_usage: bool,
@@ -461,14 +464,15 @@ pub struct ChatRequest {
     /// OpenRouter uses its default routing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<ProviderRouting>,
-    /// Usage accounting directive — always sent as `{"include": true}` so the
-    /// response (and final streaming chunk) reports token counts + total cost.
-    pub usage: UsageRequest,
-    /// OpenAI-standard streaming usage directive. `Some` only for non-OpenRouter-
-    /// dialect endpoints (e.g. api.x.ai) — generic OpenAI-spec servers ignore the
-    /// `usage` field above and only emit the terminal usage chunk when this is
-    /// present. `None` (and omitted from the wire) for OpenRouter/koma-free, which
-    /// already get cost data via `usage:{include:true}`.
+    /// OpenRouter-dialect usage accounting (`{"include": true}`). `Some` only for
+    /// OpenRouter / koma-free so the response reports tokens + cost. Omitted on
+    /// direct OpenAI-compatible endpoints — they 400 on unknown `usage`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<UsageRequest>,
+    /// OpenAI-standard streaming usage directive. `Some` only for **streaming**
+    /// requests to non-OpenRouter-dialect endpoints (e.g. api.x.ai). Omitted for
+    /// OpenRouter/koma-free (they use `usage` above) and for all non-stream
+    /// oneshots (no terminal SSE usage chunk).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<StreamOptions>,
     /// Function-calling tool definitions exposed to the model. `Some` on the

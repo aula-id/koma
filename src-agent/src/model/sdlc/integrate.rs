@@ -63,6 +63,11 @@ pub fn validate_target_immediately_before_merge(mission: &Mission) -> Result<(),
 ///    (`success` only when `branch_only_completes` and force_branch_only).
 /// 8. If clean: try `git merge --ff-only <branch>`; empty FF / already up to date is ERROR.
 /// 9. On success set mission.phase = "done" (caller) with ship summary.
+///
+/// Thin wrapper over [`try_integrate_ex`] with `branch_only_completes: false`.
+/// Production intercept uses `try_integrate_ex` directly; this entry point is
+/// the unit-test and simple-call surface.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn try_integrate(mission: &Mission, force_branch_only: bool) -> IntegrateResult {
     try_integrate_ex(mission, force_branch_only, false)
 }

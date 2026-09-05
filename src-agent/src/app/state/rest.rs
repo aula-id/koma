@@ -1131,12 +1131,14 @@ impl AppStateRest {
                             status: TodoStatus::Pending,
                             priority: TodoPriority::Low,
                             locked: true,
+                            node_id: None,
                         },
                         TodoItem {
                             content: PLAN_RAIL_SAVE.to_string(),
                             status: TodoStatus::Pending,
                             priority: TodoPriority::Low,
                             locked: true,
+                            node_id: None,
                         },
                     ];
                     let _ = todo::save_todos_to(&path, &rails);

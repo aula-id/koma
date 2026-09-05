@@ -175,6 +175,8 @@ pub(super) struct PushPlanTodo {
     pub(super) content: String,
     pub(super) status: &'static str,
     pub(super) locked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) node_id: Option<String>,
 }
 
 /// The palette roles the React chat paints with (resolved from the shadow's TUI

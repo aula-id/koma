@@ -101,6 +101,10 @@ pub struct TodoItem {
     /// the regular working TODO.md; defaults to `false` for back-compat.
     #[serde(default)]
     pub locked: bool,
+    /// SDLC graph node id when projected from the mission graph. Absent for
+    /// Plan-mode markdown TODO.md / rail items (`None` on parse).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
 }
 
 impl TodoItem {
@@ -186,6 +190,7 @@ pub fn parse_todo_file(content: &str) -> Vec<TodoItem> {
             status,
             priority,
             locked,
+            node_id: None,
         });
     }
     items
@@ -200,29 +205,22 @@ pub fn load_todos_from(path: &std::path::Path) -> Vec<TodoItem> {
         .unwrap_or_default()
 }
 
-/// Load the CURRENT todo list for a session: the session-scoped
-/// `plan_todos.md` (the model's plan checklist + the two locked rails) while
-/// `in_plan`, else the per-directory `memory/TODO.md` (the regular working
-/// list `checklist` writes to outside Plan mode) — the exact backing-file
-/// selection `/todo`'s own overlay uses (see
-/// `app::runtime::commands::todo::load_todos_with_pwd`).
-///
-/// Shared so every mirror of "the session's current todo list" — the GUI
-/// Explore "PLAN" section's `SessionRuntime::plan_todos`, refreshed at session
-/// load, mode transitions, and after every tool round — follows the SAME
-/// source of truth as the TUI overlay, in every mode, not just Plan. Empty
-/// when the relevant file doesn't exist yet.
-pub fn load_current_todos(
+/// Load the CURRENT todo list for a session by agent mode:
+/// - Plan → `plan_todos.md`
+/// - SDLC → L2 graph projection (`sdlc_nodes`) so /todo tracks the mission contract
+/// - else → per-directory `memory/TODO.md`
+pub fn load_current_todos_for_mode(
     session: &crate::model::session::Session,
-    in_plan: bool,
+    mode: crate::app::state::AgentMode,
 ) -> Vec<TodoItem> {
-    if in_plan {
-        load_todos_from(&session.plan_todos_path())
-    } else {
-        crate::model::store::memory_dir(&session.pwd_hash)
+    use crate::app::state::AgentMode;
+    match mode {
+        AgentMode::Plan => load_todos_from(&session.plan_todos_path()),
+        AgentMode::Sdlc => crate::model::sdlc::graph::load_sdlc_todo_items(&session.path),
+        _ => crate::model::store::memory_dir(&session.pwd_hash)
             .ok()
             .map(|dir| load_todos_from(&dir.join("TODO.md")))
-            .unwrap_or_default()
+            .unwrap_or_default(),
     }
 }
 
@@ -253,13 +251,12 @@ pub struct TodoState {
     pub selected: usize,
     /// Session pwd_hash for disk reads (used by periodic refresh).
     pub pwd_hash: String,
-    /// When the overlay was opened while the session was in plan mode, the
-    /// session-scoped `plan_todos.md` path to read/write instead of the
-    /// per-directory `memory/TODO.md`. `None` for the normal working list.
-    /// Daemon-only concern: the client never needs the path itself, only the
-    /// resulting items (which already project via `TodoItemSnapshot`), so this
-    /// is NOT threaded through the snapshot/shadow projection.
+    /// When the overlay was opened in plan mode, `plan_todos.md` path.
+    /// When opened in SDLC mode, session dir path — refresh reads L2 graph.
+    /// `None` for ordinary TODO.md.
     pub plan_path: Option<std::path::PathBuf>,
+    /// When true, `plan_path` is a session dir and refresh uses SDLC graph projection.
+    pub sdlc_graph: bool,
     /// Timestamp of the last disk refresh.
     pub last_refresh: Instant,
 }
@@ -271,6 +268,7 @@ impl Default for TodoState {
             selected: 0,
             pwd_hash: String::new(),
             plan_path: None,
+            sdlc_graph: false,
             last_refresh: Instant::now(),
         }
     }
@@ -284,6 +282,7 @@ impl TodoState {
             selected: 0,
             pwd_hash,
             plan_path: None,
+            sdlc_graph: false,
             last_refresh: Instant::now(),
         }
     }
@@ -314,7 +313,12 @@ impl TodoState {
     /// `memory/TODO.md`. The cursor stays on the same row index (clamped if the
     /// list shrank).
     pub fn refresh_from_disk(&mut self) {
-        let items = if let Some(path) = &self.plan_path {
+        let items = if self.sdlc_graph {
+            self.plan_path
+                .as_ref()
+                .map(|p| crate::model::sdlc::graph::load_sdlc_todo_items(p))
+                .unwrap_or_default()
+        } else if let Some(path) = &self.plan_path {
             load_todos_from(path)
         } else {
             crate::model::store::memory_dir(&self.pwd_hash)
@@ -374,6 +378,11 @@ impl TodoState {
         }
         // Write the full list back to disk atomically (temp + rename) so a
         // crash mid-write never leaves a truncated file.
+        // SDLC graph is authoritative — do not write TODO.md/plan_todos from the overlay.
+        if self.sdlc_graph {
+            self.refresh_from_disk();
+            return;
+        }
         if let Some(path) = self.plan_path.clone() {
             let _ = save_todos_to(&path, &self.items);
         } else {

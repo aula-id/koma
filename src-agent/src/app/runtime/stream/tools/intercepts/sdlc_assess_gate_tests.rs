@@ -703,6 +703,556 @@ fn sdlc_checklist_does_not_dual_write_to_todo_md() {
     assert!(nodes.iter().any(|n| n.title == "another SDLC task"));
 }
 
+/// Shared fixture for frozen-checklist intercept tests.
+fn frozen_checklist_fixture(
+    label: &str,
+) -> (
+    std::path::PathBuf,
+    AppState,
+    String,
+    String,
+    String, // original TODO.md content (when present)
+) {
+    use crate::model::conversation::Conversation;
+    use crate::model::sdlc::graph::{
+        ensure_tables, list_all, replace_nodes_from_checklist, ChecklistNode,
+    };
+    use crate::model::sdlc::mission::{
+        ContractHashInput, Mission, CURRENT_CONTRACT_VERSION,
+    };
+    use crate::model::session::Session;
+    use crate::model::settings::Settings;
+
+    let sess_path = std::env::temp_dir().join(format!(
+        "koma-sdlc-frozen-checklist-{}-{}-{}",
+        label,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(sess_path.join("memory")).unwrap();
+    let todo_path = sess_path.join("memory").join("TODO.md");
+    let original_todo = "- [ ] leave me alone (high)\n";
+    std::fs::write(&todo_path, original_todo).unwrap();
+
+    let conn = crate::model::msglog::open(&sess_path).unwrap();
+    ensure_tables(&conn).unwrap();
+    replace_nodes_from_checklist(
+        &conn,
+        &[
+            ChecklistNode {
+                title: "task-a".into(),
+                status: "active".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec![],
+            },
+            ChecklistNode {
+                title: "task-b".into(),
+                status: "pending".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec![],
+            },
+        ],
+    )
+    .unwrap();
+    let nodes = list_all(&conn).unwrap();
+    let id_a = nodes
+        .iter()
+        .find(|n| n.title == "task-a")
+        .map(|n| n.id.clone())
+        .expect("task-a");
+    let id_b = nodes
+        .iter()
+        .find(|n| n.title == "task-b")
+        .map(|n| n.id.clone())
+        .expect("task-b");
+
+    let graph_hash = Some("frozen-test-hash".to_string());
+    let hash = Mission::compute_contract_hash_full(ContractHashInput {
+        goal: "test frozen checklist",
+        acceptance: &["done".into()],
+        non_goals: &[],
+        lane: "express",
+        verify_plan: &[],
+        human_gates: &[],
+        risks: &[],
+        rationale: "",
+        graph_hash: graph_hash.as_deref(),
+        worktree_name: None,
+        branch: None,
+        worktree_path: None,
+        target_worktree_path: None,
+        target_branch: None,
+        target_head: None,
+    });
+    let mission = Mission {
+        contract_version: CURRENT_CONTRACT_VERSION,
+        id: "m-frozen-test".into(),
+        goal: "test frozen checklist".into(),
+        non_goals: vec![],
+        acceptance: vec!["done".into()],
+        lane: "express".into(),
+        verify_plan: vec![],
+        human_gates: vec![],
+        human_gates_approved: vec![],
+        risks: vec![],
+        worktree_name: None,
+        branch: None,
+        worktree_path: None,
+        target_worktree_path: None,
+        target_branch: None,
+        target_head: None,
+        rationale: String::new(),
+        phase: "execute".into(),
+        approved: true,
+        hash,
+        graph_hash,
+        needs_reapproval: false,
+        amendment_note: None,
+        draft_locks: Default::default(),
+    };
+    mission.save(&sess_path).unwrap();
+
+    let mut state = AppState::new(Mode::Chat);
+    state.rest.sessions[0].agent_mode = AgentMode::Sdlc;
+    state.rest.sessions[0].sdlc_phase = Some("execute".into());
+    state.rest.sessions[0].sdlc_pending_node_id = Some(id_a.clone());
+    state.rest.sessions[0].session = Some(Session::new(
+        format!("frozen-{label}"),
+        sess_path.clone(),
+        "test-hash".into(),
+        Settings::default(),
+        Conversation::new(""),
+    ));
+
+    (
+        sess_path,
+        state,
+        id_a,
+        id_b,
+        original_todo.to_string(),
+    )
+}
+
+fn graph_fingerprint(sess_path: &std::path::Path) -> Vec<(String, String, String)> {
+    let conn = crate::model::msglog::open(sess_path).unwrap();
+    crate::model::sdlc::graph::list_all(&conn)
+        .unwrap()
+        .into_iter()
+        .map(|n| (n.id, n.title, n.status))
+        .collect()
+}
+
+#[test]
+fn frozen_checklist_happy_handover_is_atomic_and_sets_pending() {
+    use super::intercept_checklist_sdlc;
+
+    let (sess_path, mut state, id_a, id_b, original_todo) =
+        frozen_checklist_fixture("handover");
+    struct RmGuard(std::path::PathBuf);
+    impl Drop for RmGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _guard = RmGuard(sess_path.clone());
+
+    let args = format!(
+        r#"{{"todos":[
+            {{"content":"task-a","status":"pending","priority":"medium","id":"{id_a}"}},
+            {{"content":"task-b","status":"in_progress","priority":"high","id":"{id_b}"}}
+        ]}}"#
+    );
+    let c = call("checklist", &args);
+    let flow = intercept_checklist_sdlc(&mut state, 0, &c);
+    assert!(matches!(flow, InterceptFlow::Continue));
+
+    let msg = &state.rest.sessions[0].tool_results[0].1;
+    assert!(
+        msg.contains("graph authoritative"),
+        "expected success: {msg}"
+    );
+    assert_eq!(
+        state.rest.sessions[0].sdlc_pending_node_id.as_deref(),
+        Some(id_b.as_str())
+    );
+
+    let nodes = graph_fingerprint(&sess_path);
+    assert_eq!(
+        nodes
+            .iter()
+            .find(|(id, _, _)| id == &id_a)
+            .map(|(_, _, s)| s.as_str()),
+        Some("pending")
+    );
+    assert_eq!(
+        nodes
+            .iter()
+            .find(|(id, _, _)| id == &id_b)
+            .map(|(_, _, s)| s.as_str()),
+        Some("active")
+    );
+    assert_eq!(
+        std::fs::read_to_string(sess_path.join("memory/TODO.md")).unwrap(),
+        original_todo,
+        "TODO.md must stay untouched"
+    );
+}
+
+#[test]
+fn frozen_checklist_omitted_member_fails_closed_and_preserves_state() {
+    use super::intercept_checklist_sdlc;
+
+    let (sess_path, mut state, id_a, _id_b, _) = frozen_checklist_fixture("omit");
+    struct RmGuard(std::path::PathBuf);
+    impl Drop for RmGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _guard = RmGuard(sess_path.clone());
+    let before = graph_fingerprint(&sess_path);
+    let pending_before = state.rest.sessions[0].sdlc_pending_node_id.clone();
+
+    // Missing task-b → membership failure.
+    let args = format!(
+        r#"{{"todos":[{{"content":"task-a","status":"in_progress","priority":"high","id":"{id_a}"}}]}}"#
+    );
+    let c = call("checklist", &args);
+    let _ = intercept_checklist_sdlc(&mut state, 0, &c);
+
+    let msg = &state.rest.sessions[0].tool_results[0].1;
+    assert!(
+        msg.contains("cannot change frozen graph structure")
+            || msg.contains("frozen checklist rejected"),
+        "expected membership error: {msg}"
+    );
+    assert_eq!(graph_fingerprint(&sess_path), before);
+    assert_eq!(
+        state.rest.sessions[0].sdlc_pending_node_id,
+        pending_before,
+        "pending must be untouched on error"
+    );
+}
+
+#[test]
+fn frozen_checklist_unknown_id_fails_without_title_fallback() {
+    use super::intercept_checklist_sdlc;
+
+    let (sess_path, mut state, _id_a, id_b, _) = frozen_checklist_fixture("unknown-id");
+    struct RmGuard(std::path::PathBuf);
+    impl Drop for RmGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _guard = RmGuard(sess_path.clone());
+    let before = graph_fingerprint(&sess_path);
+    let pending_before = state.rest.sessions[0].sdlc_pending_node_id.clone();
+
+    // Unknown id on task-a content — must not fall back to title match.
+    let args = format!(
+        r#"{{"todos":[
+            {{"content":"task-a","status":"pending","priority":"medium","id":"not-a-real-id"}},
+            {{"content":"task-b","status":"in_progress","priority":"high","id":"{id_b}"}}
+        ]}}"#
+    );
+    let c = call("checklist", &args);
+    let _ = intercept_checklist_sdlc(&mut state, 0, &c);
+
+    let msg = &state.rest.sessions[0].tool_results[0].1;
+    assert!(
+        msg.contains("cannot change frozen graph structure")
+            || msg.contains("frozen checklist rejected"),
+        "expected unknown-id error: {msg}"
+    );
+    assert_eq!(graph_fingerprint(&sess_path), before);
+    assert_eq!(state.rest.sessions[0].sdlc_pending_node_id, pending_before);
+}
+
+#[test]
+fn frozen_checklist_qualified_content_echo_resolves() {
+    use super::intercept_checklist_sdlc;
+    use crate::model::sdlc::graph::{
+        ensure_tables, list_all, replace_nodes_from_checklist, ChecklistNode,
+    };
+    use crate::model::sdlc::mission::{
+        ContractHashInput, Mission, CURRENT_CONTRACT_VERSION,
+    };
+    use crate::model::conversation::Conversation;
+    use crate::model::session::Session;
+    use crate::model::settings::Settings;
+
+    let sess_path = std::env::temp_dir().join(format!(
+        "koma-sdlc-frozen-qualified-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&sess_path).unwrap();
+    struct RmGuard(std::path::PathBuf);
+    impl Drop for RmGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _guard = RmGuard(sess_path.clone());
+
+    let conn = crate::model::msglog::open(&sess_path).unwrap();
+    ensure_tables(&conn).unwrap();
+    replace_nodes_from_checklist(
+        &conn,
+        &[
+            ChecklistNode {
+                title: "parent".into(),
+                status: "pending".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec![],
+            },
+            ChecklistNode {
+                title: "child".into(),
+                status: "pending".into(),
+                parent_title: Some("parent".into()),
+                id: None,
+                owned_paths: vec![],
+            },
+            ChecklistNode {
+                title: "sibling".into(),
+                status: "pending".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec![],
+            },
+        ],
+    )
+    .unwrap();
+    let nodes = list_all(&conn).unwrap();
+    let child_id = nodes
+        .iter()
+        .find(|n| n.title == "child")
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    let graph_hash = Some("frozen-qualified-hash".to_string());
+    let hash = Mission::compute_contract_hash_full(ContractHashInput {
+        goal: "qualified echo",
+        acceptance: &["done".into()],
+        non_goals: &[],
+        lane: "express",
+        verify_plan: &[],
+        human_gates: &[],
+        risks: &[],
+        rationale: "",
+        graph_hash: graph_hash.as_deref(),
+        worktree_name: None,
+        branch: None,
+        worktree_path: None,
+        target_worktree_path: None,
+        target_branch: None,
+        target_head: None,
+    });
+    Mission {
+        contract_version: CURRENT_CONTRACT_VERSION,
+        id: "m-qualified".into(),
+        goal: "qualified echo".into(),
+        non_goals: vec![],
+        acceptance: vec!["done".into()],
+        lane: "express".into(),
+        verify_plan: vec![],
+        human_gates: vec![],
+        human_gates_approved: vec![],
+        risks: vec![],
+        worktree_name: None,
+        branch: None,
+        worktree_path: None,
+        target_worktree_path: None,
+        target_branch: None,
+        target_head: None,
+        rationale: String::new(),
+        phase: "execute".into(),
+        approved: true,
+        hash,
+        graph_hash,
+        needs_reapproval: false,
+        amendment_note: None,
+        draft_locks: Default::default(),
+    }
+    .save(&sess_path)
+    .unwrap();
+
+    let mut state = AppState::new(Mode::Chat);
+    state.rest.sessions[0].agent_mode = AgentMode::Sdlc;
+    state.rest.sessions[0].sdlc_phase = Some("execute".into());
+    state.rest.sessions[0].session = Some(Session::new(
+        "frozen-qualified".into(),
+        sess_path.clone(),
+        "test-hash".into(),
+        Settings::default(),
+        Conversation::new(""),
+    ));
+
+    // Echo display label `parent › child` without id — must resolve via qualified match.
+    let args = r#"{"todos":[
+        {"content":"parent","status":"pending","priority":"medium"},
+        {"content":"parent › child","status":"in_progress","priority":"high"},
+        {"content":"sibling","status":"pending","priority":"low"}
+    ]}"#;
+    let c = call("checklist", args);
+    let _ = intercept_checklist_sdlc(&mut state, 0, &c);
+
+    let msg = &state.rest.sessions[0].tool_results[0].1;
+    assert!(
+        msg.contains("graph authoritative"),
+        "qualified content must succeed: {msg}"
+    );
+    assert_eq!(
+        state.rest.sessions[0].sdlc_pending_node_id.as_deref(),
+        Some(child_id.as_str())
+    );
+    let after = list_all(&crate::model::msglog::open(&sess_path).unwrap()).unwrap();
+    assert_eq!(
+        after
+            .iter()
+            .find(|n| n.title == "child")
+            .map(|n| n.status.as_str()),
+        Some("active")
+    );
+}
+
+#[test]
+fn frozen_checklist_all_sealed_clears_pending() {
+    use super::intercept_checklist_sdlc;
+    use crate::model::sdlc::graph::{
+        ensure_tables, list_all, replace_nodes_from_checklist, set_verify_bit_with_evidence,
+        ChecklistNode,
+    };
+    use crate::model::sdlc::mission::{
+        ContractHashInput, Mission, CURRENT_CONTRACT_VERSION,
+    };
+    use crate::model::conversation::Conversation;
+    use crate::model::session::Session;
+    use crate::model::settings::Settings;
+
+    let sess_path = std::env::temp_dir().join(format!(
+        "koma-sdlc-frozen-sealed-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&sess_path).unwrap();
+    struct RmGuard(std::path::PathBuf);
+    impl Drop for RmGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _guard = RmGuard(sess_path.clone());
+
+    let conn = crate::model::msglog::open(&sess_path).unwrap();
+    ensure_tables(&conn).unwrap();
+    replace_nodes_from_checklist(
+        &conn,
+        &[
+            ChecklistNode {
+                title: "only".into(),
+                status: "pending".into(),
+                parent_title: None,
+                id: None,
+                owned_paths: vec![],
+            },
+        ],
+    )
+    .unwrap();
+    let id = list_all(&conn).unwrap()[0].id.clone();
+    set_verify_bit_with_evidence(&conn, &id, true, None).unwrap();
+
+    let graph_hash = Some("frozen-sealed-hash".to_string());
+    let hash = Mission::compute_contract_hash_full(ContractHashInput {
+        goal: "sealed clear",
+        acceptance: &["done".into()],
+        non_goals: &[],
+        lane: "express",
+        verify_plan: &[],
+        human_gates: &[],
+        risks: &[],
+        rationale: "",
+        graph_hash: graph_hash.as_deref(),
+        worktree_name: None,
+        branch: None,
+        worktree_path: None,
+        target_worktree_path: None,
+        target_branch: None,
+        target_head: None,
+    });
+    Mission {
+        contract_version: CURRENT_CONTRACT_VERSION,
+        id: "m-sealed".into(),
+        goal: "sealed clear".into(),
+        non_goals: vec![],
+        acceptance: vec!["done".into()],
+        lane: "express".into(),
+        verify_plan: vec![],
+        human_gates: vec![],
+        human_gates_approved: vec![],
+        risks: vec![],
+        worktree_name: None,
+        branch: None,
+        worktree_path: None,
+        target_worktree_path: None,
+        target_branch: None,
+        target_head: None,
+        rationale: String::new(),
+        phase: "execute".into(),
+        approved: true,
+        hash,
+        graph_hash,
+        needs_reapproval: false,
+        amendment_note: None,
+        draft_locks: Default::default(),
+    }
+    .save(&sess_path)
+    .unwrap();
+
+    let mut state = AppState::new(Mode::Chat);
+    state.rest.sessions[0].agent_mode = AgentMode::Sdlc;
+    state.rest.sessions[0].sdlc_phase = Some("execute".into());
+    state.rest.sessions[0].sdlc_pending_node_id = Some("stale-pending".into());
+    state.rest.sessions[0].session = Some(Session::new(
+        "frozen-sealed".into(),
+        sess_path.clone(),
+        "test-hash".into(),
+        Settings::default(),
+        Conversation::new(""),
+    ));
+
+    let args = format!(
+        r#"{{"todos":[{{"content":"only","status":"completed","priority":"medium","id":"{id}"}}]}}"#
+    );
+    let c = call("checklist", &args);
+    let _ = intercept_checklist_sdlc(&mut state, 0, &c);
+
+    let msg = &state.rest.sessions[0].tool_results[0].1;
+    assert!(
+        msg.contains("graph authoritative"),
+        "all-sealed batch must succeed: {msg}"
+    );
+    assert!(
+        state.rest.sessions[0].sdlc_pending_node_id.is_none(),
+        "Ok(None) must clear pending ownership"
+    );
+    let after = list_all(&crate::model::msglog::open(&sess_path).unwrap()).unwrap();
+    assert_eq!(after[0].status, "done");
+}
+
 #[test]
 fn mission_prepare_outside_sdlc_rejects_without_state_or_artifact_mutation() {
     use super::intercept_mission_prepare;
@@ -762,8 +1312,7 @@ fn mission_prepare_outside_sdlc_rejects_without_state_or_artifact_mutation() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// plan_todos must be empty outside Plan mode - SDLC checklist does not
-/// populate it (graph is authority for SDLC; plan_todos is Plan-only).
+/// plan_todos outside Plan may be empty; SDLC projects graph into plan_todos at runtime.
 #[test]
 fn plan_todos_empty_outside_plan_mode() {
     use crate::app::mode::Mode;
@@ -775,12 +1324,5 @@ fn plan_todos_empty_outside_plan_mode() {
     assert!(
         state.rest.sessions[0].plan_todos.is_empty(),
         "plan_todos must be empty in Auto mode"
-    );
-    // In SDLC mode, plan_todos should also be empty (SDLC uses L2 graph).
-    state.rest.sessions[0].agent_mode = AgentMode::Sdlc;
-    state.rest.sessions[0].sdlc_phase = Some("execute".into());
-    assert!(
-        state.rest.sessions[0].plan_todos.is_empty(),
-        "plan_todos must be empty in SDLC mode"
     );
 }

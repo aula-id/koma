@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import type { PushEnvelope } from '../store/koma'
 
+// Node test harness: koma store uses rAF for some push paths.
+if (typeof globalThis.requestAnimationFrame !== 'function') {
+  globalThis.requestAnimationFrame = (cb: FrameRequestCallback) =>
+    setTimeout(() => cb(Date.now()), 0) as unknown as number
+}
+
 const browser = globalThis as unknown as {
   window?: { ipc?: { postMessage(message: string): void } }
 }
@@ -26,13 +32,14 @@ const snapshot = (
 })
 
 // Snapshot adopts SDLC fields only in SDLC mode and rejects stale host data otherwise.
+// Graph checklist rows ride planTodos in SDLC (L2 projection); clear in Auto.
 useKoma.getState().push(snapshot('sdlc-a', 'sdlc', {
   sdlcPhase: 'execute',
   sdlcGoal: 'goal-a',
   sdlcBranch: 'sdlc/a',
   sdlcOpen: 3,
   sdlcSealed: 2,
-  planTodos: [{ content: 'stale plan', status: 'pending', locked: false }],
+  planTodos: [{ content: 'mission leaf', status: 'in_progress', locked: false }],
 }))
 let session = useKoma.getState().session
 assert.equal(session.sdlcPhase, 'execute')
@@ -40,7 +47,8 @@ assert.equal(session.sdlcGoal, 'goal-a')
 assert.equal(session.sdlcBranch, 'sdlc/a')
 assert.equal(session.sdlcOpen, 3)
 assert.equal(session.sdlcSealed, 2)
-assert.deepEqual(session.planTodos, [])
+assert.equal(session.planTodos.length, 1)
+assert.equal(session.planTodos[0].content, 'mission leaf')
 
 useKoma.getState().push(snapshot('auto-b', 'auto', {
   sdlcPhase: 'execute',
@@ -90,7 +98,9 @@ useKoma.getState().push(snapshot('sdlc-d', 'sdlc', {
   sdlcGoal: 'goal-d',
   sdlcOpen: 1,
   sdlcSealed: 0,
+  planTodos: [{ content: 'd-leaf', status: 'pending', locked: false }],
 }))
+assert.equal(useKoma.getState().session.planTodos.length, 1)
 useKoma.getState().push({
   k: 'Status',
   session: 'sdlc-d',
@@ -103,5 +113,8 @@ assert.equal(session.sdlcPhase, null)
 assert.equal(session.sdlcGoal, null)
 assert.equal(session.sdlcOpen, null)
 assert.equal(session.sdlcSealed, null)
+// Leaving SDLC via Status to plan keeps previous planTodos until Snapshot
+// (modeChanged preserves planTodos when newMode==='plan').
+assert.equal(session.planTodos.length, 1)
 
 console.log('sdlcModeIsolation.test.ts: production push reducer tests passed')

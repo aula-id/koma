@@ -252,6 +252,53 @@ pub(crate) fn is_openrouter(endpoint: &str) -> bool {
     endpoint.to_lowercase().contains("openrouter")
 }
 
+/// True when `endpoint` is direct xAI (`api.x.ai`). Used to scope max_tokens and
+/// effort clamps that must NOT affect OpenRouter `xai/grok-*` routes or other
+/// OpenAI-compatible hosts. OAuth and API-key xAI share the same body shape.
+pub(crate) fn is_xai(endpoint: &str) -> bool {
+    endpoint.to_lowercase().contains("api.x.ai")
+}
+
+/// Interactive completion budget for direct xAI (`api.x.ai`). ~300k-class
+/// context; 256k leaves headroom without starving hidden reasoning + answer.
+/// ChatGPT Codex OAuth does **not** use this — `/responses` rejects
+/// `max_output_tokens` (live unsupported-parameter).
+pub(crate) const XAI_INTERACTIVE_MAX_TOKENS: u32 = 256_000;
+
+/// Interactive-path `max_tokens` runaway cap.
+///
+/// Direct xAI (`api.x.ai`, OAuth and API key share the body) uses
+/// [`XAI_INTERACTIVE_MAX_TOKENS`]. DeepSeek/custom OpenAI-compat keep 32k.
+/// Codex Responses: no output-budget field (backend 400s on it).
+pub(super) fn interactive_max_tokens(endpoint: &str) -> u32 {
+    if is_xai(endpoint) {
+        XAI_INTERACTIVE_MAX_TOKENS
+    } else {
+        32_000
+    }
+}
+
+/// Clamp a stored effort token for the request host.
+///
+/// Direct xAI overlay only advertises `low` / `high`. Tokens carried over from
+/// OpenAI/Codex menus (`minimal`/`medium`/`xhigh`/`max`) are mapped so the wire
+/// never sends an unsupported value. OpenRouter `xai/grok-*` is NOT clamped
+/// (overlay there may allow `medium`). Empty / off / already-valid tokens pass.
+pub(super) fn clamp_effort_for_endpoint(endpoint: &str, effort: &str) -> String {
+    let e = effort.trim();
+    if !is_xai(endpoint) {
+        return e.to_string();
+    }
+    match e {
+        "" | "default" | "off" | "none" | "low" | "high" => e.to_string(),
+        "minimal" => "low".to_string(),
+        // Prefer explicit high over omitting (provider default is opaque).
+        "medium" | "xhigh" | "max" => "high".to_string(),
+        // Unknown tokens from other providers → high (safe coding default).
+        _ => "high".to_string(),
+    }
+}
+
 /// True when `conn` should receive `reasoning: {exclude: true}` in a oneshot
 /// request body (classifier / fold / blob-picker) — i.e. [`is_openrouter`]'s
 /// endpoint-substring check, OR `conn.api_type == ApiType::KomaFree`.
@@ -276,6 +323,17 @@ pub(super) fn accepts_reasoning_exclude(conn: &Conn<'_>) -> bool {
     is_openrouter(conn.endpoint) || conn.api_type == ApiType::KomaFree
 }
 
+/// True when chat-completions should send OpenRouter's proprietary
+/// `usage: {include: true}` (tokens + cost). OpenRouter URL substring **or**
+/// koma-free (same dialect, endpoint lacks `"openrouter"`).
+///
+/// Direct OpenAI-compatible hosts must **not** get this field — they reject
+/// unknown `usage`. Streaming direct hosts use `stream_options.include_usage`
+/// instead; oneshots omit both.
+pub(super) fn wants_openrouter_usage(conn: &Conn<'_>) -> bool {
+    is_openrouter(conn.endpoint) || conn.api_type == ApiType::KomaFree
+}
+
 /// Map a stored effort token to the request `reasoning` object.
 ///
 /// - `""` / `"default"` → `None`: omit `reasoning` entirely so the model uses
@@ -290,6 +348,7 @@ pub(super) fn accepts_reasoning_exclude(conn: &Conn<'_>) -> bool {
 /// Free helper (not a method) so it has no hidden state — what you pass is what
 /// you get. Applied only on the interactive chat path.
 pub(super) fn reasoning_config(effort: &str, endpoint: &str) -> Option<ReasoningConfig> {
+    let effort = clamp_effort_for_endpoint(endpoint, effort);
     match effort.trim() {
         "" | "default" => None,
         "off" | "none" => {

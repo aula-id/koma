@@ -610,10 +610,9 @@ fn push_snapshot_if_changed(
         })
         .collect();
 
-    // Plan-mode todo checklist (Explore "PLAN" section): the foreground session's
-    // mirror of `plan_todos.md`, including the two locked workflow rails (flagged,
-    // not dropped — see the daemon's snapshot projection). Empty = no plan in
-    // progress right now.
+    // Explore checklist projection: Plan → mirror of `plan_todos.md` (locked rails
+    // flagged, not dropped); SDLC → L2 graph via `plan_todos` runtime field.
+    // Empty = no plan/mission checklist in the foreground session right now.
     let plan_todos: Vec<PushPlanTodo> = fg
         .plan_todos
         .iter()
@@ -621,6 +620,7 @@ fn push_snapshot_if_changed(
             content: t.content.clone(),
             status: t.status.label(),
             locked: t.locked,
+            node_id: t.node_id.clone(),
         })
         .collect();
 

@@ -149,15 +149,15 @@ pub fn session_snapshot(
                 status: c.status.clone(),
             })
             .collect(),
-        // Plan-mode todo checklist: only projected for foreground mode=plan.
-        // Outside Plan mode the array is empty — no stale rows bleed across modes.
-        plan_todos: if matches!(agent_mode, AgentMode::Plan) {
+        // Todo checklist for Explore: Plan file or SDLC graph projection.
+        plan_todos: if matches!(agent_mode, AgentMode::Plan | AgentMode::Sdlc) {
             rt.plan_todos
                 .iter()
                 .map(|it| crate::ipc::proto::PlanTodoSnapshot {
                     content: it.content.clone(),
                     status: it.status.clone(),
                     locked: it.locked,
+                    node_id: it.node_id.clone(),
                 })
                 .collect()
         } else {

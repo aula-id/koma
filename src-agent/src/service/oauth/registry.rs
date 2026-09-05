@@ -8,11 +8,16 @@ use crate::dto::openrouter::ModelInfo;
 use crate::model::app_config::OAuthProvider;
 
 /// Models a ChatGPT subscription can use via the codex backend.
-/// Source: opencode's ALLOWED_MODELS (plugin/openai/codex.ts) — plain base ids;
-/// effort is carried in reasoning.effort, never as an id suffix. 9router's
-/// -high/-review/-none ids are ITS OWN aliases and 404/entitlement-fail here.
+///
+/// Source of truth for the **picker list** (`codex_static_catalogue`). Effort /
+/// pricing for the same ids live in `models.json` under the Codex endpoint key
+/// (`https://chatgpt.com/backend-api/codex`) — keep those blocks in sync.
+///
+/// Aligned with OpenCode `ALLOWED_MODELS` (plain base ids; no bare `gpt-5.6`,
+/// which OpenCode denies). Effort is carried in `reasoning.effort`, never as an
+/// id suffix. 9router's `-high`/`-review`/`-none` ids are ITS OWN aliases and
+/// 404/entitlement-fail here.
 pub const CODEX_MODELS: &[&str] = &[
-    "gpt-5.6",
     "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",
@@ -244,5 +249,101 @@ pub fn meta(p: OAuthProvider) -> OAuthProviderMeta {
             chat_endpoint: COMMANDCODE_API_BASE,
             catalogue_endpoint: COMMANDCODE_API_BASE,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+
+    #[test]
+    fn codex_models_match_open_code_allowlist_shape() {
+        // No bare gpt-5.6; OpenCode denies bare 5.6 / pro modes.
+        assert!(!CODEX_MODELS.iter().any(|m| *m == "gpt-5.6"));
+        assert!(!CODEX_MODELS.iter().any(|m| m.contains("-pro")));
+        // Required plain ids.
+        for id in ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"] {
+            assert!(
+                CODEX_MODELS.contains(&id),
+                "CODEX_MODELS missing {id}"
+            );
+        }
+        // Static catalogue mirrors CODEX_MODELS 1:1.
+        let cat = codex_static_catalogue();
+        assert_eq!(cat.len(), CODEX_MODELS.len());
+        for (i, m) in cat.iter().enumerate() {
+            assert_eq!(m.id, CODEX_MODELS[i]);
+        }
+    }
+
+    #[test]
+    fn bundled_codex_overlay_covers_static_picker_ids() {
+        // models.json is the effort authority; every picker id must appear there
+        // so effort_menu can return minimal|low|medium|high|xhigh.
+        let raw = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../models.json"
+        ));
+        let v: serde_json::Value = serde_json::from_str(raw).expect("models.json parses");
+        let arr = v
+            .get("https://chatgpt.com/backend-api/codex")
+            .and_then(|x| x.as_array())
+            .expect("codex endpoint block");
+        let ids: Vec<&str> = arr
+            .iter()
+            .filter_map(|m| m.get("id").and_then(|i| i.as_str()))
+            .collect();
+        for id in CODEX_MODELS {
+            assert!(
+                ids.contains(id),
+                "models.json Codex block missing picker id {id} (have {ids:?})"
+            );
+        }
+        for m in arr {
+            let efforts = m
+                .pointer("/reasoning/supported_efforts")
+                .and_then(|e| e.as_array())
+                .expect("supported_efforts");
+            let tokens: Vec<&str> = efforts.iter().filter_map(|t| t.as_str()).collect();
+            for need in ["minimal", "low", "medium", "high", "xhigh"] {
+                assert!(
+                    tokens.contains(&need),
+                    "Codex model {} missing effort {need}",
+                    m["id"]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bundled_xai_overlay_has_grok_46_and_low_high_only() {
+        let raw = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../models.json"
+        ));
+        let v: serde_json::Value = serde_json::from_str(raw).expect("models.json parses");
+        let arr = v
+            .get("https://api.x.ai/v1")
+            .and_then(|x| x.as_array())
+            .expect("xai endpoint block");
+        let ids: Vec<&str> = arr
+            .iter()
+            .filter_map(|m| m.get("id").and_then(|i| i.as_str()))
+            .collect();
+        assert!(ids.contains(&"grok-4.6"), "missing grok-4.6 in {ids:?}");
+        for m in arr {
+            let efforts = m
+                .pointer("/reasoning/supported_efforts")
+                .and_then(|e| e.as_array())
+                .expect("supported_efforts");
+            let tokens: Vec<&str> = efforts.iter().filter_map(|t| t.as_str()).collect();
+            assert_eq!(
+                tokens,
+                ["low", "high"],
+                "xAI model {} efforts must be low|high only",
+                m["id"]
+            );
+        }
     }
 }

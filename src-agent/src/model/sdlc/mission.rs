@@ -930,6 +930,12 @@ pub fn build_seed_capsule_with_all(
             ));
         }
     }
+    if let Some(claimed) = open_nodes.iter().find(|n| n.status == "active") {
+        s.push_str(&format!(
+            "\n**CLAIMED (harness):** {} ({}) — implement this leaf next; cwd is bound worktree.\n",
+            claimed.title, claimed.id
+        ));
+    }
 
     s.push_str("\n## SEALED\n");
     if sealed_nodes.is_empty() {
@@ -966,8 +972,9 @@ pub fn build_seed_capsule_with_all(
     s.push_str(
         "\n## Law\n\
          - Never force-push; plain push only the mission branch.\n\
-         - One OPEN leaf claim at a time (main: checklist in_progress or task.node_id); seal only via mission_verify.\n\
-         - Graph is authority; checklist cannot bare-done.\n\
+         - Harness binds worktree + claims first OPEN leaf on approve — do not checkout/cd/git_worktree or re-claim unless CLAIMED is empty.\n\
+         - One OPEN leaf claim at a time; seal only via mission_verify with evidence.\n\
+         - Graph is authority; checklist cannot bare-done; /todo shows graph projection.\n\
          - Do not escape the bound mission worktree/branch during execute/integrate.\n\
          - No auto-commit; integrate needs clean mission WT + commits ahead.\n\
          - If the claimed leaf has owned_paths, stay inside them.\n\

@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::app::state::{AgentMode, AppState};
 use crate::dto::chat::Role;
@@ -329,11 +329,31 @@ fn mission_body_for_result(state: &AppState) -> String {
 /// prepare is a no-op once the single mission worktree is live. `mission_prepare`
 /// remains available if the runtime is left in prepare without auto-advance
 /// (future multi-WT / explicit topology).
+///
+/// Also auto-claims the first OPEN leaf so the model starts guided (no manual
+/// checklist in_progress / git checkout ceremony).
 fn advance_mission_after_bind(state: &mut AppState, sess_idx: usize) -> Result<(), String> {
     state
         .rest
         .apply_sdlc_phase(sess_idx, "execute")
-        .map_err(|e| format!("phase persistence failed: {e}"))
+        .map_err(|e| format!("phase persistence failed: {e}"))?;
+    // Auto-claim first OPEN leaf while still in the approve path.
+    let sess_path = state.rest.sessions[sess_idx]
+        .session
+        .as_ref()
+        .map(|s| s.path.clone());
+    state.rest.sessions[sess_idx].sdlc_pending_node_id = None;
+    if let Some(path) = sess_path {
+        state.rest.sessions[sess_idx].sdlc_pending_node_id =
+            crate::model::sdlc::graph::auto_claim_first_open_leaf_at(&path)
+                .context("mission auto-claim failed after binding")
+                .map_err(|e| format!("{e:#}"))?
+                .map(|(id, _title)| id);
+        // Project graph into plan_todos so /todo + Explore list mission tasks.
+        state.rest.sessions[sess_idx].plan_todos =
+            crate::model::sdlc::graph::load_sdlc_todo_items(&path);
+    }
+    Ok(())
 }
 
 /// Handle `Action::ApprovePlan` when the pending call is `mission_ready`:
@@ -351,8 +371,8 @@ pub(super) fn handle_approve_mission(
     match establish_mission_binding(state, client, handle) {
         Ok(wt_note) => {
             if let Err(detail) = advance_mission_after_bind(state, fgi) {
-                // Phase persistence failed after binding succeeded.
-                // Roll back worktree + unbind mission; use binding failure response.
+                // Phase persistence or auto-claim failed after binding succeeded.
+                // Restore workspace + unbind mission; do not delete the worktree.
                 restore_primary_workspace_after_failed_bind(state, fgi);
                 if let Some(path) = state.rest.sessions[fgi]
                     .session
@@ -393,12 +413,37 @@ pub(super) fn handle_approve_mission(
             let mut body = mission_body_for_result(state);
             body.push_str("\n\n");
             body.push_str(&wt_note);
+            if let Some(ref nid) = state.rest.sessions[fgi].sdlc_pending_node_id {
+                let title = state.rest.sessions[fgi]
+                    .session
+                    .as_ref()
+                    .and_then(|s| {
+                        crate::model::msglog::open(&s.path).ok().and_then(|conn| {
+                            let _ = crate::model::sdlc::graph::ensure_tables(&conn);
+                            crate::model::sdlc::graph::get_node(&conn, nid)
+                                .ok()
+                                .flatten()
+                                .map(|n| n.title)
+                        })
+                    })
+                    .unwrap_or_else(|| nid.clone());
+                body.push_str(&format!(
+                    "\n\nHARNESS: claimed OPEN leaf `{title}` ({nid}). CWD is the bound \
+                     mission worktree — do not checkout/cd/git_worktree. Implement this leaf, \
+                     then mission_verify with evidence."
+                ));
+            } else {
+                body.push_str(
+                    "\n\nHARNESS: worktree bound and phase=execute. No claimable OPEN leaf yet \
+                     — check graph / mission_ready tasks.",
+                );
+            }
             answer_plan_ready(state, crate::tool::sdlc::mission_approved_text(&body));
             // Drop premature sibling tools from the same batch as mission_ready.
             skip_trailing_after_plan_ready(
                 state,
                 "skipped — mission approved; do not run pre-approval tool calls. \
-                 Execute the approved mission on this turn (bound worktree; see contract above).",
+                 Execute the claimed leaf in the bound worktree (see approve result).",
             );
 
             let approved_mission = mission_body_for_result(state)
@@ -461,8 +506,8 @@ pub(super) fn handle_approve_mission_compact(
     match establish_mission_binding(state, client, handle) {
         Ok(_wt_note) => {
             if let Err(detail) = advance_mission_after_bind(state, fgi) {
-                // Phase persistence failed after binding succeeded.
-                // Roll back worktree + unbind mission; use binding failure response.
+                // Phase persistence or auto-claim failed after binding succeeded.
+                // Restore workspace + unbind mission; do not delete the worktree.
                 restore_primary_workspace_after_failed_bind(state, fgi);
                 if let Some(path) = state.rest.sessions[fgi]
                     .session

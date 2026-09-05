@@ -50,6 +50,39 @@ fn codex_identity_falls_back_to_top_level_and_access_token_email() {
 }
 
 #[test]
+fn codex_residency_from_auth_claim() {
+    let token = make_jwt(&serde_json::json!({
+        "https://api.openai.com/auth": {
+            "chatgpt_compute_residency": "us-west",
+        },
+    }));
+    assert_eq!(codex_residency(&token).as_deref(), Some("us-west"));
+}
+
+#[test]
+fn codex_residency_top_level_fallback() {
+    let token = make_jwt(&serde_json::json!({
+        "chatgpt_compute_residency": "eu",
+    }));
+    assert_eq!(codex_residency(&token).as_deref(), Some("eu"));
+}
+
+#[test]
+fn codex_residency_skips_no_constraint_and_empty() {
+    let none = make_jwt(&serde_json::json!({
+        "https://api.openai.com/auth": {
+            "chatgpt_compute_residency": "no_constraint",
+        },
+    }));
+    assert!(codex_residency(&none).is_none());
+    let empty = make_jwt(&serde_json::json!({
+        "chatgpt_compute_residency": "",
+    }));
+    assert!(codex_residency(&empty).is_none());
+    assert!(codex_residency("garbage").is_none());
+}
+
+#[test]
 fn expiry_reads_exp_claim() {
     let token = make_jwt(&serde_json::json!({"exp": 1_700_000_000u64}));
     assert_eq!(expiry(&token), 1_700_000_000);

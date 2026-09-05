@@ -596,6 +596,10 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
         return InterceptFlow::Continue;
     }
 
+    // Contract graph is on disk — project into plan_todos for /todo + Explore.
+    state.rest.sessions[sess_idx].plan_todos =
+        crate::model::sdlc::graph::load_sdlc_todo_items(&sess_path);
+
     // Compose the user-facing digest and swap into the stored tool-call args.
     let mut checklist = format!(
         "Mission ({} task{}{}):",
@@ -915,15 +919,45 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_verify(
 
     match result {
         Ok(()) => {
-            if pass
-                && state.rest.sessions[sess_idx]
-                    .sdlc_pending_node_id
-                    .as_deref()
-                    == Some(target_node.as_str())
-            {
+            let result_text = if pass {
+                // The seal is already committed. A failed subsequent claim is
+                // not a failed verify, and must never be reported as completion.
                 state.rest.sessions[sess_idx].sdlc_pending_node_id = None;
-            }
-            let result_text = crate::tool::sdlc::mission_verify_result(&target_node, pass);
+                match crate::model::sdlc::graph::auto_claim_first_open_leaf(&conn) {
+                    Ok(Some(next)) => {
+                        state.rest.sessions[sess_idx].sdlc_pending_node_id = Some(next.0.clone());
+                        crate::tool::sdlc::mission_verify_pass_footer(&target_node, Some(&next), None)
+                    }
+                    Ok(None) => {
+                        match crate::model::sdlc::graph::all_required_leaves_verified(&conn) {
+                            Ok(true) => crate::tool::sdlc::mission_verify_pass_footer(
+                                &target_node,
+                                None,
+                                mission.as_ref().map(|m| crate::model::sdlc::lane::keeper_ship_hint(&m.lane)),
+                            ),
+                            Ok(false) => format!(
+                                "{}\nNo next leaf claimed; unverified work remains. Inspect the graph before continuing.",
+                                crate::tool::sdlc::mission_verify_result(&target_node, true)
+                            ),
+                            Err(e) => format!(
+                                "{}\nerror: seal committed, but completion check failed: {e}",
+                                crate::tool::sdlc::mission_verify_result(&target_node, true)
+                            ),
+                        }
+                    }
+                    Err(e) => format!(
+                        "{}\nerror: seal committed, but next claim failed: {e}",
+                        crate::tool::sdlc::mission_verify_result(&target_node, true)
+                    ),
+                }
+            } else {
+                // The graph has successfully reopened this exact target.
+                state.rest.sessions[sess_idx].sdlc_pending_node_id = Some(target_node.clone());
+                crate::tool::sdlc::mission_verify_result(&target_node, false)
+            };
+
+            state.rest.sessions[sess_idx].plan_todos =
+                crate::model::sdlc::graph::load_sdlc_todo_items(&sess_path);
             state.rest.sessions[sess_idx]
                 .tool_results
                 .push((call.id.clone(), result_text));
@@ -1521,7 +1555,7 @@ fn apply_draft_field_value(
                     .filter(|s| !s.is_empty())
                     .collect::<Vec<_>>(),
                 serde_json::Value::String(s) => s
-                    .split(|c| c == '\n' || c == ';')
+                    .split(['\n', ';'])
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                     .map(str::to_string)
@@ -1581,15 +1615,17 @@ fn apply_draft_field_value(
     Ok(())
 }
 
-/// Intercept `checklist` while in SDLC mode: write through to sdlc_nodes AND
-/// memory/TODO.md (dual-write). Graph is authority; TODO cannot override it.
+/// Intercept `checklist` while in SDLC mode: write through to sdlc_nodes only.
+/// Graph is authority; TODO.md is not dual-written. /todo projects the graph.
 pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
     state: &mut AppState,
     sess_idx: usize,
     call: &ToolCall,
 ) -> InterceptFlow {
     use crate::app::mode::todo::TodoItem;
-    use crate::model::sdlc::graph::ChecklistNode;
+    use crate::model::sdlc::graph::{
+        apply_frozen_checklist, ChecklistNode, FrozenChecklistUpdate,
+    };
 
     let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
     let args: serde_json::Value =
@@ -1611,7 +1647,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
         .as_ref()
         .is_some_and(|m| m.approved && !m.needs_reapproval && m.graph_hash.is_some());
 
-    // Parse model items (optional parent).
+    // Parse model items (optional parent + optional graph node id).
     let model_items: Vec<(TodoItem, Option<String>)> = args
         .get("todos")
         .and_then(serde_json::Value::as_array)
@@ -1643,12 +1679,19 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
                         .map(str::to_string);
+                    let node_id = it
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
                     Some((
                         TodoItem {
                             content,
                             status,
                             priority,
                             locked: false,
+                            node_id,
                         },
                         parent,
                     ))
@@ -1658,22 +1701,25 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
         .unwrap_or_default();
     let n = model_items.len();
 
+    fn graph_status(status: &crate::app::mode::todo::TodoStatus) -> &'static str {
+        match status {
+            crate::app::mode::todo::TodoStatus::Completed => "done",
+            crate::app::mode::todo::TodoStatus::InProgress => "active",
+            crate::app::mode::todo::TodoStatus::Cancelled => "cancelled",
+            crate::app::mode::todo::TodoStatus::Pending => "pending",
+        }
+    }
+
+    // Raw content is authoritative: models often echo `parent › title` display
+    // labels from graph_as_todo_items; apply_frozen matches exact then qualified.
     let nodes: Vec<ChecklistNode> = model_items
         .iter()
-        .map(|(it, parent)| {
-            let status = match it.status {
-                crate::app::mode::todo::TodoStatus::Completed => "done",
-                crate::app::mode::todo::TodoStatus::InProgress => "active",
-                crate::app::mode::todo::TodoStatus::Cancelled => "cancelled",
-                crate::app::mode::todo::TodoStatus::Pending => "pending",
-            };
-            ChecklistNode {
-                title: it.content.clone(),
-                status: status.to_string(),
-                parent_title: parent.clone(),
-                id: None,
-                owned_paths: vec![],
-            }
+        .map(|(it, parent)| ChecklistNode {
+            title: it.content.clone(),
+            status: graph_status(&it.status).to_string(),
+            parent_title: parent.clone(),
+            id: it.node_id.clone(),
+            owned_paths: vec![],
         })
         .collect();
 
@@ -1682,60 +1728,37 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
             if let Err(e) = crate::model::sdlc::graph::ensure_tables(&conn) {
                 Err(format!("error: could not ensure graph tables: {e}"))
             } else if frozen {
-                // Status-only updates against frozen membership. No structural rewrite.
-                match crate::model::sdlc::graph::list_all(&conn) {
-                    Ok(existing) => {
-                        let existing_active: Vec<_> = existing
-                            .iter()
-                            .filter(|n| n.status != "cancelled")
-                            .cloned()
-                            .collect();
-                        let existing_titles: std::collections::HashSet<_> =
-                            existing_active.iter().map(|n| n.title.clone()).collect();
-                        let proposed: std::collections::HashSet<_> =
-                            nodes.iter().map(|n| n.title.clone()).collect();
-                        if proposed != existing_titles {
-                            Err("error: checklist cannot change frozen graph structure — \
+                let items: Vec<FrozenChecklistUpdate> = model_items
+                    .iter()
+                    .map(|(it, _)| FrozenChecklistUpdate {
+                        id: it.node_id.clone(),
+                        content: it.content.clone(),
+                        status: graph_status(&it.status).to_string(),
+                    })
+                    .collect();
+                match apply_frozen_checklist(&conn, &items) {
+                    Ok(ownership) => {
+                        state.rest.sessions[sess_idx].sdlc_pending_node_id =
+                            ownership.map(|(id, _)| id);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        let lower = msg.to_ascii_lowercase();
+                        let structural = lower.contains("frozen checklist must include")
+                            || lower.contains("unknown or ambiguous frozen checklist")
+                            || lower.contains("unknown or cancelled frozen checklist id")
+                            || lower.contains("duplicate frozen checklist alias");
+                        if structural {
+                            Err(
+                                "error: checklist cannot change frozen graph structure — \
                                  call mission_ready to amend and re-approve"
-                                .to_string())
+                                    .to_string(),
+                            )
                         } else {
-                            let mut err: Option<String> = None;
-                            for n in &nodes {
-                                if let Some(ex) =
-                                    existing_active.iter().find(|e| e.title == n.title)
-                                {
-                                    if ex.status == n.status {
-                                        continue;
-                                    }
-                                    // Active leaf claim must go through claim_leaf
-                                    // (exclusive OPEN claim + pending card).
-                                    if n.status == "active" {
-                                        if let Err(e) =
-                                            crate::model::sdlc::graph::claim_leaf(&conn, &ex.id)
-                                        {
-                                            err = Some(format!("error: claim_leaf failed: {e}"));
-                                            break;
-                                        }
-                                        state.rest.sessions[sess_idx].sdlc_pending_node_id =
-                                            Some(ex.id.clone());
-                                        continue;
-                                    }
-                                    // Atomic status + event (+ rollup) via graph API.
-                                    if let Err(e) = crate::model::sdlc::graph::update_node_status(
-                                        &conn, &ex.id, &n.status,
-                                    ) {
-                                        err = Some(format!("error: status update failed: {e}"));
-                                        break;
-                                    }
-                                }
-                            }
-                            match err {
-                                Some(e) => Err(e),
-                                None => Ok(()),
-                            }
+                            Err(format!("error: frozen checklist rejected: {e}"))
                         }
                     }
-                    Err(e) => Err(format!("error: could not list graph: {e}")),
                 }
             } else {
                 crate::model::sdlc::graph::replace_nodes_from_checklist(&conn, &nodes)
@@ -1746,7 +1769,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
     };
 
     if let Err(e) = graph_result {
-        // Graph is authority — do not write TODO on failure.
+        // Graph is authority — do not write TODO on failure; leave pending untouched.
         state.rest.sessions[sess_idx]
             .tool_results
             .push((call.id.clone(), e));
@@ -1755,8 +1778,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
     }
 
     // SDLC graph is the sole authority — no dual-write to TODO.md.
-    // Plan mode snapshots to plan_todos.md; ordinary todos use project TODO.md;
-    // SDLC checklist lives exclusively in the L2 graph (sdlc_nodes table).
+    // Refresh runtime plan_todos projection for /todo + Explore.
+    state.rest.sessions[sess_idx].plan_todos =
+        crate::model::sdlc::graph::load_sdlc_todo_items(&sess_path);
     let result = format!("Updated SDLC checklist: {n} task(s) (graph authoritative)");
 
     // Rebuild capsule after graph mutation.

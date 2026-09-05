@@ -136,6 +136,7 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
             status: t.status.clone(),
             priority: crate::app::mode::todo::TodoPriority::Medium,
             locked: t.locked,
+            node_id: t.node_id.clone(),
         })
         .collect();
     // Mirror the projected steer previews so the pending panel (and the Ctrl+X gate

@@ -217,6 +217,56 @@ fn to_text_format_is_flattened_shape() {
     assert_eq!(tf["format"]["schema"]["type"], "object");
     // NOT the chat-completions nesting.
     assert!(tf.get("json_schema").is_none());
+    // No model → no verbosity (legacy signature).
+    assert!(tf.get("verbosity").is_none());
+}
+
+#[test]
+fn freeform_text_verbosity_gate() {
+    let t = freeform_text("gpt-5.5").unwrap();
+    assert_eq!(t["verbosity"], "low");
+    assert!(t.get("format").is_none());
+    assert!(freeform_text("gpt-5.3-codex-spark").is_none());
+    assert!(freeform_text("gpt-5-chat-latest").is_none());
+    assert!(freeform_text("gpt-4o").is_none());
+}
+
+#[test]
+fn to_text_format_for_merges_verbosity_with_schema() {
+    let schema = serde_json::json!({"type": "object"});
+    let tf = to_text_format_for("gpt-5.4", "verdict", schema.clone());
+    assert_eq!(tf["format"]["name"], "verdict");
+    assert_eq!(tf["verbosity"], "low");
+    // codex id skips verbosity
+    let no = to_text_format_for("gpt-5.3-codex-spark", "verdict", schema);
+    assert!(no.get("verbosity").is_none());
+    assert_eq!(no["format"]["type"], "json_schema");
+}
+
+#[test]
+fn responses_request_serializes_verbosity() {
+    let body = ResponsesRequest {
+        model: "gpt-5.5".into(),
+        instructions: "sys".into(),
+        input: vec![],
+        tools: None,
+        tool_choice: "auto",
+        stream: true,
+        store: false,
+        reasoning: Some(ResponsesReasoning {
+            effort: "medium".into(),
+            summary: "auto",
+        }),
+        include: vec!["reasoning.encrypted_content"],
+        prompt_cache_key: "sid".into(),
+        text: freeform_text("gpt-5.5"),
+    };
+    let v = serde_json::to_value(&body).unwrap();
+    assert_eq!(v["text"]["verbosity"], "low");
+    assert_eq!(v["store"], false);
+    // Codex backend rejects max_output_tokens — never send either budget field.
+    assert!(v.get("max_tokens").is_none());
+    assert!(v.get("max_output_tokens").is_none());
 }
 
 #[test]

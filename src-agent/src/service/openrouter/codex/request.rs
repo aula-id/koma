@@ -349,11 +349,18 @@ fn truncate_name(name: &str) -> String {
 
 /// Map a stored effort token to `(responses_effort, include_encrypted_reasoning)`.
 ///
-/// - `""` / `"default"` → `("medium", true)`
+/// Codex REQUIRES a `reasoning` object on every request (unlike the API-key
+/// chat path, which omits `reasoning` when effort is empty). Semantics:
+///
+/// - `""` / `"default"` → `("medium", true)` — empty stored effort still forces
+///   medium + encrypted CoT include (wire requirement, not a UX default)
 /// - `"off"` / `"none"` → `("none", false)` (drop the encrypted-reasoning include)
 /// - `"minimal"` → `("low", true)` (Responses has no "minimal")
 /// - `"low"` / `"medium"` / `"high"` / `"xhigh"` → passthrough, `true`
 /// - anything else → `("medium", true)`
+///
+/// Product note: the settings UI may still store `""` (= "model default"); on
+/// Codex that is indistinguishable from an explicit `medium` on the wire.
 pub(super) fn codex_effort(effort: &str) -> (String, bool) {
     match effort.trim() {
         "" | "default" => ("medium".to_string(), true),
@@ -364,23 +371,62 @@ pub(super) fn codex_effort(effort: &str) -> (String, bool) {
     }
 }
 
+/// Whether this Codex model id should receive `text.verbosity: "low"`.
+///
+/// OpenCode parity (`transform.ts`): gpt-5.* free-form Responses, excluding ids
+/// that contain `codex` or `-chat` (those reject / only support medium).
+pub(super) fn wants_text_verbosity(model: &str) -> bool {
+    let m = model.to_ascii_lowercase();
+    m.contains("gpt-5.") && !m.contains("codex") && !m.contains("-chat")
+}
+
+/// Free-form Codex `text` object: `{ "verbosity": "low" }`, or `None` when the
+/// model is outside the verbosity gate.
+pub(super) fn freeform_text(model: &str) -> Option<serde_json::Value> {
+    if wants_text_verbosity(model) {
+        Some(serde_json::json!({ "verbosity": "low" }))
+    } else {
+        None
+    }
+}
+
 /// Build the Responses structured-output directive (`text` field). This is the
 /// FLATTENED shape `{"format":{"type":"json_schema","name":…,"strict":true,
 /// "schema":…}}` — NOT the chat-completions `response_format` nesting.
+///
+/// When [`wants_text_verbosity`] is true for `model`, merges
+/// `"verbosity": "low"` alongside `format` (never drops the schema).
 ///
 /// VI-2: if the backend 400s on this, fall back to schema-in-prompt.
 pub(in crate::service::openrouter) fn to_text_format(
     name: &str,
     schema: serde_json::Value,
 ) -> serde_json::Value {
-    serde_json::json!({
+    // Legacy signature without model — keep format-only for call sites that
+    // don't pass a model; stream/oneshot use [`to_text_format_for`].
+    to_text_format_for("", name, schema)
+}
+
+/// Like [`to_text_format`], but gates verbosity on `model`.
+pub(in crate::service::openrouter) fn to_text_format_for(
+    model: &str,
+    name: &str,
+    schema: serde_json::Value,
+) -> serde_json::Value {
+    let mut text = serde_json::json!({
         "format": {
             "type": "json_schema",
             "name": name,
             "strict": true,
             "schema": schema,
         }
-    })
+    });
+    if wants_text_verbosity(model) {
+        if let Some(obj) = text.as_object_mut() {
+            obj.insert("verbosity".into(), serde_json::json!("low"));
+        }
+    }
+    text
 }
 
 #[cfg(test)]

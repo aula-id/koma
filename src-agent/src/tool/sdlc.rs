@@ -613,10 +613,12 @@ pub(crate) struct MissionArgs {
 /// Tool-result text when user approves a mission.
 pub(crate) fn mission_approved_text(body: &str) -> String {
     format!(
-        "mission approved by user — planning is over; you are in SDLC **execute** \
-         (bound mission worktree). Do not call mission_prepare unless the harness left \
-         you in prepare for extra topology. Claim one OPEN leaf, implement inside the \
-         worktree, seal via mission_verify with evidence. Full contract below; follow it.\n\n\
+        "mission approved by user — planning is over; you are in SDLC **execute**. \
+         The harness already bound the mission worktree (cwd switched) and claimed the \
+         first OPEN leaf when possible — do NOT git checkout, cd, or git_worktree enter, \
+         and do NOT re-claim via checklist unless the harness left no claim. \
+         Implement the claimed leaf, seal with mission_verify + evidence, then the next leaf. \
+         Full contract below.\n\n\
          --- APPROVED MISSION ---\n{}\n--- END MISSION ---",
         body.trim()
     )
@@ -625,8 +627,9 @@ pub(crate) fn mission_approved_text(body: &str) -> String {
 /// Tool-result text when user approves a mission AND wants to compact.
 pub(crate) fn mission_approved_compact_text() -> &'static str {
     "mission approved by user (with history compaction) — context will be compacted to the \
-     approved mission; you enter SDLC **execute** in the bound worktree. Do not call \
-     mission_prepare unless still in prepare. Execute OPEN leaves now."
+     approved mission; you enter SDLC **execute** in the bound worktree with the first OPEN \
+     leaf claimed when possible. Do not checkout/cd/git_worktree or mission_prepare. Ship the \
+     claimed leaf, then mission_verify."
 }
 
 /// Tool-result text when user denies a mission.
@@ -662,6 +665,33 @@ pub(crate) fn mission_verify_result(node_id: &str, pass: bool) -> String {
     } else {
         format!("mission_verify: leaf {node_id} verify failed — reopened leaf + ancestors")
     }
+}
+
+/// Append harness next-claim / finish footer after a verify pass.
+pub(crate) fn mission_verify_pass_footer(
+    sealed_node_id: &str,
+    next: Option<&(String, String)>,
+    open_empty_nudge: Option<&str>,
+) -> String {
+    let mut out = mission_verify_result(sealed_node_id, true);
+    match next {
+        Some((id, title)) => {
+            out.push_str(&format!(
+                "\nHARNESS claimed next OPEN leaf \"{title}\" ({id}). Implement {title}; do not re-claim."
+            ));
+        }
+        None => {
+            if let Some(nudge) = open_empty_nudge {
+                out.push('\n');
+                out.push_str(nudge);
+            } else {
+                out.push_str(
+                    "\nOPEN empty — when gates are green call mission_integrate (lane finish).",
+                );
+            }
+        }
+    }
+    out
 }
 
 /// Tool-result text for a successful prepare transition.

@@ -5,12 +5,26 @@ Each todo item has:
 - **content**: A brief description of the task
 - **status**: One of `pending`, `in_progress`, `completed`, `cancelled`
 - **priority**: One of `high`, `medium`, `low`
+- **id** (optional): Stable task id from `/todo` or a prior checklist projection — prefer when present
+- **parent** (optional): Parent task title for nesting (assess / unfrozen only)
 
 ## Rules
 - Always provide the COMPLETE updated list when called (not just changed items)
-- Pass an empty `todos` array to clear all checklist items
+- Pass an empty `todos` array to clear all checklist items (non-mission / unfrozen only)
 - Mark items as `in_progress` when actively working on them
 - Mark items as `completed` when finished
 - Mark items as `cancelled` if they become irrelevant
 - Keep descriptions concise (under 80 characters)
 - Use `high` priority for critical path items, `medium` for standard work, `low` for nice-to-haves
+
+## Mission mode
+When a mission is active this tool updates the mission task tree, not `memory/TODO.md`.
+
+After the mission is approved (frozen list):
+- Send the **complete** non-cancelled membership every call, including already sealed `completed` rows
+- Status-only updates — no add/remove/rename; call `mission_ready` to amend and re-approve
+- Prefer `id` from `/todo` or prior projection when present; an unknown `id` fails the whole batch
+- `content` may be the bare title or the display label `parent › title`; do not invent structure via content
+- Empty `todos` does **not** clear a frozen list
+- `completed` does not seal work — only `mission_verify` seals; checklist cannot mark unverified work done
+- At most one `in_progress` leaf
