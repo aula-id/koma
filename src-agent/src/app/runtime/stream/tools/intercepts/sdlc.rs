@@ -1555,7 +1555,7 @@ fn apply_draft_field_value(
                     .filter(|s| !s.is_empty())
                     .collect::<Vec<_>>(),
                 serde_json::Value::String(s) => s
-                    .split(|c| c == '\n' || c == ';')
+                    .split(['\n', ';'])
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                     .map(str::to_string)

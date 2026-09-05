@@ -443,10 +443,11 @@ pub fn apply_frozen_checklist(
         if item.status == "done" && !(node.status == "done" && node.verify_bit) {
             bail!("cannot seal node '{}' without mission_verify", node.id);
         }
-        if item.status == "active" && node.status != "active" {
-            if !is_leaf(&tx, &node.id)? || !matches!(node.status.as_str(), "pending" | "blocked") {
-                bail!("node '{}' is not a claimable leaf", node.id);
-            }
+        if item.status == "active"
+            && node.status != "active"
+            && (!is_leaf(&tx, &node.id)? || !matches!(node.status.as_str(), "pending" | "blocked"))
+        {
+            bail!("node '{}' is not a claimable leaf", node.id);
         }
         updates.push((node, item.status.as_str()));
     }
@@ -1026,6 +1027,10 @@ pub fn set_verify_bit_with_evidence(
 
 /// Atomic status update + event for a known node. Clears verify when leaving done.
 /// Sealing to `done` requires verify_bit already true (mission_verify only path).
+///
+/// Used from unit tests and kept as the public single-node API surface; production
+/// frozen updates go through [`apply_frozen_checklist`].
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn update_node_status(conn: &Connection, node_id: &str, status: &str) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     update_node_status_in_tx(&tx, node_id, status)?;
