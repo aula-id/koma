@@ -934,7 +934,10 @@ fn mission_claim_approval_case(compact: bool, fail_claim: bool) {
         // finish_tool_round re-arms the keeper in assess too; phase guards execution.
         assert!(state.rest.fg().active_cwd.is_none());
         let sess = state.rest.fg().session.as_ref().unwrap();
-        assert_eq!(sess.workdir(), repo);
+        let got = sess.workdir();
+        let got_c = std::fs::canonicalize(&got).unwrap_or_else(|_| got.to_path_buf());
+        let exp_c = std::fs::canonicalize(&repo).unwrap_or_else(|_| repo.clone());
+        assert_eq!(got_c, exp_c, "workdir={got:?} repo={repo:?}");
         assert!(sess.settings.workdir_saved.is_none());
         assert_eq!(leaf.status, "pending");
         let history = format!("{:?}", sess.conversation.messages());
@@ -953,7 +956,12 @@ fn mission_claim_approval_case(compact: bool, fail_claim: bool) {
             Some(leaf.id.as_str())
         );
         assert!(state.rest.fg().approved_mission.is_some());
-        assert_eq!(state.rest.fg().session.as_ref().unwrap().workdir(), shadow);
+        // workdir() is canonicalized (macOS /private/var, Windows \\?\ / 8.3);
+        // compare via canonicalize so CI hosts match the live bind path.
+        let got = state.rest.fg().session.as_ref().unwrap().workdir();
+        let got_c = std::fs::canonicalize(&got).unwrap_or_else(|_| got.to_path_buf());
+        let exp_c = std::fs::canonicalize(&shadow).unwrap_or_else(|_| shadow.clone());
+        assert_eq!(got_c, exp_c, "workdir={got:?} shadow={shadow:?}");
     }
     drop(conn);
     drop(state);
