@@ -410,15 +410,22 @@ pub(in crate::app::runtime) fn apply_action(
             if is_active {
                 let msg = super::commands::skill_cmd::deactivate_skill(state, sess_idx, &name);
                 state.rest.fg_mut().status = msg;
+                if let crate::app::mode::Mode::Skill(s) = state.mode_mut() {
+                    s.set_active(&name, false);
+                }
             } else {
                 match super::commands::skill_cmd::activate_skill(state, sess_idx, &name) {
-                    Ok(msg) => state.rest.fg_mut().status = msg,
-                    Err(e) => state.rest.fg_mut().status = format!("error: {e}"),
+                    Ok(msg) => {
+                        state.rest.fg_mut().status = msg;
+                        if let crate::app::mode::Mode::Skill(s) = state.mode_mut() {
+                            s.set_active(&name, true);
+                        }
+                    }
+                    Err(e) => {
+                        // Keep hub flag honest — failed activate must not show [x].
+                        state.rest.fg_mut().status = format!("error: {e}");
+                    }
                 }
-            }
-            // Refresh the hub state's is_active flags
-            if let crate::app::mode::Mode::Skill(s) = state.mode_mut() {
-                s.set_active(&name, !is_active);
             }
         }
 

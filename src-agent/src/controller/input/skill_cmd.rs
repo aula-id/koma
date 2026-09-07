@@ -1,17 +1,25 @@
 //! Key handler for the `/skill` hub overlay (`Mode::Skill`).
 //!
-//! An omnisearch filter + chip-select surface:
+//! One coherent control stream (no multi-focus mode):
 //!
-//! - Printable char → push to `query`, refilter.
-//! - Backspace → pop from `query`, refilter.
-//! - Up/Down → move the selection over the filtered list.
-//! - Enter → toggle the selected skill (load ↔ unload).
-//! - Tab/Left/Right → cycle the filter chip (all ↔ active).
-//! - Esc → close back to Chat.
+//! | Key | Action |
+//! |---|---|
+//! | printable / paste | push query, refilter (sticky name) |
+//! | Backspace | pop query, refilter |
+//! | ↑ / ↓ | move selection |
+//! | Tab / → | cycle filter chip right: all → active → inactive |
+//! | ← | cycle filter chip left |
+//! | Enter / Space | toggle load on selected skill row |
+//! | Esc | close → Chat |
+//! | other | None (stay open) |
+//!
+//! Filter chips are a **radio group** — exactly one is checked; ←/→ moves the
+//! `[x]` across `all | active | inactive`. Space does **not** insert into the
+//! query. Esc-only close is intentional — do not copy bash/todo stray-dismiss.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::mode::{SkillCmdState, SkillFilterChip};
+use crate::app::mode::SkillCmdState;
 use crate::app::state::AppStateRest;
 
 use super::Action;
@@ -30,26 +38,20 @@ pub fn handle_skill_cmd(st: &mut SkillCmdState, _rest: &mut AppStateRest, key: K
             Action::None
         }
 
-        KeyCode::Enter => match st.selected_name() {
+        // Enter / Space toggle the selected skill (load ↔ unload).
+        KeyCode::Enter | KeyCode::Char(' ') => match st.selected_name() {
             Some(name) => Action::SkillToggle(name.to_string()),
             None => Action::None,
         },
 
-        // Tab or Left/Right cycles chip
+        // Tab / Right: radio moves right (all → active → inactive → all).
         KeyCode::Tab | KeyCode::Right => {
-            st.chip = match st.chip {
-                SkillFilterChip::All => SkillFilterChip::Active,
-                SkillFilterChip::Active => SkillFilterChip::All,
-            };
-            st.refilter();
+            st.chip_next();
             Action::None
         }
+        // Left: radio moves left.
         KeyCode::Left => {
-            st.chip = match st.chip {
-                SkillFilterChip::All => SkillFilterChip::Active,
-                SkillFilterChip::Active => SkillFilterChip::All,
-            };
-            st.refilter();
+            st.chip_prev();
             Action::None
         }
 
@@ -59,6 +61,7 @@ pub fn handle_skill_cmd(st: &mut SkillCmdState, _rest: &mut AppStateRest, key: K
             Action::None
         }
 
+        // Remaining printables (Space already handled) feed the omnisearch.
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             st.query.push(c);
             st.refilter();

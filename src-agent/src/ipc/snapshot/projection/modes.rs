@@ -871,6 +871,7 @@ pub fn skill_cmd_snapshot(s: &SkillCmdState) -> SkillCmdSnapshot {
         chip: match s.chip {
             SkillFilterChip::All => "all",
             SkillFilterChip::Active => "active",
+            SkillFilterChip::Inactive => "inactive",
         }
         .to_string(),
         all: s

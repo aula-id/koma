@@ -573,6 +573,7 @@ pub(crate) fn shadow_skill_cmd(s: SkillCmdSnapshot) -> crate::app::mode::SkillCm
         query: s.query,
         chip: match s.chip.as_str() {
             "active" => SkillFilterChip::Active,
+            "inactive" => SkillFilterChip::Inactive,
             _ => SkillFilterChip::All,
         },
         all: s

@@ -26,6 +26,8 @@ pub(super) fn handle_skill(args: String, state: &mut AppState) -> Result<()> {
         st.query = args.trim().to_string();
         st.refilter();
     }
+    // Fresh open: don't inherit a stale scroll window from a prior visit.
+    state.rest.skill_offset.set(0);
     *state.mode_mut() = Mode::Skill(Box::new(st));
     Ok(())
 }

@@ -253,7 +253,7 @@ pub struct SkillEntrySnapshot {
 #[allow(dead_code)]
 pub struct SkillCmdSnapshot {
     pub query: String,
-    /// Wire token: "all" | "active"
+    /// Wire token: "all" | "active" | "inactive"
     pub chip: String,
     pub all: Vec<SkillEntrySnapshot>,
     pub filtered_idx: Vec<usize>,
