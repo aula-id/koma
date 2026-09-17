@@ -513,10 +513,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
         }
         Some("run") => {
             // Headless one-shot: parse flags from the full argv (order-free).
-            let mut run = RunCli::default();
-            // Inherit a top-level `--session` if the user put it before `run`.
-            run.session = opts.session.clone();
-            run.workdir = opts.cwd.clone();
+            // Inherit top-level `--session` / `--cwd` if the user put them before `run`.
+            let mut run = RunCli {
+                session: opts.session.clone(),
+                workdir: opts.cwd.clone(),
+                ..Default::default()
+            };
             let mut i = 0usize;
             while i < all.len() {
                 let a = all[i].as_str();
