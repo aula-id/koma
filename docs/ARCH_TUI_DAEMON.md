@@ -41,13 +41,45 @@ The TUI is a ratatui-based terminal application that runs as a thin client conne
 
 ## Daemon-Per-Session Model
 
-Every `koma` invocation follows the same protocol:
+Every interactive `koma` invocation follows the same protocol:
 
 1. **Mint a UUID** for this session.
 2. **Ensure a daemon** is running for that UUID: try to `connect` to `~/.koma/run/<uuid>.sock` (on Windows, the named pipe `\\.\pipe\koma-<uuid>`). Success = daemon alive (attach as client). Connection refused = no daemon (spawn one and become it).
 3. **Attach as a thin client** to the daemon's socket.
 
 Each daemon owns exactly ONE session. Multiple sessions = multiple daemons, each bound to their own socket. A "session" in koma is a conversation with its own history, settings, and working directory — isolated from all others.
+
+### Headless one-shot (`koma run`)
+
+Same **session-daemon** path as the default client (not `alone` / `--local`). Thin glue in `src-agent/src/app/runtime/headless_run.rs`:
+
+```text
+ensure_daemon_running + attach_session_headless
+  → optional RenameSession (--name)
+  → ClientRequest::SubmitInput
+  → optional --once wait (Status / SessionStatusChanged until idle)
+  → Detach  (daemon keeps running)
+```
+
+```bash
+koma run --prompt 'summarize the repo' --name smoke --once --timeout 600
+koma run --prompt-file ./task.txt --workdir /path/to/desk --once
+```
+
+| Flag | Meaning |
+|---|---|
+| `--prompt` / `--prompt-file` | Exactly one required (inline text or file) |
+| `--name` | Session display name |
+| `--workdir` / `--cwd` | Daemon spawn working directory |
+| `--session` | Reuse an existing session id (else mint) |
+| `--once` | Block until idle (or timeout / approval) |
+| `--timeout SECS` | Wall clock for `--once` (default 14400) |
+
+Exit codes: `0` ok · `1` error · `2` timeout · `3` approval-parked.
+
+### Unknown CLI verbs
+
+The first non-flag positional must be a known command (`doctor`, `run`, `agents`, …). Typos such as `koma docker` set `Opts::unknown_command` and **print help + exit 1** — they must not mint a session or spawn a daemon.
 
 ### Liveness Oracle
 

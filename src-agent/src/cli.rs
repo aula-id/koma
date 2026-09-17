@@ -15,6 +15,9 @@
 //!   strictly read-only, exits non-zero only on a hard failure.
 //! - `koma lsp <status|install|uninstall>` — manage language servers for the
 //!   coding panel (`~/.koma/lsp/`). Opt-in; never auto-installed by default curl|sh.
+//! - `koma run --prompt '…'|--prompt-file PATH` — headless one-shot against the
+//!   default session-daemon (optional `--name`, `--workdir`, `--once`, `--timeout`).
+//!   Not standalone / `alone`.
 //! - `--internet-fullmode-install` — provision the Python full-mode (browser) environment and exit.
 //! - `--internet-fullmode-uninstall` — remove the Python full-mode environment and exit.
 //! - `--force`                     — modifier for `--internet-fullmode-install`: force a reinstall
@@ -106,6 +109,39 @@ pub enum ExtCli {
     /// `ext` alone, `ext install` without `--dev`, or an unrecognised verb — print
     /// usage and exit non-zero.
     Usage,
+}
+
+/// Parsed `koma run …` headless one-shot (default session-daemon path, not standalone).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunCli {
+    /// Display name for the session (`--name`).
+    pub name: Option<String>,
+    /// Inline prompt text (`--prompt`). Mutually exclusive with [`Self::prompt_file`].
+    pub prompt: Option<String>,
+    /// Path to a prompt file (`--prompt-file`). Mutually exclusive with [`Self::prompt`].
+    pub prompt_file: Option<String>,
+    /// When true, block until the agent is idle (or timeout / approval).
+    pub once: bool,
+    /// Wall-clock seconds for `--once` (default 14400 = 4h).
+    pub timeout_sec: u64,
+    /// Optional existing session id (`--session`); otherwise a new UUID is minted.
+    pub session: Option<String>,
+    /// Optional absolute working directory for the session-daemon spawn (`--workdir` / `--cwd`).
+    pub workdir: Option<String>,
+}
+
+impl Default for RunCli {
+    fn default() -> Self {
+        Self {
+            name: None,
+            prompt: None,
+            prompt_file: None,
+            once: false,
+            timeout_sec: 14_400,
+            session: None,
+            workdir: None,
+        }
+    }
 }
 
 /// Parsed command-line options passed through to the runtime.
@@ -224,6 +260,12 @@ pub struct Opts {
     /// coding panel. Short-circuited in `main` before the TUI (same pattern as
     /// `doctor` / `ext`).
     pub lsp: Option<crate::lsp::LspCli>,
+    /// `koma run …` headless one-shot against the default session-daemon path.
+    /// Short-circuited in `main` before the TUI (never uses `--local` / standalone).
+    pub run: Option<RunCli>,
+    /// First unknown positional verb (e.g. `koma docker` typo for `doctor`).
+    /// `main` prints help and exits non-zero instead of launching the default TUI.
+    pub unknown_command: Option<String>,
 }
 
 /// Print `koma <version>` to STDOUT and return the process exit code (`0`).
@@ -242,6 +284,9 @@ pub fn print_version() -> i32 {
 /// "User-facing surface" / "Positional verbs" sections) — only the advertised
 /// surface, NOT the hidden plumbing flags (`--local`, `--daemon`, `--attach`,
 /// `--ipc-selftest`, `--daemon-selftest`, `--mcp-daemon`).
+///
+/// Unknown positional verbs (`koma docker` instead of `doctor`) also end here via
+/// [`print_unknown_command`] (stderr notice + this help, exit `1`).
 pub fn print_help() -> i32 {
     println!(
         "koma — an agentic coding TUI\n\
@@ -260,14 +305,32 @@ pub fn print_help() -> i32 {
          \x20 lsp <status|install|uninstall> manage language servers for the coding panel\n\
          \x20 server                         headless daemon over stdio (for remote dev via SSH)\n\
          \x20 remote <user@host>              SSH-connect to a remote machine and run koma\n\
+         \x20 run                            headless one-shot against the session daemon\n\
          \n\
          flags:\n\
          \x20 --resume                       open the session hub\n\
          \x20 --session <id>                 bind this invocation to a specific session id\n\
          \x20 --version, -V                  print the version and exit\n\
-         \x20 --help, -h                     print this help and exit"
+         \x20 --help, -h                     print this help and exit\n\
+         \n\
+         koma run:\n\
+         \x20 koma run --prompt '…' [--name NAME] [--workdir DIR] [--once] [--timeout SECS]\n\
+         \x20 koma run --prompt-file PATH [--name NAME] [--workdir DIR] [--once] [--timeout SECS]\n\
+         \x20   --once     wait until idle (default timeout 14400s); omit to submit and detach\n\
+         \x20   exit 0 ok · 1 error · 2 timeout · 3 approval-parked\n\
+         \x20   uses the default session-daemon path (not standalone / alone)\n\
+         \n\
+         unknown commands print this help and exit 1 (e.g. typo: koma docker)"
     );
     0
+}
+
+/// Unknown positional verb: notice on stderr, full help on stdout, exit `1`.
+pub fn print_unknown_command(cmd: &str) -> i32 {
+    eprintln!("error: unknown command `{cmd}`");
+    eprintln!("run `koma --help` for the command list");
+    let _ = print_help();
+    1
 }
 
 /// Parse command-line arguments into [`Opts`].
@@ -278,10 +341,13 @@ pub fn print_help() -> i32 {
 /// The positional VERBS are read from the first non-`--` argument (after `argv[0]`):
 /// - `agents` sets `resume` (alias for `--resume`).
 /// - `alone` sets `local` (alias for `--local`).
+/// - `run` sets [`Opts::run`] (headless one-shot).
 /// - `daemon` makes this a daemon-CLI invocation; the following non-`--` argument is
 ///   its verb — a valid one yields `Some(DaemonCli::Run(sub))`, a missing/unrecognised
 ///   one yields `Some(DaemonCli::Usage)`. EITHER short-circuits the TUI in `main`, so a
 ///   typo like `koma daemon staus` prints usage instead of silently opening the terminal.
+/// - Any other first positional sets [`Opts::unknown_command`] so `main` prints help
+///   and exits (e.g. `koma docker` typo) instead of launching a session.
 ///
 /// Because `agents`/`alone` only set a bool the equivalent flag already sets, `main`'s
 /// routing is unchanged — the verbs reuse the same resume / `--local` (guarded) paths.
@@ -328,8 +394,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
     }
 
     // Positional verb/subcommand scan: skip argv[0] and look at the FIRST positional
-    // (non-flag) token. It can be one of the friendly verbs that front the plumbing
-    // flags, or the `daemon` management subcommand:
+    // (non-flag) token. Flag *values* (the token after `--session`, `--cwd`, …) must
+    // NOT count as positionals — otherwise `koma --daemon --session <uuid>` treats the
+    // uuid as an unknown command and never starts the daemon.
     //
     // - `agents` — alias for `--resume`: open the session hub. Sets the SAME
     //   `opts.resume` bit the flag does, so `main` reuses the identical resume path
@@ -341,9 +408,38 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
     //   A bare `daemon` (no following positional) or an unknown verb maps to
     //   `DaemonCli::Usage` so `main` prints usage instead of dropping into the TUI.
     //
-    // Only the FIRST positional selects a verb; `agents`/`alone` consume no further
+    // Only the FIRST real positional selects a verb; `agents`/`alone` consume no further
     // positionals, so they cannot collide with the `daemon <verb>` parsing.
-    let mut positional = all.iter().skip(1).filter(|a| !a.starts_with("--"));
+    const VALUE_FLAGS: &[&str] = &[
+        "--session",
+        "--cwd",
+        "--key",
+        "--port",
+        "--dev",
+        "--name",
+        "--prompt",
+        "--prompt-file",
+        "--timeout",
+        "--workdir",
+    ];
+    let mut positionals: Vec<&String> = Vec::new();
+    {
+        let mut skip_value = false;
+        for a in all.iter().skip(1) {
+            if skip_value {
+                skip_value = false;
+                continue;
+            }
+            if a.starts_with("--") {
+                if VALUE_FLAGS.iter().any(|f| f == a) {
+                    skip_value = true;
+                }
+                continue;
+            }
+            positionals.push(a);
+        }
+    }
+    let mut positional = positionals.into_iter();
     match positional.next().map(String::as_str) {
         Some("agents") => opts.resume = true,
         Some("alone") => opts.local = true,
@@ -415,6 +511,71 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
                 .collect();
             opts.lsp = Some(crate::lsp::LspCli::parse(&lsp_args));
         }
+        Some("run") => {
+            // Headless one-shot: parse flags from the full argv (order-free).
+            let mut run = RunCli::default();
+            // Inherit a top-level `--session` if the user put it before `run`.
+            run.session = opts.session.clone();
+            run.workdir = opts.cwd.clone();
+            let mut i = 0usize;
+            while i < all.len() {
+                let a = all[i].as_str();
+                match a {
+                    "--name" => {
+                        if let Some(v) = all.get(i + 1) {
+                            run.name = Some(v.clone());
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "--prompt" => {
+                        if let Some(v) = all.get(i + 1) {
+                            run.prompt = Some(v.clone());
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "--prompt-file" => {
+                        if let Some(v) = all.get(i + 1) {
+                            run.prompt_file = Some(v.clone());
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "--timeout" => {
+                        if let Some(v) = all.get(i + 1) {
+                            if let Ok(secs) = v.parse::<u64>() {
+                                run.timeout_sec = secs;
+                            }
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "--session" => {
+                        if let Some(v) = all.get(i + 1) {
+                            run.session = Some(v.clone());
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "--workdir" | "--cwd" => {
+                        if let Some(v) = all.get(i + 1) {
+                            run.workdir = Some(v.clone());
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "--once" => {
+                        run.once = true;
+                        i += 1;
+                        continue;
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            opts.run = Some(run);
+        }
         Some("daemon") => {
             opts.subcommand = Some(
                 match positional.next().and_then(|v| DaemonSub::from_verb(v)) {
@@ -442,7 +603,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
                 _ => ExtCli::Usage,
             });
         }
-        _ => {}
+        Some(other) => {
+            // Typo / unknown verb (e.g. `koma docker` for `doctor`): do NOT fall through
+            // to the default session launch — main prints help and exits non-zero.
+            opts.unknown_command = Some(other.to_string());
+        }
+        None => {}
     }
 
     opts

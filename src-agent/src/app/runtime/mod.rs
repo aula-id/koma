@@ -28,6 +28,7 @@ pub(crate) mod terminal;
 pub(crate) mod commands;
 mod shortsend;
 
+mod headless_run;
 mod lifecycle;
 #[cfg(feature = "linker")]
 mod linker_daemon;
@@ -92,6 +93,7 @@ pub use manage::{
 pub(crate) use manage::{list_live_sessions, spawn_into_session, SpawnIntoReply};
 
 // Re-export lifecycle entry points (previously free fns in this file).
+pub use headless_run::run_cli as run_headless;
 pub use lifecycle::{run, run_daemon, run_daemon_selftest};
 pub use remote_fs_svc::run_remote_fs;
 pub use remote_git_svc::run_remote_git;

@@ -47,7 +47,7 @@
 #![allow(dead_code)]
 
 mod bridge;
-mod connect;
+pub(crate) mod connect;
 pub(crate) mod content_search;
 pub(crate) mod diff;
 pub(crate) mod file_ops;

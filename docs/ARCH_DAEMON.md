@@ -657,6 +657,19 @@ stdin/stdout/stderr → /dev/null — fully detached
 
 This ensures the daemon runs independently of any terminal.
 
+### Headless client: `koma run`
+
+Operator / automation entry that uses the **same** ensure+attach path (not standalone):
+
+```bash
+koma run --prompt '…' [--name NAME] [--workdir DIR] [--once] [--timeout SECS]
+koma run --prompt-file PATH …
+```
+
+Implementation: `cli::RunCli` + `app::runtime::headless_run` → `attach_session_headless` → `SubmitInput` → optional idle wait → `Detach`. See [`ARCH_TUI_DAEMON.md`](ARCH_TUI_DAEMON.md#headless-one-shot-koma-run).
+
+Unknown top-level verbs (typos) print `--help` and exit 1; they never spawn a session-daemon.
+
 ---
 
 ## Global MCP Daemon

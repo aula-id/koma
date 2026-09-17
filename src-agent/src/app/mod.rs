@@ -47,6 +47,7 @@ pub use runtime::gui::run_gui;
 pub use runtime::run;
 pub use runtime::run_daemon;
 pub use runtime::run_daemon_selftest;
+pub use runtime::run_headless;
 #[cfg(feature = "linker")]
 pub use runtime::run_linker_daemon;
 pub use runtime::run_mcp_daemon;
