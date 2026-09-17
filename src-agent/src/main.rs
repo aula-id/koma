@@ -115,6 +115,12 @@ fn main() -> anyhow::Result<()> {
 
     let opts = cli::parse(std::env::args());
 
+    // --- short-circuit: unknown positional verb (typo) → help, no TUI ---
+    // e.g. `koma docker` instead of `doctor`. Must not mint a session / spawn a daemon.
+    if let Some(cmd) = opts.unknown_command.as_deref() {
+        std::process::exit(cli::print_unknown_command(cmd));
+    }
+
     // --- short-circuit: `koma daemon <verb>` management CLI (no TUI) ---
     // Mirrors how the provisioner / self-test flags short-circuit BEFORE the TUI, but
     // this is a positional SUBCOMMAND (status/kill/restart/clean) — the operator
@@ -172,6 +178,12 @@ fn main() -> anyhow::Result<()> {
     // tokio runtime (this path never enters one).
     if let Some(cmd) = opts.lsp {
         std::process::exit(lsp::run_cli(cmd));
+    }
+
+    // --- short-circuit: `koma run` headless one-shot (default session-daemon) ---
+    // Mint/attach a session-daemon, SubmitInput, optional --once wait. Never standalone.
+    if let Some(run) = opts.run.clone() {
+        std::process::exit(app::run_headless(run));
     }
 
     // --- short-circuit: `koma sessions --json` — list live sessions (no TUI) ---

@@ -149,40 +149,7 @@ fn attach_session_headless(
     session_id: &str,
     workdir: Option<&std::path::Path>,
 ) -> anyhow::Result<Connection> {
-    crate::app::runtime::manage::ensure_daemon_running(session_id, false, workdir).map_err(
-        |e| anyhow::anyhow!("could not start the koma daemon for session {session_id}: {e:#}"),
-    )?;
-
-    let sock_path = store::daemon_sock_path(session_id)?;
-    let my_fingerprint = store::build_fingerprint();
-
-    let mut conn = connect_attach_and_handshake(handle, &sock_path, session_id)?;
-    let mut already_restarted = false;
-    while conn
-        .daemon_version
-        .as_deref()
-        .is_some_and(|v| v != my_fingerprint)
-    {
-        if already_restarted {
-            crate::model::store::append_global_error_log(
-                "gui",
-                "daemon still reports a different build after a restart; continuing against it",
-            );
-            break;
-        }
-        already_restarted = true;
-
-        // Tear down the stale connection's bridge before restarting (drop the request
-        // sender so the writer drains + exits; the reader observes the daemon's death
-        // as EOF), then restart SILENTLY (no alt-screen spinner — there is no TTY).
-        drop(conn.req_tx);
-        drop(conn.frame_rx);
-        crate::app::runtime::manage::restart_daemon(session_id, true)
-            .map_err(|e| anyhow::anyhow!("failed to restart the stale koma daemon: {e:#}"))?;
-
-        conn = connect_attach_and_handshake(handle, &sock_path, session_id)?;
-    }
-    Ok(conn)
+    super::connect::attach_session_headless(handle, session_id, workdir)
 }
 
 /// Run [`attach_session_headless`] on a worker thread so the host client-thread

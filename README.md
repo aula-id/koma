@@ -45,6 +45,15 @@ curl -fsSL https://koma.run/install.sh | sh
 
 Installs to `~/.local/bin` — no sudo required. Then run `koma` and start a session.
 
+Headless one-shot (session daemon, not standalone):
+
+```sh
+koma run --prompt 'ping' --once --timeout 120
+koma run --prompt-file ./instructions.txt --name batch-1 --workdir "$PWD"
+```
+
+Unknown commands (e.g. `koma docker`) print help and exit 1.
+
 Works on Linux, macOS, and Windows. On Windows, use the PowerShell installer — it downloads and runs the MSI directly, no Git Bash required:
 
 ```powershell

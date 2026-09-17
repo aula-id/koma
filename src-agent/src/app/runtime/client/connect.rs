@@ -54,7 +54,7 @@ pub(crate) struct Connection {
 /// restart happens cleanly on the normal screen. Frames that arrive ahead of `Hello`
 /// (defensive — the daemon emits `Hello` first) are stashed in `prebuffered` for the
 /// render loop to apply first, so the seq stream the loop sees stays gap-free.
-pub(super) fn connect_attach_and_handshake(
+pub(crate) fn connect_attach_and_handshake(
     handle: &tokio::runtime::Handle,
     sock_path: &std::path::Path,
     session_id: &str,
@@ -137,4 +137,42 @@ pub(super) fn connect_attach_and_handshake(
             session_id: session_id.to_string(),
         },
     })
+}
+
+/// Headless attach: ensure session-daemon → handshake → optional one-shot build-skew restart.
+/// Shared by GUI host-relay and `koma run` (no TTY spinner).
+pub(crate) fn attach_session_headless(
+    handle: &tokio::runtime::Handle,
+    session_id: &str,
+    workdir: Option<&std::path::Path>,
+) -> anyhow::Result<Connection> {
+    crate::app::runtime::manage::ensure_daemon_running(session_id, false, workdir).map_err(
+        |e| anyhow::anyhow!("could not start the koma daemon for session {session_id}: {e:#}"),
+    )?;
+
+    let sock_path = crate::model::store::daemon_sock_path(session_id)?;
+    let my_fingerprint = crate::model::store::build_fingerprint();
+
+    let mut conn = connect_attach_and_handshake(handle, &sock_path, session_id)?;
+    let mut already_restarted = false;
+    while conn
+        .daemon_version
+        .as_deref()
+        .is_some_and(|v| v != my_fingerprint)
+    {
+        if already_restarted {
+            crate::model::store::append_global_error_log(
+                "attach",
+                "daemon still reports a different build after a restart; continuing against it",
+            );
+            break;
+        }
+        already_restarted = true;
+        drop(conn.req_tx);
+        drop(conn.frame_rx);
+        crate::app::runtime::manage::restart_daemon(session_id, true)
+            .map_err(|e| anyhow::anyhow!("failed to restart the stale koma daemon: {e:#}"))?;
+        conn = connect_attach_and_handshake(handle, &sock_path, session_id)?;
+    }
+    Ok(conn)
 }
