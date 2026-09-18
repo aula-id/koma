@@ -36,6 +36,7 @@
 //! request is POSTed.
 
 mod fold;
+mod goal;
 mod recall;
 
 // --- Cache-warmth-adaptive, hysteresis-driven summarization rail ---------------
@@ -61,6 +62,10 @@ pub(super) const ENGAGE_WARM_PCT: u64 = 80;
 /// Count gate is sticky-only: it can HOLD engage while `body_n > engage_n`, but
 /// never forces first entry (token/cache path owns kick-in).
 pub(super) const DISENGAGE_PCT: u64 = 15;
+/// Hot verbatim tail budget as % of `usable` once engaged (continuity > max compression).
+pub(super) const HOT_TAIL_PCT: u64 = 25;
+/// Hard cap on hot-window message count (pathological tiny-message sessions).
+pub(super) const HOT_TAIL_MAX_MSGS: usize = 120;
 
 /// Pure sticky engage update used by `start_stream_task` (and unit-tested here).
 /// `enter_tok` / `exit_tok` come from the warmth-dependent token thresholds;
@@ -111,7 +116,8 @@ pub(super) fn estimate_conv_tokens(history: &[ChatMessage]) -> u64 {
 
 // Re-export the public API so callers outside this module use the same paths
 // as before the split.
-pub use recall::shape;
+pub use goal::{detect_goal_update, GoalPatch};
+pub use recall::{build_recall_intent, shape};
 
 #[cfg(test)]
 mod tests {

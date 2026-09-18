@@ -137,12 +137,25 @@ fn escape_like(term: &str) -> String {
 /// Return `messages.content` for a single id, or `None` if absent / unreadable.
 /// Lets a summary expand a `blobs` reference back to its full text on demand.
 /// Best-effort.
-#[allow(dead_code)] // consumed by later phases (short-send summary/router)
 pub fn fetch_blob_content(session_dir: &Path, msg_id: i64) -> Option<String> {
     use rusqlite::OptionalExtension;
     let conn = open(session_dir).ok()?;
     conn.query_row(
         "SELECT content FROM messages WHERE id = ?1",
+        rusqlite::params![msg_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+}
+
+/// Role string for a message id (`user` / `assistant` / `tool` / …), if present.
+pub fn fetch_message_role(session_dir: &Path, msg_id: i64) -> Option<String> {
+    use rusqlite::OptionalExtension;
+    let conn = open(session_dir).ok()?;
+    conn.query_row(
+        "SELECT role FROM messages WHERE id = ?1",
         rusqlite::params![msg_id],
         |r| r.get(0),
     )
@@ -179,7 +192,8 @@ pub fn list_blobs(session_dir: &Path) -> Vec<BlobRef> {
 }
 
 /// Blobs (msg_id <= max_msg_id) whose owning message CONTENT matches any of the
-/// given lowercase terms, ranked by number of distinct terms matched (desc).
+/// given lowercase terms, ranked by number of distinct terms matched (desc), then
+/// by **newer** `msg_id` (desc) so equal scores prefer recency over ancient drafts.
 ///
 /// This is the "db lookup" recall path: it finds blobs by what their owning
 /// message actually SAYS, independent of the stored snippet — so even a blob with
@@ -228,7 +242,7 @@ pub fn search_blobs(session_dir: &Path, terms: &[String], max_msg_id: i64) -> Ve
              FROM blobs b
              JOIN messages m ON m.id = b.msg_id
              WHERE b.msg_id <= ?1 AND ({where_or})
-             ORDER BY score DESC, b.msg_id ASC
+             ORDER BY score DESC, b.msg_id DESC
              LIMIT 10"
         );
 

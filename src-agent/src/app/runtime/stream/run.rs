@@ -359,34 +359,59 @@ over sec_remote (stateful socket).\n",
     // below. Everything here is a no-op (`summarizing` stays false, the task sends
     // the history unchanged) when there's no active session.
     //
-    // The per-session snapshot the reshape task needs: (dir, settings, latest user
-    // message, resolved Awareness route). Cloned out of the session up front so the
-    // spawned task holds no borrow of `state`, and so `settings` is available to
-    // size the window + read `sliding_cache` below without re-borrowing the session.
+    // The per-session snapshot the reshape task needs: (dir, settings, recall
+    // intent with trajectory, resolved Awareness route). Goal patch applied
+    // first so shape sees fresh session_goal. Cloned so the spawn holds no
+    // borrow of `state`.
     //
     // `shape`'s fold + snippet-router ride the AWARENESS role; resolve it HERE
-    // (before the spawn) into an owned `Resolved` so the moved-into-task value
-    // carries no borrow of `state.rest.config`. `None` (an unresolved Awareness
-    // role) makes `shape` skip the fold/router (existing summary still applies).
+    // into an owned `Resolved`. `None` skips fold/router (existing summary still applies).
     let reshape: Option<(
         std::path::PathBuf,
         crate::model::settings::Settings,
         String,
         Option<crate::app::resolve::Resolved>,
-    )> = state.rest.sessions[sess_idx].session.as_ref().map(|sess| {
-        let user_intent = sess.conversation.last_user_content().unwrap_or_default();
-        // Call-boundary gate for the SECONDARY fold/router calls: only a
-        // routable Awareness route is passed through (`is_routable`). `None`
-        // means skip fold + snippet-router gracefully (existing summary still
-        // applies) — no summary / no recall, never a crash.
-        let aware = crate::app::resolve::resolve_role_dispatch(
-            &state.rest.config,
-            &sess.settings,
-            crate::model::app_config::ModelRole::Awareness,
-        )
-        .filter(|r| r.is_routable());
-        (sess.path.clone(), sess.settings.clone(), user_intent, aware)
-    });
+    )> = {
+        // Goal patch + settings clone need &mut session; awareness needs config.
+        let last_user = state.rest.sessions[sess_idx]
+            .session
+            .as_ref()
+            .map(|s| s.conversation.last_user_content().unwrap_or_default());
+        if let Some(last_user) = last_user.as_ref() {
+            if let Some(patch) = crate::app::runtime::shortsend::detect_goal_update(last_user) {
+                if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                    match patch {
+                        crate::app::runtime::shortsend::GoalPatch::Set(g) => {
+                            sess.settings.session_goal = g;
+                            sess.settings.session_goal_msg_id = 0;
+                        }
+                        crate::app::runtime::shortsend::GoalPatch::Clear => {
+                            sess.settings.session_goal.clear();
+                            sess.settings.session_goal_msg_id = 0;
+                        }
+                    }
+                    let _ = sess.save();
+                }
+            }
+        }
+        state.rest.sessions[sess_idx].session.as_ref().map(|sess| {
+            let last_user = sess.conversation.last_user_content().unwrap_or_default();
+            let intent =
+                crate::app::runtime::shortsend::build_recall_intent(&history, &last_user);
+            let aware = crate::app::resolve::resolve_role_dispatch(
+                &state.rest.config,
+                &sess.settings,
+                crate::model::app_config::ModelRole::Awareness,
+            )
+            .filter(|r| r.is_routable());
+            (
+                sess.path.clone(),
+                sess.settings.clone(),
+                intent,
+                aware,
+            )
+        })
+    };
 
     // Resolve the model driving THIS turn: its connection (endpoint + key),
     // model id, upstream-route slug, and effort. EFFORT ISOLATION: effort flows

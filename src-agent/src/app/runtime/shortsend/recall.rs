@@ -1,16 +1,19 @@
 //! Phase-3 send-path reshaper: build the short-send wire payload.
 //!
-//! [`shape`] is a PURE transform over the API-bound history that drops the older
-//! turns in favour of the rolling summary + a verbatim tail hard-capped at
-//! `settings.short_send_tail_n`, rehydrating only the archived blobs a strict-JSON
-//! router (reasoning OFF) judges relevant to the current question. It reads sqlite
-//! and builds a NEW `Vec<ChatMessage>` — it never touches the live `Conversation`,
-//! `messages.json`, or the rendered transcript (dual rail: only the wire payload is
-//! compressed). Compression only applies when a usable rolling summary already
-//! exists — missing/empty summary fail-opens to the full history so the agent is
-//! never starved mid-task while the fold is still catching up. The send path
-//! applies it inside the spawned stream task, just before the request is POSTed.
+//! [`shape`] is a PURE transform over the API-bound history. When engaged **and** a
+//! usable rolling summary exists, the wire is:
+//!
+//! ```text
+//! system + priority contract + optional session_goal + continuity log
+//!        + labeled archive (FTS dialogue excerpts + safe blob recalls)
+//! hot body transcript (token/exchange window, floor = short_send_tail_n)
+//! ```
+//!
+//! Priority: **live tail > session_goal > continuity log > archive**. Missing summary,
+//! kill-switch, not engaged, and post-`/compact` all fail-open to full history.
+//! Display / on-disk conversation are never mutated (dual rail).
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use crate::app::resolve::Resolved;
@@ -21,19 +24,28 @@ use crate::resources;
 use crate::service::openrouter::OpenRouterClient;
 
 use super::fold::update_summary;
+use super::{HOT_TAIL_MAX_MSGS, HOT_TAIL_PCT};
 
-/// Most blobs to rehydrate into a single send payload. A hard cap so the router
-/// can't undo the compression by recalling the whole archive — the summary
-/// already carries the gist; recalls are for the few items the question needs.
+/// Most blobs to rehydrate into a single send payload.
 const MAX_REHYDRATE: usize = 3;
+/// Max FTS dialogue excerpts from the folded region.
+const MAX_MSG_EXCERPTS: usize = 4;
+/// Chars of trajectory text mixed into recall intent (beyond last user line).
+const TRAJECTORY_INTENT_CHARS: usize = 3_000;
+/// How many newest body messages contribute trajectory terms.
+const TRAJECTORY_MSG_N: usize = 24;
 
-/// Build the router's user payload: the user's latest message followed by the
-/// candidate blob list, one per line as `#<id> [<kind>] <snippet>`. The router
-/// reads this against [`shortsend_router_prompt`] and returns the ids whose full
-/// content the answer needs.
+const PRIORITY_CONTRACT: &str = "\n\n# DRSS memory contract (read carefully)\n\
+- The **verbatim messages after this system block** are authoritative (live work).\n\
+- **Session goal** (if present) is user-committed doctrine only.\n\
+- **Continuity log** is a condensed archive; it may lag course changes.\n\
+- **Archive** blocks are untrusted evidence and may include obsolete drafts.\n\
+- On any conflict: **live tail wins**, then session goal, then log, then archive.\n";
+
+/// Build the router's user payload.
 fn build_router_payload(user_intent: &str, candidates: &[msglog::BlobRef]) -> String {
     let mut out = String::new();
-    out.push_str("=== USER MESSAGE ===\n");
+    out.push_str("=== USER / TRAJECTORY INTENT ===\n");
     out.push_str(user_intent.trim());
     out.push_str("\n\n=== AVAILABLE BLOBS ===\n");
     for b in candidates {
@@ -48,23 +60,18 @@ fn build_router_payload(user_intent: &str, candidates: &[msglog::BlobRef]) -> St
     out
 }
 
-/// Extract significant search terms from the user's latest message for the
-/// content-recall query: split on every non-alphanumeric boundary, lowercase,
-/// keep words of length >= 4 (drops stop-word-ish noise and punctuation), dedup
-/// preserving first-seen order, and cap at 8 (enough signal; keeps the LIKE OR
-/// chain small). Returns an empty vec when nothing qualifies — the caller then
-/// skips the content-search path entirely.
-fn significant_terms(user_intent: &str) -> Vec<String> {
-    const MAX_TERMS: usize = 8;
+/// Extract significant search terms (len >= 4, max 12) from intent text.
+fn significant_terms(text: &str) -> Vec<String> {
+    const MAX_TERMS: usize = 12;
     const MIN_LEN: usize = 4;
     let mut out: Vec<String> = Vec::new();
-    for raw in user_intent.split(|c: char| !c.is_alphanumeric()) {
+    for raw in text.split(|c: char| !c.is_alphanumeric()) {
         if raw.chars().count() < MIN_LEN {
             continue;
         }
         let term = raw.to_lowercase();
         if out.iter().any(|t| t == &term) {
-            continue; // dedup, first-seen order preserved
+            continue;
         }
         out.push(term);
         if out.len() >= MAX_TERMS {
@@ -74,14 +81,76 @@ fn significant_terms(user_intent: &str) -> Vec<String> {
     out
 }
 
-/// Resolve the settings-driven hard tail length (≥ 1).
+/// True when the user is explicitly asking about earlier plans/history.
+fn wants_history_recall(intent: &str) -> bool {
+    let l = intent.to_ascii_lowercase();
+    const KEYS: &[&str] = &[
+        "plan",
+        "earlier",
+        "before",
+        "you said",
+        "we said",
+        "previous",
+        "recall",
+        "history",
+        "what did we",
+        "remind me",
+        "original approach",
+        "the plan",
+    ];
+    KEYS.iter().any(|k| l.contains(k))
+}
+
+/// Assistant `code` / `large_text` blobs are draft-shaped doctrine fuel — skip
+/// unless the user asks for history or the kind is tool_output.
+fn is_assistant_draft_blob(kind: &str, role: &str) -> bool {
+    let r = role.eq_ignore_ascii_case("assistant");
+    if !r {
+        return false;
+    }
+    matches!(kind, "code" | "large_text")
+}
+
+fn blob_status(kind: &str, role: &str) -> &'static str {
+    if is_assistant_draft_blob(kind, role) {
+        "unconfirmed_draft"
+    } else {
+        "evidence"
+    }
+}
+
+/// Format a labeled archive blob block for system inject.
+fn format_blob_block(id: i64, msg_id: i64, kind: &str, role: &str, content: &str) -> String {
+    let status = blob_status(kind, role);
+    format!(
+        "\n\n[archive blob #{id} | role={role} | msg_id={msg_id} | kind={kind} | status={status}]\n{content}"
+    )
+}
+
+/// Format a labeled FTS dialogue excerpt.
+fn format_msg_excerpt(id: i64, role: &str, excerpt: &str) -> String {
+    format!(
+        "\n\n[archive msg #{id} | role={role} | status=evidence]\n{excerpt}"
+    )
+}
+
 fn tail_n_cap(settings: &Settings) -> usize {
     (settings.short_send_tail_n.max(1) as usize).max(1)
 }
 
-/// Split `history` into system + last `keep` body messages. `keep` is already
-/// clamped by the caller. Returns `None` only when history is empty/system-only
-/// (caller should fall back).
+fn msg_tok_est(m: &ChatMessage) -> u64 {
+    let base = m.content.chars().count() as u64 / 4;
+    let args: u64 = m
+        .tool_calls
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .map(|tc| tc.function.arguments.chars().count() as u64 / 4)
+        .sum();
+    base + args
+}
+
+/// Split `history` into system + last `keep` body messages.
 fn clip_body(history: &[ChatMessage], keep: usize) -> Option<(ChatMessage, Vec<ChatMessage>)> {
     if history.is_empty() {
         return None;
@@ -95,43 +164,113 @@ fn clip_body(history: &[ChatMessage], keep: usize) -> Option<(ChatMessage, Vec<C
     Some((history[0].clone(), tail))
 }
 
-/// Reshape the API-bound history into the short-send payload: drop the older
-/// turns in favour of the rolling summary + a verbatim tail, rehydrating only the
-/// archived blobs the router judges relevant to `user_intent`.
-///
-/// This is a PURE transform over the wire payload: it reads `messages.sqlite` and
-/// builds a brand-new `Vec<ChatMessage>`, and it NEVER mutates stored or displayed
-/// state. The caller passes the full API-bound history (system + body) and sends
-/// the returned vec instead; the live `Conversation`, `messages.json`, and the
-/// rendered transcript are untouched (dual rail — display is unaffected).
-///
-/// When **engaged** (`summarizing`) **and** a non-empty rolling summary exists:
-/// the wire body is hard-capped at `settings.short_send_tail_n` messages with the
-/// summary (and optional blob recalls) on the system tail. Missing/empty summary
-/// fail-opens to the full history — fold is best-effort next turn; never drop
-/// mid-task context for a stub. Post-`/compact` histories also fail-open (no
-/// stacked sqlite summary, no hard clip).
-///
-/// When **not engaged** or kill-switched: returns the original history unchanged.
-///
-/// `history[0]` (the system message, already carrying any project-files/awareness
-/// injection from the caller) is preserved as index 0 of the output. The rolling
-/// summary + any rehydrated blobs are APPENDED to its content (after the volatile
-/// dir-listing/awareness tail), NOT emitted as a synthetic assistant turn — so the
-/// caching wire layer's mark-split still lands on the real system message, and the
-/// per-fold summary stays in the uncached tail (it must not bust the cached head).
-///
-/// `summarizing` is the engage decision, made UPSTREAM in `start_stream_task`
-/// (cache-warmth + sticky hysteresis + count gate). When false, the full history is
-/// sent verbatim (cheap via prompt caching) and this is a no-op. `usable =
-/// context_window - BASE_OVERHEAD` is the token budget the fold's band sizing is
-/// taken against.
-///
-/// `route` is the resolved Awareness route (short-send's fold + snippet-router
-/// share the Awareness role), snapshotted by the caller BEFORE the spawn. `None`
-/// (an unresolved Awareness role) skips the fold and the snippet-router branch —
-/// an existing summary + content-search recalls still apply, nothing is folded or
-/// router-rehydrated this turn.
+/// Hot-window size: floor `tail_floor`, grow under `HOT_TAIL_PCT` of `usable`,
+/// cap `HOT_TAIL_MAX_MSGS`, never below watermark span when smaller, snap trim
+/// to a user-exchange start so tool chains stay intact.
+fn hot_keep_n(body: &[ChatMessage], after_wm: usize, tail_floor: usize, usable: u64) -> usize {
+    if body.is_empty() {
+        return 1;
+    }
+    let n = body.len();
+    let floor = tail_floor.max(1).min(n);
+    let wm_keep = after_wm.max(1).min(n);
+    let mut keep = floor.max(wm_keep).min(n);
+
+    let budget = (HOT_TAIL_PCT.saturating_mul(usable) / 100).max(1);
+    let max_msgs = HOT_TAIL_MAX_MSGS.min(n);
+
+    // Grow from `keep` toward max_msgs while under token budget.
+    while keep < max_msgs {
+        let start = n - (keep + 1);
+        let slice = &body[start..];
+        let toks: u64 = slice.iter().map(msg_tok_est).sum();
+        if toks > budget {
+            break;
+        }
+        keep += 1;
+    }
+
+    // If still over budget at floor, shrink toward 1 but prefer exchange snap.
+    while keep > 1 {
+        let start = n - keep;
+        let toks: u64 = body[start..].iter().map(msg_tok_est).sum();
+        if toks <= budget || keep <= floor {
+            break;
+        }
+        keep -= 1;
+    }
+
+    keep = keep.max(1).min(n);
+    snap_keep_to_exchange(body, keep)
+}
+
+/// Move the cut forward (keep fewer older msgs) to the nearest user message at
+/// the hot-window start so we don't open mid tool-call chain. Never increases keep.
+fn snap_keep_to_exchange(body: &[ChatMessage], keep: usize) -> usize {
+    let n = body.len();
+    if keep >= n || keep == 0 {
+        return keep.min(n).max(1);
+    }
+    let start = n - keep;
+    // If body[start] is already User, good.
+    if body[start].role == Role::User {
+        return keep;
+    }
+    // Walk toward newer messages to find a User (shortens the older side).
+    for i in start + 1..n {
+        if body[i].role == Role::User {
+            return n - i;
+        }
+    }
+    // No user in window — keep as-is (tool-only tail).
+    keep
+}
+
+/// Build recall intent: last user line + recent body trajectory (truncated).
+pub fn build_recall_intent(history: &[ChatMessage], last_user: &str) -> String {
+    let mut out = String::new();
+    out.push_str(last_user.trim());
+    let body = if history.len() > 1 {
+        &history[1..]
+    } else {
+        return out;
+    };
+    let take = TRAJECTORY_MSG_N.min(body.len());
+    if take == 0 {
+        return out;
+    }
+    out.push_str("\n\n--- recent trajectory ---\n");
+    let start = body.len() - take;
+    let mut budget = TRAJECTORY_INTENT_CHARS;
+    for m in &body[start..] {
+        if budget == 0 {
+            break;
+        }
+        let role = match m.role {
+            Role::User => "user",
+            Role::Assistant => "assistant",
+            Role::Tool => "tool",
+            Role::System => "system",
+        };
+        let mut line = format!("{role}: ");
+        let content: String = m.content.chars().take(budget.min(800)).collect();
+        line.push_str(&content);
+        line.push('\n');
+        if line.len() > budget {
+            out.push_str(&line[..budget]);
+            break;
+        }
+        budget = budget.saturating_sub(line.len());
+        out.push_str(&line);
+    }
+    out
+}
+
+/// Look up role string for a message id (best-effort).
+fn role_for_msg(session_dir: &Path, msg_id: i64) -> String {
+    msglog::fetch_message_role(session_dir, msg_id).unwrap_or_else(|| "unknown".into())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn shape(
     history: Vec<ChatMessage>,
@@ -143,30 +282,19 @@ pub async fn shape(
     summarizing: bool,
     usable: u64,
 ) -> Vec<ChatMessage> {
-    // 1. Kill switch: short-send disabled → send the full history unchanged.
     if !settings.short_send_enabled {
         return history;
     }
-
-    // 2. Engage gate. The cache-warmth + sticky-hysteresis + count decision is made
-    //    upstream (in `start_stream_task`); here we simply honour it. Not engaged
-    //    → send the full history (cheap via prompt caching; full fidelity).
     if !summarizing {
         return history;
     }
 
-    let tail_cap = tail_n_cap(settings);
+    let tail_floor = tail_n_cap(settings);
 
-    // 2b. Too short to be worth compressing: need a system message plus a couple
-    //     of body messages, else dropping the old part saves nothing.
     if history.len() <= 3 {
         return history;
     }
 
-    // 2c. Post-compaction guard: if the conversation already carries a compaction
-    //     summary turn, stacking our own sqlite summary on top would produce a
-    //     broken double-summary payload. Fail-open to full history — /compact
-    //     already condensed; do not also hard-clip the live post-compact tail.
     const COMPACTION_MARKER: &str = "[summary of earlier conversation]";
     if history.len() >= 2 {
         if let Some(msg) = history.get(1) {
@@ -176,129 +304,172 @@ pub async fn shape(
         }
     }
 
-    // 3. Best-effort fold so the summary reflects everything older than the tail.
-    //    Token-band OR message-count trigger (see update_summary). Errors / "nothing
-    //    to fold" are ignored — we use whatever summary already exists. Skipped when
-    //    the Awareness role doesn't resolve (no `route`).
+    // Fold uses floor as message-count trigger (same settings knobs).
     if let Some(route) = route.as_ref() {
-        let _ = update_summary(session_dir, client, route, usable, tail_cap).await;
+        let _ = update_summary(session_dir, client, route, usable, tail_floor).await;
     }
 
-    // 4. Read summary. Empty/missing → fail-open (full history). Never starve the
-    //    agent with a stub clip while the fold is still catching up.
     let sum = msglog::read_summary(session_dir);
     let has_summary = sum
         .as_ref()
         .map(|s| !s.text.trim().is_empty())
         .unwrap_or(false);
-
     if !has_summary {
         return history;
     }
-    let sum = sum.expect("has_summary implies Some");
+    let sum = sum.expect("has_summary");
 
-    // Everything newer than the summary boundary must stay verbatim, but hard-cap
-    // at settings.short_send_tail_n so the wire stays bounded even if the fold
-    // watermark lags. Clamp to >= 1 so we always keep at least one message.
+    let body = &history[1..];
     let max_id = msglog::max_message_id(session_dir);
     let after_wm = (max_id.saturating_sub(sum.covers_up_to)).max(1) as usize;
-    let keep = after_wm.min(tail_cap).max(1);
+    let keep = hot_keep_n(body, after_wm, tail_floor, usable);
 
-    // 5. Split into [system, body...].
     let Some((mut system, tail)) = clip_body(&history, keep) else {
         return history;
     };
 
-    // 6. Rehydrate. Candidate blobs are those in the SUMMARISED region
-    //    (msg_id <= covers_up_to), i.e. NOT in the verbatim tail — the tail still
-    //    carries its own heavy content in full.
-    //
-    //    Two recall paths, content-search FIRST:
-    //    6a. CONTENT MATCH (the "db lookup"): pull significant terms from the
-    //        user's message and ask sqlite which summarised blobs' OWNING MESSAGE
-    //        text matches — independent of the (possibly border-first) snippet. A
-    //        literal content hit is a strong signal, so the top up-to-3 are
-    //        rehydrated DIRECTLY, no router round-trip.
-    //    6b. FALLBACK: only when content search finds NOTHING do we ask the
-    //        snippet router (`pick_blobs`) — for semantic queries with no keyword
-    //        overlap, where the snippet is still the best (only) signal.
-    //    Either way the rehydrated set is capped at MAX_REHYDRATE and formatted as
-    //    the existing `[recalled blob #<id>]\n{content}` blocks.
-    let mut recalls: Vec<String> = Vec::new();
-    let candidates: Vec<msglog::BlobRef> = msglog::list_blobs(session_dir)
+    let recall_intent = if user_intent.contains("--- recent trajectory ---") {
+        user_intent.to_string()
+    } else {
+        build_recall_intent(&history, user_intent)
+    };
+    let history_ask = wants_history_recall(&recall_intent);
+    let terms = significant_terms(&recall_intent);
+
+    // --- archive: FTS dialogue excerpts (folded region only) ---
+    let mut archive_blocks: Vec<String> = Vec::new();
+    let mut used_msg_ids: HashSet<i64> = HashSet::new();
+
+    if !terms.is_empty() {
+        let q = terms.join(" ");
+        if let Ok(hits) =
+            msglog::search_messages_before(session_dir, &q, sum.covers_up_to, MAX_MSG_EXCERPTS as i64)
+        {
+            for h in hits {
+                if used_msg_ids.contains(&h.id) {
+                    continue;
+                }
+                // Prefer user/assistant dialogue over pure tool noise when possible —
+                // still allow tool if that's all we get.
+                used_msg_ids.insert(h.id);
+                archive_blocks.push(format_msg_excerpt(h.id, &h.role, h.snippet.trim()));
+                if archive_blocks.len() >= MAX_MSG_EXCERPTS {
+                    break;
+                }
+            }
+        }
+    }
+
+    // --- blobs ---
+    let mut all_candidates: Vec<msglog::BlobRef> = msglog::list_blobs(session_dir)
         .into_iter()
         .filter(|b| b.msg_id <= sum.covers_up_to)
         .collect();
 
-    // 6a. Content search over message text. `search_blobs` already filters to
-    //     msg_id <= covers_up_to and ranks by distinct-term-match count desc.
-    let terms = significant_terms(user_intent);
+    // Filter draft assistant blobs from auto paths unless history ask.
+    let filter_drafts = |cands: Vec<msglog::BlobRef>| -> Vec<msglog::BlobRef> {
+        cands
+            .into_iter()
+            .filter(|b| {
+                if history_ask {
+                    return true;
+                }
+                let role = role_for_msg(session_dir, b.msg_id);
+                !is_assistant_draft_blob(&b.kind, &role)
+            })
+            .collect()
+    };
+
     let content_hits: Vec<msglog::BlobRef> = if terms.is_empty() {
         Vec::new()
     } else {
-        msglog::search_blobs(session_dir, &terms, sum.covers_up_to)
+        filter_drafts(msglog::search_blobs(session_dir, &terms, sum.covers_up_to))
     };
 
+    let mut blob_blocks: Vec<String> = Vec::new();
     if !content_hits.is_empty() {
-        // Direct rehydrate: a literal content match needs no router confirmation.
         for hit in content_hits.iter().take(MAX_REHYDRATE) {
-            if let Some(content) = msglog::fetch_blob_content(session_dir, hit.msg_id) {
-                recalls.push(format!("\n\n[recalled blob #{}]\n{}", hit.id, content));
-            }
-        }
-    } else if let (false, Some(route)) = (candidates.is_empty(), route.as_ref()) {
-        // 6b. Fallback to the snippet router only when content search came up empty
-        //     AND the Awareness role resolved (the router rides that route). With no
-        //     route we rehydrate nothing via the router — content-search recalls
-        //     (6a) above are unaffected.
-        let payload = build_router_payload(user_intent, &candidates);
-        // Best-effort: `pick_blobs` already returns an empty vec on any error.
-        let picked = client
-            .pick_blobs(
-                route.conn(),
-                &route.model_id,
-                route.provider(),
-                resources::shortsend_router_prompt(),
-                &payload,
-            )
-            .await
-            .unwrap_or_default();
-        for id in picked {
-            if recalls.len() >= MAX_REHYDRATE {
-                break; // cap rehydration so the router can't undo the compression
-            }
-            // The router returns `blobs.id` values (the ids shown in the payload).
-            // Map back to the candidate to (a) reject any id we never offered
-            // (guards a hallucinated id) and (b) resolve its `msg_id` — full blob
-            // content lives in the `messages` row, so `fetch_blob_content` keys on
-            // the message id, not the blob id. Skip any whose content is missing.
-            let Some(cand) = candidates.iter().find(|c| c.id == id) else {
+            if used_msg_ids.contains(&hit.msg_id) {
                 continue;
-            };
-            if let Some(content) = msglog::fetch_blob_content(session_dir, cand.msg_id) {
-                recalls.push(format!("\n\n[recalled blob #{id}]\n{content}"));
+            }
+            if let Some(content) = msglog::fetch_blob_content(session_dir, hit.msg_id) {
+                let role = role_for_msg(session_dir, hit.msg_id);
+                used_msg_ids.insert(hit.msg_id);
+                blob_blocks.push(format_blob_block(
+                    hit.id,
+                    hit.msg_id,
+                    &hit.kind,
+                    &role,
+                    &content,
+                ));
+            }
+        }
+    } else {
+        all_candidates = filter_drafts(all_candidates);
+        if let (false, Some(route)) = (all_candidates.is_empty(), route.as_ref()) {
+            let payload = build_router_payload(&recall_intent, &all_candidates);
+            let picked = client
+                .pick_blobs(
+                    route.conn(),
+                    &route.model_id,
+                    route.provider(),
+                    resources::shortsend_router_prompt(),
+                    &payload,
+                )
+                .await
+                .unwrap_or_default();
+            for id in picked {
+                if blob_blocks.len() >= MAX_REHYDRATE {
+                    break;
+                }
+                let Some(cand) = all_candidates.iter().find(|c| c.id == id) else {
+                    continue;
+                };
+                if used_msg_ids.contains(&cand.msg_id) {
+                    continue;
+                }
+                if let Some(content) = msglog::fetch_blob_content(session_dir, cand.msg_id) {
+                    let role = role_for_msg(session_dir, cand.msg_id);
+                    used_msg_ids.insert(cand.msg_id);
+                    blob_blocks.push(format_blob_block(
+                        cand.id,
+                        cand.msg_id,
+                        &cand.kind,
+                        &role,
+                        &content,
+                    ));
+                }
             }
         }
     }
 
-    // 7. B-PLACEMENT: the summary goes into the SYSTEM message tail, NOT a
-    //    synthetic assistant turn. `history[0]` already ends (after
-    //    CACHE_SPLIT_MARK) with the volatile dir-listing/awareness block; append
-    //    the condensed-history summary, then the rehydrated blob blocks, after it.
-    //    Because all of this lands AFTER the mark, it rides in the UNCACHED tail —
-    //    correct, since the summary changes per fold and must not bust the cached
-    //    head.
-    system.content.push_str(&format!(
-        "\n\n# Conversation so far (reference — earlier turns, condensed)\n{}",
-        sum.text
-    ));
-    for block in &recalls {
-        system.content.push_str(block);
+    // --- system inject: contract → goal → log → archive ---
+    system.content.push_str(PRIORITY_CONTRACT);
+
+    let goal = settings.session_goal.trim();
+    if !goal.is_empty() {
+        system.content.push_str("\n\n# Session goal (user-committed)\n");
+        system.content.push_str(goal);
+        system.content.push('\n');
     }
 
-    // 8. Output: [ modified system (index 0), verbatim tail... ]. No synthetic
-    //    assistant summary turn — index 0 stays the system message so `to_wire`'s
-    //    mark-split still applies.
+    system.content.push_str(
+        "\n\n# Continuity log (condensed archive — live tail wins on conflict)\n",
+    );
+    system.content.push_str(&sum.text);
+
+    if !archive_blocks.is_empty() || !blob_blocks.is_empty() {
+        system.content.push_str(
+            "\n\n# Archive (evidence only — may be obsolete; live tail wins)\n",
+        );
+        for b in &archive_blocks {
+            system.content.push_str(b);
+        }
+        for b in &blob_blocks {
+            system.content.push_str(b);
+        }
+    }
+
     let mut out: Vec<ChatMessage> = Vec::with_capacity(1 + tail.len());
     out.push(system);
     out.extend(tail);
@@ -318,7 +489,11 @@ mod tests {
     fn long_history(n_body: usize) -> Vec<ChatMessage> {
         let mut h = vec![msg(Role::System, "system")];
         for i in 0..n_body {
-            let role = if i % 2 == 0 { Role::User } else { Role::Assistant };
+            let role = if i % 2 == 0 {
+                Role::User
+            } else {
+                Role::Assistant
+            };
             h.push(msg(role, &format!("body-{i}")));
         }
         h
@@ -352,6 +527,99 @@ mod tests {
     #[test]
     fn default_tail_is_generous() {
         let s = Settings::default();
-        assert!(tail_n_cap(&s) >= 40, "default tail must not starve agent turns");
+        assert!(tail_n_cap(&s) >= 40);
+    }
+
+    #[test]
+    fn priority_contract_mentions_tail_wins() {
+        assert!(PRIORITY_CONTRACT.contains("live tail wins") || PRIORITY_CONTRACT.contains("Live tail wins") || PRIORITY_CONTRACT.contains("live tail"));
+        assert!(PRIORITY_CONTRACT.contains("authoritative"));
+    }
+
+    #[test]
+    fn format_blob_marks_assistant_draft() {
+        let b = format_blob_block(1, 9, "code", "assistant", "fn main() {}");
+        assert!(b.contains("unconfirmed_draft"));
+        assert!(b.contains("msg_id=9"));
+        let t = format_blob_block(2, 3, "tool_output", "tool", "ok");
+        assert!(t.contains("status=evidence"));
+    }
+
+    #[test]
+    fn format_msg_excerpt_labeled() {
+        let e = format_msg_excerpt(7, "user", "please fix amnesia");
+        assert!(e.contains("archive msg #7"));
+        assert!(e.contains("role=user"));
+    }
+
+    #[test]
+    fn hot_keep_grows_past_floor_for_tiny_msgs() {
+        // 80 tiny body msgs; floor 10; huge usable → keep grows toward HOT_TAIL_MAX_MSGS
+        let body: Vec<_> = (0..80)
+            .map(|i| {
+                let role = if i % 2 == 0 {
+                    Role::User
+                } else {
+                    Role::Assistant
+                };
+                msg(role, "x")
+            })
+            .collect();
+        let k = hot_keep_n(&body, 5, 10, 100_000);
+        assert!(k >= 10, "floor");
+        assert!(k > 10, "should grow under token budget, got {k}");
+        assert!(k <= HOT_TAIL_MAX_MSGS);
+    }
+
+    #[test]
+    fn hot_keep_clamps_huge_messages() {
+        let big = "y".repeat(50_000);
+        let body = vec![
+            msg(Role::User, &big),
+            msg(Role::Assistant, &big),
+            msg(Role::User, &big),
+            msg(Role::Assistant, &big),
+        ];
+        let k = hot_keep_n(&body, 1, 4, 8_000);
+        assert!(k >= 1);
+        assert!(k <= 4);
+    }
+
+    #[test]
+    fn snap_does_not_start_on_tool() {
+        let body = vec![
+            msg(Role::User, "u0"),
+            msg(Role::Assistant, "a0"),
+            msg(Role::Tool, "t0"),
+            msg(Role::Assistant, "a1"),
+            msg(Role::User, "u1"),
+            msg(Role::Assistant, "a2"),
+        ];
+        // keep=4 would start at tool t0 (index 2); snap should move to u1 (keep=2)
+        let k = snap_keep_to_exchange(&body, 4);
+        assert_eq!(k, 2);
+        assert_eq!(body[body.len() - k].role, Role::User);
+    }
+
+    #[test]
+    fn wants_history_on_plan() {
+        assert!(wants_history_recall("what was the plan?"));
+        assert!(!wants_history_recall("continue"));
+    }
+
+    #[test]
+    fn significant_terms_from_trajectory() {
+        let t = significant_terms("fix amnesia DRSS hot window continue");
+        assert!(t.iter().any(|x| x == "amnesia"));
+        assert!(t.iter().any(|x| x == "window"));
+    }
+
+    #[test]
+    fn build_recall_intent_includes_trajectory() {
+        let h = long_history(6);
+        let s = build_recall_intent(&h, "continue please");
+        assert!(s.contains("continue please"));
+        assert!(s.contains("recent trajectory"));
+        assert!(s.contains("body-"));
     }
 }

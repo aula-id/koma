@@ -64,10 +64,10 @@ pub use records::{BashJobRecord, FileChange, SubAgentRecord};
 pub use summary::SummaryRow;
 
 // Public functions
-pub use blobs::{fetch_blob_content, list_blobs, search_blobs};
+pub use blobs::{fetch_blob_content, fetch_message_role, list_blobs, search_blobs};
 pub use query::{
-    append, fetch_messages_since, max_message_id, message_count, search_messages, totals,
-    truncate_after, user_message_ids,
+    append, fetch_messages_since, max_message_id, message_count, search_messages,
+    search_messages_before, totals, truncate_after, user_message_ids,
 };
 pub use schema::{diagnose_and_repair_message_find, invalidate_schema_ready, open};
 // Wave-5 per-session record persistence (file-change log + inert bash/sub-agent records).

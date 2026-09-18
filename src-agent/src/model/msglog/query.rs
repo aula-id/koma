@@ -364,6 +364,115 @@ pub fn search_messages(
     Ok(out)
 }
 
+/// FTS search restricted to the folded region (`messages.id <= max_msg_id`).
+/// Prefers `user` then `assistant` hits (two-pass), capped at `limit` total.
+/// Used by short-send to rehydrate dialogue that never became a blob.
+pub fn search_messages_before(
+    session_dir: &Path,
+    raw_query: &str,
+    max_msg_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<MessageMatch>> {
+    let limit = limit.max(1).min(20);
+    let mut out: Vec<MessageMatch> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Prefer user dialogue, then assistant; fill remainder without role filter.
+    for role in [Some("user"), Some("assistant"), None] {
+        if out.len() as i64 >= limit {
+            break;
+        }
+        let batch_lim = limit - out.len() as i64;
+        let batch = search_messages_capped(session_dir, raw_query, batch_lim * 3, role, max_msg_id)?;
+        for h in batch {
+            if h.id > max_msg_id {
+                continue;
+            }
+            if !seen.insert(h.id) {
+                continue;
+            }
+            out.push(h);
+            if out.len() as i64 >= limit {
+                break;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Like [`search_messages`] but only returns rows with `m.id <= max_msg_id`.
+fn search_messages_capped(
+    session_dir: &Path,
+    raw_query: &str,
+    limit: i64,
+    role_filter: Option<&str>,
+    max_msg_id: i64,
+) -> anyhow::Result<Vec<MessageMatch>> {
+    let terms: Vec<String> = raw_query
+        .split_whitespace()
+        .map(|t| {
+            t.chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
+                .collect::<String>()
+        })
+        .filter(|t| t.chars().count() >= 2)
+        .take(SEARCH_MAX_TERMS)
+        .map(|t| {
+            if t.chars().count() >= SEARCH_PREFIX_MIN_CHARS {
+                format!("\"{}\"*", t)
+            } else {
+                format!("\"{}\"", t)
+            }
+        })
+        .collect();
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let fts_query = terms.join(" OR ");
+    let conn = open(session_dir)?;
+    let sql = if role_filter.is_some() {
+        "SELECT m.id, m.role, substr(m.content, 1, 400) AS excerpt, m.created_at,
+                substr(m.reasoning, 1, 300)
+         FROM messages_fts
+         JOIN messages m ON m.id = messages_fts.rowid
+         WHERE messages_fts MATCH ?1 AND m.role = ?2 AND m.id <= ?3
+         ORDER BY rank
+         LIMIT ?4"
+    } else {
+        "SELECT m.id, m.role, substr(m.content, 1, 400) AS excerpt, m.created_at,
+                substr(m.reasoning, 1, 300)
+         FROM messages_fts
+         JOIN messages m ON m.id = messages_fts.rowid
+         WHERE messages_fts MATCH ?1 AND m.id <= ?2
+         ORDER BY rank
+         LIMIT ?3"
+    };
+    fn map_row(r: &rusqlite::Row) -> rusqlite::Result<MessageMatch> {
+        let reasoning: Option<String> = r.get(4)?;
+        Ok(MessageMatch {
+            id: r.get(0)?,
+            role: r.get(1)?,
+            snippet: r.get(2)?,
+            created_at: r.get(3)?,
+            reasoning: reasoning.filter(|s| !s.is_empty()),
+        })
+    }
+    let mut stmt = conn.prepare(sql)?;
+    let rows = if let Some(role) = role_filter {
+        stmt.query_map(
+            rusqlite::params![fts_query, role, max_msg_id, limit],
+            map_row,
+        )?
+    } else {
+        stmt.query_map(rusqlite::params![fts_query, max_msg_id, limit], map_row)?
+    };
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[path = "query_test.rs"]
 mod query_test;

@@ -320,6 +320,13 @@ pub struct Settings {
     /// Old `settings.json` files load via the serde default.
     #[serde(default = "default_short_send_tail_n")]
     pub short_send_tail_n: i64,
+    /// User-committed session goal (doctrine for DRSS). Empty = none. Never filled
+    /// from assistant drafts — only explicit user steer via `detect_goal_update`.
+    #[serde(default)]
+    pub session_goal: String,
+    /// Optional provenance message id for `session_goal` (0 = unset).
+    #[serde(default)]
+    pub session_goal_msg_id: i64,
     /// Enable cache-warmth-adaptive summarization. When true, the runtime may
     /// trigger a sliding-window summary when it detects the prompt cache has gone
     /// cold, keeping costs low on providers with a sliding/refreshing prompt cache
@@ -510,6 +517,8 @@ impl Default for Settings {
             short_send_enabled: default_short_send_enabled(),
             short_send_engage_n: default_short_send_engage_n(),
             short_send_tail_n: default_short_send_tail_n(),
+            session_goal: String::new(),
+            session_goal_msg_id: 0,
             sliding_cache: default_sliding_cache(),
             bash_saving: true,
             coding_autosave: default_coding_autosave(),

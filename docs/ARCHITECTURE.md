@@ -298,19 +298,21 @@ sticky engage/disengage (hysteresis; count is hold-only):
 4. Post-compaction guard: when `history[1]` starts with `[summary of earlier conversation]`, do **not** stack a sqlite summary — **fail-open** (full history; no hard clip).
 5. Best-effort fold via `update_summary` (fires when verbatim tail past `TAIL_HI_PCT` (15%) of usable **or** message count > `short_send_tail_n`).
 6. Read rolling summary from `messages.sqlite`. Missing/empty → **fail-open** full history (never emergency-clip mid-task).
-7. Verbatim keep = `min(messages_after(covers_up_to), short_send_tail_n)` (≥ 1).
-8. Rehydrate blobs (summarised region only): content-search first (keyword LIKE on message text, up to 3 direct matches), fallback to snippet router (secondary LLM) when no keyword overlap. Max `MAX_REHYDRATE = 3`.
-9. **B-placement:** summary + blob recalls appended to the SYSTEM message content (after `CACHE_SPLIT_MARK`), NOT emitted as a synthetic assistant turn. Landing after the mark means it rides the uncached volatile tail and does not bust the cached head.
-10. Output: `[modified system, verbatim tail...]` — body length ≤ `short_send_tail_n` **only when a summary exists**.
+7. **Hot window:** keep ≥ `short_send_tail_n` body messages, grow under `HOT_TAIL_PCT` (25%) of usable up to `HOT_TAIL_MAX_MSGS` (120), snap trim to a user-exchange edge (never open mid tool-chain). Watermark span is a lower bound when smaller.
+8. **Priority on system (after CACHE_SPLIT_MARK):** DRSS memory contract (live tail wins) → optional `session_goal` (user-committed) → continuity log → labeled archive (FTS dialogue excerpts + blob recalls). Archive is evidence only; assistant draft blobs are not auto-recalled unless the user asks about plan/history.
+9. **Recall intent** = last user message + recent body trajectory (not last user line alone). Blob search ranks by term score then **newer** `msg_id`. Message FTS (`search_messages_before`) restores folded non-blob dialogue.
+10. Output: `[modified system, hot verbatim tail...]`.
 
 **`update_summary` fold** (inside `shape`, step 5):
 
 - Token-band hysteresis **alongside** message-count: folds when tail tokens > `TAIL_HI_PCT` (15%) of usable **or** tail message count > `short_send_tail_n`; aims remaining verbatim ≤ ~`TAIL_FLOOR_PCT` (5%) of usable **and** ≤ `tail_n` messages.
 - Snaps the fold boundary to a completed-exchange edge (never folds the live in-progress exchange).
-- Uses `shortsend_summary_prompt()` (from `src-misc/shortsend-summary.txt`) as system for the secondary model call. Reasoning is OFF on this call (bleed guard).
+- Uses `shortsend_summary_prompt()` (from `src-misc/shortsend-summary.txt`) as system for the secondary model call — structured **continuity log** (goal / recent arc / done / failed / files / open questions). Assistant plans are PROPOSED unless user-accepted. Reasoning is OFF (bleed guard).
 - Persists new summary to `summary` table in `messages.sqlite`.
 
-**Settings (session-level):** `short_send_enabled` (master), `short_send_engage_n` (sticky hold body message count, default 80), `short_send_tail_n` (wire tail size when summary exists, default 40), `sliding_cache` (cold window 300s vs 120s).
+**Settings (session-level):** `short_send_enabled` (master), `short_send_engage_n` (sticky hold body message count, default 80), `short_send_tail_n` (hot-window floor, default 40), `session_goal` / `session_goal_msg_id` (user-committed doctrine; empty = none), `sliding_cache` (cold window 300s vs 120s).
+
+**Wire priority:** live hot tail > session_goal > continuity log > labeled archive.
 
 **Contrast with `/compact`:** `/compact` is destructive — it rewrites `messages.json` and the in-memory conversation. Short-send is non-destructive: the wire payload is the only thing that changes.
 
