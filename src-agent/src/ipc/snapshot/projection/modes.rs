@@ -230,6 +230,8 @@ pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
         classifier_enabled: st.classifier_enabled,
         allowed_folders: st.allowed_folders.clone(),
         short_send_enabled: st.short_send_enabled,
+        short_send_engage_n: st.short_send_engage_n.parse().unwrap_or(80),
+        short_send_tail_n: st.short_send_tail_n.parse().unwrap_or(40),
         sliding_cache: st.sliding_cache,
         bash_saving: st.bash_saving,
         coding_autosave: st.coding_autosave,

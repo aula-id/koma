@@ -128,6 +128,20 @@ pub struct RunCli {
     pub session: Option<String>,
     /// Optional absolute working directory for the session-daemon spawn (`--workdir` / `--cwd`).
     pub workdir: Option<String>,
+    /// Optional Main-model pick (`--model`): same slug as agent `model:` —
+    /// catalogue `name` | `model_id` | `uuid` (see `find_model_entry_by_slug`).
+    /// Only sets the session Main role (via `SetSessionMain`); never mutates other roles.
+    pub model: Option<String>,
+    /// Optional reasoning effort (`--effort`): `off`/`none`/`default`/`low`/`high`/….
+    pub effort: Option<String>,
+    /// Optional agent mode (`--mode`): `auto`/`normal`/`plan`/`yolo`/`sdlc`.
+    /// `yolo` requires security on + yolo armed (headless arms automatically when
+    /// `--mode yolo` or when `--security on` is paired with yolo).
+    pub mode: Option<String>,
+    /// Optional security daemon toggle (`--security on|off`).
+    /// `on` starts the security daemon (autocheck strat) and is required for yolo;
+    /// `off` stops it and disarms yolo.
+    pub security: Option<bool>,
 }
 
 impl Default for RunCli {
@@ -140,6 +154,10 @@ impl Default for RunCli {
             timeout_sec: 14_400,
             session: None,
             workdir: None,
+            model: None,
+            effort: None,
+            mode: None,
+            security: None,
         }
     }
 }
@@ -268,6 +286,15 @@ pub struct Opts {
     pub unknown_command: Option<String>,
 }
 
+/// Parse `on`/`off`/`true`/`false`/`1`/`0` (case-insensitive). Unknown → `None`.
+pub(crate) fn parse_on_off(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "on" | "true" | "1" | "yes" => Some(true),
+        "off" | "false" | "0" | "no" => Some(false),
+        _ => None,
+    }
+}
+
 /// Print `koma <version>` to STDOUT and return the process exit code (`0`).
 ///
 /// Handles `--version`/`-V` (#75). Unlike [`crate::app::print_daemon_usage`] this is
@@ -314,9 +341,17 @@ pub fn print_help() -> i32 {
          \x20 --help, -h                     print this help and exit\n\
          \n\
          koma run:\n\
-         \x20 koma run --prompt '…' [--name NAME] [--workdir DIR] [--once] [--timeout SECS]\n\
-         \x20 koma run --prompt-file PATH [--name NAME] [--workdir DIR] [--once] [--timeout SECS]\n\
-         \x20   --once     wait until idle (default timeout 14400s); omit to submit and detach\n\
+         \x20 koma run --prompt '…' [options]\n\
+         \x20 koma run --prompt-file PATH [options]\n\
+         \x20   --name NAME          session display name\n\
+         \x20   --workdir|--cwd DIR  session working directory\n\
+         \x20   --session ID         attach existing session (else mint)\n\
+         \x20   --model SLUG         set Main only (name|model_id|uuid; same as agent model:)\n\
+         \x20   --effort LEVEL       off|none|default|low|medium|high|…\n\
+         \x20   --mode MODE          auto|normal|plan|yolo|sdlc\n\
+         \x20   --security on|off    start/stop security daemon (yolo needs on)\n\
+         \x20   --once               wait until idle (default timeout 14400s)\n\
+         \x20   --timeout SECS       --once wall clock\n\
          \x20   exit 0 ok · 1 error · 2 timeout · 3 approval-parked\n\
          \x20   uses the default session-daemon path (not standalone / alone)\n\
          \n\
@@ -571,6 +606,34 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
                         run.once = true;
                         i += 1;
                         continue;
+                    }
+                    "--model" => {
+                        if let Some(v) = all.get(i + 1) {
+                            run.model = Some(v.clone());
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "--effort" => {
+                        if let Some(v) = all.get(i + 1) {
+                            run.effort = Some(v.clone());
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "--mode" => {
+                        if let Some(v) = all.get(i + 1) {
+                            run.mode = Some(v.clone());
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "--security" => {
+                        if let Some(v) = all.get(i + 1) {
+                            run.security = parse_on_off(v);
+                            i += 2;
+                            continue;
+                        }
                     }
                     _ => {}
                 }

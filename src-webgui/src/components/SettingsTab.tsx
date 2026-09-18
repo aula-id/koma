@@ -448,6 +448,8 @@ function SessionSettings() {
   const [codingAutosave, setCodingAutosave] = useState(false)
   const [internet, setInternet] = useState<'simple' | 'full'>('simple')
   const [maxTurns, setMaxTurns] = useState('500')
+  const [engageN, setEngageN] = useState('80')
+  const [tailN, setTailN] = useState('40')
 
   useEffect(() => {
     if (!values) return
@@ -459,6 +461,8 @@ function SessionSettings() {
     setCodingAutosave(values.codingAutosave)
     setInternet(values.internetMode === 'full' ? 'full' : 'simple')
     setMaxTurns(String(values.subagentMaxTurns ?? 500))
+    setEngageN(String(values.shortSendEngageN ?? 80))
+    setTailN(String(values.shortSendTailN ?? 40))
   }, [values])
 
   if (!values) {
@@ -516,6 +520,23 @@ function SessionSettings() {
       req({ r: 'SetPrefs', subagentMaxTurns: safe })
     }
   }
+  // DRSS hold / tail: clamp ≥ 1; defaults 80 / 40 on invalid.
+  const commitEngageN = () => {
+    const n = parseInt(engageN, 10)
+    const safe = isNaN(n) || n < 1 ? 80 : n
+    setEngageN(String(safe))
+    if (safe !== (values.shortSendEngageN ?? 80)) {
+      req({ r: 'SetPrefs', shortSendEngageN: safe })
+    }
+  }
+  const commitTailN = () => {
+    const n = parseInt(tailN, 10)
+    const safe = isNaN(n) || n < 1 ? 40 : n
+    setTailN(String(safe))
+    if (safe !== (values.shortSendTailN ?? 40)) {
+      req({ r: 'SetPrefs', shortSendTailN: safe })
+    }
+  }
 
   return (
     <div className="flex flex-col">
@@ -553,6 +574,40 @@ function SessionSettings() {
 
       <SettingRow label="Short-send" desc="Compress older turns into a rolling summary before each send to cut token cost.">
         <Toggle on={shortSend} onChange={setShort} />
+      </SettingRow>
+
+      <SettingRow
+        label="DRSS hold after"
+        desc="Once engaged by tokens, stay engaged while body messages exceed this count (sticky hold, not kick-in). Default: 80."
+      >
+        <input
+          type="number"
+          min={1}
+          value={engageN}
+          onChange={(e) => setEngageN(e.target.value.replace(/[^0-9]/g, ''))}
+          onBlur={commitEngageN}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
+          className="w-24 rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[12px] text-koma-fg outline-none focus:border-koma-grip"
+        />
+      </SettingRow>
+
+      <SettingRow
+        label="DRSS tail messages"
+        desc="Max verbatim body messages kept on the wire when short-send is engaged (and a summary exists). Default: 40."
+      >
+        <input
+          type="number"
+          min={1}
+          value={tailN}
+          onChange={(e) => setTailN(e.target.value.replace(/[^0-9]/g, ''))}
+          onBlur={commitTailN}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
+          className="w-24 rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[12px] text-koma-fg outline-none focus:border-koma-grip"
+        />
       </SettingRow>
 
       <SettingRow label="Sliding cache" desc="Adapt summarisation when the provider's prompt cache goes cold (e.g. Anthropic).">

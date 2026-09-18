@@ -1,9 +1,10 @@
 //! `koma run` — thin headless client on the **default session-daemon** path.
 //!
 //! ```text
-//! ensure+attach  →  SubmitInput  →  [optional --once wait]  →  Detach
+//! ensure+attach  →  [optional setup]  →  SubmitInput  →  [optional --once wait]  →  Detach
 //! ```
 //!
+//! Optional setup (before submit): `--security`, `--model` (Main only), `--effort`, `--mode`.
 //! No standalone/`--local`. Reuses [`attach_session_headless`].
 //!
 //! Exit: 0 ok · 1 error · 2 `--once` timeout · 3 approval-parked
@@ -13,9 +14,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 
+use crate::app::resolve::find_model_entry_by_slug;
 use crate::app::runtime::client::connect::{attach_session_headless, Connection};
 use crate::cli::RunCli;
 use crate::ipc::proto::{ClientRequest, DaemonEvent};
+use crate::model::app_config::AppConfig;
+use crate::model::settings::Settings;
 
 const EXIT_OK: i32 = 0;
 const EXIT_ERR: i32 = 1;
@@ -66,16 +70,27 @@ fn run_inner(cli: RunCli) -> Result<i32> {
         });
     }
 
-    // Brief drain so Attach snapshot lands before submit (non-fatal if slow).
+    // Brief drain so Attach snapshot lands before setup/submit (non-fatal if slow).
     let mut working = false;
     let mut awaiting_approval = false;
-    drain_snapshot(&conn, Duration::from_secs(5), &mut working, &mut awaiting_approval);
+    drain_snapshot(
+        &conn,
+        Duration::from_secs(5),
+        &mut working,
+        &mut awaiting_approval,
+    );
 
     if awaiting_approval {
         eprintln!("session awaiting approval; not submitting");
         finish(&conn, &rt);
         return Ok(EXIT_APPROVAL);
     }
+
+    apply_run_setup(&conn, &cli)?;
+
+    // Let daemon apply setup before the turn starts.
+    std::thread::sleep(Duration::from_millis(150));
+    drain_quiet(&conn, Duration::from_millis(400));
 
     conn.req_tx
         .send(ClientRequest::SubmitInput { text: prompt })
@@ -88,6 +103,18 @@ fn run_inner(cli: RunCli) -> Result<i32> {
     if let Some(ref w) = workdir {
         println!("workdir={}", w.display());
     }
+    if let Some(ref m) = cli.model {
+        println!("model={m}");
+    }
+    if let Some(ref e) = cli.effort {
+        println!("effort={e}");
+    }
+    if let Some(ref m) = cli.mode {
+        println!("mode={m}");
+    }
+    if let Some(s) = cli.security {
+        println!("security={}", if s { "on" } else { "off" });
+    }
 
     if !cli.once {
         finish(&conn, &rt);
@@ -97,6 +124,101 @@ fn run_inner(cli: RunCli) -> Result<i32> {
     let code = wait_once(&conn, Duration::from_secs(cli.timeout_sec.max(1)))?;
     finish(&conn, &rt);
     Ok(code)
+}
+
+/// Apply optional `--security` / `--model` / `--effort` / `--mode` before submit.
+///
+/// Order: security → model → effort → mode (yolo arms after security is up).
+fn apply_run_setup(conn: &Connection, cli: &RunCli) -> Result<()> {
+    let mode_l = cli
+        .mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase());
+    let want_yolo = mode_l.as_deref() == Some("yolo");
+
+    // Security: explicit flag, or auto-on when entering yolo.
+    let security_on = match cli.security {
+        Some(v) => Some(v),
+        None if want_yolo => Some(true),
+        None => None,
+    };
+    if let Some(enabled) = security_on {
+        conn.req_tx
+            .send(ClientRequest::SetSecurityEnabled { enabled })
+            .context("SetSecurityEnabled")?;
+        if enabled {
+            // Give the sec manager a moment to come up before arming yolo.
+            std::thread::sleep(Duration::from_millis(400));
+            drain_quiet(conn, Duration::from_millis(200));
+        }
+    }
+
+    if let Some(raw) = cli.model.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let uuid = resolve_model_ref(raw)
+            .with_context(|| format!("--model {raw}: no matching catalogue entry"))?;
+        conn.req_tx
+            .send(ClientRequest::SetSessionMain {
+                model_uuid: Some(uuid),
+            })
+            .context("SetSessionMain")?;
+    }
+
+    if let Some(effort) = cli
+        .effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        conn.req_tx
+            .send(ClientRequest::SetEffort {
+                effort: effort.to_string(),
+            })
+            .context("SetEffort")?;
+    }
+
+    if let Some(mode) = mode_l {
+        if mode == "yolo" {
+            // Arm Layer-1 YOLO (refused daemon-side if security not running).
+            conn.req_tx
+                .send(ClientRequest::SetYoloArmed { armed: true })
+                .context("SetYoloArmed")?;
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        conn.req_tx
+            .send(ClientRequest::SetMode { mode })
+            .context("SetMode")?;
+    }
+
+    Ok(())
+}
+
+/// Resolve `--model` the same way agent/manifest `model:` slugs do:
+/// [`find_model_entry_by_slug`] — case-insensitive match on `model_id` | `name` | `uuid`.
+///
+/// Returns the **global catalogue uuid** `SetSessionMain` expects (clones that entry,
+/// including its `provider_uuid` / router). No new identifier formats.
+fn resolve_model_ref(raw: &str) -> Result<String> {
+    let cfg = AppConfig::load();
+    // Fresh headless attach: no session overrides yet; empty settings matches spawn-time
+    // slug resolution with `preferred_provider_uuids: None`.
+    let settings = Settings::default();
+    let needle = raw.trim();
+    if needle.is_empty() {
+        bail!("empty model ref");
+    }
+    let entry = find_model_entry_by_slug(&cfg, &settings, needle, None).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no catalogue match for {needle:?} (slug = model_id | name | uuid, same as agent model:)"
+        )
+    })?;
+    // SetSessionMain looks up the GLOBAL catalogue by uuid. Prefer source_uuid when
+    // present (session clone pointing at a global); globals have source_uuid = None.
+    Ok(entry
+        .source_uuid
+        .clone()
+        .unwrap_or_else(|| entry.uuid.clone()))
 }
 
 fn finish(conn: &Connection, rt: &tokio::runtime::Runtime) {
@@ -111,8 +233,7 @@ fn resolve_prompt(cli: &RunCli) -> Result<String> {
         (Some(p), None) => Ok(p.clone()),
         (None, Some(path)) => {
             let path = expand_user(path);
-            std::fs::read_to_string(&path)
-                .with_context(|| format!("read {}", path.display()))
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))
         }
         (Some(_), Some(_)) => bail!("pass only one of --prompt or --prompt-file"),
         (None, None) => bail!("missing --prompt or --prompt-file"),
@@ -181,10 +302,7 @@ fn drain_snapshot(
 ) {
     let deadline = Instant::now() + budget;
     while Instant::now() < deadline {
-        match conn
-            .frame_rx
-            .recv_timeout(Duration::from_millis(100))
-        {
+        match conn.frame_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(frame) => {
                 let is_snap = matches!(frame.event, DaemonEvent::Snapshot(_));
                 note_frame(&frame.event, working, awaiting_approval);
@@ -192,6 +310,17 @@ fn drain_snapshot(
                     return;
                 }
             }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+        }
+    }
+}
+
+fn drain_quiet(conn: &Connection, budget: Duration) {
+    let deadline = Instant::now() + budget;
+    while Instant::now() < deadline {
+        match conn.frame_rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(_) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
         }
@@ -245,5 +374,16 @@ fn wait_once(conn: &Connection, timeout: Duration) -> Result<i32> {
                 bail!("daemon disconnected while waiting");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod resolve_model_tests {
+    use super::*;
+
+    #[test]
+    fn empty_ref_errors() {
+        let err = resolve_model_ref("   ").unwrap_err();
+        assert!(err.to_string().contains("empty"));
     }
 }

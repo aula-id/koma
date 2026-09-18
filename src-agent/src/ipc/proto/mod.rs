@@ -420,6 +420,10 @@ pub enum ClientRequest {
         internet_mode: Option<String>,
         workdir: Option<Vec<String>>,
         subagent_max_turns: Option<u32>,
+        /// Body message count that holds DRSS engaged (sticky; ≥ 1).
+        short_send_engage_n: Option<i64>,
+        /// Max verbatim body messages on the wire when engaged (≥ 1).
+        short_send_tail_n: Option<i64>,
     },
 
     /// GUI composer EFFORT picker opened: derive the `/effort` menu for the
@@ -444,6 +448,24 @@ pub enum ClientRequest {
     /// drives this via `Mode::Effort`'s confirm handler.
     SetEffort {
         effort: String,
+    },
+
+    /// Start or stop the security daemon (headless / non-panel equivalent of the
+    /// Security panel Daemon checkbox). `enabled: true` →
+    /// [`crate::app::runtime::actions::security` start path] (sets
+    /// `security_enabled`, starts manager); `false` → stop path (also disarms
+    /// yolo). Not gui-gated: headless `koma run --security on|off` is a first-class
+    /// client of this request.
+    SetSecurityEnabled {
+        enabled: bool,
+    },
+    /// Arm or disarm Layer-1 YOLO (`yolo_armed`). Arming is refused unless the
+    /// security daemon is running (same gate as the Security panel YOLO checkbox).
+    /// Disarming while in `Yolo` agent mode drops mode back to `Auto`. Headless
+    /// `koma run --mode yolo` sends `armed: true` after security is up, then
+    /// [`SetMode`] with `"yolo"`.
+    SetYoloArmed {
+        armed: bool,
     },
 
     // ─── GUI /agents dashboard (sub-agent definitions) ───────────────────────
@@ -810,6 +832,12 @@ pub enum DaemonEvent {
         effort: String,
         /// Max agentic turns per sub-agent (user-editable, ≥ 1).
         subagent_max_turns: u32,
+        /// Body message count that holds DRSS engaged (sticky; ≥ 1).
+        #[serde(default = "default_short_send_n_80")]
+        short_send_engage_n: i64,
+        /// Max verbatim body messages on the wire when engaged (≥ 1).
+        #[serde(default = "default_short_send_n_40")]
+        short_send_tail_n: i64,
     },
     /// One-shot reply to a [`ClientRequest::GetEffortOptions`]: the derived
     /// `/effort` menu for the foreground session's current model, from
@@ -1070,6 +1098,14 @@ pub enum StateDelta {
         kind: String,
         text: String,
     },
+}
+
+fn default_short_send_n_80() -> i64 {
+    80
+}
+
+fn default_short_send_n_40() -> i64 {
+    40
 }
 
 #[cfg(test)]

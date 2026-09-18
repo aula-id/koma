@@ -309,9 +309,15 @@ pub struct Settings {
     /// (kill switch). Display + on-disk state are unaffected either way.
     #[serde(default = "default_short_send_enabled")]
     pub short_send_enabled: bool,
-    /// How many of the newest messages short-send keeps verbatim (the tail that
-    /// is sent in full; everything older is folded into the summary). Defaults to
-    /// `6`. Old `settings.json` files load unchanged via the serde default.
+    /// Body message count (any role except system) that HOLDS DRSS engaged once
+    /// the token/cache path has kicked in — sticky only, never first entry.
+    /// Defaults to `80`. Old `settings.json` files load via the serde default.
+    #[serde(default = "default_short_send_engage_n")]
+    pub short_send_engage_n: i64,
+    /// How many of the newest body messages short-send keeps verbatim on the wire
+    /// when engaged (the tail sent in full; everything older is folded into the
+    /// summary). Defaults to `40` so multi-step tool chains stay on the wire.
+    /// Old `settings.json` files load via the serde default.
     #[serde(default = "default_short_send_tail_n")]
     pub short_send_tail_n: i64,
     /// Enable cache-warmth-adaptive summarization. When true, the runtime may
@@ -420,8 +426,12 @@ fn default_short_send_enabled() -> bool {
     true
 }
 
+fn default_short_send_engage_n() -> i64 {
+    80
+}
+
 fn default_short_send_tail_n() -> i64 {
-    6
+    40
 }
 
 fn default_sliding_cache() -> bool {
@@ -498,6 +508,7 @@ impl Default for Settings {
             classifier_provider: DEFAULT_CLASSIFIER_PROVIDER.to_string(),
             allowed_folders: Vec::new(),
             short_send_enabled: default_short_send_enabled(),
+            short_send_engage_n: default_short_send_engage_n(),
             short_send_tail_n: default_short_send_tail_n(),
             sliding_cache: default_sliding_cache(),
             bash_saving: true,

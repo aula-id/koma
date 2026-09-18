@@ -34,12 +34,15 @@ pub(crate) mod model_cmd;
 mod oauth;
 mod onboard;
 mod plan_decision;
+// `pub(crate)` so the daemon hub can call `handle_security_start` /
+// `handle_security_stop` / `handle_set_yolo_armed` for headless IPC
+// (`SetSecurityEnabled` / `SetYoloArmed`) without opening the Security panel.
+pub(crate) mod security;
 // `pub(in crate::app::runtime)` so the `/quit` COMMAND handler (in the sibling
 // `commands` module) can route through the same `request_quit` chokepoint as the
 // quit keybind, instead of duplicating the working-aware open-or-quit logic.
 pub(in crate::app::runtime) mod quit;
 mod rewind;
-mod security;
 // `pub(in crate::app::runtime)` so `runtime` can re-export `session::handle_live_switch` for
 // the extension grant broker's `sessions.switch` (W7); the module's own items stay `pub`.
 mod config_reload;

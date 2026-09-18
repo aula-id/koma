@@ -336,6 +336,8 @@ impl DaemonHub {
         internet_mode: Option<String>,
         workdir: Option<Vec<String>>,
         subagent_max_turns: Option<u32>,
+        short_send_engage_n: Option<i64>,
+        short_send_tail_n: Option<i64>,
     ) {
         use crate::model::settings::InternetMode;
         // Capture the old internet mode BEFORE the set, for the shared change-gated
@@ -397,6 +399,12 @@ impl DaemonHub {
             }
             if let Some(v) = subagent_max_turns {
                 sess.settings.subagent_max_turns = v.max(1);
+            }
+            if let Some(v) = short_send_engage_n {
+                sess.settings.short_send_engage_n = v.max(1);
+            }
+            if let Some(v) = short_send_tail_n {
+                sess.settings.short_send_tail_n = v.max(1);
             }
             // Refresh the mode-gated system-prompt roster, then persist — mirrors
             // handle_save_settings (:198 rebuild + :216 save). A save error just
@@ -499,6 +507,27 @@ impl DaemonHub {
             let _ = sess.save();
         }
         self.send_settings_values(idx, state);
+    }
+
+    /// Headless / IPC: start or stop the security daemon (panel-free).
+    pub(super) fn set_security_enabled(
+        &mut self,
+        idx: usize,
+        state: &mut AppState,
+        enabled: bool,
+    ) {
+        let result = if enabled {
+            crate::app::runtime::actions::security::handle_security_start(state)
+        } else {
+            crate::app::runtime::actions::security::handle_security_stop(state)
+        };
+        self.ack_or_error(idx, result);
+    }
+
+    /// Headless / IPC: arm or disarm Layer-1 YOLO (refuses arm if sec daemon down).
+    pub(super) fn set_yolo_armed(&mut self, idx: usize, state: &mut AppState, armed: bool) {
+        let result = crate::app::runtime::actions::security::handle_set_yolo_armed(state, armed);
+        self.ack_or_error(idx, result);
     }
 
     // GUI onboarding "koma free": mint/reuse the keyless Koma Free provider + a

@@ -28,7 +28,8 @@ use crate::service::openrouter::OpenRouterClient;
 pub(super) const TAIL_FLOOR_PCT: u64 = 5;
 /// Once the verbatim tail grows past this % of `usable`, refold (advance the
 /// watermark). Below it the fold is a no-op — the hysteresis dead-zone that
-/// avoids a summarizer call every single turn.
+/// avoids a summarizer call every single turn (unless the message-count path
+/// fires — see `tail_n`).
 pub(super) const TAIL_HI_PCT: u64 = 15;
 
 /// Upper bound on how many delta messages to pull in one fold. Large enough that
@@ -47,15 +48,20 @@ fn cap_chars(s: &str, cap: usize) -> String {
 }
 
 /// Fold newly-archived messages into the session's rolling summary, advancing the
-/// summary watermark by a TOKEN BAND rather than a fixed message count.
+/// summary watermark by a TOKEN BAND and/or a MESSAGE COUNT rather than a fixed
+/// message count alone.
 ///
 /// `usable = context_window - BASE_OVERHEAD` is the budget the percentages are
 /// taken against. The verbatim tail (messages after the current watermark) is
 /// allowed to grow up to [`TAIL_HI_PCT`] of `usable`; only when it crosses that
-/// high-water mark do we fold, and we fold just enough that the REMAINING tail
-/// drops back to ~[`TAIL_FLOOR_PCT`]. This hysteresis dead-zone means we do NOT
-/// pay for a summarizer call on every turn — only when the tail has genuinely
-/// grown past the band.
+/// high-water mark (OR exceeds `tail_n` messages) do we fold, and we fold just
+/// enough that the REMAINING tail drops back to ~[`TAIL_FLOOR_PCT`] **and** ≤
+/// `tail_n` messages. This hysteresis dead-zone means we do NOT pay for a
+/// summarizer call on every turn — only when the tail has genuinely grown past
+/// the band or the settings-driven message cap.
+///
+/// `tail_n` is `settings.short_send_tail_n` (≥ 1): the max verbatim body messages
+/// the wire keeps when engaged. Count path does not need a correct window.
 ///
 /// Returns `Ok(true)` when a fold happened (a new summary was written) and
 /// `Ok(false)` when there was nothing to fold (tail still within band, or no
@@ -67,15 +73,18 @@ pub async fn update_summary(
     client: &OpenRouterClient,
     route: &Resolved,
     usable: u64,
+    tail_n: usize,
 ) -> Result<bool> {
+    let tail_n = tail_n.max(1);
+
     // Existing summary state. Absent row (first ever fold) → empty text, covers 0.
     let cur = msglog::read_summary(session_dir);
     let existing_text = cur.as_ref().map(|s| s.text.as_str()).unwrap_or("");
     let covers_up_to = cur.as_ref().map(|s| s.covers_up_to).unwrap_or(0);
 
     // The verbatim tail = every message after the current watermark. Measure its
-    // token cost (~4 chars/token over content) to decide whether it has grown out
-    // of band. (fetch returns id ASC, id > covers_up_to.)
+    // token cost (~4 chars/token over content) AND message count to decide whether
+    // it has grown out of band. (fetch returns id ASC, id > covers_up_to.)
     let tail: Vec<msglog::ArchivedMsg> =
         msglog::fetch_messages_since(session_dir, covers_up_to, DELTA_LIMIT);
     if tail.is_empty() {
@@ -83,31 +92,49 @@ pub async fn update_summary(
     }
     let tok = |s: &str| s.chars().count() as u64 / 4;
     let tail_tokens: u64 = tail.iter().map(|m| tok(&m.content)).sum();
+    let tail_msgs = tail.len();
 
-    // Hysteresis dead-zone: the tail is still within band → no fold this turn.
-    // This is the whole point of the token-band design: a fold (a secondary LLM
-    // call) only fires when the tail has actually outgrown TAIL_HI_PCT.
+    // Hysteresis dead-zone: the tail is still within BOTH token band and message
+    // cap → no fold this turn. Count path fires alongside token path so a wrong
+    // catalogue window cannot leave multi-day agentic runs unbounded.
     let tail_hi = TAIL_HI_PCT * usable / 100;
-    if tail_tokens <= tail_hi {
+    let over_tokens = tail_tokens > tail_hi;
+    let over_count = tail_msgs > tail_n;
+    if !over_tokens && !over_count {
         return Ok(false);
     }
 
-    // Pick the cut so the REMAINING verbatim tail is ~TAIL_FLOOR_PCT of usable.
-    // Walk the tail NEWEST→oldest accumulating tokens; the first message at which
-    // the kept-newest total reaches `tail_floor` is the youngest message we still
-    // keep. Everything OLDER than it is a fold candidate, so the walked cut point
-    // is the id of the message just before that kept boundary.
+    // Pick the cut so the REMAINING verbatim tail is ~TAIL_FLOOR_PCT of usable
+    // AND ≤ tail_n messages. Walk the tail NEWEST→oldest accumulating tokens and
+    // counting kept messages; stop when BOTH floors are satisfied (or we run out).
     let tail_floor = (TAIL_FLOOR_PCT * usable / 100).max(1);
-    let mut kept = 0u64;
+    let mut kept_tok = 0u64;
+    let mut kept_n = 0usize;
     // Default the cut to "fold the whole tail" (cut at the newest id); the loop
-    // below raises it to the boundary where the kept-newest tokens hit the floor.
+    // below raises it to the boundary where kept-newest hits the floors.
     let mut cut_id = tail.last().map(|m| m.id).unwrap_or(covers_up_to);
     for m in tail.iter().rev() {
-        kept += tok(&m.content);
-        if kept >= tail_floor {
+        kept_tok += tok(&m.content);
+        kept_n += 1;
+        // Need enough token budget AND message budget before we stop keeping.
+        // When only the count path fired (over_count, tokens still small), the
+        // token floor may never be reached on a short-message tail — so also
+        // accept once kept_n has reached tail_n (message target met).
+        let tok_ok = kept_tok >= tail_floor;
+        let n_ok = kept_n >= tail_n;
+        if (tok_ok && n_ok) || (over_count && !over_tokens && n_ok) || (over_tokens && !over_count && tok_ok) {
             // `m` is the oldest message we KEEP; fold everything strictly before it.
             cut_id = m.id - 1;
             break;
+        }
+    }
+    // If the loop exhausted without breaking, cut_id stayed at newest — fold all
+    // but leave nothing? Prefer leaving at least the last tail_n messages.
+    if cut_id == tail.last().map(|m| m.id).unwrap_or(covers_up_to) && tail_msgs > tail_n {
+        // Keep the newest tail_n; fold the rest.
+        let keep_from = tail_msgs.saturating_sub(tail_n);
+        if let Some(m) = tail.get(keep_from) {
+            cut_id = m.id - 1;
         }
     }
 
@@ -224,4 +251,25 @@ pub(super) fn build_payload(
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cap_chars_respects_limit() {
+        let s = "abcdefghij";
+        assert_eq!(cap_chars(s, 4), "abcd");
+        assert_eq!(cap_chars(s, 100), s);
+    }
+
+    #[test]
+    fn build_payload_empty_sections() {
+        let p = build_payload("", &[], &[]);
+        assert!(p.contains("(none)"));
+        assert!(p.contains("=== EXISTING SUMMARY ==="));
+        assert!(p.contains("=== NEW MESSAGES ==="));
+        assert!(p.contains("=== AVAILABLE BLOBS ==="));
+    }
 }

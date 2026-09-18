@@ -591,6 +591,8 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             internet_mode,
             workdir,
             subagent_max_turns,
+            short_send_engage_n,
+            short_send_tail_n,
         } => {
             if let Ok(g) = ctx.req.lock() {
                 if let Some(tx) = g.as_ref() {
@@ -602,6 +604,8 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                         internet_mode,
                         workdir,
                         subagent_max_turns,
+                        short_send_engage_n,
+                        short_send_tail_n,
                     });
                 }
             }

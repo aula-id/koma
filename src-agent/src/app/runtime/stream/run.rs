@@ -592,13 +592,24 @@ over sec_remote (stateful socket).\n",
     // 5. Sticky engage hysteresis: cross the (warmth-dependent) engage threshold to
     //    turn summarizing ON; only fall back below DISENGAGE_PCT to turn it OFF.
     //    The dead-zone between the two prevents flapping on/off each turn.
-    let enter = conv_tokens > engage_pct * usable / 100;
-    let exit = conv_tokens < super::super::shortsend::DISENGAGE_PCT * usable / 100;
-    if !state.rest.sessions[sess_idx].summarizing && enter {
-        state.rest.sessions[sess_idx].summarizing = true;
-    } else if state.rest.sessions[sess_idx].summarizing && exit {
-        state.rest.sessions[sess_idx].summarizing = false;
-    }
+    //    Count gate is STICKY HOLD only: body_n above short_send_engage_n keeps
+    //    summarizing on through token dips, but never forces first kick-in (that
+    //    would starve short agentic runs before a summary exists).
+    let enter_tok = conv_tokens > engage_pct * usable / 100;
+    let exit_tok = conv_tokens < super::super::shortsend::DISENGAGE_PCT * usable / 100;
+    let engage_n = reshape
+        .as_ref()
+        .map(|(_, settings, _, _)| settings.short_send_engage_n.max(1) as usize)
+        .unwrap_or(80);
+    // history[0] is system; body = everything after.
+    let body_n = history.len().saturating_sub(1);
+    let enter_n = body_n > engage_n;
+    state.rest.sessions[sess_idx].summarizing = super::super::shortsend::sticky_summarizing(
+        state.rest.sessions[sess_idx].summarizing,
+        enter_tok,
+        exit_tok,
+        enter_n,
+    );
     let summarizing = state.rest.sessions[sess_idx].summarizing;
     // 6. Stamp the send instant so the NEXT turn can measure cache warmth from the
     //    gap since this send.

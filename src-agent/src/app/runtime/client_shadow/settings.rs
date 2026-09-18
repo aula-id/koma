@@ -41,6 +41,8 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
         classifier_enabled: s.classifier_enabled,
         allowed_folders: s.allowed_folders,
         short_send_enabled: s.short_send_enabled,
+        short_send_engage_n: s.short_send_engage_n.to_string(),
+        short_send_tail_n: s.short_send_tail_n.to_string(),
         sliding_cache: s.sliding_cache,
         bash_saving: s.bash_saving,
         coding_autosave: s.coding_autosave,

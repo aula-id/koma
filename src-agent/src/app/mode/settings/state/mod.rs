@@ -76,6 +76,10 @@ pub struct SettingsState {
     pub allowed_folders: Vec<String>,
     /// Draft: short-send token-saver master switch.
     pub short_send_enabled: bool,
+    /// Draft: body message count that holds DRSS engaged (numeric string).
+    pub short_send_engage_n: String,
+    /// Draft: max verbatim body messages on the wire when engaged (numeric string).
+    pub short_send_tail_n: String,
     /// Draft: cache-warmth-adaptive summarization toggle.
     pub sliding_cache: bool,
     /// Draft: bash output saving (filtered + tee-to-disk) toggle.
@@ -261,6 +265,8 @@ impl SettingsState {
             classifier_enabled: session.settings.classifier_enabled,
             allowed_folders,
             short_send_enabled: session.settings.short_send_enabled,
+            short_send_engage_n: session.settings.short_send_engage_n.to_string(),
+            short_send_tail_n: session.settings.short_send_tail_n.to_string(),
             sliding_cache: session.settings.sliding_cache,
             bash_saving: session.settings.bash_saving,
             coding_autosave: session.settings.coding_autosave,
@@ -328,6 +334,9 @@ impl SettingsState {
             SettingField::ShortSendEnabled => {
                 self.short_send_enabled = !self.short_send_enabled;
             }
+            SettingField::ShortSendEngageN | SettingField::ShortSendTailN => {
+                self.editing = true;
+            }
             SettingField::SlidingCache => {
                 self.sliding_cache = !self.sliding_cache;
             }
@@ -360,7 +369,13 @@ impl SettingsState {
     /// For numeric fields, only digits are accepted.
     pub fn push_char(&mut self, c: char) {
         let f = self.current_field();
-        if f == SettingField::SubagentMaxTurns && !c.is_ascii_digit() {
+        if matches!(
+            f,
+            SettingField::SubagentMaxTurns
+                | SettingField::ShortSendEngageN
+                | SettingField::ShortSendTailN
+        ) && !c.is_ascii_digit()
+        {
             return;
         }
         if let Some(s) = self.text_draft_mut(f) {

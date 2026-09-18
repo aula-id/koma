@@ -3,9 +3,10 @@
 //! Keeping the full chat history in every request is expensive. The short-send
 //! architecture instead maintains ONE dense rolling summary of the older history
 //! (in `messages.sqlite`'s `summary` row) plus a verbatim tail of the newest N
-//! messages. This module owns the fold: it reads the messages that have grown
-//! past the verbatim tail but aren't yet summarised, asks a secondary model to
-//! merge them into the running summary, and persists the result.
+//! messages (N = `settings.short_send_tail_n`). This module owns the fold: it
+//! reads the messages that have grown past the verbatim tail but aren't yet
+//! summarised, asks a secondary model to merge them into the running summary,
+//! and persists the result.
 //!
 //! ## Bleed guard (critical)
 //!
@@ -25,14 +26,14 @@
 //! ## Send-path reshaper (Phase 3)
 //!
 //! [`shape`] is the payoff: a PURE transform over the API-bound history that drops
-//! the older turns in favour of the rolling summary + a verbatim tail, rehydrating
-//! only the archived blobs a strict-JSON router (reasoning OFF) judges relevant to
-//! the current question. It reads sqlite and builds a NEW `Vec<ChatMessage>` — it
-//! never touches the live `Conversation`, `messages.json`, or the rendered
-//! transcript (dual rail: only the wire payload is compressed). It folds first
-//! (via [`update_summary`]) and fails open at every step, so a turn is never
-//! broken. The send path applies it inside the spawned stream task, just before
-//! the request is POSTed.
+//! the older turns in favour of the rolling summary + a verbatim tail (hard-capped
+//! at `short_send_tail_n`), rehydrating only the archived blobs a strict-JSON
+//! router (reasoning OFF) judges relevant to the current question. It reads sqlite
+//! and builds a NEW `Vec<ChatMessage>` — it never touches the live `Conversation`,
+//! `messages.json`, or the rendered transcript (dual rail: only the wire payload is
+//! compressed). Missing/empty summary fail-opens to full history (no emergency
+//! clip). The send path applies it inside the spawned stream task, just before the
+//! request is POSTed.
 
 mod fold;
 mod recall;
@@ -57,7 +58,28 @@ pub(super) const ENGAGE_WARM_PCT: u64 = 80;
 /// Sticky disengage floor: once engaged, KEEP summarizing until the conversation
 /// shrinks below this % of `usable`. The gap between this and the engage
 /// thresholds is the hysteresis band that prevents flapping on/off each turn.
+/// Count gate is sticky-only: it can HOLD engage while `body_n > engage_n`, but
+/// never forces first entry (token/cache path owns kick-in).
 pub(super) const DISENGAGE_PCT: u64 = 15;
+
+/// Pure sticky engage update used by `start_stream_task` (and unit-tested here).
+/// `enter_tok` / `exit_tok` come from the warmth-dependent token thresholds;
+/// `enter_n` is the settings-driven body-message count hold (not a kick-in).
+pub(super) fn sticky_summarizing(
+    was: bool,
+    enter_tok: bool,
+    exit_tok: bool,
+    enter_n: bool,
+) -> bool {
+    // Kick-in is token/cache only. Count alone must not starve short agentic runs.
+    if !was && enter_tok {
+        true
+    } else if was && exit_tok && !enter_n {
+        false
+    } else {
+        was
+    }
+}
 
 use crate::dto::chat::{ChatMessage, Role};
 
@@ -90,3 +112,41 @@ pub(super) fn estimate_conv_tokens(history: &[ChatMessage]) -> u64 {
 // Re-export the public API so callers outside this module use the same paths
 // as before the split.
 pub use recall::shape;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn count_gate_alone_does_not_enter() {
+        // Count is sticky-hold only — never forces first engage.
+        assert!(!sticky_summarizing(false, false, false, true));
+    }
+
+    #[test]
+    fn token_gate_enters_without_count() {
+        assert!(sticky_summarizing(false, true, false, false));
+    }
+
+    #[test]
+    fn exit_tok_clears_when_count_idle() {
+        assert!(!sticky_summarizing(true, false, true, false));
+    }
+
+    #[test]
+    fn exit_tok_stays_engaged_while_count_high() {
+        // Long agentic: tokens may dip (estimate noise) but body_n still above engage_n.
+        assert!(sticky_summarizing(true, false, true, true));
+    }
+
+    #[test]
+    fn neither_gate_leaves_off() {
+        assert!(!sticky_summarizing(false, false, true, false));
+    }
+
+    #[test]
+    fn hysteresis_holds_in_dead_zone() {
+        // Was on, neither exit_tok nor enter — stay on.
+        assert!(sticky_summarizing(true, false, false, false));
+    }
+}

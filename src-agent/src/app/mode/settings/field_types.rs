@@ -19,6 +19,10 @@ pub enum SettingField {
     AllowedFolders,
     /// Toggle: master kill-switch for the short-send token saver.
     ShortSendEnabled,
+    /// Numeric: body message count that HOLDS DRSS engaged (sticky; not kick-in).
+    ShortSendEngageN,
+    /// Numeric: max verbatim body messages on the wire when short-send is engaged.
+    ShortSendTailN,
     /// Toggle: cache-warmth-adaptive summarization. On only for models with a
     /// sliding/refreshing prompt cache (e.g. Anthropic).
     SlidingCache,
@@ -49,6 +53,8 @@ impl SettingField {
             SettingField::ClassifierEnabled => "Harness",
             SettingField::AllowedFolders => "Allowed dirs",
             SettingField::ShortSendEnabled => "Short-send",
+            SettingField::ShortSendEngageN => "DRSS hold",
+            SettingField::ShortSendTailN => "DRSS tail",
             SettingField::SlidingCache => "Sliding cache",
             SettingField::BashSaving => "Bash shorts",
             SettingField::CodingAutosave => "Coding autosave",
@@ -67,6 +73,8 @@ pub const GENERAL_FIELDS: &[SettingField] = &[
     SettingField::ClassifierEnabled,
     SettingField::AllowedFolders,
     SettingField::ShortSendEnabled,
+    SettingField::ShortSendEngageN,
+    SettingField::ShortSendTailN,
     SettingField::SlidingCache,
     SettingField::BashSaving,
     SettingField::CodingAutosave,

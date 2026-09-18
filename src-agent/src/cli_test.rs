@@ -95,6 +95,53 @@ fn run_prompt_file_flag() {
 }
 
 #[test]
+fn run_model_effort_mode_security_flags() {
+    let opts = parse(
+        [
+            "koma",
+            "run",
+            "--prompt",
+            "go",
+            "--model",
+            "laguna-s-2.1",
+            "--effort",
+            "off",
+            "--mode",
+            "yolo",
+            "--security",
+            "on",
+            "--once",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
+    let run = opts.run.expect("run cli");
+    assert_eq!(run.model.as_deref(), Some("laguna-s-2.1"));
+    assert_eq!(run.effort.as_deref(), Some("off"));
+    assert_eq!(run.mode.as_deref(), Some("yolo"));
+    assert_eq!(run.security, Some(true));
+    assert!(run.once);
+}
+
+#[test]
+fn run_security_off_parses() {
+    let opts = parse(
+        ["koma", "run", "--prompt", "x", "--security", "off"]
+            .into_iter()
+            .map(String::from),
+    );
+    let run = opts.run.expect("run cli");
+    assert_eq!(run.security, Some(false));
+}
+
+#[test]
+fn parse_on_off_tokens() {
+    assert_eq!(crate::cli::parse_on_off("ON"), Some(true));
+    assert_eq!(crate::cli::parse_on_off("false"), Some(false));
+    assert_eq!(crate::cli::parse_on_off("maybe"), None);
+}
+
+#[test]
 fn unknown_positional_is_not_default_launch() {
     let opts = parse(["koma", "docker"].into_iter().map(String::from));
     assert_eq!(opts.unknown_command.as_deref(), Some("docker"));

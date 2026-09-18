@@ -506,6 +506,8 @@ impl DaemonHub {
                 internet_mode,
                 workdir,
                 subagent_max_turns,
+                short_send_engage_n,
+                short_send_tail_n,
             } => {
                 self.set_session_prefs(
                     idx,
@@ -517,6 +519,8 @@ impl DaemonHub {
                     internet_mode,
                     workdir,
                     subagent_max_turns,
+                    short_send_engage_n,
+                    short_send_tail_n,
                 );
             }
 
@@ -535,6 +539,16 @@ impl DaemonHub {
             // (the effort-picker label rides the same settings channel), not a bare Ack.
             ClientRequest::SetEffort { effort } => {
                 self.set_effort(idx, state, effort);
+            }
+
+            // Headless / non-panel security toggle: start or stop the security daemon
+            // via the same handlers the Security panel Daemon checkbox uses.
+            ClientRequest::SetSecurityEnabled { enabled } => {
+                self.set_security_enabled(idx, state, enabled);
+            }
+            // Headless YOLO arm/disarm (gated on security daemon running).
+            ClientRequest::SetYoloArmed { armed } => {
+                self.set_yolo_armed(idx, state, armed);
             }
 
             // GUI onboarding "koma free": mint/reuse the keyless Koma Free provider + a
@@ -817,6 +831,8 @@ impl DaemonHub {
             palette: state.rest.config.palette.clone(),
             effort: s.effort.clone(),
             subagent_max_turns: s.subagent_max_turns,
+            short_send_engage_n: s.short_send_engage_n,
+            short_send_tail_n: s.short_send_tail_n,
         };
         self.send_to(idx, event);
     }
