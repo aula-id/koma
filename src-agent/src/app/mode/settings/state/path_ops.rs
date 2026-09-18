@@ -16,6 +16,7 @@ impl SettingsState {
             SettingField::Provider => Some(&mut self.provider),
             SettingField::Name => Some(&mut self.name),
             SettingField::SubagentMaxTurns => Some(&mut self.subagent_max_turns),
+            SettingField::MaxOutputTokens => Some(&mut self.max_output_tokens),
             SettingField::ShortSendEngageN => Some(&mut self.short_send_engage_n),
             SettingField::ShortSendTailN => Some(&mut self.short_send_tail_n),
             SettingField::Workdir

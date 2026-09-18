@@ -424,6 +424,8 @@ pub enum ClientRequest {
         short_send_engage_n: Option<i64>,
         /// Max verbatim body messages on the wire when engaged (≥ 1).
         short_send_tail_n: Option<i64>,
+        /// Interactive chat max_tokens (0 = auto endpoint default). Soft max 1_000_000.
+        max_output_tokens: Option<u32>,
     },
 
     /// GUI composer EFFORT picker opened: derive the `/effort` menu for the
@@ -838,6 +840,9 @@ pub enum DaemonEvent {
         /// Max verbatim body messages on the wire when engaged (≥ 1).
         #[serde(default = "default_short_send_n_40")]
         short_send_tail_n: i64,
+        /// Interactive chat max_tokens (0 = auto). Default 0 for older peers.
+        #[serde(default)]
+        max_output_tokens: u32,
     },
     /// One-shot reply to a [`ClientRequest::GetEffortOptions`]: the derived
     /// `/effort` menu for the foreground session's current model, from

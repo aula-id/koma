@@ -475,6 +475,9 @@ pub(super) enum PushEnvelope {
         /// Max verbatim body messages on the wire when engaged (≥ 1).
         #[serde(default = "default_push_short_send_n_40")]
         short_send_tail_n: i64,
+        /// Interactive chat max_tokens (0 = auto). Default 0 for older peers.
+        #[serde(default)]
+        max_output_tokens: u32,
     },
     /// One-shot reply to a `GetAgents` (and the re-push after a `SetAgent` / `DeleteAgent`):
     /// the merged sub-agent registry + model / provider catalogue for the GUI /agents
@@ -1094,6 +1097,7 @@ pub(super) fn push_settings_values(
     subagent_max_turns: u32,
     short_send_engage_n: i64,
     short_send_tail_n: i64,
+    max_output_tokens: u32,
 ) {
     super::render::emit(
         push,
@@ -1110,6 +1114,7 @@ pub(super) fn push_settings_values(
             subagent_max_turns,
             short_send_engage_n,
             short_send_tail_n,
+            max_output_tokens,
         },
     );
 }

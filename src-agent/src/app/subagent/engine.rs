@@ -221,6 +221,8 @@ pub async fn run_agent_loop(
     // is the per-session sub-agent id assigned by the orchestrator at spawn.
     agent_name: String,
     agent_id: usize,
+    // Model context window (tokens) for output-budget clamp; 128k if unknown.
+    context_window: u64,
 ) {
     // The most-recent assistant text, surfaced as the final answer if the loop
     // runs out of steps before the model gives a no-tool reply.
@@ -259,8 +261,17 @@ pub async fn run_agent_loop(
         // 1. Stream one model reply on a fresh per-step channel, then drain it.
         //    Advertise ONLY this agent's allow-list to the model (the execution
         //    gate below stays as a backstop).
-        let outcome =
-            stream_step(&client, &resolved, convo.history(), &tools, &mcp_tools, &tx).await;
+        let outcome = stream_step(
+            &client,
+            &resolved,
+            convo.history(),
+            &tools,
+            &mcp_tools,
+            settings.max_output_tokens,
+            context_window,
+            &tx,
+        )
+        .await;
 
         // Fold this step's usage into the running totals (best-effort: a step
         // with no Usage chunk simply contributes nothing). tokens_in is
@@ -532,6 +543,8 @@ async fn stream_step(
     history: Vec<crate::dto::chat::ChatMessage>,
     tools: &[String],
     mcp_tools: &[crate::dto::openrouter::ToolDef],
+    settings_cap: u32,
+    context_window: u64,
     tx: &UnboundedSender<AgentEvent>,
 ) -> StreamOutcome {
     let (inner_tx, mut inner_rx) = mpsc::unbounded_channel();
@@ -562,6 +575,13 @@ async fn stream_step(
     // Owned clone of the inherited MCP tool defs, moved into the task alongside
     // `advertise` (same pattern — see doc comment above `stream_step`).
     let mcp_tools = mcp_tools.to_vec();
+    let prompt_est = crate::app::runtime::shortsend::estimate_conv_tokens(&history);
+    let max_tokens = crate::service::openrouter::effective_max_output_tokens(
+        settings_cap,
+        &endpoint,
+        context_window,
+        prompt_est,
+    );
     let send = tokio::spawn(async move {
         let conn = crate::service::openrouter::Conn {
             endpoint: &endpoint,
@@ -576,7 +596,15 @@ async fn stream_step(
         // exactly like the main agent's advertise fold (run.rs:447-456).
         let _ = c
             .stream_complete(
-                conn, &model_id, &provider, &effort, history, &advertise, &mcp_tools, None,
+                conn,
+                &model_id,
+                &provider,
+                &effort,
+                history,
+                &advertise,
+                &mcp_tools,
+                None,
+                max_tokens,
                 inner_tx,
             )
             .await;

@@ -38,6 +38,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             s.internet_mode,
             s.mouse_capture,
             s.subagent_max_turns.clone(),
+            s.max_output_tokens.clone(),
             s.providers.clone(),
             s.oauth_drafts.clone(),
             s.models.clone(),
@@ -65,6 +66,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         internet_mode,
         mouse_capture,
         subagent_max_turns,
+        max_output_tokens,
         provider_drafts,
         oauth_drafts,
         model_drafts,
@@ -343,6 +345,9 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             // empty/invalid input so the user can never disable the safety cap.
             let parsed_turns: u32 = subagent_max_turns.parse().unwrap_or(0);
             sess.settings.subagent_max_turns = parsed_turns.max(1);
+            // Interactive max_tokens: 0 = auto; soft-cap 1_000_000; invalid → 0.
+            let parsed_out: u32 = max_output_tokens.parse().unwrap_or(0);
+            sess.settings.max_output_tokens = parsed_out.min(1_000_000);
             // But DO refresh the system-prompt roster so any mode-gated agents
             // stay in sync on a mid-session mode change (rebuild reads in-memory
             // settings; nothing else here rebuilds).

@@ -143,6 +143,7 @@ pub(crate) fn draw_general(
                     SettingField::ShortSendEngageN => st.short_send_engage_n.as_str(),
                     SettingField::ShortSendTailN => st.short_send_tail_n.as_str(),
                     SettingField::SubagentMaxTurns => st.subagent_max_turns.as_str(),
+                    SettingField::MaxOutputTokens => st.max_output_tokens.as_str(),
                     _ => "",
                 };
                 let editing_here = st.editing && is_selected;

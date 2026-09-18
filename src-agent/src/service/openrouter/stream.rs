@@ -14,9 +14,9 @@ use crate::service::StreamEvent;
 
 use super::client::OpenRouterClient;
 use super::helpers::{
-    apply_tool_call_delta, auth_headers, backoff_delay, clean_error, emit, interactive_max_tokens,
-    is_openrouter, is_retryable_send_err, is_retryable_status, provider_routing_for,
-    reasoning_config, sanitize_tool_acc, wants_openrouter_usage, MAX_ATTEMPTS,
+    apply_tool_call_delta, auth_headers, backoff_delay, clean_error, emit, is_openrouter,
+    is_retryable_send_err, is_retryable_status, provider_routing_for, reasoning_config,
+    sanitize_tool_acc, wants_openrouter_usage, MAX_ATTEMPTS,
 };
 use super::think_split::{Emit as ThinkEmit, ThinkSplit};
 use super::types::Conn;
@@ -44,6 +44,9 @@ impl OpenRouterClient {
         advertise: &[String],
         mcp_tools: &[ToolDef],
         image_ctx: Option<ImageWireCtx>,
+        // Caller-computed interactive output budget (settings + context clamp).
+        // Codex / Anthropic / Command Code paths ignore this (own wire budgets).
+        max_tokens: u32,
         tx: UnboundedSender<StreamEvent>,
     ) -> Result<()> {
         // Send-time OAuth refresh hook: resolve a (possibly just-refreshed) bearer
@@ -179,8 +182,8 @@ impl OpenRouterClient {
             reasoning: reasoning_config(effort, conn.endpoint),
             // Free-form text reply; structured output is classifier-only.
             response_format: None,
-            // Runaway cap: 32k default; raised for direct xAI (see interactive_max_tokens).
-            max_tokens: Some(interactive_max_tokens(conn.endpoint)),
+            // Caller supplies settings/auto cap already clamped to remaining context.
+            max_tokens: Some(max_tokens.max(1)),
         };
 
         // Opt-in request dump (KOMA_DEBUG_LLM=1).

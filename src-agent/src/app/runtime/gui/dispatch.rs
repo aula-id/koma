@@ -593,6 +593,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             subagent_max_turns,
             short_send_engage_n,
             short_send_tail_n,
+            max_output_tokens,
         } => {
             if let Ok(g) = ctx.req.lock() {
                 if let Some(tx) = g.as_ref() {
@@ -606,6 +607,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                         subagent_max_turns,
                         short_send_engage_n,
                         short_send_tail_n,
+                        max_output_tokens,
                     });
                 }
             }

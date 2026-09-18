@@ -320,6 +320,13 @@ pub struct Settings {
     /// Old `settings.json` files load via the serde default.
     #[serde(default = "default_short_send_tail_n")]
     pub short_send_tail_n: i64,
+    /// Interactive chat `max_tokens` on OpenAI-compatible wire.
+    /// `0` = auto (endpoint default: 32k general, 256k direct xAI). Always clamped
+    /// at send so `prompt_est + max_tokens + margin ≤` model context window —
+    /// prevents mid-turn HTTP 400 on strict providers when a fat prompt + fixed
+    /// 32k would exceed the window. Soft upper bound at settings UI is 1_000_000.
+    #[serde(default)]
+    pub max_output_tokens: u32,
     /// User-committed session goal (doctrine for DRSS). Empty = none. Never filled
     /// from assistant drafts — only explicit user steer via `detect_goal_update`.
     #[serde(default)]
@@ -529,6 +536,7 @@ impl Default for Settings {
             short_send_enabled: default_short_send_enabled(),
             short_send_engage_n: default_short_send_engage_n(),
             short_send_tail_n: default_short_send_tail_n(),
+            max_output_tokens: 0,
             session_goal: String::new(),
             session_goal_msg_id: 0,
             session_goal_source: String::new(),
@@ -648,6 +656,21 @@ impl LocalConfig {
         let json = serde_json::to_vec_pretty(self)?;
         std::fs::write(path, json)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod max_output_tokens_tests {
+    use super::Settings;
+
+    #[test]
+    fn default_and_missing_field_are_auto_zero() {
+        assert_eq!(Settings::default().max_output_tokens, 0);
+        let s: Settings = serde_json::from_str("{}").expect("empty object");
+        assert_eq!(s.max_output_tokens, 0);
+        let s: Settings =
+            serde_json::from_str(r#"{"max_output_tokens":8192}"#).expect("explicit");
+        assert_eq!(s.max_output_tokens, 8192);
     }
 }
 

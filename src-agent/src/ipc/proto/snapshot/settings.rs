@@ -49,6 +49,9 @@ pub struct SettingsSnapshot {
     /// Max verbatim body messages on the wire when engaged. Default 40.
     #[serde(default = "default_i64_40")]
     pub short_send_tail_n: i64,
+    /// Interactive chat max_tokens (0 = auto). Default 0.
+    #[serde(default)]
+    pub max_output_tokens: u32,
     pub sliding_cache: bool,
     pub bash_saving: bool,
     #[serde(default)]

@@ -675,6 +675,8 @@ pub(super) enum GuiReq {
         short_send_engage_n: Option<i64>,
         #[serde(default, rename = "shortSendTailN")]
         short_send_tail_n: Option<i64>,
+        #[serde(default, rename = "maxOutputTokens")]
+        max_output_tokens: Option<u32>,
     },
 
     // ─── GUI composer EFFORT picker (TUI `/effort` parity) ───────────────────────

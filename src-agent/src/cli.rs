@@ -142,6 +142,9 @@ pub struct RunCli {
     /// `on` starts the security daemon (autocheck strat) and is required for yolo;
     /// `off` stops it and disarms yolo.
     pub security: Option<bool>,
+    /// Optional interactive max_tokens (`--max-tokens N`). `0` = auto endpoint
+    /// default; always clamped at send to remaining context.
+    pub max_tokens: Option<u32>,
 }
 
 impl Default for RunCli {
@@ -158,6 +161,7 @@ impl Default for RunCli {
             effort: None,
             mode: None,
             security: None,
+            max_tokens: None,
         }
     }
 }
@@ -350,6 +354,7 @@ pub fn print_help() -> i32 {
          \x20   --effort LEVEL       off|none|default|low|medium|high|…\n\
          \x20   --mode MODE          auto|normal|plan|yolo|sdlc\n\
          \x20   --security on|off    start/stop security daemon (yolo needs on)\n\
+         \x20   --max-tokens N       interactive max_tokens (0=auto; clamped to ctx)\n\
          \x20   --once               wait until idle (default timeout 14400s)\n\
          \x20   --timeout SECS       --once wall clock\n\
          \x20   exit 0 ok · 1 error · 2 timeout · 3 approval-parked\n\
@@ -631,6 +636,15 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
                     "--security" => {
                         if let Some(v) = all.get(i + 1) {
                             run.security = parse_on_off(v);
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "--max-tokens" => {
+                        if let Some(v) = all.get(i + 1) {
+                            if let Ok(n) = v.parse::<u32>() {
+                                run.max_tokens = Some(n.min(1_000_000));
+                            }
                             i += 2;
                             continue;
                         }

@@ -397,6 +397,7 @@ fn spawn_task_with_id(
         state.rest.sessions[sess_idx].agent_mode,
         overrides,
         initial_injects,
+        state.rest.models_cache.as_deref(),
     )
     .ok_or(SpawnFailReason::Unresolved)?;
     state.rest.sessions[sess_idx].subagents.push(sub);

@@ -508,6 +508,7 @@ impl DaemonHub {
                 subagent_max_turns,
                 short_send_engage_n,
                 short_send_tail_n,
+                max_output_tokens,
             } => {
                 self.set_session_prefs(
                     idx,
@@ -521,6 +522,7 @@ impl DaemonHub {
                     subagent_max_turns,
                     short_send_engage_n,
                     short_send_tail_n,
+                    max_output_tokens,
                 );
             }
 
@@ -833,6 +835,7 @@ impl DaemonHub {
             subagent_max_turns: s.subagent_max_turns,
             short_send_engage_n: s.short_send_engage_n,
             short_send_tail_n: s.short_send_tail_n,
+            max_output_tokens: s.max_output_tokens,
         };
         self.send_to(idx, event);
     }

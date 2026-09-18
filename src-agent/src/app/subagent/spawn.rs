@@ -89,6 +89,8 @@ pub fn spawn_subagent(
     mode: AgentMode,
     overrides: Option<SpawnOverrides>,
     initial_injects: Vec<String>,
+    // Live models catalogue for context-window lookup (None → 128k fallback).
+    models_cache: Option<&[crate::dto::openrouter::ModelInfo]>,
 ) -> Option<SubAgent> {
     // Look the agent up; a missing name is a no-op for the caller.
     let agent = registry.get(agent_name)?;
@@ -176,6 +178,13 @@ pub fn spawn_subagent(
         .map(|s| s as usize)
         .or(Some(settings.subagent_max_turns.max(1) as usize));
 
+    // Context window for interactive max_tokens clamp (catalogue or 128k fallback).
+    let context_window = models_cache
+        .and_then(|models| {
+            crate::service::openrouter::context_length_for(models, &resolved.model_id)
+        })
+        .unwrap_or(128_000);
+
     // Owned clones moved into the task so it borrows nothing from the caller.
     let client_arc = Arc::clone(client);
     let config = config.clone();
@@ -214,6 +223,7 @@ pub fn spawn_subagent(
         inject_rx,
         agent_name.clone(),
         id,
+        context_window,
     ));
 
     Some(SubAgent {

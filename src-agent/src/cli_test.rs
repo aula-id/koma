@@ -124,6 +124,24 @@ fn run_model_effort_mode_security_flags() {
 }
 
 #[test]
+fn run_max_tokens_flag() {
+    let opts = parse(
+        [
+            "koma",
+            "run",
+            "--prompt",
+            "go",
+            "--max-tokens",
+            "8192",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
+    let run = opts.run.expect("run cli");
+    assert_eq!(run.max_tokens, Some(8192));
+}
+
+#[test]
 fn run_security_off_parses() {
     let opts = parse(
         ["koma", "run", "--prompt", "x", "--security", "off"]

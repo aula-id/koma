@@ -93,7 +93,7 @@ use crate::dto::chat::{ChatMessage, Role};
 /// (often the bulk of a turn). This is the SAME estimate shape the engage gate
 /// uses; `start_stream_task` calls it to size the conversation against `usable`
 /// before deciding whether to summarize. No tokenizer needed — fast + cheap.
-pub(super) fn estimate_conv_tokens(history: &[ChatMessage]) -> u64 {
+pub(crate) fn estimate_conv_tokens(history: &[ChatMessage]) -> u64 {
     history
         .iter()
         // Skip the System message: the ~10k base it carries is already accounted

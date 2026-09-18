@@ -232,6 +232,7 @@ pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
         short_send_enabled: st.short_send_enabled,
         short_send_engage_n: st.short_send_engage_n.parse().unwrap_or(80),
         short_send_tail_n: st.short_send_tail_n.parse().unwrap_or(40),
+        max_output_tokens: st.max_output_tokens.parse().unwrap_or(0),
         sliding_cache: st.sliding_cache,
         bash_saving: st.bash_saving,
         coding_autosave: st.coding_autosave,

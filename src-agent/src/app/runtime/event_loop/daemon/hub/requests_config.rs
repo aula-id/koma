@@ -338,6 +338,7 @@ impl DaemonHub {
         subagent_max_turns: Option<u32>,
         short_send_engage_n: Option<i64>,
         short_send_tail_n: Option<i64>,
+        max_output_tokens: Option<u32>,
     ) {
         use crate::model::settings::InternetMode;
         // Capture the old internet mode BEFORE the set, for the shared change-gated
@@ -405,6 +406,9 @@ impl DaemonHub {
             }
             if let Some(v) = short_send_tail_n {
                 sess.settings.short_send_tail_n = v.max(1);
+            }
+            if let Some(v) = max_output_tokens {
+                sess.settings.max_output_tokens = v.min(1_000_000);
             }
             // Refresh the mode-gated system-prompt roster, then persist — mirrors
             // handle_save_settings (:198 rebuild + :216 save). A save error just

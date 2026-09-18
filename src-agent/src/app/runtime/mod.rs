@@ -26,7 +26,7 @@ pub(crate) mod terminal;
 // `pub(crate)` so the shared `commands::internet::internet_feedback` helper is
 // reachable from the controller's Ctrl+E handler (outside this module tree).
 pub(crate) mod commands;
-mod shortsend;
+pub(crate) mod shortsend;
 
 mod headless_run;
 mod lifecycle;

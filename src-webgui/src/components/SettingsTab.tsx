@@ -450,6 +450,7 @@ function SessionSettings() {
   const [maxTurns, setMaxTurns] = useState('500')
   const [engageN, setEngageN] = useState('80')
   const [tailN, setTailN] = useState('40')
+  const [maxOutTokens, setMaxOutTokens] = useState('0')
 
   useEffect(() => {
     if (!values) return
@@ -463,6 +464,7 @@ function SessionSettings() {
     setMaxTurns(String(values.subagentMaxTurns ?? 500))
     setEngageN(String(values.shortSendEngageN ?? 80))
     setTailN(String(values.shortSendTailN ?? 40))
+    setMaxOutTokens(String(values.maxOutputTokens ?? 0))
   }, [values])
 
   if (!values) {
@@ -537,6 +539,15 @@ function SessionSettings() {
       req({ r: 'SetPrefs', shortSendTailN: safe })
     }
   }
+  // Interactive max_tokens: 0 = auto; soft max 1_000_000.
+  const commitMaxOutTokens = () => {
+    const n = parseInt(maxOutTokens, 10)
+    const safe = isNaN(n) || n < 0 ? 0 : Math.min(n, 1_000_000)
+    setMaxOutTokens(String(safe))
+    if (safe !== (values.maxOutputTokens ?? 0)) {
+      req({ r: 'SetPrefs', maxOutputTokens: safe })
+    }
+  }
 
   return (
     <div className="flex flex-col">
@@ -603,6 +614,23 @@ function SessionSettings() {
           value={tailN}
           onChange={(e) => setTailN(e.target.value.replace(/[^0-9]/g, ''))}
           onBlur={commitTailN}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
+          className="w-24 rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[12px] text-koma-fg outline-none focus:border-koma-grip"
+        />
+      </SettingRow>
+
+      <SettingRow
+        label="Max out tokens"
+        desc="Interactive completion max_tokens. 0 = auto (32k general / 256k direct xAI). Always clamped so prompt + max + margin fit the model context window."
+      >
+        <input
+          type="number"
+          min={0}
+          value={maxOutTokens}
+          onChange={(e) => setMaxOutTokens(e.target.value.replace(/[^0-9]/g, ''))}
+          onBlur={commitMaxOutTokens}
           onKeyDown={(e) => {
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
           }}

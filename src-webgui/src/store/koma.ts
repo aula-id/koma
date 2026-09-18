@@ -149,6 +149,8 @@ export type SettingsValues = {
   shortSendEngageN: number
   // Max verbatim body messages on the wire when short-send is engaged (≥ 1, default 40).
   shortSendTailN: number
+  // Interactive chat max_tokens (0 = auto endpoint default).
+  maxOutputTokens: number
 }
 
 // The composer EffortPicker's latest GetEffortOptions reply (host
@@ -1122,6 +1124,7 @@ export type PushEnvelope =
       subagentMaxTurns: number
       shortSendEngageN: number
       shortSendTailN: number
+      maxOutputTokens?: number
     }
   // Reply to GuiReq GetEffortOptions — the composer EffortPicker's derived
   // `/effort` menu for the foreground session's current model. ALWAYS a reply
@@ -3622,6 +3625,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             subagentMaxTurns: env.subagentMaxTurns ?? 500,
             shortSendEngageN: env.shortSendEngageN ?? 80,
             shortSendTailN: env.shortSendTailN ?? 40,
+            maxOutputTokens: env.maxOutputTokens ?? 0,
           },
           ...(s.ui.bootstrap ? { ui: updateBootstrap(s.ui, { settings: 'done' }) } : {}),
         }))

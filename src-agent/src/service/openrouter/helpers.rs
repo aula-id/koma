@@ -270,12 +270,46 @@ pub(crate) const XAI_INTERACTIVE_MAX_TOKENS: u32 = 256_000;
 /// Direct xAI (`api.x.ai`, OAuth and API key share the body) uses
 /// [`XAI_INTERACTIVE_MAX_TOKENS`]. DeepSeek/custom OpenAI-compat keep 32k.
 /// Codex Responses: no output-budget field (backend 400s on it).
-pub(super) fn interactive_max_tokens(endpoint: &str) -> u32 {
+///
+/// Auto baseline only — callers should prefer [`effective_max_output_tokens`] so
+/// a fat prompt cannot request `prompt + max_tokens` over the model window.
+pub(crate) fn interactive_max_tokens(endpoint: &str) -> u32 {
     if is_xai(endpoint) {
         XAI_INTERACTIVE_MAX_TOKENS
     } else {
         32_000
     }
+}
+
+/// Tokenizer / framing slack subtracted from context when clamping output budget.
+pub(crate) const OUTPUT_TOKEN_MARGIN: u64 = 1_024;
+
+/// Interactive chat `max_tokens` after settings + context-room clamp.
+///
+/// ```text
+/// cap = settings_cap > 0 ? settings_cap : interactive_max_tokens(endpoint)
+/// room = context_window.saturating_sub(prompt_est).saturating_sub(MARGIN)
+/// effective = min(cap, room).max(1)
+/// ```
+///
+/// Always returns ≥ 1. When room is exhausted the wire still sends 1 so the
+/// request is well-formed; the provider may still refuse an oversize prompt.
+pub(crate) fn effective_max_output_tokens(
+    settings_cap: u32,
+    endpoint: &str,
+    context_window: u64,
+    prompt_est_tokens: u64,
+) -> u32 {
+    let cap = if settings_cap > 0 {
+        settings_cap
+    } else {
+        interactive_max_tokens(endpoint)
+    };
+    let room = context_window
+        .saturating_sub(prompt_est_tokens)
+        .saturating_sub(OUTPUT_TOKEN_MARGIN);
+    let room_u32 = u32::try_from(room).unwrap_or(u32::MAX);
+    cap.min(room_u32).max(1)
 }
 
 /// Clamp a stored effort token for the request host.

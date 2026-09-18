@@ -37,6 +37,8 @@ pub enum SettingField {
     MouseCapture,
     /// Numeric: max agentic turns per sub-agent (when agent def has no `steps`).
     SubagentMaxTurns,
+    /// Numeric: interactive chat max_tokens (0 = auto endpoint default).
+    MaxOutputTokens,
 }
 
 impl SettingField {
@@ -61,6 +63,7 @@ impl SettingField {
             SettingField::InternetMode => "Internet mode",
             SettingField::MouseCapture => "Mouse capture",
             SettingField::SubagentMaxTurns => "Max turns",
+            SettingField::MaxOutputTokens => "Max out tokens",
         }
     }
 }
@@ -81,4 +84,5 @@ pub const GENERAL_FIELDS: &[SettingField] = &[
     SettingField::InternetMode,
     SettingField::MouseCapture,
     SettingField::SubagentMaxTurns,
+    SettingField::MaxOutputTokens,
 ];

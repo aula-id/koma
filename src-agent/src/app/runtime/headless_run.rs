@@ -4,7 +4,7 @@
 //! ensure+attach  →  [optional setup]  →  SubmitInput  →  [optional --once wait]  →  Detach
 //! ```
 //!
-//! Optional setup (before submit): `--security`, `--model` (Main only), `--effort`, `--mode`.
+//! Optional setup (before submit): `--security`, `--model` (Main only), `--effort`, `--mode`, `--max-tokens`.
 //! No standalone/`--local`. Reuses [`attach_session_headless`].
 //!
 //! Exit: 0 ok · 1 error · 2 `--once` timeout · 3 approval-parked
@@ -115,6 +115,9 @@ fn run_inner(cli: RunCli) -> Result<i32> {
     if let Some(s) = cli.security {
         println!("security={}", if s { "on" } else { "off" });
     }
+    if let Some(n) = cli.max_tokens {
+        println!("max_tokens={n}");
+    }
 
     if !cli.once {
         finish(&conn, &rt);
@@ -126,9 +129,9 @@ fn run_inner(cli: RunCli) -> Result<i32> {
     Ok(code)
 }
 
-/// Apply optional `--security` / `--model` / `--effort` / `--mode` before submit.
+/// Apply optional `--security` / `--model` / `--effort` / `--mode` / `--max-tokens` before submit.
 ///
-/// Order: security → model → effort → mode (yolo arms after security is up).
+/// Order: security → model → effort → mode → max_tokens (yolo arms after security is up).
 fn apply_run_setup(conn: &Connection, cli: &RunCli) -> Result<()> {
     let mode_l = cli
         .mode
@@ -189,6 +192,23 @@ fn apply_run_setup(conn: &Connection, cli: &RunCli) -> Result<()> {
         conn.req_tx
             .send(ClientRequest::SetMode { mode })
             .context("SetMode")?;
+    }
+
+    if let Some(n) = cli.max_tokens {
+        conn.req_tx
+            .send(ClientRequest::SetSessionPrefs {
+                short_send: None,
+                sliding_cache: None,
+                bash_saving: None,
+                coding_autosave: None,
+                internet_mode: None,
+                workdir: None,
+                subagent_max_turns: None,
+                short_send_engage_n: None,
+                short_send_tail_n: None,
+                max_output_tokens: Some(n.min(1_000_000)),
+            })
+            .context("SetSessionPrefs max_output_tokens")?;
     }
 
     Ok(())

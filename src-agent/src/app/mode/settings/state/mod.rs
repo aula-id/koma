@@ -92,6 +92,8 @@ pub struct SettingsState {
     pub mouse_capture: MouseCapture,
     /// Draft: max agentic turns per sub-agent (numeric, string for editing).
     pub subagent_max_turns: String,
+    /// Draft: interactive max_tokens (0 = auto; numeric string).
+    pub max_output_tokens: String,
     /// The session's effective working directory, captured at construction. Used
     /// as the base for resolving workspace-relative paths in the FS picker.
     pub cwd: PathBuf,
@@ -273,6 +275,7 @@ impl SettingsState {
             internet_mode: session.settings.internet_mode,
             mouse_capture: session.settings.mouse_capture,
             subagent_max_turns: session.settings.subagent_max_turns.to_string(),
+            max_output_tokens: session.settings.max_output_tokens.to_string(),
             cwd: effective_cwd,
             list_editing: false,
             list_sel: 0,
@@ -356,7 +359,7 @@ impl SettingsState {
                 self.list_editing = true;
                 self.list_sel = 0;
             }
-            SettingField::SubagentMaxTurns => {
+            SettingField::SubagentMaxTurns | SettingField::MaxOutputTokens => {
                 self.editing = true;
             }
             _ => {
@@ -374,6 +377,7 @@ impl SettingsState {
             SettingField::SubagentMaxTurns
                 | SettingField::ShortSendEngageN
                 | SettingField::ShortSendTailN
+                | SettingField::MaxOutputTokens
         ) && !c.is_ascii_digit()
         {
             return;
