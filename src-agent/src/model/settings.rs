@@ -327,6 +327,18 @@ pub struct Settings {
     /// Optional provenance message id for `session_goal` (0 = unset).
     #[serde(default)]
     pub session_goal_msg_id: i64,
+    /// Provenance of `session_goal` text: `"none" | "user"` (mission/charter are
+    /// effective-only on the wire and not written here as durable doctrine).
+    #[serde(default)]
+    pub session_goal_source: String,
+    /// Immutable kickoff charter (first real user prompt). Empty = unset. Never
+    /// overwritten once non-empty by the stream-start seeder.
+    #[serde(default)]
+    pub session_charter: String,
+    /// Last applied effective-objective fingerprint (`user:…` / `mission:{id}` /
+    /// `charter:…`) for transition detection. Empty = never applied.
+    #[serde(default)]
+    pub session_objective_fp: String,
     /// Enable cache-warmth-adaptive summarization. When true, the runtime may
     /// trigger a sliding-window summary when it detects the prompt cache has gone
     /// cold, keeping costs low on providers with a sliding/refreshing prompt cache
@@ -519,6 +531,9 @@ impl Default for Settings {
             short_send_tail_n: default_short_send_tail_n(),
             session_goal: String::new(),
             session_goal_msg_id: 0,
+            session_goal_source: String::new(),
+            session_charter: String::new(),
+            session_objective_fp: String::new(),
             sliding_cache: default_sliding_cache(),
             bash_saving: true,
             coding_autosave: default_coding_autosave(),

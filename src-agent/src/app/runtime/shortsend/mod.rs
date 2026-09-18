@@ -116,7 +116,11 @@ pub(super) fn estimate_conv_tokens(history: &[ChatMessage]) -> u64 {
 
 // Re-export the public API so callers outside this module use the same paths
 // as before the split.
-pub use goal::{detect_goal_update, GoalPatch};
+pub use goal::{
+    detect_goal_update, load_mission_snap, resolve_effective_goal, seed_charter_if_empty, GoalPatch,
+    GoalWire,
+};
+// EffectiveGoal / GoalSource / MissionSnap stay crate-internal via goal:: unless needed.
 pub use recall::{build_recall_intent, shape};
 
 #[cfg(test)]

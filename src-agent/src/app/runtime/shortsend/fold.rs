@@ -75,6 +75,30 @@ pub async fn update_summary(
     usable: u64,
     tail_n: usize,
 ) -> Result<bool> {
+    update_summary_inner(session_dir, client, route, usable, tail_n, false).await
+}
+
+/// Like [`update_summary`], but when `force` is true skip the band no-op so an
+/// objective transition can refresh the continuity log once (still no-ops when
+/// there is nothing foldable past the watermark).
+pub async fn update_summary_forced(
+    session_dir: &Path,
+    client: &OpenRouterClient,
+    route: &Resolved,
+    usable: u64,
+    tail_n: usize,
+) -> Result<bool> {
+    update_summary_inner(session_dir, client, route, usable, tail_n, true).await
+}
+
+async fn update_summary_inner(
+    session_dir: &Path,
+    client: &OpenRouterClient,
+    route: &Resolved,
+    usable: u64,
+    tail_n: usize,
+    force: bool,
+) -> Result<bool> {
     let tail_n = tail_n.max(1);
 
     // Existing summary state. Absent row (first ever fold) → empty text, covers 0.
@@ -95,12 +119,11 @@ pub async fn update_summary(
     let tail_msgs = tail.len();
 
     // Hysteresis dead-zone: the tail is still within BOTH token band and message
-    // cap → no fold this turn. Count path fires alongside token path so a wrong
-    // catalogue window cannot leave multi-day agentic runs unbounded.
+    // cap → no fold this turn (unless force_fold on objective transition).
     let tail_hi = TAIL_HI_PCT * usable / 100;
     let over_tokens = tail_tokens > tail_hi;
     let over_count = tail_msgs > tail_n;
-    if !over_tokens && !over_count {
+    if !force && !over_tokens && !over_count {
         return Ok(false);
     }
 

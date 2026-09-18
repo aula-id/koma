@@ -360,9 +360,9 @@ over sec_remote (stateful socket).\n",
     // the history unchanged) when there's no active session.
     //
     // The per-session snapshot the reshape task needs: (dir, settings, recall
-    // intent with trajectory, resolved Awareness route). Goal patch applied
-    // first so shape sees fresh session_goal. Cloned so the spawn holds no
-    // borrow of `state`.
+    // intent with trajectory, resolved Awareness route, force_fold, goal wire).
+    // Goal patch / charter seed / mission resolve applied first so shape sees
+    // fresh doctrine. Cloned so the spawn holds no borrow of `state`.
     //
     // `shape`'s fold + snippet-router ride the AWARENESS role; resolve it HERE
     // into an owned `Resolved`. `None` skips fold/router (existing summary still applies).
@@ -371,29 +371,79 @@ over sec_remote (stateful socket).\n",
         crate::model::settings::Settings,
         String,
         Option<crate::app::resolve::Resolved>,
+        bool,
+        crate::app::runtime::shortsend::GoalWire,
     )> = {
-        // Goal patch + settings clone need &mut session; awareness needs config.
+        use crate::app::runtime::shortsend::{
+            detect_goal_update, load_mission_snap, resolve_effective_goal, seed_charter_if_empty,
+            GoalPatch, GoalWire,
+        };
+
         let last_user = state.rest.sessions[sess_idx]
             .session
             .as_ref()
             .map(|s| s.conversation.last_user_content().unwrap_or_default());
+
+        let mut settings_dirty = false;
+        let mut continuity_dirty = state.rest.sessions[sess_idx].continuity_dirty;
+
         if let Some(last_user) = last_user.as_ref() {
-            if let Some(patch) = crate::app::runtime::shortsend::detect_goal_update(last_user) {
+            // 1. Phrase detect (no short-accept).
+            if let Some(patch) = detect_goal_update(last_user) {
                 if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
                     match patch {
-                        crate::app::runtime::shortsend::GoalPatch::Set(g) => {
+                        GoalPatch::Set(g) => {
                             sess.settings.session_goal = g;
                             sess.settings.session_goal_msg_id = 0;
+                            sess.settings.session_goal_source = "user".into();
                         }
-                        crate::app::runtime::shortsend::GoalPatch::Clear => {
+                        GoalPatch::Clear => {
                             sess.settings.session_goal.clear();
                             sess.settings.session_goal_msg_id = 0;
+                            sess.settings.session_goal_source = "none".into();
+                            // charter preserved
                         }
                     }
-                    let _ = sess.save();
+                    settings_dirty = true;
+                    continuity_dirty = true;
+                }
+            }
+
+            // 2. Charter seed once (does not promote to user goal).
+            if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                if seed_charter_if_empty(&mut sess.settings, last_user) {
+                    settings_dirty = true;
+                    // Dirty only when charter becomes the shown objective (no prior
+                    // user/mission objective will still win in resolve).
                 }
             }
         }
+
+        // 3–4. Mission snap + resolve + fingerprint transition.
+        let sess_path = state.rest.sessions[sess_idx]
+            .session
+            .as_ref()
+            .map(|s| s.path.clone());
+        let mission = sess_path.as_ref().and_then(|p| load_mission_snap(p));
+        let mut goal_wire = GoalWire::default();
+
+        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+            let eg = resolve_effective_goal(&sess.settings, mission.as_ref());
+            if eg.fingerprint != sess.settings.session_objective_fp {
+                sess.settings.session_objective_fp = eg.fingerprint.clone();
+                settings_dirty = true;
+                continuity_dirty = true;
+            }
+            goal_wire = GoalWire::from_effective(&eg);
+            if settings_dirty {
+                let _ = sess.save();
+            }
+        }
+
+        // Arm force_fold from dirty; clear synchronously so we force once per transition.
+        let force_fold = continuity_dirty;
+        state.rest.sessions[sess_idx].continuity_dirty = false;
+
         state.rest.sessions[sess_idx].session.as_ref().map(|sess| {
             let last_user = sess.conversation.last_user_content().unwrap_or_default();
             let intent =
@@ -409,6 +459,8 @@ over sec_remote (stateful socket).\n",
                 sess.settings.clone(),
                 intent,
                 aware,
+                force_fold,
+                goal_wire,
             )
         })
     };
@@ -597,7 +649,7 @@ over sec_remote (stateful socket).\n",
     //    window is longer when the provider runs a sliding/refreshing cache.
     let sliding_cache = reshape
         .as_ref()
-        .is_some_and(|(_, settings, _, _)| settings.sliding_cache);
+        .is_some_and(|(_, settings, _, _, _, _)| settings.sliding_cache);
     let gap = state.rest.sessions[sess_idx]
         .last_send_at
         .map(|t| t.elapsed());
@@ -624,7 +676,7 @@ over sec_remote (stateful socket).\n",
     let exit_tok = conv_tokens < super::super::shortsend::DISENGAGE_PCT * usable / 100;
     let engage_n = reshape
         .as_ref()
-        .map(|(_, settings, _, _)| settings.short_send_engage_n.max(1) as usize)
+        .map(|(_, settings, _, _, _, _)| settings.short_send_engage_n.max(1) as usize)
         .unwrap_or(80);
     // history[0] is system; body = everything after.
     let body_n = history.len().saturating_sub(1);
@@ -732,7 +784,7 @@ over sec_remote (stateful socket).\n",
         // so this can never break the send. `summarizing` is the upstream engage
         // decision; `usable` is the token budget the fold's band sizing uses.
         let history = match reshape {
-            Some((session_dir, settings, user_intent, route)) => {
+            Some((session_dir, settings, user_intent, route, force_fold, goal_wire)) => {
                 super::super::shortsend::shape(
                     history,
                     &session_dir,
@@ -742,6 +794,8 @@ over sec_remote (stateful socket).\n",
                     &user_intent,
                     summarizing,
                     usable,
+                    force_fold,
+                    &goal_wire,
                 )
                 .await
             }

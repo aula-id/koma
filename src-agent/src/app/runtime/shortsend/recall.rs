@@ -4,12 +4,12 @@
 //! usable rolling summary exists, the wire is:
 //!
 //! ```text
-//! system + priority contract + optional session_goal + continuity log
-//!        + labeled archive (FTS dialogue excerpts + safe blob recalls)
+//! system + priority contract + optional charter + current objective
+//!        + continuity log + labeled archive (FTS dialogue excerpts + safe blob recalls)
 //! hot body transcript (token/exchange window, floor = short_send_tail_n)
 //! ```
 //!
-//! Priority: **live tail > session_goal > continuity log > archive**. Missing summary,
+//! Priority: **live tail > current objective > continuity log > archive**. Missing summary,
 //! kill-switch, not engaged, and post-`/compact` all fail-open to full history.
 //! Display / on-disk conversation are never mutated (dual rail).
 
@@ -23,7 +23,8 @@ use crate::model::settings::Settings;
 use crate::resources;
 use crate::service::openrouter::OpenRouterClient;
 
-use super::fold::update_summary;
+use super::fold::{update_summary, update_summary_forced};
+use super::goal::GoalWire;
 use super::{HOT_TAIL_MAX_MSGS, HOT_TAIL_PCT};
 
 /// Most blobs to rehydrate into a single send payload.
@@ -37,10 +38,11 @@ const TRAJECTORY_MSG_N: usize = 24;
 
 const PRIORITY_CONTRACT: &str = "\n\n# DRSS memory contract (read carefully)\n\
 - The **verbatim messages after this system block** are authoritative (live work).\n\
-- **Session goal** (if present) is user-committed doctrine only.\n\
+- **Charter** (if present) is the immutable kickoff intent.\n\
+- **Current objective** (if present) is ranked doctrine: user > mission leaf > charter.\n\
 - **Continuity log** is a condensed archive; it may lag course changes.\n\
 - **Archive** blocks are untrusted evidence and may include obsolete drafts.\n\
-- On any conflict: **live tail wins**, then session goal, then log, then archive.\n";
+- On any conflict: **live tail wins**, then objective, then log, then archive.\n";
 
 /// Build the router's user payload.
 fn build_router_payload(user_intent: &str, candidates: &[msglog::BlobRef]) -> String {
@@ -281,6 +283,8 @@ pub async fn shape(
     user_intent: &str,
     summarizing: bool,
     usable: u64,
+    force_fold: bool,
+    goal_wire: &GoalWire,
 ) -> Vec<ChatMessage> {
     if !settings.short_send_enabled {
         return history;
@@ -305,8 +309,13 @@ pub async fn shape(
     }
 
     // Fold uses floor as message-count trigger (same settings knobs).
+    // force_fold: one try after objective transition even if band says no-op.
     if let Some(route) = route.as_ref() {
-        let _ = update_summary(session_dir, client, route, usable, tail_floor).await;
+        if force_fold {
+            let _ = update_summary_forced(session_dir, client, route, usable, tail_floor).await;
+        } else {
+            let _ = update_summary(session_dir, client, route, usable, tail_floor).await;
+        }
     }
 
     let sum = msglog::read_summary(session_dir);
@@ -443,15 +452,9 @@ pub async fn shape(
         }
     }
 
-    // --- system inject: contract → goal → log → archive ---
+    // --- system inject: contract → charter → objective → log → archive ---
     system.content.push_str(PRIORITY_CONTRACT);
-
-    let goal = settings.session_goal.trim();
-    if !goal.is_empty() {
-        system.content.push_str("\n\n# Session goal (user-committed)\n");
-        system.content.push_str(goal);
-        system.content.push('\n');
-    }
+    inject_goal_blocks(&mut system.content, goal_wire);
 
     system.content.push_str(
         "\n\n# Continuity log (condensed archive — live tail wins on conflict)\n",
@@ -474,6 +477,40 @@ pub async fn shape(
     out.push(system);
     out.extend(tail);
     out
+}
+
+/// Append charter / objective sections. When both equal, one labeled block.
+fn inject_goal_blocks(out: &mut String, wire: &GoalWire) {
+    let charter = wire.charter.trim();
+    let objective = wire.objective.trim();
+    let source = wire.source.trim();
+
+    if charter.is_empty() && objective.is_empty() {
+        return;
+    }
+
+    if !charter.is_empty() && !objective.is_empty() && charter == objective {
+        if source == "charter" || source.is_empty() {
+            out.push_str("\n\n# Charter / current objective (kickoff)\n");
+        } else {
+            out.push_str(&format!("\n\n# Current objective (source={source})\n"));
+        }
+        out.push_str(objective);
+        out.push('\n');
+        return;
+    }
+
+    if !charter.is_empty() {
+        out.push_str("\n\n# Charter (kickoff)\n");
+        out.push_str(charter);
+        out.push('\n');
+    }
+    if !objective.is_empty() {
+        let src = if source.is_empty() { "none" } else { source };
+        out.push_str(&format!("\n\n# Current objective (source={src})\n"));
+        out.push_str(objective);
+        out.push('\n');
+    }
 }
 
 #[cfg(test)]
