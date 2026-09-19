@@ -293,7 +293,7 @@ sticky engage/disengage (hysteresis; count is hold-only):
 **`shape()` pipeline** (only when `short_send_enabled` and `summarizing = true`):
 
 1. Kill-switch check (`settings.short_send_enabled`).
-2. Engage gate (`summarizing` flag from upstream).
+2. Engage gate (`summarizing` flag from upstream). On clamped chat-completions routes, conservative prompt pressure overrides cache warmth and forces a fold when fewer than 4096 output tokens would remain (or the explicit output cap, if smaller). After shaping, unresolved pressure returns an actionable context error before dispatch; it never silently requests a one-token continuation. Direct xAI and transports with their own output budgeting retain their existing behavior.
 3. Guard: skip when history length ≤ 3 (too short to compress).
 4. Post-compaction guard: when `history[1]` starts with `[summary of earlier conversation]`, do **not** stack a sqlite summary — **fail-open** (full history; no hard clip).
 5. Best-effort fold via `update_summary` (fires when verbatim tail past `TAIL_HI_PCT` (15%) of usable **or** message count > `short_send_tail_n`).

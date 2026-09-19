@@ -206,3 +206,39 @@ fn tiny_window_preserves_complete_live_tool_round() {
         assert_eq!(snap_keep_to_round(&body, requested), 3);
     }
 }
+
+#[test]
+fn warm_cache_cannot_hide_output_pressure() {
+    use crate::service::openrouter::{checked_max_output_tokens, output_headroom_is_low};
+    let history = vec![
+        ChatMessage::new(Role::System, "s".repeat(1000)),
+        ChatMessage::new(Role::User, "let value = parse(input);\n".repeat(12000)),
+    ];
+    let window = 128_000;
+    let warm_threshold =
+        super::super::ENGAGE_WARM_PCT * (window - super::super::BASE_OVERHEAD) / 100;
+    assert!(super::super::estimate_conv_tokens(&history) < warm_threshold);
+    let estimate = super::super::estimate_prompt_tokens_for_max_clamp(&history);
+    let endpoint = "https://example.invalid/v1";
+    assert!(output_headroom_is_low(0, endpoint, window, estimate));
+    assert!(checked_max_output_tokens(0, endpoint, window, estimate).is_err());
+    assert_eq!(
+        checked_max_output_tokens(0, endpoint, window, 20_000).unwrap(),
+        32_000
+    );
+    // Small user-selected caps and direct xAI's independent budget still work.
+    assert_eq!(
+        checked_max_output_tokens(1, endpoint, window, window - 1025).unwrap(),
+        1
+    );
+    assert!(checked_max_output_tokens(1, endpoint, window, window - 1024).is_err());
+    assert_eq!(
+        checked_max_output_tokens(0, "https://api.x.ai/v1", window, estimate).unwrap(),
+        256_000
+    );
+    assert_eq!(
+        checked_max_output_tokens(0, endpoint, window, window - 1024 - 4096).unwrap(),
+        4096
+    );
+    assert!(checked_max_output_tokens(0, endpoint, window, window - 1024 - 4095).is_err());
+}

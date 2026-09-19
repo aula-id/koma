@@ -666,14 +666,36 @@ over sec_remote (stateful socket).\n",
     } else {
         super::super::shortsend::ENGAGE_COLD_PCT
     };
+    let max_output_settings = reshape
+        .as_ref()
+        .map(|(_, settings, _, _, _, _)| settings.max_output_tokens)
+        .unwrap_or(0);
+    let clamp_endpoint = main
+        .as_ref()
+        .map(|m| m.endpoint.clone())
+        .unwrap_or_default();
+    // Only the chat-completions transports consume this output clamp.
+    let clamp_applies = main.as_ref().is_some_and(|m| !matches!(
+        m.api_type,
+        crate::model::app_config::ApiType::Codex
+            | crate::model::app_config::ApiType::AnthropicCompatible
+            | crate::model::app_config::ApiType::CommandCode
+    ));
+    let output_pressure = clamp_applies && crate::service::openrouter::output_headroom_is_low(
+        max_output_settings,
+        &clamp_endpoint,
+        window,
+        super::super::shortsend::estimate_prompt_tokens_for_max_clamp(&history),
+    );
     // 5. Sticky engage hysteresis: cross the (warmth-dependent) engage threshold to
     //    turn summarizing ON; only fall back below DISENGAGE_PCT to turn it OFF.
     //    The dead-zone between the two prevents flapping on/off each turn.
     //    Count gate is STICKY HOLD only: body_n above short_send_engage_n keeps
     //    summarizing on through token dips, but never forces first kick-in (that
     //    would starve short agentic runs before a summary exists).
-    let enter_tok = conv_tokens > engage_pct * usable / 100;
-    let exit_tok = conv_tokens < super::super::shortsend::DISENGAGE_PCT * usable / 100;
+    let enter_tok = output_pressure || conv_tokens > engage_pct * usable / 100;
+    let exit_tok = !output_pressure
+        && conv_tokens < super::super::shortsend::DISENGAGE_PCT * usable / 100;
     let engage_n = reshape
         .as_ref()
         .map(|(_, settings, _, _, _, _)| settings.short_send_engage_n.max(1) as usize)
@@ -760,14 +782,6 @@ over sec_remote (stateful socket).\n",
     // Interactive max_tokens settings (0=auto). Actual clamp runs AFTER reshape
     // inside the spawn on the wire history — pre-reshape body/4 under-counts
     // (system + tool schemas + code density) and still 400'd on vLLM with 8k.
-    let max_output_settings = reshape
-        .as_ref()
-        .map(|(_, settings, _, _, _, _)| settings.max_output_tokens)
-        .unwrap_or(0);
-    let clamp_endpoint = main
-        .as_ref()
-        .map(|m| m.endpoint.clone())
-        .unwrap_or_default();
     let clamp_window = window;
     let (tx, rx) = mpsc::unbounded_channel();
     state.rest.sessions[sess_idx].active_rx = Some(rx);
@@ -806,7 +820,7 @@ over sec_remote (stateful socket).\n",
                     &user_intent,
                     summarizing,
                     usable,
-                    force_fold,
+                    force_fold || output_pressure,
                     &goal_wire,
                 )
                 .await
@@ -818,12 +832,21 @@ over sec_remote (stateful socket).\n",
         // prompt + max_tokens > context.
         let prompt_est =
             super::super::shortsend::estimate_prompt_tokens_for_max_clamp(&history);
-        let max_tokens = crate::service::openrouter::effective_max_output_tokens(
-            max_output_settings,
-            &clamp_endpoint,
-            clamp_window,
-            prompt_est,
-        );
+        let max_tokens = if clamp_applies {
+            match crate::service::openrouter::checked_max_output_tokens(
+                max_output_settings, &clamp_endpoint, clamp_window, prompt_est,
+            ) {
+                Ok(tokens) => tokens,
+                Err(error) => {
+                    let _ = tx.send(crate::service::StreamEvent::Error(error.to_string()));
+                    return;
+                }
+            }
+        } else {
+            crate::service::openrouter::effective_max_output_tokens(
+                max_output_settings, &clamp_endpoint, clamp_window, prompt_est,
+            )
+        };
         // Send on the resolved MAIN route: its connection (endpoint + key), model
         // id, upstream-route slug, and effort. The owned `Resolved` was moved into
         // this task; borrow it for the call. A `None` (no session) can't reach here

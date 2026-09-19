@@ -284,6 +284,42 @@ pub(crate) fn interactive_max_tokens(endpoint: &str) -> u32 {
 /// Tokenizer / framing slack subtracted from context when clamping output budget.
 pub(crate) const OUTPUT_TOKEN_MARGIN: u64 = 1_024;
 
+/// Reserve enough room for a useful continuation before riding a warm cache.
+/// Explicit smaller output caps remain valid; direct xAI keeps its own budget.
+pub(crate) fn output_headroom_is_low(
+    settings_cap: u32,
+    endpoint: &str,
+    context_window: u64,
+    prompt_est_tokens: u64,
+) -> bool {
+    if is_xai(endpoint) {
+        return false;
+    }
+    let reserve = if settings_cap == 0 { 4_096 } else { settings_cap.min(4_096) };
+    prompt_est_tokens
+        .saturating_add(OUTPUT_TOKEN_MARGIN)
+        .saturating_add(u64::from(reserve)) > context_window
+}
+
+/// Main-turn guard after DRSS. Do not turn failed compaction into a silent
+/// one-token response; leave the stored conversation intact and explain recovery.
+pub(crate) fn checked_max_output_tokens(
+    settings_cap: u32,
+    endpoint: &str,
+    context_window: u64,
+    prompt_est_tokens: u64,
+) -> Result<u32> {
+    if output_headroom_is_low(settings_cap, endpoint, context_window, prompt_est_tokens) {
+        return Err(anyhow!(
+            "Insufficient context headroom after short-send (estimated prompt {} tokens, window {}). \
+             Conversation preserved. Configure an Awareness model to fold history, use /compact, \
+             or select a larger-context model before retrying.",
+            prompt_est_tokens, context_window
+        ));
+    }
+    Ok(effective_max_output_tokens(settings_cap, endpoint, context_window, prompt_est_tokens))
+}
+
 /// Interactive chat `max_tokens` after settings + (host-aware) context clamp.
 ///
 /// ```text
