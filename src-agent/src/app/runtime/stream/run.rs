@@ -1,7 +1,7 @@
 //! Stream task management: start, abort, and manage the async streaming task.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use tokio::sync::mpsc;
 
@@ -339,90 +339,18 @@ over sec_remote (stateful socket).\n",
         }
     }
 
-    // Short-send reshape inputs, snapshotted out of `state` BEFORE the spawn so
-    // the task holds no borrow of `state`. Cloning the session dir + settings +
-    // latest user message lets `shortsend::shape` run its fold/router off the UI
-    // thread (the task already shows the "waiting" state, so the UI never freezes
-    // on these secondary-model calls). `None` when there's no session — the task
-    // then sends the injected history unchanged.
-    //
-    // DUAL RAIL: `shape` only transforms this API-bound `history` Vec (built from
-    // `sess.conversation.history()` by the caller). It reads `messages.sqlite` and
-    // returns a NEW Vec; it does not touch `sess.conversation`, `messages.json`,
-    // or the rendered transcript — display is entirely unaffected.
-    //
-    // The OLD per-send "is the history near the window?" gate moves HERE (out of
-    // shape) so it can read the live cache-warmth + sticky engage state, which only
-    // exists on `state`. We compute the engage decision (a bool) + the token budget
-    // (`usable`) into locals FIRST — all the `state.rest` reads happen up front so
-    // they don't borrow-conflict with the per-session snapshot or the two writes
-    // below. Everything here is a no-op (`summarizing` stays false, the task sends
-    // the history unchanged) when there's no active session.
-    //
-    // The per-session snapshot the reshape task needs: (dir, settings, recall
-    // text, resolved Awareness route, force_fold, goal wire).
-    // Goal patch / charter seed / mission resolve applied first so shape sees
-    // fresh doctrine. Cloned so the spawn holds no borrow of `state`.
-    //
-    // `shape`'s fold + snippet-router ride the AWARENESS role; resolve it HERE
-    // into an owned `Resolved`. `None` skips fold/router (existing summary still applies).
-    let reshape: Option<(
-        std::path::PathBuf,
-        crate::model::settings::Settings,
-        String,
-        Option<crate::app::resolve::Resolved>,
-        bool,
-        crate::app::runtime::shortsend::GoalWire,
-    )> = {
-        use crate::app::runtime::shortsend::{
-            load_mission_snap, refresh_goal_state, GoalWire,
-        };
-
-        let last_user = state.rest.sessions[sess_idx]
-            .session
-            .as_ref()
-            .map(|s| s.conversation.last_user_content().unwrap_or_default());
-
-        let mut continuity_dirty = state.rest.sessions[sess_idx].continuity_dirty;
-
-        let sess_path = state.rest.sessions[sess_idx]
-            .session
-            .as_ref()
-            .map(|s| s.path.clone());
-        let mission = sess_path.as_ref().and_then(|p| load_mission_snap(p));
-        let mut goal_wire = GoalWire::default();
-
-        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-            let refresh = refresh_goal_state(
-                &mut sess.settings, last_user.as_deref(), mission.as_ref(),
-            );
-            continuity_dirty |= refresh.objective_changed;
-            goal_wire = refresh.wire;
+    // Snapshot only the archive path, settings, raw user intent and objective.
+    // DRSS shapes the request in the spawned task; the visible history is untouched.
+    let reshape = {
+        use crate::app::runtime::shortsend::{load_mission_snap, refresh_goal_state};
+        state.rest.sessions[sess_idx].session.as_mut().map(|sess| {
+            let user = sess.conversation.last_user_content().unwrap_or_default();
+            let mission = load_mission_snap(&sess.path);
+            let refresh = refresh_goal_state(&mut sess.settings, Some(&user), mission.as_ref());
             if refresh.settings_changed {
                 let _ = sess.save();
             }
-        }
-
-        // Keep the transition pending until an engaged, routed reshape can try it.
-        let force_fold = continuity_dirty;
-        state.rest.sessions[sess_idx].continuity_dirty = continuity_dirty;
-
-        state.rest.sessions[sess_idx].session.as_ref().map(|sess| {
-            let last_user = sess.conversation.last_user_content().unwrap_or_default();
-            let aware = crate::app::resolve::resolve_role_dispatch(
-                &state.rest.config,
-                &sess.settings,
-                crate::model::app_config::ModelRole::Awareness,
-            )
-            .filter(|r| r.is_routable());
-            (
-                sess.path.clone(),
-                sess.settings.clone(),
-                last_user,
-                aware,
-                force_fold,
-                goal_wire,
-            )
+            (sess.path.clone(), sess.settings.clone(), user, refresh.wire)
         })
     };
 
@@ -543,19 +471,12 @@ over sec_remote (stateful socket).\n",
         crate::model::store::append_global_error_log("main fallback → koma/apple", detail);
     }
 
-    // 1. Window: the model's context-window size in tokens, from the cached
-    //    catalogue. WINDOW-SIZING FIX: size against the RESOLVED Main model id
-    //    (what we actually send), NOT the legacy `settings.model` — a per-session
-    //    or config Main override must size the short-send window correctly. 128k is
-    //    a safe fallback (the min-window policy is 100k+).
-    let window = main
+    // Never borrow a cached capability record from a different endpoint.
+    let native_models = main
         .as_ref()
-        .and_then(|m| {
-            state.rest.models_cache.as_deref().and_then(|models| {
-                crate::service::openrouter::context_length_for(models, &m.model_id)
-            })
-        })
-        .unwrap_or(128_000);
+        .filter(|m| state.rest.models_cache_endpoint.as_deref() == Some(m.endpoint.as_str()))
+        .and_then(|_| state.rest.models_cache.clone())
+        .unwrap_or_default();
     // Image-attachment send context: the session dir (source of record for image
     // bytes), whether the resolved Main model can read images, and its id (named
     // in the strip-warning). Built BEFORE the spawn so the task holds no borrow of
@@ -597,87 +518,18 @@ over sec_remote (stateful socket).\n",
         }
         _ => None,
     };
-    // 2. Usable budget: the window minus the fixed system/tools/memory overhead,
-    //    floored so the percentages below never go degenerate on a tiny window.
-    let usable = window
-        .saturating_sub(super::super::shortsend::BASE_OVERHEAD)
-        .max(8_000);
-    // 3. Conversation size estimate (~4 chars/token over content + tool args).
-    let conv_tokens = super::super::shortsend::estimate_conv_tokens(&history);
-    // 4. Cache warmth: a warm cache (provider supports caching, the cache holds
-    //    tokens, and the last send was recent enough that it hasn't gone cold)
-    //    lets the conversation grow far larger before we summarize. The cold
-    //    window is longer when the provider runs a sliding/refreshing cache.
-    let sliding_cache = reshape
-        .as_ref()
-        .is_some_and(|(_, settings, _, _, _, _)| settings.sliding_cache);
-    let gap = state.rest.sessions[sess_idx]
-        .last_send_at
-        .map(|t| t.elapsed());
-    let cold_window = if sliding_cache {
-        Duration::from_secs(300)
-    } else {
-        Duration::from_secs(120)
-    };
-    let cache_warm = state.rest.sessions[sess_idx].provider_caches
-        && state.rest.sessions[sess_idx].tokens_cached > 0
-        && gap.is_some_and(|g| g < cold_window);
-    let engage_pct = if cache_warm {
-        super::super::shortsend::ENGAGE_WARM_PCT
-    } else {
-        super::super::shortsend::ENGAGE_COLD_PCT
-    };
     let max_output_settings = reshape
         .as_ref()
-        .map(|(_, settings, _, _, _, _)| settings.max_output_tokens)
+        .map(|(_, settings, _, _)| settings.max_output_tokens)
         .unwrap_or(0);
-    let clamp_endpoint = main
+    let context_limit = reshape
         .as_ref()
-        .map(|m| m.endpoint.clone())
+        .map(|(_, settings, _, _)| settings.context_window_limit)
+        .unwrap_or(0);
+    let context_alias = reshape
+        .as_ref()
+        .map(|(_, settings, _, _)| settings.context_model_alias.clone())
         .unwrap_or_default();
-    // Only the chat-completions transports consume this output clamp.
-    let clamp_applies = main.as_ref().is_some_and(|m| !matches!(
-        m.api_type,
-        crate::model::app_config::ApiType::Codex
-            | crate::model::app_config::ApiType::AnthropicCompatible
-            | crate::model::app_config::ApiType::CommandCode
-    ));
-    let output_pressure = clamp_applies && crate::service::openrouter::output_headroom_is_low(
-        max_output_settings,
-        &clamp_endpoint,
-        window,
-        super::super::shortsend::estimate_prompt_tokens_for_max_clamp(&history),
-    );
-    // 5. Sticky engage hysteresis: cross the (warmth-dependent) engage threshold to
-    //    turn summarizing ON; only fall back below DISENGAGE_PCT to turn it OFF.
-    //    The dead-zone between the two prevents flapping on/off each turn.
-    //    Count gate is STICKY HOLD only: body_n above short_send_engage_n keeps
-    //    summarizing on through token dips, but never forces first kick-in (that
-    //    would starve short agentic runs before a summary exists).
-    let enter_tok = output_pressure || conv_tokens > engage_pct * usable / 100;
-    let exit_tok = !output_pressure
-        && conv_tokens < super::super::shortsend::DISENGAGE_PCT * usable / 100;
-    let engage_n = reshape
-        .as_ref()
-        .map(|(_, settings, _, _, _, _)| settings.short_send_engage_n.max(1) as usize)
-        .unwrap_or(80);
-    // history[0] is system; body = everything after.
-    let body_n = history.len().saturating_sub(1);
-    let enter_n = body_n > engage_n;
-    state.rest.sessions[sess_idx].summarizing = super::super::shortsend::sticky_summarizing(
-        state.rest.sessions[sess_idx].summarizing,
-        enter_tok,
-        exit_tok,
-        enter_n,
-    );
-    let summarizing = state.rest.sessions[sess_idx].summarizing;
-    if summarizing && reshape.as_ref().is_some_and(|(_, settings, _, route, _, _)| {
-        settings.short_send_enabled && route.is_some()
-    }) {
-        state.rest.sessions[sess_idx].continuity_dirty = false;
-    }
-    // 6. Stamp the send instant so the NEXT turn can measure cache warmth from the
-    //    gap since this send.
     state.rest.sessions[sess_idx].last_send_at = Some(Instant::now());
 
     // MCP tools for the MAIN agent. Snapshot the global manager's discovered tools
@@ -748,7 +600,7 @@ over sec_remote (stateful socket).\n",
     // Interactive max_tokens settings (0=auto). Actual clamp runs AFTER reshape
     // inside the spawn on the wire history — pre-reshape body/4 under-counts
     // (system + tool schemas + code density) and still 400'd on vLLM with 8k.
-    let clamp_window = window;
+    let schemas = super::super::shortsend::budget::schema_tokens(&advertise, &mcp_tools);
     let (tx, rx) = mpsc::unbounded_channel();
     state.rest.sessions[sess_idx].active_rx = Some(rx);
     let Some(c) = client.as_ref().cloned() else {
@@ -758,60 +610,63 @@ over sec_remote (stateful socket).\n",
         return;
     };
     let jh = handle.spawn(async move {
-        // Wire-only first-hop tool nudge: append a note to the last User
-        // message ONLY on the first dispatch of an agentic round. Never
-        // persisted to msglog, UI, or messages.json — this mutates the local
-        // `history` Vec only.
+        let Some(ref model) = main else {
+            return;
+        };
+        let limits = crate::service::context_limits::discover(
+            &model.model_id,
+            &model.endpoint,
+            &context_alias,
+            context_limit,
+            &native_models,
+        )
+        .await;
+        if let Some((session_dir, _, _, _)) = &reshape {
+            // Diagnostic metadata contains model names/limits, never credentials.
+            if let Ok(bytes) = serde_json::to_vec_pretty(&limits) {
+                let _ = std::fs::write(session_dir.join("drss-context.json"), bytes);
+            }
+        }
+        // Reserve the first-hop nudge before shaping; append only afterward so
+        // original user text can still be matched to its exact archive record.
+        let shape_schemas = schemas
+            + if agent_steps == 0 {
+                super::super::shortsend::budget::text_tokens(TOOL_NUDGE)
+            } else {
+                0
+            };
+        let mut history = match reshape {
+            Some((session_dir, settings, user_intent, goal_wire)) => {
+                match super::super::shortsend::shape(
+                    history,
+                    &session_dir,
+                    &settings,
+                    &user_intent,
+                    &goal_wire,
+                    &limits,
+                    shape_schemas,
+                ) {
+                    Ok(history) => history,
+                    Err(error) => {
+                        let _ = tx.send(crate::service::StreamEvent::Error(error.to_string()));
+                        return;
+                    }
+                }
+            }
+            None => history,
+        };
         if agent_steps == 0 {
             if let Some(msg) = history.iter_mut().rev().find(|m| m.role == Role::User) {
                 msg.content.push_str(TOOL_NUDGE);
             }
         }
-
-        // Reshape the wire payload just before POSTing. `shape` preserves the
-        // system message at index 0 (with the project-files/awareness injection
-        // applied above, plus — when engaged — the condensed-history summary
-        // appended to its uncached tail), so the model still receives the real
-        // system prompt. It fails open — any error returns the original history —
-        // so this can never break the send. `summarizing` is the upstream engage
-        // decision; `usable` is the token budget the fold's band sizing uses.
-        let history = match reshape {
-            Some((session_dir, settings, user_intent, route, force_fold, goal_wire)) => {
-                super::super::shortsend::shape(
-                    history,
-                    &session_dir,
-                    &c,
-                    &settings,
-                    route,
-                    &user_intent,
-                    summarizing,
-                    usable,
-                    force_fold || output_pressure,
-                    &goal_wire,
-                )
-                .await
+        let prompt_est = super::super::shortsend::budget::prompt_tokens(&history, schemas);
+        let max_tokens = match limits.output_tokens(max_output_settings, prompt_est) {
+            Ok(tokens) => tokens,
+            Err(error) => {
+                let _ = tx.send(crate::service::StreamEvent::Error(error.to_string()));
+                return;
             }
-            None => history,
-        };
-        // Clamp max_tokens against the POST body we actually send (post-reshape),
-        // with a high-biased prompt estimate so strict hosts never see
-        // prompt + max_tokens > context.
-        let prompt_est =
-            super::super::shortsend::estimate_prompt_tokens_for_max_clamp(&history);
-        let max_tokens = if clamp_applies {
-            match crate::service::openrouter::checked_max_output_tokens(
-                max_output_settings, &clamp_endpoint, clamp_window, prompt_est,
-            ) {
-                Ok(tokens) => tokens,
-                Err(error) => {
-                    let _ = tx.send(crate::service::StreamEvent::Error(error.to_string()));
-                    return;
-                }
-            }
-        } else {
-            crate::service::openrouter::effective_max_output_tokens(
-                max_output_settings, &clamp_endpoint, clamp_window, prompt_est,
-            )
         };
         // Send on the resolved MAIN route: its connection (endpoint + key), model
         // id, upstream-route slug, and effort. The owned `Resolved` was moved into
@@ -823,12 +678,10 @@ over sec_remote (stateful socket).\n",
             // error on the stream channel and DON'T dispatch; the drain folds it
             // into the status line + toast exactly like any stream failure.
             if !m.is_routable() {
-                let _ = tx.send(crate::service::StreamEvent::Error(
-                    format!(
-                        "provider wire type {:?} is not routable",
-                        m.api_type
-                    ),
-                ));
+                let _ = tx.send(crate::service::StreamEvent::Error(format!(
+                    "provider wire type {:?} is not routable",
+                    m.api_type
+                )));
             } else {
                 let _ = c
                     .stream_complete(

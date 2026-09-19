@@ -21,7 +21,7 @@
 //! `output_config` body params plus the interleaved-thinking + effort betas — and
 //! the model's thinking blocks are parsed for live display AND REPLAYED (with
 //! their signatures) across a tool loop so continuation requests don't 400. The
-//! oneshot structured-output paths (classifier/fold/router) send NO thinking: they
+//! oneshot structured-output paths (classifier) send NO thinking: they
 //! force a `respond` tool, and Anthropic deletes thinking under a forced
 //! `tool_choice`. The X-Stainless / client fingerprint headers are intentionally
 //! omitted. If the live backend rejects a request we add fields then.
@@ -31,8 +31,7 @@ mod request;
 mod sse;
 mod stream;
 
-/// Required output-token budget for a Messages request (`max_tokens` is a REQUIRED
-/// field on this API, unlike the chat-completions runaway guard which is optional).
+/// Default output budget for non-streaming requests. Streaming uses the caller limit.
 pub(super) const CLAUDE_MAX_OUTPUT_TOKENS: u32 = 32_000;
 
 /// The load-bearing first `system` block. Anthropic REJECTS OAuth requests whose

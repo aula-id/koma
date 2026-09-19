@@ -132,3 +132,53 @@ pub(super) async fn lookup_alias(query: &str, endpoint: &str) -> Option<CatalogM
     );
     model
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    #[tokio::test]
+    async fn public_fetch_has_no_authorization_and_does_not_follow_redirects() {
+        for redirect in [false, true] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/models", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&buf[..n]);
+                }
+                let request = String::from_utf8(request).unwrap().to_lowercase();
+                assert!(!request.contains("authorization:"));
+                assert!(!request.contains("cookie:"));
+                let body = r#"{"data":[{"id":"vendor/model-1","context_length":1000000,"top_provider":null}]}"#;
+                let response = if redirect {
+                    "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+                } else {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                };
+                stream.write_all(response.as_bytes()).unwrap();
+            });
+            let result = fetch::<Vec<CatalogModel>>(&url).await;
+            if redirect {
+                // No request to the Location target: the empty redirect body
+                // fails JSON parsing rather than yielding a connect failure.
+                assert!(result.unwrap_err().is::<serde_json::Error>());
+            } else {
+                assert_eq!(result.unwrap()[0].window(), Some(1_000_000));
+            }
+            server.join().unwrap();
+        }
+    }
+}

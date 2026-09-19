@@ -302,29 +302,19 @@ pub struct Settings {
     /// by default; ignored entirely when `classifier_enabled` is false.
     #[serde(default)]
     pub allowed_folders: Vec<String>,
-    /// Master switch for the "short-send" payload reshaper. When true (the
-    /// default), the API-bound history is compressed before each send: the older
-    /// turns are replaced by a rolling summary + a verbatim tail, with heavy
-    /// blobs rehydrated on demand. When false the full history is sent as before
-    /// (kill switch). Display + on-disk state are unaffected either way.
+    /// Shape only outgoing requests into system + deterministic archive index +
+    /// recent live context. Stored/displayed messages remain unchanged.
     #[serde(default = "default_short_send_enabled")]
     pub short_send_enabled: bool,
-    /// Body message count (any role except system) that HOLDS DRSS engaged once
-    /// the token/cache path has kicked in — sticky only, never first entry.
-    /// Defaults to `80`. Old `settings.json` files load via the serde default.
+    /// Legacy field retained for settings/peer compatibility; no effect on DRSS.
     #[serde(default = "default_short_send_engage_n")]
     pub short_send_engage_n: i64,
-    /// Preferred newest-body count for the short-send hot window when engaged.
-    /// Token budget (`HOT_TAIL_PCT`) may keep fewer so fat tool dumps cannot
-    /// overflow the window. Defaults to `40`. Old `settings.json` files load
-    /// via the serde default.
+    /// Legacy field retained for settings/peer compatibility; no effect on DRSS.
     #[serde(default = "default_short_send_tail_n")]
     pub short_send_tail_n: i64,
-    /// Interactive chat `max_tokens` on OpenAI-compatible wire.
-    /// `0` = auto (endpoint default: 32k general, 256k direct xAI). Always clamped
-    /// at send so `prompt_est + max_tokens + margin ≤` model context window —
-    /// prevents mid-turn HTTP 400 on strict providers when a fat prompt + fixed
-    /// 32k would exceed the window. Soft upper bound at settings UI is 1_000_000.
+    /// Requested reply limit. Auto=32k (256k for direct xAI), constrained by provider/remaining
+    /// context. Codex OAuth does not accept an explicit output limit. Sub-agent
+    /// calls retain their endpoint-specific auto defaults.
     #[serde(default)]
     pub max_output_tokens: u32,
     /// Optional smaller operating context ceiling (0 = catalog/default).
@@ -352,10 +342,7 @@ pub struct Settings {
     /// `charter:…`) for transition detection. Empty = never applied.
     #[serde(default)]
     pub session_objective_fp: String,
-    /// Enable cache-warmth-adaptive summarization. When true, the runtime may
-    /// trigger a sliding-window summary when it detects the prompt cache has gone
-    /// cold, keeping costs low on providers with a sliding/refreshing prompt cache
-    /// (e.g. Anthropic). When false (the default), no such adaptation is attempted.
+    /// Legacy cache-adaptation preference; deterministic DRSS uses token bands.
     #[serde(default = "default_sliding_cache")]
     pub sliding_cache: bool,
     /// Whether bash/git_operator run their "saving" output path (filtering +

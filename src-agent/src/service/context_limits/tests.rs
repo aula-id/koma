@@ -104,3 +104,57 @@ fn empty_catalogue_and_legacy_settings_have_stable_defaults() {
     assert_eq!(settings.context_window_limit, 0);
     assert!(settings.context_model_alias.is_empty());
 }
+
+#[test]
+fn nullable_provider_metadata_keeps_nominal_window_and_canonical_ids_match() {
+    let mut model: CatalogModel = serde_json::from_value(serde_json::json!({
+        "id":"vendor/model-1", "canonical_slug":"vendor/model-1-20260901",
+        "context_length":64000, "top_provider":null,
+    }))
+    .unwrap();
+    assert_eq!(
+        limits("vendor/model-1-20260901", &[model.clone()]).effective_window,
+        64000
+    );
+    model.top_provider.context_length = Some(32000);
+    assert_eq!(
+        limits("vendor/model-1", &[model.clone()]).effective_window,
+        32000
+    );
+    model.top_provider.context_length = Some(128000);
+    assert_eq!(limits("vendor/model-1", &[model]).effective_window, 64000);
+}
+
+#[test]
+fn small_models_can_use_a_proportional_reply_reserve() {
+    let got = limits("vendor/small", &[model("vendor/small", 8000)]);
+    assert_eq!(got.reserved_output(0), 1600);
+    assert_eq!(got.output_tokens(0, 5000).unwrap(), 1976);
+    assert!(got.output_tokens(0, 6500).is_err());
+}
+
+#[test]
+fn known_native_model_is_fallback_when_public_catalogue_is_unavailable() {
+    let native: ModelInfo = serde_json::from_value(serde_json::json!({
+        "id":"local-model", "context_length":1_000_000,
+    }))
+    .unwrap();
+    let got = resolve("local-model", "", "", 0, &[], &[native]);
+    assert_eq!(got.catalogue_source, "active_provider");
+    assert_eq!(got.effective_window, 300_000);
+}
+
+#[test]
+fn direct_xai_keeps_auto_default_but_now_respects_remaining_room() {
+    let got = resolve(
+        "grok-4",
+        "https://api.x.ai/v1",
+        "",
+        0,
+        &[model("x-ai/grok-4", 2_000_000)],
+        &[],
+    );
+    assert_eq!(got.desired_output(0), 256_000);
+    assert_eq!(got.output_tokens(0, 225_000).unwrap(), 73_976);
+    assert!(got.output_tokens(0, 298_000).is_err());
+}

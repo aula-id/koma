@@ -165,6 +165,14 @@ pub(super) fn find<'a>(query: &str, endpoint: &str, models: &'a [CatalogModel]) 
             conservative_window: None,
         };
     }
+    if exact.len() > 1 {
+        return Match {
+            model: None,
+            method: "ambiguous",
+            uncertain: true,
+            conservative_window: exact.iter().filter_map(|m| m.window()).min(),
+        };
+    }
     let wanted = identity(query, vendor(endpoint));
     let mut normalized = Vec::new();
     let mut fuzzy = Vec::new();

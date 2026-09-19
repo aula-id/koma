@@ -68,6 +68,10 @@ pub fn write_summary(
 /// (the archive stays). Wrote as empty `text`; short-send `shape` treats empty
 /// summary text as absent and skips injection/recall.
 pub fn clear_rolling_summary(session_dir: &Path) -> Result<()> {
+    let mut conn = super::open(session_dir)?;
+    let tx = conn.transaction()?;
+    super::drss::reset(&tx, true)?;
+    tx.commit()?;
     let max_id = super::query::max_message_id(session_dir);
     // Empty archive → delete the summary row if present so a new session starts
     // with no summary at all.

@@ -2,7 +2,7 @@
 //!
 //! DRSS must not invent “the plan” from draft-shaped archive text. Doctrine on
 //! the wire is resolved from ranked sources: **user > mission active leaf >
-//! charter > none**. Fold never writes doctrine — only continuity log.
+//! charter > none**. Archive indexing never writes doctrine.
 
 use crate::model::settings::Settings;
 
@@ -89,6 +89,7 @@ impl GoalWire {
 pub struct GoalRefresh {
     pub wire: GoalWire,
     pub settings_changed: bool,
+    #[cfg_attr(not(test), allow(dead_code))] // Transition regression tests inspect this flag.
     pub objective_changed: bool,
 }
 

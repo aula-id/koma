@@ -19,8 +19,12 @@ pub struct CatalogModel {
     pub name: String,
     #[serde(default)]
     pub context_length: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable_top_provider")]
     pub top_provider: TopProvider,
+}
+
+fn nullable_top_provider<'de, D: serde::Deserializer<'de>>(d: D) -> Result<TopProvider, D::Error> {
+    Ok(Option::<TopProvider>::deserialize(d)?.unwrap_or_default())
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -31,10 +35,11 @@ pub struct TopProvider {
 
 impl CatalogModel {
     fn window(&self) -> Option<u64> {
-        self.top_provider
-            .context_length
+        [self.top_provider.context_length, self.context_length]
+            .into_iter()
+            .flatten()
             .filter(|n| *n > 0)
-            .or(self.context_length.filter(|n| *n > 0))
+            .min()
     }
 }
 
@@ -47,13 +52,14 @@ pub struct ContextLimits {
     pub catalog_window: Option<u64>,
     pub route_window: Option<u64>,
     pub effective_window: u64,
+    pub auto_output_tokens: u64,
     pub max_completion_tokens: Option<u64>,
 }
 
 impl ContextLimits {
     pub fn desired_output(&self, configured: u32) -> u64 {
         let desired = if configured == 0 {
-            32_000
+            self.auto_output_tokens
         } else {
             u64::from(configured)
         };
@@ -74,7 +80,7 @@ impl ContextLimits {
             .effective_window
             .saturating_sub(prompt)
             .saturating_sub(OUTPUT_MARGIN);
-        let minimum = self.desired_output(configured).min(4096);
+        let minimum = self.reserved_output(configured).min(4096);
         anyhow::ensure!(room >= minimum,
             "Insufficient context headroom: estimated prompt {prompt}, effective window {}. Conversation preserved; reduce input or configure a verified context limit.", self.effective_window);
         Ok(self
@@ -114,11 +120,19 @@ pub fn resolve(
         })
         .collect();
     let route = matching::find(requested, endpoint, &native_models);
-    let route_window = route.model.and_then(CatalogModel::window);
+    let route_window = route
+        .model
+        .and_then(CatalogModel::window)
+        .or(route.conservative_window);
     let catalog_window = found.model.and_then(CatalogModel::window);
     let mut window = catalog_window.or(route_window).unwrap_or(FALLBACK_WINDOW);
     // A fuzzy spelling guess or ambiguous name must not inflate the fallback.
-    if found.uncertain {
+    let uncertain = if found.model.is_some() || found.conservative_window.is_some() {
+        found.uncertain
+    } else {
+        route.uncertain
+    };
+    if uncertain {
         window = window.min(FALLBACK_WINDOW);
     }
     if let Some(n) = found.conservative_window {
@@ -149,6 +163,13 @@ pub fn resolve(
         catalog_window,
         route_window,
         effective_window: window.min(OPERATING_CEILING),
+        // Preserve existing endpoint defaults while bounding every main request
+        // by the newly detected operating window.
+        auto_output_tokens: if matching::vendor(endpoint) == Some("x-ai") {
+            256_000
+        } else {
+            32_000
+        },
         max_completion_tokens: found
             .model
             .and_then(|m| m.top_provider.max_completion_tokens)

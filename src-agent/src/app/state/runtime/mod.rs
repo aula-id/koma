@@ -612,14 +612,6 @@ pub struct SessionRuntime {
     /// Latched true the first time a response reports `cached_tokens > 0`, meaning
     /// the active provider supports and is using a prompt cache. Never reset.
     pub provider_caches: bool,
-    /// Sticky engage-state for the cache-warmth-adaptive summarization hysteresis.
-    /// Set true when the summarizer engages; a later wave reads and writes it.
-    #[allow(dead_code)]
-    pub summarizing: bool,
-    /// Set on objective transition (user goal patch, mission leaf change, first
-    /// charter seed when it becomes the shown objective). Armed into `shape` as
-    /// `force_fold` once, then cleared synchronously so we don't thrash folds.
-    pub continuity_dirty: bool,
     /// Wall-clock instant of the most-recent send (user turn start). Stamped by
     /// the submit handler in a later wave; used to estimate prompt-cache warmth.
     #[allow(dead_code)]
@@ -788,8 +780,6 @@ impl SessionRuntime {
             compact_pending: None,
             held_lock: None,
             provider_caches: false,
-            summarizing: false,
-            continuity_dirty: false,
             last_send_at: None,
             was_working: false,
             finished_unseen: false,

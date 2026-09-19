@@ -97,6 +97,7 @@ impl OpenRouterClient {
                     advertise,
                     mcp_tools,
                     image_ctx,
+                    max_tokens,
                     tx,
                 )
                 .await;
@@ -107,7 +108,7 @@ impl OpenRouterClient {
         if conn.api_type == ApiType::CommandCode {
             return self
                 .commandcode_stream_complete(
-                    conn, &bearer, model, messages, advertise, mcp_tools, image_ctx, tx,
+                    conn, &bearer, model, messages, advertise, mcp_tools, image_ctx, max_tokens, tx,
                 )
                 .await;
         }
@@ -292,6 +293,7 @@ impl OpenRouterClient {
                             advertise,
                             mcp_tools,
                             image_ctx,
+                            max_tokens,
                             tx,
                         )
                         .await;

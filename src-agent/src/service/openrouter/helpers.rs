@@ -3,7 +3,6 @@
 //! None of these are part of the public API; they exist here so the larger
 //! submodules (stream, oneshot) can share them without duplication.
 
-use anyhow::{anyhow, Result};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::config::{APP_TITLE, HTTP_REFERER};
@@ -68,44 +67,6 @@ pub(super) fn auth_headers_with_account(
     } else {
         rb
     }
-}
-
-/// Parse a rolling-summary reply (`{"summary": "<text>"}`) into the clean summary
-/// string. Shared by the chat-completions and Codex fold transports so both parse
-/// byte-identically. `Err("unparseable summary")` on non-JSON, a missing/empty
-/// `summary`, or a non-string value — the caller (`update_summary`) swallows the
-/// error, skipping one turn's summary rather than persisting garbage.
-pub(super) fn parse_summary(raw: &str) -> Result<String> {
-    let content = raw.trim();
-    let parsed: serde_json::Value =
-        serde_json::from_str(content).map_err(|_| anyhow!("unparseable summary"))?;
-    let summary = parsed
-        .get("summary")
-        .and_then(|v| v.as_str())
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow!("unparseable summary"))?;
-    Ok(summary.to_string())
-}
-
-/// Parse a blob-selection reply (`{"blob_ids": [<integer>, …]}`) into the id list.
-/// Shared by the chat-completions and Codex router transports so both parse
-/// byte-identically. Best-effort: an empty/non-JSON reply or a missing/ill-typed
-/// `blob_ids` yields an empty vec (the caller rehydrates nothing).
-pub(super) fn parse_blob_ids(raw: &str) -> Vec<i64> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return Vec::new();
-    }
-    let parsed: serde_json::Value = match serde_json::from_str(raw) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
-    parsed
-        .get("blob_ids")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|x| x.as_i64()).collect())
-        .unwrap_or_default()
 }
 
 /// Sanitise every accumulated tool call before the assembled set leaves the client.
@@ -283,42 +244,6 @@ pub(crate) fn interactive_max_tokens(endpoint: &str) -> u32 {
 
 /// Tokenizer / framing slack subtracted from context when clamping output budget.
 pub(crate) const OUTPUT_TOKEN_MARGIN: u64 = 1_024;
-
-/// Reserve enough room for a useful continuation before riding a warm cache.
-/// Explicit smaller output caps remain valid; direct xAI keeps its own budget.
-pub(crate) fn output_headroom_is_low(
-    settings_cap: u32,
-    endpoint: &str,
-    context_window: u64,
-    prompt_est_tokens: u64,
-) -> bool {
-    if is_xai(endpoint) {
-        return false;
-    }
-    let reserve = if settings_cap == 0 { 4_096 } else { settings_cap.min(4_096) };
-    prompt_est_tokens
-        .saturating_add(OUTPUT_TOKEN_MARGIN)
-        .saturating_add(u64::from(reserve)) > context_window
-}
-
-/// Main-turn guard after DRSS. Do not turn failed compaction into a silent
-/// one-token response; leave the stored conversation intact and explain recovery.
-pub(crate) fn checked_max_output_tokens(
-    settings_cap: u32,
-    endpoint: &str,
-    context_window: u64,
-    prompt_est_tokens: u64,
-) -> Result<u32> {
-    if output_headroom_is_low(settings_cap, endpoint, context_window, prompt_est_tokens) {
-        return Err(anyhow!(
-            "Insufficient context headroom after short-send (estimated prompt {} tokens, window {}). \
-             Conversation preserved. Configure an Awareness model to fold history, use /compact, \
-             or select a larger-context model before retrying.",
-            prompt_est_tokens, context_window
-        ));
-    }
-    Ok(effective_max_output_tokens(settings_cap, endpoint, context_window, prompt_est_tokens))
-}
 
 /// Interactive chat `max_tokens` after settings + (host-aware) context clamp.
 ///

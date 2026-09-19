@@ -258,6 +258,7 @@ pub fn truncate_after(session_dir: &Path, cut_id: i64) -> Result<()> {
           WHERE id = 1",
         rusqlite::params![last_kept],
     )?;
+    super::drss::reset(&tx, false)?;
     tx.commit()?;
     Ok(())
 }
@@ -367,6 +368,7 @@ pub fn search_messages(
 /// FTS search restricted to the folded region (`messages.id <= max_msg_id`).
 /// Prefers `user` then `assistant` hits (two-pass), capped at `limit` total.
 /// Used by short-send to rehydrate dialogue that never became a blob.
+#[allow(dead_code)] // Legacy capped archive query, retained for archive inspection.
 pub fn search_messages_before(
     session_dir: &Path,
     raw_query: &str,

@@ -42,4 +42,4 @@ pub use types::{Conn, EffortCaps};
 // but needs to reach `app::runtime::commands::effort` — see its doc comment.
 pub(crate) use helpers::is_openrouter;
 // Interactive max_tokens context-safe clamp (stream/run + subagents).
-pub(crate) use helpers::{checked_max_output_tokens, effective_max_output_tokens, output_headroom_is_low};
+pub(crate) use helpers::effective_max_output_tokens;

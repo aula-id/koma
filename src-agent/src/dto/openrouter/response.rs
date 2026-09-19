@@ -51,6 +51,7 @@ pub struct ResponseMessage {
     #[serde(default)]
     pub content: Option<String>,
     #[serde(default, alias = "reasoning_content", alias = "thinking")]
+    #[allow(dead_code)] // Retained in the response DTO; never used as archive evidence.
     pub reasoning: Option<String>,
     /// OpenRouter `reasoning_details` array on a non-streaming assistant message.
     /// Captured verbatim so a reasoning model's chain-of-thought (incl. load-bearing
