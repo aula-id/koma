@@ -246,19 +246,20 @@ fn stub_one_message(m: &mut ChatMessage, blob: Option<&msglog::BlobRef>) {
     if msg_tok_est(m) < WIRE_STUB_TOKENS {
         return;
     }
-    let snippet: String = match blob {
-        Some(b) if !b.snippet.trim().is_empty() => b.snippet.trim().to_string(),
+    // Without an indexed source there is no reliable way to recover the body.
+    let Some(blob) = blob else { return };
+    let snippet: String = match blob.snippet.trim() {
+        s if !s.is_empty() => s.to_string(),
         _ => m.content.chars().take(250).collect(),
     };
-    let head = match blob {
-        Some(b) => format!(
-            "[wire stub | blob #{} | msg_id={} | kind={} | status=evidence]\n",
-            b.id, b.msg_id, b.kind
-        ),
-        None => "[wire stub | kind=large | stored-rail only]\n".to_string(),
-    };
+    let head = format!(
+        "[wire stub | blob #{} | msg_id={} | kind={} | status=evidence]\n",
+        blob.id, blob.msg_id, blob.kind
+    );
     m.content = format!(
-        "{head}{snippet}\n(full body on stored rail; use message_find / archive)"
+        "{head}{snippet}\n(full body on stored rail; read with \
+         message_find({{\"message_id\":{},\"offset\":0,\"limit\":3000}}), \
+         then follow next_offset until null)", blob.msg_id
     );
 }
 
@@ -277,9 +278,16 @@ fn stub_heavy_wire_tail(tail: &mut [ChatMessage], session_dir: &Path) {
         Vec::new()
     };
     for t in tail.iter_mut() {
+        let role = match t.role {
+            Role::System => "system",
+            Role::User => "user",
+            Role::Assistant => "assistant",
+            Role::Tool => "tool",
+        };
         let blob = archived
             .iter()
-            .find(|a| a.content == t.content)
+            .rev()
+            .find(|a| a.content == t.content && a.role == role)
             .and_then(|a| blobs.iter().find(|b| b.msg_id == a.id));
         stub_one_message(t, blob);
     }
@@ -727,7 +735,11 @@ mod tests {
     #[test]
     fn stub_rewrites_fat_tool() {
         let mut t = msg(Role::Tool, &"dump".repeat(2_000));
-        stub_one_message(&mut t, None);
+        let blob = msglog::BlobRef {
+            id: 7, msg_id: 7, kind: "tool_output".into(),
+            token_est: 2000, snippet: "dump preview".into(),
+        };
+        stub_one_message(&mut t, Some(&blob));
         assert!(t.content.contains("wire stub"));
         assert!(t.content.contains("stored rail"));
         assert!(t.content.len() < 1_000);

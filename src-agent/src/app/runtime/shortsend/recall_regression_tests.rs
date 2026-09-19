@@ -13,6 +13,34 @@ impl Archive {
         msglog::append(&self.0, role, content, None, None).unwrap();
         ChatMessage::new(role, content)
     }
+
+    fn tool_ctx(&self) -> crate::tool::ToolCtx {
+        crate::tool::ToolCtx {
+            workspace: self.0.clone(),
+            workspaces: vec![self.0.clone()],
+            dir_cache: std::sync::Arc::new(
+                std::sync::RwLock::new(crate::tool::DirCache::default()),
+            ),
+            memory_dir: None,
+            worktrees_dir: None,
+            download_dir: None,
+            scratch_dir: None,
+            internet_mode: Default::default(),
+            ssh_key: None,
+            skill_registry: None,
+            active_skill_names: None,
+            active_skill_dirs: Vec::new(),
+            mcp_manager: None,
+            sec_manager: None,
+            bash_saving: true,
+            bash_log_dir: None,
+            session_dir: Some(self.0.clone()),
+            allow_scratch: true,
+            sdlc_assess: false,
+            sdlc_active_node_id: None,
+            search_engine: None,
+        }
+    }
 }
 
 impl Drop for Archive {
@@ -71,4 +99,85 @@ fn watermark_span_can_exceed_hot_message_limit() {
         .collect();
     assert_eq!(hot_keep_n(&body, 150, 40, 8000), 150);
     assert!(hot_keep_n(&body, 1, 40, 8000) < 40);
+}
+
+#[test]
+fn live_stub_round_trips_through_message_find_pages() {
+    use crate::tool::Tool;
+    for payload in ["工具\n", "工具\0\n"] {
+        let archive = Archive::new();
+        let body = format!("{}\nexact_result=42", payload.repeat(2300));
+        let mut message = archive.append(Role::Tool, &body);
+        let blob = msglog::list_blobs(&archive.0).pop().unwrap();
+        stub_one_message(&mut message, Some(&blob));
+        assert!(!message.content.contains("exact_result=42"));
+        assert!(message
+            .content
+            .contains(&format!("\"message_id\":{}", blob.msg_id)));
+        let mut offset = 0;
+        let mut restored = String::new();
+        loop {
+            let output = crate::tool::history::MessageFind
+                .run(
+                    &archive.tool_ctx(),
+                    &serde_json::json!({
+                        "message_id": blob.msg_id, "offset": offset,
+                    }),
+                )
+                .unwrap();
+            let (header, content) = output.split_once('\n').unwrap();
+            let header: serde_json::Value = serde_json::from_str(header).unwrap();
+            assert_eq!(header["offset"], offset);
+            assert!(msg_tok_est(&ChatMessage::new(Role::Tool, &output)) < WIRE_STUB_TOKENS);
+            restored.push_str(content);
+            match header["next_offset"].as_i64() {
+                Some(next) => {
+                    assert!(next > offset);
+                    offset = next;
+                }
+                None => break,
+            }
+        }
+        assert_eq!(restored, body);
+        assert_eq!(
+            msglog::fetch_blob_content(&archive.0, blob.msg_id).unwrap(),
+            body
+        );
+    }
+}
+
+#[test]
+fn exact_message_reads_reject_ambiguous_or_invalid_requests() {
+    use crate::tool::Tool;
+    let archive = Archive::new();
+    archive.append(Role::User, "short body");
+    for args in [
+        serde_json::json!({"message_id": 1, "scope": "project"}),
+        serde_json::json!({"message_id": 1, "query": "body"}),
+        serde_json::json!({"message_id": 1, "offset": -1}),
+        serde_json::json!({"message_id": 1, "offset": i64::MAX}),
+        serde_json::json!({"message_id": 1, "offset": 100}),
+        serde_json::json!({"message_id": 1, "limit": 3001}),
+        serde_json::json!({"message_id": 1, "limit": 0}),
+        serde_json::json!({"message_id": 999}),
+    ] {
+        assert!(crate::tool::history::MessageFind
+            .run(&archive.tool_ctx(), &args)
+            .is_err());
+    }
+    let other_session = Archive::new();
+    assert!(crate::tool::history::MessageFind
+        .run(
+            &other_session.tool_ctx(),
+            &serde_json::json!({"message_id": 1})
+        )
+        .is_err());
+}
+
+#[test]
+fn unindexed_body_is_never_stubbed() {
+    let content = "unarchived evidence ".repeat(400);
+    let mut message = ChatMessage::new(Role::Tool, &content);
+    stub_one_message(&mut message, None);
+    assert_eq!(message.content, content);
 }

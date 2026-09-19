@@ -15,6 +15,9 @@ use super::{Tool, ToolCtx};
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
+#[path = "history_page.rs"]
+mod page;
+
 /// Hard wall-clock budget for one search. On timeout the turn unparks with an
 /// error and a deterministic FTS/panic diagnosis + repair runs (no AI).
 const MESSAGE_FIND_TIMEOUT: Duration = Duration::from_secs(20);
@@ -76,6 +79,9 @@ impl Tool for MessageFind {
          session only; pass scope \"project\" to search all sessions sharing \
          this working-directory bucket. Returns up to 10 results with message \
          id, role, and the first 300 characters of the matching message. \
+         To read a complete current-session message, pass message_id instead of \
+         query, with an optional character offset and limit (maximum 3000). \
+         Follow next_offset to retrieve further pages. \
          When a hit snippet contains [Image #N], appends a reload path so you \
          can call load_image to re-inspect. Project-scope hits are tagged with \
          session name/id (message ids are per-session). Query is limited to 5 \
@@ -95,6 +101,18 @@ impl Tool for MessageFind {
                     "type": "string",
                     "description": "At most 5 search words (extra words ignored). Multi-word queries are OR'd as prefix matches (e.g. \"foo bar\" → foo* OR bar*). Prefer short precise terms."
                 },
+                "message_id": {
+                    "type": "integer", "minimum": 1,
+                    "description": "Read this current-session message by id instead of searching."
+                },
+                "offset": {
+                    "type": "integer", "minimum": 0,
+                    "description": "Zero-based character offset for message_id; default 0."
+                },
+                "limit": {
+                    "type": "integer", "minimum": 1, "maximum": 3000,
+                    "description": "Characters per message_id page; default and maximum 3000."
+                },
                 "role": {
                     "type": "string",
                     "description": "Optional role filter: \"user\" for user messages, \"assistant\" for assistant messages, \"tool\" for tool results. Omit to search all roles.",
@@ -106,11 +124,16 @@ impl Tool for MessageFind {
                     "enum": ["session", "project"]
                 }
             },
-            "required": ["query"]
+            "anyOf": [{"required": ["query"]}, {"required": ["message_id"]}]
         })
     }
 
     fn run(&self, ctx: &ToolCtx, args: &Value) -> Result<String> {
+        if args.get("message_id").is_some() {
+            let session_dir = ctx.session_dir.as_deref()
+                .ok_or_else(|| anyhow::anyhow!("no active session to read"))?;
+            return page::read(session_dir, args);
+        }
         let query = args
             .get("query")
             .and_then(Value::as_str)
