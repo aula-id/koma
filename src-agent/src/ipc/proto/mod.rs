@@ -426,6 +426,8 @@ pub enum ClientRequest {
         short_send_tail_n: Option<i64>,
         /// Interactive chat max_tokens (0 = auto endpoint default). Soft max 1_000_000.
         max_output_tokens: Option<u32>,
+        context_window_limit: Option<u64>,
+        context_model_alias: Option<String>,
     },
 
     /// GUI composer EFFORT picker opened: derive the `/effort` menu for the
@@ -843,6 +845,10 @@ pub enum DaemonEvent {
         /// Interactive chat max_tokens (0 = auto). Default 0 for older peers.
         #[serde(default)]
         max_output_tokens: u32,
+        #[serde(default)]
+        context_window_limit: u64,
+        #[serde(default)]
+        context_model_alias: String,
     },
     /// One-shot reply to a [`ClientRequest::GetEffortOptions`]: the derived
     /// `/effort` menu for the foreground session's current model, from

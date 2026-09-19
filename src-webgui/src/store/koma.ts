@@ -151,6 +151,8 @@ export type SettingsValues = {
   shortSendTailN: number
   // Interactive chat max_tokens (0 = auto endpoint default).
   maxOutputTokens: number
+  contextWindowLimit: number
+  contextModelAlias: string
 }
 
 // The composer EffortPicker's latest GetEffortOptions reply (host
@@ -1125,6 +1127,8 @@ export type PushEnvelope =
       shortSendEngageN: number
       shortSendTailN: number
       maxOutputTokens?: number
+      contextWindowLimit?: number
+      contextModelAlias?: string
     }
   // Reply to GuiReq GetEffortOptions — the composer EffortPicker's derived
   // `/effort` menu for the foreground session's current model. ALWAYS a reply
@@ -3626,6 +3630,8 @@ export const useKoma = create<KomaState>((set, get) => ({
             shortSendEngageN: env.shortSendEngageN ?? 80,
             shortSendTailN: env.shortSendTailN ?? 40,
             maxOutputTokens: env.maxOutputTokens ?? 0,
+            contextWindowLimit: env.contextWindowLimit ?? 0,
+            contextModelAlias: env.contextModelAlias ?? '',
           },
           ...(s.ui.bootstrap ? { ui: updateBootstrap(s.ui, { settings: 'done' }) } : {}),
         }))

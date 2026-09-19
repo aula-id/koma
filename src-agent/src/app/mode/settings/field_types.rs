@@ -20,11 +20,14 @@ pub enum SettingField {
     /// Toggle: master kill-switch for the short-send token saver.
     ShortSendEnabled,
     /// Numeric: body message count that HOLDS DRSS engaged (sticky; not kick-in).
+    #[allow(dead_code)] // Legacy settings projection; hidden from the General page.
     ShortSendEngageN,
     /// Numeric: max verbatim body messages on the wire when short-send is engaged.
+    #[allow(dead_code)] // Legacy settings projection; hidden from the General page.
     ShortSendTailN,
     /// Toggle: cache-warmth-adaptive summarization. On only for models with a
     /// sliding/refreshing prompt cache (e.g. Anthropic).
+    #[allow(dead_code)] // Legacy settings projection; hidden from the General page.
     SlidingCache,
     /// Toggle: whether bash/git_operator save filtered output logs to disk.
     BashSaving,
@@ -76,9 +79,6 @@ pub const GENERAL_FIELDS: &[SettingField] = &[
     SettingField::ClassifierEnabled,
     SettingField::AllowedFolders,
     SettingField::ShortSendEnabled,
-    SettingField::ShortSendEngageN,
-    SettingField::ShortSendTailN,
-    SettingField::SlidingCache,
     SettingField::BashSaving,
     SettingField::CodingAutosave,
     SettingField::InternetMode,

@@ -443,13 +443,12 @@ function SessionSettings() {
   const [name, setName] = useState('')
   const [workdir, setWorkdir] = useState('')
   const [shortSend, setShortSend] = useState(true)
-  const [slidingCache, setSlidingCache] = useState(false)
   const [bashSaving, setBashSaving] = useState(true)
   const [codingAutosave, setCodingAutosave] = useState(false)
   const [internet, setInternet] = useState<'simple' | 'full'>('simple')
   const [maxTurns, setMaxTurns] = useState('500')
-  const [engageN, setEngageN] = useState('80')
-  const [tailN, setTailN] = useState('40')
+  const [contextLimit, setContextLimit] = useState('0')
+  const [contextAlias, setContextAlias] = useState('')
   const [maxOutTokens, setMaxOutTokens] = useState('0')
 
   useEffect(() => {
@@ -457,13 +456,12 @@ function SessionSettings() {
     setName(values.name)
     setWorkdir(values.workdir.join('\n'))
     setShortSend(values.shortSend)
-    setSlidingCache(values.slidingCache)
     setBashSaving(values.bashSaving)
     setCodingAutosave(values.codingAutosave)
     setInternet(values.internetMode === 'full' ? 'full' : 'simple')
     setMaxTurns(String(values.subagentMaxTurns ?? 500))
-    setEngageN(String(values.shortSendEngageN ?? 80))
-    setTailN(String(values.shortSendTailN ?? 40))
+    setContextLimit(String(values.contextWindowLimit ?? 0))
+    setContextAlias(values.contextModelAlias ?? '')
     setMaxOutTokens(String(values.maxOutputTokens ?? 0))
   }, [values])
 
@@ -497,10 +495,6 @@ function SessionSettings() {
     setShortSend(v)
     req({ r: 'SetPrefs', shortSend: v })
   }
-  const setSliding = (v: boolean) => {
-    setSlidingCache(v)
-    req({ r: 'SetPrefs', slidingCache: v })
-  }
   const setBash = (v: boolean) => {
     setBashSaving(v)
     req({ r: 'SetPrefs', bashSaving: v })
@@ -522,22 +516,16 @@ function SessionSettings() {
       req({ r: 'SetPrefs', subagentMaxTurns: safe })
     }
   }
-  // DRSS hold / tail: clamp ≥ 1; defaults 80 / 40 on invalid.
-  const commitEngageN = () => {
-    const n = parseInt(engageN, 10)
-    const safe = isNaN(n) || n < 1 ? 80 : n
-    setEngageN(String(safe))
-    if (safe !== (values.shortSendEngageN ?? 80)) {
-      req({ r: 'SetPrefs', shortSendEngageN: safe })
-    }
+  const commitContextLimit = () => {
+    const n = parseInt(contextLimit, 10)
+    const safe = isNaN(n) || n < 0 ? 0 : Math.min(n, 300_000)
+    setContextLimit(String(safe))
+    if (safe !== (values.contextWindowLimit ?? 0)) req({ r: 'SetPrefs', contextWindowLimit: safe })
   }
-  const commitTailN = () => {
-    const n = parseInt(tailN, 10)
-    const safe = isNaN(n) || n < 1 ? 40 : n
-    setTailN(String(safe))
-    if (safe !== (values.shortSendTailN ?? 40)) {
-      req({ r: 'SetPrefs', shortSendTailN: safe })
-    }
+  const commitContextAlias = () => {
+    const alias = contextAlias.trim().slice(0, 200)
+    setContextAlias(alias)
+    if (alias !== (values.contextModelAlias ?? '')) req({ r: 'SetPrefs', contextModelAlias: alias })
   }
   // Interactive max_tokens: 0 = auto; soft max 1_000_000.
   const commitMaxOutTokens = () => {
@@ -583,20 +571,21 @@ function SessionSettings() {
         />
       </SettingRow>
 
-      <SettingRow label="Short-send" desc="Compress older turns into a rolling summary before each send to cut token cost.">
+      <SettingRow label="Short-send" desc="Use a deterministic archive index and recent context for outgoing requests. Target 60%, ceiling 75%, with a 300k maximum model window.">
         <Toggle on={shortSend} onChange={setShort} />
       </SettingRow>
 
       <SettingRow
-        label="DRSS hold after"
-        desc="Once engaged by tokens, stay engaged while body messages exceed this count (sticky hold, not kick-in). Default: 80."
+        label="Context window limit"
+        desc="0 = automatic OpenRouter estimate. Set a smaller token limit if your provider supports less context."
       >
         <input
           type="number"
-          min={1}
-          value={engageN}
-          onChange={(e) => setEngageN(e.target.value.replace(/[^0-9]/g, ''))}
-          onBlur={commitEngageN}
+          min={0}
+          max={300000}
+          value={contextLimit}
+          onChange={(e) => setContextLimit(e.target.value.replace(/[^0-9]/g, ''))}
+          onBlur={commitContextLimit}
           onKeyDown={(e) => {
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
           }}
@@ -605,25 +594,25 @@ function SessionSettings() {
       </SettingRow>
 
       <SettingRow
-        label="DRSS tail messages"
-        desc="Max verbatim body messages kept on the wire when short-send is engaged (and a summary exists). Default: 40."
+        label="Context model alias"
+        desc="Optional OpenRouter model ID for context detection, such as anthropic/claude-sonnet-4. Leaves the selected chat model unchanged."
       >
         <input
-          type="number"
-          min={1}
-          value={tailN}
-          onChange={(e) => setTailN(e.target.value.replace(/[^0-9]/g, ''))}
-          onBlur={commitTailN}
+          type="text"
+          maxLength={200}
+          value={contextAlias}
+          onChange={(e) => setContextAlias(e.target.value)}
+          onBlur={commitContextAlias}
           onKeyDown={(e) => {
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
           }}
-          className="w-24 rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[12px] text-koma-fg outline-none focus:border-koma-grip"
+          className="w-72 rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[12px] text-koma-fg outline-none focus:border-koma-grip"
         />
       </SettingRow>
 
       <SettingRow
         label="Max out tokens"
-        desc="Interactive completion max_tokens. 0 = auto (32k general / 256k direct xAI). Always clamped so prompt + max + margin fit the model context window."
+        desc="Requested reply tokens. Auto = 32k (256k on direct xAI), limited by available context and provider metadata. Codex OAuth controls its own output limit."
       >
         <input
           type="number"
@@ -636,10 +625,6 @@ function SessionSettings() {
           }}
           className="w-24 rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[12px] text-koma-fg outline-none focus:border-koma-grip"
         />
-      </SettingRow>
-
-      <SettingRow label="Sliding cache" desc="Adapt summarisation when the provider's prompt cache goes cold (e.g. Anthropic).">
-        <Toggle on={slidingCache} onChange={setSliding} />
       </SettingRow>
 
       <SettingRow label="Bash shorts" desc="Filter and tee bash / git output to disk to preserve command logs.">

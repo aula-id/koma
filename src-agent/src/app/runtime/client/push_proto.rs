@@ -478,6 +478,10 @@ pub(super) enum PushEnvelope {
         /// Interactive chat max_tokens (0 = auto). Default 0 for older peers.
         #[serde(default)]
         max_output_tokens: u32,
+        #[serde(default)]
+        context_window_limit: u64,
+        #[serde(default)]
+        context_model_alias: String,
     },
     /// One-shot reply to a `GetAgents` (and the re-push after a `SetAgent` / `DeleteAgent`):
     /// the merged sub-agent registry + model / provider catalogue for the GUI /agents
@@ -1098,6 +1102,8 @@ pub(super) fn push_settings_values(
     short_send_engage_n: i64,
     short_send_tail_n: i64,
     max_output_tokens: u32,
+    context_window_limit: u64,
+    context_model_alias: String,
 ) {
     super::render::emit(
         push,
@@ -1115,6 +1121,8 @@ pub(super) fn push_settings_values(
             short_send_engage_n,
             short_send_tail_n,
             max_output_tokens,
+            context_window_limit,
+            context_model_alias,
         },
     );
 }

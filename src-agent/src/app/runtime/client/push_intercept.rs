@@ -91,6 +91,8 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
         short_send_engage_n,
         short_send_tail_n,
         max_output_tokens,
+        context_window_limit,
+        context_model_alias,
     } = &frame.event
     {
         let env = PushEnvelope::SettingsValues {
@@ -107,6 +109,8 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             short_send_engage_n: *short_send_engage_n,
             short_send_tail_n: *short_send_tail_n,
             max_output_tokens: *max_output_tokens,
+            context_window_limit: *context_window_limit,
+            context_model_alias: context_model_alias.clone(),
         };
         if let Ok(json) = serde_json::to_string(&env) {
             push(json);

@@ -207,6 +207,8 @@ fn apply_run_setup(conn: &Connection, cli: &RunCli) -> Result<()> {
                 short_send_engage_n: None,
                 short_send_tail_n: None,
                 max_output_tokens: Some(n.min(1_000_000)),
+                context_window_limit: None,
+                context_model_alias: None,
             })
             .context("SetSessionPrefs max_output_tokens")?;
     }

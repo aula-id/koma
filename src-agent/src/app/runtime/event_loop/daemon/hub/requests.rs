@@ -509,6 +509,8 @@ impl DaemonHub {
                 short_send_engage_n,
                 short_send_tail_n,
                 max_output_tokens,
+                context_window_limit,
+                context_model_alias,
             } => {
                 self.set_session_prefs(
                     idx,
@@ -523,6 +525,8 @@ impl DaemonHub {
                     short_send_engage_n,
                     short_send_tail_n,
                     max_output_tokens,
+                    context_window_limit,
+                    context_model_alias,
                 );
             }
 
@@ -836,6 +840,8 @@ impl DaemonHub {
             short_send_engage_n: s.short_send_engage_n,
             short_send_tail_n: s.short_send_tail_n,
             max_output_tokens: s.max_output_tokens,
+            context_window_limit: s.context_window_limit,
+            context_model_alias: s.context_model_alias.clone(),
         };
         self.send_to(idx, event);
     }

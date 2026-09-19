@@ -231,6 +231,8 @@ declare global {
         shortSendEngageN?: number
         shortSendTailN?: number
         maxOutputTokens?: number
+        contextWindowLimit?: number
+        contextModelAlias?: string
       }
     // Composer EFFORT pill opened: fetch the derived `/effort` menu (TUI
     // parity) for the foreground session's current model. Attached-only (like
