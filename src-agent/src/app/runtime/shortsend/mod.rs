@@ -31,9 +31,11 @@
 //! router (reasoning OFF) judges relevant to the current question. It reads sqlite
 //! and builds a NEW `Vec<ChatMessage>` — it never touches the live `Conversation`,
 //! `messages.json`, or the rendered transcript (dual rail: only the wire payload is
-//! compressed). Missing/empty summary fail-opens to full history (no emergency
-//! clip). The send path applies it inside the spawned stream task, just before the
-//! request is POSTed.
+//! compressed). Missing/empty summary fail-opens to full history **when the
+//! wire still fits**. If it would overflow, that is fold debt: force one more
+//! fold, then fail-open only if a log still cannot be written (never
+//! emergency-clip without a continuity log). The send path applies it inside
+//! the spawned stream task, just before the request is POSTed.
 
 mod fold;
 mod goal;
@@ -146,6 +148,20 @@ pub(crate) fn estimate_prompt_tokens_for_max_clamp(history: &[ChatMessage]) -> u
     (chars * 2 / 5).saturating_add(WIRE_FRAMING_PAD)
 }
 
+/// Slack for "will this POST even fit?" — same order as the output-budget clamp.
+pub(crate) const FOLD_DEBT_MARGIN: u64 = 1_024;
+
+/// True when a fail-open of `history` would not fit the model window.
+///
+/// `usable = window - BASE_OVERHEAD`, so window is reconstructed the same way
+/// `start_stream_task` built it. High-bias prompt est: we would rather force
+/// a fold than 400.
+pub(crate) fn wire_would_overflow(history: &[ChatMessage], usable: u64) -> bool {
+    let window = usable.saturating_add(BASE_OVERHEAD);
+    let est = estimate_prompt_tokens_for_max_clamp(history);
+    est.saturating_add(FOLD_DEBT_MARGIN) >= window
+}
+
 // Re-export the public API so callers outside this module use the same paths
 // as before the split.
 pub use goal::{
@@ -190,5 +206,22 @@ mod tests {
     fn hysteresis_holds_in_dead_zone() {
         // Was on, neither exit_tok nor enter — stay on.
         assert!(sticky_summarizing(true, false, false, false));
+    }
+
+    #[test]
+    fn wire_overflow_false_when_small() {
+        let h = vec![ChatMessage::new(Role::System, "sys"), ChatMessage::new(Role::User, "hi")];
+        assert!(!wire_would_overflow(&h, 100_000));
+    }
+
+    #[test]
+    fn wire_overflow_true_when_fat_prompt() {
+        // ~80k chars → high-bias est well over a tiny usable window.
+        let fat = "x".repeat(80_000);
+        let h = vec![
+            ChatMessage::new(Role::System, &fat),
+            ChatMessage::new(Role::User, &fat),
+        ];
+        assert!(wire_would_overflow(&h, 8_000));
     }
 }

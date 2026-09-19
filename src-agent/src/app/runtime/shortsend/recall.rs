@@ -9,9 +9,11 @@
 //! hot body transcript (token/exchange window, floor = short_send_tail_n)
 //! ```
 //!
-//! Priority: **live tail > current objective > continuity log > archive**. Missing summary,
-//! kill-switch, not engaged, and post-`/compact` all fail-open to full history.
-//! Display / on-disk conversation are never mutated (dual rail).
+//! Priority: **live tail > current objective > continuity log > archive**. Missing
+//! summary fail-opens to full history only while the wire still fits. Overflow
+//! without a log is **fold debt** (force one more fold); still no summary →
+//! fail-open, never emergency-clip. Kill-switch, not engaged, and post-`/compact`
+//! fail-open as before. Display / on-disk conversation are never mutated (dual rail).
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -319,11 +321,24 @@ pub async fn shape(
         }
     }
 
-    let sum = msglog::read_summary(session_dir);
-    let has_summary = sum
+    let mut sum = msglog::read_summary(session_dir);
+    let mut has_summary = sum
         .as_ref()
         .map(|s| !s.text.trim().is_empty())
         .unwrap_or(false);
+    // Fold debt: no continuity log AND the full wire would not fit → force
+    // one more fold (band no-op / swallowed error). Still no log → fail-open.
+    // Never emergency-clip without a summary (that starved cognition before).
+    if !has_summary && super::wire_would_overflow(&history, usable) {
+        if let Some(route) = route.as_ref() {
+            let _ = update_summary_forced(session_dir, client, route, usable, tail_floor).await;
+            sum = msglog::read_summary(session_dir);
+            has_summary = sum
+                .as_ref()
+                .map(|s| !s.text.trim().is_empty())
+                .unwrap_or(false);
+        }
+    }
     if !has_summary {
         return history;
     }
