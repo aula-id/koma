@@ -575,7 +575,8 @@ async fn stream_step(
     // Owned clone of the inherited MCP tool defs, moved into the task alongside
     // `advertise` (same pattern — see doc comment above `stream_step`).
     let mcp_tools = mcp_tools.to_vec();
-    let prompt_est = crate::app::runtime::shortsend::estimate_conv_tokens(&history);
+    let prompt_est =
+        crate::app::runtime::shortsend::estimate_prompt_tokens_for_max_clamp(&history);
     let max_tokens = crate::service::openrouter::effective_max_output_tokens(
         settings_cap,
         &endpoint,

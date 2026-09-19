@@ -757,21 +757,18 @@ over sec_remote (stateful socket).\n",
     advertise.retain(|name| advertised_names.insert(name.clone()));
 
     let agent_steps = state.rest.sessions[sess_idx].agent_steps;
-    // Interactive max_tokens: settings cap (0=auto) clamped to remaining context.
-    // Uses pre-reshape conv_tokens (conservative if reshape shrinks the prompt).
+    // Interactive max_tokens settings (0=auto). Actual clamp runs AFTER reshape
+    // inside the spawn on the wire history — pre-reshape body/4 under-counts
+    // (system + tool schemas + code density) and still 400'd on vLLM with 8k.
     let max_output_settings = reshape
         .as_ref()
         .map(|(_, settings, _, _, _, _)| settings.max_output_tokens)
         .unwrap_or(0);
-    let max_tokens = {
-        let endpoint = main.as_ref().map(|m| m.endpoint.as_str()).unwrap_or("");
-        crate::service::openrouter::effective_max_output_tokens(
-            max_output_settings,
-            endpoint,
-            window,
-            conv_tokens,
-        )
-    };
+    let clamp_endpoint = main
+        .as_ref()
+        .map(|m| m.endpoint.clone())
+        .unwrap_or_default();
+    let clamp_window = window;
     let (tx, rx) = mpsc::unbounded_channel();
     state.rest.sessions[sess_idx].active_rx = Some(rx);
     let Some(c) = client.as_ref().cloned() else {
@@ -816,6 +813,17 @@ over sec_remote (stateful socket).\n",
             }
             None => history,
         };
+        // Clamp max_tokens against the POST body we actually send (post-reshape),
+        // with a high-biased prompt estimate so strict hosts never see
+        // prompt + max_tokens > context.
+        let prompt_est =
+            super::super::shortsend::estimate_prompt_tokens_for_max_clamp(&history);
+        let max_tokens = crate::service::openrouter::effective_max_output_tokens(
+            max_output_settings,
+            &clamp_endpoint,
+            clamp_window,
+            prompt_est,
+        );
         // Send on the resolved MAIN route: its connection (endpoint + key), model
         // id, upstream-route slug, and effort. The owned `Resolved` was moved into
         // this task; borrow it for the call. A `None` (no session) can't reach here

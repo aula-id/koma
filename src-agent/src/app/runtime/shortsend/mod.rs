@@ -88,11 +88,9 @@ pub(super) fn sticky_summarizing(
 
 use crate::dto::chat::{ChatMessage, Role};
 
-/// Estimate the conversation's token cost from an API-bound history slice:
-/// `~4 chars/token` over each message's content plus its tool-call arguments
-/// (often the bulk of a turn). This is the SAME estimate shape the engage gate
-/// uses; `start_stream_task` calls it to size the conversation against `usable`
-/// before deciding whether to summarize. No tokenizer needed — fast + cheap.
+/// Estimate conversation tokens for DRSS engage (body only, ~4 chars/token).
+/// Deliberately excludes System (counted in [`BASE_OVERHEAD`]) so the engage
+/// gate is not double-charged.
 pub(crate) fn estimate_conv_tokens(history: &[ChatMessage]) -> u64 {
     history
         .iter()
@@ -112,6 +110,40 @@ pub(crate) fn estimate_conv_tokens(history: &[ChatMessage]) -> u64 {
             base + args
         })
         .sum()
+}
+
+/// Conservative prompt-token estimate for interactive `max_tokens` room clamp.
+///
+/// Unlike [`estimate_conv_tokens`] (engage-oriented, body-only, ~4 chars/token),
+/// this MUST NOT under-count: strict hosts (vLLM) 400 when
+/// `prompt + max_tokens > context`. Live CyberGym smoke saw body/4 ≈ 71k while
+/// the provider measured ≥122k (system + tool schemas + denser code tokens).
+///
+/// Bias slightly high vs engage:
+/// - **all** roles (including System)
+/// - ~2.5 chars/token (`*2/5`) — denser than 4 cpt for code/tool dumps
+/// - small pad for tool JSON schemas not present in `history` content
+pub(crate) fn estimate_prompt_tokens_for_max_clamp(history: &[ChatMessage]) -> u64 {
+    /// Tool defs / wire framing absent from message content (tokens).
+    /// Sized so a CyberGym fat prompt (provider ≥122k on ~284k chars) leaves
+    /// room < 8k and the clamp actually fires (live 400 was 122881+8192>131072).
+    const WIRE_FRAMING_PAD: u64 = 12_000;
+    let chars: u64 = history
+        .iter()
+        .map(|m| {
+            let base = m.content.chars().count() as u64;
+            let args: u64 = m
+                .tool_calls
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .map(|tc| tc.function.arguments.chars().count() as u64)
+                .sum();
+            base + args
+        })
+        .sum();
+    // 2/5 ≈ 0.4 tokens/char ≈ 2.5 chars/token.
+    (chars * 2 / 5).saturating_add(WIRE_FRAMING_PAD)
 }
 
 // Re-export the public API so callers outside this module use the same paths
