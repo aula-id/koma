@@ -284,16 +284,24 @@ pub(crate) fn interactive_max_tokens(endpoint: &str) -> u32 {
 /// Tokenizer / framing slack subtracted from context when clamping output budget.
 pub(crate) const OUTPUT_TOKEN_MARGIN: u64 = 1_024;
 
-/// Interactive chat `max_tokens` after settings + context-room clamp.
+/// Interactive chat `max_tokens` after settings + (host-aware) context clamp.
 ///
 /// ```text
 /// cap = settings_cap > 0 ? settings_cap : interactive_max_tokens(endpoint)
+///
+/// // Direct xAI (api.x.ai): NO room clamp — pre-feature behaviour.
+/// // Auto stays 256k; explicit settings_cap is honored as-is. xAI context is
+/// // multi-hundred-k / 2M-class and our window fallback is often 128k with no
+/// // overlay context_length, which would starve Grok agentic turns if clamped.
+///
+/// // Everyone else (OpenRouter, vLLM, DeepSeek, …):
 /// room = context_window.saturating_sub(prompt_est).saturating_sub(MARGIN)
 /// effective = min(cap, room).max(1)
 /// ```
 ///
-/// Always returns ≥ 1. When room is exhausted the wire still sends 1 so the
-/// request is well-formed; the provider may still refuse an oversize prompt.
+/// Always returns ≥ 1. When room is exhausted on clamped hosts the wire still
+/// sends 1 so the request is well-formed; the provider may still refuse an
+/// oversize prompt.
 pub(crate) fn effective_max_output_tokens(
     settings_cap: u32,
     endpoint: &str,
@@ -305,6 +313,11 @@ pub(crate) fn effective_max_output_tokens(
     } else {
         interactive_max_tokens(endpoint)
     };
+    // xAI OAuth/API: keep historical large output budget. Room clamp used a
+    // 128k DRSS fallback / empty overlay ctx and broke Grok continuity.
+    if is_xai(endpoint) {
+        return cap.max(1);
+    }
     let room = context_window
         .saturating_sub(prompt_est_tokens)
         .saturating_sub(OUTPUT_TOKEN_MARGIN);

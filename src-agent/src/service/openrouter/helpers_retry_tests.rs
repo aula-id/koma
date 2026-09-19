@@ -64,25 +64,35 @@ fn effective_max_output_tokens_table() {
         effective_max_output_tokens(0, or, 131_072, 10_000),
         32_000
     );
-    // Auto xAI 256k when room allows.
+    // Auto xAI 256k — passthrough even when window is the 128k DRSS fallback
+    // (pre-feature behaviour; room clamp would starve Grok).
+    assert_eq!(
+        effective_max_output_tokens(0, xai, 128_000, 80_000),
+        256_000
+    );
     assert_eq!(
         effective_max_output_tokens(0, xai, 300_000, 10_000),
         256_000
     );
-    // User 8k honored when room large.
+    // Explicit xAI settings also skip room clamp.
+    assert_eq!(
+        effective_max_output_tokens(512_000, xai, 128_000, 80_000),
+        512_000
+    );
+    // User 8k honored when room large (non-xAI).
     assert_eq!(
         effective_max_output_tokens(8_192, or, 131_072, 10_000),
         8_192
     );
-    // Fat prompt clamps below 32k: room = 131072 - 99073 - 1024 = 30975.
+    // Fat prompt clamps below 32k on strict hosts: room = 131072 - 99073 - 1024 = 30975.
     assert_eq!(
         effective_max_output_tokens(0, or, 131_072, 99_073),
         30_975
     );
-    // prompt + max + margin ≤ window.
+    // prompt + max + margin ≤ window (non-xAI).
     let eff = effective_max_output_tokens(0, or, 131_072, 99_073);
     assert!(99_073 + u64::from(eff) + OUTPUT_TOKEN_MARGIN <= 131_072);
-    // Room exhausted → 1.
+    // Room exhausted → 1 (non-xAI).
     assert_eq!(
         effective_max_output_tokens(32_000, or, 131_072, 200_000),
         1
