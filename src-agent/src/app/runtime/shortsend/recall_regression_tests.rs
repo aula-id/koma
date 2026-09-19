@@ -181,3 +181,28 @@ fn unindexed_body_is_never_stubbed() {
     stub_one_message(&mut message, None);
     assert_eq!(message.content, content);
 }
+
+#[test]
+fn tiny_window_preserves_complete_live_tool_round() {
+    let call = |id: &str| {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "type": "function",
+            "function": {"name": "read", "arguments": "{\"path\":\"file.txt\"}"},
+        }))
+        .unwrap()
+    };
+    let body = vec![
+        ChatMessage::new(Role::User, "current task"),
+        ChatMessage::assistant_with_tools(String::new(), vec![call("a"), call("b")]),
+        ChatMessage::tool_result("a".into(), "x".repeat(8000)),
+        ChatMessage::tool_result("b".into(), "y".repeat(8000)),
+    ];
+    // Even if a restored watermark places the cut inside this round, its
+    // assistant and every tool response must survive together.
+    let keep = hot_keep_n(&body, 1, 1, 8000);
+    assert_eq!(keep, 3);
+    assert_eq!(&body[body.len() - keep..], &body[1..]);
+    for requested in 1..=3 {
+        assert_eq!(snap_keep_to_round(&body, requested), 3);
+    }
+}

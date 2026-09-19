@@ -207,30 +207,22 @@ fn hot_keep_n(body: &[ChatMessage], after_wm: usize, tail_floor: usize, usable: 
     }
 
     keep = keep.max(1).min(n);
-    snap_keep_to_round(body, keep).max(wm_keep)
+    snap_keep_to_round(body, keep)
 }
 
-/// Move the cut forward (keep fewer older msgs) so the window opens on a user
-/// or assistant — never a dangling tool result. One-user agentic tails have no
-/// later user to snap to; an assistant that started the tool-round is enough.
-/// Never increases keep.
+/// Expand the window back to the opening assistant when the cut lands inside
+/// a tool round. Never discard part of the round to satisfy a token preference;
+/// this also preserves the assistant's tool arguments and replay metadata.
 fn snap_keep_to_round(body: &[ChatMessage], keep: usize) -> usize {
     let n = body.len();
-    if keep >= n || keep == 0 {
-        return keep.min(n).max(1);
+    if n == 0 {
+        return 1;
     }
-    let start = n - keep;
-    match body[start].role {
-        Role::User | Role::Assistant => keep,
-        Role::Tool | Role::System => {
-            for i in start + 1..n {
-                if matches!(body[i].role, Role::User | Role::Assistant) {
-                    return n - i;
-                }
-            }
-            keep
-        }
+    let mut start = n.saturating_sub(keep.max(1));
+    while start > 0 && matches!(body[start].role, Role::Tool | Role::System) {
+        start -= 1;
     }
+    n - start
 }
 
 /// ~1000 tokens at 4 chars/token. One fat `cat` / tool dump on the hot tail.
@@ -755,9 +747,9 @@ mod tests {
             msg(Role::User, "u1"),
             msg(Role::Assistant, "a2"),
         ];
-        // keep=4 would start at tool t0 (index 2); snap to the next assistant (a1).
+        // keep=4 starts at t0; retain its opening assistant a0 as well.
         let k = snap_keep_to_round(&body, 4);
-        assert_eq!(k, 3);
+        assert_eq!(k, 5);
         assert_eq!(body[body.len() - k].role, Role::Assistant);
     }
 
@@ -770,9 +762,9 @@ mod tests {
             msg(Role::Assistant, "a1"),
             msg(Role::Tool, "t1"),
         ];
-        // keep=3 starts at t0; snap forward to a1 (keep=2) — not "no user, leave it".
+        // keep=3 starts at t0; expand to a0 without dropping either round.
         let k = snap_keep_to_round(&body, 3);
-        assert_eq!(k, 2);
+        assert_eq!(k, 4);
         assert_eq!(body[body.len() - k].role, Role::Assistant);
     }
 
