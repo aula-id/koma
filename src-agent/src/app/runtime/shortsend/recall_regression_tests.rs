@@ -261,3 +261,44 @@ fn multilingual_trajectory_respects_character_budget() {
     assert!(trajectory.contains("工具日志"));
     assert!(trajectory.contains("🦀 café résumé"));
 }
+
+#[tokio::test]
+async fn full_blob_replaces_fts_excerpt_for_the_same_message() {
+    let archive = Archive::new();
+    let body = format!(
+        "{} focusneedle exact_archived_result=42",
+        "old material ".repeat(200)
+    );
+    let mut history = vec![ChatMessage::new(Role::System, "system")];
+    history.push(archive.append(Role::User, &body));
+    history.push(archive.append(Role::Assistant, "acknowledged"));
+    msglog::write_summary(&archive.0, "Prior exchange complete.", 2, 5).unwrap();
+    history.push(archive.append(Role::User, "focusneedle"));
+    history.push(archive.append(Role::Assistant, &"current work ".repeat(100)));
+    let hits = msglog::search_messages_before(&archive.0, "focusneedle", 2, 4).unwrap();
+    assert_eq!(hits[0].id, 1);
+    assert!(!hits[0].snippet.contains("exact_archived_result=42"));
+    let out = shape(
+        history,
+        &archive.0,
+        &OpenRouterClient::new(),
+        &Settings {
+            short_send_tail_n: 1,
+            ..Settings::default()
+        },
+        None,
+        "focusneedle",
+        true,
+        1000,
+        false,
+        &GoalWire::default(),
+    )
+    .await;
+    assert!(out[0].content.contains("exact_archived_result=42"));
+    assert_eq!(
+        out[0].content.matches("exact_archived_result=42").count(),
+        1
+    );
+    assert!(!out[0].content.contains("[archive msg #1 |"));
+    assert_eq!(msglog::fetch_blob_content(&archive.0, 1).unwrap(), body);
+}

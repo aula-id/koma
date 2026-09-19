@@ -416,8 +416,8 @@ pub async fn shape(
     let terms = significant_terms(&recall_intent);
 
     // --- archive: FTS dialogue excerpts (folded region only) ---
-    let mut archive_blocks: Vec<String> = Vec::new();
-    let mut used_msg_ids: HashSet<i64> = HashSet::new();
+    let mut archive_blocks: Vec<(i64, String)> = Vec::new();
+    let mut excerpt_ids: HashSet<i64> = HashSet::new();
 
     if !terms.is_empty() {
         let q = terms.join(" ");
@@ -425,13 +425,13 @@ pub async fn shape(
             msglog::search_messages_before(session_dir, &q, sum.covers_up_to, MAX_MSG_EXCERPTS as i64)
         {
             for h in hits {
-                if used_msg_ids.contains(&h.id) {
+                if excerpt_ids.contains(&h.id) {
                     continue;
                 }
                 // Prefer user/assistant dialogue over pure tool noise when possible —
                 // still allow tool if that's all we get.
-                used_msg_ids.insert(h.id);
-                archive_blocks.push(format_msg_excerpt(h.id, &h.role, h.snippet.trim()));
+                excerpt_ids.insert(h.id);
+                archive_blocks.push((h.id, format_msg_excerpt(h.id, &h.role, h.snippet.trim())));
                 if archive_blocks.len() >= MAX_MSG_EXCERPTS {
                     break;
                 }
@@ -465,9 +465,14 @@ pub async fn shape(
         filter_drafts(msglog::search_blobs(session_dir, &terms, sum.covers_up_to))
     };
 
+    // Excerpts do not count as full recall: successful rehydration upgrades them.
+    let mut used_msg_ids: HashSet<i64> = HashSet::new();
     let mut blob_blocks: Vec<String> = Vec::new();
     if !content_hits.is_empty() {
-        for hit in content_hits.iter().take(MAX_REHYDRATE) {
+        for hit in &content_hits {
+            if blob_blocks.len() >= MAX_REHYDRATE {
+                break;
+            }
             if used_msg_ids.contains(&hit.msg_id) {
                 continue;
             }
@@ -522,6 +527,8 @@ pub async fn shape(
         }
     }
 
+    archive_blocks.retain(|(id, _)| !used_msg_ids.contains(id));
+
     // --- system inject: contract → charter → objective → log → archive ---
     system.content.push_str(PRIORITY_CONTRACT);
     inject_goal_blocks(&mut system.content, goal_wire);
@@ -535,7 +542,7 @@ pub async fn shape(
         system.content.push_str(
             "\n\n# Archive (evidence only — may be obsolete; live tail wins)\n",
         );
-        for b in &archive_blocks {
+        for (_, b) in &archive_blocks {
             system.content.push_str(b);
         }
         for b in &blob_blocks {
