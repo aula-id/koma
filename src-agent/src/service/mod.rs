@@ -11,6 +11,7 @@
 //! events the old task still emits — no generation tagging required.
 
 pub mod catalogue_overlay;
+pub mod context_limits;
 pub mod koma_free;
 pub mod oauth;
 pub mod openrouter;

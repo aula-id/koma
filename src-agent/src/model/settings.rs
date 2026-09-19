@@ -327,6 +327,12 @@ pub struct Settings {
     /// 32k would exceed the window. Soft upper bound at settings UI is 1_000_000.
     #[serde(default)]
     pub max_output_tokens: u32,
+    /// Optional smaller operating context ceiling (0 = catalog/default).
+    #[serde(default)]
+    pub context_window_limit: u64,
+    /// Explicit public catalog alias used only for capability matching.
+    #[serde(default)]
+    pub context_model_alias: String,
     /// User-committed session goal (doctrine for DRSS). Empty = none. Never filled
     /// from assistant drafts — only explicit user steer via `detect_goal_update`.
     #[serde(default)]
@@ -537,6 +543,8 @@ impl Default for Settings {
             short_send_engage_n: default_short_send_engage_n(),
             short_send_tail_n: default_short_send_tail_n(),
             max_output_tokens: 0,
+            context_window_limit: 0,
+            context_model_alias: String::new(),
             session_goal: String::new(),
             session_goal_msg_id: 0,
             session_goal_source: String::new(),
