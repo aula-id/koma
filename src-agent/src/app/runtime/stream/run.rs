@@ -360,7 +360,7 @@ over sec_remote (stateful socket).\n",
     // the history unchanged) when there's no active session.
     //
     // The per-session snapshot the reshape task needs: (dir, settings, recall
-    // intent with trajectory, resolved Awareness route, force_fold, goal wire).
+    // text, resolved Awareness route, force_fold, goal wire).
     // Goal patch / charter seed / mission resolve applied first so shape sees
     // fresh doctrine. Cloned so the spawn holds no borrow of `state`.
     //
@@ -446,8 +446,6 @@ over sec_remote (stateful socket).\n",
 
         state.rest.sessions[sess_idx].session.as_ref().map(|sess| {
             let last_user = sess.conversation.last_user_content().unwrap_or_default();
-            let intent =
-                crate::app::runtime::shortsend::build_recall_intent(&history, &last_user);
             let aware = crate::app::resolve::resolve_role_dispatch(
                 &state.rest.config,
                 &sess.settings,
@@ -457,7 +455,7 @@ over sec_remote (stateful socket).\n",
             (
                 sess.path.clone(),
                 sess.settings.clone(),
-                intent,
+                last_user,
                 aware,
                 force_fold,
                 goal_wire,

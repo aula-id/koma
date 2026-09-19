@@ -333,3 +333,62 @@ fn trajectory_keeps_newest_work_when_older_messages_fill_the_budget() {
     );
     assert!(trajectory.lines().all(|line| line.starts_with("tool: ")));
 }
+
+#[tokio::test]
+async fn only_user_intent_can_enable_old_assistant_drafts() {
+    let archive = Archive::new();
+    let mut history = vec![ChatMessage::new(Role::System, "system")];
+    history.push(archive.append(Role::User, "initial request"));
+    history.push(archive.append(
+        Role::Assistant,
+        &format!(
+            "focusneedle obsolete_draft_marker {} hidden_draft_detail",
+            "old proposal ".repeat(200),
+        ),
+    ));
+    msglog::write_summary(&archive.0, "Earlier investigation finished.", 2, 5).unwrap();
+    history.push(archive.append(Role::User, "continue"));
+    history.push(archive.append(
+        Role::Assistant,
+        &format!(
+            "My plan: inspect focusneedle. {}",
+            "current work ".repeat(100),
+        ),
+    ));
+
+    for (user, should_recall) in [
+        ("continue", false),
+        ("explain planet configuration", false),
+        ("what was our earlier plan for focusneedle?", true),
+    ] {
+        let out = shape(
+            history.clone(),
+            &archive.0,
+            &OpenRouterClient::new(),
+            &Settings {
+                short_send_tail_n: 1,
+                ..Settings::default()
+            },
+            None,
+            user,
+            true,
+            1000,
+            false,
+            &GoalWire::default(),
+        )
+        .await;
+        assert_eq!(
+            out[0].content.contains("obsolete_draft_marker"),
+            should_recall,
+            "{user}"
+        );
+        assert_eq!(
+            out[0].content.contains("hidden_draft_detail"),
+            should_recall,
+            "{user}"
+        );
+        if should_recall {
+            assert!(out[0].content.contains("status=unconfirmed_draft"));
+        }
+    }
+}

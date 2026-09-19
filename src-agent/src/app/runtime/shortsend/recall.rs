@@ -102,7 +102,11 @@ fn wants_history_recall(intent: &str) -> bool {
         "original approach",
         "the plan",
     ];
-    KEYS.iter().any(|k| l.contains(k))
+    KEYS.iter().any(|key| l.match_indices(key).any(|(start, matched)| {
+        let end = start + matched.len();
+        !l[..start].chars().next_back().is_some_and(char::is_alphanumeric)
+            && !l[end..].chars().next().is_some_and(char::is_alphanumeric)
+    }))
 }
 
 /// Assistant `code` / `large_text` blobs are draft-shaped doctrine fuel — skip
@@ -133,8 +137,13 @@ fn format_blob_block(id: i64, msg_id: i64, kind: &str, role: &str, content: &str
 
 /// Format a labeled FTS dialogue excerpt.
 fn format_msg_excerpt(id: i64, role: &str, excerpt: &str) -> String {
+    let status = if role.eq_ignore_ascii_case("assistant") {
+        "unconfirmed_draft"
+    } else {
+        "evidence"
+    };
     format!(
-        "\n\n[archive msg #{id} | role={role} | status=evidence]\n{excerpt}"
+        "\n\n[archive msg #{id} | role={role} | status={status}]\n{excerpt}"
     )
 }
 
@@ -414,13 +423,21 @@ pub async fn shape(
     };
     stub_heavy_wire_tail(&mut tail, session_dir);
 
-    let recall_intent = if user_intent.contains("--- recent trajectory ---") {
-        user_intent.to_string()
-    } else {
-        build_recall_intent(&history, user_intent)
-    };
-    let history_ask = wants_history_recall(&recall_intent);
+    // Only the raw user request grants history recall. Assistant/tool trajectory
+    // contributes relevance terms but cannot authorize replaying old drafts.
+    let history_ask = wants_history_recall(user_intent);
+    let recall_intent = build_recall_intent(&history, user_intent);
     let terms = significant_terms(&recall_intent);
+
+    let mut all_candidates: Vec<msglog::BlobRef> = msglog::list_blobs(session_dir)
+        .into_iter()
+        .filter(|b| b.msg_id <= sum.covers_up_to)
+        .collect();
+
+    let draft_msg_ids: HashSet<i64> = all_candidates.iter()
+        .filter(|b| is_assistant_draft_blob(&b.kind, &role_for_msg(session_dir, b.msg_id)))
+        .map(|b| b.msg_id)
+        .collect();
 
     // --- archive: FTS dialogue excerpts (folded region only) ---
     let mut archive_blocks: Vec<(i64, String)> = Vec::new();
@@ -432,7 +449,8 @@ pub async fn shape(
             msglog::search_messages_before(session_dir, &q, sum.covers_up_to, MAX_MSG_EXCERPTS as i64)
         {
             for h in hits {
-                if excerpt_ids.contains(&h.id) {
+                // Apply the same draft rule to both recall paths.
+                if (!history_ask && draft_msg_ids.contains(&h.id)) || excerpt_ids.contains(&h.id) {
                     continue;
                 }
                 // Prefer user/assistant dialogue over pure tool noise when possible —
@@ -447,11 +465,6 @@ pub async fn shape(
     }
 
     // --- blobs ---
-    let mut all_candidates: Vec<msglog::BlobRef> = msglog::list_blobs(session_dir)
-        .into_iter()
-        .filter(|b| b.msg_id <= sum.covers_up_to)
-        .collect();
-
     // Filter draft assistant blobs from auto paths unless history ask.
     let filter_drafts = |cands: Vec<msglog::BlobRef>| -> Vec<msglog::BlobRef> {
         cands

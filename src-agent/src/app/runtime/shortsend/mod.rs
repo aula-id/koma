@@ -169,7 +169,7 @@ pub use goal::{
     GoalWire,
 };
 // EffectiveGoal / GoalSource / MissionSnap stay crate-internal via goal:: unless needed.
-pub use recall::{build_recall_intent, shape};
+pub use recall::shape;
 
 #[cfg(test)]
 mod tests {
