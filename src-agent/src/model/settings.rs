@@ -314,10 +314,10 @@ pub struct Settings {
     /// Defaults to `80`. Old `settings.json` files load via the serde default.
     #[serde(default = "default_short_send_engage_n")]
     pub short_send_engage_n: i64,
-    /// How many of the newest body messages short-send keeps verbatim on the wire
-    /// when engaged (the tail sent in full; everything older is folded into the
-    /// summary). Defaults to `40` so multi-step tool chains stay on the wire.
-    /// Old `settings.json` files load via the serde default.
+    /// Preferred newest-body count for the short-send hot window when engaged.
+    /// Token budget (`HOT_TAIL_PCT`) may keep fewer so fat tool dumps cannot
+    /// overflow the window. Defaults to `40`. Old `settings.json` files load
+    /// via the serde default.
     #[serde(default = "default_short_send_tail_n")]
     pub short_send_tail_n: i64,
     /// Interactive chat `max_tokens` on OpenAI-compatible wire.

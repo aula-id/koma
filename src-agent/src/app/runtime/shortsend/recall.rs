@@ -168,9 +168,10 @@ fn clip_body(history: &[ChatMessage], keep: usize) -> Option<(ChatMessage, Vec<C
     Some((history[0].clone(), tail))
 }
 
-/// Hot-window size: floor `tail_floor`, grow under `HOT_TAIL_PCT` of `usable`,
-/// cap `HOT_TAIL_MAX_MSGS`, never below watermark span when smaller, snap trim
-/// to a tool-round start (user or assistant) so we never open mid tool-chain.
+/// Hot-window size: prefer `tail_floor` / watermark span, grow under
+/// `HOT_TAIL_PCT` of `usable`, cap `HOT_TAIL_MAX_MSGS`, then **shrink below
+/// the floor** if still over the token budget. `tail_n` is a preference, not
+/// a license to ship 40 fat tool dumps. Snap to a tool-round start.
 fn hot_keep_n(body: &[ChatMessage], after_wm: usize, tail_floor: usize, usable: u64) -> usize {
     if body.is_empty() {
         return 1;
@@ -178,6 +179,7 @@ fn hot_keep_n(body: &[ChatMessage], after_wm: usize, tail_floor: usize, usable: 
     let n = body.len();
     let floor = tail_floor.max(1).min(n);
     let wm_keep = after_wm.max(1).min(n);
+    // Preference only — token budget may shrink below this.
     let mut keep = floor.max(wm_keep).min(n);
 
     let budget = (HOT_TAIL_PCT.saturating_mul(usable) / 100).max(1);
@@ -194,11 +196,11 @@ fn hot_keep_n(body: &[ChatMessage], after_wm: usize, tail_floor: usize, usable: 
         keep += 1;
     }
 
-    // If still over budget at floor, shrink toward 1 but prefer exchange snap.
+    // Shrink while over budget. Floor does not win.
     while keep > 1 {
         let start = n - keep;
         let toks: u64 = body[start..].iter().map(msg_tok_est).sum();
-        if toks <= budget || keep <= floor {
+        if toks <= budget {
             break;
         }
         keep -= 1;
@@ -228,6 +230,58 @@ fn snap_keep_to_round(body: &[ChatMessage], keep: usize) -> usize {
             }
             keep
         }
+    }
+}
+
+/// ~1000 tokens at 4 chars/token. One fat `cat` / tool dump on the hot tail.
+const WIRE_STUB_TOKENS: u64 = 1_000;
+
+/// Replace an over-budget tool/assistant body with a pointer + snippet.
+/// User messages are never stubbed (the live question stays verbatim).
+/// Dual rail: full text remains on disk / in the conversation.
+fn stub_one_message(m: &mut ChatMessage, blob: Option<&msglog::BlobRef>) {
+    if m.role == Role::User {
+        return;
+    }
+    if msg_tok_est(m) < WIRE_STUB_TOKENS {
+        return;
+    }
+    let snippet: String = match blob {
+        Some(b) if !b.snippet.trim().is_empty() => b.snippet.trim().to_string(),
+        _ => m.content.chars().take(250).collect(),
+    };
+    let head = match blob {
+        Some(b) => format!(
+            "[wire stub | blob #{} | msg_id={} | kind={} | status=evidence]\n",
+            b.id, b.msg_id, b.kind
+        ),
+        None => "[wire stub | kind=large | stored-rail only]\n".to_string(),
+    };
+    m.content = format!(
+        "{head}{snippet}\n(full body on stored rail; use message_find / archive)"
+    );
+}
+
+/// Stub fat tool/assistant bodies on the hot tail so one file dump cannot
+/// eat `HOT_TAIL_PCT`. Matches sqlite blobs by exact content when present.
+fn stub_heavy_wire_tail(tail: &mut [ChatMessage], session_dir: &Path) {
+    let blobs = msglog::list_blobs(session_dir);
+    let max_id = msglog::max_message_id(session_dir);
+    let archived = if max_id > 0 {
+        msglog::fetch_messages_since(
+            session_dir,
+            max_id.saturating_sub(tail.len() as i64 + 32),
+            tail.len() as i64 + 64,
+        )
+    } else {
+        Vec::new()
+    };
+    for t in tail.iter_mut() {
+        let blob = archived
+            .iter()
+            .find(|a| a.content == t.content)
+            .and_then(|a| blobs.iter().find(|b| b.msg_id == a.id));
+        stub_one_message(t, blob);
     }
 }
 
@@ -349,9 +403,10 @@ pub async fn shape(
     let after_wm = (max_id.saturating_sub(sum.covers_up_to)).max(1) as usize;
     let keep = hot_keep_n(body, after_wm, tail_floor, usable);
 
-    let Some((mut system, tail)) = clip_body(&history, keep) else {
+    let Some((mut system, mut tail)) = clip_body(&history, keep) else {
         return history;
     };
+    stub_heavy_wire_tail(&mut tail, session_dir);
 
     let recall_intent = if user_intent.contains("--- recent trajectory ---") {
         user_intent.to_string()
@@ -635,7 +690,46 @@ mod tests {
         ];
         let k = hot_keep_n(&body, 1, 4, 8_000);
         assert!(k >= 1);
-        assert!(k <= 4);
+        // Token budget binds: four 12k-token msgs cannot all stay.
+        assert!(k <= 2, "budget must shrink below floor, got {k}");
+    }
+
+    #[test]
+    fn hot_keep_floor_does_not_win_over_budget() {
+        // 40 × ~500-token msgs, floor 40, usable 8k → budget 2k. Must shrink.
+        let body: Vec<_> = (0..40)
+            .map(|i| {
+                let role = if i % 2 == 0 {
+                    Role::User
+                } else {
+                    Role::Assistant
+                };
+                msg(role, &"z".repeat(2_000))
+            })
+            .collect();
+        let k = hot_keep_n(&body, 40, 40, 8_000);
+        assert!(k < 40, "floor must yield to token budget, got {k}");
+        assert!(k >= 1);
+    }
+
+    #[test]
+    fn stub_skips_user_and_small_tool() {
+        let mut u = msg(Role::User, &"u".repeat(8_000));
+        stub_one_message(&mut u, None);
+        assert!(u.content.starts_with("u"), "user must stay verbatim");
+
+        let mut t = msg(Role::Tool, "ok");
+        stub_one_message(&mut t, None);
+        assert_eq!(t.content, "ok");
+    }
+
+    #[test]
+    fn stub_rewrites_fat_tool() {
+        let mut t = msg(Role::Tool, &"dump".repeat(2_000));
+        stub_one_message(&mut t, None);
+        assert!(t.content.contains("wire stub"));
+        assert!(t.content.contains("stored rail"));
+        assert!(t.content.len() < 1_000);
     }
 
     #[test]
