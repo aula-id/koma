@@ -168,10 +168,9 @@ fn clip_body(history: &[ChatMessage], keep: usize) -> Option<(ChatMessage, Vec<C
     Some((history[0].clone(), tail))
 }
 
-/// Hot-window size: prefer `tail_floor` / watermark span, grow under
-/// `HOT_TAIL_PCT` of `usable`, cap `HOT_TAIL_MAX_MSGS`, then **shrink below
-/// the floor** if still over the token budget. `tail_n` is a preference, not
-/// a license to ship 40 fat tool dumps. Snap to a tool-round start.
+/// Prefer `tail_floor` messages within the hot token budget, but always retain
+/// the entire span newer than the persisted summary. Token/count preferences
+/// may trim already summarized messages; they cannot create a coverage gap.
 fn hot_keep_n(body: &[ChatMessage], after_wm: usize, tail_floor: usize, usable: u64) -> usize {
     if body.is_empty() {
         return 1;
@@ -196,8 +195,9 @@ fn hot_keep_n(body: &[ChatMessage], after_wm: usize, tail_floor: usize, usable: 
         keep += 1;
     }
 
-    // Shrink while over budget. Floor does not win.
-    while keep > 1 {
+    // A failed/unavailable fold leaves a larger uncovered span. Keep it intact
+    // even when it exceeds the budget; only a successful fold may replace it.
+    while keep > wm_keep {
         let start = n - keep;
         let toks: u64 = body[start..].iter().map(msg_tok_est).sum();
         if toks <= budget {
@@ -207,7 +207,7 @@ fn hot_keep_n(body: &[ChatMessage], after_wm: usize, tail_floor: usize, usable: 
     }
 
     keep = keep.max(1).min(n);
-    snap_keep_to_round(body, keep)
+    snap_keep_to_round(body, keep).max(wm_keep)
 }
 
 /// Move the cut forward (keep fewer older msgs) so the window opens on a user
@@ -707,7 +707,8 @@ mod tests {
                 msg(role, &"z".repeat(2_000))
             })
             .collect();
-        let k = hot_keep_n(&body, 40, 40, 8_000);
+        // Only one message is newer than the summary. The other 39 are optional.
+        let k = hot_keep_n(&body, 1, 40, 8_000);
         assert!(k < 40, "floor must yield to token budget, got {k}");
         assert!(k >= 1);
     }
@@ -785,3 +786,7 @@ mod tests {
         assert!(s.contains("body-"));
     }
 }
+
+#[cfg(test)]
+#[path = "recall_regression_tests.rs"]
+mod regression_tests;
