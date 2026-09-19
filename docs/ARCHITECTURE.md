@@ -309,7 +309,7 @@ sticky engage/disengage (hysteresis; count is hold-only):
 3. Else `session_charter` (seeded once from the first real kickoff prompt, including `koma run`).
 4. Else none (empty objective is OK).
 
-Objective fingerprint changes set `continuity_dirty` on the session runtime; the next engaged `shape` passes `force_fold` once (cleared on arm) so the continuity log can catch up without waiting for token/count bands.
+Objective fingerprint changes set `continuity_dirty` on the session runtime; the next enabled, engaged `shape` with an Awareness route passes `force_fold` once (cleared on arm) so the continuity log can catch up without waiting for token/count bands. Re-reading an unchanged goal or clear phrase during tool continuations neither rewrites goal provenance nor re-arms the fold.
 
 **`update_summary` fold** (inside `shape`, step 5):
 

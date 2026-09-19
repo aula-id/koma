@@ -84,6 +84,50 @@ impl GoalWire {
     }
 }
 
+/// A stream-start refresh separates persistence changes from objective changes.
+/// Only an effective fingerprint transition requests a consolidation fold.
+pub struct GoalRefresh {
+    pub wire: GoalWire,
+    pub settings_changed: bool,
+    pub objective_changed: bool,
+}
+
+pub fn refresh_goal_state(
+    settings: &mut Settings,
+    last_user: Option<&str>,
+    mission: Option<&MissionSnap>,
+) -> GoalRefresh {
+    let mut settings_changed = false;
+    if let Some(user) = last_user {
+        if let Some(patch) = detect_goal_update(user) {
+            let (goal, source) = match patch {
+                GoalPatch::Set(goal) => (goal, "user"),
+                GoalPatch::Clear => (String::new(), "none"),
+            };
+            // Re-reading the same user message on every tool continuation is
+            // idempotent, including the existing message provenance.
+            if settings.session_goal != goal || settings.session_goal_source != source {
+                settings.session_goal = goal;
+                settings.session_goal_source = source.into();
+                settings.session_goal_msg_id = 0;
+                settings_changed = true;
+            }
+        }
+        settings_changed |= seed_charter_if_empty(settings, user);
+    }
+    let effective = resolve_effective_goal(settings, mission);
+    let objective_changed = settings.session_objective_fp != effective.fingerprint;
+    if objective_changed {
+        settings.session_objective_fp = effective.fingerprint.clone();
+        settings_changed = true;
+    }
+    GoalRefresh {
+        wire: GoalWire::from_effective(&effective),
+        settings_changed,
+        objective_changed,
+    }
+}
+
 /// Cap stored goal length so doctrine stays a one-liner, not a pasted essay.
 const GOAL_MAX_CHARS: usize = 240;
 
@@ -440,5 +484,75 @@ mod tests {
         let eg = resolve_effective_goal(&s, None);
         assert_eq!(eg.source, GoalSource::Charter);
         assert_eq!(eg.objective, "still here");
+    }
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::*;
+
+    #[test]
+    fn unchanged_goal_and_clear_are_idempotent_across_tool_steps() {
+        let mut settings = Settings::default();
+        let first = refresh_goal_state(&mut settings, Some("goal: fix context recall"), None);
+        assert!(first.settings_changed && first.objective_changed);
+        settings.session_goal_msg_id = 42;
+        let charter = settings.session_charter.clone();
+        for _ in 0..10 {
+            let repeated = refresh_goal_state(&mut settings, Some("goal: fix context recall"), None);
+            assert!(!repeated.settings_changed && !repeated.objective_changed);
+            assert_eq!(settings.session_goal_msg_id, 42);
+        }
+        let changed = refresh_goal_state(&mut settings, Some("goal: validate the fix"), None);
+        assert!(changed.settings_changed && changed.objective_changed);
+        assert_eq!(changed.wire.objective, "validate the fix");
+        let cleared = refresh_goal_state(&mut settings, Some("cancel goal"), None);
+        assert!(cleared.settings_changed && cleared.objective_changed);
+        assert_eq!(cleared.wire.source, "charter");
+        for _ in 0..10 {
+            let repeated = refresh_goal_state(&mut settings, Some("cancel goal"), None);
+            assert!(!repeated.settings_changed && !repeated.objective_changed);
+        }
+        assert_eq!(settings.session_charter, charter);
+    }
+
+    #[test]
+    fn metadata_change_does_not_force_an_unchanged_objective() {
+        let mut settings = Settings {
+            session_goal: "fix recall".into(),
+            session_goal_source: "none".into(),
+            session_charter: "initial request".into(),
+            session_objective_fp: "user:fix recall".into(),
+            ..Settings::default()
+        };
+        let refresh = refresh_goal_state(&mut settings, Some("goal: fix recall"), None);
+        assert!(refresh.settings_changed);
+        assert!(!refresh.objective_changed);
+        assert_eq!(refresh.wire.source, "user");
+    }
+
+    #[test]
+    fn mission_transitions_respect_user_priority_and_only_arm_once() {
+        let mut settings = Settings::default();
+        let mut mission = MissionSnap {
+            approved: true,
+            active_leaf: Some(("first".into(), "Inspect context".into())),
+            ..MissionSnap::default()
+        };
+        let first = refresh_goal_state(&mut settings, Some("initial task"), Some(&mission));
+        assert!(first.objective_changed);
+        assert_eq!(first.wire.source, "mission");
+        assert!(!refresh_goal_state(&mut settings, Some("continue"), Some(&mission)).objective_changed);
+        mission.active_leaf = Some(("second".into(), "Validate context".into()));
+        assert!(refresh_goal_state(&mut settings, Some("continue"), Some(&mission)).objective_changed);
+        assert!(!refresh_goal_state(&mut settings, Some("continue"), Some(&mission)).objective_changed);
+        assert!(refresh_goal_state(&mut settings, Some("goal: fix recall"), Some(&mission)).objective_changed);
+        mission.active_leaf = Some(("third".into(), "Review context".into()));
+        let masked = refresh_goal_state(&mut settings, Some("goal: fix recall"), Some(&mission));
+        assert!(!masked.objective_changed);
+        assert_eq!(masked.wire.source, "user");
+        let clear = refresh_goal_state(&mut settings, Some("cancel goal"), Some(&mission));
+        assert!(clear.objective_changed);
+        assert_eq!(clear.wire.objective, "Review context");
     }
 }

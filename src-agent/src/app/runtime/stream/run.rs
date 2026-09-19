@@ -375,8 +375,7 @@ over sec_remote (stateful socket).\n",
         crate::app::runtime::shortsend::GoalWire,
     )> = {
         use crate::app::runtime::shortsend::{
-            detect_goal_update, load_mission_snap, resolve_effective_goal, seed_charter_if_empty,
-            GoalPatch, GoalWire,
+            load_mission_snap, refresh_goal_state, GoalWire,
         };
 
         let last_user = state.rest.sessions[sess_idx]
@@ -384,42 +383,8 @@ over sec_remote (stateful socket).\n",
             .as_ref()
             .map(|s| s.conversation.last_user_content().unwrap_or_default());
 
-        let mut settings_dirty = false;
         let mut continuity_dirty = state.rest.sessions[sess_idx].continuity_dirty;
 
-        if let Some(last_user) = last_user.as_ref() {
-            // 1. Phrase detect (no short-accept).
-            if let Some(patch) = detect_goal_update(last_user) {
-                if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-                    match patch {
-                        GoalPatch::Set(g) => {
-                            sess.settings.session_goal = g;
-                            sess.settings.session_goal_msg_id = 0;
-                            sess.settings.session_goal_source = "user".into();
-                        }
-                        GoalPatch::Clear => {
-                            sess.settings.session_goal.clear();
-                            sess.settings.session_goal_msg_id = 0;
-                            sess.settings.session_goal_source = "none".into();
-                            // charter preserved
-                        }
-                    }
-                    settings_dirty = true;
-                    continuity_dirty = true;
-                }
-            }
-
-            // 2. Charter seed once (does not promote to user goal).
-            if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-                if seed_charter_if_empty(&mut sess.settings, last_user) {
-                    settings_dirty = true;
-                    // Dirty only when charter becomes the shown objective (no prior
-                    // user/mission objective will still win in resolve).
-                }
-            }
-        }
-
-        // 3–4. Mission snap + resolve + fingerprint transition.
         let sess_path = state.rest.sessions[sess_idx]
             .session
             .as_ref()
@@ -428,21 +393,19 @@ over sec_remote (stateful socket).\n",
         let mut goal_wire = GoalWire::default();
 
         if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-            let eg = resolve_effective_goal(&sess.settings, mission.as_ref());
-            if eg.fingerprint != sess.settings.session_objective_fp {
-                sess.settings.session_objective_fp = eg.fingerprint.clone();
-                settings_dirty = true;
-                continuity_dirty = true;
-            }
-            goal_wire = GoalWire::from_effective(&eg);
-            if settings_dirty {
+            let refresh = refresh_goal_state(
+                &mut sess.settings, last_user.as_deref(), mission.as_ref(),
+            );
+            continuity_dirty |= refresh.objective_changed;
+            goal_wire = refresh.wire;
+            if refresh.settings_changed {
                 let _ = sess.save();
             }
         }
 
-        // Arm force_fold from dirty; clear synchronously so we force once per transition.
+        // Keep the transition pending until an engaged, routed reshape can try it.
         let force_fold = continuity_dirty;
-        state.rest.sessions[sess_idx].continuity_dirty = false;
+        state.rest.sessions[sess_idx].continuity_dirty = continuity_dirty;
 
         state.rest.sessions[sess_idx].session.as_ref().map(|sess| {
             let last_user = sess.conversation.last_user_content().unwrap_or_default();
@@ -708,6 +671,11 @@ over sec_remote (stateful socket).\n",
         enter_n,
     );
     let summarizing = state.rest.sessions[sess_idx].summarizing;
+    if summarizing && reshape.as_ref().is_some_and(|(_, settings, _, route, _, _)| {
+        settings.short_send_enabled && route.is_some()
+    }) {
+        state.rest.sessions[sess_idx].continuity_dirty = false;
+    }
     // 6. Stamp the send instant so the NEXT turn can measure cache warmth from the
     //    gap since this send.
     state.rest.sessions[sess_idx].last_send_at = Some(Instant::now());

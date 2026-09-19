@@ -164,10 +164,7 @@ pub(crate) fn wire_would_overflow(history: &[ChatMessage], usable: u64) -> bool 
 
 // Re-export the public API so callers outside this module use the same paths
 // as before the split.
-pub use goal::{
-    detect_goal_update, load_mission_snap, resolve_effective_goal, seed_charter_if_empty, GoalPatch,
-    GoalWire,
-};
+pub use goal::{load_mission_snap, refresh_goal_state, GoalWire};
 // EffectiveGoal / GoalSource / MissionSnap stay crate-internal via goal:: unless needed.
 pub use recall::shape;
 
