@@ -315,11 +315,10 @@ pub fn build_recall_intent(history: &[ChatMessage], last_user: &str) -> String {
         let content: String = m.content.chars().take(budget.min(800)).collect();
         line.push_str(&content);
         line.push('\n');
-        if line.len() > budget {
-            out.push_str(&line[..budget]);
-            break;
-        }
-        budget = budget.saturating_sub(line.len());
+        // The limit is in characters throughout, including the role/newline.
+        // Never cut a UTF-8 string at an arbitrary byte offset.
+        let line: String = line.chars().take(budget).collect();
+        budget = budget.saturating_sub(line.chars().count());
         out.push_str(&line);
     }
     out

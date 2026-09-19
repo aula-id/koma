@@ -242,3 +242,22 @@ fn warm_cache_cannot_hide_output_pressure() {
     );
     assert!(checked_max_output_tokens(0, endpoint, window, window - 1024 - 4095).is_err());
 }
+
+#[test]
+fn multilingual_trajectory_respects_character_budget() {
+    let history = vec![
+        ChatMessage::new(Role::System, "system"),
+        ChatMessage::new(Role::Tool, "界".repeat(800)),
+        ChatMessage::new(Role::Tool, "工具日志".repeat(200)),
+        ChatMessage::new(Role::Assistant, "🦀 café résumé ".repeat(100)),
+        ChatMessage::new(Role::Tool, "trailing text".repeat(100)),
+    ];
+    let intent = build_recall_intent(&history, "continue");
+    let (user, trajectory) = intent
+        .split_once("\n\n--- recent trajectory ---\n")
+        .unwrap();
+    assert_eq!(user, "continue");
+    assert_eq!(trajectory.chars().count(), TRAJECTORY_INTENT_CHARS);
+    assert!(trajectory.contains("工具日志"));
+    assert!(trajectory.contains("🦀 café résumé"));
+}
