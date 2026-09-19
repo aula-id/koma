@@ -298,7 +298,7 @@ sticky engage/disengage (hysteresis; count is hold-only):
 4. Post-compaction guard: when `history[1]` starts with `[summary of earlier conversation]`, do **not** stack a sqlite summary — **fail-open** (full history; no hard clip).
 5. Best-effort fold via `update_summary` (fires when verbatim tail past `TAIL_HI_PCT` (15%) of usable **or** message count > `short_send_tail_n`).
 6. Read rolling summary from `messages.sqlite`. Missing/empty → **fail-open** full history (never emergency-clip mid-task).
-7. **Hot window:** keep ≥ `short_send_tail_n` body messages, grow under `HOT_TAIL_PCT` (25%) of usable up to `HOT_TAIL_MAX_MSGS` (120), snap trim to a user-exchange edge (never open mid tool-chain). Watermark span is a lower bound when smaller.
+7. **Hot window:** keep ≥ `short_send_tail_n` body messages, grow under `HOT_TAIL_PCT` (25%) of usable up to `HOT_TAIL_MAX_MSGS` (120), snap trim to a tool-round start (user or assistant — never a dangling tool). Watermark span is a lower bound when smaller.
 8. **Priority on system (after CACHE_SPLIT_MARK):** DRSS memory contract (live tail wins) → optional **charter** (immutable kickoff) → **current objective** (ranked: user > mission active leaf > charter) → continuity log → labeled archive (FTS dialogue excerpts + blob recalls). Archive is evidence only; assistant draft blobs are not auto-recalled unless the user asks about plan/history. Fold never writes doctrine.
 9. **Recall intent** = last user message + recent body trajectory (not last user line alone). Blob search ranks by term score then **newer** `msg_id`. Message FTS (`search_messages_before`) restores folded non-blob dialogue.
 10. Output: `[modified system, hot verbatim tail...]`.
@@ -314,7 +314,7 @@ Objective fingerprint changes set `continuity_dirty` on the session runtime; the
 **`update_summary` fold** (inside `shape`, step 5):
 
 - Token-band hysteresis **alongside** message-count: folds when tail tokens > `TAIL_HI_PCT` (15%) of usable **or** tail message count > `short_send_tail_n`; aims remaining verbatim ≤ ~`TAIL_FLOOR_PCT` (5%) of usable **and** ≤ `tail_n` messages. `force_fold` skips the band no-op once per objective transition (still no-ops when nothing foldable).
-- Snaps the fold boundary to a completed-exchange edge (never folds the live in-progress exchange).
+- Snaps the fold boundary to a **completed tool-round** (last tool before the next assistant/user, or a text-only assistant before the next turn). The live assistant+tool chain stays verbatim. Older finished rounds in the same kickoff MAY fold — a one-user `koma run` loop is the normal case, not a no-op. Never opens mid-chain. Never folds “just the user question” with no settled round after it.
 - Uses `shortsend_summary_prompt()` (from `src-misc/shortsend-summary.txt`) as system for the secondary model call — structured **continuity log** (goal / recent arc / done / failed / files / open questions). Assistant plans are PROPOSED unless user-accepted. Reasoning is OFF (bleed guard).
 - Persists new summary to `summary` table in `messages.sqlite`. Does **not** write `session_goal` / charter.
 

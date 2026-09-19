@@ -65,7 +65,7 @@ fn cap_chars(s: &str, cap: usize) -> String {
 ///
 /// Returns `Ok(true)` when a fold happened (a new summary was written) and
 /// `Ok(false)` when there was nothing to fold (tail still within band, or no
-/// valid completed-exchange boundary) — so the caller can skip the write
+/// valid completed tool-round boundary) — so the caller can skip the write
 /// entirely. Errors propagate from the secondary model call; the sqlite helpers
 /// are best-effort and degrade to empty rather than erroring.
 pub async fn update_summary(
@@ -161,25 +161,14 @@ async fn update_summary_inner(
         }
     }
 
-    // Snap the cut DOWN to a COMPLETED-exchange edge so a tool-call chain is never
-    // cut and the current, in-progress exchange is never summarised. An exchange
-    // runs from one `user` message up to (but not including) the next; the most
-    // recent `user` message begins the live exchange, which must stay verbatim.
-    // Valid boundaries are `(user_id) - 1`: pick the LARGEST that is <= the walked
-    // cut, strictly > covers_up_to (so we actually advance), and < the last user
-    // message id (so the live exchange is never folded).
-    let user_ids = msglog::user_message_ids(session_dir); // ascending
-    let last_user = user_ids.last().copied().unwrap_or(i64::MAX);
-    let fold_up_to = match user_ids
-        .iter()
-        .copied()
-        .filter(|&u| u < last_user) // never fold the in-progress (last) exchange
-        .map(|u| u - 1)
-        .filter(|&b| b <= cut_id && b > covers_up_to)
-        .max()
-    {
+    // Snap the cut DOWN to a completed tool-round edge. Live work stays
+    // verbatim: the open assistant+tool chain (or the trailing assistant / user
+    // if no tools yet). Older *finished* assistant+tool rounds in the same
+    // kickoff MAY fold — a one-user agentic loop is the normal DRSS case, not
+    // a reason to no-op. Never open mid-chain (assistant followed by its tools).
+    let fold_up_to = match fold_boundary_id(&tail, cut_id, covers_up_to) {
         Some(b) => b,
-        None => return Ok(false), // no completed-exchange boundary in range → don't fold
+        None => return Ok(false), // nothing settled before the live turn
     };
 
     // Pull everything after the last-covered id, then trim to the fold ceiling so
@@ -225,6 +214,65 @@ async fn update_summary_inner(
     // start id is the first message past it.
     msglog::write_summary(session_dir, &new_text, fold_up_to, fold_up_to + 1)?;
     Ok(true)
+}
+
+/// Start id of the live tool-round / live turn (must stay verbatim).
+///
+/// - last `tool` → walk back to the assistant that opened the chain
+/// - last `assistant` or `user` → that message
+pub(super) fn live_turn_start_id(msgs: &[msglog::ArchivedMsg]) -> Option<i64> {
+    let last = msgs.last()?;
+    if last.role.eq_ignore_ascii_case("tool") {
+        for m in msgs.iter().rev() {
+            if m.role.eq_ignore_ascii_case("assistant") {
+                return Some(m.id);
+            }
+            if m.role.eq_ignore_ascii_case("user") {
+                return Some(m.id);
+            }
+        }
+        return Some(last.id);
+    }
+    Some(last.id)
+}
+
+/// True when `m` closes a settled round relative to `next` (next may be the
+/// live assistant — a tool followed by that assistant still closes).
+fn closes_round(m: &msglog::ArchivedMsg, next: Option<&msglog::ArchivedMsg>) -> bool {
+    let r = m.role.as_str();
+    let n = next.map(|x| x.role.as_str());
+    match (r, n) {
+        // Last tool of a chain, next thought / next user request.
+        ("tool", Some("assistant") | Some("user")) => true,
+        // Text-only assistant turn (no pending tools).
+        ("assistant", Some("user") | Some("assistant")) => true,
+        // User is never a close by itself — folding "just the question"
+        // eats cognition. A later completed tool-round may still cover it.
+        _ => false,
+    }
+}
+
+/// Largest id ≤ `cut_id` that closes a completed tool-round / utterance and
+/// is strictly before the live turn. `None` if the live turn is the whole tail.
+pub(super) fn fold_boundary_id(
+    msgs: &[msglog::ArchivedMsg],
+    cut_id: i64,
+    covers_up_to: i64,
+) -> Option<i64> {
+    let live_start = live_turn_start_id(msgs)?;
+    msgs.iter()
+        .enumerate()
+        .filter_map(|(i, m)| {
+            if m.id <= covers_up_to || m.id > cut_id || m.id >= live_start {
+                return None;
+            }
+            if closes_round(m, msgs.get(i + 1)) {
+                Some(m.id)
+            } else {
+                None
+            }
+        })
+        .max()
 }
 
 /// Assemble the plain-text fold payload: three labeled sections the prompt
@@ -294,5 +342,94 @@ mod tests {
         assert!(p.contains("=== EXISTING SUMMARY ==="));
         assert!(p.contains("=== NEW MESSAGES ==="));
         assert!(p.contains("=== AVAILABLE BLOBS ==="));
+    }
+
+    fn am(id: i64, role: &str) -> msglog::ArchivedMsg {
+        msglog::ArchivedMsg {
+            id,
+            role: role.into(),
+            content: String::new(),
+            reasoning: None,
+        }
+    }
+
+    /// One-user CyberGym loop: U, A1, T1, A2, T2. Live = A2+T2. Fold through T1.
+    #[test]
+    fn intra_exchange_folds_completed_tool_round() {
+        let msgs = vec![
+            am(1, "user"),
+            am(2, "assistant"),
+            am(3, "tool"),
+            am(4, "assistant"),
+            am(5, "tool"),
+        ];
+        assert_eq!(live_turn_start_id(&msgs), Some(4));
+        assert_eq!(fold_boundary_id(&msgs, 5, 0), Some(3));
+    }
+
+    /// Multi-tool chain: do not cut between T1a and T1b.
+    #[test]
+    fn intra_exchange_does_not_split_tool_chain() {
+        let msgs = vec![
+            am(1, "user"),
+            am(2, "assistant"),
+            am(3, "tool"),
+            am(4, "tool"),
+            am(5, "assistant"),
+            am(6, "tool"),
+        ];
+        assert_eq!(live_turn_start_id(&msgs), Some(5));
+        assert_eq!(fold_boundary_id(&msgs, 6, 0), Some(4));
+    }
+
+    /// Kickoff + live assistant, no settled tool-round yet — don't fold the question.
+    #[test]
+    fn no_boundary_when_only_live_turn() {
+        let msgs = vec![am(1, "user"), am(2, "assistant")];
+        assert_eq!(live_turn_start_id(&msgs), Some(2));
+        assert_eq!(fold_boundary_id(&msgs, 2, 0), None);
+    }
+
+    /// Live is the user (nothing after it) — do not fold that user.
+    #[test]
+    fn no_boundary_when_user_is_live() {
+        let msgs = vec![
+            am(1, "user"),
+            am(2, "assistant"),
+            am(3, "tool"),
+            am(4, "user"),
+        ];
+        assert_eq!(live_turn_start_id(&msgs), Some(4));
+        assert_eq!(fold_boundary_id(&msgs, 4, 0), Some(3));
+    }
+
+    /// Two user exchanges: previous exchange still foldable; live tool-round kept.
+    #[test]
+    fn prior_user_exchange_still_folds() {
+        let msgs = vec![
+            am(1, "user"),
+            am(2, "assistant"),
+            am(3, "tool"),
+            am(4, "user"),
+            am(5, "assistant"),
+            am(6, "tool"),
+        ];
+        assert_eq!(live_turn_start_id(&msgs), Some(5));
+        // Close at T1 (id 3), not at U2 — current question stays verbatim.
+        assert_eq!(fold_boundary_id(&msgs, 6, 0), Some(3));
+    }
+
+    /// cut_id below the only closed round → none.
+    #[test]
+    fn boundary_respects_cut_and_watermark() {
+        let msgs = vec![
+            am(1, "user"),
+            am(2, "assistant"),
+            am(3, "tool"),
+            am(4, "assistant"),
+            am(5, "tool"),
+        ];
+        assert_eq!(fold_boundary_id(&msgs, 2, 0), None);
+        assert_eq!(fold_boundary_id(&msgs, 5, 3), None);
     }
 }

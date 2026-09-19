@@ -168,7 +168,7 @@ fn clip_body(history: &[ChatMessage], keep: usize) -> Option<(ChatMessage, Vec<C
 
 /// Hot-window size: floor `tail_floor`, grow under `HOT_TAIL_PCT` of `usable`,
 /// cap `HOT_TAIL_MAX_MSGS`, never below watermark span when smaller, snap trim
-/// to a user-exchange start so tool chains stay intact.
+/// to a tool-round start (user or assistant) so we never open mid tool-chain.
 fn hot_keep_n(body: &[ChatMessage], after_wm: usize, tail_floor: usize, usable: u64) -> usize {
     if body.is_empty() {
         return 1;
@@ -203,29 +203,30 @@ fn hot_keep_n(body: &[ChatMessage], after_wm: usize, tail_floor: usize, usable: 
     }
 
     keep = keep.max(1).min(n);
-    snap_keep_to_exchange(body, keep)
+    snap_keep_to_round(body, keep)
 }
 
-/// Move the cut forward (keep fewer older msgs) to the nearest user message at
-/// the hot-window start so we don't open mid tool-call chain. Never increases keep.
-fn snap_keep_to_exchange(body: &[ChatMessage], keep: usize) -> usize {
+/// Move the cut forward (keep fewer older msgs) so the window opens on a user
+/// or assistant — never a dangling tool result. One-user agentic tails have no
+/// later user to snap to; an assistant that started the tool-round is enough.
+/// Never increases keep.
+fn snap_keep_to_round(body: &[ChatMessage], keep: usize) -> usize {
     let n = body.len();
     if keep >= n || keep == 0 {
         return keep.min(n).max(1);
     }
     let start = n - keep;
-    // If body[start] is already User, good.
-    if body[start].role == Role::User {
-        return keep;
-    }
-    // Walk toward newer messages to find a User (shortens the older side).
-    for i in start + 1..n {
-        if body[i].role == Role::User {
-            return n - i;
+    match body[start].role {
+        Role::User | Role::Assistant => keep,
+        Role::Tool | Role::System => {
+            for i in start + 1..n {
+                if matches!(body[i].role, Role::User | Role::Assistant) {
+                    return n - i;
+                }
+            }
+            keep
         }
     }
-    // No user in window — keep as-is (tool-only tail).
-    keep
 }
 
 /// Build recall intent: last user line + recent body trajectory (truncated).
@@ -632,10 +633,25 @@ mod tests {
             msg(Role::User, "u1"),
             msg(Role::Assistant, "a2"),
         ];
-        // keep=4 would start at tool t0 (index 2); snap should move to u1 (keep=2)
-        let k = snap_keep_to_exchange(&body, 4);
+        // keep=4 would start at tool t0 (index 2); snap to the next assistant (a1).
+        let k = snap_keep_to_round(&body, 4);
+        assert_eq!(k, 3);
+        assert_eq!(body[body.len() - k].role, Role::Assistant);
+    }
+
+    #[test]
+    fn snap_one_user_agentic_opens_on_assistant() {
+        let body = vec![
+            msg(Role::User, "kickoff"),
+            msg(Role::Assistant, "a0"),
+            msg(Role::Tool, "t0"),
+            msg(Role::Assistant, "a1"),
+            msg(Role::Tool, "t1"),
+        ];
+        // keep=3 starts at t0; snap forward to a1 (keep=2) — not "no user, leave it".
+        let k = snap_keep_to_round(&body, 3);
         assert_eq!(k, 2);
-        assert_eq!(body[body.len() - k].role, Role::User);
+        assert_eq!(body[body.len() - k].role, Role::Assistant);
     }
 
     #[test]
