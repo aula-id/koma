@@ -294,14 +294,15 @@ pub fn build_recall_intent(history: &[ChatMessage], last_user: &str) -> String {
     } else {
         return out;
     };
-    let take = TRAJECTORY_MSG_N.min(body.len());
-    if take == 0 {
+    if body.is_empty() {
         return out;
     }
     out.push_str("\n\n--- recent trajectory ---\n");
-    let start = body.len() - take;
     let mut budget = TRAJECTORY_INTENT_CHARS;
-    for m in &body[start..] {
+    let mut lines = Vec::new();
+    // Allocate from the newest work backward, then render chronologically.
+    // Otherwise several large older messages consume the entire budget.
+    for m in body.iter().rev().filter(|m| m.role != Role::System).take(TRAJECTORY_MSG_N) {
         if budget == 0 {
             break;
         }
@@ -312,14 +313,20 @@ pub fn build_recall_intent(history: &[ChatMessage], last_user: &str) -> String {
             Role::System => "system",
         };
         let mut line = format!("{role}: ");
-        let content: String = m.content.chars().take(budget.min(800)).collect();
+        let framing = line.chars().count() + 1;
+        if budget < framing {
+            break;
+        }
+        // Reserve the separator before truncation so the earliest partial line
+        // cannot run into the next message when chronological order is restored.
+        let content: String = m.content.chars().take((budget - framing).min(800)).collect();
         line.push_str(&content);
         line.push('\n');
-        // The limit is in characters throughout, including the role/newline.
-        // Never cut a UTF-8 string at an arbitrary byte offset.
-        let line: String = line.chars().take(budget).collect();
         budget = budget.saturating_sub(line.chars().count());
-        out.push_str(&line);
+        lines.push(line);
+    }
+    for line in lines.iter().rev() {
+        out.push_str(line);
     }
     out
 }

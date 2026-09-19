@@ -302,3 +302,34 @@ async fn full_blob_replaces_fts_excerpt_for_the_same_message() {
     assert!(!out[0].content.contains("[archive msg #1 |"));
     assert_eq!(msglog::fetch_blob_content(&archive.0, 1).unwrap(), body);
 }
+
+#[test]
+fn trajectory_keeps_newest_work_when_older_messages_fill_the_budget() {
+    let mut history = vec![ChatMessage::new(Role::System, "system")];
+    for i in 0..24 {
+        history.push(ChatMessage::new(
+            Role::Tool,
+            format!("round-{i:02}: {}", "x".repeat(1000)),
+        ));
+    }
+    history.push(ChatMessage::new(
+        Role::Tool,
+        "latestdiagnostic missing-config",
+    ));
+    history.push(ChatMessage::new(Role::System, "system-only directive"));
+    let intent = build_recall_intent(&history, "continue");
+    assert!(intent.contains("latestdiagnostic missing-config"));
+    assert!(!intent.contains("round-00"));
+    assert!(!intent.contains("system-only directive"));
+    assert!(intent.find("round-22").unwrap() < intent.find("round-23").unwrap());
+    assert!(intent.find("round-23").unwrap() < intent.find("latestdiagnostic").unwrap());
+    let (_, trajectory) = intent
+        .split_once("\n\n--- recent trajectory ---\n")
+        .unwrap();
+    assert_eq!(trajectory.chars().count(), TRAJECTORY_INTENT_CHARS);
+    assert_eq!(
+        trajectory.lines().count(),
+        trajectory.matches("tool: ").count()
+    );
+    assert!(trajectory.lines().all(|line| line.starts_with("tool: ")));
+}
