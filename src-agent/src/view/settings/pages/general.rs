@@ -109,10 +109,6 @@ pub(crate) fn draw_general(
                 let v = if st.short_send_enabled { "on" } else { "off" };
                 vec![Span::styled(v, Style::default().fg(palette.accent))]
             }
-            SettingField::SlidingCache => {
-                let v = if st.sliding_cache { "on" } else { "off" };
-                vec![Span::styled(v, Style::default().fg(palette.accent))]
-            }
             SettingField::BashSaving => {
                 let v = if st.bash_saving { "on" } else { "off" };
                 vec![Span::styled(v, Style::default().fg(palette.accent))]
@@ -140,8 +136,6 @@ pub(crate) fn draw_general(
                         }
                     }
                     SettingField::Name => st.name.as_str(),
-                    SettingField::ShortSendEngageN => st.short_send_engage_n.as_str(),
-                    SettingField::ShortSendTailN => st.short_send_tail_n.as_str(),
                     SettingField::SubagentMaxTurns => st.subagent_max_turns.as_str(),
                     SettingField::MaxOutputTokens => st.max_output_tokens.as_str(),
                     _ => "",

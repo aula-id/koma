@@ -43,15 +43,16 @@ pub struct SettingsSnapshot {
     pub classifier_enabled: bool,
     pub allowed_folders: Vec<String>,
     pub short_send_enabled: bool,
-    /// Body message count that holds DRSS engaged (sticky). Default 80.
+    /// Legacy snapshot compatibility only; ignored by deterministic DRSS.
     #[serde(default = "default_i64_80")]
     pub short_send_engage_n: i64,
-    /// Max verbatim body messages on the wire when engaged. Default 40.
+    /// Legacy snapshot compatibility only; ignored by deterministic DRSS.
     #[serde(default = "default_i64_40")]
     pub short_send_tail_n: i64,
-    /// Interactive chat max_tokens (0 = auto). Default 0.
+    /// Requested reply limit (0 = 128k, bounded by model/context limits).
     #[serde(default)]
     pub max_output_tokens: u32,
+    /// Legacy snapshot compatibility only; ignored by deterministic DRSS.
     pub sliding_cache: bool,
     pub bash_saving: bool,
     #[serde(default)]

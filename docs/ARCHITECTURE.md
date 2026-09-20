@@ -374,12 +374,17 @@ Repeated goal/clear phrases during tool continuations do not rewrite provenance.
 (0 = automatic) can lower the operating ceiling; `context_model_alias` supplies
 an explicit OpenRouter capability ID. Both are exposed in GUI session settings
 and persisted in session `settings.json`. `max_output_tokens` requests a reply
-limit (auto = 32k, or 256k on direct xAI), clamped by available room and provider metadata. Generic
+limit (a positive custom value takes priority; 0 = 128k), clamped by available
+room and provider output metadata. Sub-agent requests share the 128k default
+and clamp on every host, including direct xAI. Context and reply ceilings are
+separate: a 128k context fallback does not leave room for a full 128k reply. Generic
 chat completions, Anthropic, and Command Code receive this calculated limit.
 Codex OAuth rejects output-limit fields, so its output is provider-controlled;
-input shaping still reserves reply room. Sub-agents retain their separate endpoint budget policy.
+input shaping still reserves reply room.
 Legacy `short_send_engage_n`, `short_send_tail_n`, and `sliding_cache` fields remain
-readable for compatibility but no longer control DRSS.
+readable for compatibility but no longer control DRSS. Their controls and edit
+handlers are removed from General settings; saving current settings leaves these
+legacy values untouched.
 
 `/compact` is a separate, explicitly requested operation that rewrites the visible
 conversation. DRSS never invokes it.
@@ -448,9 +453,9 @@ cache hits, the flag is never reset). DRSS uses its fixed token bands independen
   For models where reasoning is mandatory (`mandatory: true`), the "off" option is
   not shown; instead `reasoning: {exclude: true}` is used on secondary/utility calls.
 - **No plan gate.** Tools run on the first model call; there is no forced plan step.
-- **Context length preference.** `context_length_for` prefers
-  `top_provider.context_length` (what the serving provider actually enforces) over
-  the nominal `context_length`. Falls back to 128 000 tokens.
+- **Context length preference.** `context_length_for` uses the smaller positive
+  serving-provider / nominal context length, matching DRSS. Missing, null, and
+  zero values are unknown; callers use the shared 128 000-token fallback.
 - **Provider routing.** `provider_routing_for(slug)` sets `only: [slug], allow_fallbacks: false`
   for non-empty slugs; omits the field entirely for empty slugs (OpenRouter default routing).
 - **`reasoning: {exclude: true}`.** Used on ALL secondary / utility calls

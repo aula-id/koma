@@ -19,16 +19,6 @@ pub enum SettingField {
     AllowedFolders,
     /// Toggle: master kill-switch for the short-send token saver.
     ShortSendEnabled,
-    /// Numeric: body message count that HOLDS DRSS engaged (sticky; not kick-in).
-    #[allow(dead_code)] // Legacy settings projection; hidden from the General page.
-    ShortSendEngageN,
-    /// Numeric: max verbatim body messages on the wire when short-send is engaged.
-    #[allow(dead_code)] // Legacy settings projection; hidden from the General page.
-    ShortSendTailN,
-    /// Toggle: cache-warmth-adaptive summarization. On only for models with a
-    /// sliding/refreshing prompt cache (e.g. Anthropic).
-    #[allow(dead_code)] // Legacy settings projection; hidden from the General page.
-    SlidingCache,
     /// Toggle: whether bash/git_operator save filtered output logs to disk.
     BashSaving,
     /// Toggle: GUI Coding panel auto-save (debounced) for dirty editor tabs.
@@ -40,7 +30,7 @@ pub enum SettingField {
     MouseCapture,
     /// Numeric: max agentic turns per sub-agent (when agent def has no `steps`).
     SubagentMaxTurns,
-    /// Numeric: interactive chat max_tokens (0 = auto endpoint default).
+    /// Numeric: requested reply limit (0 = 128k, bounded by model/context limits).
     MaxOutputTokens,
 }
 
@@ -58,9 +48,6 @@ impl SettingField {
             SettingField::ClassifierEnabled => "Harness",
             SettingField::AllowedFolders => "Allowed dirs",
             SettingField::ShortSendEnabled => "Short-send",
-            SettingField::ShortSendEngageN => "DRSS hold",
-            SettingField::ShortSendTailN => "DRSS tail",
-            SettingField::SlidingCache => "Sliding cache",
             SettingField::BashSaving => "Bash shorts",
             SettingField::CodingAutosave => "Coding autosave",
             SettingField::InternetMode => "Internet mode",

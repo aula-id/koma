@@ -406,7 +406,7 @@ pub enum ClientRequest {
     /// Partial-update the foreground session's GUI-editable prefs (the GUI Settings tab's
     /// Session section). Only the `Some` fields are applied, EACH through the SAME per-field
     /// apply logic the TUI settings save uses (`actions::settings::handle_save_settings`):
-    /// short-send / sliding-cache / bash-saving are plain field sets, `internet_mode`
+    /// short-send / bash-saving are plain field sets, `internet_mode`
     /// (`"simple"`/`"full"`) goes through the shared internet-feedback path, and `workdir` is
     /// normalized (trim + drop empties + cwd fallback) with a dir-cache reindex. The daemon
     /// then persists the session settings and re-pushes a fresh [`DaemonEvent::SettingsValues`]
@@ -420,11 +420,11 @@ pub enum ClientRequest {
         internet_mode: Option<String>,
         workdir: Option<Vec<String>>,
         subagent_max_turns: Option<u32>,
-        /// Body message count that holds DRSS engaged (sticky; ≥ 1).
+        /// Legacy preference accepted for older clients; ignored by DRSS.
         short_send_engage_n: Option<i64>,
-        /// Max verbatim body messages on the wire when engaged (≥ 1).
+        /// Legacy preference accepted for older clients; ignored by DRSS.
         short_send_tail_n: Option<i64>,
-        /// Interactive chat max_tokens (0 = auto endpoint default). Soft max 1_000_000.
+        /// Requested reply limit (0 = 128k). Soft max 1_000_000; bounded by context.
         max_output_tokens: Option<u32>,
         context_window_limit: Option<u64>,
         context_model_alias: Option<String>,
@@ -836,10 +836,10 @@ pub enum DaemonEvent {
         effort: String,
         /// Max agentic turns per sub-agent (user-editable, ≥ 1).
         subagent_max_turns: u32,
-        /// Body message count that holds DRSS engaged (sticky; ≥ 1).
+        /// Legacy wire compatibility only; ignored by DRSS.
         #[serde(default = "default_short_send_n_80")]
         short_send_engage_n: i64,
-        /// Max verbatim body messages on the wire when engaged (≥ 1).
+        /// Legacy wire compatibility only; ignored by DRSS.
         #[serde(default = "default_short_send_n_40")]
         short_send_tail_n: i64,
         /// Interactive chat max_tokens (0 = auto). Default 0 for older peers.

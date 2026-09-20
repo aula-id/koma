@@ -76,11 +76,11 @@ pub struct SettingsState {
     pub allowed_folders: Vec<String>,
     /// Draft: short-send token-saver master switch.
     pub short_send_enabled: bool,
-    /// Draft: body message count that holds DRSS engaged (numeric string).
+    /// Legacy snapshot value only; not editable and ignored by deterministic DRSS.
     pub short_send_engage_n: String,
-    /// Draft: max verbatim body messages on the wire when engaged (numeric string).
+    /// Legacy snapshot value only; not editable and ignored by deterministic DRSS.
     pub short_send_tail_n: String,
-    /// Draft: cache-warmth-adaptive summarization toggle.
+    /// Legacy snapshot value only; not editable and ignored by deterministic DRSS.
     pub sliding_cache: bool,
     /// Draft: bash output saving (filtered + tee-to-disk) toggle.
     pub bash_saving: bool,
@@ -337,12 +337,6 @@ impl SettingsState {
             SettingField::ShortSendEnabled => {
                 self.short_send_enabled = !self.short_send_enabled;
             }
-            SettingField::ShortSendEngageN | SettingField::ShortSendTailN => {
-                self.editing = true;
-            }
-            SettingField::SlidingCache => {
-                self.sliding_cache = !self.sliding_cache;
-            }
             SettingField::BashSaving => {
                 self.bash_saving = !self.bash_saving;
             }
@@ -374,10 +368,7 @@ impl SettingsState {
         let f = self.current_field();
         if matches!(
             f,
-            SettingField::SubagentMaxTurns
-                | SettingField::ShortSendEngageN
-                | SettingField::ShortSendTailN
-                | SettingField::MaxOutputTokens
+            SettingField::SubagentMaxTurns | SettingField::MaxOutputTokens
         ) && !c.is_ascii_digit()
         {
             return;

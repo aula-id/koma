@@ -30,9 +30,6 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             s.classifier_enabled,
             s.allowed_folders.clone(),
             s.short_send_enabled,
-            s.short_send_engage_n.clone(),
-            s.short_send_tail_n.clone(),
-            s.sliding_cache,
             s.bash_saving,
             s.coding_autosave,
             s.internet_mode,
@@ -58,9 +55,6 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         classifier_enabled,
         allowed_folders,
         short_send_enabled,
-        short_send_engage_n,
-        short_send_tail_n,
-        sliding_cache,
         bash_saving,
         coding_autosave,
         internet_mode,
@@ -321,15 +315,8 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             // Short-send kill switch: no client rebuild needed; the
             // shape() call reads this flag per-send.
             sess.settings.short_send_enabled = short_send_enabled;
-            // DRSS hold / tail: parse as i64, clamp ≥ 1 so empty/invalid
-            // drafts cannot disable the forever-run bound.
-            let parsed_engage: i64 = short_send_engage_n.parse().unwrap_or(0);
-            sess.settings.short_send_engage_n = parsed_engage.max(1);
-            let parsed_tail: i64 = short_send_tail_n.parse().unwrap_or(0);
-            sess.settings.short_send_tail_n = parsed_tail.max(1);
-            // Sliding-cache toggle: no client rebuild needed; a later
-            // wave's summarization logic reads this flag per-send.
-            sess.settings.sliding_cache = sliding_cache;
+            // Obsolete count/cache fields are compatibility data, not drafts.
+            // Leave their stored values untouched when saving current settings.
             // Bash-saving toggle: no client rebuild needed; the tool
             // context reads this flag per-spawn.
             sess.settings.bash_saving = bash_saving;

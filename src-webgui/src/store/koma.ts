@@ -145,11 +145,11 @@ export type SettingsValues = {
   effort: string
   // Max agentic turns per sub-agent (≥ 1, default 500).
   subagentMaxTurns: number
-  // Body message count that holds DRSS engaged (sticky; ≥ 1, default 80).
+  // Legacy wire compatibility only; ignored by deterministic DRSS.
   shortSendEngageN: number
-  // Max verbatim body messages on the wire when short-send is engaged (≥ 1, default 40).
+  // Legacy wire compatibility only; ignored by deterministic DRSS.
   shortSendTailN: number
-  // Interactive chat max_tokens (0 = auto endpoint default).
+  // Requested reply limit (0 = 128k, bounded by model/context limits).
   maxOutputTokens: number
   contextWindowLimit: number
   contextModelAlias: string
