@@ -6,6 +6,50 @@ use crate::model::{
 };
 
 #[test]
+fn headless_extension_batches_are_validated_before_mutating_selection() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let fixture = ExtensionFixture::new();
+    let mut state = AppState::new(Mode::Chat);
+    state.rest.config.installed_extensions = vec![fixture.ext.clone()];
+    state.rest.fg_mut().session = Some(Session::new(
+        "batch-test".into(),
+        "/unused".into(),
+        "test".into(),
+        Settings::default(),
+        Conversation::from_messages(vec![]),
+    ));
+    let load = vec![fixture.ext.id.clone(), "run.koma.not-installed".into()];
+    let result = crate::app::runtime::commands::extensions::set_session_extensions(
+        &mut state,
+        0,
+        rt.handle(),
+        &load,
+        &[],
+    );
+    assert!(result.unwrap_err().to_string().contains("not installed"));
+    assert!(state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .unwrap()
+        .settings
+        .active_extensions
+        .is_empty());
+    assert!(!fixture.workspace.exists());
+    state.rest.config.installed_extensions[0].activation =
+        crate::model::app_config::ExtensionActivation::Global;
+    let result = crate::app::runtime::commands::extensions::set_session_extensions(
+        &mut state,
+        0,
+        rt.handle(),
+        &[],
+        &[fixture.ext.id.clone()],
+    );
+    assert!(result.unwrap_err().to_string().contains("global"));
+}
+
+#[test]
 fn activation_picker_roundtrip_load_and_unload_are_session_local() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let fixture = ExtensionFixture::new();

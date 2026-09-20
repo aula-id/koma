@@ -36,53 +36,16 @@ pub(super) fn handle_use_extension(
     }) else {
         return Ok(());
     };
-    if load
-        && !state
-            .rest
-            .config
-            .installed_extensions
-            .iter()
-            .any(|e| e.id == row.id && e.enabled)
-    {
-        activation_error(state, "Extension is disabled or no longer installed.");
-        return Ok(());
-    }
-    if !load && row.activation == crate::model::app_config::ExtensionActivation::Global {
-        activation_error(
-            state,
-            "This extension is global. Set it to on-demand in /extension first.",
-        );
-        return Ok(());
-    }
-    if load {
-        if let Some(raw) = &row.workspace_dir {
-            if let Err(error) = crate::model::ext_workspace::validate_workspace_dir(raw) {
-                activation_error(state, error);
-                return Ok(());
-            }
-        }
-    }
-    let Some(sess) = state.rest.fg_mut().session.as_mut() else {
-        return Ok(());
+    let ids = vec![row.id.clone()];
+    let (load_ids, unload_ids) = if load {
+        (ids.as_slice(), &[][..])
+    } else {
+        (&[][..], ids.as_slice())
     };
-    let old = sess.settings.clone();
-    sess.settings.active_extensions.retain(|id| id != &row.id);
-    if load && row.enabled {
-        sess.settings.active_extensions.push(row.id.clone());
-    }
-    if let Err(error) = sess.save() {
-        sess.settings = old;
-        activation_error(state, error);
-        return Ok(());
-    }
     let idx = state.rest.foreground;
-    if let Err(error) =
-        crate::app::runtime::commands::extensions::refresh_session(state, idx, handle)
-    {
-        if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-            sess.settings = old;
-        }
-        let _ = crate::app::runtime::commands::extensions::refresh_session(state, idx, handle);
+    if let Err(error) = crate::app::runtime::commands::extensions::set_session_extensions(
+        state, idx, handle, load_ids, unload_ids,
+    ) {
         activation_error(state, error);
         return Ok(());
     }

@@ -5,6 +5,8 @@
 //! the agent runtime + session locks) and a thin attach/detach TUI client.
 
 pub mod key;
+mod run;
+pub use run::{RunExtension, RunState};
 pub mod snapshot;
 pub mod stream;
 
@@ -68,6 +70,15 @@ pub enum ClientRequest {
     /// attach and NO snapshot stream. The daemon must answer this WITHOUT mutating any
     /// session state (no create/attach, no foreground change, no Hello/Snapshot).
     Status,
+    /// Correlated readback of this client's current session, without opening a UI.
+    GetRunState {
+        req_seq: u64,
+    },
+    /// Activate/deactivate extensions only for this client's session. Ack or Error.
+    SetSessionExtensions {
+        load: Vec<String>,
+        unload: Vec<String>,
+    },
     /// FIRE-AND-FORGET cross-daemon sub-agent spawn (extension `sessions.spawn_into`, W7):
     /// one session-daemon's grant broker connects ANOTHER session-daemon's keyed socket and
     /// sends this to spawn a sub-agent INTO that daemon's own foreground/first-live session,
@@ -741,6 +752,10 @@ pub enum DaemonEvent {
     /// single owned session's metadata. Sent WITHOUT attaching the client or streaming
     /// any snapshot — the connection is expected to close right after.
     Status(SessionStatus),
+    RunState {
+        req_seq: u64,
+        state: RunState,
+    },
     /// One-shot reply to a [`ClientRequest::FileSearch`]: the resolved workspace-file
     /// hits for `query` (echoed so the GUI can drop a stale/out-of-order reply). Sent
     /// WITHOUT attaching or snapshotting — a metadata reply like [`Status`].

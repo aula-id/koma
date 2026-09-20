@@ -181,6 +181,10 @@ impl DaemonHub {
             ClientRequest::Status => {
                 self.status(idx, state);
             }
+            ClientRequest::GetRunState { req_seq } => self.get_run_state(idx, state, req_seq),
+            ClientRequest::SetSessionExtensions { load, unload } => {
+                self.set_session_extensions(idx, state, handle, load, unload)
+            }
             ClientRequest::Detach => {
                 self.detach(idx, state);
             }
@@ -773,6 +777,8 @@ impl DaemonHub {
             | ClientRequest::Resync
             | ClientRequest::ListSessions
             | ClientRequest::Status
+            | ClientRequest::GetRunState { .. }
+            | ClientRequest::SetSessionExtensions { .. }
             | ClientRequest::RemoveAttachment { .. }
             | ClientRequest::FileSearch { .. }
             | ClientRequest::UsagePreview { .. }

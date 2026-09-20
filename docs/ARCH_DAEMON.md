@@ -664,9 +664,15 @@ Operator / automation entry that uses the **same** ensure+attach path (not stand
 ```bash
 koma run --prompt '…' [--name NAME] [--workdir DIR] [--once] [--timeout SECS]
 koma run --prompt-file PATH …
+koma run --session ID --status
 ```
 
-Implementation: `cli::RunCli` + `app::runtime::headless_run` → `attach_session_headless` → `SubmitInput` → optional idle wait → `Detach`. See [`ARCH_TUI_DAEMON.md`](ARCH_TUI_DAEMON.md#headless-one-shot-koma-run).
+Implementation: `cli::RunCli` + `app::runtime::headless_run` → `attach_session_headless`
+→ setup with correlated `GetRunState` readback → `SubmitInput` (or inspection only with
+`--status`) → optional idle wait → `Detach`. `SetSessionExtensions` reuses the TUI's
+session activation helper; the reply state names the extensions active in this session.
+DRSS controls include short-send, context limit/alias, and reply limit. See
+[`ARCH_TUI_DAEMON.md`](ARCH_TUI_DAEMON.md#headless-one-shot-koma-run).
 
 Unknown top-level verbs (typos) print `--help` and exit 1; they never spawn a session-daemon.
 

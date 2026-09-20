@@ -188,6 +188,72 @@ fn read_ext_manifest(id: &str) -> ExtManifestInfo {
     }
 }
 
+/// Apply a validated selection batch for either the TUI picker or headless CLI.
+/// Workspace, tools, and model-facing context follow the session selection together.
+pub(crate) fn set_session_extensions(
+    state: &mut AppState,
+    idx: usize,
+    handle: &tokio::runtime::Handle,
+    load: &[String],
+    unload: &[String],
+) -> Result<()> {
+    anyhow::ensure!(
+        !state.rest.sessions[idx].is_working(),
+        "Wait for the current turn to finish before changing extensions."
+    );
+    anyhow::ensure!(
+        !load.iter().any(|id| unload.contains(id)),
+        "An extension cannot be loaded and unloaded together."
+    );
+    // Validate the complete batch before changing selection or creating roots.
+    for id in load.iter().chain(unload) {
+        let ext = state
+            .rest
+            .config
+            .installed_extensions
+            .iter()
+            .find(|e| &e.id == id)
+            .ok_or_else(|| anyhow::anyhow!("Extension '{id}' is not installed."))?;
+        if load.contains(id) {
+            anyhow::ensure!(
+                ext.enabled,
+                "Extension '{id}' is disabled; enable it in /extension first."
+            );
+        } else {
+            anyhow::ensure!(
+                ext.activation != crate::model::app_config::ExtensionActivation::Global,
+                "Extension '{id}' is global. Set it to on-demand in /extension first."
+            );
+        }
+    }
+    for id in load {
+        if let Some(raw) = crate::model::ext_workspace::read_workspace_dir(id) {
+            crate::model::ext_workspace::validate_workspace_dir(&raw)?;
+        }
+    }
+    let sess = state.rest.sessions[idx]
+        .session
+        .as_mut()
+        .ok_or_else(|| anyhow::anyhow!("No active session."))?;
+    let before = sess.settings.clone();
+    sess.settings
+        .active_extensions
+        .retain(|id| !unload.contains(id));
+    for id in load {
+        if !sess.settings.active_extensions.contains(id) {
+            sess.settings.active_extensions.push(id.clone());
+        }
+    }
+    if let Err(error) = refresh_session(state, idx, handle) {
+        if let Some(sess) = state.rest.sessions[idx].session.as_mut() {
+            sess.settings = before;
+        }
+        let _ = refresh_session(state, idx, handle);
+        return Err(error);
+    }
+    Ok(())
+}
+
 /// Reconcile one session after activation policy changes. Workspace provenance
 /// is saved with selection so resume cannot mistake extension roots for user roots.
 pub(crate) fn refresh_session_if_needed(

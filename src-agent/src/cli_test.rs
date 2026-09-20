@@ -1,6 +1,102 @@
 use super::parse;
 
 #[test]
+fn run_current_drss_and_extension_flags() {
+    let run = parse(
+        [
+            "koma",
+            "--session",
+            "existing",
+            "run",
+            "--status",
+            "--short-send",
+            "off",
+            "--max-tokens",
+            "0",
+            "--context-window-limit",
+            "1000000",
+            "--context-model-alias",
+            "model-alias",
+            "--extension",
+            "run.koma.one",
+            "--extension",
+            "run.koma.two",
+            "--extension",
+            "run.koma.one",
+            "--unload-extension",
+            "run.koma.old",
+        ]
+        .into_iter()
+        .map(String::from),
+    )
+    .run
+    .unwrap();
+    assert!(run.error.is_none(), "{:?}", run.error);
+    assert_eq!(run.session.as_deref(), Some("existing"));
+    assert!(run.status);
+    assert_eq!(run.short_send, Some(false));
+    assert_eq!(run.max_tokens, Some(0));
+    assert_eq!(run.context_window_limit, Some(300_000));
+    assert_eq!(run.context_model_alias.as_deref(), Some("model-alias"));
+    assert_eq!(run.extensions, vec!["run.koma.one", "run.koma.two"]);
+    assert_eq!(run.unload_extensions, vec!["run.koma.old"]);
+}
+
+#[test]
+fn run_rejects_invalid_and_retired_setup_flags() {
+    for args in [
+        vec!["--short-send", "maybe"],
+        vec!["--context-window-limit", "-1"],
+        vec!["--max-tokens", "wrong"],
+        vec!["--extension"],
+        vec!["--mode", "made-up"],
+        vec!["--short-send-engage-n", "80"],
+        vec!["--mode", "yolo", "--security", "off"],
+        vec![
+            "--extension",
+            "run.koma.one",
+            "--unload-extension",
+            "run.koma.one",
+        ],
+    ] {
+        let run = parse(
+            ["koma", "run"]
+                .into_iter()
+                .chain(args.iter().copied())
+                .map(String::from),
+        )
+        .run
+        .unwrap();
+        assert!(
+            run.error.is_some(),
+            "invalid args silently accepted: {args:?}"
+        );
+    }
+}
+
+#[test]
+fn run_flags_before_verb_and_prompt_flag_literals_are_not_misparsed() {
+    let run = parse(
+        [
+            "koma",
+            "--short-send",
+            "on",
+            "run",
+            "--prompt",
+            "--extension",
+        ]
+        .into_iter()
+        .map(String::from),
+    )
+    .run
+    .unwrap();
+    assert!(run.error.is_none());
+    assert_eq!(run.short_send, Some(true));
+    assert_eq!(run.prompt.as_deref(), Some("--extension"));
+    assert!(run.extensions.is_empty());
+}
+
+#[test]
 fn bare_remote_opens_saved_host_picker() {
     let opts = parse(["koma", "remote"].into_iter().map(String::from));
     assert!(opts.remote_picker);

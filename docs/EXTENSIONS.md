@@ -238,6 +238,13 @@ conversation messages remain. Other sessions keep their own selections. Running 
 or OAuth flow can start the extension process without activating its context in a chat.
 Extension-initiated prompts and delegated tasks require activation in their target session.
 
+Headless runs use the same selection: `koma run --prompt '…' --extension <id>` loads
+an extension for that run's session (repeat `--extension` for multiple ids).
+`--session <id> --unload-extension <extension-id> --status` unloads without sending a
+prompt. `koma run --session <id> --status` reports active extensions and enable modes.
+Omitting these flags preserves selection on an existing session; a new session starts
+with only global extensions active.
+
 ## Two extensions to picture
 
 Two examples make the two directions concrete.

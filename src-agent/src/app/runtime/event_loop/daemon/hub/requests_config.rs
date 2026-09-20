@@ -9,6 +9,7 @@
 //! (see `actions::mcp::ensure_mcp_manager`).
 
 use crate::app::state::AppState;
+use crate::ipc::proto::DaemonEvent;
 
 use super::core::DaemonHub;
 
@@ -419,17 +420,20 @@ impl DaemonHub {
             if let Some(v) = context_model_alias {
                 sess.settings.context_model_alias = v.trim().chars().take(200).collect();
             }
-            // Refresh the mode-gated system-prompt roster, then persist — mirrors
-            // handle_save_settings (:198 rebuild + :216 save). A save error just
-            // leaves the on-disk file stale; the `SettingsValues` re-push below still
-            // reflects the in-memory state, and this GUI path has no Ack/Error channel
-            // to surface it to (the store ignores those frames).
+            // Refresh the mode-gated system prompt, then persist. Surface save
+            // failures to headless callers before their state readback so they
+            // do not submit a prompt with settings that were not persisted.
+            // SettingsValues below still reflects the current in-memory state.
             sess.rebuild_system();
-            if sess.save().is_err() {
+            if let Err(error) = sess.save() {
                 #[cfg(feature = "linker")]
                 {
                     session_save_ok = false;
                 }
+                self.send_to(
+                    idx,
+                    DaemonEvent::Error(format!("Could not save session settings: {error}")),
+                );
             }
         }
         // internet feedback (status + optional install toast) only on an actual
@@ -517,7 +521,12 @@ impl DaemonHub {
         };
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
             sess.settings.effort = effort;
-            let _ = sess.save();
+            if let Err(error) = sess.save() {
+                self.send_to(
+                    idx,
+                    DaemonEvent::Error(format!("Could not save effort: {error}")),
+                );
+            }
         }
         self.send_settings_values(idx, state);
     }

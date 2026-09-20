@@ -56,26 +56,55 @@ Same **session-daemon** path as the default client (not `alone` / `--local`). Th
 ```text
 ensure_daemon_running + attach_session_headless
   → optional RenameSession (--name)
-  → ClientRequest::SubmitInput
-  → optional --once wait (Status / SessionStatusChanged until idle)
+  → optional setup + GetRunState readback (DRSS / model / mode / extensions)
+  → ClientRequest::SubmitInput (omitted for --status)
+  → optional --once wait (GetRunState until idle or approval)
   → Detach  (daemon keeps running)
 ```
 
 ```bash
 koma run --prompt 'summarize the repo' --name smoke --once --timeout 600
 koma run --prompt-file ./task.txt --workdir /path/to/desk --once
+koma run --prompt 'continue this task' --extension run.koma.example --short-send on --once
+koma run --session SESSION_ID --status
+koma run --session SESSION_ID --unload-extension run.koma.example --status
 ```
 
 | Flag | Meaning |
 |---|---|
-| `--prompt` / `--prompt-file` | Exactly one required (inline text or file) |
+| `--prompt` / `--prompt-file` | Exactly one required, except with `--status` |
 | `--name` | Session display name |
 | `--workdir` / `--cwd` | Daemon spawn working directory |
 | `--session` | Reuse an existing session id (else mint) |
+| `--model` | Main model catalogue name, model id, or UUID |
+| `--effort` / `--mode` | Session reasoning effort and agent mode |
+| `--security on\|off` | Start/stop security; yolo requires it running |
+| `--max-tokens N` | Reply limit; zero uses the 128k fallback, bounded by context |
+| `--short-send on\|off` | DRSS master switch for this session |
+| `--context-window-limit N` | Context override, capped at 300,000; zero uses detection |
+| `--context-model-alias ID` | Model identifier used for context detection; empty clears |
+| `--extension ID` | Load this extension for this session; repeat for multiple ids |
+| `--unload-extension ID` | Unload an on-demand extension for this session; repeatable |
+| `--status` | Inspect/configure an existing `--session` without submitting a prompt |
 | `--once` | Block until idle (or timeout / approval) |
 | `--timeout SECS` | Wall clock for `--once` (default 14400) |
 
 Exit codes: `0` ok · `1` error · `2` timeout · `3` approval-parked.
+
+Extension flags call the same session activation helper as `/extension use`: workspace,
+tools, sub-agent definitions, and context change together and persist on resume.
+Omitting extension flags preserves the session's selection. Global extensions remain
+active; these flags never change global policy or another session's selection.
+
+Output reports daemon-applied settings, workspace roots, and `active_extensions` (a JSON
+array of ids). `--status` also reports `extensions` with each installed extension's id,
+name, enable mode, active flag, and process state. `drss_active` describes the most recent
+request; `short_send` is the configured master switch. No credentials are included.
+Setup uses correlated `GetRunState` replies instead of blind sleeps: errors, missing
+confirmations, and rejected settings stop prompt submission. Explicitly loaded daemon
+extensions are given time to start before the prompt. Invalid/retired flags fail before
+attaching. Changing settings on a busy session is rejected; submitting a follow-up without
+setup retains the existing queue behavior.
 
 ### Unknown CLI verbs
 
