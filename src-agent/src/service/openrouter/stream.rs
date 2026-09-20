@@ -199,6 +199,9 @@ impl OpenRouterClient {
             if conn.api_type == ApiType::OpenAiCompatible && !conn.account_id.is_empty() {
                 hdrs.push(("X-Kilocode-OrganizationID", conn.account_id));
             }
+            if conn.api_type == ApiType::OpenAiCompatible && super::helpers::is_xai(conn.endpoint) {
+                hdrs.push(("x-grok-conv-id", self.codex_session_id()));
+            }
             super::debug_dump::dump_outbound(&url, &hdrs, &body);
         }
 

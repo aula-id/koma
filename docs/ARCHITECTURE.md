@@ -320,6 +320,15 @@ implementation or change the mode. Assistant excerpts require a history/plan
 request in the raw user message; assistant/tool text supplies search relevance only. Per-message indexing
 keeps at most 512 distinct terms, with exact repetition counts for those terms.
 
+B is snapshotted in the derived `drss_memory` table. Fresh diagnostic relevance is
+captured when B is built, then its exact bytes are reused while C grows through
+tool continuations, including after a process restart. B refreshes when the raw
+user request, objective/charter/provenance, archive range, recovery references, or
+summary token budget changes. New evidence stays available in C and through
+`message_find` / `message_load`. `/clear` and resend invalidate the snapshot.
+This preserves the A–B–C ordering without reranking the prefix on every tool step;
+the normal 60–75% bands and the 300k ceiling still apply.
+
 **Context discovery:** a dedicated, unauthenticated client reads OpenRouter's
 public `/api/v1/models` catalog. It sends no provider/OAuth credentials. Matching
 uses an optional explicit alias, exact IDs/canonical slugs, normalized punctuation
@@ -439,6 +448,7 @@ Each session has `messages.sqlite` alongside `messages.json`. Tables:
 | `summary` | Legacy rolling-summary record (unused by deterministic DRSS) |
 | `drss_index` / `drss_terms` | Derived content fingerprints and bounded term counts |
 | `drss_state` | Active archive range and persisted outgoing boundary |
+| `drss_memory` | Bounded deterministic B snapshot and refresh-input fingerprint |
 | `drss_recovery` / `drss_recovery_fts` | Exact legacy copies, independent read keys, coverage, and keyword index |
 
 Heavy thresholds: `token_est >= 400` (≈1 600 chars) for general messages, `>= 150` for tool outputs, or any message containing a triple-backtick fence. Kind: `"code"`, `"tool_output"`, or `"large_text"`.
@@ -472,6 +482,14 @@ CACHE_SPLIT_MARK  (two invisible Unicode chars U+2062 U+2061)
 head part only, and emits the tail as a second uncached part. The plan-word steer is
 chosen ONCE per `OpenRouterClient` construction (once per session) so the prefix is
 byte-stable across all requests in that session.
+
+Direct xAI chat-completions calls (OAuth or API key) also send `x-grok-conv-id`
+using the client's stable cache-routing ID. Streaming, one-shot requests, retries,
+and refreshed credentials reuse the ID. The header is scoped to `api.x.ai` and
+its regional subdomains; OpenRouter and other providers keep their own routing.
+xAI prefix caching remains best-effort: changing A, refreshing B, changing tool
+schemas, or provider cache eviction can still reduce cache hits. A content-block
+cache marker does not make the remaining prefix independent of those changes.
 
 `usage.prompt_tokens_details.cached_tokens` from the response drives the
 `tokens_cached` readout and the `provider_caches` latch (once any response reports

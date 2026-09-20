@@ -1,6 +1,6 @@
 //! Incremental deterministic archive index. Never indexes the reasoning column.
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -92,6 +92,8 @@ fn tables(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS drss_term_lookup ON drss_terms(term, msg_id);
         CREATE TABLE IF NOT EXISTS drss_state (
         id INTEGER PRIMARY KEY CHECK(id=1), boundary INTEGER NOT NULL, start_id INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS drss_memory (
+        id INTEGER PRIMARY KEY CHECK(id=1), cache_key TEXT NOT NULL, content TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS drss_recovery (
         archive_key TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL,
         covered INTEGER NOT NULL DEFAULT 0);
@@ -159,13 +161,38 @@ impl Index {
         Ok(refs)
     }
 
-    pub fn save_coverage(&mut self, boundary: i64, keys: &[&str]) -> Result<()> {
+    /// B is a bounded, derived snapshot. Live tool results must not reshuffle
+    /// its prefix on every continuation; the caller keys all refresh inputs.
+    pub fn cached_memory(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT content FROM drss_memory WHERE id=1 AND cache_key=?1",
+                [key],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn save_coverage(
+        &mut self,
+        boundary: i64,
+        keys: &[&str],
+        memory: Option<(&str, &str)>,
+    ) -> Result<()> {
         let tx = self.conn.transaction()?;
         tx.execute("UPDATE drss_state SET boundary=?1 WHERE id=1", [boundary])?;
         for key in keys {
             tx.execute(
                 "UPDATE drss_recovery SET covered=1 WHERE archive_key=?1",
                 [key],
+            )?;
+        }
+        if let Some((key, content)) = memory {
+            tx.execute(
+                "INSERT INTO drss_memory(id,cache_key,content) VALUES(1,?1,?2)
+                 ON CONFLICT(id) DO UPDATE SET cache_key=excluded.cache_key,content=excluded.content",
+                params![key, content],
             )?;
         }
         tx.commit()?;
@@ -348,6 +375,7 @@ pub(super) fn reset(conn: &Connection, clear: bool) -> Result<()> {
     conn.execute_batch(
         "DELETE FROM drss_terms WHERE msg_id NOT IN (SELECT id FROM messages);
         DELETE FROM drss_index WHERE msg_id NOT IN (SELECT id FROM messages);
+        DELETE FROM drss_memory;
         UPDATE drss_recovery SET covered=0;",
     )?;
     if clear {

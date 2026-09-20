@@ -128,11 +128,14 @@ fn trims_to_60_then_grows_to_75_without_touching_the_visible_rail() {
     let second = send(&history, &archive, 100_000);
     assert!(live_tokens(&second) > 60_000 && live_tokens(&second) <= 75_000);
     assert_eq!(boundary(&archive), first_cut);
+    assert_eq!(second[1], out[1], "B stays byte-stable while C grows");
     for i in 0..4 {
         history.push(archive.append(Role::Assistant, format!("later-{i} {}", "z".repeat(10000))));
     }
-    assert!(live_tokens(&send(&history, &archive, 100_000)) <= 60_000);
+    let third = send(&history, &archive, 100_000);
+    assert!(live_tokens(&third) <= 60_000);
     assert!(boundary(&archive) > first_cut);
+    assert_ne!(third[1], second[1], "new archive coverage refreshes B");
 }
 
 fn assert_plan_authority_survives_drss(recover_legacy: bool) {
@@ -689,6 +692,7 @@ fn oversized_legacy_session_recovers_immediately_without_changing_history() {
     history.push(archive.append(Role::Assistant, "new live progress"));
     let second = send(&history, &archive, 100_000);
     assert_eq!(second.last(), history.last());
+    assert_eq!(second[1], first[1], "recovery B also stays byte-stable");
     assert_eq!(
         conn.query_row::<i64, _, _>(
             "SELECT COUNT(*) FROM drss_recovery WHERE covered=1",
@@ -938,3 +942,6 @@ fn activity_tracks_condensed_history_including_reuse_but_not_index_only_or_disab
     ];
     assert!(!send_shaped(&fresh, &archive, 100_000).drss_active);
 }
+
+#[path = "cache_tests.rs"]
+mod cache_tests;

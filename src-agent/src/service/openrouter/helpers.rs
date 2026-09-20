@@ -24,8 +24,8 @@ pub(super) fn emit(tx: &UnboundedSender<StreamEvent>, event: StreamEvent) {
 /// `bearer` is the (possibly refreshed) token — NOT `conn.api_key`. The caller
 /// runs the [`crate::service::oauth::manager::fresh_key`] hook first and passes
 /// its result here so an OAuth-backed connection always sends a live token.
-/// `session_id` is the client's stable per-session id (used only by the koma-free
-/// branch as the `X-Session` header; ignored for every other wire type).
+/// `session_id` is the client's stable id: koma-free sends it as `X-Session`;
+/// direct xAI sends it as `x-grok-conv-id` for cache-affine request routing.
 ///
 /// Kilo OAuth conns (`OpenAiCompatible` wire + a non-empty `account_id`, which
 /// carries their organization id) additionally get their organization header so
@@ -61,6 +61,13 @@ pub(super) fn auth_headers_with_account(
         .header("Authorization", format!("Bearer {bearer}"))
         .header("HTTP-Referer", HTTP_REFERER)
         .header("X-Title", APP_TITLE);
+    // Reuse the same conversation id for streaming, one-shot calls, retries,
+    // and OAuth refreshes. A fresh id per request would defeat cache routing.
+    let rb = if conn.api_type == ApiType::OpenAiCompatible && is_xai(conn.endpoint) {
+        rb.header("x-grok-conv-id", session_id)
+    } else {
+        rb
+    };
     let account_id = effective_account.unwrap_or(conn.account_id);
     if conn.api_type == ApiType::OpenAiCompatible && !account_id.is_empty() {
         rb.header("X-Kilocode-OrganizationID", account_id)
@@ -217,7 +224,10 @@ pub(crate) fn is_openrouter(endpoint: &str) -> bool {
 /// effort clamps that must NOT affect OpenRouter `xai/grok-*` routes or other
 /// OpenAI-compatible hosts. OAuth and API-key xAI share the same body shape.
 pub(crate) fn is_xai(endpoint: &str) -> bool {
-    endpoint.to_lowercase().contains("api.x.ai")
+    reqwest::Url::parse(endpoint).ok().is_some_and(|url| {
+        url.host_str()
+            .is_some_and(|host| host == "api.x.ai" || host.ends_with(".api.x.ai"))
+    })
 }
 
 /// Shared context/output fallback policy for the older sub-agent call path.

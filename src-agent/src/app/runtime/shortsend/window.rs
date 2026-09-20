@@ -128,6 +128,32 @@ pub(super) fn append_bounded(out: &mut String, line: &str, budget: u64) {
     }
 }
 
+/// Refresh B when its archive, intent, or capacity changes, not when another
+/// tool result arrives in C. Capture fresh diagnostic relevance at refresh time
+/// and persist the resulting bytes so process restarts do not rerank the prefix.
+fn memory_key(
+    index: &Index,
+    through: i64,
+    user: &str,
+    goal: &GoalWire,
+    budget: u64,
+    omitted: &[(usize, &ArchiveRef)],
+) -> Result<String> {
+    let references: Vec<_> = omitted.iter().map(|(_, r)| r.read_args()).collect();
+    let inputs = serde_json::to_string(&(
+        index.start_id,
+        through,
+        user,
+        &goal.source,
+        &goal.objective,
+        &goal.charter,
+        budget,
+        references,
+    ))?;
+    // Bump this version when B's format or interpretation changes.
+    Ok(drss::fingerprint("drss-memory-v1", &inputs))
+}
+
 fn memory(
     index: &Index,
     through: i64,
@@ -347,16 +373,26 @@ pub fn shape(
         .flat_map(|(round, _)| round.start..round.end)
         .collect();
     let mut tail: Vec<_> = retained_indices.iter().map(|i| body[*i].clone()).collect();
-    let b = memory(
-        &index,
-        boundary,
-        &tail,
-        user,
-        goal,
-        b_budget,
-        if recovery { &omitted } else { &[] },
-        body,
-    )?;
+    let recovery_omitted = if recovery { omitted.as_slice() } else { &[] };
+    let memory_key = memory_key(&index, boundary, user, goal, b_budget, recovery_omitted)?;
+    let cached_memory = index.cached_memory(&memory_key)?.filter(|text| {
+        text.starts_with("[DRSS archive index: generated context data]")
+            && text_tokens(text) <= b_budget
+    });
+    let refresh_memory = cached_memory.is_none();
+    let b = match cached_memory {
+        Some(text) => ChatMessage::new(Role::User, text),
+        None => memory(
+            &index,
+            boundary,
+            &tail,
+            user,
+            goal,
+            b_budget,
+            recovery_omitted,
+            body,
+        )?,
+    };
     // Recovery borrows only real free room: A, B, schemas, framing, a useful D,
     // and the safety margin still fit W. The 300k operating cap never changes.
     let recovery_room = window.saturating_sub(fixed + message_tokens(&b) + minimum_reply);
@@ -399,7 +435,7 @@ pub fn shape(
     let mut output = Vec::with_capacity(tail.len() + 2);
     output.push(history[0].clone());
     if !b.content.is_empty() {
-        output.push(b);
+        output.push(b.clone());
     }
     output.extend(tail);
     anyhow::ensure!(prompt_tokens(&output, schemas) + minimum_reply + OUTPUT_MARGIN <= window,
@@ -412,7 +448,11 @@ pub fn shape(
         })
         .collect();
     index
-        .save_coverage(boundary, &recovered_keys)
+        .save_coverage(
+            boundary,
+            &recovered_keys,
+            refresh_memory.then_some((memory_key.as_str(), b.content.as_str())),
+        )
         .context("persist DRSS archive coverage")?;
     Ok(ShapedRequest {
         history: output,
