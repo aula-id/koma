@@ -20,6 +20,7 @@ fn ext_record(kind: &str, enabled: bool) -> InstalledExtension {
         tier: "free".to_string(),
         granted: Vec::new(),
         enabled,
+        activation: Default::default(),
         kind: kind.to_string(),
         exec: "bin/x".to_string(),
     }

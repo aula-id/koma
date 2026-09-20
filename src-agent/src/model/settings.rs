@@ -258,6 +258,14 @@ pub struct Settings {
     #[serde(default, deserialize_with = "string_or_vec")]
     pub workdir: Vec<String>,
 
+    /// On-demand extensions selected for this session; never shared by project.
+    #[serde(default)]
+    pub active_extensions: Vec<String>,
+    /// Roots added by extensions, distinct from user-owned workspaces. None is
+    /// a legacy file whose previously injected secondary roots need migration.
+    #[serde(default)]
+    pub extension_workspace_roots: Option<Vec<String>>,
+
     /// While inside a git_worktree (entered or created via the `git_worktree`
     /// tool), holds the base PRIMARY root (`workdir[0]`) to restore on exit.
     /// `None` = at the base root (not inside a worktree). Only slot `[0]` swaps
@@ -517,6 +525,8 @@ impl Default for Settings {
             provider: DEFAULT_PROVIDER.to_string(),
             effort: String::new(),
             workdir: Vec::new(),
+            active_extensions: Vec::new(),
+            extension_workspace_roots: Some(Vec::new()),
             workdir_saved: None,
             awareness_enabled: default_awareness_enabled(),
             awareness_inherit: default_awareness_inherit(),

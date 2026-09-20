@@ -351,12 +351,13 @@ impl DaemonHub {
             // same connectionless contract the `Status` discovery probe relies on. See
             // `spawn_agent`.
             ClientRequest::SpawnAgent {
+                ext_id,
                 agent,
                 task,
                 model,
                 effort,
             } => {
-                self.spawn_agent(idx, state, client, handle, agent, task, model, effort);
+                self.spawn_agent(idx, state, client, handle, ext_id, agent, task, model, effort);
             }
 
             // Quit (close) a single session by stable UUID (daemon stage 10). Resolve

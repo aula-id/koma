@@ -21,7 +21,7 @@ pub struct ExtensionManifest {
     /// Optional dedicated state directory this extension owns, declared as a path
     /// string (typically `"~/.<ext-name>"`, e.g. `"~/.event-watcher"`). When present,
     /// koma validates it, CREATES it if missing, and injects it as an extra workspace
-    /// root of every session so the agent's file tools + `bash` may read/write there
+    /// root of sessions where the extension is active, so file tools + `bash` may read/write there
     /// (an extension's own sub-agents can persist state that survives a restart).
     ///
     /// The path must resolve STRICTLY under `$HOME` (`%USERPROFILE%` on Windows); koma

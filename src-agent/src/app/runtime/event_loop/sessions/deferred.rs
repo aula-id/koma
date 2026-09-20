@@ -825,6 +825,22 @@ pub(super) fn drain_deferred_and_resume(
     //   the buffer stays parked (not dropped) until a real user turn resets the
     //   counter (see `SessionRuntime::ext_injected_turns` / `actions::chat::handle_submit`).
     //   The toast block just below fires once when that park begins.
+    {
+        let rt = &mut state.rest.sessions[idx];
+        let selected = rt
+            .session
+            .as_ref()
+            .map(|s| s.settings.active_extensions.as_slice())
+            .unwrap_or_default();
+        rt.pending_ext_prompts.retain(|(id, _)| {
+            state
+                .rest
+                .config
+                .installed_extensions
+                .iter()
+                .any(|e| &e.id == id && e.active_in(selected))
+        });
+    }
     if !state.rest.sessions[idx].pending_ext_prompts.is_empty()
         && !state.rest.sessions[idx].is_working()
         && state.rest.sessions[idx].ext_injected_turns == EXT_TURN_BUDGET

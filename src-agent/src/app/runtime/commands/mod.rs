@@ -82,7 +82,7 @@ pub(super) fn apply_slash(
         Command::Settings => misc::handle_settings(state)?,
         Command::Agents => misc::handle_agents(state)?,
         Command::Mcp => mcp::handle_mcp(state)?,
-        Command::Extensions => extensions::handle_extensions(state)?,
+        Command::Extensions(args) => extensions::handle_extensions(&args, state, handle)?,
         Command::Store => store::handle_store(state, handle)?,
         Command::Security => security::handle_security(state)?,
         Command::Remote(args) => {

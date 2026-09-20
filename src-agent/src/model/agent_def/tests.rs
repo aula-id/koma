@@ -236,6 +236,7 @@ fn extension_sub_agent_appears_and_disappears_with_installed_extensions() {
         tier: "free".to_string(),
         granted: vec![],
         enabled: true,
+        activation: Default::default(),
         kind: "daemon".to_string(),
         exec: "bin/tool".to_string(),
     });
@@ -320,6 +321,7 @@ fn extension_sub_agent_merges_full_fields_and_ext_id() {
         tier: "free".to_string(),
         granted: vec![],
         enabled: true,
+        activation: Default::default(),
         kind: "daemon".to_string(),
         exec: "bin/tool".to_string(),
     });
@@ -381,6 +383,7 @@ fn extension_sub_agent_partial_fields_fall_back_to_description() {
         tier: "free".to_string(),
         granted: vec![],
         enabled: true,
+        activation: Default::default(),
         kind: "daemon".to_string(),
         exec: "bin/tool".to_string(),
     });

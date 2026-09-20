@@ -102,6 +102,19 @@ impl AgentRegistry {
     /// enabling, or disabling an extension is reflected on the very next `load()`
     /// with no separate cache-invalidation/reload trigger needed.
     pub fn load(session_dir: Option<&Path>) -> Self {
+        let config = crate::model::app_config::AppConfig::load();
+        let selected = session_dir
+            .and_then(|p| crate::model::settings::Settings::load(&p.join("settings.json")).ok())
+            .map(|s| s.active_extensions)
+            .unwrap_or_default();
+        Self::load_for_session(session_dir, &config, &selected)
+    }
+
+    pub fn load_for_session(
+        session_dir: Option<&Path>,
+        config: &crate::model::app_config::AppConfig,
+        selected: &[String],
+    ) -> Self {
         let mut agents: HashMap<String, AgentDef> = HashMap::new();
 
         // Tier 1: built-ins.
@@ -117,8 +130,11 @@ impl AgentRegistry {
         // Tier 3: extension-contributed sub-agents (see `app::ext::register` for
         // the sibling `contributes.tools` half of this wiring).
         if let Ok(ext_root) = crate::model::store::extensions_dir() {
-            let config = crate::model::app_config::AppConfig::load();
-            merge_extension_sub_agents(&config, &ext_root, &mut agents);
+            let mut active_config = config.clone();
+            active_config
+                .installed_extensions
+                .retain(|e| e.active_in(selected));
+            merge_extension_sub_agents(&active_config, &ext_root, &mut agents);
         }
 
         // Tier 4: session.

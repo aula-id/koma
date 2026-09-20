@@ -342,16 +342,18 @@ impl Session {
         }
     }
 
-    /// Multi-root legend for the system prompt. Returns `None` when there is
-    /// only a single workspace root (bare relatives already unambiguous).
+    /// Current workspace roots, including the single-root case after an
+    /// extension is unloaded. Historical workspace lists must not override it.
     fn format_workspaces_block(workdirs: &[std::path::PathBuf]) -> Option<String> {
-        if workdirs.len() <= 1 {
+        if workdirs.is_empty() {
             return None;
         }
         let mut s = String::from(
             "\n\n# Workspaces\n\
-Multiple workspace roots are configured. Paths written as [N]… (for example from \
-@ mentions) refer to these roots. Bare relative tool paths target [0] (primary):",
+These are the current workspace roots for this session. This list replaces workspace \
+lists in older messages. An extension contributes a workspace only while active in \
+this session. Paths written as [N]… refer to these roots. Bare relative tool paths \
+target [0] (primary):",
         );
         for (i, p) in workdirs.iter().enumerate() {
             let path = p.display().to_string().replace('\\', "/");
@@ -379,7 +381,11 @@ Multiple workspace roots are configured. Paths written as [N]… (for example fr
     /// [`Self::rebuild_system_with`].
     pub fn rebuild_system(&mut self) {
         let config = crate::model::app_config::AppConfig::load();
-        let registry = AgentRegistry::load(Some(&self.path));
+        let registry = AgentRegistry::load_for_session(
+            Some(&self.path),
+            &config,
+            &self.settings.active_extensions,
+        );
         self.rebuild_system_with(&registry, &config);
     }
 
@@ -392,6 +398,10 @@ Multiple workspace roots are configured. Paths written as [N]… (for example fr
         registry: &AgentRegistry,
         config: &crate::model::app_config::AppConfig,
     ) {
+        crate::model::ext_workspace::sync_extension_workspaces(
+            &config.installed_extensions,
+            &mut self.settings,
+        );
         // Memory is now per-PROJECT (shared across every session in this
         // working dir). Resolve the project memory dir, run the best-effort
         // legacy migration (flat per-session MEMORY.md -> index store), then load
@@ -410,6 +420,17 @@ Multiple workspace roots are configured. Paths written as [N]… (for example fr
         let visible = registry.list(true); // exclude_hidden = true
         let roster: String = visible
             .iter()
+            .filter(|a| {
+                a.ext_id
+                    .as_ref()
+                    .map(|id| {
+                        config
+                            .installed_extensions
+                            .iter()
+                            .any(|e| &e.id == id && e.active_in(&self.settings.active_extensions))
+                    })
+                    .unwrap_or(true)
+            })
             .map(|a| {
                 // The roster line describes WHEN to delegate: prefer `conditions`
                 // (its first line), falling back to `description` when it's empty.
@@ -464,18 +485,23 @@ Multiple workspace roots are configured. Paths written as [N]… (for example fr
             scratch_path.display()
         ));
 
-        // Multi-root legend: when several workspace roots are configured, tell
-        // the model which physical directory each [N] index maps to.
+        // Always name the current roots, including after an extension unload.
         if let Some(block) = Self::format_workspaces_block(&self.workdirs()) {
             sys.push_str(&block);
         }
 
-        // Extension workspaces: when an enabled extension owns an injected workspace root
-        // (see `ext_workspace::inject_extension_workspaces`), name it so the model knows it
+        // Extension workspaces: when an active extension owns an injected workspace root
+        // (see `ext_workspace::sync_extension_workspaces`), name it so the model knows it
         // may write there for that extension's tasks. Read-only: reads the live extension
         // registry + this session's current workdir roots (creates nothing, no side effects).
+        let active_extensions: Vec<_> = config
+            .installed_extensions
+            .iter()
+            .filter(|e| e.active_in(&self.settings.active_extensions))
+            .cloned()
+            .collect();
         let ext_ws = crate::model::ext_workspace::active_extension_workspaces(
-            &config.installed_extensions,
+            &active_extensions,
             &self.settings.workdir,
         );
         if !ext_ws.is_empty() {

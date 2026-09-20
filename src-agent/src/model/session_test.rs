@@ -2,9 +2,11 @@ use super::*;
 use std::path::PathBuf;
 
 #[test]
-fn workspaces_block_none_for_single_root() {
+fn workspaces_block_names_current_single_root() {
     let dirs = vec![PathBuf::from("/home/user/project")];
-    assert!(Session::format_workspaces_block(&dirs).is_none());
+    assert!(Session::format_workspaces_block(&dirs)
+        .unwrap()
+        .contains("[0]"));
 }
 
 #[test]

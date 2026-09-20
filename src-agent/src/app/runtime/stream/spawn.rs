@@ -314,6 +314,12 @@ fn spawn_task_with_id(
     // Main. Keep the refreshed copy in rest so this daemon is warmed for the next
     // settings-dependent operation too.
     state.rest.config = crate::model::app_config::AppConfig::load();
+    if let Err(error) =
+        super::super::commands::extensions::refresh_session_if_needed(state, sess_idx, handle)
+    {
+        state.rest.sessions[sess_idx].set_toast(error.to_string());
+        return Err(SpawnFailReason::Unresolved);
+    }
 
     // Snapshot inputs before borrowing state mutably below — identical to the
     // `/task` command's construction so the two paths can never diverge. All

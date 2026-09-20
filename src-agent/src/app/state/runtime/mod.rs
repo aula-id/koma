@@ -416,6 +416,12 @@ pub struct SessionRuntime {
     /// the buffer. Purely in-memory / transient — `SessionRuntime` is rebuilt fresh
     /// each launch (it is never serialised), so this is never persisted.
     pub pending_ext_prompts: Vec<(String, String)>,
+    /// Last reconciled extension policy and selection. Kept per session because
+    /// unrelated provider/config reloads must not hide a pending scope change.
+    pub extension_scope: Option<(
+        Vec<crate::model::app_config::InstalledExtension>,
+        Vec<String>,
+    )>,
     /// THIS session's tool-approval / lifecycle mode (per-session, not global).
     /// Shift+Tab and `/mode` mutate the FOREGROUND session via
     /// [`super::AppStateRest::set_agent_mode`]; stream/harness paths that already
@@ -749,6 +755,7 @@ impl SessionRuntime {
             pending_bash_nudges: Vec::new(),
             pending_subagent_nudges: Vec::new(),
             pending_ext_prompts: Vec::new(),
+            extension_scope: None,
             agent_mode: super::types::AgentMode::default(),
             plan_read_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             plan_return_mode: None,

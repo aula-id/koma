@@ -589,6 +589,20 @@ plain-string value is deserialized as a one-element vec). The first non-empty
 entry is the effective workspace (`Session::workdir()`); all entries contribute to
 the harness workspace allow-set and the multi-workspace `[N]` index.
 
+Extension installation is global, but `InstalledExtension.activation` defaults to
+`on_demand` (including legacy entries). A `global` extension is active everywhere;
+otherwise its id must appear in the session's persisted `active_extensions` list.
+`/extension use` selects or unloads an extension for the current session. Workspace
+roots, MCP tool advertisements and dispatch, extension agent definitions, published
+context, and extension-initiated prompts/tasks all follow that activation decision.
+The session's `extension_workspace_roots` records managed roots for reconciliation;
+missing provenance triggers one-time cleanup of known legacy secondary roots.
+User roots and the primary workspace remain intact. The system prompt names the
+current roots even for a single workspace, while the visible history stays unchanged.
+Session daemons keep extension tool registrations locally even when ordinary MCP
+tools use the shared proxy. Proxy cache refreshes preserve these local tools, and
+calls dispatch to the session's extension host.
+
 ---
 
 ## 14. System-Prompt Assembly

@@ -126,6 +126,31 @@ pub(crate) fn start_stream_task(
     client: &Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) {
+    state.rest.config.installed_extensions =
+        crate::model::app_config::AppConfig::load().installed_extensions;
+    let refreshed = match super::super::commands::extensions::refresh_session_if_needed(
+        state, sess_idx, handle,
+    ) {
+        Ok(changed) => changed,
+        Err(error) => {
+            state.rest.sessions[sess_idx].waiting = false;
+            state.rest.sessions[sess_idx].set_toast(error.to_string());
+            return;
+        }
+    };
+    if refreshed {
+        if let (Some(first), Some(system)) = (
+            history.first_mut(),
+            state.rest.sessions[sess_idx]
+                .session
+                .as_ref()
+                .and_then(|s| s.conversation.messages().first()),
+        ) {
+            if first.role == Role::System {
+                *first = system.clone();
+            }
+        }
+    }
     super::mode_contract::sync_system(&mut history, &mut state.rest.sessions[sess_idx]);
     // Assemble the System message so the prompt-caching breakpoint covers only the
     // STABLE head (which is byte-identical across the session, so the cache hits):
@@ -217,7 +242,7 @@ pub(crate) fn start_stream_task(
             // blob rides the VOLATILE tail (after the cache split) so it never busts
             // the provider-cached head. Iterated in BTreeMap key order → a byte-stable
             // tail across turns. Empty map = no-op (byte-identical to before).
-            append_ext_context(&mut first.content, &state.rest.ext_context);
+            append_session_ext_context(&mut first.content, &state.rest, sess_idx);
             // Active skill bodies: injected into the volatile tail (after cache
             // split) so they never bust the cached head. BTreeMap key order is
             // byte-stable across turns.
@@ -607,6 +632,13 @@ over sec_remote (stateful socket).\n",
     // first definition while deduplicating the fully composed built-in + MCP +
     // security + lifecycle allow-list.
     let mut advertised_names = std::collections::HashSet::new();
+    let selected = state.rest.sessions[sess_idx]
+        .session
+        .as_ref()
+        .map(|s| s.settings.active_extensions.as_slice())
+        .unwrap_or_default();
+    advertise
+        .retain(|name| crate::app::mcp::tool_active_in_session(name, &state.rest.config, selected));
     advertise.retain(|name| advertised_names.insert(name.clone()));
     // Definitions must obey the same mode filter as names. Otherwise an MCP
     // schema could remain callable even after its name left the advertise list.
@@ -730,7 +762,32 @@ over sec_remote (stateful socket).\n",
     state.rest.sessions[sess_idx].current_task = Some(jh.abort_handle());
 }
 
-/// Append each extension's published context blob (`context.set`) to the volatile
+/// Filter published context by this session's activation before appending it.
+fn append_session_ext_context(
+    dst: &mut String,
+    rest: &crate::app::state::AppStateRest,
+    idx: usize,
+) {
+    let selected = rest.sessions[idx]
+        .session
+        .as_ref()
+        .map(|s| s.settings.active_extensions.as_slice())
+        .unwrap_or_default();
+    let active = rest
+        .ext_context
+        .iter()
+        .filter(|(id, _)| {
+            rest.config
+                .installed_extensions
+                .iter()
+                .any(|e| &e.id == *id && e.active_in(selected))
+        })
+        .map(|(id, text)| (id.clone(), text.clone()))
+        .collect();
+    append_ext_context(dst, &active);
+}
+
+/// Append each active extension's published context blob (`context.set`) to the volatile
 /// System tail. Iterated in `BTreeMap` KEY ORDER (deterministic) so the resulting
 /// tail is byte-STABLE across turns; a blank/whitespace blob is skipped. MUST be
 /// called AFTER the `CACHE_SPLIT_MARK` so these ride the UNCACHED tail — an

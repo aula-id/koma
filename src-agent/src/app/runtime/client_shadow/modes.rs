@@ -465,6 +465,12 @@ fn shadow_ext_row(w: ExtRowWire) -> ExtRow {
         tier: w.tier,
         kind: w.kind,
         enabled: w.enabled,
+        activation: if w.activation == "global" {
+            crate::model::app_config::ExtensionActivation::Global
+        } else {
+            crate::model::app_config::ExtensionActivation::OnDemand
+        },
+        active: w.active,
         running: w.running,
         description: w.description,
         granted: w.granted,
@@ -488,6 +494,7 @@ fn shadow_ext_row(w: ExtRowWire) -> ExtRow {
 /// the read-only default — never lost).
 fn shadow_ext_submode(m: &str) -> ExtSubMode {
     match m {
+        "use" => ExtSubMode::UsePicker,
         "detail" => ExtSubMode::Detail,
         "uninstall_confirm" => ExtSubMode::UninstallConfirm,
         _ => ExtSubMode::Browse,

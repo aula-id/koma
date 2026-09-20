@@ -94,6 +94,15 @@ pub fn spawn_subagent(
 ) -> Option<SubAgent> {
     // Look the agent up; a missing name is a no-op for the caller.
     let agent = registry.get(agent_name)?;
+    if let Some(id) = &agent.ext_id {
+        if !config
+            .installed_extensions
+            .iter()
+            .any(|e| &e.id == id && e.active_in(&settings.active_extensions))
+        {
+            return None;
+        }
+    }
 
     // Resolve the agent's route (its own model+provider, else inherit Main).
     // An override, when present, is applied to a CLONE used only for this
@@ -141,6 +150,9 @@ pub fn spawn_subagent(
         tools.extend(names);
         mcp_tools = defs;
     }
+    tools.retain(|name| {
+        crate::app::mcp::tool_active_in_session(name, config, &settings.active_extensions)
+    });
     if mode == AgentMode::Plan {
         tools.retain(|name| crate::tool::delegated_tool_allowed_in_plan(name));
     } else if mode == AgentMode::Sdlc && ctx.sdlc_assess {

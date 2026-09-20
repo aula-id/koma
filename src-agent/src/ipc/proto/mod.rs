@@ -81,6 +81,9 @@ pub enum ClientRequest {
     /// daemon owns the resulting sub-agent, and the caller receives no ext-facing agent id
     /// (no cross-daemon `agents.status`/`result` polling yet).
     SpawnAgent {
+        /// Extension-origin requests must be active in the target session.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ext_id: Option<String>,
         agent: Option<String>,
         task: String,
         model: Option<String>,

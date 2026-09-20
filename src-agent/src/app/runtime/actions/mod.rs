@@ -317,6 +317,15 @@ pub(in crate::app::runtime) fn apply_action(
         Action::CloseExtensions => {
             extensions::handle_close_extensions(state)?;
         }
+        Action::UseExtension => {
+            extensions::handle_use_extension(state, handle, true)?;
+        }
+        Action::UnuseExtension => {
+            extensions::handle_use_extension(state, handle, false)?;
+        }
+        Action::SetExtensionActivation(activation) => {
+            extensions::handle_extension_activation(state, handle, activation)?;
+        }
 
         Action::UninstallExtension => {
             extensions::handle_uninstall_extension(state, handle)?;

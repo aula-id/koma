@@ -80,6 +80,7 @@ fn installed_extensions_projects_registry_fields() {
             tier: "paid".to_string(),
             kind: "daemon".to_string(),
             enabled: true,
+            activation: Default::default(),
             granted: vec!["agents:read".to_string()],
             exec: String::new(),
         });

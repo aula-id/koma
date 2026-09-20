@@ -764,6 +764,8 @@ fn ext_row_wire(r: &ExtRow) -> ExtRowWire {
         tier: r.tier.clone(),
         kind: r.kind.clone(),
         enabled: r.enabled,
+        activation: r.activation.label().to_string(),
+        active: r.active,
         running: r.running,
         description: r.description.clone(),
         granted: r.granted.clone(),

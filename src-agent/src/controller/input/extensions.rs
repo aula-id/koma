@@ -1,11 +1,11 @@
 //! Key handler for the `/extension` installed-extension manager (`Mode::Extensions`).
 //!
-//! A read-only sibling of [`super::mcp`] with no editor: three sub-modes (deepest first):
+//! The manager has a session activation picker and three dashboard sub-modes:
 //!
 //! 0. **UninstallConfirm** – modal y/n; `y` uninstalls (`Action::UninstallExtension`),
 //!    `n`/Esc cancels back to Detail.
 //! 1. **Detail** – ↑/↓ move the tui-screen cursor; Enter opens the selected extension screen
-//!    (`Action::ExtScreenOpen`); `u` arms the uninstall confirm; Esc returns to Browse.
+//!    (`Action::ExtScreenOpen`); g/o set global/on-demand; `u` arms the uninstall confirm.
 //! 2. **Browse** – ↑/↓ move the LIST cursor; →/Enter open the selected extension's detail;
 //!    Esc closes the dashboard (`Action::CloseExtensions`).
 
@@ -23,6 +23,20 @@ pub fn handle_extensions(
     key: KeyEvent,
 ) -> Action {
     match s.sub_mode {
+        ExtSubMode::UsePicker => match key.code {
+            KeyCode::Esc => Action::CloseExtensions,
+            KeyCode::Up => {
+                s.list_up();
+                Action::None
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                s.list_down();
+                Action::None
+            }
+            KeyCode::Enter if s.current().is_some() => Action::UseExtension,
+            KeyCode::Char('x') if s.current().is_some() => Action::UnuseExtension,
+            _ => Action::None,
+        },
         // --- UninstallConfirm: modal y/n ---
         ExtSubMode::UninstallConfirm => match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => Action::UninstallExtension,
@@ -35,6 +49,12 @@ pub fn handle_extensions(
 
         // --- Detail: read the selected extension + open its TUI screens ---
         ExtSubMode::Detail => match key.code {
+            KeyCode::Char('g') => Action::SetExtensionActivation(
+                crate::model::app_config::ExtensionActivation::Global,
+            ),
+            KeyCode::Char('o') => Action::SetExtensionActivation(
+                crate::model::app_config::ExtensionActivation::OnDemand,
+            ),
             KeyCode::Esc => {
                 s.sub_mode = ExtSubMode::Browse;
                 Action::None

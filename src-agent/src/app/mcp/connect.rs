@@ -40,6 +40,7 @@ impl McpManager {
             advertise_cache_at: Mutex::new(None),
             advertise_confirmed_empty_at: Mutex::new(None),
             ext_manager: Mutex::new(None),
+            proxy_extension_tools: Mutex::new(Vec::new()),
         });
 
         for server in servers {
@@ -95,6 +96,7 @@ impl McpManager {
             advertise_cache_at: Mutex::new(None),
             advertise_confirmed_empty_at: Mutex::new(None),
             ext_manager: Mutex::new(None),
+            proxy_extension_tools: Mutex::new(Vec::new()),
         }))
     }
 
@@ -150,13 +152,15 @@ impl McpManager {
         };
 
         // Take the old connections out under the lock, then drop the guard BEFORE
-        // doing any async teardown. `tools` is cleared here so stale tools stop
-        // being advertised immediately; the new tools repopulate as servers
+        // doing any async teardown. Server tools are cleared so stale tools stop
+        // being advertised; session extension tools keep their separate lifecycle.
+        // The new server tools repopulate as servers
         // reconnect. (Holding the lock across the teardown await would violate the
         // no-lock-across-await rule and could deadlock the sync readers.)
         let old_conns: Vec<ServerConn> = {
             let mut snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
-            snap.tools.clear();
+            snap.tools
+                .retain(|t| matches!(t.source, super::ToolSource::Extension(_)));
             snap.errors.clear();
             // Bump the generation under the SAME lock that clears conns+tools, so any
             // connect task spawned for the OLD config (which captured the previous

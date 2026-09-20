@@ -13,6 +13,7 @@ fn register_contributions_errors_on_missing_manifest() {
         tier: "free".to_string(),
         granted: vec![],
         enabled: true,
+        activation: Default::default(),
         kind: "daemon".to_string(),
         exec: "bin/tool".to_string(),
     };

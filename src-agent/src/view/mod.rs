@@ -214,7 +214,16 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
                 .or_else(|| m.shadow_status.clone());
             mcp::draw(frame, m, status.as_ref(), &palette);
         }
-        Mode::Extensions(e) => extensions::draw(frame, e, &palette),
+        Mode::Extensions(e) => {
+            if e.sub_mode == crate::app::mode::ExtSubMode::UsePicker {
+                let resolved_model = resolved_main_model(&state.rest);
+                chat::draw(frame, &state.rest, &resolved_model, &palette);
+                let chunks = chat::layout_chunks(&state.rest, frame.area());
+                extensions::render_use_overlay(frame, e, &palette, chunks[4], chunks[1]);
+            } else {
+                extensions::draw(frame, e, &palette);
+            }
+        }
         Mode::ExtScreen(s) => extscreen::draw(frame, s, &palette),
         Mode::ExtStore(s) => store::draw(frame, s, &palette),
         Mode::Security(s) => security::draw(frame, s, &palette),

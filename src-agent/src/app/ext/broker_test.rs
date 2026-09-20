@@ -40,6 +40,26 @@ fn call_broker(
     method: &str,
     params: Value,
 ) -> Value {
+    // The broker receives calls from installed, enabled extensions. Existing
+    // contract tests exercise globally active callers unless a test specifies scope.
+    if !state
+        .rest
+        .config
+        .installed_extensions
+        .iter()
+        .any(|e| e.id == ext_id)
+    {
+        state
+            .rest
+            .config
+            .installed_extensions
+            .push(crate::model::app_config::InstalledExtension {
+                id: ext_id.into(),
+                enabled: true,
+                activation: crate::model::app_config::ExtensionActivation::Global,
+                ..Default::default()
+            });
+    }
     let (reply, mut reply_rx) = tokio::sync::oneshot::channel::<Value>();
     let req = ExtCallRequest {
         ext_id: ext_id.to_string(),

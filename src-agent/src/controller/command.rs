@@ -35,6 +35,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "/extension",
         "Manage installed extensions (detail, uninstall, screens)",
     ),
+    ("/extension use", "Load an extension into this session"),
     (
         "/store",
         "Browse and install extensions from the koma.run marketplace",
@@ -166,7 +167,7 @@ pub enum Command {
     /// Open the `/mcp` server management dashboard.
     Mcp,
     /// Open the `/extension` installed-extension manager (alias: `/extensions`).
-    Extensions,
+    Extensions(String),
     /// Open the `/store` koma.run extension marketplace browser.
     Store,
     /// Open the `/security` daemon control panel.
@@ -272,7 +273,7 @@ pub fn parse(line: &str) -> Command {
         "settings" | "config" => Command::Settings,
         "agents" | "agent" => Command::Agents,
         "mcp" => Command::Mcp,
-        "extension" | "extensions" => Command::Extensions,
+        "extension" | "extensions" => Command::Extensions(rest.to_string()),
         "store" => Command::Store,
         "security" => Command::Security,
         "remote" => Command::Remote(rest.to_string()),

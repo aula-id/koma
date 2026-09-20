@@ -220,6 +220,24 @@ mirrors the GUI's storefront browse for discovering new ones. Nothing here needs
 panel's webview — the TUI never renders one — so `contributes.tui_screens` is a
 GUI-less extension's only route to a full-screen UI of its own.
 
+### Global installation, session activation
+
+Installed extensions remain available from every project. Their **enable mode** controls
+which sessions receive their workspace, tools, sub-agent definitions, and published context:
+
+- **On-demand** (the default for new and existing installations): run `/extension use`
+  to open the picker above the composer. Select an extension and press Enter to load it
+  into this session. Press `x` on its row to unload it. Selection survives session resume.
+- **Global**: the extension is active in every session. In `/extension`, open its detail
+  and press `g` to enable globally, or `o` to enable on-demand. A disabled extension stays
+  unavailable until enabled; reinstalling preserves its enable mode.
+
+Changing session selection waits until the current turn finishes. Unloading removes
+model-facing contributions and queued prompts from that extension; its files and previous
+conversation messages remain. Other sessions keep their own selections. Running a panel
+or OAuth flow can start the extension process without activating its context in a chat.
+Extension-initiated prompts and delegated tasks require activation in their target session.
+
 ## Two extensions to picture
 
 Two examples make the two directions concrete.
@@ -350,8 +368,8 @@ typically `"~/.<ext-name>"` (the `event-watcher-daemon` sample uses `"~/.event-w
 { "workspace_dir": "~/.event-watcher" }
 ```
 
-When present, koma validates the path, **creates it if missing**, and injects its
-canonical form as an extra workspace root of every session. It appears as an `[N]` root
+When active in a session, koma validates the path, **creates it if missing**, and injects its
+canonical form as an extra workspace root of that session. It appears as an `[N]` root
 alongside the launch directory, so the agent's file tools and `bash` may read and write
 there (an extension's own sub-agents can persist state that survives a restart) — it is
 exempt from the safety harness the same way any configured workspace root is, and is
@@ -369,10 +387,12 @@ skipped — it never blocks the extension from starting:
 - Any other `$HOME` subdirectory — including a dotdir like `~/.babalic-extension` — is allowed.
 
 Comparison is on canonicalized paths (symlinks and `..` resolved), so a symlinked escape
-can't slip past. Injection happens at daemon/TUI startup, and again the moment an
-extension is installed at runtime (no restart needed). It is in-memory and re-derived
-from the currently **enabled** extension set on every start, so disabling or uninstalling
-an extension drops its workspace root on the next start.
+can't slip past. Roots are reconciled on session restore and activation changes. Session
+settings track extension-owned roots separately so unloading or uninstalling removes only
+managed roots; the primary workspace and explicitly configured roots are preserved.
+Old sessions without this tracking migrate known extension secondary roots once, removing
+the unrelated roots previous versions saved. The system prompt always names the current
+workspace list, including when only the primary remains.
 
 ### `mcp_servers`
 
@@ -1144,8 +1164,8 @@ error modes inline.
 
 Verifies the zip's SHA-256 then an Ed25519 signature over it before any disk write;
 rejects unsafe zip paths; unpacks under `~/.koma/extensions/<id>/`; persists an
-enabled registry entry. `kind: "daemon"` extensions are started immediately after a
-successful install (one of four auto-start triggers — see below). Any declared
+enabled, on-demand registry entry. `kind: "daemon"` extensions start when activated
+(see the auto-start triggers below). Any declared
 `mcp_servers[]` are auto-registered into the MCP catalogue (see "`mcp_servers`" above)
 in the SAME config mutation as the registry upsert, before the live reload:
 
@@ -1251,12 +1271,12 @@ host has no live managers for (called out below). In order:
 The GUI never fires an uninstall without a two-step confirm (files, agents, MCP servers, and
 the data directory are all named) — it is genuinely irreversible.
 
-### Daemon auto-start — four triggers
+### Daemon auto-start
 
-1. **Boot** — koma's own startup best-effort starts every enabled, `daemon`-kind
-   extension.
-2. **Install** — a freshly installed `daemon`-kind extension is started
-   immediately.
+1. **Boot/resume** — best-effort starts enabled, `daemon`-kind extensions active
+   globally or selected in the resumed session.
+2. **Activation/install** — loading an extension with `/extension use` starts its
+   daemon. An install starts it only if its preserved policy makes it active.
 3. **Panel-open** — the first `panel.msg` a panel iframe actually sends
    auto-starts its backing daemon if it's enabled and not already running (merely
    opening the tab does not).

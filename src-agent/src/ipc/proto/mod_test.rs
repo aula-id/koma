@@ -8,6 +8,7 @@ use super::*;
 #[test]
 fn spawn_agent_serde_roundtrip() {
     let full = ClientRequest::SpawnAgent {
+        ext_id: Some("run.koma.example".into()),
         agent: Some("researcher".into()),
         task: "summarise the diff".into(),
         model: Some("gpt-5".into()),
@@ -19,6 +20,7 @@ fn spawn_agent_serde_roundtrip() {
 
     // Optional fields absent (the common `sessions.spawn_into { session, task }` shape).
     let minimal = ClientRequest::SpawnAgent {
+        ext_id: None,
         agent: None,
         task: "do the thing".into(),
         model: None,

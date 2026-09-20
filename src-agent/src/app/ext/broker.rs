@@ -689,6 +689,9 @@ fn broker_spawn(
     handle: &tokio::runtime::Handle,
     params: &Value,
 ) -> Value {
+    if !extension_active_in_session(state, ext_id, sess_idx) {
+        return json!({ "error": "extension is inactive in this session; select it with /extension use" });
+    }
     let task = params
         .get("task")
         .and_then(|v| v.as_str())
@@ -1110,6 +1113,9 @@ fn broker_chat_prompt(
     sess_idx: usize,
     params: &Value,
 ) -> Value {
+    if !extension_active_in_session(state, ext_id, sess_idx) {
+        return json!({ "error": "extension is inactive in this session; select it with /extension use" });
+    }
     let text = params
         .get("text")
         .and_then(|v| v.as_str())
@@ -1142,6 +1148,22 @@ fn broker_chat_prompt(
     }
     buf.push((ext_id.to_string(), text.to_string()));
     json!({ "queued": buf.len() })
+}
+
+pub(crate) fn extension_active_in_session(state: &AppState, ext_id: &str, idx: usize) -> bool {
+    let selected = state
+        .rest
+        .sessions
+        .get(idx)
+        .and_then(|s| s.session.as_ref())
+        .map(|s| s.settings.active_extensions.as_slice())
+        .unwrap_or_default();
+    state
+        .rest
+        .config
+        .installed_extensions
+        .iter()
+        .any(|e| e.id == ext_id && e.active_in(selected))
 }
 
 /// `models.invoke { role?, system?, prompt, format? }` → a ONE-SHOT completion
@@ -2172,10 +2194,12 @@ fn broker_sessions_spawn_into(
     let model = non_empty_owned(params, "model");
     let effort = non_empty_owned(params, "effort");
     let task_owned = task.to_string();
+    let ext_id = ext_id.to_string();
     handle.spawn_blocking(move || {
         let v = match store::daemon_sock_path(&session) {
             Ok(path) => {
                 let req = ClientRequest::SpawnAgent {
+                    ext_id: Some(ext_id),
                     agent,
                     task: task_owned,
                     model,

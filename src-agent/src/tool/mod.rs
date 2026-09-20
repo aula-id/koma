@@ -900,6 +900,16 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
         }
     }
     if call.function.name.starts_with("mcp__") {
+        let config = crate::model::app_config::AppConfig::load();
+        let selected = ctx
+            .session_dir
+            .as_ref()
+            .and_then(|p| crate::model::settings::Settings::load(&p.join("settings.json")).ok())
+            .map(|s| s.active_extensions)
+            .unwrap_or_default();
+        if !crate::app::mcp::tool_active_in_session(&call.function.name, &config, &selected) {
+            return "error: extension is inactive in this session; the user can select it with /extension use".into();
+        }
         if let Some(mgr) = ctx.mcp_manager.as_ref() {
             return mgr
                 .execute_blocking(&call.function.name, &args)

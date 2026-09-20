@@ -104,6 +104,7 @@ pub fn mcp_transport_token(t: McpTransport) -> &'static str {
 
 pub fn ext_submode_token(m: ExtSubMode) -> &'static str {
     match m {
+        ExtSubMode::UsePicker => "use",
         ExtSubMode::Browse => "browse",
         ExtSubMode::Detail => "detail",
         ExtSubMode::UninstallConfirm => "uninstall_confirm",

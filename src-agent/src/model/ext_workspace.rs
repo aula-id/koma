@@ -13,16 +13,16 @@
 //!
 //! So an extension directory must land in `settings.workdir` to be writable — putting
 //! it in `allowed_folders` would pass the turn gate yet still get every individual
-//! write rejected by `tool::resolve`. [`inject_extension_workspaces`] therefore pushes
+//! write rejected by `tool::resolve`. [`sync_extension_workspaces`] therefore pushes
 //! the validated canonical path onto `settings.workdir`.
 //!
-//! # Lifecycle (in-memory, re-derived every boot)
+//! # Lifecycle
 //!
-//! Injection is IN-MEMORY only (the caller does not persist it): the root set is
-//! re-derived from the CURRENTLY-ENABLED extension set on every daemon/TUI start, so a
-//! disabled or uninstalled extension's root simply isn't re-added next start — no stale
-//! entry accrues in `settings.json`. Injection is idempotent (canonical-equality dedupe
-//! against the existing roots), so repeated boots after the first are a no-op.
+//! Selection and managed-root provenance are persisted with session settings.
+//! Reconciliation removes previously managed roots, then adds only globally active
+//! or explicitly selected extensions. Primary and explicitly configured roots survive.
+//! Legacy sessions without provenance adopt known extension secondary roots once,
+//! cleaning up the roots old releases inadvertently saved for every session.
 
 use std::path::{Path, PathBuf};
 
@@ -30,8 +30,8 @@ use anyhow::{anyhow, bail, Result};
 
 use koma_extension::protocol::ExtensionManifest;
 
-use crate::model::app_config::InstalledExtension;
 use crate::model::store;
+use crate::model::{app_config::InstalledExtension, settings::Settings};
 
 /// Validate an extension's declared `workspace_dir`, create it if missing, and return
 /// its canonical path. This is NET-NEW security code — a manifest is only as trusted as
@@ -158,22 +158,43 @@ pub fn remove_workspace_dir(raw: &str) -> bool {
     }
 }
 
-/// For every ENABLED installed extension that declares a valid `workspace_dir`, inject
-/// its canonical path into `workdir` (the session's [`crate::model::settings::Settings::workdir`]
-/// list). Idempotent: a root already present (by canonical equality) is skipped, so
-/// every boot after the first is a no-op. A `workspace_dir` that fails
-/// [`validate_workspace_dir`] is logged to `~/.koma/error.log` and skipped — a bad path
-/// never blocks the extension. Returns the list of newly-added canonical path strings
-/// (empty ⇒ nothing changed) so the caller can decide whether to reindex the dir cache.
-///
-/// In-memory only — the caller does NOT persist `workdir` after this (see the module
-/// docs on the re-derive-every-boot lifecycle).
-pub fn inject_extension_workspaces(
+/// Reconcile managed workspace roots with this session's active extensions.
+/// Invalid declared paths are logged and skipped. Canonical equality deduplicates
+/// roots. Returns whether the root list changed; callers save settings and reindex
+/// when needed. Inactive extensions do not create directories.
+pub fn sync_extension_workspaces(
     installed: &[InstalledExtension],
-    workdir: &mut Vec<String>,
-) -> Vec<String> {
+    settings: &mut Settings,
+) -> bool {
+    let before = settings.workdir.clone();
+    let owned = settings
+        .extension_workspace_roots
+        .take()
+        .unwrap_or_else(|| {
+            // Legacy releases saved injected roots without provenance. Adopt only
+            // known extension secondary roots; the primary workspace always wins.
+            active_extension_workspaces(installed, &settings.workdir)
+                .into_iter()
+                .filter(|(i, _)| *i > 0)
+                .map(|(i, _)| settings.workdir[i].clone())
+                .collect()
+        });
+    let primary = settings.workdir.iter().position(|w| !w.trim().is_empty());
+    let mut i = 0;
+    settings.workdir.retain(|root| {
+        let keep = Some(i) == primary
+            || !owned
+                .iter()
+                .any(|p| norm(Path::new(p)) == norm(Path::new(root)));
+        i += 1;
+        keep
+    });
+    let workdir = &mut settings.workdir;
     let mut added = Vec::new();
-    for ext in installed.iter().filter(|e| e.enabled) {
+    for ext in installed
+        .iter()
+        .filter(|e| e.active_in(&settings.active_extensions))
+    {
         let Some(raw) = read_workspace_dir(&ext.id) else {
             continue;
         };
@@ -187,6 +208,17 @@ pub fn inject_extension_workspaces(
                 continue;
             }
         };
+        // Preserve the same primary directory that Session::workdir would use
+        // when no explicit root exists. An extension must remain secondary.
+        if workdir.iter().all(|w| w.trim().is_empty()) {
+            workdir.clear();
+            workdir.push(
+                std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .display()
+                    .to_string(),
+            );
+        }
         // Canonical-equality dedupe against the existing roots (idempotent per boot).
         if workdir.iter().any(|w| norm(Path::new(w.trim())) == canon) {
             continue;
@@ -195,11 +227,12 @@ pub fn inject_extension_workspaces(
         workdir.push(canon_str.clone());
         added.push(canon_str);
     }
-    added
+    settings.extension_workspace_roots = Some(added);
+    settings.workdir != before
 }
 
-/// Read-only companion to [`inject_extension_workspaces`] for the system-prompt note:
-/// return `(index_in_workdir, extension_id)` for each ENABLED extension whose declared
+/// Read-only companion to [`sync_extension_workspaces`] for migration and prompt notes:
+/// return `(index_in_workdir, extension_id)` for each supplied extension whose declared
 /// `workspace_dir` resolves to a root already present in `workdir`. No side effects — it
 /// creates nothing and re-runs no security policy, because membership in `workdir`
 /// already proves the root passed [`validate_workspace_dir`] at injection time. An
@@ -213,7 +246,7 @@ pub fn active_extension_workspaces(
         return Vec::new();
     };
     let mut out = Vec::new();
-    for ext in installed.iter().filter(|e| e.enabled) {
+    for ext in installed {
         let Some(raw) = read_workspace_dir(&ext.id) else {
             continue;
         };
@@ -303,3 +336,7 @@ fn policy_violation(path: &Path, home: &Path) -> Option<String> {
 fn norm(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
+
+#[cfg(test)]
+#[path = "ext_workspace_tests.rs"]
+pub(crate) mod tests;
