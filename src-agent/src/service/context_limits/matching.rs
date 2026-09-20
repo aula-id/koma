@@ -151,10 +151,8 @@ pub(super) fn find<'a>(query: &str, endpoint: &str, models: &'a [CatalogModel]) 
     let exact: Vec<_> = models
         .iter()
         .filter(|m| {
-            m.window().is_some()
-                && (m.id.eq_ignore_ascii_case(query)
-                    || (!m.canonical_slug.is_empty()
-                        && m.canonical_slug.eq_ignore_ascii_case(query)))
+            m.id.eq_ignore_ascii_case(query)
+                || (!m.canonical_slug.is_empty() && m.canonical_slug.eq_ignore_ascii_case(query))
         })
         .collect();
     if exact.len() == 1 {
@@ -176,7 +174,9 @@ pub(super) fn find<'a>(query: &str, endpoint: &str, models: &'a [CatalogModel]) 
     let wanted = identity(query, vendor(endpoint));
     let mut normalized = Vec::new();
     let mut fuzzy = Vec::new();
-    for model in models.iter().filter(|m| m.window().is_some()) {
+    // Identity matching is independent of capability completeness: a model can
+    // report an output limit even when its context length is absent.
+    for model in models {
         let id = identity(&model.id, None);
         if !compatible(&wanted, &id) {
             continue;

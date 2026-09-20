@@ -178,12 +178,10 @@ pub fn spawn_subagent(
         .map(|s| s as usize)
         .or(Some(settings.subagent_max_turns.max(1) as usize));
 
-    // Context window for interactive max_tokens clamp (catalogue or 128k fallback).
-    let context_window = models_cache
-        .and_then(|models| {
-            crate::service::openrouter::context_length_for(models, &resolved.model_id)
-        })
-        .unwrap_or(128_000);
+    // Let the shared output-budget helper supply 128k when context is unknown.
+    let context_window = models_cache.and_then(|models| {
+        crate::service::openrouter::context_length_for(models, &resolved.model_id)
+    });
 
     // Owned clones moved into the task so it borrows nothing from the caller.
     let client_arc = Arc::clone(client);

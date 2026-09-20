@@ -119,7 +119,7 @@ pub(super) async fn lookup_alias(query: &str, endpoint: &str) -> Option<CatalogM
     let model = fetch::<CatalogModel>(&key)
         .await
         .ok()
-        .filter(|m| m.window().is_some());
+        .filter(|m| !m.id.trim().is_empty());
     if cache.aliases.len() >= 256 {
         cache.aliases.clear();
     }

@@ -48,56 +48,37 @@ fn is_xai_detects_host() {
 }
 
 #[test]
-fn interactive_max_tokens_xai_raised() {
-    assert_eq!(XAI_INTERACTIVE_MAX_TOKENS, 256_000);
-    assert_eq!(interactive_max_tokens("https://api.x.ai/v1"), 256_000);
-    assert_eq!(interactive_max_tokens("https://openrouter.ai/api/v1"), 32_000);
-    assert_eq!(interactive_max_tokens("https://api.deepseek.com"), 32_000);
-}
-
-#[test]
-fn effective_max_output_tokens_table() {
-    let or = "https://openrouter.ai/api/v1";
-    let xai = "https://api.x.ai/v1";
-    // Auto 32k when room is large.
+fn effective_max_output_tokens_respects_custom_default_and_room() {
+    use crate::service::context_limits::OUTPUT_MARGIN;
+    // Zero selects 128k even with known context. A larger custom value wins
+    // when the context has enough room; a smaller one is preserved too.
     assert_eq!(
-        effective_max_output_tokens(0, or, 131_072, 10_000),
-        32_000
-    );
-    // Auto xAI 256k — passthrough even when window is the 128k DRSS fallback
-    // (pre-feature behaviour; room clamp would starve Grok).
-    assert_eq!(
-        effective_max_output_tokens(0, xai, 128_000, 80_000),
-        256_000
+        effective_max_output_tokens(0, Some(300_000), 10_000),
+        128_000
     );
     assert_eq!(
-        effective_max_output_tokens(0, xai, 300_000, 10_000),
-        256_000
+        effective_max_output_tokens(200_000, Some(300_000), 10_000),
+        200_000
     );
-    // Explicit xAI settings also skip room clamp.
     assert_eq!(
-        effective_max_output_tokens(512_000, xai, 128_000, 80_000),
-        512_000
+        effective_max_output_tokens(8192, Some(300_000), 10_000),
+        8192
     );
-    // User 8k honored when room large (non-xAI).
-    assert_eq!(
-        effective_max_output_tokens(8_192, or, 131_072, 10_000),
-        8_192
-    );
-    // Fat prompt clamps below 32k on strict hosts: room = 131072 - 99073 - 1024 = 30975.
-    assert_eq!(
-        effective_max_output_tokens(0, or, 131_072, 99_073),
-        30_975
-    );
-    // prompt + max + margin ≤ window (non-xAI).
-    let eff = effective_max_output_tokens(0, or, 131_072, 99_073);
-    assert!(99_073 + u64::from(eff) + OUTPUT_TOKEN_MARGIN <= 131_072);
-    // Room exhausted → 1 (non-xAI).
-    assert_eq!(
-        effective_max_output_tokens(32_000, or, 131_072, 200_000),
-        1
-    );
-    assert_eq!(effective_max_output_tokens(0, or, 1_000, 5_000), 1);
+    for metadata in [None, Some(0)] {
+        // Unknown metadata uses 128k for both budgets. The prompt and margin
+        // must fit too, so the actual request is smaller than 128k.
+        assert_eq!(effective_max_output_tokens(0, metadata, 10_000), 116_976);
+        assert_eq!(effective_max_output_tokens(0, metadata, 80_000), 46_976);
+        assert_eq!(effective_max_output_tokens(8192, metadata, 10_000), 8192);
+        assert_eq!(
+            effective_max_output_tokens(512_000, metadata, 80_000),
+            46_976
+        );
+    }
+    let effective = effective_max_output_tokens(512_000, Some(131_072), 99_073);
+    assert_eq!(effective, 30_975);
+    assert!(99_073 + u64::from(effective) + OUTPUT_MARGIN <= 131_072);
+    assert_eq!(effective_max_output_tokens(0, Some(1000), 5000), 1);
 }
 
 #[test]

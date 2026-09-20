@@ -15,8 +15,9 @@
 //!
 //! ## No `max_output_tokens` / `max_tokens` on Codex
 //!
-//! Chat-completions uses `max_tokens` as a runaway guard (32k default; 256k on
-//! direct xAI). The ChatGPT Codex `/responses` backend **rejects**
+//! Chat-completions uses a context-bounded `max_tokens` guard (a positive custom
+//! value, or 128k when the setting is zero, clamped to the available room).
+//! The ChatGPT Codex `/responses` backend **rejects**
 //! `max_output_tokens` (and has no chat-style `max_tokens`) — verified live:
 //! unsupported-parameter errors. Output length stays governed by reasoning
 //! effort + the model's own limits; `response.completed` still arrives.

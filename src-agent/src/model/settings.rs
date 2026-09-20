@@ -312,9 +312,9 @@ pub struct Settings {
     /// Legacy field retained for settings/peer compatibility; no effect on DRSS.
     #[serde(default = "default_short_send_tail_n")]
     pub short_send_tail_n: i64,
-    /// Requested reply limit. Auto=32k (256k for direct xAI), constrained by provider/remaining
-    /// context. Codex OAuth does not accept an explicit output limit. Sub-agent
-    /// calls retain their endpoint-specific auto defaults.
+    /// Requested reply limit: a positive custom value takes priority; 0 = 128k.
+    /// Provider output limits and remaining context constrain the actual reply.
+    /// Codex OAuth does not accept an explicit output limit.
     #[serde(default)]
     pub max_output_tokens: u32,
     /// Optional smaller operating context ceiling (0 = catalog/default).

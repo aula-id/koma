@@ -577,7 +577,7 @@ function SessionSettings() {
 
       <SettingRow
         label="Context window limit"
-        desc="0 = automatic OpenRouter estimate. Set a smaller token limit if your provider supports less context."
+        desc="0 = automatic OpenRouter estimate, falling back to 128k when unknown. A custom limit can lower the detected window. Maximum: 300k."
       >
         <input
           type="number"
@@ -612,7 +612,7 @@ function SessionSettings() {
 
       <SettingRow
         label="Max out tokens"
-        desc="Requested reply tokens. Auto = 32k (256k on direct xAI), limited by available context and provider metadata. Codex OAuth controls its own output limit."
+        desc="Requested reply tokens. A positive custom value takes priority; 0 = 128k. Limited by remaining context and provider output limits. Codex OAuth controls its own output limit."
       >
         <input
           type="number"

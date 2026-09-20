@@ -99,10 +99,114 @@ fn output_budget_respects_provider_and_full_request_room() {
 }
 #[test]
 fn empty_catalogue_and_legacy_settings_have_stable_defaults() {
-    assert_eq!(limits("unknown", &[]).effective_window, FALLBACK_WINDOW);
+    let unknown = limits("unknown", &[]);
+    assert_eq!(unknown.effective_window, FALLBACK_WINDOW);
+    assert_eq!(unknown.desired_output(0), 128_000);
     let settings: crate::model::settings::Settings = serde_json::from_str("{}").unwrap();
     assert_eq!(settings.context_window_limit, 0);
     assert!(settings.context_model_alias.is_empty());
+}
+
+#[test]
+fn missing_null_and_zero_context_use_128k_reply_fallback_on_every_endpoint() {
+    for endpoint in [
+        "https://openrouter.ai/api/v1",
+        "https://api.x.ai/v1",
+        "https://api.anthropic.com",
+        "https://chatgpt.com/backend-api/codex",
+        "https://example.invalid/v1",
+    ] {
+        for public in [
+            Vec::new(),
+            vec![serde_json::from_value(serde_json::json!({"id":"vendor/model-1","context_length":null,"top_provider":null})).unwrap()],
+            vec![serde_json::from_value(serde_json::json!({"id":"vendor/model-1","context_length":0,"top_provider":{"context_length":0}})).unwrap()],
+        ] {
+            let got = resolve("vendor/model-1", endpoint, "", 0, &public, &[]);
+            assert_eq!(got.effective_window, 128_000);
+            assert_eq!(got.auto_output_tokens, 128_000);
+            assert_eq!(got.catalogue_source, "fallback");
+            assert_eq!(got.output_tokens(0, 80_000).unwrap(), 46_976);
+            assert_eq!(got.output_tokens(8192, 80_000).unwrap(), 8192);
+            assert_eq!(got.output_tokens(512_000, 80_000).unwrap(), 46_976);
+        }
+    }
+}
+
+#[test]
+fn missing_context_still_respects_output_metadata_and_smaller_native_limits() {
+    let public = CatalogModel {
+        id: "vendor/model-1".into(),
+        top_provider: TopProvider {
+            max_completion_tokens: Some(8192),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let native: ModelInfo =
+        serde_json::from_value(serde_json::json!({"id":"vendor/model-1","context_length":64000}))
+            .unwrap();
+    // Both exact and normalized identity matches preserve output metadata.
+    for query in ["vendor/model-1", "Model 1"] {
+        let got = resolve(query, "", "", 0, &[public.clone()], &[native.clone()]);
+        assert_eq!(got.effective_window, 64_000);
+        assert_eq!(got.catalogue_source, "active_provider");
+        assert_eq!(got.auto_output_tokens, 128_000);
+        assert_eq!(got.output_tokens(0, 50_000).unwrap(), 8192);
+        assert_eq!(got.output_tokens(4000, 50_000).unwrap(), 4000);
+    }
+}
+
+#[test]
+fn missing_public_context_does_not_make_an_uncertain_native_window_trusted() {
+    let public = CatalogModel {
+        id: "vendor/modeel-1".into(),
+        ..Default::default()
+    };
+    let native: ModelInfo = serde_json::from_value(serde_json::json!({
+        "id":"vendor/model-1", "context_length":1_000_000,
+    }))
+    .unwrap();
+    let got = resolve("vendor/modeel-1", "", "", 0, &[public], &[native]);
+    assert_eq!(got.match_method, "exact");
+    assert_eq!(got.route_window, Some(1_000_000));
+    assert_eq!(got.effective_window, 128_000);
+}
+
+#[test]
+fn missing_context_does_not_hide_identity_ambiguity() {
+    let models = [
+        model("vendor-a/model-1", 1_000_000),
+        CatalogModel {
+            id: "vendor-b/model-1".into(),
+            ..Default::default()
+        },
+    ];
+    let got = limits("model-1", &models);
+    assert_eq!(got.match_method, "ambiguous");
+    assert!(got.matched_model.is_none());
+    assert_eq!(got.effective_window, 128_000);
+}
+
+#[test]
+fn catalogue_lookup_ignores_zero_and_keeps_the_smaller_positive_limit() {
+    for (nominal, provider, expected) in [
+        (None, None, None),
+        (Some(0), Some(0), None),
+        (Some(64_000), Some(0), Some(64_000)),
+        (Some(0), Some(32_000), Some(32_000)),
+        (Some(64_000), Some(128_000), Some(64_000)),
+        (Some(128_000), Some(64_000), Some(64_000)),
+    ] {
+        let native: ModelInfo = serde_json::from_value(serde_json::json!({
+            "id":"vendor/model-1", "context_length":nominal,
+            "top_provider":{"context_length":provider},
+        }))
+        .unwrap();
+        assert_eq!(
+            crate::service::openrouter::context_length_for(&[native], "vendor/model-1"),
+            expected
+        );
+    }
 }
 
 #[test]
@@ -145,16 +249,27 @@ fn known_native_model_is_fallback_when_public_catalogue_is_unavailable() {
 }
 
 #[test]
-fn direct_xai_keeps_auto_default_but_now_respects_remaining_room() {
-    let got = resolve(
-        "grok-4",
+fn custom_reply_limit_wins_and_zero_uses_128k_on_every_endpoint() {
+    for endpoint in [
+        "https://openrouter.ai/api/v1",
         "https://api.x.ai/v1",
-        "",
-        0,
-        &[model("x-ai/grok-4", 2_000_000)],
-        &[],
-    );
-    assert_eq!(got.desired_output(0), 256_000);
-    assert_eq!(got.output_tokens(0, 225_000).unwrap(), 73_976);
-    assert!(got.output_tokens(0, 298_000).is_err());
+        "https://api.anthropic.com",
+        "https://chatgpt.com/backend-api/codex",
+        "https://example.invalid/v1",
+    ] {
+        let got = resolve(
+            "vendor/model-1",
+            endpoint,
+            "",
+            0,
+            &[model("vendor/model-1", 1_000_000)],
+            &[],
+        );
+        assert_eq!(got.output_tokens(0, 50_000).unwrap(), 128_000);
+        assert_eq!(got.output_tokens(8192, 50_000).unwrap(), 8192);
+        assert_eq!(got.output_tokens(200_000, 50_000).unwrap(), 200_000);
+        assert_eq!(got.output_tokens(400_000, 50_000).unwrap(), 248_976);
+        assert_eq!(got.output_tokens(0, 225_000).unwrap(), 73_976);
+        assert!(got.output_tokens(0, 298_000).is_err());
+    }
 }

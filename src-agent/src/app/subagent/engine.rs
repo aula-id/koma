@@ -221,8 +221,8 @@ pub async fn run_agent_loop(
     // is the per-session sub-agent id assigned by the orchestrator at spawn.
     agent_name: String,
     agent_id: usize,
-    // Model context window (tokens) for output-budget clamp; 128k if unknown.
-    context_window: u64,
+    // Reported model context; None selects the shared 128k fallback.
+    context_window: Option<u64>,
 ) {
     // The most-recent assistant text, surfaced as the final answer if the loop
     // runs out of steps before the model gives a no-tool reply.
@@ -544,7 +544,7 @@ async fn stream_step(
     tools: &[String],
     mcp_tools: &[crate::dto::openrouter::ToolDef],
     settings_cap: u32,
-    context_window: u64,
+    context_window: Option<u64>,
     tx: &UnboundedSender<AgentEvent>,
 ) -> StreamOutcome {
     let (inner_tx, mut inner_rx) = mpsc::unbounded_channel();
@@ -579,7 +579,6 @@ async fn stream_step(
         crate::app::runtime::shortsend::estimate_prompt_tokens_for_max_clamp(&history);
     let max_tokens = crate::service::openrouter::effective_max_output_tokens(
         settings_cap,
-        &endpoint,
         context_window,
         prompt_est,
     );

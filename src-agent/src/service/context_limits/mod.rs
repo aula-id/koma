@@ -8,7 +8,18 @@ use serde::{Deserialize, Serialize};
 
 pub const OPERATING_CEILING: u64 = 300_000;
 pub const FALLBACK_WINDOW: u64 = 128_000;
+pub const FALLBACK_OUTPUT_TOKENS: u32 = 128_000;
 pub const OUTPUT_MARGIN: u64 = 1_024;
+
+/// Missing or zero metadata is unknown. A serving-provider limit and a nominal
+/// model limit can both constrain the request; use the smaller positive value.
+pub(crate) fn reported_window(provider: Option<u64>, nominal: Option<u64>) -> Option<u64> {
+    [provider, nominal]
+        .into_iter()
+        .flatten()
+        .filter(|n| *n > 0)
+        .min()
+}
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct CatalogModel {
@@ -35,11 +46,7 @@ pub struct TopProvider {
 
 impl CatalogModel {
     fn window(&self) -> Option<u64> {
-        [self.top_provider.context_length, self.context_length]
-            .into_iter()
-            .flatten()
-            .filter(|n| *n > 0)
-            .min()
+        reported_window(self.top_provider.context_length, self.context_length)
     }
 }
 
@@ -127,7 +134,7 @@ pub fn resolve(
     let catalog_window = found.model.and_then(CatalogModel::window);
     let mut window = catalog_window.or(route_window).unwrap_or(FALLBACK_WINDOW);
     // A fuzzy spelling guess or ambiguous name must not inflate the fallback.
-    let uncertain = if found.model.is_some() || found.conservative_window.is_some() {
+    let uncertain = if catalog_window.is_some() || found.conservative_window.is_some() {
         found.uncertain
     } else {
         route.uncertain
@@ -152,7 +159,7 @@ pub fn resolve(
         } else {
             format!("configured_alias/{}", found.method)
         },
-        catalogue_source: if found.model.is_some() {
+        catalogue_source: if catalog_window.is_some() {
             "openrouter"
         } else if route_window.is_some() {
             "active_provider"
@@ -163,13 +170,7 @@ pub fn resolve(
         catalog_window,
         route_window,
         effective_window: window.min(OPERATING_CEILING),
-        // Preserve existing endpoint defaults while bounding every main request
-        // by the newly detected operating window.
-        auto_output_tokens: if matching::vendor(endpoint) == Some("x-ai") {
-            256_000
-        } else {
-            32_000
-        },
+        auto_output_tokens: u64::from(FALLBACK_OUTPUT_TOKENS),
         max_completion_tokens: found
             .model
             .and_then(|m| m.top_provider.max_completion_tokens)
