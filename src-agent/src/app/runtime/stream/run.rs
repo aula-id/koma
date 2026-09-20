@@ -651,7 +651,7 @@ over sec_remote (stateful socket).\n",
             } else {
                 0
             };
-        let mut history = match reshape {
+        let (mut history, drss_active) = match reshape {
             Some((session_dir, settings, user_intent, goal_wire)) => {
                 match super::super::shortsend::shape(
                     history,
@@ -662,14 +662,14 @@ over sec_remote (stateful socket).\n",
                     &limits,
                     shape_schemas,
                 ) {
-                    Ok(history) => history,
+                    Ok(shaped) => (shaped.history, shaped.drss_active),
                     Err(error) => {
                         let _ = tx.send(crate::service::StreamEvent::Error(error.to_string()));
                         return;
                     }
                 }
             }
-            None => history,
+            None => (history, false),
         };
         if history.first() != Some(&expected_system) {
             let _ = tx.send(crate::service::StreamEvent::Error(
@@ -708,6 +708,7 @@ over sec_remote (stateful socket).\n",
                 let _ = tx.send(crate::service::StreamEvent::ContextPrepared {
                     prompt_tokens: prompt_est,
                     effective_window: limits.effective_window,
+                    drss_active,
                 });
                 let _ = c
                     .stream_complete(

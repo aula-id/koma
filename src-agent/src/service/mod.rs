@@ -37,6 +37,7 @@ pub enum StreamEvent {
     ContextPrepared {
         prompt_tokens: u64,
         effective_window: u64,
+        drss_active: bool,
     },
     /// Token/cost accounting for the in-flight generation. Arrives on the final
     /// streaming chunk, just before [`StreamEvent::Done`]; stashed and committed

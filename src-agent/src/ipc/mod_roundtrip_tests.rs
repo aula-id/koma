@@ -38,6 +38,7 @@ fn sample_session_snapshot() -> SessionSnapshot {
             prompt_tokens: 100,
             effective_window: 128_000,
             estimated: false,
+            drss_active: true,
         }),
         waiting: true,
         awaiting_approval: false,
@@ -847,6 +848,12 @@ fn context_usage_legacy_snapshots_remain_readable() {
     let session = sample_session_snapshot();
 
     let mut old_wire = serde_json::to_value(&session).unwrap();
+    old_wire["context_usage"]
+        .as_object_mut()
+        .unwrap()
+        .remove("drss_active");
+    let old_usage: SessionSnapshot = serde_json::from_value(old_wire.clone()).unwrap();
+    assert!(!old_usage.context_usage.unwrap().drss_active);
     old_wire.as_object_mut().unwrap().remove("context_usage");
     let legacy: SessionSnapshot = serde_json::from_value(old_wire).unwrap();
     assert!(legacy.context_usage.is_none());
@@ -865,6 +872,9 @@ fn context_usage_only_changes_trigger_client_refresh() {
         .as_mut()
         .unwrap()
         .effective_window = 300_000;
+    assert!(super::snapshot::diff(&prev, &next, None, None).needs_full);
+    next = prev.clone();
+    next.sessions[0].context_usage.as_mut().unwrap().drss_active = false;
     assert!(super::snapshot::diff(&prev, &next, None, None).needs_full);
     assert!(!super::snapshot::diff(&prev, &prev, None, None).needs_full);
 }

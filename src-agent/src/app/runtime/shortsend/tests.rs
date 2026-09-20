@@ -64,6 +64,13 @@ fn limits(window: u64) -> context_limits::ContextLimits {
     )
 }
 fn send(history: &[ChatMessage], archive: &Archive, window: u64) -> Vec<ChatMessage> {
+    send_shaped(history, archive, window).history
+}
+fn send_shaped(
+    history: &[ChatMessage],
+    archive: &Archive,
+    window: u64,
+) -> super::window::ShapedRequest {
     shape(
         history.to_vec(),
         &archive.0,
@@ -177,7 +184,8 @@ fn assert_plan_authority_survives_drss(recover_legacy: bool) {
         &limits,
         128,
     )
-    .unwrap();
+    .unwrap()
+    .history;
 
     assert!(
         out.len() < history.len(),
@@ -257,7 +265,13 @@ fn active_multi_tool_round_keeps_calls_results_and_replay_metadata() {
         result.tool_call_id = Some(format!("call-{i}"));
         history.push(result);
     }
-    let out = send(&history, &archive, 100_000);
+    let shaped = send_shaped(&history, &archive, 100_000);
+    assert!(
+        shaped.drss_active,
+        "shortened live bodies activate the badge"
+    );
+    assert_eq!(boundary(&archive), 0, "no older round was omitted");
+    let out = shaped.history;
     let opening = out.iter().position(|m| m.tool_calls.is_some()).unwrap();
     assert_eq!(out[opening], assistant);
     for i in 1..=2 {
@@ -356,7 +370,8 @@ fn archive_relevance_uses_latest_diagnostics_and_exact_unicode_match_windows() {
             &limits(100_000),
             0,
         )
-        .unwrap();
+        .unwrap()
+        .history;
         let memory = &out[1].content;
         assert!(memory.contains("latestdiagnostic exact_result=42"));
         assert_eq!(
@@ -467,7 +482,8 @@ fn unavailable_archive_preserves_small_requests_and_refuses_unsafe_clipping() {
             &limits(100_000),
             0
         )
-        .unwrap(),
+        .unwrap()
+        .history,
         history
     );
     history[1].content = "x".repeat(300000);
@@ -530,7 +546,8 @@ fn disabled_drss_is_identity_and_full_request_guard_still_applies() {
             &limits(100_000),
             0
         )
-        .unwrap(),
+        .unwrap()
+        .history,
         history
     );
     assert!(limits(100_000)
@@ -587,7 +604,8 @@ fn full_budget_includes_system_schemas_and_reserved_reply() {
         &limit,
         6000,
     )
-    .unwrap();
+    .unwrap()
+    .history;
     assert!(
         budget::prompt_tokens(&out, 6000)
             + limit.reserved_output(0)
@@ -860,11 +878,63 @@ fn large_recovery_summary_prioritizes_newest_work_and_keeps_kickoff_reference() 
         &limits(100_000),
         0,
     )
-    .unwrap();
+    .unwrap()
+    .history;
     assert!(out[1].content.contains("Kickoff excerpt:"));
     assert!(out[1].content.contains("turn-0 最新工作"));
     assert!(out[1].content.contains("turn-17 最新工作"));
     assert!(out[1].content.contains("archive_key"));
     assert!(budget::message_tokens(&out[1]) <= 5000);
     assert_eq!(out.last(), history.last());
+}
+
+#[test]
+fn activity_tracks_condensed_history_including_reuse_but_not_index_only_or_disabled() {
+    let archive = Archive::new();
+    let mut history = vec![
+        ChatMessage::new(Role::System, "system"),
+        archive.append(Role::User, "keep this request"),
+    ];
+    let small = send_shaped(&history, &archive, 100_000);
+    assert!(!small.drss_active);
+    assert!(small.history[1].content.starts_with("[DRSS archive index"));
+
+    for i in 0..22 {
+        history.push(archive.append(Role::Assistant, format!("step-{i} {}", "x".repeat(10_000))));
+    }
+    let shaped = send_shaped(&history, &archive, 100_000);
+    assert!(shaped.drss_active);
+    let first_boundary = boundary(&archive);
+    assert!(first_boundary > 0);
+    assert!(send_shaped(&history, &archive, 100_000).drss_active);
+    assert_eq!(boundary(&archive), first_boundary);
+
+    // A continuation with only the live tail still uses condensed archive context.
+    let mut tail_only = vec![history[0].clone()];
+    tail_only.extend(shaped.history.into_iter().skip(2));
+    assert!(send_shaped(&tail_only, &archive, 100_000).drss_active);
+
+    let disabled = shape(
+        history.clone(),
+        &archive.0,
+        &Settings {
+            short_send_enabled: false,
+            ..Default::default()
+        },
+        "continue",
+        &GoalWire::default(),
+        &limits(100_000),
+        0,
+    )
+    .unwrap();
+    assert!(!disabled.drss_active);
+    assert_eq!(disabled.history, history);
+
+    // Clearing the visible conversation freezes old archive coverage out of B.
+    msglog::clear_rolling_summary(&archive.0).unwrap();
+    let fresh = vec![
+        history[0].clone(),
+        archive.append(Role::User, "a new request"),
+    ];
+    assert!(!send_shaped(&fresh, &archive, 100_000).drss_active);
 }

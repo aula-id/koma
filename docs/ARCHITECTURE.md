@@ -274,7 +274,11 @@ request's local estimate is marked `~` until positive provider prompt usage
 arrives. Cached tokens in dim brackets are part of input, not added to it;
 output and cost remain cumulative. A missing dispatch-time limit shows `—%`
 until the next request. The paired prompt/limit snapshot travels to attached
-clients and does not alter history, budgeting, or billed usage.
+clients and does not alter history, budgeting, or billed usage. When the latest
+request uses condensed archive context or shortened message bodies, `[!]` becomes
+a bold, shimmering `[DRSS]`. An enabled setting or index-only pass does not light
+it up; the next uncondensed request restores `[!]`. The local animation continues
+between turns without marking the session busy or changing polling cadence.
 
 **Files:** `src-agent/src/app/runtime/shortsend/`, `src-agent/src/model/msglog/drss.rs`,
 `src-agent/src/service/context_limits/`

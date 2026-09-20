@@ -234,6 +234,10 @@ pub(super) fn force_dirty_while_live(state: &AppState, shimmer_active: bool) -> 
         || state.rest.sec_health_rx.is_some()
         || state.rest.oauth_rx.is_some()
         || state.rest.agent_mode() == crate::app::state::AgentMode::Plan
+        // Like the Plan header, the DRSS badge animates at the existing idle
+        // cadence. It does not make the session busy or trigger fast polling.
+        || (matches!(state.mode(), Mode::Chat)
+            && state.rest.fg().context_usage.is_some_and(|usage| usage.drss_active))
 }
 
 /// Auto-dismiss expired toasts. Toast is per-session now (C6), and this runs

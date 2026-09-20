@@ -5,7 +5,7 @@ use crate::app::state::{AppStateRest, SessionRuntime};
 use crate::view::theme::Palette;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
-    style::Style,
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -107,7 +107,23 @@ fn usage_readout(fg: &SessionRuntime, palette: &Palette) -> Option<Line<'static>
         format!(" ↓{} ${:.4}", fmt_count(fg.tokens_out), fg.cost),
         accent,
     ));
-    // [!] retains its existing meaning: aggregate spend includes sub-agents.
-    spans.push(Span::styled(" [!]", dim));
+    if fg.context_usage.is_some_and(|usage| usage.drss_active) {
+        let elapsed_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        spans.push(Span::raw(" "));
+        spans.extend(
+            comet_spans("[DRSS]", elapsed_ms, palette)
+                .into_iter()
+                .map(|mut span| {
+                    span.style = span.style.add_modifier(Modifier::BOLD);
+                    span
+                }),
+        );
+    } else {
+        // [!] retains its existing meaning: aggregate spend includes sub-agents.
+        spans.push(Span::styled(" [!]", dim));
+    }
     Some(Line::from(spans))
 }

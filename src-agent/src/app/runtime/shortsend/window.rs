@@ -224,6 +224,13 @@ fn stub(msg: &mut ChatMessage, reference: Option<&ArchiveRef>) {
     );
 }
 
+/// A shaped request plus display telemetry. The flag means condensed archive
+/// context is in use, not merely that the DRSS setting is enabled.
+pub struct ShapedRequest {
+    pub history: Vec<ChatMessage>,
+    pub drss_active: bool,
+}
+
 pub fn shape(
     history: Vec<ChatMessage>,
     session_dir: &Path,
@@ -232,9 +239,12 @@ pub fn shape(
     goal: &GoalWire,
     limits: &ContextLimits,
     schemas: u64,
-) -> Result<Vec<ChatMessage>> {
+) -> Result<ShapedRequest> {
     if !settings.short_send_enabled || history.len() <= 1 {
-        return Ok(history);
+        return Ok(ShapedRequest {
+            history,
+            drss_active: false,
+        });
     }
     anyhow::ensure!(
         history[0].role == Role::System,
@@ -256,7 +266,10 @@ pub fn shape(
             // still fits the complete model window with useful reply room.
             anyhow::ensure!(fixed + body_tokens + minimum_reply <= window,
                 "DRSS archive unavailable ({error}); cannot safely reduce context. Conversation preserved.");
-            return Ok(history);
+            return Ok(ShapedRequest {
+                history,
+                drss_active: false,
+            });
         }
     };
     let ids = archive_ids(&index, body);
@@ -315,6 +328,10 @@ pub fn shape(
             boundary = boundary.max(round.archived_end.unwrap_or(0));
         }
     }
+    // Previously covered history still counts as active on later requests,
+    // even when this pass does not advance the boundary. /clear moves start_id
+    // past the old boundary, so an empty/new conversation does not inherit it.
+    let mut drss_active = boundary >= index.start_id || keep.iter().any(|retained| !retained);
     let omitted: Vec<_> = rounds
         .iter()
         .zip(&keep)
@@ -373,6 +390,7 @@ pub fn shape(
             }
             let before = message_tokens(&tail[i]);
             stub(&mut tail[i], refs[retained_indices[i]].as_ref());
+            drss_active |= tail[i] != body[retained_indices[i]];
             tokens = tokens.saturating_sub(before) + message_tokens(&tail[i]);
         }
     }
@@ -396,5 +414,8 @@ pub fn shape(
     index
         .save_coverage(boundary, &recovered_keys)
         .context("persist DRSS archive coverage")?;
-    Ok(output)
+    Ok(ShapedRequest {
+        history: output,
+        drss_active,
+    })
 }

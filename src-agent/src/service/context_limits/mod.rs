@@ -57,6 +57,9 @@ pub struct ContextUsage {
     pub prompt_tokens: u64,
     pub effective_window: u64,
     pub estimated: bool,
+    /// This request uses archived/shortened context, not just an enabled setting.
+    #[serde(default)]
+    pub drss_active: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]

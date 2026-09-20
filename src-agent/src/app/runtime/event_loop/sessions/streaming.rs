@@ -47,12 +47,14 @@ pub(super) fn drain_stream(
                 StreamEvent::ContextPrepared {
                     prompt_tokens,
                     effective_window,
+                    drss_active,
                 } => {
                     let rt = &mut state.rest.sessions[idx];
                     rt.context_usage = Some(crate::service::context_limits::ContextUsage {
                         prompt_tokens,
                         effective_window,
                         estimated: true,
+                        drss_active,
                     });
                     // The previous request's cache hit does not describe this prompt.
                     rt.tokens_cached = 0;
@@ -241,6 +243,7 @@ mod context_usage_tests {
         tx.send(StreamEvent::ContextPrepared {
             prompt_tokens: 54_000,
             effective_window: 300_000,
+            drss_active: true,
         })
         .unwrap();
         assert!(drain_stream(&mut state, 1, &None, runtime.handle()));
@@ -248,6 +251,7 @@ mod context_usage_tests {
         assert_eq!(estimate.prompt_tokens, 54_000);
         assert_eq!(estimate.effective_window, 300_000);
         assert!(estimate.estimated);
+        assert!(estimate.drss_active);
         assert_eq!(state.rest.sessions[1].tokens_cached, 0);
         assert!(state.rest.sessions[0].context_usage.is_none());
 
@@ -275,6 +279,7 @@ mod context_usage_tests {
         assert_eq!(reported.prompt_tokens, 51_500);
         assert_eq!(reported.effective_window, 300_000);
         assert!(!reported.estimated);
+        assert!(reported.drss_active);
         assert_eq!(state.rest.sessions[1].tokens_cached, 49_400);
         let snapshot = crate::ipc::snapshot::build_snapshot(&state);
         let shadow =
@@ -290,6 +295,7 @@ mod context_usage_tests {
         tx.send(StreamEvent::ContextPrepared {
             prompt_tokens: 32_000,
             effective_window: 128_000,
+            drss_active: false,
         })
         .unwrap();
         drain_stream(&mut state, 1, &None, runtime.handle());
@@ -297,6 +303,7 @@ mod context_usage_tests {
         assert_eq!(next.effective_window, 128_000);
         assert_eq!(next.prompt_tokens, 32_000);
         assert!(next.estimated);
+        assert!(!next.drss_active);
         assert_eq!(state.rest.sessions[1].tokens_cached, 0);
     }
 }
