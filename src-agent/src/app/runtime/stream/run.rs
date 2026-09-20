@@ -13,8 +13,8 @@ use crate::service::openrouter::OpenRouterClient;
 /// Never persisted — only mutates the local `history` Vec before POST.
 const TOOL_NUDGE: &str = "\n\nIMPORTANT (auto message, ignore if no need):\n\
 - If unsure (for example does not know how to implement, or does not know what is this or you really unsure what does the code mean or there is unclear documentation of certain module or api and other thing that IS UNSURE but NON BLOCKING), USE web_search/web_fetch rather than guessing.\n\
-- If you need prior conversation context, use message_find (add scope project only when searching sibling sessions in this project).\n\
-- If internet and history having zero result, STOP and ASK me.";
+- If you need prior conversation context, use message_find for short previews, then message_load with a selected ref for exact text. Add scope project only when searching sibling sessions in this project.\n\
+- If necessary information is still missing after relevant searches, pagination and selected archive reads, ask the user for that information.";
 
 /// Names of SDLC lifecycle tools that are INTERNAL_ONLY (never part of
 /// `main_tool_names`). Used by [`mode_advertised_lifecycle_tools`] and by the

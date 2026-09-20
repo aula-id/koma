@@ -13,8 +13,8 @@
 //! The `messages` table carries an optional `reasoning TEXT` column that stores
 //! the display-only thinking trace from assistant turns. It is NOT indexed by
 //! FTS5 (search stays on user-visible content); reasoning is rehydrated from
-//! `messages.json` on session load and returned as a snippet by
-//! [`query::search_messages`] for display in `message_find` results.
+//! `messages.json` on session load for the display. Archive discovery and exact
+//! model-facing reads exclude it.
 //!
 //! ## Full-text search (FTS5)
 //!
@@ -45,6 +45,7 @@
 
 mod blobs;
 pub mod drss;
+pub mod history_search;
 mod query;
 mod records;
 mod schema;

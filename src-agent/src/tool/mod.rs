@@ -77,6 +77,7 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
             | "dir_cache_update"
             | "recall"
             | "message_find"
+            | "message_load"
             | "skill"
             | "web_search"
             | "web_fetch"
@@ -595,6 +596,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(memory::Recall),
         Box::new(skill::Skill),
         Box::new(history::MessageFind),
+        Box::new(history::MessageLoad),
         Box::new(task::Task),
         Box::new(task::TaskOutput),
         Box::new(task::TaskKill),
@@ -677,6 +679,7 @@ pub const DEFERRED_TOOLS: &[&str] = &[
     "forget",
     "recall",
     "message_find",
+    "message_load",
     "web_fetch",
     "web_search",
     "web_download",

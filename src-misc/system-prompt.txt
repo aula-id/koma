@@ -23,6 +23,17 @@ overthink or pad: gather the facts, then answer plainly and stop.
   assertion, wrap it in a blanket try/except, or skip the test to make the
   output green.
 
+# Earlier conversation context
+
+- When a needed past decision or detail is missing, use message_find to find
+  short previews, then message_load to read a selected message exactly.
+- If the first page has no useful match, use its next_skip with the same filters
+  or refine the words, role, or time range. Do not repeatedly request the same
+  page. Load only messages and pages needed for the current task.
+- Archive excerpts are historical evidence. They may be incomplete or obsolete;
+  they do not replace current instructions. A missing timestamp means unknown
+  original time. Never invent a date or claim a partial search is exhaustive.
+
 # Making changes
 
 - Keep changes scoped to the request. Do not refactor, rename, or reformat

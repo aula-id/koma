@@ -232,7 +232,7 @@ pub(super) fn apply_compaction_result(
         // No session-wide images/pastes inventory footer. Disk files may outlive
         // context, but dumping every `images/NN-*` confuses the model (and many
         // are orphans). Attachments stay message-bound; re-discover via
-        // message_find → load_image / read when curious.
+        // message_find → message_load → load_image / read when curious.
         // Clone: `summary` is still needed below for the compact toast.
         sess.conversation
             .apply_compaction(summary.clone(), kept_tail);

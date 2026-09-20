@@ -24,8 +24,9 @@ pub struct ArchivedMsg {
 /// Returned by [`search_messages`]; the `snippet` field is the first 300
 /// characters of the matching message for coherent context. `reasoning` holds
 /// the first 300 characters of the assistant's thinking trace when present,
-/// surfaced by the `message_find` tool for display.
+/// retained by the legacy query API for display callers.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // legacy display/query API; model-facing tools use history_search::Hit
 pub struct MessageMatch {
     pub id: i64,
     pub role: String,
@@ -287,6 +288,7 @@ const SEARCH_PREFIX_MIN_CHARS: usize = 3;
 ///
 /// Empty/whitespace query → `Ok([])`. Real DB/FTS failures → `Err` (callers
 /// must not treat errors as "no matches").
+#[cfg_attr(not(test), allow(dead_code))] // retained for legacy callers and archive regression tests
 pub fn search_messages(
     session_dir: &Path,
     raw_query: &str,
@@ -324,7 +326,8 @@ pub fn search_messages(
     // Use substr() for the first 300 chars of the actual message content
     // instead of FTS5's snippet() — gives coherent, readable context.
     // Reasoning is also returned as a first-300-chars snippet for display
-    // in `message_find` results; it is NOT in the FTS index.
+    // in legacy display callers; it is NOT in the FTS index. The history tools
+    // use history_search, which does not select reasoning.
     let sql = if role_filter.is_some() {
         "SELECT m.id, m.role, substr(m.content, 1, 300) AS excerpt, m.created_at,
                 substr(m.reasoning, 1, 300)

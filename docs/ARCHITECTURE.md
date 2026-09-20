@@ -334,12 +334,33 @@ do large assistant/tool bodies become read-pointer stubs, largest first and only
 until the request fits. Calls, arguments, replay metadata, and the active user
 request stay intact.
 
-`message_find({message_id, offset, limit})` reads original archive rows;
-`message_find({archive_key, offset, limit})` reads recovery copies. Both return
-Unicode-character pages and `next_offset`, including text with embedded NUL.
-Keyword search includes recovery copies and preserves session scope. Read results
-are never restubbed. The tool schema is a plain object for providers that reject
-root `anyOf`/`oneOf`; mutually exclusive modes are checked at runtime.
+`message_find` discovers messages with bounded deterministic excerpts near the
+matching text. It defaults to the current session, latest first, 10 results;
+`skip`/`limit` page results (maximum 20 per page, skip up to 10,000). Role, project
+scope, inclusive `after` and exclusive `before` timestamps, and oldest/relevance
+ordering are optional. Timestamps require seconds and an explicit timezone.
+Time ordering applies before limiting candidates, including across project
+sessions. Unknown original times on recovery copies are null, sort last for date
+ordering, and are excluded by time filters. A time-limited or unavailable-sibling
+search reports incomplete coverage instead of claiming exhaustion. Search pages
+are a live view, so new matching messages can shift skip offsets.
+
+Search responses cap previews at 400 Unicode characters and the entire response
+at 6,000 characters / 12,000 UTF-8 bytes. `next_skip` advances by the number actually
+returned, with `has_more` and plain instructions for refining or continuing a
+search. Previews contain only message content; stored reasoning and attachment
+reload details are excluded from search results.
+
+`message_load({ref, offset, max_chars})` reads the exact selected message. A ref
+identifies the session plus original message ID or recovery key. Project refs
+resolve only to registered sessions in the same canonical bucket. Current-session
+`message_id` / `archive_key` references from DRSS are also supported. Reads return
+at most 3,000 Unicode characters, including embedded NUL, with timestamp, role,
+total length and `next_offset`; attachment hints have a separate bounded header.
+Legacy `message_find({message_id|archive_key, offset, limit})` reads still work.
+DRSS protects both tools' returned pages from restubbing and advertises
+`message_load` for exact recall. Both schemas have plain object roots; runtime
+validation enforces exclusive modes without provider-sensitive root unions.
 
 A request that still cannot fit its protected input/metadata or cannot store
 required recovery copies fails explicitly; the history rail remains intact. `/clear` resets the active index range; resend truncation invalidates stale

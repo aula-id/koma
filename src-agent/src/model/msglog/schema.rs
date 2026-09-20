@@ -3,8 +3,8 @@
 //! The `reasoning` column on `messages` stores display-only thinking traces
 //! from assistant turns. It is NOT indexed by FTS5 (search stays on user-
 //! visible content); reasoning is rehydrated from `messages.json` on load
-//! and returned as a snippet by `search_messages` for display in
-//! `message_find` results.
+//! and returned as a snippet by `search_messages` for display-only history.
+//! Model-facing history tools exclude reasoning.
 //!
 //! `schema_meta` is a key/value table that gates one-shot migrations (e.g.
 //! FTS backfill) so `open()` never re-runs expensive init work.

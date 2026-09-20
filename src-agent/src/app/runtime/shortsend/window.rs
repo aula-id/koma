@@ -170,7 +170,7 @@ fn memory(
         );
     }
     if through >= index.start_id {
-        append_bounded(&mut text, &format!("Archive range: #{} through #{}. Full text remains stored.\nRead exact messages with message_find({{\"message_id\":N,\"offset\":0,\"limit\":3000}}); follow next_offset.\nTerm counts cover the indexed vocabulary (up to 512 terms per message).\n",index.start_id,through), budget);
+        append_bounded(&mut text, &format!("Archive range: #{} through #{}. Full text remains stored.\nRead exact messages with message_load({{\"message_id\":N,\"offset\":0,\"max_chars\":3000}}); follow next_offset.\nTerm counts cover the indexed vocabulary (up to 512 terms per message).\n",index.start_id,through), budget);
         for (id, quote) in index.user_constraints(through)? {
             append_bounded(
                 &mut text,
@@ -219,7 +219,7 @@ fn stub(msg: &mut ChatMessage, reference: Option<&ArchiveRef>) {
     };
     let preview: String = msg.content.chars().take(240).collect();
     msg.content = format!(
-        "[DRSS live body stored in archive]\n{preview}\nRead message_find({}); follow next_offset.",
+        "[DRSS live body stored in archive]\n{preview}\nRead message_load({}); follow next_offset.",
         reference.read_args()
     );
 }
@@ -346,7 +346,7 @@ pub fn shape(
     let archive_reads: HashSet<_> = body
         .iter()
         .flat_map(|m| m.tool_calls.iter().flatten())
-        .filter(|call| call.function.name == "message_find")
+        .filter(|call| matches!(call.function.name.as_str(), "message_find" | "message_load"))
         .map(|call| call.id.as_str())
         .collect();
     if tokens > recovery_room {

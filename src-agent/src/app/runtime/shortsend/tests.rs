@@ -292,7 +292,7 @@ fn paged_unicode_and_nul_reads_round_trip_and_are_not_restubbed() {
         let mut restored = String::new();
         let mut offset = 0;
         loop {
-            let output = crate::tool::history::MessageFind
+            let output = crate::tool::history::MessageLoad
                 .run(
                     &archive.tool_ctx(),
                     &serde_json::json!({"message_id":2,"offset":offset}),
@@ -311,7 +311,7 @@ fn paged_unicode_and_nul_reads_round_trip_and_are_not_restubbed() {
                         id: "read-page".into(),
                         kind: "function".into(),
                         function: FunctionCall {
-                            name: "message_find".into(),
+                            name: "message_load".into(),
                             arguments: "{\"message_id\":2}".into(),
                         },
                     },
@@ -640,7 +640,7 @@ fn partial_archive_keeps_existing_ids_and_recovery_pages_round_trip() {
             &serde_json::json!({"query":"exact_legacy_end", "role":"assistant"}),
         )
         .unwrap();
-    assert!(found.contains("archive_key"));
+    assert!(found.contains(":recovery:"));
     assert!(!found.contains("(no matching messages found)"));
     assert!(crate::tool::history::MessageFind
         .run(
@@ -648,6 +648,7 @@ fn partial_archive_keeps_existing_ids_and_recovery_pages_round_trip() {
             &serde_json::json!({"query":"exact_legacy_end", "role":"user"})
         )
         .unwrap()
+        .to_lowercase()
         .contains("no matching"));
     // Another session cannot read this recovery record.
     assert!(crate::tool::history::MessageFind

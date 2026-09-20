@@ -494,7 +494,7 @@ Multiple workspace roots are configured. Paths written as [N]… (for example fr
             sys.push_str(
                 "\n\n# Plan mode\n\
 Plan mode is active — READ-ONLY until the user approves.\n\
-- DO explore: read, grep, glob, dir_list, web_*, git_operator (read-only subcommands), task (explore agents), seqthink, message_find, recall, graph_query, browser inspect/tabs, load_image/show_image.\n\
+- DO explore: read, grep, glob, dir_list, web_*, git_operator (read-only subcommands), task (explore agents), seqthink, message_find, message_load, recall, graph_query, browser inspect/tabs, load_image/show_image.\n\
 - DO structure: checklist (plan steps), then plan_ready with `highlights` + full `plan` when ready.\n\
 - DO NOT call write, edit, delete, bash, web_download, remember, git_worktree, or any mutating git (commit/push/checkout/…). Those are blocked until approval; calling them wastes the turn.\n\
 - DO NOT start implementing \"just a little\" while planning. When the plan is complete, call plan_ready and STOP — wait for the user (y / a / n). Do not queue edit/bash in the same tool batch as plan_ready.\n\
@@ -544,7 +544,7 @@ NO preference nags; research, decide, ship. Never invent APIs — read the code.
 - Integrate never force-pushes; main/master auto-merge blocked. Dirty target → leave mission branch ready. Destination is frozen target_worktree_path.\n\
 - Human gates need explicit user y/n via mission_verify(human_gate=...). Model cannot self-approve gates.\n\
 - External shell/MCP is not OS-sandboxed — stay inside the mission tree by discipline.\n\
-- Unsure: web_search → message_find → ask the user.\n\
+- For missing history, use message_find for previews, then message_load for selected messages. Ask the user if necessary information is still missing.\n\
 - On confusion: re-read mission.json and the OPEN/SEALED capsule below — contract is source of truth.\n\
 - Do not call mission_prepare (you are past prepare). Do not re-interview the user for goal/acceptance unless they ask to amend (mission_ready → needs_reapproval).\n",
                         if phase == "integrate" {

@@ -23,7 +23,7 @@ impl super::Tool for LoadImage {
     fn description(&self) -> &'static str {
         "Load an existing image file from a configured workspace, this session's \
          exact scratch directory, or this session's images/ attachment directory \
-         into the next model message for visual inspection. Use after message_find \
+         into the next model message for visual inspection. Use after message_load \
          or compact when a past [Image #N] is no longer in live context."
     }
 
@@ -37,7 +37,7 @@ impl super::Tool for LoadImage {
                 },
                 "image_n": {
                     "type": "integer",
-                    "description": "Optional marker number N from [Image #N]. Resolves to the matching file under this session's images/ (NN-*). Prefer when message_find listed the marker without a full path."
+                    "description": "Optional marker number N from [Image #N]. Resolves to the matching file under this session's images/ (NN-*). Prefer for a current-session image marker when no full path is available."
                 }
             },
             "additionalProperties": false

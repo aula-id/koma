@@ -23,9 +23,9 @@ impl ArchiveRef {
     }
     pub fn read_args(&self) -> String {
         match self {
-            Self::Message(id) => format!("{{\"message_id\":{id},\"offset\":0,\"limit\":3000}}"),
+            Self::Message(id) => format!("{{\"message_id\":{id},\"offset\":0,\"max_chars\":3000}}"),
             Self::Recovery(reference) => format!(
-                "{{\"archive_key\":\"{}\",\"offset\":0,\"limit\":3000}}",
+                "{{\"archive_key\":\"{}\",\"offset\":0,\"max_chars\":3000}}",
                 reference.key
             ),
         }
@@ -50,7 +50,7 @@ pub(super) fn handoff(
         append_bounded(
             out,
             &format!(
-                "Kickoff excerpt: {}; read message_find({}).\n",
+                "Kickoff excerpt: {}; read message_load({}).\n",
                 serde_json::to_string(&kickoff).unwrap_or_default(),
                 reference.read_args()
             ),
@@ -93,7 +93,7 @@ pub(super) fn handoff(
         append_bounded(
             out,
             &format!(
-                "Historical {}: {quote}{end}; read message_find({}).\n",
+                "Historical {}: {quote}{end}; read message_load({}).\n",
                 msg.role.as_str(),
                 reference.read_args()
             ),
@@ -131,7 +131,7 @@ pub(super) fn handoff(
         let Some((_, reference)) = omitted.iter().find(|(i, _)| *i == latest) else {
             continue;
         };
-        append_bounded(out, &format!("Recovery term {}: {occurrences} occurrences / {messages} messages; latest message_find({}).\n", serde_json::to_string(&term).unwrap_or_default(), reference.read_args()), budget);
+        append_bounded(out, &format!("Recovery term {}: {occurrences} occurrences / {messages} messages; latest message_load({}).\n", serde_json::to_string(&term).unwrap_or_default(), reference.read_args()), budget);
         if text_tokens(out) + 100 >= budget {
             break;
         }

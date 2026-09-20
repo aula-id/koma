@@ -341,54 +341,6 @@ impl Index {
     }
 }
 
-/// Recovery copies participate in keyword lookup as well as exact paged reads.
-pub fn search_recovery(
-    session_dir: &Path,
-    query: &str,
-    role: Option<&str>,
-    limit: i64,
-) -> Result<Vec<(String, String, String)>> {
-    let conn = super::open(session_dir)?;
-    let exists: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='drss_recovery_fts')",
-        [],
-        |r| r.get(0),
-    )?;
-    if !exists {
-        return Ok(Vec::new());
-    }
-    let words: Vec<_> = query
-        .split_whitespace()
-        .map(|word| {
-            word.chars()
-                .filter(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.'))
-                .collect::<String>()
-        })
-        .filter(|word| word.chars().count() >= 2)
-        .take(5)
-        .map(|word| {
-            if word.chars().count() >= 3 {
-                format!("\"{word}\"*")
-            } else {
-                format!("\"{word}\"")
-            }
-        })
-        .collect();
-    if words.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut stmt = conn.prepare(
-        "SELECT r.archive_key,r.role,substr(r.content,1,300)
-        FROM drss_recovery_fts f JOIN drss_recovery r ON r.rowid=f.rowid
-        WHERE drss_recovery_fts MATCH ?1 AND (?2 IS NULL OR r.role=?2)
-        ORDER BY rank,r.rowid DESC LIMIT ?3",
-    )?;
-    let rows = stmt.query_map(params![words.join(" OR "), role, limit.clamp(1, 10)], |r| {
-        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-    })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-}
-
 /// Called by /clear and resend/truncate so stale boundaries never hide new work.
 pub(super) fn reset(conn: &Connection, clear: bool) -> Result<()> {
     tables(conn)?;
