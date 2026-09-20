@@ -1,5 +1,6 @@
 //! Async streaming bridge: spawn / abort / finalize a request task.
 
+mod mode_contract;
 mod run;
 mod spawn;
 pub(crate) mod stall;

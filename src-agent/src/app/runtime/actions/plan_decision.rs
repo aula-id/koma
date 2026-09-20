@@ -12,6 +12,29 @@ use crate::service::openrouter::OpenRouterClient;
 
 use crate::app::runtime::stream::process_tools;
 
+/// A decision belongs to the live, unanswered `plan_ready` park, never to an
+/// old transcript, `approved_plan` classifier hint, or a plan left on disk.
+/// Return the exact body submitted by that call so later disk edits cannot
+/// change what the user approved.
+fn parked_plan_body(state: &AppState) -> Result<String> {
+    let rt = state.rest.fg();
+    anyhow::ensure!(
+        rt.agent_mode == AgentMode::Plan && rt.awaiting_approval && rt.session.is_some(),
+        "plan decision requires a currently parked plan_ready in Plan mode"
+    );
+    let call = rt
+        .pending_tool_calls
+        .get(rt.tool_idx)
+        .filter(|call| call.function.name == "plan_ready")
+        .filter(|call| !rt.tool_results.iter().any(|(id, _)| id == &call.id))
+        .context("plan decision requires an unanswered plan_ready call")?;
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let args: serde_json::Value =
+        serde_json::from_str(&sanitized).context("parked plan_ready arguments are invalid")?;
+    let (_, body) = crate::tool::plan::parse_plan_ready_args(&args).map_err(anyhow::Error::msg)?;
+    Ok(body)
+}
+
 /// Answer the paused `plan_ready`/`mission_ready` call (at `tool_idx`) with
 /// `result` and advance past it.
 fn answer_plan_ready(state: &mut AppState, result: String) {
@@ -77,29 +100,13 @@ pub(super) fn handle_approve_plan(
     client: &mut Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
+    let plan_body = parked_plan_body(state)?;
     let fgi = state.rest.foreground;
     state.rest.fg_mut().awaiting_approval = false;
     state.rest.fg_mut().approval_reason = None;
-    // Read the approved plan off disk and embed its full body in the tool
-    // result, instead of just naming the path — the session dir can sit
-    // outside every configured workspace root, so a bare pointer sends the
-    // model off to `read` a path it may not be allowed to open (see the
-    // `resolve_read` sessions-tree bypass in `tool/mod.rs` for the other half
-    // of this fix). Falls back to the old pointer-only text if the read fails
-    // (no session, or the file vanished) so nothing regresses.
-    let plan_path_opt = state.rest.fg().session.as_ref().map(|s| s.plan_path());
-    let plan_body = plan_path_opt
-        .as_ref()
-        .and_then(|p| std::fs::read_to_string(p).ok());
-    let approve_text = match plan_body {
-        Some(body) => crate::tool::plan::plan_approved_text_with_body(&body),
-        None => {
-            let plan_path = plan_path_opt
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "the session plan.md".to_string());
-            crate::tool::plan::plan_approved_text(&plan_path)
-        }
-    };
+    // Embed the submitted body directly: plan.md is a convenience copy, not
+    // the source of approval authority or a mutable execution instruction.
+    let approve_text = crate::tool::plan::plan_approved_text_with_body(&plan_body);
     answer_plan_ready(state, approve_text);
     // Drop premature sibling tools from the same batch as plan_ready (edit/bash
     // queued "already" by the model). Execution belongs on the NEXT model turn
@@ -112,17 +119,9 @@ pub(super) fn handle_approve_plan(
     // Make the tool-call classifier PLAN-AWARE for the execution that follows: stash
     // the approved plan text (truncated) on the fg session so `process_tools`
     // prepends it to the classifier context. The classifier keeps running (safety net
-    // intact) but now allows the tool calls that carry out the plan. A read failure →
-    // no stash (classifier behaves exactly as before). Cleared on the next user submit
-    // / plan re-entry so it never leaks past this execution.
-    let approved_plan = state
-        .rest
-        .fg()
-        .session
-        .as_ref()
-        .and_then(|s| std::fs::read_to_string(s.plan_path()).ok())
-        .map(|t| t.chars().take(2000).collect::<String>());
-    state.rest.fg_mut().approved_plan = approved_plan;
+    // intact) but now allows the tool calls that carry out the plan. Retained
+    // across follow-up turns; Plan re-entry or denial clears this scoped record.
+    state.rest.fg_mut().approved_plan = Some(plan_body.chars().take(2000).collect());
     // Leave Plan BEFORE resuming: the round finishes into `finish_tool_round` →
     // `start_stream_task`, which reads `agent_mode` to size the advertised tool
     // surface, so the continuation must already be in the restored (executing) mode.
@@ -142,7 +141,7 @@ pub(super) fn handle_approve_plan(
 /// `handle_compact(preserve_n = 0)` SYNCHRONOUSLY — collapsing the whole
 /// exploratory history to a summary. When that async compaction lands,
 /// `apply_compaction_result` (gated on `pending_plan_seed`) injects the approved
-/// `plan.md` as a fresh user turn and AUTO-WAKES the execution stream.
+/// body as a fresh user turn and AUTO-WAKES the execution stream.
 ///
 /// We deliberately do NOT call `process_tools` (that would immediately execute the
 /// plan on the UN-compacted context — the bug this fixes); compaction fires
@@ -154,6 +153,7 @@ pub(super) fn handle_approve_plan_compact(
     client: &mut Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
+    let plan_body = parked_plan_body(state)?;
     let fgi = state.rest.foreground;
     state.rest.fg_mut().awaiting_approval = false;
     state.rest.fg_mut().approval_reason = None;
@@ -165,21 +165,15 @@ pub(super) fn handle_approve_plan_compact(
     // stash the approved plan text (truncated) on the fg session so `process_tools`
     // prepends it to the classifier context. The stash SURVIVES the compaction — the
     // plan-seeded auto-wake in `apply_compaction_result` does not clear it — so the
-    // classifier stays plan-aware for the seeded execution stream. A read failure →
-    // no stash. Cleared on the next user submit / plan re-entry.
-    let approved_plan = state
-        .rest
-        .fg()
-        .session
-        .as_ref()
-        .and_then(|s| std::fs::read_to_string(s.plan_path()).ok())
-        .map(|t| t.chars().take(2000).collect::<String>());
-    state.rest.fg_mut().approved_plan = approved_plan;
+    // classifier stays plan-aware for the seeded execution stream. Retained
+    // across follow-up turns; Plan re-entry or denial clears it.
+    state.rest.fg_mut().approved_plan = Some(plan_body.chars().take(2000).collect());
     // Leaving Plan here (via set_agent_mode) drops the plan checklist so it doesn't
-    // bleed into `/todo` (independent of the plan.md seed the compaction re-reads).
+    // bleed into `/todo` (independent of the captured execution seed).
     restore_plan_return_mode(state);
-    // Arm the one-shot seed so `apply_compaction_result` injects plan.md as the first
-    // post-compaction user turn and auto-wakes execution.
+    // Capture the approved body before compaction; plan.md may change or vanish
+    // while the summary is running, and must not redefine this approval.
+    state.rest.fg_mut().pending_plan_seed_body = Some(plan_body);
     state.rest.fg_mut().pending_plan_seed = true;
 
     // Answer any TRAILING pending tool calls that follow `plan_ready` in the same
@@ -252,9 +246,9 @@ pub(super) fn handle_approve_plan_compact(
     state.rest.fg_mut().waiting = false;
     // Compact-first: collapse the entire planning history NOW (preserve_n = 0). The
     // async result lands as `StreamEvent::Compacted` → `apply_compaction_result`,
-    // which seeds plan.md and auto-wakes the execution stream. `client` is already
-    // the `&mut Option<_>` the handler owns (no clone needed, unlike the deferred
-    // drain which holds a `&`).
+    // which seeds the captured approved body and auto-wakes execution. `client`
+    // is already the `&mut Option<_>` the handler owns (no clone needed, unlike
+    // the deferred drain which holds a `&`).
     let _ = crate::app::runtime::commands::compact::handle_compact(state, client, handle, Some(0));
     Ok(())
 }
@@ -267,9 +261,13 @@ pub(super) fn handle_deny_plan(
     client: &mut Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
+    parked_plan_body(state)?;
     let fgi = state.rest.foreground;
     state.rest.fg_mut().awaiting_approval = false;
     state.rest.fg_mut().approval_reason = None;
+    state.rest.fg_mut().approved_plan = None;
+    state.rest.fg_mut().pending_plan_seed = false;
+    state.rest.fg_mut().pending_plan_seed_body = None;
     answer_plan_ready(state, crate::tool::plan::plan_denied_text().to_string());
     // Same-batch siblings of plan_ready (often premature edit/bash) must not run
     // even while we stay in Plan — the gate would deny mutators, but skipping

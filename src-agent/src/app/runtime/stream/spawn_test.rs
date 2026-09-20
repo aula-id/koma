@@ -7,6 +7,7 @@ use std::sync::{Arc, RwLock};
 /// `workspace`/`workspaces`.
 fn test_ctx(workspaces: Vec<std::path::PathBuf>) -> crate::tool::ToolCtx {
     crate::tool::ToolCtx {
+        plan_read_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         workspace: workspaces.first().cloned().unwrap_or_default(),
         workspaces,
         dir_cache: Arc::new(RwLock::new(crate::tool::DirCache::default())),
@@ -52,8 +53,7 @@ fn absent_workspace_leaves_ctx_unchanged() {
 /// `ctx.workspace`/`ctx.workspaces` down to that single canonicalized path.
 #[test]
 fn containment_pass_narrows_ctx_to_single_root() {
-    let base =
-        std::env::temp_dir().join(format!("koma-spawn-test-pass-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("koma-spawn-test-pass-{}", std::process::id()));
     let child = base.join("desk-1");
     std::fs::create_dir_all(&child).expect("create nested test dir");
 
@@ -76,8 +76,7 @@ fn containment_pass_narrows_ctx_to_single_root() {
 /// naming the rejected path.
 #[test]
 fn containment_reject_when_outside_every_root() {
-    let root =
-        std::env::temp_dir().join(format!("koma-spawn-test-root-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("koma-spawn-test-root-{}", std::process::id()));
     let outsider =
         std::env::temp_dir().join(format!("koma-spawn-test-outsider-{}", std::process::id()));
     std::fs::create_dir_all(&root).expect("create root dir");
@@ -115,8 +114,7 @@ fn containment_reject_when_outside_every_root() {
 /// "…/b" is a literal prefix of "…/bc".
 #[test]
 fn containment_rejects_string_prefix_trap() {
-    let base =
-        std::env::temp_dir().join(format!("koma-spawn-test-trap-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("koma-spawn-test-trap-{}", std::process::id()));
     let root = base.join("b");
     let sibling = base.join("bc");
     std::fs::create_dir_all(&root).expect("create root dir");
@@ -132,4 +130,61 @@ fn containment_rejects_string_prefix_trap() {
     assert!(matches!(err, SpawnFailReason::Workspace(_)));
 
     let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A queued/deferred call owns its ToolCtx already; changing the shared parent
+/// flag must still be enforced at its eventual dispatch, before touching files.
+#[test]
+fn live_plan_policy_rechecks_pending_dispatch() {
+    use crate::dto::chat::{FunctionCall, ToolCall};
+    use std::sync::atomic::Ordering;
+
+    let root = std::env::temp_dir().join(format!(
+        "koma-plan-dispatch-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("notes.txt"), "existing notes").unwrap();
+    let ctx = test_ctx(vec![root.clone()]);
+    let parent_plan = Arc::clone(&ctx.plan_read_only);
+    let call = |name: &str, args: serde_json::Value| ToolCall {
+        id: "pending-operation".into(),
+        kind: "function".into(),
+        function: FunctionCall {
+            name: name.into(),
+            arguments: args.to_string(),
+        },
+    };
+    let write = call(
+        "write",
+        serde_json::json!({"path":"notes.txt", "content":"changed"}),
+    );
+    // This models a call approved before the parent switched modes, whose
+    // deferred worker has not dispatched yet.
+    parent_plan.store(true, Ordering::Release);
+    assert!(crate::tool::execute_tool(&ctx, &write).starts_with("blocked: plan mode is read-only"));
+    assert_eq!(
+        std::fs::read_to_string(root.join("notes.txt")).unwrap(),
+        "existing notes"
+    );
+    assert!(crate::tool::execute_tool(
+        &ctx,
+        &call("read", serde_json::json!({"path":"notes.txt"}))
+    )
+    .contains("existing notes"));
+    assert!(
+        crate::tool::execute_tool(&ctx, &call("mcp__server__read", serde_json::json!({})))
+            .starts_with("blocked: plan mode is read-only")
+    );
+    parent_plan.store(false, Ordering::Release);
+    assert!(crate::tool::execute_tool(&ctx, &write).starts_with("Wrote"));
+    assert_eq!(
+        std::fs::read_to_string(root.join("notes.txt")).unwrap(),
+        "changed"
+    );
+    std::fs::remove_dir_all(root).unwrap();
 }

@@ -14,6 +14,10 @@ use crate::service::openrouter::OpenRouterClient;
 /// runs against that session's own workspace + dir cache.
 pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::ToolCtx {
     let rt = &state.rest.sessions[sess_idx];
+    rt.plan_read_only.store(
+        rt.agent_mode == crate::app::state::AgentMode::Plan,
+        std::sync::atomic::Ordering::Release,
+    );
     let session_ref = rt.session.as_ref();
     // The session's EFFECTIVE cwd: the live `cd` override when set, else the
     // configured workdir. This drives `bash` (its `current_dir`) and the dir
@@ -134,6 +138,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         .collect();
     let search_engine = session_ref.map(|s| s.settings.search_engine.clone());
     crate::tool::ToolCtx {
+        plan_read_only: rt.plan_read_only.clone(),
         workspace,
         workspaces,
         dir_cache: rt.dir_cache.clone(),

@@ -26,7 +26,7 @@ pub(in crate::app::runtime::stream::tools) fn build_convo_context(
         .unwrap_or_default();
     let rt = &state.rest.sessions[sess_idx];
     match (&rt.approved_plan, &rt.approved_mission) {
-        (Some(plan), _) if rt.agent_mode != AgentMode::Sdlc => format!(
+        (Some(plan), _) if !matches!(rt.agent_mode, AgentMode::Plan | AgentMode::Sdlc) => format!(
             "[The user has APPROVED the following plan and asked to execute it now. ALLOW tool calls that carry out this plan — file writes/edits and shell commands needed to implement it are authorized. Only flag calls that are clearly OFF-PLAN, destructive beyond the plan's scope, or dangerous.]\n\nAPPROVED PLAN:\n{plan}\n\n--- recent conversation ---\n{base}"
         ),
         // Mission TAC bias only while actively executing (not assess/done/paused).
@@ -360,36 +360,13 @@ pub(in crate::app::runtime::stream::tools) fn intercept_plan_readonly_gate(
     sess_idx: usize,
     call: &ToolCall,
 ) -> InterceptFlow {
-    if call.function.name == "git_operator" {
-        let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
-        let args: serde_json::Value =
-            serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
-        let subcmd = args
-            .get("args")
-            .and_then(|v| v.as_array())
-            .and_then(|a| a.first())
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if !crate::tool::plan_git_subcommand_allowed(subcmd) {
-            state.rest.sessions[sess_idx].tool_results.push((
-                call.id.clone(),
-                format!("plan mode is read-only: git {subcmd} is not allowed (read-only git only)"),
-            ));
-            state.rest.sessions[sess_idx].tool_idx += 1;
-            return InterceptFlow::Continue;
-        }
-        // An allowed read-only git subcommand falls through to the normal
-        // gate flow below — git_operator is risky, so Auto/Normal/Yolo
-        // handling applies unchanged (Plan is treated like Auto there; see
-        // the comments at the classifier verdict branches).
-    } else if !crate::tool::tool_allowed_in_plan(&call.function.name) {
-        state.rest.sessions[sess_idx].tool_results.push((
-            call.id.clone(),
-            format!(
-                "plan mode is read-only: {} is unavailable until the plan is approved",
-                call.function.name
-            ),
-        ));
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let args: serde_json::Value =
+        serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+    if let Err(reason) = crate::tool::plan_tool_call_allowed(&call.function.name, &args) {
+        state.rest.sessions[sess_idx]
+            .tool_results
+            .push((call.id.clone(), reason));
         state.rest.sessions[sess_idx].tool_idx += 1;
         return InterceptFlow::Continue;
     }

@@ -30,6 +30,7 @@ pub mod history;
 pub mod internet;
 pub mod memory;
 pub mod plan;
+mod plan_policy;
 pub mod pong;
 pub mod sdlc;
 pub mod search;
@@ -41,6 +42,7 @@ pub mod task;
 pub mod todo;
 
 pub use dircache::DirCache;
+pub(crate) use plan_policy::{delegated_tool_allowed_in_plan, plan_tool_call_allowed};
 
 /// True for built-in tools that mutate the workspace, run arbitrary shell
 /// commands, mutate git state (local or remote, e.g. `git_operator` push /
@@ -475,6 +477,10 @@ fn sdlc_push_refspec_is_mission_branch(spec: &str, mission_branch: &str) -> bool
 
 /// Shared context handed to every tool invocation.
 pub struct ToolCtx {
+    /// Live parent-session Plan restriction, shared with deferred calls and
+    /// delegates. Checked immediately before dispatch; it cannot undo I/O that
+    /// has already started.
+    pub plan_read_only: Arc<std::sync::atomic::AtomicBool>,
     /// Absolute workspace root (the session's primary workdir).
     pub workspace: PathBuf,
     /// All configured workspace roots (may be >1).
@@ -877,6 +883,14 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
     let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
     let args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+    if ctx
+        .plan_read_only
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        if let Err(reason) = plan_tool_call_allowed(&call.function.name, &args) {
+            return format!("blocked: {reason}");
+        }
+    }
     for tool in all_tools() {
         if tool.name() == call.function.name {
             return match tool.run(ctx, &args) {

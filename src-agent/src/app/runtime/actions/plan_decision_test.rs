@@ -30,6 +30,191 @@ fn scratch_session(tag: &str) -> (std::path::PathBuf, Session) {
     (dir, sess)
 }
 
+fn park_plan_ready(state: &mut AppState, body: &str) {
+    let call = ToolCall {
+        id: "call-plan".into(),
+        kind: "function".into(),
+        function: FunctionCall {
+            name: "plan_ready".into(),
+            arguments: serde_json::json!({"highlights": "Proposed change", "plan": body})
+                .to_string(),
+        },
+    };
+    let rt = state.rest.fg_mut();
+    rt.agent_mode = AgentMode::Plan;
+    rt.waiting = true;
+    rt.awaiting_approval = true;
+    rt.pending_tool_calls = vec![call.clone()];
+    rt.tool_idx = 0;
+    rt.tool_results.clear();
+    if let Some(sess) = rt.session.as_mut() {
+        sess.conversation.push_assistant_with_tools(
+            "Proposed change".into(),
+            vec![call],
+            None,
+            None,
+        );
+    }
+}
+
+fn decide_plan(
+    decision: u8,
+    state: &mut AppState,
+    handle: &tokio::runtime::Handle,
+) -> anyhow::Result<()> {
+    match decision {
+        0 => handle_approve_plan(state, &mut None, handle),
+        1 => handle_approve_plan_compact(state, &mut None, handle),
+        _ => handle_deny_plan(state, &mut None, handle),
+    }
+}
+
+#[test]
+fn plan_decisions_require_live_unanswered_plan_park() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for decision in 0..3 {
+        for invalid in 0..8 {
+            let (dir, mut sess) = scratch_session("stale-plan");
+            std::fs::write(sess.plan_path(), "Old disk plan: execute now").unwrap();
+            sess.conversation
+                .push_user("An earlier plan was approved; execute now.");
+            let mut state = AppState::new(Mode::Chat);
+            state.rest.fg_mut().session = Some(sess);
+            park_plan_ready(&mut state, "Current proposal");
+            state.rest.fg_mut().approved_plan = Some("Old approved classifier hint".into());
+            match invalid {
+                0 => state.rest.fg_mut().awaiting_approval = false,
+                1 => state.rest.fg_mut().agent_mode = AgentMode::Auto,
+                2 => state.rest.fg_mut().pending_tool_calls[0].function.name = "bash".into(),
+                3 => state
+                    .rest
+                    .fg_mut()
+                    .tool_results
+                    .push(("call-plan".into(), "answered".into())),
+                4 => state.rest.fg_mut().pending_tool_calls.clear(),
+                5 => state.rest.fg_mut().tool_idx = 1,
+                6 => state.rest.fg_mut().pending_tool_calls[0].function.arguments = "{}".into(),
+                _ => state.rest.fg_mut().session = None,
+            }
+            let before_mode = state.rest.fg().agent_mode;
+            let before_awaiting = state.rest.fg().awaiting_approval;
+            let before_idx = state.rest.fg().tool_idx;
+            let before_results = state.rest.fg().tool_results.clone();
+            assert!(
+                decide_plan(decision, &mut state, runtime.handle()).is_err(),
+                "decision={decision}, invalid={invalid} must reject stale approval"
+            );
+            assert_eq!(state.rest.fg().agent_mode, before_mode);
+            assert_eq!(state.rest.fg().awaiting_approval, before_awaiting);
+            assert_eq!(state.rest.fg().tool_idx, before_idx);
+            assert_eq!(state.rest.fg().tool_results, before_results);
+            assert_eq!(
+                state.rest.fg().approved_plan.as_deref(),
+                Some("Old approved classifier hint")
+            );
+            assert!(!state.rest.fg().pending_plan_seed);
+            assert!(state.rest.fg().pending_plan_seed_body.is_none());
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+#[test]
+fn approving_live_plan_uses_submitted_body_and_skips_queued_mutations() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for decision in 0..2 {
+        let (dir, sess) = scratch_session("approve-current");
+        // A replaced convenience copy must not alter what the user approves.
+        std::fs::write(sess.plan_path(), "Unreviewed replacement on disk").unwrap();
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.fg_mut().session = Some(sess);
+        park_plan_ready(&mut state, "Reviewed plan body");
+        let trailing = ToolCall {
+            id: "premature-write".into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: "write".into(),
+                arguments: "{}".into(),
+            },
+        };
+        state.rest.fg_mut().pending_tool_calls.push(trailing);
+        decide_plan(decision, &mut state, runtime.handle()).unwrap();
+        assert_eq!(state.rest.fg().agent_mode, AgentMode::Auto);
+        assert!(!state.rest.fg().awaiting_approval);
+        assert_eq!(
+            state.rest.fg().approved_plan.as_deref(),
+            Some("Reviewed plan body")
+        );
+        let messages = state
+            .rest
+            .fg()
+            .session
+            .as_ref()
+            .unwrap()
+            .conversation
+            .messages();
+        assert!(messages
+            .iter()
+            .any(|m| m.tool_call_id.as_deref() == Some("premature-write")
+                && m.content.contains("skipped")));
+        assert!(!messages
+            .iter()
+            .any(|m| m.content.contains("Unreviewed replacement")));
+        if decision == 0 {
+            assert!(messages
+                .iter()
+                .any(|m| m.role == Role::Tool && m.content.contains("Reviewed plan body")));
+        } else {
+            // No provider in this test: failed-to-start compaction consumes its arm.
+            assert!(!state.rest.fg().pending_plan_seed);
+            assert!(state.rest.fg().pending_plan_seed_body.is_none());
+        }
+        assert!(decide_plan(decision, &mut state, runtime.handle()).is_err());
+        assert_eq!(state.rest.fg().agent_mode, AgentMode::Auto);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+fn denying_live_plan_clears_old_approval_and_stays_in_plan() {
+    let (dir, sess) = scratch_session("deny-current");
+    let mut state = AppState::new(Mode::Chat);
+    state.rest.fg_mut().session = Some(sess);
+    park_plan_ready(&mut state, "Proposed change");
+    state.rest.fg_mut().approved_plan = Some("stale prior approval".into());
+    state.rest.fg_mut().pending_plan_seed = true;
+    state.rest.fg_mut().pending_plan_seed_body = Some("stale prior seed".into());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    decide_plan(2, &mut state, runtime.handle()).unwrap();
+    assert_eq!(state.rest.fg().agent_mode, AgentMode::Plan);
+    assert!(!state.rest.fg().awaiting_approval);
+    assert!(state.rest.fg().approved_plan.is_none());
+    assert!(!state.rest.fg().pending_plan_seed);
+    assert!(state.rest.fg().pending_plan_seed_body.is_none());
+    assert!(state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .unwrap()
+        .conversation
+        .messages()
+        .iter()
+        .any(|m| m.role == Role::Tool && m.content.contains("plan not approved")));
+    assert!(decide_plan(2, &mut state, runtime.handle()).is_err());
+    assert_eq!(state.rest.fg().agent_mode, AgentMode::Plan);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 fn unapproved_amendment_mission() -> Mission {
     let goal = "ship X";
     let acceptance = vec!["tests pass".into()];

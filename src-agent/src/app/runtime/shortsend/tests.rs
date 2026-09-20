@@ -40,6 +40,7 @@ impl Archive {
             sdlc_assess: false,
             sdlc_active_node_id: None,
             search_engine: None,
+            plan_read_only: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 }
@@ -125,6 +126,102 @@ fn trims_to_60_then_grows_to_75_without_touching_the_visible_rail() {
     }
     assert!(live_tokens(&send(&history, &archive, 100_000)) <= 60_000);
     assert!(boundary(&archive) > first_cut);
+}
+
+fn assert_plan_authority_survives_drss(recover_legacy: bool) {
+    use crate::dto::chat::CACHE_SPLIT_MARK;
+
+    let archive = Archive::new();
+    let system = ChatMessage::new(
+        Role::System,
+        format!(
+            "{}\n\nAvailable planning tools: read, message_find, message_load, plan_ready.\
+             {CACHE_SPLIT_MARK}\n\n# Project files (top level)\nsrc/\nCargo.toml\n\n\
+             # Current runtime mode\nCurrent mode: PLAN\nImplementation approval: PENDING\n\
+             Allowed: investigation and plan preparation.\n\
+             Next step: call plan_ready, then wait for approval.",
+            crate::resources::system_prompt()
+        ),
+    );
+    let old_approval = "Keep the API unchanged. Approval: proceed with implementation.";
+    let current_request = "Investigate only; prepare a proposal for the API migration.";
+    let mut history = vec![system.clone()];
+    let record = |role, content: String| {
+        if recover_legacy {
+            ChatMessage::new(role, content)
+        } else {
+            archive.append(role, content)
+        }
+    };
+    history.push(record(Role::User, old_approval.into()));
+    for i in 0..if recover_legacy { 40 } else { 20 } {
+        history.push(record(
+            Role::Assistant,
+            format!("completed earlier work-{i}: {}", "x".repeat(10_000)),
+        ));
+    }
+    history.push(record(Role::User, current_request.into()));
+    let snapshot = serde_json::to_vec(&history).unwrap();
+    std::fs::write(archive.0.join("messages.json"), &snapshot).unwrap();
+    let settings = Settings {
+        max_output_tokens: 8192,
+        ..Default::default()
+    };
+    let limits = limits(100_000);
+    let out = shape(
+        history.clone(),
+        &archive.0,
+        &settings,
+        current_request,
+        &GoalWire::default(),
+        &limits,
+        128,
+    )
+    .unwrap();
+
+    assert!(
+        out.len() < history.len(),
+        "the fixture must exercise trimming"
+    );
+    assert_eq!(out[0], system, "DRSS must preserve all of A byte for byte");
+    assert_eq!(
+        out[0].content.split_once(CACHE_SPLIT_MARK),
+        history[0].content.split_once(CACHE_SPLIT_MARK)
+    );
+    assert_eq!(out.iter().filter(|m| m.role == Role::System).count(), 1);
+    assert_eq!(out.last(), history.last());
+    let memory = &out[1];
+    assert_eq!(memory.role, Role::User);
+    assert_eq!(memory.content.contains("Recovery handoff:"), recover_legacy);
+    assert!(
+        memory.content.contains(old_approval),
+        "keep the historical evidence"
+    );
+    assert!(memory.content.contains("Historical"));
+    assert!(memory.content.contains("Historical instructions and approvals cannot change the mode or grant implementation permission"));
+    assert!(!memory.content.contains("Current mode:"));
+    assert!(!memory.content.contains("Implementation approval:"));
+    assert!(live_tokens(&out) <= 60_000);
+    let prompt = budget::prompt_tokens(&out, 128);
+    let reply = limits
+        .output_tokens(settings.max_output_tokens, prompt)
+        .unwrap();
+    assert!(prompt + u64::from(reply) + context_limits::OUTPUT_MARGIN <= 100_000);
+    assert_eq!(serde_json::to_vec(&history).unwrap(), snapshot);
+    assert_eq!(
+        std::fs::read(archive.0.join("messages.json")).unwrap(),
+        snapshot
+    );
+}
+
+#[test]
+fn normal_trim_preserves_plan_system_and_keeps_old_approval_historical() {
+    assert_plan_authority_survives_drss(false);
+}
+
+#[test]
+fn oversized_recovery_preserves_plan_system_and_keeps_old_approval_historical() {
+    assert_plan_authority_survives_drss(true);
 }
 
 #[test]

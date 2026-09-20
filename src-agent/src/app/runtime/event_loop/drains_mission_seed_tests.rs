@@ -89,7 +89,7 @@ fn plan_seed_compact_does_not_append_session_image_inventory() {
         b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89",
     )
     .unwrap();
-    std::fs::write(path.join("plan.md"), "Spelunking: do the thing\n").unwrap();
+    std::fs::write(path.join("plan.md"), "Unreviewed replacement on disk\n").unwrap();
 
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let mut state = AppState::new(Mode::Chat);
@@ -105,6 +105,7 @@ fn plan_seed_compact_does_not_append_session_image_inventory() {
         rt.id = "img-session".into();
         rt.session = Some(session);
         rt.pending_plan_seed = true;
+        rt.pending_plan_seed_body = Some("Reviewed body captured at approval".into());
     }
     apply_compaction_result(
         &mut state,
@@ -129,7 +130,76 @@ fn plan_seed_compact_does_not_append_session_image_inventory() {
     );
     assert!(!joined.contains("[Image #1] images/01-a.png"));
     assert!(joined.contains("Approved plan (execute now)"));
+    assert!(joined.contains("Reviewed body captured at approval"));
+    assert!(!joined.contains("Unreviewed replacement on disk"));
     assert!(!state.rest.fg().pending_plan_seed);
+    assert!(state.rest.fg().pending_plan_seed_body.is_none());
+}
+
+#[test]
+fn plan_seed_rejects_missing_snapshot_and_read_only_modes() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for (mode, armed, body) in [
+        (AgentMode::Auto, true, None),
+        (AgentMode::Auto, false, Some("Old captured body")),
+        (AgentMode::Plan, true, Some("Previously approved body")),
+        (AgentMode::Sdlc, true, Some("Previously approved body")),
+    ] {
+        let path = std::env::temp_dir().join(format!(
+            "koma-plan-seed-reject-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        let _scratch = Scratch(path.clone());
+        std::fs::write(path.join("plan.md"), "Historical disk plan").unwrap();
+        let mut state = AppState::new(Mode::Chat);
+        {
+            let rt = state.rest.fg_mut();
+            rt.session = Some(Session::new(
+                "stale-seed".into(),
+                path,
+                "pwd".into(),
+                Settings::default(),
+                Conversation::from_messages(vec![]),
+            ));
+            rt.agent_mode = mode;
+            rt.pending_plan_seed = armed;
+            rt.pending_plan_seed_body = body.map(str::to_string);
+        }
+        apply_compaction_result(
+            &mut state,
+            0,
+            &None,
+            runtime.handle(),
+            "Summary of prior conversation".into(),
+            vec![],
+        );
+        let joined: String = state
+            .rest
+            .fg()
+            .session
+            .as_ref()
+            .unwrap()
+            .conversation
+            .messages()
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect();
+        assert!(
+            !joined.contains("Approved plan (execute now)"),
+            "mode={mode:?}"
+        );
+        assert!(!joined.contains("Historical disk plan"));
+        assert!(!state.rest.fg().pending_plan_seed);
+        assert!(state.rest.fg().pending_plan_seed_body.is_none());
+    }
 }
 
 #[test]

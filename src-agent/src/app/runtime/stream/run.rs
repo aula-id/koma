@@ -126,6 +126,7 @@ pub(crate) fn start_stream_task(
     client: &Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) {
+    super::mode_contract::sync_system(&mut history, &mut state.rest.sessions[sess_idx]);
     // Assemble the System message so the prompt-caching breakpoint covers only the
     // STABLE head (which is byte-identical across the session, so the cache hits):
     //
@@ -227,7 +228,9 @@ pub(crate) fn start_stream_task(
             // Security mode: when active, tell the model it IS a security testing agent
             // and list its live security tools, so it uses them directly instead of
             // grepping the codebase for "security tools".
-            if state.rest.security_enabled {
+            if state.rest.security_enabled
+                && state.rest.sessions[sess_idx].agent_mode != AgentMode::Plan
+            {
                 if let Some(sec) = state.rest.sec_manager.as_ref() {
                     // Drop any tool the user disabled in the `/security` panel so the
                     // awareness block lists ONLY the active tools (empty `sec_inactive`
@@ -338,6 +341,16 @@ over sec_remote (stateful socket).\n",
             }
         }
     }
+
+    // Current mode is request-local system context, outside the stable cache
+    // prefix and outside B. Shape and budget only after it has been appended.
+    if let Err(error) = super::mode_contract::append(&mut history, &state.rest.sessions[sess_idx]) {
+        let rt = &mut state.rest.sessions[sess_idx];
+        rt.waiting = false;
+        rt.set_toast(error.to_string());
+        return;
+    }
+    let expected_system = history[0].clone();
 
     // Snapshot only the archive path, settings, raw user intent and objective.
     // DRSS shapes the request in the spawned task; the visible history is untouched.
@@ -581,7 +594,7 @@ over sec_remote (stateful socket).\n",
         // even if an extension accidentally contributes one to the base list.
         advertise.retain(|name| !is_sdlc_lifecycle_tool(name));
         if mode == AgentMode::Plan {
-            advertise.retain(|n| crate::tool::tool_allowed_in_plan(n) || n.starts_with("mcp__"));
+            advertise.retain(|n| crate::tool::tool_allowed_in_plan(n));
         } else if mode == AgentMode::Sdlc && matches!(sdlc_phase, Some("assess")) {
             // Assess is fail-closed: no MCP advertise (runtime also denies mcp__).
             advertise.retain(|n| crate::tool::tool_allowed_in_sdlc_assess(n));
@@ -595,6 +608,9 @@ over sec_remote (stateful socket).\n",
     // security + lifecycle allow-list.
     let mut advertised_names = std::collections::HashSet::new();
     advertise.retain(|name| advertised_names.insert(name.clone()));
+    // Definitions must obey the same mode filter as names. Otherwise an MCP
+    // schema could remain callable even after its name left the advertise list.
+    mcp_tools.retain(|def| advertised_names.contains(&def.function.name));
 
     let agent_steps = state.rest.sessions[sess_idx].agent_steps;
     // Interactive max_tokens settings (0=auto). Actual clamp runs AFTER reshape
@@ -655,6 +671,12 @@ over sec_remote (stateful socket).\n",
             }
             None => history,
         };
+        if history.first() != Some(&expected_system) {
+            let _ = tx.send(crate::service::StreamEvent::Error(
+                "Outgoing context lost its system/mode contract; request stopped.".into(),
+            ));
+            return;
+        }
         if agent_steps == 0 {
             if let Some(msg) = history.iter_mut().rev().find(|m| m.role == Role::User) {
                 msg.content.push_str(TOOL_NUDGE);

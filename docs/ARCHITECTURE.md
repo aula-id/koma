@@ -143,7 +143,17 @@ The model emits `tool_calls` during streaming. On `Done`, `advance_turn`:
    `start_stream_task` again. The loop continues until the model returns no more
    tool calls or `MAX_AGENT_STEPS` (40) is reached.
 
-There is **no plan gate** — tools run immediately on the first model call.
+Normal execution does not require a separate planning step. In Plan mode, the
+runtime restricts tools to permitted investigation and planning operations;
+`plan_ready` pauses for approval before implementation. Tool execution checks
+the live mode, including calls proposed before a mode change. Built-in, MCP, and
+delegated tools follow the same Plan restriction. All MCP tools are currently
+unavailable in Plan: server annotations alone are not trusted capability policy.
+Changing mode stops an active model response requested under the previous mode
+and invalidates an old plan approval park. An operation already dispatched
+cannot be rolled back by changing mode. Plan approval uses the reviewed
+`plan_ready` body; compact execution retains that exact body instead of rereading
+a possibly changed `plan.md`.
 
 **Tool trait** (defined in `tool/mod.rs`):
 
@@ -271,8 +281,15 @@ History rail: full original conversation -> display + messages.json
 Request rail: [A system] [B deterministic archive index] [C live context] -> [D reply]
 ```
 
-A stays unchanged by DRSS. B is a separate ordinary user-role context message
-before C, never appended to the system prompt. It contains the current objective,
+A stays unchanged by DRSS. Before shaping each outgoing request, the request
+builder appends the live mode and approval state to A's uncached tail. This
+runtime-generated block counts toward the token budget and survives normal
+trimming and oversized recovery unchanged. Mode and permission come from live
+runtime state, never from historical approvals in B or C. The request-only block
+does not alter the user-visible history rail.
+
+B is a separate ordinary user-role context message before C, never appended to
+the system prompt. It contains the current objective,
 kickoff charter, historical user constraint quotes, matching archive excerpts,
 and indexed term occurrence/message counts with exact message IDs. B is bounded
 to 2,000 estimated tokens or 2% of the operating window, whichever is smaller.
@@ -281,8 +298,10 @@ recovery handoff quotes the kickoff and recent omitted user/tool messages, inclu
 message endings and term counts, and reserves space for exact read references.
 It does not invoke an inference model, read stored reasoning, or reuse the legacy
 rolling summary. Excerpts are historical evidence; live user messages take
-precedence. Assistant excerpts require a history/plan request in the raw user
-message; assistant/tool text supplies search relevance only. Per-message indexing
+precedence within the current runtime mode. Both the archive index and recovery
+handoff state that historical instructions and approvals cannot authorize
+implementation or change the mode. Assistant excerpts require a history/plan
+request in the raw user message; assistant/tool text supplies search relevance only. Per-message indexing
 keeps at most 512 distinct terms, with exact repetition counts for those terms.
 
 **Context discovery:** a dedicated, unauthenticated client reads OpenRouter's
@@ -430,6 +449,7 @@ The system message content is assembled as:
 CACHE_SPLIT_MARK  (two invisible Unicode chars U+2062 U+2061)
 ["\n\n# Project files (top level)\n" + dir listing]         ← VOLATILE (uncached)
 ["\n\n# Project summary\n" + awareness text]                ← VOLATILE (uncached)
+[current runtime mode + approval state]                     ← VOLATILE (uncached)
 ```
 
 `to_wire` splits at `CACHE_SPLIT_MARK`, attaches `cache_control: ephemeral` to the
@@ -452,7 +472,9 @@ cache hits, the flag is never reset). DRSS uses its fixed token bands independen
   `supported_parameters`. The `/effort` menu is only offered for capable models.
   For models where reasoning is mandatory (`mandatory: true`), the "off" option is
   not shown; instead `reasoning: {exclude: true}` is used on secondary/utility calls.
-- **No plan gate.** Tools run on the first model call; there is no forced plan step.
+- **Mode-aware execution.** Normal execution has no forced planning step. Plan
+  mode permits investigation and proposal preparation, then waits for approval
+  through `plan_ready`; the runtime enforces permitted tools.
 - **Context length preference.** `context_length_for` uses the smaller positive
   serving-provider / nominal context length, matching DRSS. Missing, null, and
   zero values are unknown; callers use the shared 128 000-token fallback.
@@ -561,7 +583,15 @@ At request time, `start_stream_task` appends to the system message content BEFOR
 2. `CACHE_SPLIT_MARK` (the cache/uncached boundary).
 3. Volatile tail: `# Project files (top level)` dir listing (from `DirCache`).
 4. Volatile tail: `# Project summary` awareness text (from `awareness::summarize`).
+5. Volatile tail: current runtime mode, implementation approval state, and the
+   permitted next action, rebuilt from live state on every dispatch.
 DRSS then inserts B as a separate context message after the system message; it does not modify the system text.
+
+The embedded general instructions qualify "act" and "skip writing out a plan"
+by the current mode. During Plan mode the model describes proposed changes,
+calls `plan_ready`, and waits; archived approvals and quoted tool results cannot
+release that gate. The runtime checks permission again before executing tools,
+so a conversation summary or an in-flight response cannot supply authorization.
 
 The multi-workspace `[N]` convention (how the model should prefix tool paths when
 multiple workdirs are configured) is documented in `src-misc/system-tools.txt`.

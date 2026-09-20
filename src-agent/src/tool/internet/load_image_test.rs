@@ -12,6 +12,7 @@ fn ctx(
     session_dir: Option<PathBuf>,
 ) -> ToolCtx {
     ToolCtx {
+        plan_read_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         workspace,
         workspaces,
         dir_cache: Arc::new(RwLock::new(DirCache::default())),

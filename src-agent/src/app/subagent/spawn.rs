@@ -117,10 +117,10 @@ pub fn spawn_subagent(
     // The effective allow-list + isolated seed conversation + step budget. While
     // the PARENT session is in Plan mode, the delegated sub-agent must stay
     // read-only too — fold its allow-list down through the same whitelist used
-    // by the main advertise fold (`tool_allowed_in_plan`), then strip two tools
-    // that whitelist alone would let through: `seqthink` (main-agent-only — a
-    // sub-agent has no user to ask "enter plan mode" on its behalf) and
-    // `checklist` (its plan-mode interception lives in the main event loop's
+    // by the main advertise fold (`tool_allowed_in_plan`), then strip tools
+    // whose planning behavior requires the main runtime (`plan_enter`,
+    // `plan_ready`, `seqthink`, and `checklist`). The checklist interception is
+    // in the main event loop's
     // `process_tools`; a sub-agent that ran the generic `Checklist::run` instead
     // would write the real per-directory `memory/TODO.md`, breaking plan-mode
     // read-only). This only ever NARROWS whatever the agent declared.
@@ -142,15 +142,7 @@ pub fn spawn_subagent(
         mcp_tools = defs;
     }
     if mode == AgentMode::Plan {
-        // MCP tools ride through untouched — same precedent as the main advertise
-        // fold at run.rs:487 (the user explicitly wired those servers, so they own
-        // that risk), otherwise `tool_allowed_in_plan` would strip every mcp__*
-        // name since it knows nothing about them.
-        tools.retain(|n| {
-            (crate::tool::tool_allowed_in_plan(n)
-                && !matches!(n.as_str(), "seqthink" | "checklist"))
-                || n.starts_with("mcp__")
-        });
+        tools.retain(|name| crate::tool::delegated_tool_allowed_in_plan(name));
     } else if mode == AgentMode::Sdlc && ctx.sdlc_assess {
         // SDLC assess: fold to the same read-only surface as the main assess gate.
         // MCP is fail-closed (main advertise/gate also deny mcp__ in assess).
@@ -162,6 +154,7 @@ pub fn spawn_subagent(
                 )
         });
     }
+    mcp_tools.retain(|definition| tools.contains(&definition.function.name));
     let convo = context::build_seed(
         agent,
         awareness,
@@ -222,6 +215,7 @@ pub fn spawn_subagent(
         agent_name.clone(),
         id,
         context_window,
+        mode == AgentMode::Plan,
     ));
 
     Some(SubAgent {

@@ -272,8 +272,8 @@ pub struct SessionRuntime {
     /// tool-call classifier's (TAC) conversation context in `process_tools`, so the
     /// classifier — which keeps running as the safety net — is TOLD the plan was
     /// approved and ALLOWS the tool calls that carry it out, flagging only genuinely
-    /// off-plan / destructive actions. Cleared on the next genuine user submit and on
-    /// (re)entering Plan mode, so it never leaks past the plan's execution window.
+    /// off-plan / destructive actions. Retained across follow-up user turns;
+    /// cleared on Plan re-entry or denial. It applies only to the reviewed plan.
     pub approved_plan: Option<String>,
     /// SDLC-specific TAC authorization context. Set by mission-approval handlers
     /// instead of `approved_plan`, so the TAC classifier sees an SDLC-appropriate
@@ -416,6 +416,9 @@ pub struct SessionRuntime {
     /// know a `sess_idx` must read `sessions[sess_idx].agent_mode` so a
     /// background session never inherits another session's SDLC/Plan/Yolo envelope.
     pub agent_mode: super::types::AgentMode,
+    /// Shared live restriction for deferred tools and delegates. Updated before
+    /// a mode transition; captured contexts cannot retain old write permission.
+    pub plan_read_only: Arc<std::sync::atomic::AtomicBool>,
     /// Mode to restore when THIS session leaves `Plan`.
     pub plan_return_mode: Option<super::types::AgentMode>,
     /// Mode to restore when THIS session leaves SDLC.
@@ -442,8 +445,11 @@ pub struct SessionRuntime {
     /// Carries identity + integrity guards so a stale seed from a prior session, mission,
     /// contract, or generation can never inject.
     pub pending_mission_seed: Option<MissionSeedArm>,
-    /// One-shot: after plan-approval compact, seed plan.md on THIS session.
+    /// One-shot: after plan-approval compact, seed the approved body on THIS session.
     pub pending_plan_seed: bool,
+    /// Full immutable body from the approved `plan_ready` call. Never reconstructed
+    /// from plan.md or conversation history after approval.
+    pub pending_plan_seed_body: Option<String>,
     /// Monotonic counter bumped whenever the SDLC session leaves or a new mission is
     /// approved. The `pending_mission_seed` arm stores the generation at arm time;
     /// the consumer checks it matches so a seed from a prior SDLC session/mission
@@ -736,6 +742,7 @@ impl SessionRuntime {
             pending_subagent_nudges: Vec::new(),
             pending_ext_prompts: Vec::new(),
             agent_mode: super::types::AgentMode::default(),
+            plan_read_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             plan_return_mode: None,
             sdlc_return_mode: None,
             sdlc_prev_short_send: None,
@@ -747,6 +754,7 @@ impl SessionRuntime {
             sdlc_assess_entry_branch: None,
             pending_mission_seed: None,
             pending_plan_seed: false,
+            pending_plan_seed_body: None,
             sdlc_mission_generation: 0,
             sdlc_keeper_due: false,
             pending_sdlc_keeper_llm: None,
