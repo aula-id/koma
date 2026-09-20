@@ -4,6 +4,7 @@ use crate::dto::openrouter::ToolDef;
 pub const TARGET_PCT: u64 = 60;
 pub const CEILING_PCT: u64 = 75;
 pub const INDEX_MAX_TOKENS: u64 = 2_000;
+pub const RECOVERY_INDEX_MAX_TOKENS: u64 = 12_000;
 pub const FRAMING_TOKENS: u64 = 1_024;
 
 /// Deterministic high-biased estimate. ASCII uses 2.5 chars/token; non-ASCII

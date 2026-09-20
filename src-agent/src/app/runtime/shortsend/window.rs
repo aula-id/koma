@@ -1,6 +1,7 @@
 //! Deterministic A(system), B(index), C(live context) request construction.
 use super::budget::*;
 use super::goal::GoalWire;
+use super::recovery::{self, ArchiveRef};
 use crate::dto::chat::{ChatMessage, Role};
 use crate::model::msglog::drss::{self, Index};
 use crate::model::settings::Settings;
@@ -39,8 +40,14 @@ struct Round {
     end: usize,
     archived_end: Option<i64>,
     protected: bool,
+    covered: bool,
 }
-fn rounds(body: &[ChatMessage], ids: &[Option<i64>]) -> Vec<Round> {
+fn rounds(
+    body: &[ChatMessage],
+    ids: &[Option<i64>],
+    refs: &[Option<ArchiveRef>],
+    boundary: i64,
+) -> Vec<Round> {
     let latest_user = body.iter().rposition(|m| m.role == Role::User);
     let mut result = Vec::new();
     let mut start = 0;
@@ -58,7 +65,7 @@ fn rounds(body: &[ChatMessage], ids: &[Option<i64>]) -> Vec<Round> {
             .filter_map(|m| m.tool_call_id.as_deref())
             .collect();
         let complete = calls.iter().all(|call| replies.contains(call.id.as_str()));
-        let indexed = ids[start..end].iter().all(Option::is_some);
+        let indexed = refs[start..end].iter().all(Option::is_some);
         let protected = !indexed
             || !complete
             || end == body.len()
@@ -70,13 +77,16 @@ fn rounds(body: &[ChatMessage], ids: &[Option<i64>]) -> Vec<Round> {
             end,
             archived_end: ids[start..end].iter().flatten().max().copied(),
             protected,
+            covered: refs[start..end]
+                .iter()
+                .all(|r| r.as_ref().is_some_and(|r| r.covered(boundary))),
         });
         start = end;
     }
     result
 }
 
-fn history_ask(user: &str) -> bool {
+pub(super) fn history_ask(user: &str) -> bool {
     let words: HashSet<_> = user
         .split(|c: char| !c.is_alphanumeric())
         .map(str::to_lowercase)
@@ -88,7 +98,7 @@ fn history_ask(user: &str) -> bool {
         || user.to_lowercase().contains("you said")
 }
 
-fn relevance(body: &[ChatMessage], user: &str) -> Vec<String> {
+pub(super) fn relevance(body: &[ChatMessage], user: &str) -> Vec<String> {
     // Reserve half the query slots for fresh diagnostics even on long user turns.
     let fragment: String = user.chars().take(800).collect();
     let mut terms: Vec<_> = drss::terms(&fragment).into_keys().take(16).collect();
@@ -112,7 +122,7 @@ fn relevance(body: &[ChatMessage], user: &str) -> Vec<String> {
     terms
 }
 
-fn append_bounded(out: &mut String, line: &str, budget: u64) {
+pub(super) fn append_bounded(out: &mut String, line: &str, budget: u64) {
     if text_tokens(out).saturating_add(text_tokens(line)) + 8 <= budget {
         out.push_str(line);
     }
@@ -125,7 +135,17 @@ fn memory(
     user: &str,
     goal: &GoalWire,
     budget: u64,
+    omitted: &[(usize, &ArchiveRef)],
+    original_body: &[ChatMessage],
 ) -> Result<ChatMessage> {
+    let total_budget = budget;
+    // A long charter or the existing index must not crowd every exact recovery
+    // reference out of B. Reserve half of the expanded budget for the handoff.
+    let budget = if omitted.is_empty() {
+        budget
+    } else {
+        budget / 2
+    };
     let mut text = String::new();
     append_bounded(&mut text, "[DRSS archive index: generated context data]\nLive user messages take precedence. Archive excerpts may be obsolete; assistant text is unconfirmed draft material.\n", budget);
     if !goal.objective.is_empty() {
@@ -183,20 +203,25 @@ fn memory(
             );
         }
     }
+    // Spend the extra capacity on a deterministic handoff and exact read paths.
+    recovery::handoff(&mut text, omitted, original_body, user, total_budget);
     // A user-role context message is valid before an assistant/tool round on
     // chat-completions, Responses and Anthropic. Never counterfeit a tool result.
     Ok(ChatMessage::new(Role::User, text))
 }
 
-fn stub(msg: &mut ChatMessage, id: Option<i64>) {
+fn stub(msg: &mut ChatMessage, reference: Option<&ArchiveRef>) {
     if !matches!(msg.role, Role::Tool | Role::Assistant) || text_tokens(&msg.content) < 1600 {
         return;
     }
-    let Some(id) = id else {
+    let Some(reference) = reference else {
         return;
     };
     let preview: String = msg.content.chars().take(240).collect();
-    msg.content = format!("[DRSS live body stored as message #{id}]\n{preview}\nRead message_find({{\"message_id\":{id},\"offset\":0,\"limit\":3000}}); follow next_offset.");
+    msg.content = format!(
+        "[DRSS live body stored in archive]\n{preview}\nRead message_find({}); follow next_offset.",
+        reference.read_args()
+    );
 }
 
 pub fn shape(
@@ -217,32 +242,59 @@ pub fn shape(
     );
     let window = limits.effective_window;
     let reserve = limits.reserved_output(settings.max_output_tokens);
-    let b_budget = INDEX_MAX_TOKENS.min(window / 50);
-    let available = window
-        .saturating_sub(message_tokens(&history[0]))
-        .saturating_sub(schemas + FRAMING_TOKENS + OUTPUT_MARGIN + reserve + b_budget);
-    let ceiling = (window * CEILING_PCT / 100).min(available);
-    let target = (window * TARGET_PCT / 100).min(ceiling);
+    let minimum_reply = reserve.min(4096);
     let body = &history[1..];
-    let index = match Index::load(session_dir) {
+    let body_tokens = body.iter().map(message_tokens).sum::<u64>();
+    let fixed = message_tokens(&history[0]) + schemas + FRAMING_TOKENS + OUTPUT_MARGIN;
+    let normal_b = INDEX_MAX_TOKENS.min(window / 50);
+    let normal_ceiling =
+        (window * CEILING_PCT / 100).min(window.saturating_sub(fixed + reserve + normal_b));
+    let mut index = match Index::load(session_dir) {
         Ok(index) => index,
         Err(error) => {
-            anyhow::ensure!(body.iter().map(message_tokens).sum::<u64>() <= ceiling,
+            // The 75% operating band alone must not interrupt a request that
+            // still fits the complete model window with useful reply room.
+            anyhow::ensure!(fixed + body_tokens + minimum_reply <= window,
                 "DRSS archive unavailable ({error}); cannot safely reduce context. Conversation preserved.");
             return Ok(history);
         }
     };
     let ids = archive_ids(&index, body);
-    let rounds = rounds(body, &ids);
-    let mut boundary = index.boundary;
-    let mut keep: Vec<bool> = rounds
+    let missing = ids.iter().any(Option::is_none);
+    let recovery =
+        fixed + body_tokens + reserve > window || (missing && body_tokens > normal_ceiling);
+    let b_budget = if recovery {
+        RECOVERY_INDEX_MAX_TOKENS.min(window / 20)
+    } else {
+        normal_b
+    };
+    // Old sessions can have a full messages.json and a missing/partial SQLite
+    // archive. Persist exact copies before any such message may leave the wire.
+    let recovered = if missing && body_tokens > normal_ceiling {
+        index
+            .recover_missing(body, &ids)
+            .context("archive legacy context for DRSS recovery")?
+    } else {
+        vec![None; body.len()]
+    };
+    let refs: Vec<_> = ids
         .iter()
-        .map(|r| r.protected || r.archived_end.is_none_or(|id| id > boundary))
+        .zip(recovered)
+        .map(|(id, recovered)| {
+            id.map(ArchiveRef::Message)
+                .or_else(|| recovered.map(ArchiveRef::Recovery))
+        })
         .collect();
+    let available = window.saturating_sub(fixed + reserve + b_budget);
+    let ceiling = (window * CEILING_PCT / 100).min(available);
+    let target = (window * TARGET_PCT / 100).min(ceiling);
+    let rounds = rounds(body, &ids, &refs, index.boundary);
+    let mut boundary = index.boundary;
+    let mut keep: Vec<bool> = rounds.iter().map(|r| r.protected || !r.covered).collect();
     let mut tokens: u64 = rounds
         .iter()
         .zip(&keep)
-        .filter(|(_, k)| **k)
+        .filter(|(_, keep)| **keep)
         .map(|(r, _)| body[r.start..r.end].iter().map(message_tokens).sum::<u64>())
         .sum();
     if tokens > ceiling {
@@ -263,47 +315,86 @@ pub fn shape(
             boundary = boundary.max(round.archived_end.unwrap_or(0));
         }
     }
-    let mut tail = Vec::new();
-    let pressure = tokens > ceiling;
-    // Paged archive reads must remain readable on the next turn, including
-    // Unicode-heavy pages whose token estimate exceeds the normal stub threshold.
+    let omitted: Vec<_> = rounds
+        .iter()
+        .zip(&keep)
+        .filter(|(_, keep)| !**keep)
+        .flat_map(|(round, _)| {
+            (round.start..round.end).filter_map(|i| refs[i].as_ref().map(|r| (i, r)))
+        })
+        .collect();
+    let retained_indices: Vec<_> = rounds
+        .iter()
+        .zip(&keep)
+        .filter(|(_, keep)| **keep)
+        .flat_map(|(round, _)| round.start..round.end)
+        .collect();
+    let mut tail: Vec<_> = retained_indices.iter().map(|i| body[*i].clone()).collect();
+    let b = memory(
+        &index,
+        boundary,
+        &tail,
+        user,
+        goal,
+        b_budget,
+        if recovery { &omitted } else { &[] },
+        body,
+    )?;
+    // Recovery borrows only real free room: A, B, schemas, framing, a useful D,
+    // and the safety margin still fit W. The 300k operating cap never changes.
+    let recovery_room = window.saturating_sub(fixed + message_tokens(&b) + minimum_reply);
     let archive_reads: HashSet<_> = body
         .iter()
         .flat_map(|m| m.tool_calls.iter().flatten())
         .filter(|call| call.function.name == "message_find")
         .map(|call| call.id.as_str())
         .collect();
-    for (round, retained) in rounds.iter().zip(&keep) {
-        if !retained {
-            continue;
-        }
-        for i in round.start..round.end {
-            let mut msg = body[i].clone();
-            if pressure
-                && !msg
-                    .tool_call_id
-                    .as_deref()
-                    .is_some_and(|id| archive_reads.contains(id))
-            {
-                stub(&mut msg, ids[i]);
+    if tokens > recovery_room {
+        // Preserve as much live evidence as possible. Reduce the largest
+        // retrievable body first, stopping as soon as the complete request fits.
+        let mut candidates: Vec<_> = tail
+            .iter()
+            .enumerate()
+            .filter(|(i, msg)| {
+                refs[retained_indices[*i]].is_some()
+                    && matches!(msg.role, Role::Assistant | Role::Tool)
+                    && text_tokens(&msg.content) >= 1600
+                    && !msg
+                        .tool_call_id
+                        .as_deref()
+                        .is_some_and(|id| archive_reads.contains(id))
+            })
+            .map(|(i, msg)| (i, text_tokens(&msg.content)))
+            .collect();
+        candidates.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        for (i, _) in candidates {
+            if tokens <= recovery_room {
+                break;
             }
-            tail.push(msg);
+            let before = message_tokens(&tail[i]);
+            stub(&mut tail[i], refs[retained_indices[i]].as_ref());
+            tokens = tokens.saturating_sub(before) + message_tokens(&tail[i]);
         }
     }
-    let actual_c: u64 = tail.iter().map(message_tokens).sum();
-    anyhow::ensure!(actual_c <= ceiling,
-        "DRSS live context needs {actual_c} estimated tokens, above its {ceiling}-token ceiling. The current request/tool round is preserved; reduce the oversized input or adjust a verified model limit.");
-    let b = memory(&index, boundary, &tail, user, goal, b_budget)?;
+    anyhow::ensure!(tokens <= recovery_room,
+        "DRSS recovery cannot fit the active request/tool metadata into the {window}-token window even after archiving older context. Conversation preserved; the active input alone needs {tokens} estimated tokens, with {recovery_room} available.");
     let mut output = Vec::with_capacity(tail.len() + 2);
     output.push(history[0].clone());
     if !b.content.is_empty() {
         output.push(b);
     }
     output.extend(tail);
-    anyhow::ensure!(prompt_tokens(&output,schemas) + reserve + OUTPUT_MARGIN <= window,
+    anyhow::ensure!(prompt_tokens(&output, schemas) + minimum_reply + OUTPUT_MARGIN <= window,
         "DRSS cannot fit system, memory, live context and reply reserve into {window} tokens. Conversation preserved.");
+    let recovered_keys: Vec<_> = omitted
+        .iter()
+        .filter_map(|(_, r)| match r {
+            ArchiveRef::Recovery(r) => Some(r.key.as_str()),
+            _ => None,
+        })
+        .collect();
     index
-        .save_boundary(boundary)
-        .context("persist DRSS archive boundary")?;
+        .save_coverage(boundary, &recovered_keys)
+        .context("persist DRSS archive coverage")?;
     Ok(output)
 }

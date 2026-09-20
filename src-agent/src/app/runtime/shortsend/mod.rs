@@ -4,6 +4,7 @@
 
 pub(crate) mod budget;
 mod goal;
+mod recovery;
 mod window;
 
 #[cfg(test)]

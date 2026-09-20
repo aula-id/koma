@@ -571,7 +571,7 @@ function SessionSettings() {
         />
       </SettingRow>
 
-      <SettingRow label="Short-send" desc="Use a deterministic archive index and recent context for outgoing requests. Target 60%, ceiling 75%, with a 300k maximum model window.">
+      <SettingRow label="Short-send" desc="Use a deterministic archive index and recent context for outgoing requests. Normally 60–75%; oversized sessions recover using spare context within the 300k maximum window.">
         <Toggle on={shortSend} onChange={setShort} />
       </SettingRow>
 

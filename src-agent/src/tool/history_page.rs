@@ -6,23 +6,45 @@ use anyhow::{bail, Context, Result};
 use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
 
-// Keep retrieval results below DRSS's heavy-message threshold so reading a
-// stub's target does not immediately produce another stub of the same result.
+// Exact reads are bounded; DRSS preserves message_find results on the live rail.
 const MAX_PAGE_CHARS: i64 = 3000;
 
 pub(super) fn read(session_dir: &Path, args: &Value) -> Result<String> {
     if args.get("query").is_some() {
-        bail!("pass message_id or query, not both");
+        bail!("pass exactly one of query, message_id or archive_key");
     }
     if super::parse_scope(args.get("scope").and_then(Value::as_str))? != super::SearchScope::Session
     {
-        bail!("message_id is scoped to the current session; project ids are ambiguous");
+        bail!("exact archive reads are scoped to the current session; project ids are ambiguous");
     }
-    let id = args
-        .get("message_id")
-        .and_then(Value::as_i64)
-        .filter(|id| *id > 0)
-        .context("message_id must be a positive integer")?;
+    let key = args.get("archive_key");
+    if key.is_some() && args.get("message_id").is_some() {
+        bail!("pass exactly one of query, message_id or archive_key");
+    }
+    let (table, column, identifier, reference) = if let Some(key) = key {
+        let key = key
+            .as_str()
+            .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+            .context("archive_key must be a 64-character recovery key")?;
+        (
+            "drss_recovery",
+            "archive_key",
+            rusqlite::types::Value::Text(key.to_string()),
+            json!({"archive_key": key}),
+        )
+    } else {
+        let id = args
+            .get("message_id")
+            .and_then(Value::as_i64)
+            .filter(|id| *id > 0)
+            .context("message_id must be a positive integer")?;
+        (
+            "messages",
+            "id",
+            rusqlite::types::Value::Integer(id),
+            json!({"message_id": id}),
+        )
+    };
     let integer = |key: &str, default: i64| -> Result<i64> {
         match args.get(key) {
             None => Ok(default),
@@ -43,17 +65,19 @@ pub(super) fn read(session_dir: &Path, args: &Value) -> Result<String> {
     // Never read the separate reasoning column.
     let row: Option<(String, String, i64, bool)> = conn
         .query_row(
-            "SELECT role,
+            &format!(
+                "SELECT role,
                     CASE WHEN instr(content, char(0)) > 0 THEN content
                          ELSE substr(content, ?2, ?3) END,
                     length(content), instr(content, char(0)) > 0
-             FROM messages WHERE id = ?1",
-            rusqlite::params![id, start, limit],
+             FROM {table} WHERE {column} = ?1"
+            ),
+            rusqlite::params![identifier, start, limit],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()?;
     let (role, mut content, mut total_chars, has_nul) =
-        row.context("message_id not found in the current session")?;
+        row.context("archive reference not found in the current session")?;
     if has_nul {
         total_chars = content.chars().count() as i64;
         let offset = usize::try_from(offset).context("offset is too large")?;
@@ -63,13 +87,16 @@ pub(super) fn read(session_dir: &Path, args: &Value) -> Result<String> {
         bail!("offset exceeds message length ({total_chars} characters)");
     }
     let end = offset + content.chars().count() as i64;
-    let header = json!({
-        "message_id": id,
+    let mut header = json!({
         "role": role,
         "offset": offset,
         "total_chars": total_chars,
         "next_offset": if end < total_chars { Some(end) } else { None },
     });
+    header
+        .as_object_mut()
+        .unwrap()
+        .extend(reference.as_object().unwrap().clone());
     // Plain content avoids JSON escaping expanding a 3000-character page past
     // the stub threshold (for example a page containing many newlines).
     Ok(format!("{header}\n{content}"))

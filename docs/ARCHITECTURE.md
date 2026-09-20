@@ -276,6 +276,9 @@ before C, never appended to the system prompt. It contains the current objective
 kickoff charter, historical user constraint quotes, matching archive excerpts,
 and indexed term occurrence/message counts with exact message IDs. B is bounded
 to 2,000 estimated tokens or 2% of the operating window, whichever is smaller.
+Oversized history expands B to at most 12,000 tokens or 5% of the window. Its
+recovery handoff quotes the kickoff and recent omitted user/tool messages, includes
+message endings and term counts, and reserves space for exact read references.
 It does not invoke an inference model, read stored reasoning, or reuse the legacy
 rolling summary. Excerpts are historical evidence; live user messages take
 precedence. Assistant excerpts require a history/plan request in the raw user
@@ -301,7 +304,7 @@ backend. Match provenance and effective limits are written to the session's
 ```text
 W = min(detected context window, optional smaller override, 300,000)
 C target = 60% W
-C ceiling = 75% W
+C normal operating ceiling = 75% W
 A + B + C + tool schemas + framing + reserved D + margin <= W
 ```
 
@@ -313,15 +316,33 @@ so C grows through the 60–75% band before another cut. Cache warmth and messag
 counts do not override these token bands. Token counts are conservative estimates;
 provider tokenization and image accounting can differ.
 
-The latest user request, unfinished/live tool round, attachments, and unindexed
-messages are protected. Assistant tool calls and all their results stay together.
-When necessary, indexed large assistant/tool bodies become preview/read-pointer
-stubs while their call IDs, arguments, and replay metadata remain intact. Full
-text is available through `message_find({message_id, offset, limit})`, which returns
-bounded Unicode-character pages and `next_offset`. Archive-read results are never
-restubbed. An oversized protected request or unavailable archive produces an
-explicit context error when safe shaping is impossible; the history rail remains
-intact. `/clear` resets the active index range; resend truncation invalidates stale
+Recovery runs before the first provider request; no failed model call or manual
+`/compact` is required. If an old session has messages in its transcript missing
+from SQLite, DRSS writes exact copies into `drss_recovery` with separate stable
+keys and an FTS index. Original archive rows/IDs, usage, and `messages.json` remain
+unchanged. Covered recovery keys persist alongside the regular boundary so the
+next send does not reintroduce omitted legacy text. `/clear` and resend reset
+coverage while keeping the exact copies readable.
+
+The latest user request, unfinished/live tool round, attachments, and messages
+without a durable original or recovery copy are protected. Assistant tool calls and all their results stay together.
+If protected live context exceeds the normal 75% band, recovery can borrow spare
+room within W, after accounting for A, the actual B, schemas, framing, margin, and
+a useful reply (up to 4,096 reserved tokens, proportionally less on small models).
+The 300k maximum never increases. Only when that complete budget still overflows
+do large assistant/tool bodies become read-pointer stubs, largest first and only
+until the request fits. Calls, arguments, replay metadata, and the active user
+request stay intact.
+
+`message_find({message_id, offset, limit})` reads original archive rows;
+`message_find({archive_key, offset, limit})` reads recovery copies. Both return
+Unicode-character pages and `next_offset`, including text with embedded NUL.
+Keyword search includes recovery copies and preserves session scope. Read results
+are never restubbed. The tool schema is a plain object for providers that reject
+root `anyOf`/`oneOf`; mutually exclusive modes are checked at runtime.
+
+A request that still cannot fit its protected input/metadata or cannot store
+required recovery copies fails explicitly; the history rail remains intact. `/clear` resets the active index range; resend truncation invalidates stale
 boundary/index entries.
 
 **Objective precedence:** explicit user goal > approved mission's single active
@@ -357,6 +378,7 @@ Each session has `messages.sqlite` alongside `messages.json`. Tables:
 | `summary` | Legacy rolling-summary record (unused by deterministic DRSS) |
 | `drss_index` / `drss_terms` | Derived content fingerprints and bounded term counts |
 | `drss_state` | Active archive range and persisted outgoing boundary |
+| `drss_recovery` / `drss_recovery_fts` | Exact legacy copies, independent read keys, coverage, and keyword index |
 
 Heavy thresholds: `token_est >= 400` (≈1 600 chars) for general messages, `>= 150` for tool outputs, or any message containing a triple-backtick fence. Kind: `"code"`, `"tool_output"`, or `"large_text"`.
 

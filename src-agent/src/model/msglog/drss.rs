@@ -92,6 +92,11 @@ fn tables(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS drss_term_lookup ON drss_terms(term, msg_id);
         CREATE TABLE IF NOT EXISTS drss_state (
         id INTEGER PRIMARY KEY CHECK(id=1), boundary INTEGER NOT NULL, start_id INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS drss_recovery (
+        archive_key TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL,
+        covered INTEGER NOT NULL DEFAULT 0);
+        CREATE VIRTUAL TABLE IF NOT EXISTS drss_recovery_fts USING fts5(
+        content, role UNINDEXED, content='drss_recovery', content_rowid='rowid');
         INSERT OR IGNORE INTO drss_state VALUES(1,0,1);",
     )?;
     Ok(())
@@ -104,7 +109,68 @@ pub struct Index {
     pub ids: HashMap<String, Vec<i64>>,
 }
 
+#[derive(Clone)]
+pub struct RecoveryRef {
+    pub key: String,
+    pub covered: bool,
+}
+
 impl Index {
+    /// Save exact copies of legacy messages absent from the original archive.
+    /// Prefix-derived keys distinguish repeated messages and remain stable as
+    /// the conversation grows. Original messages/IDs and usage are untouched.
+    pub fn recover_missing(
+        &mut self,
+        body: &[crate::dto::chat::ChatMessage],
+        ids: &[Option<i64>],
+    ) -> Result<Vec<Option<RecoveryRef>>> {
+        let tx = self.conn.transaction()?;
+        let mut prefix = String::from("drss-recovery-v1");
+        let mut refs = Vec::with_capacity(body.len());
+        for (msg, id) in body.iter().zip(ids) {
+            let role = super::schema::role_str(msg.role);
+            prefix = fingerprint(&prefix, &fingerprint(role, &msg.content));
+            if id.is_some() {
+                refs.push(None);
+                continue;
+            }
+            let inserted = tx.execute(
+                "INSERT OR IGNORE INTO drss_recovery(archive_key,role,content) VALUES(?1,?2,?3)",
+                params![prefix, role, msg.content],
+            )?;
+            if inserted > 0 {
+                tx.execute(
+                    "INSERT INTO drss_recovery_fts(rowid,content,role)
+                    SELECT rowid,content,role FROM drss_recovery WHERE archive_key=?1",
+                    [&prefix],
+                )?;
+            }
+            let covered = tx.query_row(
+                "SELECT covered FROM drss_recovery WHERE archive_key=?1",
+                [&prefix],
+                |r| r.get::<_, bool>(0),
+            )?;
+            refs.push(Some(RecoveryRef {
+                key: prefix.clone(),
+                covered,
+            }));
+        }
+        tx.commit()?;
+        Ok(refs)
+    }
+
+    pub fn save_coverage(&mut self, boundary: i64, keys: &[&str]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("UPDATE drss_state SET boundary=?1 WHERE id=1", [boundary])?;
+        for key in keys {
+            tx.execute(
+                "UPDATE drss_recovery SET covered=1 WHERE archive_key=?1",
+                [key],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
     pub fn load(session_dir: &Path) -> Result<Self> {
         let mut conn = super::open(session_dir)?;
         tables(&conn)?;
@@ -159,6 +225,7 @@ impl Index {
         })
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn save_boundary(&self, boundary: i64) -> Result<()> {
         self.conn
             .execute("UPDATE drss_state SET boundary=?1 WHERE id=1", [boundary])?;
@@ -274,13 +341,62 @@ impl Index {
     }
 }
 
+/// Recovery copies participate in keyword lookup as well as exact paged reads.
+pub fn search_recovery(
+    session_dir: &Path,
+    query: &str,
+    role: Option<&str>,
+    limit: i64,
+) -> Result<Vec<(String, String, String)>> {
+    let conn = super::open(session_dir)?;
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='drss_recovery_fts')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        return Ok(Vec::new());
+    }
+    let words: Vec<_> = query
+        .split_whitespace()
+        .map(|word| {
+            word.chars()
+                .filter(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.'))
+                .collect::<String>()
+        })
+        .filter(|word| word.chars().count() >= 2)
+        .take(5)
+        .map(|word| {
+            if word.chars().count() >= 3 {
+                format!("\"{word}\"*")
+            } else {
+                format!("\"{word}\"")
+            }
+        })
+        .collect();
+    if words.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn.prepare(
+        "SELECT r.archive_key,r.role,substr(r.content,1,300)
+        FROM drss_recovery_fts f JOIN drss_recovery r ON r.rowid=f.rowid
+        WHERE drss_recovery_fts MATCH ?1 AND (?2 IS NULL OR r.role=?2)
+        ORDER BY rank,r.rowid DESC LIMIT ?3",
+    )?;
+    let rows = stmt.query_map(params![words.join(" OR "), role, limit.clamp(1, 10)], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// Called by /clear and resend/truncate so stale boundaries never hide new work.
 pub(super) fn reset(conn: &Connection, clear: bool) -> Result<()> {
     tables(conn)?;
     let max: i64 = conn.query_row("SELECT COALESCE(MAX(id),0) FROM messages", [], |r| r.get(0))?;
     conn.execute_batch(
         "DELETE FROM drss_terms WHERE msg_id NOT IN (SELECT id FROM messages);
-        DELETE FROM drss_index WHERE msg_id NOT IN (SELECT id FROM messages);",
+        DELETE FROM drss_index WHERE msg_id NOT IN (SELECT id FROM messages);
+        UPDATE drss_recovery SET covered=0;",
     )?;
     if clear {
         conn.execute(

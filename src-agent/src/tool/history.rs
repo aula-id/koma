@@ -53,6 +53,7 @@ struct SearchTarget {
 #[derive(Debug, Clone)]
 struct LabeledMatch {
     id: i64,
+    archive_key: Option<String>,
     role: String,
     snippet: String,
     created_at: i64,
@@ -82,6 +83,7 @@ impl Tool for MessageFind {
          To read a complete current-session message, pass message_id instead of \
          query, with an optional character offset and limit (maximum 3000). \
          Follow next_offset to retrieve further pages. \
+         For a DRSS recovery copy, pass its archive_key instead of message_id. \
          When a hit snippet contains [Image #N], appends a reload path so you \
          can call load_image to re-inspect. Project-scope hits are tagged with \
          session name/id (message ids are per-session). Query is limited to 5 \
@@ -105,6 +107,10 @@ impl Tool for MessageFind {
                     "type": "integer", "minimum": 1,
                     "description": "Read this current-session message by id instead of searching."
                 },
+                "archive_key": {
+                    "type": "string",
+                    "description": "Exact current-session DRSS recovery key from a context reference; use instead of query or message_id."
+                },
                 "offset": {
                     "type": "integer", "minimum": 0,
                     "description": "Zero-based character offset for message_id; default 0."
@@ -123,13 +129,14 @@ impl Tool for MessageFind {
                     "description": "Search breadth. Omit or \"session\" = this session only (default). \"project\" = all sessions sharing this working-directory bucket.",
                     "enum": ["session", "project"]
                 }
-            },
-            "anyOf": [{"required": ["query"]}, {"required": ["message_id"]}]
+            }
         })
     }
 
     fn run(&self, ctx: &ToolCtx, args: &Value) -> Result<String> {
-        if args.get("message_id").is_some() {
+        // Keep the root a plain object: some providers reject root anyOf/oneOf.
+        // The mutually exclusive read/search modes are validated at runtime.
+        if args.get("message_id").is_some() || args.get("archive_key").is_some() {
             let session_dir = ctx.session_dir.as_deref()
                 .ok_or_else(|| anyhow::anyhow!("no active session to read"))?;
             return page::read(session_dir, args);
@@ -367,10 +374,34 @@ fn search_targets(
                 for h in hits {
                     collected.push(LabeledMatch {
                         id: h.id,
+                        archive_key: None,
                         role: h.role,
                         snippet: h.snippet,
                         created_at: h.created_at,
                         reasoning: h.reasoning,
+                        session_label: label.clone(),
+                        is_current: target.is_current,
+                        session_path: target.path.clone(),
+                    });
+                }
+                let recovered = match crate::model::msglog::drss::search_recovery(
+                    &target.path,
+                    query,
+                    role_filter,
+                    MESSAGE_FIND_LIMIT,
+                ) {
+                    Ok(hits) => hits,
+                    Err(error) if target.is_current => return Err(error),
+                    Err(_) => Vec::new(), // Unreadable siblings must not block current work.
+                };
+                for (key, role, snippet) in recovered {
+                    collected.push(LabeledMatch {
+                        id: 0,
+                        archive_key: Some(key),
+                        role,
+                        snippet,
+                        created_at: 0,
+                        reasoning: None,
                         session_label: label.clone(),
                         is_current: target.is_current,
                         session_path: target.path.clone(),
@@ -446,6 +477,18 @@ fn format_labeled_matches(matches: &[LabeledMatch]) -> String {
             _ => "[?]",
         };
         let snippet = floor_chars(m.snippet.trim(), 300);
+        if let Some(key) = &m.archive_key {
+            let label = m.session_label.as_ref()
+                .map(|(name, uuid)| format!(" @ {name} ({})", short_uuid(uuid)))
+                .unwrap_or_default();
+            let read = if m.is_current {
+                format!("message_find({{\"archive_key\":\"{key}\"}})")
+            } else {
+                format!("archive_key={key} (read from that session)")
+            };
+            out.push_str(&format!("{role_prefix} recovery{label}: {snippet}\n  {read}\n\n"));
+            continue;
+        }
         match &m.session_label {
             Some((name, uuid)) if !uuid.is_empty() || !name.is_empty() => {
                 let name = if name.is_empty() {
@@ -601,6 +644,7 @@ mod tests {
     fn format_session_scope_omits_label() {
         let hits = vec![LabeledMatch {
             id: 7,
+            archive_key: None,
             role: "user".into(),
             snippet: "hello world".into(),
             created_at: 1,
@@ -618,6 +662,7 @@ mod tests {
     fn format_project_scope_includes_session_label() {
         let hits = vec![LabeledMatch {
             id: 3,
+            archive_key: None,
             role: "assistant".into(),
             snippet: "attach freeze fix".into(),
             created_at: 2,
@@ -644,6 +689,7 @@ mod tests {
         .unwrap();
         let hits = vec![LabeledMatch {
             id: 9,
+            archive_key: None,
             role: "user".into(),
             snippet: "look at [Image #3] please".into(),
             created_at: 1,
@@ -664,6 +710,7 @@ mod tests {
         let hits = vec![
             LabeledMatch {
                 id: 1,
+                archive_key: None,
                 role: "user".into(),
                 snippet: "sib old".into(),
                 created_at: 100,
@@ -674,6 +721,7 @@ mod tests {
             },
             LabeledMatch {
                 id: 2,
+                archive_key: None,
                 role: "user".into(),
                 snippet: "cur older".into(),
                 created_at: 50,
@@ -684,6 +732,7 @@ mod tests {
             },
             LabeledMatch {
                 id: 3,
+                archive_key: None,
                 role: "user".into(),
                 snippet: "sib new".into(),
                 created_at: 200,
@@ -694,6 +743,7 @@ mod tests {
             },
             LabeledMatch {
                 id: 4,
+                archive_key: None,
                 role: "user".into(),
                 snippet: "cur new".into(),
                 created_at: 150,

@@ -168,11 +168,17 @@ fn active_multi_tool_round_keeps_calls_results_and_replay_metadata() {
             out[opening + i].tool_call_id.as_deref(),
             Some(format!("call-{i}").as_str())
         );
-        assert!(out[opening + i].content.contains("message_find"));
+
         assert!(msglog::fetch_blob_content(&archive.0, i as i64 + 2)
             .unwrap()
             .contains(&format!("exact-end-{i}")));
     }
+    assert_eq!(
+        out.iter()
+            .filter(|m| m.content.contains("DRSS live body stored"))
+            .count(),
+        1
+    );
     assert!(live_tokens(&out) <= 75_000);
 }
 
@@ -202,7 +208,9 @@ fn index_is_deterministic_and_ignores_old_inference_summary_and_reasoning() {
         .iter()
         .any(|m| m.content.contains("PRIVATE_REASONING_SENTINEL")
             || m.content.contains("DO NOT REPLAY LEGACY SUMMARY")));
-    assert!(budget::message_tokens(&first[1]) <= budget::INDEX_MAX_TOKENS);
+    assert!(
+        budget::message_tokens(&first[1]) <= budget::RECOVERY_INDEX_MAX_TOKENS.min(100_000 / 20)
+    );
 }
 
 #[test]
@@ -518,4 +526,247 @@ fn exact_message_reads_reject_ambiguous_or_invalid_requests() {
             &serde_json::json!({"message_id": 1})
         )
         .is_err());
+}
+
+#[test]
+fn oversized_legacy_session_recovers_immediately_without_changing_history() {
+    let archive = Archive::new();
+    let mut history = vec![ChatMessage::new(Role::System, "original system")];
+    for i in 0..36 {
+        history.push(ChatMessage::new(
+            Role::User,
+            format!("Keep requirement-{i}. {}", "legacy context ".repeat(1800)),
+        ));
+        history.push(ChatMessage::new(Role::Assistant, "completed"));
+    }
+    history.push(ChatMessage::new(Role::User, "continue the current work"));
+    let bytes = serde_json::to_vec(&history).unwrap();
+    std::fs::write(archive.0.join("messages.json"), &bytes).unwrap();
+    let first = send(&history, &archive, 100_000);
+    assert!(first.len() < history.len());
+    assert_eq!(first[0], history[0]);
+    assert_eq!(first.last(), history.last());
+    assert!(first[1].content.contains("Recovery handoff:"));
+    assert!(first[1].content.contains("archive_key"));
+    assert!(budget::message_tokens(&first[1]) > budget::INDEX_MAX_TOKENS);
+    assert!(budget::message_tokens(&first[1]) <= 5000);
+    assert!(live_tokens(&first) <= 60_000);
+    assert_eq!(
+        std::fs::read(archive.0.join("messages.json")).unwrap(),
+        bytes
+    );
+    assert_eq!(serde_json::to_vec(&history).unwrap(), bytes);
+    assert_eq!(msglog::max_message_id(&archive.0), 0);
+    let conn = msglog::open(&archive.0).unwrap();
+    let covered: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM drss_recovery WHERE covered=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM drss_recovery", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(rows, history.len() as i64 - 1); // repeated "completed" messages stay distinct
+    assert!(covered > 0);
+    assert_eq!(send(&history, &archive, 100_000), first);
+    history.push(archive.append(Role::Assistant, "new live progress"));
+    let second = send(&history, &archive, 100_000);
+    assert_eq!(second.last(), history.last());
+    assert_eq!(
+        conn.query_row::<i64, _, _>(
+            "SELECT COUNT(*) FROM drss_recovery WHERE covered=1",
+            [],
+            |r| r.get(0)
+        )
+        .unwrap(),
+        covered
+    );
+    assert_eq!(msglog::max_message_id(&archive.0), 1);
+}
+
+#[test]
+fn partial_archive_keeps_existing_ids_and_recovery_pages_round_trip() {
+    use crate::tool::Tool;
+    let archive = Archive::new();
+    let body = format!("{} exact_legacy_end", "工具\0\n".repeat(12000));
+    let mut history = vec![ChatMessage::new(Role::System, "system")];
+    for _ in 0..3 {
+        history.push(ChatMessage::new(Role::User, "old request"));
+        history.push(ChatMessage::new(Role::Assistant, &body));
+    }
+    history.push(archive.append(Role::User, "continue"));
+    let out = send(&history, &archive, 100_000);
+    assert_eq!(out.last(), history.last());
+    assert_eq!(msglog::max_message_id(&archive.0), 1);
+    assert_eq!(
+        msglog::fetch_blob_content(&archive.0, 1).unwrap(),
+        "continue"
+    );
+    let conn = msglog::open(&archive.0).unwrap();
+    let key: String = conn
+        .query_row(
+            "SELECT archive_key FROM drss_recovery WHERE content=?1 LIMIT 1",
+            [&body],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut restored = String::new();
+    let mut offset = 0;
+    loop {
+        let page = crate::tool::history::MessageFind
+            .run(
+                &archive.tool_ctx(),
+                &serde_json::json!({"archive_key":key,"offset":offset}),
+            )
+            .unwrap();
+        let (header, content) = page.split_once('\n').unwrap();
+        let header: serde_json::Value = serde_json::from_str(header).unwrap();
+        assert_eq!(header["archive_key"], key);
+        restored.push_str(content);
+        match header["next_offset"].as_i64() {
+            Some(next) => {
+                assert!(next > offset);
+                offset = next;
+            }
+            None => break,
+        }
+    }
+    assert_eq!(restored, body);
+    let found = crate::tool::history::MessageFind
+        .run(
+            &archive.tool_ctx(),
+            &serde_json::json!({"query":"exact_legacy_end", "role":"assistant"}),
+        )
+        .unwrap();
+    assert!(found.contains("archive_key"));
+    assert!(!found.contains("(no matching messages found)"));
+    assert!(crate::tool::history::MessageFind
+        .run(
+            &archive.tool_ctx(),
+            &serde_json::json!({"query":"exact_legacy_end", "role":"user"})
+        )
+        .unwrap()
+        .contains("no matching"));
+    // Another session cannot read this recovery record.
+    assert!(crate::tool::history::MessageFind
+        .run(
+            &Archive::new().tool_ctx(),
+            &serde_json::json!({"archive_key":key})
+        )
+        .is_err());
+    msglog::truncate_after(&archive.0, 1).unwrap();
+    assert_eq!(
+        conn.query_row::<i64, _, _>(
+            "SELECT COUNT(*) FROM drss_recovery WHERE covered=1",
+            [],
+            |r| r.get(0)
+        )
+        .unwrap(),
+        0
+    );
+    send(&history, &archive, 100_000);
+    msglog::clear_rolling_summary(&archive.0).unwrap();
+    assert_eq!(
+        conn.query_row::<i64, _, _>(
+            "SELECT COUNT(*) FROM drss_recovery WHERE covered=1",
+            [],
+            |r| r.get(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        conn.query_row::<String, _, _>(
+            "SELECT content FROM drss_recovery WHERE archive_key=?1",
+            [&key],
+            |r| r.get(0)
+        )
+        .unwrap(),
+        body
+    );
+}
+
+#[test]
+fn active_context_can_borrow_spare_room_without_raising_the_300k_cap() {
+    let archive = Archive::new();
+    let history = vec![
+        ChatMessage::new(Role::System, "system"),
+        archive.append(Role::User, "x".repeat(600000)),
+    ];
+    let limits = limits(1_000_000);
+    assert_eq!(limits.effective_window, 300_000);
+    let out = send(&history, &archive, 1_000_000);
+    assert_eq!(out.last(), history.last());
+    assert!(live_tokens(&out) > 225_000);
+    let prompt = budget::prompt_tokens(&out, 0);
+    let reply = limits.output_tokens(0, prompt).unwrap();
+    assert!(reply >= 4096);
+    assert!(prompt + u64::from(reply) + context_limits::OUTPUT_MARGIN <= 300_000);
+    assert!(!out
+        .last()
+        .unwrap()
+        .content
+        .contains("DRSS live body stored"));
+}
+
+#[test]
+fn message_find_plain_object_schema_still_validates_read_modes() {
+    use crate::tool::Tool;
+    let tool = crate::tool::history::MessageFind;
+    let schema = tool.parameters();
+    assert_eq!(schema["type"], "object");
+    for union in ["anyOf", "oneOf", "allOf"] {
+        assert!(schema.get(union).is_none());
+    }
+    let archive = Archive::new();
+    archive.append(Role::User, "hello");
+    for args in [
+        serde_json::json!({}),
+        serde_json::json!({"archive_key":"bad"}),
+        serde_json::json!({"archive_key":"a".repeat(64),"message_id":1}),
+        serde_json::json!({"archive_key":"a".repeat(64),"query":"hello"}),
+        serde_json::json!({"archive_key":"a".repeat(64),"scope":"project"}),
+    ] {
+        assert!(tool.run(&archive.tool_ctx(), &args).is_err());
+    }
+    assert!(tool
+        .run(&archive.tool_ctx(), &serde_json::json!({"message_id":1}))
+        .unwrap()
+        .contains("hello"));
+}
+
+#[test]
+fn large_recovery_summary_prioritizes_newest_work_and_keeps_kickoff_reference() {
+    let archive = Archive::new();
+    let mut history = vec![ChatMessage::new(Role::System, "system")];
+    for i in 0..20 {
+        history.push(ChatMessage::new(
+            Role::User,
+            format!("turn-{i} 最新工作 {}", "界".repeat(8000)),
+        ));
+        history.push(ChatMessage::new(Role::Assistant, "done"));
+    }
+    history.push(ChatMessage::new(Role::User, "continue"));
+    let out = shape(
+        history.clone(),
+        &archive.0,
+        &Settings::default(),
+        "continue",
+        &GoalWire {
+            source: "user".into(),
+            objective: "goal ".repeat(2400),
+            ..Default::default()
+        },
+        &limits(100_000),
+        0,
+    )
+    .unwrap();
+    assert!(out[1].content.contains("Kickoff excerpt:"));
+    assert!(out[1].content.contains("turn-0 最新工作"));
+    assert!(out[1].content.contains("turn-17 最新工作"));
+    assert!(out[1].content.contains("archive_key"));
+    assert!(budget::message_tokens(&out[1]) <= 5000);
+    assert_eq!(out.last(), history.last());
 }
