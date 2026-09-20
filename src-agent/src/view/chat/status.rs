@@ -1,7 +1,7 @@
 //! Status bar: left-side animated comet label + right-side token/cost readout.
 
 use super::helpers::{comet_spans, fmt_count};
-use crate::app::state::AppStateRest;
+use crate::app::state::{AppStateRest, SessionRuntime};
 use crate::view::theme::Palette;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -18,7 +18,7 @@ use ratatui::{
 /// elapsed counter. Idle (`ready`) and the `approve …? [y/n]` prompt render
 /// statically — a single plain dim span, no comet, no timer.
 ///
-/// The cumulative token/cost readout is right-aligned when non-zero.
+/// Latest context usage and cumulative output/cost are right-aligned.
 pub(super) fn render_status(
     frame: &mut Frame,
     chunk: Rect,
@@ -51,31 +51,11 @@ pub(super) fn render_status(
     // Read the FOREGROUND session's own counters — each tab shows only its own
     // ↑/↓/$, never the sum across sessions.
     let fg = rest.fg();
-    let readout = if fg.tokens_in > 0 || fg.tokens_out > 0 || fg.cost > 0.0 {
-        // Show the cached-prompt-token count right after the input arrow when the
-        // last response hit the prompt cache (`cached:N`), so the saving is
-        // visible; omitted entirely on a cold prefix to keep the readout quiet.
-        let cached = if fg.tokens_cached > 0 {
-            format!(" cached:{}", fmt_count(fg.tokens_cached))
-        } else {
-            String::new()
-        };
-        Some(format!(
-            "↑{}{} ↓{}  ${:.4}",
-            fmt_count(fg.tokens_in),
-            cached,
-            fmt_count(fg.tokens_out),
-            fg.cost
-        ))
-    } else {
-        None
-    };
+    let readout = usage_readout(fg, palette);
     match &readout {
         Some(r) => {
-            // `↑ ↓ $` and digits are each one display column, so a char count is
-            // the exact width; +1 keeps a gap from the status text, +4 accounts for
-            // the ` [!]` aggregate marker appended after the cost figure.
-            let w = u16::try_from(r.chars().count() + 1 + 4).unwrap_or(u16::MAX);
+            // Include the dim cache bracket and aggregate marker in the width.
+            let w = u16::try_from(r.width() + 1).unwrap_or(u16::MAX);
             let cols = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Min(0), Constraint::Length(w)])
@@ -83,15 +63,8 @@ pub(super) fn render_status(
             // Per-span styles (the comet's colours, or the static dim) own the look;
             // no paragraph-level base style so it doesn't flatten the comet head.
             frame.render_widget(Paragraph::new(status_line), cols[0]);
-            // Two spans: accent for the counters, dim for the [!] aggregate marker.
-            // [!] signals that the cost figure is an aggregate (includes sub-agent
-            // spend); the detail will be visible in a future /usage screen.
-            let readout_line = Line::from(vec![
-                Span::styled(r.as_str(), Style::default().fg(palette.accent)),
-                Span::styled(" [!]", Style::default().fg(palette.dim)),
-            ]);
             frame.render_widget(
-                Paragraph::new(readout_line).alignment(Alignment::Right),
+                Paragraph::new(r.clone()).alignment(Alignment::Right),
                 cols[1],
             );
         }
@@ -99,4 +72,42 @@ pub(super) fn render_status(
             frame.render_widget(Paragraph::new(status_line), status_area);
         }
     }
+}
+
+/// The estimate and limit come from the same shaped request. Cached tokens are
+/// a subset of the input count; output and spend remain cumulative.
+fn usage_readout(fg: &SessionRuntime, palette: &Palette) -> Option<Line<'static>> {
+    let input = fg.context_usage.map_or(fg.tokens_in, |u| u.prompt_tokens);
+    if fg.context_usage.is_none() && input == 0 && fg.tokens_out == 0 && fg.cost == 0.0 {
+        return None;
+    }
+    let context = match fg.context_usage.filter(|u| u.effective_window > 0) {
+        Some(usage) => format!(
+            "{}{:.0}%",
+            if usage.estimated { "~" } else { "" },
+            usage.prompt_tokens as f64 / usage.effective_window as f64 * 100.0
+        ),
+        // A restored session/older daemon may have counts without the request's
+        // context limit. Avoid guessing a denominator for those historical counts.
+        None => "—%".into(),
+    };
+    let accent = Style::default().fg(palette.accent);
+    let dim = Style::default().fg(palette.dim);
+    let mut spans = vec![Span::styled(
+        format!("{context} ↑{}", fmt_count(input)),
+        accent,
+    )];
+    if fg.tokens_cached > 0 {
+        spans.push(Span::styled(
+            format!("[{}]", fmt_count(fg.tokens_cached)),
+            dim,
+        ));
+    }
+    spans.push(Span::styled(
+        format!(" ↓{} ${:.4}", fmt_count(fg.tokens_out), fg.cost),
+        accent,
+    ));
+    // [!] retains its existing meaning: aggregate spend includes sub-agents.
+    spans.push(Span::styled(" [!]", dim));
+    Some(Line::from(spans))
 }

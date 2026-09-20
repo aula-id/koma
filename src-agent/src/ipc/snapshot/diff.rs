@@ -210,6 +210,7 @@ pub fn diff(
             || p.tokens_in != n.tokens_in
             || p.tokens_out != n.tokens_out
             || p.tokens_cached != n.tokens_cached
+            || p.context_usage != n.context_usage
             || p.cost != n.cost
             || p.awaiting_approval != n.awaiting_approval
             || p.approval_reason != n.approval_reason

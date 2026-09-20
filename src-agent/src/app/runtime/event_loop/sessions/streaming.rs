@@ -44,6 +44,19 @@ pub(super) fn drain_stream(
                         d,
                     );
                 }
+                StreamEvent::ContextPrepared {
+                    prompt_tokens,
+                    effective_window,
+                } => {
+                    let rt = &mut state.rest.sessions[idx];
+                    rt.context_usage = Some(crate::service::context_limits::ContextUsage {
+                        prompt_tokens,
+                        effective_window,
+                        estimated: true,
+                    });
+                    // The previous request's cache hit does not describe this prompt.
+                    rt.tokens_cached = 0;
+                }
                 StreamEvent::Usage {
                     prompt_tokens,
                     completion_tokens,
@@ -59,6 +72,12 @@ pub(super) fn drain_stream(
                     // session so its readout can show the cache hit even on a tool
                     // round-trip that commits no assistant text.
                     state.rest.sessions[idx].tokens_cached = cached_tokens;
+                    if prompt_tokens > 0 {
+                        if let Some(usage) = state.rest.sessions[idx].context_usage.as_mut() {
+                            usage.prompt_tokens = prompt_tokens;
+                            usage.estimated = false;
+                        }
+                    }
                     // Latch: once any response reports cache hits we know this
                     // provider supports prompt caching. Never reset.
                     if cached_tokens > 0 {
@@ -199,4 +218,85 @@ pub(super) fn drain_stream(
     }
 
     dirty
+}
+
+#[cfg(test)]
+mod context_usage_tests {
+    use super::*;
+    use crate::app::{mode::Mode, state::SessionRuntime};
+
+    #[test]
+    fn request_context_is_session_local_and_provider_usage_replaces_estimate() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.sessions.push(SessionRuntime::new());
+        state.rest.sessions[1].tokens_in = 240_000;
+        state.rest.sessions[1].tokens_cached = 200_000;
+        state.rest.sessions[1].tokens_out = 1_300_000;
+        state.rest.sessions[1].cost = 232.9321;
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        state.rest.sessions[1].active_rx = Some(rx);
+        tx.send(StreamEvent::ContextPrepared {
+            prompt_tokens: 54_000,
+            effective_window: 300_000,
+        })
+        .unwrap();
+        assert!(drain_stream(&mut state, 1, &None, runtime.handle()));
+        let estimate = state.rest.sessions[1].context_usage.unwrap();
+        assert_eq!(estimate.prompt_tokens, 54_000);
+        assert_eq!(estimate.effective_window, 300_000);
+        assert!(estimate.estimated);
+        assert_eq!(state.rest.sessions[1].tokens_cached, 0);
+        assert!(state.rest.sessions[0].context_usage.is_none());
+
+        // A provider omitting prompt usage must not turn the estimate into 0%.
+        tx.send(StreamEvent::Usage {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            cached_tokens: 0,
+            cost: 0.0,
+        })
+        .unwrap();
+        drain_stream(&mut state, 1, &None, runtime.handle());
+        assert_eq!(state.rest.sessions[1].context_usage, Some(estimate));
+
+        // Even an empty/tool-only response can confirm the latest prompt.
+        tx.send(StreamEvent::Usage {
+            prompt_tokens: 51_500,
+            completion_tokens: 25,
+            cached_tokens: 49_400,
+            cost: 0.01,
+        })
+        .unwrap();
+        drain_stream(&mut state, 1, &None, runtime.handle());
+        let reported = state.rest.sessions[1].context_usage.unwrap();
+        assert_eq!(reported.prompt_tokens, 51_500);
+        assert_eq!(reported.effective_window, 300_000);
+        assert!(!reported.estimated);
+        assert_eq!(state.rest.sessions[1].tokens_cached, 49_400);
+        let snapshot = crate::ipc::snapshot::build_snapshot(&state);
+        let shadow =
+            crate::app::runtime::client_shadow::shadow_session_runtime(&snapshot.sessions[1]);
+        assert_eq!(shadow.context_usage, Some(reported));
+        assert_eq!(shadow.tokens_cached, 49_400);
+        // Display telemetry never changes the billed/cumulative ledger counters.
+        assert_eq!(state.rest.sessions[1].tokens_in, 240_000);
+        assert_eq!(state.rest.sessions[1].tokens_out, 1_300_000);
+        assert_eq!(state.rest.sessions[1].cost, 232.9321);
+
+        // A new request snapshots its own smaller/fallback window and cache state.
+        tx.send(StreamEvent::ContextPrepared {
+            prompt_tokens: 32_000,
+            effective_window: 128_000,
+        })
+        .unwrap();
+        drain_stream(&mut state, 1, &None, runtime.handle());
+        let next = state.rest.sessions[1].context_usage.unwrap();
+        assert_eq!(next.effective_window, 128_000);
+        assert_eq!(next.prompt_tokens, 32_000);
+        assert!(next.estimated);
+        assert_eq!(state.rest.sessions[1].tokens_cached, 0);
+    }
 }

@@ -267,6 +267,15 @@ reasoning text to become the content so it shows in the foreground and persists.
 
 ## 8. Dual-Rail Short-Send (DRSS)
 
+The terminal footer shows `17% ↑51.5K[49.4K] ↓1.3M $232.9321 [!]`:
+percentage is the latest request's full input divided by its effective context
+window, after DRSS shaping (including system text and tool schemas). The
+request's local estimate is marked `~` until positive provider prompt usage
+arrives. Cached tokens in dim brackets are part of input, not added to it;
+output and cost remain cumulative. A missing dispatch-time limit shows `—%`
+until the next request. The paired prompt/limit snapshot travels to attached
+clients and does not alter history, budgeting, or billed usage.
+
 **Files:** `src-agent/src/app/runtime/shortsend/`, `src-agent/src/model/msglog/drss.rs`,
 `src-agent/src/service/context_limits/`
 

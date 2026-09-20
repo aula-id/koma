@@ -78,6 +78,8 @@ impl StreamEventWire {
             // the side that runs the stream, never re-driven from the daemon mirror,
             // so this variant is deliberately not carried over the boundary.
             StreamEvent::ReasoningDetails(_) => return None,
+            // Display telemetry travels in SessionSnapshot, not the provider stream.
+            StreamEvent::ContextPrepared { .. } => return None,
         })
     }
 }

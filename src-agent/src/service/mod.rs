@@ -32,6 +32,12 @@ pub enum StreamEvent {
     /// A batch of `reasoning_details` fragments from one streaming chunk (OpenRouter).
     /// Merged by index into the assistant message's reasoning_details for replay.
     ReasoningDetails(Vec<crate::dto::chat::ReasoningDetail>),
+    /// Local estimate after DRSS shaping, paired with the exact effective window
+    /// used for this dispatch. Display only; never part of provider usage/cost.
+    ContextPrepared {
+        prompt_tokens: u64,
+        effective_window: u64,
+    },
     /// Token/cost accounting for the in-flight generation. Arrives on the final
     /// streaming chunk, just before [`StreamEvent::Done`]; stashed and committed
     /// with the assistant message. `cached_tokens` is the share of `prompt_tokens`

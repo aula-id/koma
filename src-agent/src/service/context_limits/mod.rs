@@ -50,6 +50,15 @@ impl CatalogModel {
     }
 }
 
+/// Display-only usage for the latest DRSS request. Keep the dispatch-time
+/// denominator with its prompt so model/settings changes cannot skew the ratio.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ContextUsage {
+    pub prompt_tokens: u64,
+    pub effective_window: u64,
+    pub estimated: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct ContextLimits {
     pub requested_model: String,

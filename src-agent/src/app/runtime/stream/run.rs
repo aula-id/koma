@@ -705,6 +705,10 @@ over sec_remote (stateful socket).\n",
                     m.api_type
                 )));
             } else {
+                let _ = tx.send(crate::service::StreamEvent::ContextPrepared {
+                    prompt_tokens: prompt_est,
+                    effective_window: limits.effective_window,
+                });
                 let _ = c
                     .stream_complete(
                         m.conn(),

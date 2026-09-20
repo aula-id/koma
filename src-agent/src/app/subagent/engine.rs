@@ -732,6 +732,7 @@ async fn stream_step(
             }
             // Lifecycle / accounting events the sub-agent doesn't track here.
             StreamEvent::Done
+            | StreamEvent::ContextPrepared { .. }
             | StreamEvent::Compacted { .. }
             | StreamEvent::HarnessVerdict { .. }
             | StreamEvent::EndpointsLoaded { .. }

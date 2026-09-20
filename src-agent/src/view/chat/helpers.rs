@@ -150,15 +150,14 @@ pub(super) fn comet_spans(text: &str, elapsed_ms: u128, palette: &Palette) -> Ve
     spans
 }
 
-/// Compact token count: raw below 10k, else "10,1k" / "1,1m" (one decimal,
-/// comma as the decimal mark, k=thousand m=million).
+/// Compact footer token count: raw below 1K, then one decimal with K/M units.
 pub(super) fn fmt_count(n: u64) -> String {
-    if n < 10_000 {
+    if n < 1_000 {
         n.to_string()
     } else if n < 1_000_000 {
-        format!("{:.1}k", n as f64 / 1_000.0).replace('.', ",")
+        format!("{:.1}K", n as f64 / 1_000.0)
     } else {
-        format!("{:.1}m", n as f64 / 1_000_000.0).replace('.', ",")
+        format!("{:.1}M", n as f64 / 1_000_000.0)
     }
 }
 
