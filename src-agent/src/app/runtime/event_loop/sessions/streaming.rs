@@ -50,14 +50,32 @@ pub(super) fn drain_stream(
                     drss_active,
                 } => {
                     let rt = &mut state.rest.sessions[idx];
-                    rt.context_usage = Some(crate::service::context_limits::ContextUsage {
+                    let prepared = crate::service::context_limits::ContextUsage {
                         prompt_tokens,
                         effective_window,
                         estimated: true,
+                        cached_tokens: None,
                         drss_active,
-                    });
-                    // The previous request's cache hit does not describe this prompt.
-                    rt.tokens_cached = 0;
+                    };
+                    rt.pending_context_usage = Some(prepared);
+                    match rt.context_usage.as_mut() {
+                        // Keep the reported input/cache/window together while the
+                        // new request runs. Only its DRSS activity changes now.
+                        Some(shown) if !shown.estimated => shown.drss_active = drss_active,
+                        // Restored counts are still reported data, even when
+                        // their original window is unavailable. Keep them and
+                        // show an unknown percentage until fresh usage arrives.
+                        None if rt.tokens_in > 0 => {
+                            rt.context_usage = Some(crate::service::context_limits::ContextUsage {
+                                prompt_tokens: rt.tokens_in,
+                                effective_window: 0,
+                                estimated: false,
+                                cached_tokens: Some(rt.tokens_cached),
+                                drss_active,
+                            });
+                        }
+                        _ => rt.context_usage = Some(prepared),
+                    }
                 }
                 StreamEvent::Usage {
                     prompt_tokens,
@@ -75,9 +93,12 @@ pub(super) fn drain_stream(
                     // round-trip that commits no assistant text.
                     state.rest.sessions[idx].tokens_cached = cached_tokens;
                     if prompt_tokens > 0 {
-                        if let Some(usage) = state.rest.sessions[idx].context_usage.as_mut() {
+                        let rt = &mut state.rest.sessions[idx];
+                        if let Some(mut usage) = rt.pending_context_usage {
                             usage.prompt_tokens = prompt_tokens;
+                            usage.cached_tokens = Some(cached_tokens);
                             usage.estimated = false;
+                            rt.context_usage = Some(usage);
                         }
                     }
                     // Latch: once any response reports cache hits we know this
@@ -234,21 +255,19 @@ mod context_usage_tests {
             .unwrap();
         let mut state = AppState::new(Mode::Chat);
         state.rest.sessions.push(SessionRuntime::new());
-        state.rest.sessions[1].tokens_in = 240_000;
-        state.rest.sessions[1].tokens_cached = 200_000;
         state.rest.sessions[1].tokens_out = 1_300_000;
         state.rest.sessions[1].cost = 232.9321;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         state.rest.sessions[1].active_rx = Some(rx);
         tx.send(StreamEvent::ContextPrepared {
-            prompt_tokens: 54_000,
+            prompt_tokens: 180_000,
             effective_window: 300_000,
             drss_active: true,
         })
         .unwrap();
         assert!(drain_stream(&mut state, 1, &None, runtime.handle()));
         let estimate = state.rest.sessions[1].context_usage.unwrap();
-        assert_eq!(estimate.prompt_tokens, 54_000);
+        assert_eq!(estimate.prompt_tokens, 180_000);
         assert_eq!(estimate.effective_window, 300_000);
         assert!(estimate.estimated);
         assert!(estimate.drss_active);
@@ -268,42 +287,120 @@ mod context_usage_tests {
 
         // Even an empty/tool-only response can confirm the latest prompt.
         tx.send(StreamEvent::Usage {
-            prompt_tokens: 51_500,
+            prompt_tokens: 164_600,
             completion_tokens: 25,
-            cached_tokens: 49_400,
+            cached_tokens: 161_700,
             cost: 0.01,
         })
         .unwrap();
         drain_stream(&mut state, 1, &None, runtime.handle());
         let reported = state.rest.sessions[1].context_usage.unwrap();
-        assert_eq!(reported.prompt_tokens, 51_500);
+        assert_eq!(reported.prompt_tokens, 164_600);
         assert_eq!(reported.effective_window, 300_000);
         assert!(!reported.estimated);
+        assert_eq!(reported.cached_tokens, Some(161_700));
         assert!(reported.drss_active);
-        assert_eq!(state.rest.sessions[1].tokens_cached, 49_400);
+        assert_eq!(state.rest.sessions[1].tokens_cached, 161_700);
         let snapshot = crate::ipc::snapshot::build_snapshot(&state);
         let shadow =
             crate::app::runtime::client_shadow::shadow_session_runtime(&snapshot.sessions[1]);
         assert_eq!(shadow.context_usage, Some(reported));
-        assert_eq!(shadow.tokens_cached, 49_400);
+        assert_eq!(shadow.tokens_cached, 161_700);
         // Display telemetry never changes the billed/cumulative ledger counters.
-        assert_eq!(state.rest.sessions[1].tokens_in, 240_000);
+        assert_eq!(state.rest.sessions[1].tokens_in, 0);
         assert_eq!(state.rest.sessions[1].tokens_out, 1_300_000);
         assert_eq!(state.rest.sessions[1].cost, 232.9321);
 
-        // A new request snapshots its own smaller/fallback window and cache state.
+        // Regression: the next local estimate must not make 55%/164.6K jump
+        // to ~75%/224.9K or erase [161.7K] between tool rounds.
         tx.send(StreamEvent::ContextPrepared {
-            prompt_tokens: 32_000,
+            prompt_tokens: 224_900,
+            effective_window: 300_000,
+            drss_active: false,
+        })
+        .unwrap();
+        drain_stream(&mut state, 1, &None, runtime.handle());
+        let shown = state.rest.sessions[1].context_usage.unwrap();
+        assert_eq!(shown.prompt_tokens, 164_600);
+        assert_eq!(shown.cached_tokens, Some(161_700));
+        assert_eq!(shown.effective_window, 300_000);
+        assert!(!shown.estimated);
+        assert!(!shown.drss_active);
+        assert_eq!(state.rest.sessions[1].tokens_cached, 161_700);
+        assert_eq!(
+            state.rest.sessions[1]
+                .pending_context_usage
+                .unwrap()
+                .prompt_tokens,
+            224_900
+        );
+
+        // A missing/zero usage placeholder cannot overwrite the displayed pair.
+        // Raw accounting still receives the provider's actual values.
+        tx.send(StreamEvent::Usage {
+            prompt_tokens: 0,
+            completion_tokens: 25,
+            cached_tokens: 0,
+            cost: 0.0,
+        })
+        .unwrap();
+        drain_stream(&mut state, 1, &None, runtime.handle());
+        assert_eq!(state.rest.sessions[1].tokens_cached, 0);
+        assert_eq!(state.rest.sessions[1].context_usage, Some(shown));
+        let snapshot = crate::ipc::snapshot::build_snapshot(&state);
+        let shadow =
+            crate::app::runtime::client_shadow::shadow_session_runtime(&snapshot.sessions[1]);
+        assert_eq!(shadow.context_usage.unwrap().cached_tokens, Some(161_700));
+
+        // A model/window change keeps the old denominator until that request
+        // reports usage, then replaces input/cache/window as a single sample.
+        tx.send(StreamEvent::ContextPrepared {
+            prompt_tokens: 16_000,
             effective_window: 128_000,
             drss_active: false,
         })
         .unwrap();
         drain_stream(&mut state, 1, &None, runtime.handle());
+        assert_eq!(state.rest.sessions[1].context_usage, Some(shown));
+        tx.send(StreamEvent::Usage {
+            prompt_tokens: 12_800,
+            completion_tokens: 25,
+            cached_tokens: 0,
+            cost: 0.01,
+        })
+        .unwrap();
+        drain_stream(&mut state, 1, &None, runtime.handle());
         let next = state.rest.sessions[1].context_usage.unwrap();
+        assert_eq!(next.prompt_tokens, 12_800);
         assert_eq!(next.effective_window, 128_000);
-        assert_eq!(next.prompt_tokens, 32_000);
-        assert!(next.estimated);
+        assert_eq!(next.cached_tokens, Some(0));
+        assert!(!next.estimated);
         assert!(!next.drss_active);
-        assert_eq!(state.rest.sessions[1].tokens_cached, 0);
+        assert!(state.rest.sessions[0].context_usage.is_none());
+    }
+
+    #[test]
+    fn restored_reported_counts_do_not_get_replaced_by_a_new_estimate() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.sessions[0].tokens_in = 164_600;
+        state.rest.sessions[0].tokens_cached = 161_700;
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        state.rest.sessions[0].active_rx = Some(rx);
+        tx.send(StreamEvent::ContextPrepared {
+            prompt_tokens: 224_900,
+            effective_window: 300_000,
+            drss_active: true,
+        })
+        .unwrap();
+        drain_stream(&mut state, 0, &None, runtime.handle());
+        let shown = state.rest.sessions[0].context_usage.unwrap();
+        assert_eq!(shown.prompt_tokens, 164_600);
+        assert_eq!(shown.cached_tokens, Some(161_700));
+        assert_eq!(shown.effective_window, 0); // don't invent a historical limit
+        assert!(!shown.estimated);
+        assert!(shown.drss_active);
     }
 }

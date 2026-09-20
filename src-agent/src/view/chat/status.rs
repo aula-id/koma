@@ -74,8 +74,8 @@ pub(super) fn render_status(
     }
 }
 
-/// The estimate and limit come from the same shaped request. Cached tokens are
-/// a subset of the input count; output and spend remain cumulative.
+/// Reported input/cache/window values stay together between requests. Local
+/// estimates are shown only before the first report; output/spend accumulate.
 fn usage_readout(fg: &SessionRuntime, palette: &Palette) -> Option<Line<'static>> {
     let input = fg.context_usage.map_or(fg.tokens_in, |u| u.prompt_tokens);
     if fg.context_usage.is_none() && input == 0 && fg.tokens_out == 0 && fg.cost == 0.0 {
@@ -97,11 +97,11 @@ fn usage_readout(fg: &SessionRuntime, palette: &Palette) -> Option<Line<'static>
         format!("{context} ↑{}", fmt_count(input)),
         accent,
     )];
-    if fg.tokens_cached > 0 {
-        spans.push(Span::styled(
-            format!("[{}]", fmt_count(fg.tokens_cached)),
-            dim,
-        ));
+    let reported_cache = fg.context_usage.and_then(|usage| usage.cached_tokens);
+    let cached = reported_cache.unwrap_or(fg.tokens_cached);
+    // Once reported, keep the bracket present even for a real zero cache hit.
+    if cached > 0 || reported_cache.is_some() {
+        spans.push(Span::styled(format!("[{}]", fmt_count(cached)), dim));
     }
     spans.push(Span::styled(
         format!(" ↓{} ${:.4}", fmt_count(fg.tokens_out), fg.cost),

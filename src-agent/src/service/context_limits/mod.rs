@@ -50,14 +50,20 @@ impl CatalogModel {
     }
 }
 
-/// Display-only usage for the latest DRSS request. Keep the dispatch-time
-/// denominator with its prompt so model/settings changes cannot skew the ratio.
+/// Display-only context sample. Prefer the latest provider-reported sample;
+/// use estimates only until the first report. Keep input, cache and the request's
+/// dispatch-time denominator together so new estimates cannot skew the readout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ContextUsage {
     pub prompt_tokens: u64,
     pub effective_window: u64,
     pub estimated: bool,
-    /// This request uses archived/shortened context, not just an enabled setting.
+    /// Cache count from the same provider report, including a real zero. None
+    /// before a report or when reading a snapshot from an older daemon.
+    #[serde(default)]
+    pub cached_tokens: Option<u64>,
+    /// Latest dispatched request uses condensed context. This indicator may
+    /// advance while the numeric sample waits for the next provider report.
     #[serde(default)]
     pub drss_active: bool,
 }

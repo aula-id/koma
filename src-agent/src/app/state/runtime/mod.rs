@@ -232,9 +232,12 @@ pub struct SessionRuntime {
     /// current prompt, not a cumulative sum; set from `StreamEvent::Usage` each
     /// response, 0 on a cold prefix or a provider that doesn't report cache stats.
     pub tokens_cached: u64,
-    /// Latest post-DRSS prompt and its dispatch-time context ceiling. None until
-    /// a request is shaped in this runtime; legacy/restored counts lack a ceiling.
+    /// Stable footer sample: latest provider report, or a local estimate only
+    /// before the first report. Its input/cache/window values stay together.
     pub context_usage: Option<crate::service::context_limits::ContextUsage>,
+    /// In-flight request metadata used to pair fresh usage with its own window.
+    /// Kept separate so starting another tool round cannot replace the readout.
+    pub pending_context_usage: Option<crate::service::context_limits::ContextUsage>,
     /// Tool calls emitted by the in-flight stream, stashed on
     /// `StreamEvent::ToolCalls` and consumed by `advance_turn` once the stream
     /// finalises. Empty when the model returned a plain (final) answer.
@@ -717,6 +720,7 @@ impl SessionRuntime {
             cost: 0.0,
             tokens_cached: 0,
             context_usage: None,
+            pending_context_usage: None,
             pending_tool_calls: Vec::new(),
             agent_steps: 0,
             main_stall_nudges: 0,

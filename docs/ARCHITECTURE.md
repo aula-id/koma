@@ -268,11 +268,14 @@ reasoning text to become the content so it shows in the foreground and persists.
 ## 8. Dual-Rail Short-Send (DRSS)
 
 The terminal footer shows `17% ↑51.5K[49.4K] ↓1.3M $232.9321 [!]`:
-percentage is the latest request's full input divided by its effective context
-window, after DRSS shaping (including system text and tool schemas). The
-request's local estimate is marked `~` until positive provider prompt usage
-arrives. Cached tokens in dim brackets are part of input, not added to it;
-output and cost remain cumulative. A missing dispatch-time limit shows `—%`
+percentage is the latest provider-reported full input divided by that request's
+effective context window, after DRSS shaping (including system text and tool
+schemas). Before the first report, a local estimate is marked `~`. Once reported,
+input, cache and percentage remain visible together through subsequent requests,
+missing-usage responses and failures until fresh positive prompt usage arrives.
+Cached tokens in dim brackets are part of input, not added to it; a reported cold
+cache stays visible as `[0]`. Output and cost remain cumulative. A missing
+dispatch-time limit shows `—%`
 until the next request. The paired prompt/limit snapshot travels to attached
 clients and does not alter history, budgeting, or billed usage. When the latest
 request uses condensed archive context or shortened message bodies, `[!]` becomes
