@@ -535,6 +535,7 @@ impl Tool for Bash {
     }
     fn description(&self) -> &'static str {
         "Run a shell command in the workspace. Use for cargo, build commands, and general shell tasks. \
+         Output is capped at 20k chars / 20 lines — narrow the command or pipe through head/grep; do not dump huge logs. \
          For git operations, use the git_operator tool instead — it handles SSH key injection and \
          destructive-operation guards automatically. Output is captured (stdout+stderr). \
          Output of known noisy commands (cargo, git, npm, pip, docker, make) is auto-compressed; a [filter: <name>, N -> M lines] marker shows when. \

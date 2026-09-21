@@ -62,9 +62,16 @@ pub const APP_TITLE: &str = "koma";
 /// session files and configuration.
 pub const APP_DIR_NAME: &str = ".koma";
 
-/// Hard cap on a single tool result's size, in characters. ~100k tokens at
-/// ~4 chars/token. Tool outputs are not truncated below this.
-pub const MAX_TOOL_OUTPUT_CHARS: usize = 400_000;
+/// Hard cap on a single tool result's size, in characters. Applied first
+/// (before the line cap) so a 20-line dump that is still huge gets cut here.
+/// ~5k tokens at ~4 chars/token. A 10k-line dump wipes the context window
+/// and forces DRSS; this is the safety net. Sub-agent reports use
+/// [`MAX_SUBAGENT_REPORT_CHARS`] instead.
+pub const MAX_TOOL_OUTPUT_CHARS: usize = 20_000;
+
+/// Secondary cap on a single tool result, in lines. Applied after the char
+/// cap. Nudges the model to page with offset/limit or grep one path at a time.
+pub const MAX_TOOL_OUTPUT_LINES: usize = 20;
 
 /// Hard ceiling on a sub-agent's final report before it is delivered to the
 /// main agent as a `task` tool result. Reports above this are truncated (with a

@@ -41,6 +41,7 @@ impl Archive {
             sdlc_active_node_id: None,
             search_engine: None,
             plan_read_only: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            call_track: crate::tool::CallTrack::new(),
         }
     }
 }

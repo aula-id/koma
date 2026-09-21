@@ -29,6 +29,7 @@ pub mod graph;
 pub mod history;
 pub mod internet;
 pub mod memory;
+pub mod output;
 pub mod plan;
 mod plan_policy;
 pub mod pong;
@@ -42,6 +43,7 @@ pub mod task;
 pub mod todo;
 
 pub use dircache::DirCache;
+pub use output::CallTrack;
 pub(crate) use plan_policy::{delegated_tool_allowed_in_plan, plan_tool_call_allowed};
 
 /// True for built-in tools that mutate the workspace, run arbitrary shell
@@ -530,6 +532,10 @@ pub struct ToolCtx {
     /// The session's preferred search engine URL template (e.g.
     /// `https://html.duckduckgo.com/html/?q={query}`).
     pub search_engine: Option<String>,
+    /// Exact tool-call fingerprints seen this session (name + canonical args).
+    /// Shared with deferred workers and sub-agents so a repeated read/grep/
+    /// command can warn the model.
+    pub call_track: Arc<CallTrack>,
 }
 
 /// Parse a `[N]` workspace-index prefix from the start of a path string.
@@ -888,15 +894,21 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
         .load(std::sync::atomic::Ordering::Acquire)
     {
         if let Err(reason) = plan_tool_call_allowed(&call.function.name, &args) {
-            return format!("blocked: {reason}");
+            return output::finish_tool_output(
+                ctx,
+                &call.function.name,
+                &args,
+                format!("blocked: {reason}"),
+            );
         }
     }
     for tool in all_tools() {
         if tool.name() == call.function.name {
-            return match tool.run(ctx, &args) {
+            let raw = match tool.run(ctx, &args) {
                 Ok(s) => s,
                 Err(e) => format!("error: {e}"),
             };
+            return output::finish_tool_output(ctx, &call.function.name, &args, raw);
         }
     }
     if call.function.name.starts_with("mcp__") {
@@ -908,22 +920,34 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
             .map(|s| s.active_extensions)
             .unwrap_or_default();
         if !crate::app::mcp::tool_active_in_session(&call.function.name, &config, &selected) {
-            return "error: extension is inactive in this session; the user can select it with /extension use".into();
+            return output::finish_tool_output(
+                ctx,
+                &call.function.name,
+                &args,
+                "error: extension is inactive in this session; the user can select it with /extension use".into(),
+            );
         }
         if let Some(mgr) = ctx.mcp_manager.as_ref() {
-            return mgr
+            let raw = mgr
                 .execute_blocking(&call.function.name, &args)
                 .unwrap_or_else(|e| format!("error: {e}"));
+            return output::finish_tool_output(ctx, &call.function.name, &args, raw);
         }
     }
     if call.function.name.starts_with("sec_") {
         if let Some(mgr) = ctx.sec_manager.as_ref() {
-            return mgr
+            let raw = mgr
                 .execute_blocking(&call.function.name, &args)
                 .unwrap_or_else(|e| format!("error: {e}"));
+            return output::finish_tool_output(ctx, &call.function.name, &args, raw);
         }
     }
-    format!("error: unknown tool '{}'", call.function.name)
+    output::finish_tool_output(
+        ctx,
+        &call.function.name,
+        &args,
+        format!("error: unknown tool '{}'", call.function.name),
+    )
 }
 
 /// Find which workspace contains the given absolute path.

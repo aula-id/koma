@@ -587,6 +587,10 @@ pub struct SessionRuntime {
     /// Background-refreshed index of the active session's workspace files
     /// (gitignore-respecting). Re-indexed off-thread; shared with the tool layer.
     pub dir_cache: Arc<RwLock<DirCache>>,
+    /// Exact tool-call fingerprints (name + canonical args) seen this session.
+    /// Shared into every [`crate::tool::ToolCtx`] so repeated read/grep/bash
+    /// with the same arguments can warn the model.
+    pub call_track: Arc<crate::tool::CallTrack>,
     /// Project-awareness summary (Phase 2): a few-sentence digest of the
     /// project's depth-1 docs, produced by a secondary model at startup and
     /// after `/compact`. Appended to the first System message on every request
@@ -792,6 +796,7 @@ impl SessionRuntime {
             plan_todos: Vec::new(),
             active_cwd: None,
             dir_cache: Arc::new(RwLock::new(DirCache::default())),
+            call_track: crate::tool::CallTrack::new(),
             awareness_summary: None,
             #[cfg(feature = "linker")]
             graph_summary: None,
