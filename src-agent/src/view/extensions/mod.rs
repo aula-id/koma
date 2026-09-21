@@ -1,6 +1,6 @@
 //! View — in-app `/extension` installed-extension manager (`Mode::Extensions`).
 //!
-//! A read-only top-down dashboard (no side-by-side detail pane, unlike `/mcp`): Browse is a
+//! A top-down dashboard (no side-by-side detail pane, unlike `/mcp`): Browse is a
 //! full-width list of installed extensions; Detail shows one extension's full info +
 //! selectable TUI-screen rows; UninstallConfirm is a `y`/`n` prompt naming what the nuke
 //! deletes. Minimalist border convention (project rule): a `Borders::BOTTOM` header rule + a
@@ -68,7 +68,7 @@ pub fn draw(frame: &mut Frame, st: &ExtensionsState, palette: &Palette) {
     let header_inner = header_block.inner(outer[0]);
     frame.render_widget(header_block, outer[0]);
     let header_text = match st.sub_mode {
-        ExtSubMode::Browse => "extensions".to_string(),
+        ExtSubMode::Browse | ExtSubMode::UsePicker => "extensions".to_string(),
         ExtSubMode::Detail | ExtSubMode::UninstallConfirm => match st.current() {
             Some(r) => format!("extensions / {}", r.name),
             None => "extensions".to_string(),
@@ -88,7 +88,9 @@ pub fn draw(frame: &mut Frame, st: &ExtensionsState, palette: &Palette) {
         vertical: 1,
     });
     let lines = match st.sub_mode {
-        ExtSubMode::Browse => browse_lines(st, palette, body.width as usize),
+        ExtSubMode::Browse | ExtSubMode::UsePicker => {
+            browse_lines(st, palette, body.width as usize)
+        }
         ExtSubMode::Detail => detail_lines(st, palette, body.width as usize),
         ExtSubMode::UninstallConfirm => uninstall_lines(st, palette),
     };
@@ -152,6 +154,10 @@ fn browse_lines<'a>(st: &'a ExtensionsState, palette: &Palette, width: usize) ->
                     Style::default().fg(palette.dim),
                 ),
                 running_span(row.running, palette),
+                Span::styled(
+                    format!("  {}", row.activation.label()),
+                    Style::default().fg(palette.dim),
+                ),
             ];
             if !row.enabled {
                 spans.push(Span::styled(
@@ -216,11 +222,20 @@ fn detail_lines<'a>(st: &'a ExtensionsState, palette: &Palette, width: usize) ->
     lines.push(kv(
         "enabled",
         if row.enabled {
-            "yes".into()
+            row.activation.label().into()
         } else {
             "no".into()
         },
         if row.enabled { palette.fg } else { palette.dim },
+    ));
+    lines.push(kv(
+        "this session",
+        if row.active {
+            "loaded".into()
+        } else {
+            "inactive".into()
+        },
+        palette.fg,
     ));
     lines.push(Line::from(vec![
         Span::styled(
@@ -308,14 +323,86 @@ fn uninstall_lines<'a>(st: &'a ExtensionsState, palette: &Palette) -> Vec<Line<'
 /// Context-sensitive footer hint for the active sub-mode.
 fn footer_hint(st: &ExtensionsState) -> &'static str {
     match st.sub_mode {
+        ExtSubMode::UsePicker => "↑/↓ pick · Enter load · x unload · Esc cancel",
         ExtSubMode::UninstallConfirm => "y uninstall · n/Esc cancel",
         ExtSubMode::Detail => {
             if st.current_tui_screens_len() > 0 {
-                "↑/↓ screen · Enter open · u uninstall · Esc back"
+                "g global · o on-demand · Enter screen · u uninstall · Esc back"
             } else {
-                "u uninstall · Esc back"
+                "g global · o on-demand · u uninstall · Esc back"
             }
         }
         ExtSubMode::Browse => "↑/↓ pick · →/Enter detail · Esc close",
     }
+}
+
+/// Session activation uses the same above-composer geometry as /model main.
+pub fn render_use_overlay(
+    frame: &mut Frame,
+    st: &ExtensionsState,
+    palette: &Palette,
+    input: ratatui::layout::Rect,
+    transcript: ratatui::layout::Rect,
+) {
+    let count = st.rows.len().clamp(1, 12) as u16;
+    let height =
+        (count + 4 + u16::from(st.error.is_some())).min(input.y.saturating_sub(transcript.y));
+    let area =
+        ratatui::layout::Rect::new(input.x, input.y.saturating_sub(height), input.width, height);
+    let block = Block::bordered()
+        .title(" extension — use in this session ")
+        .border_style(Style::default().fg(palette.dim));
+    let inner = block.inner(area);
+    crate::view::clear_and_fill(frame, area, palette.bg);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let rows = inner
+        .height
+        .saturating_sub(2 + u16::from(st.error.is_some()))
+        .max(1) as usize;
+    let start = st.list_sel.saturating_sub(rows.saturating_sub(1));
+    let mut lines: Vec<Line> = st
+        .rows
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(rows)
+        .map(|(i, row)| {
+            let status = if row.active { "loaded" } else { "inactive" };
+            let label = format!(" {}  [{} · {status}]", row.name, row.activation.label());
+            let style = if i == st.list_sel {
+                Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
+            } else {
+                Style::default().fg(palette.fg)
+            };
+            Line::from(Span::styled(
+                format!(
+                    "{:<width$}",
+                    truncate(&label, inner.width as usize),
+                    width = inner.width as usize
+                ),
+                style,
+            ))
+        })
+        .collect();
+    if st.rows.is_empty() {
+        lines.push(Line::from(" No enabled extensions installed."));
+    }
+    lines.push(Line::from(Span::styled(
+        " Selection applies only to this session.",
+        Style::default().fg(palette.dim),
+    )));
+    if let Some(error) = &st.error {
+        lines.push(Line::from(Span::styled(
+            error.clone(),
+            Style::default().fg(palette.error),
+        )));
+    }
+    lines.push(Line::from(Span::styled(
+        footer_hint(st),
+        Style::default().fg(palette.dim),
+    )));
+    frame.render_widget(Paragraph::new(lines), inner);
 }

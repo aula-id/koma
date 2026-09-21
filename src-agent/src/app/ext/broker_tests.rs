@@ -361,6 +361,67 @@ fn fixture_state() -> AppState {
     AppState::new(Mode::Chat)
 }
 
+#[test]
+fn inactive_extension_cannot_queue_prompts_or_spawn_agents() {
+    use crate::model::{
+        app_config::InstalledExtension, conversation::Conversation, session::Session,
+        settings::Settings,
+    };
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut state = fixture_state();
+    state.rest.config.installed_extensions = vec![InstalledExtension {
+        id: "test.ext".into(),
+        enabled: true,
+        ..Default::default()
+    }];
+    for (method, grant, params) in [
+        (
+            "chat.prompt",
+            Grant::ChatPrompt,
+            json!({"text":"extension context"}),
+        ),
+        (
+            "agents.spawn",
+            Grant::AgentsOrchestrate,
+            json!({"task":"extension task"}),
+        ),
+    ] {
+        let reply = call_broker(
+            &mut state,
+            rt.handle(),
+            &None,
+            "test.ext",
+            &[grant],
+            method,
+            params,
+        );
+        assert!(reply["error"].as_str().unwrap().contains("inactive"));
+    }
+    assert!(state.rest.fg().pending_ext_prompts.is_empty());
+    state.rest.fg_mut().session = Some(Session::new(
+        "test".into(),
+        "/unused".into(),
+        "test".into(),
+        Settings {
+            active_extensions: vec!["test.ext".into()],
+            ..Default::default()
+        },
+        Conversation::from_messages(vec![]),
+    ));
+    assert_eq!(
+        call_broker(
+            &mut state,
+            rt.handle(),
+            &None,
+            "test.ext",
+            &[Grant::ChatPrompt],
+            "chat.prompt",
+            json!({"text":"extension context"})
+        ),
+        json!({"queued":1})
+    );
+}
+
 /// Fabricate an INERT sub-agent record in a known state (mirrors
 /// `bg_persist::restore_*` / `client_shadow::shadow_subagent`): an abort handle
 /// for a task that finishes at once and a never-written receiver, so no real
@@ -415,6 +476,26 @@ fn call_broker(
     method: &str,
     params: Value,
 ) -> Value {
+    // The broker receives calls from installed, enabled extensions. Existing
+    // contract tests exercise globally active callers unless a test specifies scope.
+    if !state
+        .rest
+        .config
+        .installed_extensions
+        .iter()
+        .any(|e| e.id == ext_id)
+    {
+        state
+            .rest
+            .config
+            .installed_extensions
+            .push(crate::model::app_config::InstalledExtension {
+                id: ext_id.into(),
+                enabled: true,
+                activation: crate::model::app_config::ExtensionActivation::Global,
+                ..Default::default()
+            });
+    }
     let (reply, mut reply_rx) = tokio::sync::oneshot::channel::<Value>();
     let req = ExtCallRequest {
         ext_id: ext_id.to_string(),

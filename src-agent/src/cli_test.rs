@@ -1,6 +1,102 @@
 use super::parse;
 
 #[test]
+fn run_current_drss_and_extension_flags() {
+    let run = parse(
+        [
+            "koma",
+            "--session",
+            "existing",
+            "run",
+            "--status",
+            "--short-send",
+            "off",
+            "--max-tokens",
+            "0",
+            "--context-window-limit",
+            "1000000",
+            "--context-model-alias",
+            "model-alias",
+            "--extension",
+            "run.koma.one",
+            "--extension",
+            "run.koma.two",
+            "--extension",
+            "run.koma.one",
+            "--unload-extension",
+            "run.koma.old",
+        ]
+        .into_iter()
+        .map(String::from),
+    )
+    .run
+    .unwrap();
+    assert!(run.error.is_none(), "{:?}", run.error);
+    assert_eq!(run.session.as_deref(), Some("existing"));
+    assert!(run.status);
+    assert_eq!(run.short_send, Some(false));
+    assert_eq!(run.max_tokens, Some(0));
+    assert_eq!(run.context_window_limit, Some(300_000));
+    assert_eq!(run.context_model_alias.as_deref(), Some("model-alias"));
+    assert_eq!(run.extensions, vec!["run.koma.one", "run.koma.two"]);
+    assert_eq!(run.unload_extensions, vec!["run.koma.old"]);
+}
+
+#[test]
+fn run_rejects_invalid_and_retired_setup_flags() {
+    for args in [
+        vec!["--short-send", "maybe"],
+        vec!["--context-window-limit", "-1"],
+        vec!["--max-tokens", "wrong"],
+        vec!["--extension"],
+        vec!["--mode", "made-up"],
+        vec!["--short-send-engage-n", "80"],
+        vec!["--mode", "yolo", "--security", "off"],
+        vec![
+            "--extension",
+            "run.koma.one",
+            "--unload-extension",
+            "run.koma.one",
+        ],
+    ] {
+        let run = parse(
+            ["koma", "run"]
+                .into_iter()
+                .chain(args.iter().copied())
+                .map(String::from),
+        )
+        .run
+        .unwrap();
+        assert!(
+            run.error.is_some(),
+            "invalid args silently accepted: {args:?}"
+        );
+    }
+}
+
+#[test]
+fn run_flags_before_verb_and_prompt_flag_literals_are_not_misparsed() {
+    let run = parse(
+        [
+            "koma",
+            "--short-send",
+            "on",
+            "run",
+            "--prompt",
+            "--extension",
+        ]
+        .into_iter()
+        .map(String::from),
+    )
+    .run
+    .unwrap();
+    assert!(run.error.is_none());
+    assert_eq!(run.short_send, Some(true));
+    assert_eq!(run.prompt.as_deref(), Some("--extension"));
+    assert!(run.extensions.is_empty());
+}
+
+#[test]
 fn bare_remote_opens_saved_host_picker() {
     let opts = parse(["koma", "remote"].into_iter().map(String::from));
     assert!(opts.remote_picker);
@@ -92,6 +188,71 @@ fn run_prompt_file_flag() {
     assert_eq!(run.session.as_deref(), Some("abc"));
     assert!(!run.once);
     assert_eq!(run.timeout_sec, 14_400);
+}
+
+#[test]
+fn run_model_effort_mode_security_flags() {
+    let opts = parse(
+        [
+            "koma",
+            "run",
+            "--prompt",
+            "go",
+            "--model",
+            "laguna-s-2.1",
+            "--effort",
+            "off",
+            "--mode",
+            "yolo",
+            "--security",
+            "on",
+            "--once",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
+    let run = opts.run.expect("run cli");
+    assert_eq!(run.model.as_deref(), Some("laguna-s-2.1"));
+    assert_eq!(run.effort.as_deref(), Some("off"));
+    assert_eq!(run.mode.as_deref(), Some("yolo"));
+    assert_eq!(run.security, Some(true));
+    assert!(run.once);
+}
+
+#[test]
+fn run_max_tokens_flag() {
+    let opts = parse(
+        [
+            "koma",
+            "run",
+            "--prompt",
+            "go",
+            "--max-tokens",
+            "8192",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
+    let run = opts.run.expect("run cli");
+    assert_eq!(run.max_tokens, Some(8192));
+}
+
+#[test]
+fn run_security_off_parses() {
+    let opts = parse(
+        ["koma", "run", "--prompt", "x", "--security", "off"]
+            .into_iter()
+            .map(String::from),
+    );
+    let run = opts.run.expect("run cli");
+    assert_eq!(run.security, Some(false));
+}
+
+#[test]
+fn parse_on_off_tokens() {
+    assert_eq!(crate::cli::parse_on_off("ON"), Some(true));
+    assert_eq!(crate::cli::parse_on_off("false"), Some(false));
+    assert_eq!(crate::cli::parse_on_off("maybe"), None);
 }
 
 #[test]

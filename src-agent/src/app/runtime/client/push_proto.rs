@@ -21,6 +21,14 @@ pub(super) use super::push_rows::{
     PushSubAgent, PushToolCall, PushUsageDay, PushUsageModel,
 };
 
+fn default_push_short_send_n_80() -> i64 {
+    80
+}
+
+fn default_push_short_send_n_40() -> i64 {
+    40
+}
+
 /// Impact analysis result: paths that transitively depend on a file.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -461,6 +469,19 @@ pub(super) enum PushEnvelope {
         effort: String,
         /// Max agentic turns per sub-agent (user-editable, ≥ 1).
         subagent_max_turns: u32,
+        /// Body message count that holds DRSS engaged (sticky; ≥ 1).
+        #[serde(default = "default_push_short_send_n_80")]
+        short_send_engage_n: i64,
+        /// Max verbatim body messages on the wire when engaged (≥ 1).
+        #[serde(default = "default_push_short_send_n_40")]
+        short_send_tail_n: i64,
+        /// Interactive chat max_tokens (0 = auto). Default 0 for older peers.
+        #[serde(default)]
+        max_output_tokens: u32,
+        #[serde(default)]
+        context_window_limit: u64,
+        #[serde(default)]
+        context_model_alias: String,
     },
     /// One-shot reply to a `GetAgents` (and the re-push after a `SetAgent` / `DeleteAgent`):
     /// the merged sub-agent registry + model / provider catalogue for the GUI /agents
@@ -1078,6 +1099,11 @@ pub(super) fn push_settings_values(
     palette: String,
     effort: String,
     subagent_max_turns: u32,
+    short_send_engage_n: i64,
+    short_send_tail_n: i64,
+    max_output_tokens: u32,
+    context_window_limit: u64,
+    context_model_alias: String,
 ) {
     super::render::emit(
         push,
@@ -1092,6 +1118,11 @@ pub(super) fn push_settings_values(
             palette,
             effort,
             subagent_max_turns,
+            short_send_engage_n,
+            short_send_tail_n,
+            max_output_tokens,
+            context_window_limit,
+            context_model_alias,
         },
     );
 }

@@ -65,6 +65,7 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
     rt.tokens_out = s.tokens_out;
     rt.cost = s.cost;
     rt.tokens_cached = s.tokens_cached;
+    rt.context_usage = s.context_usage;
     // `waiting` drives the local input-poll cadence + the comet; mirror the snapshot's
     // composite `working` so a parked/streaming background session keeps the shadow
     // ticking fast and shimmering, matching the daemon.

@@ -387,3 +387,21 @@ fn search_messages_repairs_empty_fts_after_false_backfill_flag() {
     assert_eq!(hits.len(), 1, "repair backfill should reindex messages");
     assert!(hits[0].snippet.contains("repair_me_token_abc"));
 }
+
+#[test]
+fn search_messages_before_respects_max_id() {
+    let dir = TempDir::new("before-max");
+    append(dir.path(), Role::User, "alpha topic one", None, None).unwrap();
+    append(dir.path(), Role::Assistant, "reply about alpha", None, None).unwrap();
+    append(dir.path(), Role::User, "beta later topic", None, None).unwrap();
+    let max_early = 2i64;
+    let hits = search_messages_before(dir.path(), "alpha", max_early, 10).unwrap();
+    assert!(!hits.is_empty(), "should find alpha in folded region");
+    assert!(hits.iter().all(|h| h.id <= max_early));
+    let hits_beta = search_messages_before(dir.path(), "beta", max_early, 10).unwrap();
+    assert!(
+        hits_beta.iter().all(|h| h.id <= max_early),
+        "beta is msg 3 — must not appear when max_id=2: {:?}",
+        hits_beta
+    );
+}

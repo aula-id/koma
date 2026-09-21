@@ -560,6 +560,24 @@ pub struct McpServerEntry {
     pub ext_id: Option<String>,
 }
 
+/// Whether an installed extension is exposed to every session or selected locally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionActivation {
+    Global,
+    #[default]
+    OnDemand,
+}
+
+impl ExtensionActivation {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::OnDemand => "on-demand",
+        }
+    }
+}
+
 /// One installed extension's persisted registry entry.
 ///
 /// Written by the install path ([`crate::app::ext::install`]) after a signed
@@ -575,7 +593,7 @@ pub struct McpServerEntry {
 ///
 /// Every field carries `#[serde(default)]` (with `enabled` defaulting to `true`) so
 /// an older `config.json` — or a partially-written entry — loads cleanly.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct InstalledExtension {
     /// Reverse-DNS manifest id, e.g. `"run.koma.example.echo-tool-daemon"`. The key
     /// for every registry op and the on-disk `extensions/<id>/` directory name.
@@ -589,10 +607,14 @@ pub struct InstalledExtension {
     /// grant enforcement is a later wave.
     #[serde(default)]
     pub granted: Vec<String>,
-    /// When false, the extension is skipped at boot (not auto-started). Defaults to
-    /// `true` so a freshly-installed extension is live.
+    /// When false, the extension cannot activate. Defaults to true on deserialization;
+    /// activation scope still defaults to on-demand.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Installation is global; on-demand contributions belong only to sessions
+    /// that explicitly select the extension. Old entries default to on-demand.
+    #[serde(default)]
+    pub activation: ExtensionActivation,
     /// Manifest kind as a wire string: `"daemon"` | `"oneshot"`.
     #[serde(default)]
     pub kind: String,
@@ -600,6 +622,13 @@ pub struct InstalledExtension {
     /// `"bin/echo-tool-daemon"`). Resolved against `extensions/<id>/` at spawn.
     #[serde(default)]
     pub exec: String,
+}
+
+impl InstalledExtension {
+    pub fn active_in(&self, selected: &[String]) -> bool {
+        self.enabled
+            && (self.activation == ExtensionActivation::Global || selected.contains(&self.id))
+    }
 }
 
 /// W12b: the outcome of [`AppConfig::purge_extension`] — how many catalogue entries an
@@ -942,13 +971,17 @@ impl AppConfig {
     // Registry building block for the install/uninstall command wiring (a later wave);
     // dead until then, like `seed_from_settings`.
     #[allow(dead_code)]
-    pub fn upsert_extension(&mut self, ext: InstalledExtension) {
+    pub fn upsert_extension(&mut self, mut ext: InstalledExtension) {
         match self
             .installed_extensions
             .iter_mut()
             .find(|e| e.id == ext.id)
         {
-            Some(slot) => *slot = ext,
+            Some(slot) => {
+                ext.enabled = slot.enabled;
+                ext.activation = slot.activation;
+                *slot = ext;
+            }
             None => self.installed_extensions.push(ext),
         }
     }

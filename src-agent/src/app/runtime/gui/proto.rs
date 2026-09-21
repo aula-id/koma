@@ -671,6 +671,16 @@ pub(super) enum GuiReq {
         workdir: Option<Vec<String>>,
         #[serde(default, rename = "subagentMaxTurns")]
         subagent_max_turns: Option<u32>,
+        #[serde(default, rename = "shortSendEngageN")]
+        short_send_engage_n: Option<i64>,
+        #[serde(default, rename = "shortSendTailN")]
+        short_send_tail_n: Option<i64>,
+        #[serde(default, rename = "maxOutputTokens")]
+        max_output_tokens: Option<u32>,
+        #[serde(default, rename = "contextWindowLimit")]
+        context_window_limit: Option<u64>,
+        #[serde(default, rename = "contextModelAlias")]
+        context_model_alias: Option<String>,
     },
 
     // ─── GUI composer EFFORT picker (TUI `/effort` parity) ───────────────────────

@@ -16,7 +16,7 @@ use super::super::Conn;
 use super::super::OpenRouterClient;
 use super::request::{build_messages, flatten_tools, thinking_params, MessagesRequest};
 use super::sse::{parse_event, AnthropicEvent, BlockDelta, ContentBlockStart};
-use super::{anthropic_headers, error_message, CLAUDE_MAX_OUTPUT_TOKENS};
+use super::{anthropic_headers, error_message};
 
 /// A tool_use block being reconstructed from the stream: its id + name (from
 /// `content_block_start`) and the incrementally-accumulated input-JSON string
@@ -109,6 +109,7 @@ impl OpenRouterClient {
         advertise: &[String],
         mcp_tools: &[ToolDef],
         image_ctx: Option<ImageWireCtx>,
+        max_tokens: u32,
         tx: UnboundedSender<StreamEvent>,
     ) -> Result<()> {
         let _ = account_id; // reserved for codex-parity signature
@@ -133,7 +134,7 @@ impl OpenRouterClient {
             messages: msgs,
             tools,
             tool_choice,
-            max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
+            max_tokens,
             thinking,
             context_management,
             output_config,

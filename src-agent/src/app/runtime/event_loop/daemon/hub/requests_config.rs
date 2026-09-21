@@ -9,6 +9,7 @@
 //! (see `actions::mcp::ensure_mcp_manager`).
 
 use crate::app::state::AppState;
+use crate::ipc::proto::DaemonEvent;
 
 use super::core::DaemonHub;
 
@@ -336,6 +337,11 @@ impl DaemonHub {
         internet_mode: Option<String>,
         workdir: Option<Vec<String>>,
         subagent_max_turns: Option<u32>,
+        short_send_engage_n: Option<i64>,
+        short_send_tail_n: Option<i64>,
+        max_output_tokens: Option<u32>,
+        context_window_limit: Option<u64>,
+        context_model_alias: Option<String>,
     ) {
         use crate::model::settings::InternetMode;
         // Capture the old internet mode BEFORE the set, for the shared change-gated
@@ -398,17 +404,36 @@ impl DaemonHub {
             if let Some(v) = subagent_max_turns {
                 sess.settings.subagent_max_turns = v.max(1);
             }
-            // Refresh the mode-gated system-prompt roster, then persist — mirrors
-            // handle_save_settings (:198 rebuild + :216 save). A save error just
-            // leaves the on-disk file stale; the `SettingsValues` re-push below still
-            // reflects the in-memory state, and this GUI path has no Ack/Error channel
-            // to surface it to (the store ignores those frames).
+            if let Some(v) = short_send_engage_n {
+                sess.settings.short_send_engage_n = v.max(1);
+            }
+            if let Some(v) = short_send_tail_n {
+                sess.settings.short_send_tail_n = v.max(1);
+            }
+            if let Some(v) = max_output_tokens {
+                sess.settings.max_output_tokens = v.min(1_000_000);
+            }
+            if let Some(v) = context_window_limit {
+                sess.settings.context_window_limit =
+                    v.min(crate::service::context_limits::OPERATING_CEILING);
+            }
+            if let Some(v) = context_model_alias {
+                sess.settings.context_model_alias = v.trim().chars().take(200).collect();
+            }
+            // Refresh the mode-gated system prompt, then persist. Surface save
+            // failures to headless callers before their state readback so they
+            // do not submit a prompt with settings that were not persisted.
+            // SettingsValues below still reflects the current in-memory state.
             sess.rebuild_system();
-            if sess.save().is_err() {
+            if let Err(error) = sess.save() {
                 #[cfg(feature = "linker")]
                 {
                     session_save_ok = false;
                 }
+                self.send_to(
+                    idx,
+                    DaemonEvent::Error(format!("Could not save session settings: {error}")),
+                );
             }
         }
         // internet feedback (status + optional install toast) only on an actual
@@ -496,9 +521,35 @@ impl DaemonHub {
         };
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
             sess.settings.effort = effort;
-            let _ = sess.save();
+            if let Err(error) = sess.save() {
+                self.send_to(
+                    idx,
+                    DaemonEvent::Error(format!("Could not save effort: {error}")),
+                );
+            }
         }
         self.send_settings_values(idx, state);
+    }
+
+    /// Headless / IPC: start or stop the security daemon (panel-free).
+    pub(super) fn set_security_enabled(
+        &mut self,
+        idx: usize,
+        state: &mut AppState,
+        enabled: bool,
+    ) {
+        let result = if enabled {
+            crate::app::runtime::actions::security::handle_security_start(state)
+        } else {
+            crate::app::runtime::actions::security::handle_security_stop(state)
+        };
+        self.ack_or_error(idx, result);
+    }
+
+    /// Headless / IPC: arm or disarm Layer-1 YOLO (refuses arm if sec daemon down).
+    pub(super) fn set_yolo_armed(&mut self, idx: usize, state: &mut AppState, armed: bool) {
+        let result = crate::app::runtime::actions::security::handle_set_yolo_armed(state, armed);
+        self.ack_or_error(idx, result);
     }
 
     // GUI onboarding "koma free": mint/reuse the keyless Koma Free provider + a

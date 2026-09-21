@@ -37,6 +37,7 @@ impl OpenRouterClient {
         advertise: &[String],
         mcp_tools: &[ToolDef],
         image_ctx: Option<ImageWireCtx>,
+        max_tokens: u32,
         tx: UnboundedSender<StreamEvent>,
     ) -> Result<()> {
         let url = format!("{}/alpha/generate", conn.endpoint);
@@ -69,7 +70,7 @@ impl OpenRouterClient {
                 messages: cc_messages,
                 tools,
                 system,
-                max_tokens: super::request::DEFAULT_GENERATE_MAX_TOKENS,
+                max_tokens,
                 temperature: 0.3,
                 stream: true,
             },

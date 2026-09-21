@@ -34,6 +34,13 @@ fn sample_session_snapshot() -> SessionSnapshot {
         tokens_out: 42,
         cost: 0.0012,
         tokens_cached: 16,
+        context_usage: Some(crate::service::context_limits::ContextUsage {
+            prompt_tokens: 100,
+            effective_window: 128_000,
+            estimated: false,
+            cached_tokens: Some(16),
+            drss_active: true,
+        }),
         waiting: true,
         awaiting_approval: false,
         approval_reason: None,
@@ -835,4 +842,52 @@ fn cross_session_no_rail_leakage() {
     assert_eq!(sb.sdlc_branch.as_deref(), Some("sdlc/feat-b"));
     assert_eq!(sb.sdlc_open, Some(1));
     assert_eq!(sb.sdlc_sealed, Some(1));
+}
+
+#[test]
+fn context_usage_legacy_snapshots_remain_readable() {
+    let session = sample_session_snapshot();
+
+    let mut old_wire = serde_json::to_value(&session).unwrap();
+    old_wire["context_usage"]
+        .as_object_mut()
+        .unwrap()
+        .remove("drss_active");
+    old_wire["context_usage"]
+        .as_object_mut()
+        .unwrap()
+        .remove("cached_tokens");
+    let old_usage: SessionSnapshot = serde_json::from_value(old_wire.clone()).unwrap();
+    assert!(!old_usage.context_usage.unwrap().drss_active);
+    assert!(old_usage.context_usage.unwrap().cached_tokens.is_none());
+    old_wire.as_object_mut().unwrap().remove("context_usage");
+    let legacy: SessionSnapshot = serde_json::from_value(old_wire).unwrap();
+    assert!(legacy.context_usage.is_none());
+    assert_eq!(legacy.tokens_in, session.tokens_in);
+}
+
+#[test]
+fn context_usage_only_changes_trigger_client_refresh() {
+    let prev = sample_snapshot();
+    let mut next = prev.clone();
+    next.sessions[0].context_usage.as_mut().unwrap().estimated = true;
+    assert!(super::snapshot::diff(&prev, &next, None, None).needs_full);
+    next = prev.clone();
+    next.sessions[0]
+        .context_usage
+        .as_mut()
+        .unwrap()
+        .effective_window = 300_000;
+    assert!(super::snapshot::diff(&prev, &next, None, None).needs_full);
+    next = prev.clone();
+    next.sessions[0].context_usage.as_mut().unwrap().drss_active = false;
+    assert!(super::snapshot::diff(&prev, &next, None, None).needs_full);
+    next = prev.clone();
+    next.sessions[0]
+        .context_usage
+        .as_mut()
+        .unwrap()
+        .cached_tokens = Some(0);
+    assert!(super::snapshot::diff(&prev, &next, None, None).needs_full);
+    assert!(!super::snapshot::diff(&prev, &prev, None, None).needs_full);
 }

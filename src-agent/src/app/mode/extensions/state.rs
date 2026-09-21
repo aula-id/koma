@@ -1,7 +1,7 @@
 //! [`ExtensionsState`] — the working state for the in-app `/extension` dashboard.
 //!
-//! Unlike `/mcp` (which owns a mutable draft/editor), this dashboard is READ-ONLY plus a
-//! single destructive action (uninstall): each row is a snapshot of one installed extension,
+//! This dashboard manages enable mode, session activation, and uninstall. Each row
+//! is a snapshot of one installed extension,
 //! enriched at BUILD time from `config.installed_extensions` + the on-disk `manifest.json` +
 //! the live `ExtHostManager` running status (see
 //! `crate::app::runtime::commands::extensions::build_extensions_state`). Navigation lives
@@ -34,8 +34,10 @@ pub struct ExtRow {
     pub tier: String,
     /// Kind wire string: `"daemon"` | `"oneshot"`.
     pub kind: String,
-    /// Whether the extension auto-starts at boot (the registry `enabled` flag).
+    /// Whether the extension may be activated (the registry `enabled` flag).
     pub enabled: bool,
+    pub activation: crate::model::app_config::ExtensionActivation,
+    pub active: bool,
     /// Whether a live child is currently running (from `ExtHostManager::is_running` at build).
     pub running: bool,
     /// Manifest description (empty when absent).

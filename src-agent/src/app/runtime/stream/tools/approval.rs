@@ -262,7 +262,7 @@ pub(crate) fn process_tools(
                 InterceptFlow::Fallthrough => {}
             }
         }
-        if mode == AgentMode::Plan && !call.function.name.starts_with("mcp__") {
+        if mode == AgentMode::Plan {
             match intercepts::intercept_plan_readonly_gate(state, sess_idx, &call) {
                 InterceptFlow::Continue => continue,
                 InterceptFlow::Return => return,

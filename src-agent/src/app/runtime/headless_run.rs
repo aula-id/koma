@@ -1,9 +1,12 @@
 //! `koma run` — thin headless client on the **default session-daemon** path.
 //!
 //! ```text
-//! ensure+attach  →  SubmitInput  →  [optional --once wait]  →  Detach
+//! ensure+attach  →  [optional setup]  →  SubmitInput  →  [optional --once wait]  →  Detach
 //! ```
 //!
+//! Setup covers model/mode, current DRSS settings, and session-local extensions.
+//! Every setup request is checked against daemon readback before submitting.
+//! `--status --session ID` inspects/configures a session without an inference call.
 //! No standalone/`--local`. Reuses [`attach_session_headless`].
 //!
 //! Exit: 0 ok · 1 error · 2 `--once` timeout · 3 approval-parked
@@ -13,9 +16,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 
+use crate::app::resolve::find_model_entry_by_slug;
 use crate::app::runtime::client::connect::{attach_session_headless, Connection};
 use crate::cli::RunCli;
-use crate::ipc::proto::{ClientRequest, DaemonEvent};
+use crate::ipc::proto::{ClientRequest, DaemonEvent, RunState};
+use crate::model::app_config::AppConfig;
+use crate::model::settings::Settings;
 
 const EXIT_OK: i32 = 0;
 const EXIT_ERR: i32 = 1;
@@ -34,10 +40,25 @@ pub fn run_cli(cli: RunCli) -> i32 {
 }
 
 fn run_inner(cli: RunCli) -> Result<i32> {
-    let prompt = resolve_prompt(&cli)?;
-    if prompt.trim().is_empty() {
-        bail!("prompt is empty");
+    if let Some(error) = &cli.error {
+        bail!("{error}");
     }
+    let prompt = if cli.status {
+        anyhow::ensure!(
+            cli.prompt.is_none() && cli.prompt_file.is_none(),
+            "--status does not submit a prompt"
+        );
+        anyhow::ensure!(
+            cli.session.as_deref().is_some_and(|s| !s.trim().is_empty()),
+            "--status requires --session ID"
+        );
+        anyhow::ensure!(!cli.once, "--status cannot be combined with --once");
+        None
+    } else {
+        let prompt = resolve_prompt(&cli)?;
+        anyhow::ensure!(!prompt.trim().is_empty(), "prompt is empty");
+        Some(prompt)
+    };
     let workdir = resolve_workdir(cli.workdir.as_deref())?;
     let session_id = cli
         .session
@@ -46,57 +67,365 @@ fn run_inner(cli: RunCli) -> Result<i32> {
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-    if let Some(name) = cli.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        let _ = crate::model::session_registry::set_name(&session_id, name);
+    if cli.status {
+        anyhow::ensure!(
+            crate::model::session_registry::get(&session_id)?.is_some(),
+            "session '{session_id}' does not exist"
+        );
     }
-
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("tokio runtime")?;
-    let handle = rt.handle().clone();
-
-    let conn = attach_session_headless(&handle, &session_id, workdir.as_deref())
+    let conn = attach_session_headless(&rt.handle().clone(), &session_id, workdir.as_deref())
         .with_context(|| format!("attach session {session_id}"))?;
+    // Always detach, including a rejected setup. Never abandon a submitted daemon turn.
+    let result = run_attached(&conn, &cli, prompt);
+    finish(&conn, &rt);
+    result
+}
 
-    if let Some(name) = cli.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        let _ = conn.req_tx.send(ClientRequest::RenameSession {
-            name: name.to_string(),
-        });
-    }
+fn has_setup(cli: &RunCli) -> bool {
+    cli.name.is_some()
+        || cli.model.is_some()
+        || cli.effort.is_some()
+        || cli.mode.is_some()
+        || cli.security.is_some()
+        || cli.max_tokens.is_some()
+        || cli.short_send.is_some()
+        || cli.context_window_limit.is_some()
+        || cli.context_model_alias.is_some()
+        || !cli.extensions.is_empty()
+        || !cli.unload_extensions.is_empty()
+}
 
-    // Brief drain so Attach snapshot lands before submit (non-fatal if slow).
-    let mut working = false;
-    let mut awaiting_approval = false;
-    drain_snapshot(&conn, Duration::from_secs(5), &mut working, &mut awaiting_approval);
-
-    if awaiting_approval {
+fn run_attached(conn: &Connection, cli: &RunCli, prompt: Option<String>) -> Result<i32> {
+    let mut state = request_state(conn, Duration::from_secs(10))?;
+    if state.awaiting_approval && (prompt.is_some() || has_setup(cli)) {
         eprintln!("session awaiting approval; not submitting");
-        finish(&conn, &rt);
         return Ok(EXIT_APPROVAL);
     }
+    if has_setup(cli) {
+        anyhow::ensure!(
+            !state.working,
+            "session is working; finish the current turn before changing run settings"
+        );
+        state = apply_run_setup(conn, cli, state)?;
+    }
+    if let Some(prompt) = prompt {
+        conn.req_tx
+            .send(ClientRequest::SubmitInput { text: prompt })
+            .context("SubmitInput")?;
+        // Ordered readback also observes any daemon rejection before reporting success.
+        state = request_state(conn, Duration::from_secs(10))?;
+        print_state(&state, false);
+        if cli.once {
+            return wait_once(conn, Duration::from_secs(cli.timeout_sec.max(1)), state);
+        }
+    } else {
+        print_state(&state, true);
+    }
+    Ok(EXIT_OK)
+}
 
+fn apply_run_setup(conn: &Connection, cli: &RunCli, mut state: RunState) -> Result<RunState> {
+    // Resolve/check the entire requested selection before changing any settings.
+    for id in cli.extensions.iter().chain(&cli.unload_extensions) {
+        let ext = state
+            .extensions
+            .iter()
+            .find(|e| &e.id == id)
+            .ok_or_else(|| anyhow::anyhow!("extension '{id}' is not installed"))?;
+        if cli.extensions.contains(id) {
+            anyhow::ensure!(ext.enabled, "extension '{id}' is disabled");
+        } else {
+            anyhow::ensure!(
+                ext.activation != "global",
+                "extension '{id}' is global; set it to on-demand in /extension first"
+            );
+        }
+    }
+    let model = cli.model.as_deref().map(resolve_model_ref).transpose()?;
+    let mode = cli.mode.as_deref();
+    if let Some(name) = &cli.name {
+        state = apply_request(conn, ClientRequest::RenameSession { name: name.clone() })?;
+        anyhow::ensure!(
+            state.name == name.trim(),
+            "daemon did not apply the requested session name"
+        );
+    }
+    if let Some(enabled) = cli
+        .security
+        .or_else(|| (mode == Some("yolo")).then_some(true))
+    {
+        state = apply_request(conn, ClientRequest::SetSecurityEnabled { enabled })?;
+        if enabled {
+            state = wait_for_state(conn, state, "security daemon startup", |s| {
+                s.security_running
+            })?;
+        }
+        anyhow::ensure!(
+            state.security_enabled == enabled,
+            "daemon did not apply security setting"
+        );
+    }
+    if let Some(uuid) = model {
+        let expected = AppConfig::load()
+            .models
+            .iter()
+            .find(|m| m.uuid == uuid)
+            .map(|m| m.model_id.clone());
+        state = apply_request(
+            conn,
+            ClientRequest::SetSessionMain {
+                model_uuid: Some(uuid),
+            },
+        )?;
+        anyhow::ensure!(
+            expected.as_deref() == Some(state.model.as_str()),
+            "daemon did not apply the requested model"
+        );
+    }
+    if let Some(effort) = &cli.effort {
+        let effort = effort.trim();
+        state = apply_request(
+            conn,
+            ClientRequest::SetEffort {
+                effort: effort.into(),
+            },
+        )?;
+        anyhow::ensure!(
+            state.effort == if effort == "default" { "" } else { effort },
+            "daemon did not apply the requested effort"
+        );
+    }
+    if let Some(mode) = mode {
+        if mode == "yolo" {
+            state = apply_request(conn, ClientRequest::SetYoloArmed { armed: true })?;
+            anyhow::ensure!(state.yolo_armed, "daemon refused to arm yolo");
+        }
+        state = apply_request(conn, ClientRequest::SetMode { mode: mode.into() })?;
+        anyhow::ensure!(
+            state.mode == mode,
+            "daemon did not enter requested mode '{mode}' (current: {})",
+            state.mode
+        );
+    }
+    if cli.max_tokens.is_some()
+        || cli.short_send.is_some()
+        || cli.context_window_limit.is_some()
+        || cli.context_model_alias.is_some()
+    {
+        state = apply_request(
+            conn,
+            ClientRequest::SetSessionPrefs {
+                short_send: cli.short_send,
+                sliding_cache: None,
+                bash_saving: None,
+                coding_autosave: None,
+                internet_mode: None,
+                workdir: None,
+                subagent_max_turns: None,
+                short_send_engage_n: None,
+                short_send_tail_n: None,
+                max_output_tokens: cli.max_tokens,
+                context_window_limit: cli.context_window_limit,
+                context_model_alias: cli.context_model_alias.clone(),
+            },
+        )?;
+        anyhow::ensure!(
+            cli.short_send.is_none_or(|v| state.short_send == v),
+            "daemon did not apply short-send setting"
+        );
+        anyhow::ensure!(
+            cli.max_tokens.is_none_or(|v| state.max_output_tokens == v),
+            "daemon did not apply reply limit"
+        );
+        anyhow::ensure!(
+            cli.context_window_limit
+                .is_none_or(|v| state.context_window_limit == v),
+            "daemon did not apply context limit"
+        );
+        anyhow::ensure!(
+            cli.context_model_alias
+                .as_ref()
+                .is_none_or(|v| &state.context_model_alias == v),
+            "daemon did not apply context alias"
+        );
+    }
+    if !cli.extensions.is_empty() || !cli.unload_extensions.is_empty() {
+        state = apply_request(
+            conn,
+            ClientRequest::SetSessionExtensions {
+                load: cli.extensions.clone(),
+                unload: cli.unload_extensions.clone(),
+            },
+        )?;
+        for id in &cli.extensions {
+            anyhow::ensure!(
+                state.extensions.iter().any(|e| &e.id == id && e.active),
+                "daemon did not activate extension '{id}'"
+            );
+        }
+        for id in &cli.unload_extensions {
+            anyhow::ensure!(
+                !state.extensions.iter().any(|e| &e.id == id && e.active),
+                "daemon did not unload extension '{id}'"
+            );
+        }
+        state = wait_for_state(conn, state, "extension startup", |s| {
+            s.extensions
+                .iter()
+                .filter(|e| cli.extensions.contains(&e.id) && e.kind == "daemon")
+                .all(|e| e.running)
+        })?;
+    }
+    Ok(state)
+}
+
+fn apply_request(conn: &Connection, request: ClientRequest) -> Result<RunState> {
+    conn.req_tx.send(request).context("send run setup")?;
+    request_state(conn, Duration::from_secs(10))
+}
+
+fn request_state(conn: &Connection, budget: Duration) -> Result<RunState> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_REQUEST: AtomicU64 = AtomicU64::new(1);
+    let req_seq = NEXT_REQUEST.fetch_add(1, Ordering::Relaxed);
     conn.req_tx
-        .send(ClientRequest::SubmitInput { text: prompt })
-        .context("SubmitInput")?;
-
-    println!("session_id={session_id}");
-    if let Some(n) = cli.name.as_deref() {
-        println!("name={n}");
+        .send(ClientRequest::GetRunState { req_seq })
+        .context("GetRunState")?;
+    let deadline = Instant::now() + budget;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail!("timed out waiting for daemon run state; no setup confirmation received");
+        }
+        let frame = conn
+            .frame_rx
+            .recv_timeout(remaining)
+            .context("waiting for daemon run state")?;
+        match frame.event {
+            DaemonEvent::RunState {
+                req_seq: reply_seq,
+                state,
+            } if reply_seq == req_seq => return Ok(state),
+            DaemonEvent::Error(error) => bail!("daemon rejected request: {error}"),
+            _ => {}
+        }
     }
-    if let Some(ref w) = workdir {
-        println!("workdir={}", w.display());
-    }
+}
 
-    if !cli.once {
-        finish(&conn, &rt);
-        return Ok(EXIT_OK);
+fn wait_for_state(
+    conn: &Connection,
+    mut state: RunState,
+    label: &str,
+    ready: impl Fn(&RunState) -> bool,
+) -> Result<RunState> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !ready(&state) {
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "timed out waiting for {label}; prompt was not submitted"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+        state = request_state(
+            conn,
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_secs(5)),
+        )?;
     }
+    Ok(state)
+}
 
-    let code = wait_once(&conn, Duration::from_secs(cli.timeout_sec.max(1)))?;
-    finish(&conn, &rt);
-    Ok(code)
+fn print_state(state: &RunState, include_available: bool) {
+    println!("session_id={}", state.session_id);
+    println!("name={}", state.name.replace('\n', "\\n"));
+    println!(
+        "workdir={}",
+        state
+            .workdir
+            .first()
+            .map(String::as_str)
+            .unwrap_or_default()
+    );
+    println!(
+        "workspaces={}",
+        serde_json::to_string(&state.workdir).unwrap_or_default()
+    );
+    println!("model={}", state.model);
+    println!(
+        "effort={}",
+        if state.effort.is_empty() {
+            "default"
+        } else {
+            &state.effort
+        }
+    );
+    println!("mode={}", state.mode);
+    println!(
+        "security={}",
+        if state.security_enabled { "on" } else { "off" }
+    );
+    println!("short_send={}", if state.short_send { "on" } else { "off" });
+    println!("drss_active={}", state.drss_active);
+    println!("max_tokens={}", state.max_output_tokens);
+    println!("context_window_limit={}", state.context_window_limit);
+    println!("context_model_alias={}", state.context_model_alias);
+    let active: Vec<_> = state
+        .extensions
+        .iter()
+        .filter(|e| e.active)
+        .map(|e| &e.id)
+        .collect();
+    println!(
+        "active_extensions={}",
+        serde_json::to_string(&active).unwrap_or_default()
+    );
+    if include_available {
+        println!(
+            "extensions={}",
+            serde_json::to_string(&state.extensions).unwrap_or_default()
+        );
+        println!(
+            "status={}",
+            if state.awaiting_approval {
+                "approval"
+            } else if state.working {
+                "working"
+            } else {
+                "idle"
+            }
+        );
+    }
+}
+
+/// Resolve `--model` the same way agent/manifest `model:` slugs do:
+/// [`find_model_entry_by_slug`] — case-insensitive match on `model_id` | `name` | `uuid`.
+///
+/// Returns the **global catalogue uuid** `SetSessionMain` expects (clones that entry,
+/// including its `provider_uuid` / router). No new identifier formats.
+fn resolve_model_ref(raw: &str) -> Result<String> {
+    let cfg = AppConfig::load();
+    // Fresh headless attach: no session overrides yet; empty settings matches spawn-time
+    // slug resolution with `preferred_provider_uuids: None`.
+    let settings = Settings::default();
+    let needle = raw.trim();
+    if needle.is_empty() {
+        bail!("empty model ref");
+    }
+    let entry = find_model_entry_by_slug(&cfg, &settings, needle, None).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no catalogue match for {needle:?} (slug = model_id | name | uuid, same as agent model:)"
+        )
+    })?;
+    // SetSessionMain looks up the GLOBAL catalogue by uuid. Prefer source_uuid when
+    // present (session clone pointing at a global); globals have source_uuid = None.
+    Ok(entry
+        .source_uuid
+        .clone()
+        .unwrap_or_else(|| entry.uuid.clone()))
 }
 
 fn finish(conn: &Connection, rt: &tokio::runtime::Runtime) {
@@ -111,8 +440,7 @@ fn resolve_prompt(cli: &RunCli) -> Result<String> {
         (Some(p), None) => Ok(p.clone()),
         (None, Some(path)) => {
             let path = expand_user(path);
-            std::fs::read_to_string(&path)
-                .with_context(|| format!("read {}", path.display()))
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))
         }
         (Some(_), Some(_)) => bail!("pass only one of --prompt or --prompt-file"),
         (None, None) => bail!("missing --prompt or --prompt-file"),
@@ -147,103 +475,48 @@ fn expand_user(p: &str) -> PathBuf {
     PathBuf::from(p)
 }
 
-fn note_frame(ev: &DaemonEvent, working: &mut bool, awaiting_approval: &mut bool) {
-    match ev {
-        DaemonEvent::Snapshot(state) => {
-            let s = state
-                .foreground_id
-                .as_ref()
-                .and_then(|fg| state.sessions.iter().find(|s| s.id == *fg))
-                .or_else(|| state.sessions.first());
-            if let Some(s) = s {
-                *working = s.working || s.waiting;
-                *awaiting_approval = s.awaiting_approval;
-            }
-        }
-        DaemonEvent::Delta(crate::ipc::proto::StateDelta::SessionStatusChanged {
-            working: w,
-            ..
-        }) => {
-            *working = *w;
-        }
-        DaemonEvent::Status(st) => {
-            *working = st.working;
-        }
-        _ => {}
-    }
-}
-
-fn drain_snapshot(
-    conn: &Connection,
-    budget: Duration,
-    working: &mut bool,
-    awaiting_approval: &mut bool,
-) {
-    let deadline = Instant::now() + budget;
-    while Instant::now() < deadline {
-        match conn
-            .frame_rx
-            .recv_timeout(Duration::from_millis(100))
-        {
-            Ok(frame) => {
-                let is_snap = matches!(frame.event, DaemonEvent::Snapshot(_));
-                note_frame(&frame.event, working, awaiting_approval);
-                if is_snap {
-                    return;
-                }
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
-        }
-    }
-}
-
-/// Wait until busy→idle (or timeout / approval). Polls `Status` as a heartbeat.
-fn wait_once(conn: &Connection, timeout: Duration) -> Result<i32> {
+/// Poll daemon-authoritative state after SubmitInput has been processed.
+fn wait_once(conn: &Connection, timeout: Duration, mut state: RunState) -> Result<i32> {
     let deadline = Instant::now() + timeout;
-    let grace = Instant::now() + Duration::from_secs(2);
-    let mut working = false;
-    let mut saw_busy = false;
-    let mut awaiting_approval = false;
-    let mut last_poll = Instant::now()
-        .checked_sub(Duration::from_secs(2))
-        .unwrap_or_else(Instant::now);
-
     loop {
-        if awaiting_approval {
+        if state.awaiting_approval {
             eprintln!("parked on approval (daemon still running)");
             return Ok(EXIT_APPROVAL);
         }
-        if saw_busy && !working {
+        if !state.working {
             println!("status=idle");
             return Ok(EXIT_OK);
         }
-        // Fast-finish / never-started after short grace.
-        if !saw_busy && !working && Instant::now() >= grace {
-            println!("status=idle");
-            return Ok(EXIT_OK);
-        }
-        if Instant::now() >= deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             eprintln!("timeout (daemon still running)");
             return Ok(EXIT_TIMEOUT);
         }
-
-        if last_poll.elapsed() >= Duration::from_secs(1) {
-            let _ = conn.req_tx.send(ClientRequest::Status);
-            last_poll = Instant::now();
+        std::thread::sleep(remaining.min(Duration::from_millis(250)));
+        match request_state(
+            conn,
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_secs(5)),
+        ) {
+            Ok(next) => state = next,
+            Err(_) if Instant::now() >= deadline => return Ok(EXIT_TIMEOUT),
+            Err(error) => return Err(error),
         }
+    }
+}
 
-        match conn.frame_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(frame) => {
-                note_frame(&frame.event, &mut working, &mut awaiting_approval);
-                if working {
-                    saw_busy = true;
-                }
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                bail!("daemon disconnected while waiting");
-            }
-        }
+#[cfg(test)]
+#[path = "headless_run_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+mod resolve_model_tests {
+    use super::*;
+
+    #[test]
+    fn empty_ref_errors() {
+        let err = resolve_model_ref("   ").unwrap_err();
+        assert!(err.to_string().contains("empty"));
     }
 }

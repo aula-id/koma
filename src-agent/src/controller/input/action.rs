@@ -220,6 +220,9 @@ pub enum Action {
     // --- Extensions dashboard actions ---
     /// Esc from the `/extension` dashboard (Browse) — return to Chat.
     CloseExtensions,
+    UseExtension,
+    UnuseExtension,
+    SetExtensionActivation(crate::model::app_config::ExtensionActivation),
     /// `y` in the `/extension` uninstall confirm — run the shared uninstall nuke on the
     /// selected extension, toast, and rebuild the Browse list. On error the message is
     /// shown in-state and the dashboard returns to Detail.

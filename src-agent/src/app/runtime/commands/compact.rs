@@ -29,18 +29,21 @@ pub(crate) fn handle_compact(
     if state.rest.fg().waiting {
         state.rest.fg_mut().status = "busy — wait for response".into();
         state.rest.fg_mut().pending_plan_seed = false;
+        state.rest.fg_mut().pending_plan_seed_body = None;
         state.rest.fg_mut().pending_mission_seed = None;
         return Ok(());
     }
     if client.is_none() || state.rest.fg().session.is_none() {
         state.rest.fg_mut().status = "no active session".into();
         state.rest.fg_mut().pending_plan_seed = false;
+        state.rest.fg_mut().pending_plan_seed_body = None;
         state.rest.fg_mut().pending_mission_seed = None;
         return Ok(());
     }
     let Some(sess) = state.rest.fg().session.as_ref() else {
         crate::model::store::append_global_error_log("compact", "BUG: fg session missing");
         state.rest.fg_mut().pending_plan_seed = false;
+        state.rest.fg_mut().pending_plan_seed_body = None;
         state.rest.fg_mut().pending_mission_seed = None;
         return Ok(());
     };
@@ -49,6 +52,7 @@ pub(crate) fn handle_compact(
     if to_sum.is_empty() {
         state.rest.fg_mut().status = "nothing to compact".into();
         state.rest.fg_mut().pending_plan_seed = false;
+        state.rest.fg_mut().pending_plan_seed_body = None;
         state.rest.fg_mut().pending_mission_seed = None;
         return Ok(());
     }
@@ -88,6 +92,7 @@ pub(crate) fn handle_compact(
     let Some(c) = client.as_ref().cloned() else {
         crate::model::store::append_global_error_log("compact", "BUG: client missing");
         state.rest.fg_mut().pending_plan_seed = false;
+        state.rest.fg_mut().pending_plan_seed_body = None;
         state.rest.fg_mut().pending_mission_seed = None;
         return Ok(());
     };

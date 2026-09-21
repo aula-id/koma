@@ -2,7 +2,7 @@
 //!
 //! A simpler sibling of the `/mcp` types module: there is no editor/create flow (an
 //! extension is installed via the `/store` wave, not authored here), so the only moving
-//! parts are Browse → Detail → UninstallConfirm.
+//! parts are Browse → Detail → UninstallConfirm, plus the session UsePicker.
 
 /// The active sub-mode of the `/extension` dashboard.
 ///
@@ -13,6 +13,8 @@
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtSubMode {
+    /// Session-local activation picker, drawn above the composer.
+    UsePicker,
     /// Navigating the installed-extension list (read-only).
     Browse,
     /// Reading one extension's full detail (contributions, grants, tui-screens).

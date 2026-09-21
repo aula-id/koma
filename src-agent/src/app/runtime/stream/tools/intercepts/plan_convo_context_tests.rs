@@ -44,3 +44,47 @@ fn mission_tac_ignored_in_done_and_assess_phases() {
         );
     }
 }
+
+#[test]
+fn plan_mode_does_not_treat_old_approval_as_execution_authority() {
+    let mut state = AppState::new(Mode::Chat);
+    state.rest.fg_mut().agent_mode = AgentMode::Plan;
+    state.rest.fg_mut().approved_plan = Some("old approved implementation".into());
+    assert!(!build_convo_context(&state, 0).contains("APPROVED PLAN"));
+}
+
+#[test]
+fn plan_gate_denies_external_and_mutating_calls_but_keeps_inspection() {
+    use crate::dto::chat::{FunctionCall, ToolCall};
+    for (name, arguments, allowed) in [
+        ("mcp__notes__read", "{}", false),
+        ("write", "{}", false),
+        (
+            "git_operator",
+            r#"{"args":["branch","new-feature"]}"#,
+            false,
+        ),
+        ("browser_tabs", r#"{"action":"navigate"}"#, false),
+        ("git_operator", r#"{"args":["status","--short"]}"#, true),
+        ("read", r#"{"path":"notes.txt"}"#, true),
+    ] {
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.fg_mut().agent_mode = AgentMode::Plan;
+        let call = ToolCall {
+            id: "plan-policy".into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: name.into(),
+                arguments: arguments.into(),
+            },
+        };
+        let flow = intercept_plan_readonly_gate(&mut state, 0, &call);
+        assert_eq!(
+            matches!(flow, InterceptFlow::Fallthrough),
+            allowed,
+            "{name}: {arguments}"
+        );
+        assert_eq!(state.rest.fg().tool_results.len(), usize::from(!allowed));
+        assert_eq!(state.rest.fg().tool_idx, usize::from(!allowed));
+    }
+}

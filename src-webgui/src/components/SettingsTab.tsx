@@ -443,22 +443,26 @@ function SessionSettings() {
   const [name, setName] = useState('')
   const [workdir, setWorkdir] = useState('')
   const [shortSend, setShortSend] = useState(true)
-  const [slidingCache, setSlidingCache] = useState(false)
   const [bashSaving, setBashSaving] = useState(true)
   const [codingAutosave, setCodingAutosave] = useState(false)
   const [internet, setInternet] = useState<'simple' | 'full'>('simple')
   const [maxTurns, setMaxTurns] = useState('500')
+  const [contextLimit, setContextLimit] = useState('0')
+  const [contextAlias, setContextAlias] = useState('')
+  const [maxOutTokens, setMaxOutTokens] = useState('0')
 
   useEffect(() => {
     if (!values) return
     setName(values.name)
     setWorkdir(values.workdir.join('\n'))
     setShortSend(values.shortSend)
-    setSlidingCache(values.slidingCache)
     setBashSaving(values.bashSaving)
     setCodingAutosave(values.codingAutosave)
     setInternet(values.internetMode === 'full' ? 'full' : 'simple')
     setMaxTurns(String(values.subagentMaxTurns ?? 500))
+    setContextLimit(String(values.contextWindowLimit ?? 0))
+    setContextAlias(values.contextModelAlias ?? '')
+    setMaxOutTokens(String(values.maxOutputTokens ?? 0))
   }, [values])
 
   if (!values) {
@@ -491,10 +495,6 @@ function SessionSettings() {
     setShortSend(v)
     req({ r: 'SetPrefs', shortSend: v })
   }
-  const setSliding = (v: boolean) => {
-    setSlidingCache(v)
-    req({ r: 'SetPrefs', slidingCache: v })
-  }
   const setBash = (v: boolean) => {
     setBashSaving(v)
     req({ r: 'SetPrefs', bashSaving: v })
@@ -514,6 +514,26 @@ function SessionSettings() {
     setMaxTurns(String(safe))
     if (safe !== (values.subagentMaxTurns ?? 500)) {
       req({ r: 'SetPrefs', subagentMaxTurns: safe })
+    }
+  }
+  const commitContextLimit = () => {
+    const n = parseInt(contextLimit, 10)
+    const safe = isNaN(n) || n < 0 ? 0 : Math.min(n, 300_000)
+    setContextLimit(String(safe))
+    if (safe !== (values.contextWindowLimit ?? 0)) req({ r: 'SetPrefs', contextWindowLimit: safe })
+  }
+  const commitContextAlias = () => {
+    const alias = contextAlias.trim().slice(0, 200)
+    setContextAlias(alias)
+    if (alias !== (values.contextModelAlias ?? '')) req({ r: 'SetPrefs', contextModelAlias: alias })
+  }
+  // Interactive max_tokens: 0 = auto; soft max 1_000_000.
+  const commitMaxOutTokens = () => {
+    const n = parseInt(maxOutTokens, 10)
+    const safe = isNaN(n) || n < 0 ? 0 : Math.min(n, 1_000_000)
+    setMaxOutTokens(String(safe))
+    if (safe !== (values.maxOutputTokens ?? 0)) {
+      req({ r: 'SetPrefs', maxOutputTokens: safe })
     }
   }
 
@@ -551,12 +571,60 @@ function SessionSettings() {
         />
       </SettingRow>
 
-      <SettingRow label="Short-send" desc="Compress older turns into a rolling summary before each send to cut token cost.">
+      <SettingRow label="Short-send" desc="Use a deterministic archive index and recent context for outgoing requests. Normally 60–75%; oversized sessions recover using spare context within the 300k maximum window.">
         <Toggle on={shortSend} onChange={setShort} />
       </SettingRow>
 
-      <SettingRow label="Sliding cache" desc="Adapt summarisation when the provider's prompt cache goes cold (e.g. Anthropic).">
-        <Toggle on={slidingCache} onChange={setSliding} />
+      <SettingRow
+        label="Context window limit"
+        desc="0 = automatic OpenRouter estimate, falling back to 128k when unknown. A custom limit can lower the detected window. Maximum: 300k."
+      >
+        <input
+          type="number"
+          min={0}
+          max={300000}
+          value={contextLimit}
+          onChange={(e) => setContextLimit(e.target.value.replace(/[^0-9]/g, ''))}
+          onBlur={commitContextLimit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
+          className="w-24 rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[12px] text-koma-fg outline-none focus:border-koma-grip"
+        />
+      </SettingRow>
+
+      <SettingRow
+        label="Context model alias"
+        desc="Optional OpenRouter model ID for context detection, such as anthropic/claude-sonnet-4. Leaves the selected chat model unchanged."
+      >
+        <input
+          type="text"
+          maxLength={200}
+          value={contextAlias}
+          onChange={(e) => setContextAlias(e.target.value)}
+          onBlur={commitContextAlias}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
+          className="w-72 rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[12px] text-koma-fg outline-none focus:border-koma-grip"
+        />
+      </SettingRow>
+
+      <SettingRow
+        label="Max out tokens"
+        desc="Requested reply tokens. A positive custom value takes priority; 0 = 128k. Limited by remaining context and provider output limits. Codex OAuth controls its own output limit."
+      >
+        <input
+          type="number"
+          min={0}
+          value={maxOutTokens}
+          onChange={(e) => setMaxOutTokens(e.target.value.replace(/[^0-9]/g, ''))}
+          onBlur={commitMaxOutTokens}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
+          className="w-24 rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[12px] text-koma-fg outline-none focus:border-koma-grip"
+        />
       </SettingRow>
 
       <SettingRow label="Bash shorts" desc="Filter and tee bash / git output to disk to preserve command logs.">

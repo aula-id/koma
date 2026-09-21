@@ -978,7 +978,7 @@ pub fn build_seed_capsule_with_all(
          - Do not escape the bound mission worktree/branch during execute/integrate.\n\
          - No auto-commit; integrate needs clean mission WT + commits ahead.\n\
          - If the claimed leaf has owned_paths, stay inside them.\n\
-         - Unsure: web_search → message_find → ask the user.\n",
+         - For missing history, use message_find for previews, then message_load for selected messages. Ask the user if necessary information is still missing.\n",
     );
 
     s

@@ -917,6 +917,10 @@ impl AppStateRest {
             return;
         }
         let old_mode = self.sessions[sess_idx].agent_mode;
+        self.sessions[sess_idx].plan_read_only.store(
+            new_mode == AgentMode::Plan,
+            std::sync::atomic::Ordering::Release,
+        );
         if old_mode == new_mode {
             return;
         }
@@ -925,7 +929,26 @@ impl AppStateRest {
         let entering_sdlc = new_mode == AgentMode::Sdlc;
         let leaving_sdlc = old_mode == AgentMode::Sdlc;
 
+        // A response already requested under the old mode must not continue
+        // supplying text/tools under a new mode label. Each request has its own
+        // channel: interrupt drops it so queued/late events cannot be consumed.
+        // During plan_enter / a valid plan approval the stream has already been
+        // drained, so preserve that tool continuation. Compaction is a separate
+        // operation; its captured approval seed is invalidated below as needed.
+        let rt = &mut self.sessions[sess_idx];
+        let stale_plan_park = leaving_plan
+            && rt.awaiting_approval
+            && rt.pending_tool_calls
+                .get(rt.tool_idx)
+                .is_some_and(|call| call.function.name == "plan_ready");
+        if (rt.active_rx.is_some() && rt.compact_anim_start.is_none()) || stale_plan_park {
+            rt.interrupt();
+            rt.set_toast("Mode changed; the previous response was stopped.".into());
+        }
+
         if entering_plan {
+            self.sessions[sess_idx].pending_plan_seed = false;
+            self.sessions[sess_idx].pending_plan_seed_body = None;
             self.sessions[sess_idx].plan_return_mode = Some(old_mode);
             self.sessions[sess_idx].approved_plan = None;
             self.sessions[sess_idx].approved_mission = None;
@@ -942,6 +965,7 @@ impl AppStateRest {
             // Clear stale seeds from a prior Plan session so they can never fire
             // inside SDLC (Plan and SDLC are mutually exclusive).
             self.sessions[sess_idx].pending_plan_seed = false;
+            self.sessions[sess_idx].pending_plan_seed_body = None;
             self.sessions[sess_idx].approved_plan = None;
             self.sessions[sess_idx].approved_mission = None;
             // Bump generation so any armed mission seed from a PRIOR SDLC session
@@ -1099,6 +1123,7 @@ impl AppStateRest {
             self.sessions[sess_idx].approved_mission = None;
             // Clear any stale plan seed so it can't fire in a post-SDLC context.
             self.sessions[sess_idx].pending_plan_seed = false;
+            self.sessions[sess_idx].pending_plan_seed_body = None;
             // Drop any in-flight LLM keeper so a late result cannot start a turn
             // after SDLC has been left.
             self.sessions[sess_idx].invalidate_sdlc_keeper_llm();

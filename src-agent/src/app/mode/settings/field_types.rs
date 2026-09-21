@@ -19,9 +19,6 @@ pub enum SettingField {
     AllowedFolders,
     /// Toggle: master kill-switch for the short-send token saver.
     ShortSendEnabled,
-    /// Toggle: cache-warmth-adaptive summarization. On only for models with a
-    /// sliding/refreshing prompt cache (e.g. Anthropic).
-    SlidingCache,
     /// Toggle: whether bash/git_operator save filtered output logs to disk.
     BashSaving,
     /// Toggle: GUI Coding panel auto-save (debounced) for dirty editor tabs.
@@ -33,6 +30,8 @@ pub enum SettingField {
     MouseCapture,
     /// Numeric: max agentic turns per sub-agent (when agent def has no `steps`).
     SubagentMaxTurns,
+    /// Numeric: requested reply limit (0 = 128k, bounded by model/context limits).
+    MaxOutputTokens,
 }
 
 impl SettingField {
@@ -49,12 +48,12 @@ impl SettingField {
             SettingField::ClassifierEnabled => "Harness",
             SettingField::AllowedFolders => "Allowed dirs",
             SettingField::ShortSendEnabled => "Short-send",
-            SettingField::SlidingCache => "Sliding cache",
             SettingField::BashSaving => "Bash shorts",
             SettingField::CodingAutosave => "Coding autosave",
             SettingField::InternetMode => "Internet mode",
             SettingField::MouseCapture => "Mouse capture",
             SettingField::SubagentMaxTurns => "Max turns",
+            SettingField::MaxOutputTokens => "Max out tokens",
         }
     }
 }
@@ -67,10 +66,10 @@ pub const GENERAL_FIELDS: &[SettingField] = &[
     SettingField::ClassifierEnabled,
     SettingField::AllowedFolders,
     SettingField::ShortSendEnabled,
-    SettingField::SlidingCache,
     SettingField::BashSaving,
     SettingField::CodingAutosave,
     SettingField::InternetMode,
     SettingField::MouseCapture,
     SettingField::SubagentMaxTurns,
+    SettingField::MaxOutputTokens,
 ];

@@ -5,6 +5,8 @@
 //! the agent runtime + session locks) and a thin attach/detach TUI client.
 
 pub mod key;
+mod run;
+pub use run::{RunExtension, RunState};
 pub mod snapshot;
 pub mod stream;
 
@@ -68,6 +70,15 @@ pub enum ClientRequest {
     /// attach and NO snapshot stream. The daemon must answer this WITHOUT mutating any
     /// session state (no create/attach, no foreground change, no Hello/Snapshot).
     Status,
+    /// Correlated readback of this client's current session, without opening a UI.
+    GetRunState {
+        req_seq: u64,
+    },
+    /// Activate/deactivate extensions only for this client's session. Ack or Error.
+    SetSessionExtensions {
+        load: Vec<String>,
+        unload: Vec<String>,
+    },
     /// FIRE-AND-FORGET cross-daemon sub-agent spawn (extension `sessions.spawn_into`, W7):
     /// one session-daemon's grant broker connects ANOTHER session-daemon's keyed socket and
     /// sends this to spawn a sub-agent INTO that daemon's own foreground/first-live session,
@@ -81,6 +92,9 @@ pub enum ClientRequest {
     /// daemon owns the resulting sub-agent, and the caller receives no ext-facing agent id
     /// (no cross-daemon `agents.status`/`result` polling yet).
     SpawnAgent {
+        /// Extension-origin requests must be active in the target session.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ext_id: Option<String>,
         agent: Option<String>,
         task: String,
         model: Option<String>,
@@ -406,7 +420,7 @@ pub enum ClientRequest {
     /// Partial-update the foreground session's GUI-editable prefs (the GUI Settings tab's
     /// Session section). Only the `Some` fields are applied, EACH through the SAME per-field
     /// apply logic the TUI settings save uses (`actions::settings::handle_save_settings`):
-    /// short-send / sliding-cache / bash-saving are plain field sets, `internet_mode`
+    /// short-send / bash-saving are plain field sets, `internet_mode`
     /// (`"simple"`/`"full"`) goes through the shared internet-feedback path, and `workdir` is
     /// normalized (trim + drop empties + cwd fallback) with a dir-cache reindex. The daemon
     /// then persists the session settings and re-pushes a fresh [`DaemonEvent::SettingsValues`]
@@ -420,6 +434,14 @@ pub enum ClientRequest {
         internet_mode: Option<String>,
         workdir: Option<Vec<String>>,
         subagent_max_turns: Option<u32>,
+        /// Legacy preference accepted for older clients; ignored by DRSS.
+        short_send_engage_n: Option<i64>,
+        /// Legacy preference accepted for older clients; ignored by DRSS.
+        short_send_tail_n: Option<i64>,
+        /// Requested reply limit (0 = 128k). Soft max 1_000_000; bounded by context.
+        max_output_tokens: Option<u32>,
+        context_window_limit: Option<u64>,
+        context_model_alias: Option<String>,
     },
 
     /// GUI composer EFFORT picker opened: derive the `/effort` menu for the
@@ -444,6 +466,24 @@ pub enum ClientRequest {
     /// drives this via `Mode::Effort`'s confirm handler.
     SetEffort {
         effort: String,
+    },
+
+    /// Start or stop the security daemon (headless / non-panel equivalent of the
+    /// Security panel Daemon checkbox). `enabled: true` →
+    /// [`crate::app::runtime::actions::security` start path] (sets
+    /// `security_enabled`, starts manager); `false` → stop path (also disarms
+    /// yolo). Not gui-gated: headless `koma run --security on|off` is a first-class
+    /// client of this request.
+    SetSecurityEnabled {
+        enabled: bool,
+    },
+    /// Arm or disarm Layer-1 YOLO (`yolo_armed`). Arming is refused unless the
+    /// security daemon is running (same gate as the Security panel YOLO checkbox).
+    /// Disarming while in `Yolo` agent mode drops mode back to `Auto`. Headless
+    /// `koma run --mode yolo` sends `armed: true` after security is up, then
+    /// [`SetMode`] with `"yolo"`.
+    SetYoloArmed {
+        armed: bool,
     },
 
     // ─── GUI /agents dashboard (sub-agent definitions) ───────────────────────
@@ -712,6 +752,10 @@ pub enum DaemonEvent {
     /// single owned session's metadata. Sent WITHOUT attaching the client or streaming
     /// any snapshot — the connection is expected to close right after.
     Status(SessionStatus),
+    RunState {
+        req_seq: u64,
+        state: RunState,
+    },
     /// One-shot reply to a [`ClientRequest::FileSearch`]: the resolved workspace-file
     /// hits for `query` (echoed so the GUI can drop a stale/out-of-order reply). Sent
     /// WITHOUT attaching or snapshotting — a metadata reply like [`Status`].
@@ -810,6 +854,19 @@ pub enum DaemonEvent {
         effort: String,
         /// Max agentic turns per sub-agent (user-editable, ≥ 1).
         subagent_max_turns: u32,
+        /// Legacy wire compatibility only; ignored by DRSS.
+        #[serde(default = "default_short_send_n_80")]
+        short_send_engage_n: i64,
+        /// Legacy wire compatibility only; ignored by DRSS.
+        #[serde(default = "default_short_send_n_40")]
+        short_send_tail_n: i64,
+        /// Interactive chat max_tokens (0 = auto). Default 0 for older peers.
+        #[serde(default)]
+        max_output_tokens: u32,
+        #[serde(default)]
+        context_window_limit: u64,
+        #[serde(default)]
+        context_model_alias: String,
     },
     /// One-shot reply to a [`ClientRequest::GetEffortOptions`]: the derived
     /// `/effort` menu for the foreground session's current model, from
@@ -1070,6 +1127,14 @@ pub enum StateDelta {
         kind: String,
         text: String,
     },
+}
+
+fn default_short_send_n_80() -> i64 {
+    80
+}
+
+fn default_short_send_n_40() -> i64 {
+    40
 }
 
 #[cfg(test)]

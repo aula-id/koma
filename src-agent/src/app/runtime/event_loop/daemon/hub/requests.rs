@@ -181,6 +181,10 @@ impl DaemonHub {
             ClientRequest::Status => {
                 self.status(idx, state);
             }
+            ClientRequest::GetRunState { req_seq } => self.get_run_state(idx, state, req_seq),
+            ClientRequest::SetSessionExtensions { load, unload } => {
+                self.set_session_extensions(idx, state, handle, load, unload)
+            }
             ClientRequest::Detach => {
                 self.detach(idx, state);
             }
@@ -351,12 +355,13 @@ impl DaemonHub {
             // same connectionless contract the `Status` discovery probe relies on. See
             // `spawn_agent`.
             ClientRequest::SpawnAgent {
+                ext_id,
                 agent,
                 task,
                 model,
                 effort,
             } => {
-                self.spawn_agent(idx, state, client, handle, agent, task, model, effort);
+                self.spawn_agent(idx, state, client, handle, ext_id, agent, task, model, effort);
             }
 
             // Quit (close) a single session by stable UUID (daemon stage 10). Resolve
@@ -506,6 +511,11 @@ impl DaemonHub {
                 internet_mode,
                 workdir,
                 subagent_max_turns,
+                short_send_engage_n,
+                short_send_tail_n,
+                max_output_tokens,
+                context_window_limit,
+                context_model_alias,
             } => {
                 self.set_session_prefs(
                     idx,
@@ -517,6 +527,11 @@ impl DaemonHub {
                     internet_mode,
                     workdir,
                     subagent_max_turns,
+                    short_send_engage_n,
+                    short_send_tail_n,
+                    max_output_tokens,
+                    context_window_limit,
+                    context_model_alias,
                 );
             }
 
@@ -535,6 +550,16 @@ impl DaemonHub {
             // (the effort-picker label rides the same settings channel), not a bare Ack.
             ClientRequest::SetEffort { effort } => {
                 self.set_effort(idx, state, effort);
+            }
+
+            // Headless / non-panel security toggle: start or stop the security daemon
+            // via the same handlers the Security panel Daemon checkbox uses.
+            ClientRequest::SetSecurityEnabled { enabled } => {
+                self.set_security_enabled(idx, state, enabled);
+            }
+            // Headless YOLO arm/disarm (gated on security daemon running).
+            ClientRequest::SetYoloArmed { armed } => {
+                self.set_yolo_armed(idx, state, armed);
             }
 
             // GUI onboarding "koma free": mint/reuse the keyless Koma Free provider + a
@@ -752,6 +777,8 @@ impl DaemonHub {
             | ClientRequest::Resync
             | ClientRequest::ListSessions
             | ClientRequest::Status
+            | ClientRequest::GetRunState { .. }
+            | ClientRequest::SetSessionExtensions { .. }
             | ClientRequest::RemoveAttachment { .. }
             | ClientRequest::FileSearch { .. }
             | ClientRequest::UsagePreview { .. }
@@ -817,6 +844,11 @@ impl DaemonHub {
             palette: state.rest.config.palette.clone(),
             effort: s.effort.clone(),
             subagent_max_turns: s.subagent_max_turns,
+            short_send_engage_n: s.short_send_engage_n,
+            short_send_tail_n: s.short_send_tail_n,
+            max_output_tokens: s.max_output_tokens,
+            context_window_limit: s.context_window_limit,
+            context_model_alias: s.context_model_alias.clone(),
         };
         self.send_to(idx, event);
     }

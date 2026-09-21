@@ -33,10 +33,11 @@ pub(super) fn handle_close_security(state: &mut AppState) -> Result<()> {
 }
 
 /// Start the daemon. Called when the Daemon checkbox is toggled ON (from
-/// `handle_security_toggle_tool`).
+/// `handle_security_toggle_tool`), and from the headless IPC
+/// [`crate::ipc::proto::ClientRequest::SetSecurityEnabled`] path.
 ///
 /// Sets `security_enabled` to true so subsequent turns advertise sec_ tools.
-pub(super) fn handle_security_start(state: &mut AppState) -> Result<()> {
+pub(crate) fn handle_security_start(state: &mut AppState) -> Result<()> {
     state.rest.security_enabled = true;
     if let Some(m) = state.rest.sec_manager.as_ref() {
         m.start(state.rest.sec_token.clone());
@@ -47,18 +48,46 @@ pub(super) fn handle_security_start(state: &mut AppState) -> Result<()> {
 }
 
 /// Stop the daemon. Called when the Daemon checkbox is toggled OFF (from
-/// `handle_security_toggle_tool`).
+/// `handle_security_toggle_tool`), and from the headless IPC
+/// [`crate::ipc::proto::ClientRequest::SetSecurityEnabled`] path.
 ///
 /// Clears `security_enabled` so sec_ tools are no longer advertised. ENFORCES the
 /// "YOLO requires a running daemon" invariant: stopping the daemon always disarms YOLO
 /// (and drops out of `Yolo` agent mode) so a harness-bypass can never outlive the daemon.
-pub(super) fn handle_security_stop(state: &mut AppState) -> Result<()> {
+pub(crate) fn handle_security_stop(state: &mut AppState) -> Result<()> {
     state.rest.security_enabled = false;
     if let Some(m) = state.rest.sec_manager.as_ref() {
         m.stop();
     }
     disarm_yolo_for_stop(state);
     state.rest.fg_mut().status = "security: daemon stopped".into();
+    refresh_security_state(state, None);
+    Ok(())
+}
+
+/// Set Layer-1 YOLO arm flag without requiring the Security panel to be open.
+/// Same gate as the panel YOLO checkbox: arming needs a running security daemon.
+/// Disarming while in `Yolo` drops `agent_mode` to `Auto`.
+pub(crate) fn handle_set_yolo_armed(state: &mut AppState, armed: bool) -> Result<()> {
+    let running = state
+        .rest
+        .sec_manager
+        .as_ref()
+        .map(|m| m.status().running)
+        .unwrap_or(false);
+    if armed && !running {
+        state.rest.fg_mut().status = "yolo locked — start the daemon first".into();
+        anyhow::bail!("yolo arm refused: security daemon not running");
+    }
+    state.rest.yolo_armed = armed;
+    if armed {
+        state.rest.fg_mut().status = "yolo armed — switch with /mode yolo or Shift+Tab".into();
+    } else {
+        if state.rest.agent_mode() == AgentMode::Yolo {
+            state.rest.set_agent_mode(AgentMode::Auto);
+        }
+        state.rest.fg_mut().status = "yolo disarmed".into();
+    }
     refresh_security_state(state, None);
     Ok(())
 }

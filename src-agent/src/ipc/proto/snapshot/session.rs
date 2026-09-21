@@ -31,6 +31,8 @@ pub struct SessionSnapshot {
     pub tokens_out: u64,
     pub cost: f64,
     pub tokens_cached: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_usage: Option<crate::service::context_limits::ContextUsage>,
     pub waiting: bool,
     pub awaiting_approval: bool,
     pub approval_reason: Option<String>,

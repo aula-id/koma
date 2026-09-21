@@ -98,6 +98,10 @@ fn warm_session_impl(
     // activation path that routes through warm_session — startup, /new,
     // picker-select, creds-confirm — acquires the lock.
     reconcile_session_lock(state);
+    let idx = state.rest.foreground;
+    if let Err(error) = super::commands::extensions::refresh_session(state, idx, handle) {
+        crate::model::store::append_global_error_log("extension activation", &error.to_string());
+    }
     // Snapshot what we need, dropping the session borrow before mutating
     // `state.mode` / `state.rest`. `config` is cloned so the role resolution
     // below doesn't borrow `state` across the spawn.

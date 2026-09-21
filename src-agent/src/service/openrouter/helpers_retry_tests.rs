@@ -42,17 +42,113 @@ fn max_attempts_is_three() {
 fn is_xai_detects_host() {
     assert!(is_xai("https://api.x.ai/v1"));
     assert!(is_xai("https://API.X.AI/v1"));
+    assert!(is_xai("https://us.api.x.ai/v1"));
+    assert!(!is_xai("https://api.x.ai.example.test/v1"));
+    assert!(!is_xai("https://example.test/api.x.ai"));
     assert!(!is_xai("https://openrouter.ai/api/v1"));
     assert!(!is_xai("https://api.openai.com/v1"));
     assert!(!is_xai("https://api.deepseek.com"));
 }
 
 #[test]
-fn interactive_max_tokens_xai_raised() {
-    assert_eq!(XAI_INTERACTIVE_MAX_TOKENS, 256_000);
-    assert_eq!(interactive_max_tokens("https://api.x.ai/v1"), 256_000);
-    assert_eq!(interactive_max_tokens("https://openrouter.ai/api/v1"), 32_000);
-    assert_eq!(interactive_max_tokens("https://api.deepseek.com"), 32_000);
+fn xai_cache_routing_survives_retries_and_credential_refresh() {
+    let client = super::super::client::OpenRouterClient::new();
+    let other = super::super::client::OpenRouterClient::new();
+    assert_ne!(client.codex_session_id(), other.codex_session_id());
+    for endpoint in ["https://api.x.ai/v1", "https://us.api.x.ai/v1"] {
+        for (oauth_uuid, bearer) in [("", "api-key"), ("oauth", "old"), ("oauth", "refreshed")] {
+            let conn = Conn {
+                endpoint,
+                api_key: "unused-fallback",
+                api_type: ApiType::OpenAiCompatible,
+                account_id: "",
+                oauth_uuid,
+                install_id: "",
+            };
+            let request = auth_headers(
+                client.http.post(format!("{endpoint}/chat/completions")),
+                &conn,
+                bearer,
+                client.codex_session_id(),
+            )
+            .build()
+            .unwrap();
+            assert_eq!(
+                request.headers()["x-grok-conv-id"],
+                client.codex_session_id()
+            );
+            assert_eq!(
+                request.headers()["authorization"],
+                format!("Bearer {bearer}")
+            );
+        }
+    }
+}
+
+#[test]
+fn xai_cache_routing_does_not_change_other_providers() {
+    let client = reqwest::Client::new();
+    for (endpoint, api_type) in [
+        ("https://openrouter.ai/api/v1", ApiType::OpenAiCompatible),
+        ("https://api.openai.com/v1", ApiType::OpenAiCompatible),
+        (
+            "https://api.x.ai.example.test/v1",
+            ApiType::OpenAiCompatible,
+        ),
+        ("https://example.test/api.x.ai", ApiType::OpenAiCompatible),
+        ("https://example.test/v1", ApiType::KomaFree),
+    ] {
+        let conn = Conn {
+            endpoint,
+            api_key: "key",
+            api_type,
+            account_id: "",
+            oauth_uuid: "",
+            install_id: "install",
+        };
+        let request = auth_headers(client.post(endpoint), &conn, "key", "session")
+            .build()
+            .unwrap();
+        assert!(!request.headers().contains_key("x-grok-conv-id"));
+        if api_type == ApiType::KomaFree {
+            assert_eq!(request.headers()["X-Session"], "session");
+            assert!(!request.headers().contains_key("authorization"));
+        }
+    }
+}
+
+#[test]
+fn effective_max_output_tokens_respects_custom_default_and_room() {
+    use crate::service::context_limits::OUTPUT_MARGIN;
+    // Zero selects 128k even with known context. A larger custom value wins
+    // when the context has enough room; a smaller one is preserved too.
+    assert_eq!(
+        effective_max_output_tokens(0, Some(300_000), 10_000),
+        128_000
+    );
+    assert_eq!(
+        effective_max_output_tokens(200_000, Some(300_000), 10_000),
+        200_000
+    );
+    assert_eq!(
+        effective_max_output_tokens(8192, Some(300_000), 10_000),
+        8192
+    );
+    for metadata in [None, Some(0)] {
+        // Unknown metadata uses 128k for both budgets. The prompt and margin
+        // must fit too, so the actual request is smaller than 128k.
+        assert_eq!(effective_max_output_tokens(0, metadata, 10_000), 116_976);
+        assert_eq!(effective_max_output_tokens(0, metadata, 80_000), 46_976);
+        assert_eq!(effective_max_output_tokens(8192, metadata, 10_000), 8192);
+        assert_eq!(
+            effective_max_output_tokens(512_000, metadata, 80_000),
+            46_976
+        );
+    }
+    let effective = effective_max_output_tokens(512_000, Some(131_072), 99_073);
+    assert_eq!(effective, 30_975);
+    assert!(99_073 + u64::from(effective) + OUTPUT_MARGIN <= 131_072);
+    assert_eq!(effective_max_output_tokens(0, Some(1000), 5000), 1);
 }
 
 #[test]

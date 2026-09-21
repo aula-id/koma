@@ -96,6 +96,7 @@ impl DaemonHub {
         state: &mut AppState,
         client: &Option<Arc<OpenRouterClient>>,
         handle: &tokio::runtime::Handle,
+        ext_id: Option<String>,
         agent: Option<String>,
         task: String,
         model: Option<String>,
@@ -119,6 +120,12 @@ impl DaemonHub {
             return;
         };
 
+        if let Some(id) = ext_id {
+            if !crate::app::ext::broker::extension_active_in_session(state, &id, sess_idx) {
+                self.send_to(idx, DaemonEvent::Error(format!("Extension '{id}' is inactive in the target session; select it with /extension use.")));
+                return;
+            }
+        }
         let agent_name = agent
             .as_deref()
             .map(str::trim)

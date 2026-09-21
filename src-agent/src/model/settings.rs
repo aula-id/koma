@@ -258,6 +258,14 @@ pub struct Settings {
     #[serde(default, deserialize_with = "string_or_vec")]
     pub workdir: Vec<String>,
 
+    /// On-demand extensions selected for this session; never shared by project.
+    #[serde(default)]
+    pub active_extensions: Vec<String>,
+    /// Roots added by extensions, distinct from user-owned workspaces. None is
+    /// a legacy file whose previously injected secondary roots need migration.
+    #[serde(default)]
+    pub extension_workspace_roots: Option<Vec<String>>,
+
     /// While inside a git_worktree (entered or created via the `git_worktree`
     /// tool), holds the base PRIMARY root (`workdir[0]`) to restore on exit.
     /// `None` = at the base root (not inside a worktree). Only slot `[0]` swaps
@@ -302,22 +310,47 @@ pub struct Settings {
     /// by default; ignored entirely when `classifier_enabled` is false.
     #[serde(default)]
     pub allowed_folders: Vec<String>,
-    /// Master switch for the "short-send" payload reshaper. When true (the
-    /// default), the API-bound history is compressed before each send: the older
-    /// turns are replaced by a rolling summary + a verbatim tail, with heavy
-    /// blobs rehydrated on demand. When false the full history is sent as before
-    /// (kill switch). Display + on-disk state are unaffected either way.
+    /// Shape only outgoing requests into system + deterministic archive index +
+    /// recent live context. Stored/displayed messages remain unchanged.
     #[serde(default = "default_short_send_enabled")]
     pub short_send_enabled: bool,
-    /// How many of the newest messages short-send keeps verbatim (the tail that
-    /// is sent in full; everything older is folded into the summary). Defaults to
-    /// `6`. Old `settings.json` files load unchanged via the serde default.
+    /// Legacy field retained for settings/peer compatibility; no effect on DRSS.
+    #[serde(default = "default_short_send_engage_n")]
+    pub short_send_engage_n: i64,
+    /// Legacy field retained for settings/peer compatibility; no effect on DRSS.
     #[serde(default = "default_short_send_tail_n")]
     pub short_send_tail_n: i64,
-    /// Enable cache-warmth-adaptive summarization. When true, the runtime may
-    /// trigger a sliding-window summary when it detects the prompt cache has gone
-    /// cold, keeping costs low on providers with a sliding/refreshing prompt cache
-    /// (e.g. Anthropic). When false (the default), no such adaptation is attempted.
+    /// Requested reply limit: a positive custom value takes priority; 0 = 128k.
+    /// Provider output limits and remaining context constrain the actual reply.
+    /// Codex OAuth does not accept an explicit output limit.
+    #[serde(default)]
+    pub max_output_tokens: u32,
+    /// Optional smaller operating context ceiling (0 = catalog/default).
+    #[serde(default)]
+    pub context_window_limit: u64,
+    /// Explicit public catalog alias used only for capability matching.
+    #[serde(default)]
+    pub context_model_alias: String,
+    /// User-committed session goal (doctrine for DRSS). Empty = none. Never filled
+    /// from assistant drafts — only explicit user steer via `detect_goal_update`.
+    #[serde(default)]
+    pub session_goal: String,
+    /// Optional provenance message id for `session_goal` (0 = unset).
+    #[serde(default)]
+    pub session_goal_msg_id: i64,
+    /// Provenance of `session_goal` text: `"none" | "user"` (mission/charter are
+    /// effective-only on the wire and not written here as durable doctrine).
+    #[serde(default)]
+    pub session_goal_source: String,
+    /// Immutable kickoff charter (first real user prompt). Empty = unset. Never
+    /// overwritten once non-empty by the stream-start seeder.
+    #[serde(default)]
+    pub session_charter: String,
+    /// Last applied effective-objective fingerprint (`user:…` / `mission:{id}` /
+    /// `charter:…`) for transition detection. Empty = never applied.
+    #[serde(default)]
+    pub session_objective_fp: String,
+    /// Legacy cache-adaptation preference; deterministic DRSS uses token bands.
     #[serde(default = "default_sliding_cache")]
     pub sliding_cache: bool,
     /// Whether bash/git_operator run their "saving" output path (filtering +
@@ -420,8 +453,12 @@ fn default_short_send_enabled() -> bool {
     true
 }
 
+fn default_short_send_engage_n() -> i64 {
+    80
+}
+
 fn default_short_send_tail_n() -> i64 {
-    6
+    40
 }
 
 fn default_sliding_cache() -> bool {
@@ -488,6 +525,8 @@ impl Default for Settings {
             provider: DEFAULT_PROVIDER.to_string(),
             effort: String::new(),
             workdir: Vec::new(),
+            active_extensions: Vec::new(),
+            extension_workspace_roots: Some(Vec::new()),
             workdir_saved: None,
             awareness_enabled: default_awareness_enabled(),
             awareness_inherit: default_awareness_inherit(),
@@ -498,7 +537,16 @@ impl Default for Settings {
             classifier_provider: DEFAULT_CLASSIFIER_PROVIDER.to_string(),
             allowed_folders: Vec::new(),
             short_send_enabled: default_short_send_enabled(),
+            short_send_engage_n: default_short_send_engage_n(),
             short_send_tail_n: default_short_send_tail_n(),
+            max_output_tokens: 0,
+            context_window_limit: 0,
+            context_model_alias: String::new(),
+            session_goal: String::new(),
+            session_goal_msg_id: 0,
+            session_goal_source: String::new(),
+            session_charter: String::new(),
+            session_objective_fp: String::new(),
             sliding_cache: default_sliding_cache(),
             bash_saving: true,
             coding_autosave: default_coding_autosave(),
@@ -613,6 +661,21 @@ impl LocalConfig {
         let json = serde_json::to_vec_pretty(self)?;
         std::fs::write(path, json)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod max_output_tokens_tests {
+    use super::Settings;
+
+    #[test]
+    fn default_and_missing_field_are_auto_zero() {
+        assert_eq!(Settings::default().max_output_tokens, 0);
+        let s: Settings = serde_json::from_str("{}").expect("empty object");
+        assert_eq!(s.max_output_tokens, 0);
+        let s: Settings =
+            serde_json::from_str(r#"{"max_output_tokens":8192}"#).expect("explicit");
+        assert_eq!(s.max_output_tokens, 8192);
     }
 }
 

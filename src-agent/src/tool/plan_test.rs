@@ -32,9 +32,9 @@ fn parse_plan_ready_rejects_non_string() {
 }
 
 #[test]
-fn approved_text_embeds_plan_path() {
-    let t = plan_approved_text("/tmp/sess/plan.md");
-    assert!(t.contains("/tmp/sess/plan.md"));
+fn approved_text_embeds_reviewed_plan_body() {
+    let t = plan_approved_text_with_body("Reviewed change: keep the existing API");
+    assert!(t.contains("Reviewed change: keep the existing API"));
     assert!(t.contains("approved"));
 }
 

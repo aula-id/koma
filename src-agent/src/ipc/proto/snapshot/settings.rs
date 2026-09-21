@@ -43,6 +43,16 @@ pub struct SettingsSnapshot {
     pub classifier_enabled: bool,
     pub allowed_folders: Vec<String>,
     pub short_send_enabled: bool,
+    /// Legacy snapshot compatibility only; ignored by deterministic DRSS.
+    #[serde(default = "default_i64_80")]
+    pub short_send_engage_n: i64,
+    /// Legacy snapshot compatibility only; ignored by deterministic DRSS.
+    #[serde(default = "default_i64_40")]
+    pub short_send_tail_n: i64,
+    /// Requested reply limit (0 = 128k, bounded by model/context limits).
+    #[serde(default)]
+    pub max_output_tokens: u32,
+    /// Legacy snapshot compatibility only; ignored by deterministic DRSS.
     pub sliding_cache: bool,
     pub bash_saving: bool,
     #[serde(default)]
@@ -96,6 +106,14 @@ pub struct SettingsSnapshot {
 
 fn default_u32_500() -> u32 {
     500
+}
+
+fn default_i64_80() -> i64 {
+    80
+}
+
+fn default_i64_40() -> i64 {
+    40
 }
 
 // -- mode payload projections (stage 3: secondary full-screen views) -----------

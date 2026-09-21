@@ -95,30 +95,26 @@ pub(super) fn apply_compaction_result(
     // final-answer paths already apply to assistant content.
     let summary = crate::dto::chat::strip_tool_call_tags(&summary);
 
-    // Plan-approval seed (one-shot): if `handle_approve_plan_compact` armed
-    // `pending_plan_seed`, read the approved plan now so we can append it as the
-    // FIRST post-compaction user turn — the model then executes from a clean
-    // context that leads with the plan. Cleared unconditionally (a missing plan.md
-    // is silently skipped) so it can never re-fire on a later plain `/compact`.
-    // Gated on !SDLC — plan seeds must not fire during SDLC mode, which uses
-    // its own pending_mission_seed path for mission capsule injection.
-    let plan_seed: Option<String> = if state.rest.sessions.get(idx).is_some_and(|rt| {
-        rt.pending_plan_seed && rt.agent_mode != crate::app::state::AgentMode::Sdlc
-    }) {
-        if let Some(rt) = state.rest.sessions.get_mut(idx) {
-            rt.pending_plan_seed = false;
+    // Consume the exact body captured by approval, not mutable plan.md or a
+    // historical approval. Re-entering Plan or SDLC invalidates execution;
+    // discard the one-shot arm in every case so a later compact cannot revive it.
+    let plan_seed = state.rest.sessions.get_mut(idx).and_then(|rt| {
+        let armed = std::mem::take(&mut rt.pending_plan_seed);
+        let body = rt.pending_plan_seed_body.take();
+        if armed
+            && matches!(
+                rt.agent_mode,
+                crate::app::state::AgentMode::Auto
+                    | crate::app::state::AgentMode::Normal
+                    | crate::app::state::AgentMode::Yolo
+            )
+        {
+            body.filter(|body| !body.trim().is_empty())
+                .map(|body| format!("Approved plan (execute now):\n\n{}", body.trim()))
+        } else {
+            None
         }
-        state
-            .rest
-            .sessions
-            .get(idx)
-            .and_then(|rt| rt.session.as_ref())
-            .map(|s| s.plan_path())
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .map(|body| format!("Approved plan (execute now):\n\n{}", body.trim()))
-    } else {
-        None
-    };
+    });
     // Mission-approval seed: full OPEN+SEALED capsule (force continuity).
     // Gated on SDLC mode AND a valid MissionSeedArm — stale seeds from a mode
     // transition out of SDLC, a different session, a different mission, or a
@@ -232,7 +228,7 @@ pub(super) fn apply_compaction_result(
         // No session-wide images/pastes inventory footer. Disk files may outlive
         // context, but dumping every `images/NN-*` confuses the model (and many
         // are orphans). Attachments stay message-bound; re-discover via
-        // message_find → load_image / read when curious.
+        // message_find → message_load → load_image / read when curious.
         // Clone: `summary` is still needed below for the compact toast.
         sess.conversation
             .apply_compaction(summary.clone(), kept_tail);

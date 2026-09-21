@@ -89,9 +89,20 @@ pub fn spawn_subagent(
     mode: AgentMode,
     overrides: Option<SpawnOverrides>,
     initial_injects: Vec<String>,
+    // Live models catalogue for context-window lookup (None → 128k fallback).
+    models_cache: Option<&[crate::dto::openrouter::ModelInfo]>,
 ) -> Option<SubAgent> {
     // Look the agent up; a missing name is a no-op for the caller.
     let agent = registry.get(agent_name)?;
+    if let Some(id) = &agent.ext_id {
+        if !config
+            .installed_extensions
+            .iter()
+            .any(|e| &e.id == id && e.active_in(&settings.active_extensions))
+        {
+            return None;
+        }
+    }
 
     // Resolve the agent's route (its own model+provider, else inherit Main).
     // An override, when present, is applied to a CLONE used only for this
@@ -115,10 +126,10 @@ pub fn spawn_subagent(
     // The effective allow-list + isolated seed conversation + step budget. While
     // the PARENT session is in Plan mode, the delegated sub-agent must stay
     // read-only too — fold its allow-list down through the same whitelist used
-    // by the main advertise fold (`tool_allowed_in_plan`), then strip two tools
-    // that whitelist alone would let through: `seqthink` (main-agent-only — a
-    // sub-agent has no user to ask "enter plan mode" on its behalf) and
-    // `checklist` (its plan-mode interception lives in the main event loop's
+    // by the main advertise fold (`tool_allowed_in_plan`), then strip tools
+    // whose planning behavior requires the main runtime (`plan_enter`,
+    // `plan_ready`, `seqthink`, and `checklist`). The checklist interception is
+    // in the main event loop's
     // `process_tools`; a sub-agent that ran the generic `Checklist::run` instead
     // would write the real per-directory `memory/TODO.md`, breaking plan-mode
     // read-only). This only ever NARROWS whatever the agent declared.
@@ -139,16 +150,11 @@ pub fn spawn_subagent(
         tools.extend(names);
         mcp_tools = defs;
     }
+    tools.retain(|name| {
+        crate::app::mcp::tool_active_in_session(name, config, &settings.active_extensions)
+    });
     if mode == AgentMode::Plan {
-        // MCP tools ride through untouched — same precedent as the main advertise
-        // fold at run.rs:487 (the user explicitly wired those servers, so they own
-        // that risk), otherwise `tool_allowed_in_plan` would strip every mcp__*
-        // name since it knows nothing about them.
-        tools.retain(|n| {
-            (crate::tool::tool_allowed_in_plan(n)
-                && !matches!(n.as_str(), "seqthink" | "checklist"))
-                || n.starts_with("mcp__")
-        });
+        tools.retain(|name| crate::tool::delegated_tool_allowed_in_plan(name));
     } else if mode == AgentMode::Sdlc && ctx.sdlc_assess {
         // SDLC assess: fold to the same read-only surface as the main assess gate.
         // MCP is fail-closed (main advertise/gate also deny mcp__ in assess).
@@ -160,6 +166,7 @@ pub fn spawn_subagent(
                 )
         });
     }
+    mcp_tools.retain(|definition| tools.contains(&definition.function.name));
     let convo = context::build_seed(
         agent,
         awareness,
@@ -175,6 +182,11 @@ pub fn spawn_subagent(
         .steps
         .map(|s| s as usize)
         .or(Some(settings.subagent_max_turns.max(1) as usize));
+
+    // Let the shared output-budget helper supply 128k when context is unknown.
+    let context_window = models_cache.and_then(|models| {
+        crate::service::openrouter::context_length_for(models, &resolved.model_id)
+    });
 
     // Owned clones moved into the task so it borrows nothing from the caller.
     let client_arc = Arc::clone(client);
@@ -214,6 +226,8 @@ pub fn spawn_subagent(
         inject_rx,
         agent_name.clone(),
         id,
+        context_window,
+        mode == AgentMode::Plan,
     ));
 
     Some(SubAgent {

@@ -48,20 +48,16 @@ pub fn effort_caps(models: &[ModelInfo], model_id: &str) -> EffortCaps {
 
 /// Return the context-window size (tokens) for `model_id` from a `GET /models`
 /// listing. Returns `None` when the model is absent from the listing or its
-/// `context_length` field was not reported. The caller falls back to a hardcoded
-/// default when `None` is returned — never panics.
+/// `context_length` fields are missing or zero. Callers use the shared 128k
+/// fallback when `None` is returned.
 ///
-/// Prefers `top_provider.context_length` (the limit the serving provider
-/// actually enforces) over the nominal top-level `context_length` (the
-/// model's theoretical maximum). Falls back to the nominal value when the
-/// `top_provider` object is absent or its `context_length` is not reported.
+/// Uses the smaller positive serving-provider / nominal limit, matching DRSS.
 pub fn context_length_for(models: &[ModelInfo], model_id: &str) -> Option<u64> {
     models.iter().find(|m| m.id == model_id).and_then(|model| {
-        model
-            .top_provider
-            .as_ref()
-            .and_then(|tp| tp.context_length)
-            .or(model.context_length)
+        crate::service::context_limits::reported_window(
+            model.top_provider.as_ref().and_then(|tp| tp.context_length),
+            model.context_length,
+        )
     })
 }
 

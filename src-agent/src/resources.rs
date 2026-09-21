@@ -173,43 +173,6 @@ pub fn classifier_toolcall() -> &'static str {
         .unwrap_or_else(fallback_classifier_toolcall)
 }
 
-/// Hard-coded fallback for the short-send fold prompt, used when the embedded
-/// `src-misc/shortsend-summary.txt` file is missing or blank. Keeps the core
-/// contract intact: merge new messages into the running summary, reference heavy
-/// content as `[blob #<id>]` rather than inlining it, and emit ONLY the summary.
-const FALLBACK_SHORTSEND_SUMMARY: &str = "You maintain a single dense running summary of a coding conversation to save tokens. You are given an EXISTING SUMMARY, a batch of NEW MESSAGES to fold in, and a list of AVAILABLE BLOBS (#id [kind] snippet). Merge the new messages into the existing summary, keeping decisions, files, function names, values, current state, and open threads. NEVER inline large code or command output: reference it as [blob #<id>] using the given ids. Output ONLY the updated summary text — no preamble, no headings, no markdown, no thinking.";
-
-/// Return the short-send rolling-summary "fold" prompt text from
-/// `src-misc/shortsend-summary.txt`. Used as the System message when folding new
-/// messages into the running summary (P2). Falls back to
-/// [`FALLBACK_SHORTSEND_SUMMARY`] if missing/blank.
-pub fn shortsend_summary_prompt() -> &'static str {
-    MISC.get_file("shortsend-summary.txt")
-        .and_then(|f| f.contents_utf8())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(FALLBACK_SHORTSEND_SUMMARY)
-}
-
-/// Hard-coded fallback for the short-send blob-rehydrate router prompt, used when
-/// the embedded `src-misc/shortsend-router.txt` file is missing or blank. Keeps
-/// the contract intact: pick the ids of blobs whose full content is needed for the
-/// latest message, prefer precision, and emit ONLY the `{"blob_ids": [...]}`
-/// object.
-const FALLBACK_SHORTSEND_ROUTER: &str = "You are a retrieval router for an AI coding assistant. Given the user's latest message and a list of available archived blobs (#id [kind] snippet), return the ids of blobs whose FULL content is needed to answer well. Return an empty list if none are relevant. Prefer precision — only include a blob if it's clearly relevant. Only choose from the ids shown; do not invent ids. Output ONLY a JSON object of the form {\"blob_ids\": [<id>, ...]} and nothing else — no preamble, no markdown, no thinking.";
-
-/// Return the short-send blob-rehydrate router prompt text from
-/// `src-misc/shortsend-router.txt`. Used as the System message when asking the
-/// router which archived blobs to inflate for the current question (P3). Falls
-/// back to [`FALLBACK_SHORTSEND_ROUTER`] if missing/blank.
-pub fn shortsend_router_prompt() -> &'static str {
-    MISC.get_file("shortsend-router.txt")
-        .and_then(|f| f.contents_utf8())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(FALLBACK_SHORTSEND_ROUTER)
-}
-
 /// Assemble the full system prompt string for the OpenRouter `system` field.
 ///
 /// Structure: `prompt + "\n\n" + personality [+ "\n\n# Project Instructions\n" + agents]

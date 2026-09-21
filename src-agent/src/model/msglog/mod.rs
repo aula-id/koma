@@ -13,8 +13,8 @@
 //! The `messages` table carries an optional `reasoning TEXT` column that stores
 //! the display-only thinking trace from assistant turns. It is NOT indexed by
 //! FTS5 (search stays on user-visible content); reasoning is rehydrated from
-//! `messages.json` on session load and returned as a snippet by
-//! [`query::search_messages`] for display in `message_find` results.
+//! `messages.json` on session load for the display. Archive discovery and exact
+//! model-facing reads exclude it.
 //!
 //! ## Full-text search (FTS5)
 //!
@@ -30,21 +30,13 @@
 //! This replaces the old `COUNT(*)` probe on `messages_fts` which was O(n) on
 //! multi-million-row tables and caused multi-minute stalls on every `open()`.
 //!
-//! ## "Short-send" storage (Phase 1)
+//! ## Short-send storage
 //!
-//! Beyond the append-only `messages` table this archive also carries two
-//! side tables that nothing reads yet (filled here, consumed by later phases):
-//!
-//! - `blobs` — one row per "heavy" message (long text, a code fence, or a
-//!   sizeable tool output). Keyed by `msg_id` (UNIQUE), so re-indexing the same
-//!   message is idempotent. Stores a cheap token estimate + a short snippet so a
-//!   summary can *reference* the bulky content without re-sending it.
-//! - `summary` — a single row (id = 1) holding a rolling summary of the
-//!   archived history plus the id-range it covers / the live-send start id.
-//!
-//! Indexing happens inside `append`'s transaction (append + classify in one
-//! commit). It only ever *inserts*; the `messages` table is append-only and is
-//! never updated or deleted.
+//! `blobs` retains the legacy heavy-message classification and previews;
+//! `summary` retains old rolling-summary records for database compatibility.
+//! Deterministic DRSS uses `drss_index`, `drss_terms`, and `drss_state` instead.
+//! It derives search metadata without changing original message bodies.
+//! Explicit resend truncates abandoned message/index rows atomically.
 
 // Re-exports below preserve the original flat-file public API; some names (the
 // "short-send" side tables) have no consumer yet, so silence the unused-import
@@ -52,6 +44,8 @@
 #![allow(unused_imports)]
 
 mod blobs;
+pub mod drss;
+pub mod history_search;
 mod query;
 mod records;
 mod schema;
@@ -64,10 +58,10 @@ pub use records::{BashJobRecord, FileChange, SubAgentRecord};
 pub use summary::SummaryRow;
 
 // Public functions
-pub use blobs::{fetch_blob_content, list_blobs, search_blobs};
+pub use blobs::{fetch_blob_content, list_blobs};
 pub use query::{
-    append, fetch_messages_since, max_message_id, message_count, search_messages, totals,
-    truncate_after, user_message_ids,
+    append, fetch_messages_since, max_message_id, message_count, search_messages,
+    search_messages_before, totals, truncate_after, user_message_ids,
 };
 pub use schema::{diagnose_and_repair_message_find, invalidate_schema_ready, open};
 // Wave-5 per-session record persistence (file-change log + inert bash/sub-agent records).

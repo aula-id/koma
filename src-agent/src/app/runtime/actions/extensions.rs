@@ -12,6 +12,103 @@ use crate::app::mode::{ExtScreenState, ExtSubMode, Mode};
 use crate::app::runtime::commands::extensions::build_extensions_state;
 use crate::app::state::AppState;
 
+fn activation_error(state: &mut AppState, error: impl ToString) {
+    if let Mode::Extensions(s) = state.mode_mut() {
+        s.error = Some(error.to_string());
+    }
+}
+
+pub(super) fn handle_use_extension(
+    state: &mut AppState,
+    handle: &tokio::runtime::Handle,
+    load: bool,
+) -> Result<()> {
+    if state.rest.fg().is_working() {
+        activation_error(
+            state,
+            "Wait for the current turn to finish before changing extensions.",
+        );
+        return Ok(());
+    }
+    let Some(row) = (match state.mode() {
+        Mode::Extensions(s) => s.current().cloned(),
+        _ => None,
+    }) else {
+        return Ok(());
+    };
+    let ids = vec![row.id.clone()];
+    let (load_ids, unload_ids) = if load {
+        (ids.as_slice(), &[][..])
+    } else {
+        (&[][..], ids.as_slice())
+    };
+    let idx = state.rest.foreground;
+    if let Err(error) = crate::app::runtime::commands::extensions::set_session_extensions(
+        state, idx, handle, load_ids, unload_ids,
+    ) {
+        activation_error(state, error);
+        return Ok(());
+    }
+    *state.mode_mut() = Mode::Chat;
+    state.rest.fg_mut().set_toast_info(format!(
+        "extension {}: {}",
+        if load { "loaded" } else { "unloaded" },
+        row.name
+    ));
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "extensions_test.rs"]
+mod tests;
+
+pub(super) fn handle_extension_activation(
+    state: &mut AppState,
+    handle: &tokio::runtime::Handle,
+    activation: crate::model::app_config::ExtensionActivation,
+) -> Result<()> {
+    if state.rest.sessions.iter().any(|s| s.is_working()) {
+        activation_error(
+            state,
+            "Wait for running turns to finish before changing global extension policy.",
+        );
+        return Ok(());
+    }
+    let Some(id) = (match state.mode() {
+        Mode::Extensions(s) => s.current().map(|r| r.id.clone()),
+        _ => None,
+    }) else {
+        return Ok(());
+    };
+    // Start from disk so one daemon does not overwrite another's settings.
+    let mut config = crate::model::app_config::AppConfig::load();
+    let Some(ext) = config.installed_extensions.iter_mut().find(|e| e.id == id) else {
+        activation_error(state, "Extension is no longer installed.");
+        return Ok(());
+    };
+    ext.activation = activation;
+    ext.enabled = true;
+    if let Err(error) = config.save() {
+        activation_error(state, error);
+        return Ok(());
+    }
+    state.rest.config.installed_extensions = config.installed_extensions;
+    for idx in 0..state.rest.sessions.len() {
+        if let Err(error) =
+            crate::app::runtime::commands::extensions::refresh_session(state, idx, handle)
+        {
+            activation_error(state, error);
+            return Ok(());
+        }
+    }
+    *state.mode_mut() = Mode::Extensions(Box::new(build_extensions_state(
+        &state.rest,
+        ExtSubMode::Detail,
+        Some(&id),
+    )));
+    Ok(())
+}
+
 /// Handle `Action::CloseExtensions`: leave the dashboard and return to Chat.
 pub(super) fn handle_close_extensions(state: &mut AppState) -> Result<()> {
     *state.mode_mut() = Mode::Chat;

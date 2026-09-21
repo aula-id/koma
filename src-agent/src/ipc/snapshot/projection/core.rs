@@ -104,6 +104,7 @@ pub fn session_snapshot(
         tokens_out: rt.tokens_out,
         cost: rt.cost,
         tokens_cached: rt.tokens_cached,
+        context_usage: rt.context_usage,
         waiting: rt.waiting,
         awaiting_approval: rt.awaiting_approval,
         approval_reason: rt.approval_reason.clone(),

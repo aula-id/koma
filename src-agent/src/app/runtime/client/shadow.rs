@@ -191,6 +191,7 @@ pub(super) fn apply_frame(
         DaemonEvent::Ack
         | DaemonEvent::Error(_)
         | DaemonEvent::Status(_)
+        | DaemonEvent::RunState { .. }
         | DaemonEvent::AttachSession { .. }
         | DaemonEvent::FileSearchResults { .. }
         | DaemonEvent::ModelList { .. }

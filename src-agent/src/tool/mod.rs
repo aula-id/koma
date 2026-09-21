@@ -30,6 +30,7 @@ pub mod history;
 pub mod internet;
 pub mod memory;
 pub mod plan;
+mod plan_policy;
 pub mod pong;
 pub mod sdlc;
 pub mod search;
@@ -41,6 +42,7 @@ pub mod task;
 pub mod todo;
 
 pub use dircache::DirCache;
+pub(crate) use plan_policy::{delegated_tool_allowed_in_plan, plan_tool_call_allowed};
 
 /// True for built-in tools that mutate the workspace, run arbitrary shell
 /// commands, mutate git state (local or remote, e.g. `git_operator` push /
@@ -77,6 +79,7 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
             | "dir_cache_update"
             | "recall"
             | "message_find"
+            | "message_load"
             | "skill"
             | "web_search"
             | "web_fetch"
@@ -474,6 +477,10 @@ fn sdlc_push_refspec_is_mission_branch(spec: &str, mission_branch: &str) -> bool
 
 /// Shared context handed to every tool invocation.
 pub struct ToolCtx {
+    /// Live parent-session Plan restriction, shared with deferred calls and
+    /// delegates. Checked immediately before dispatch; it cannot undo I/O that
+    /// has already started.
+    pub plan_read_only: Arc<std::sync::atomic::AtomicBool>,
     /// Absolute workspace root (the session's primary workdir).
     pub workspace: PathBuf,
     /// All configured workspace roots (may be >1).
@@ -595,6 +602,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(memory::Recall),
         Box::new(skill::Skill),
         Box::new(history::MessageFind),
+        Box::new(history::MessageLoad),
         Box::new(task::Task),
         Box::new(task::TaskOutput),
         Box::new(task::TaskKill),
@@ -677,6 +685,7 @@ pub const DEFERRED_TOOLS: &[&str] = &[
     "forget",
     "recall",
     "message_find",
+    "message_load",
     "web_fetch",
     "web_search",
     "web_download",
@@ -874,6 +883,14 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
     let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
     let args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+    if ctx
+        .plan_read_only
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        if let Err(reason) = plan_tool_call_allowed(&call.function.name, &args) {
+            return format!("blocked: {reason}");
+        }
+    }
     for tool in all_tools() {
         if tool.name() == call.function.name {
             return match tool.run(ctx, &args) {
@@ -883,6 +900,16 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
         }
     }
     if call.function.name.starts_with("mcp__") {
+        let config = crate::model::app_config::AppConfig::load();
+        let selected = ctx
+            .session_dir
+            .as_ref()
+            .and_then(|p| crate::model::settings::Settings::load(&p.join("settings.json")).ok())
+            .map(|s| s.active_extensions)
+            .unwrap_or_default();
+        if !crate::app::mcp::tool_active_in_session(&call.function.name, &config, &selected) {
+            return "error: extension is inactive in this session; the user can select it with /extension use".into();
+        }
         if let Some(mgr) = ctx.mcp_manager.as_ref() {
             return mgr
                 .execute_blocking(&call.function.name, &args)

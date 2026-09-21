@@ -44,7 +44,7 @@ function resetStore() {
     settingsValues: {
       name: 'test', workdir: WORKDIRS, shortSend: false, slidingCache: false,
       bashSaving: false, codingAutosave: false, internetMode: 'simple', palette: 'dark', effort: '',
-      subagentMaxTurns: 500,
+      subagentMaxTurns: 500, shortSendEngageN: 80, shortSendTailN: 40, maxOutputTokens: 0,
     },
     session: { ...s.session, id: 'test-session' },
   }))
@@ -244,7 +244,7 @@ function igPush(p: Record<string, unknown>) {
     { path: '/ws/a/a.rs', language: 'Rust', outDegree: 0, inDegree: 0, role: 'Overview' as const, depthFromFocus: null, workspaceRoot: '/ws/a' },
     { path: '/ws/b/b.py', language: 'Python', outDegree: 0, inDegree: 0, role: 'Overview' as const, depthFromFocus: null, workspaceRoot: '/ws/b' },
   ] } }))
-  useKoma.getState().push({ k: 'SettingsValues', name: 'test', workdir: ['/ws/a'], shortSend: false, slidingCache: false, bashSaving: false, codingAutosave: false, internetMode: 'simple', palette: 'dark', effort: '', subagentMaxTurns: 500 })
+  useKoma.getState().push({ k: 'SettingsValues', name: 'test', workdir: ['/ws/a'], shortSend: false, slidingCache: false, bashSaving: false, codingAutosave: false, internetMode: 'simple', palette: 'dark', effort: '', subagentMaxTurns: 500, shortSendEngageN: 80, shortSendTailN: 40, maxOutputTokens: 0 })
   const s = useKoma.getState().importGraph
   assert.deepEqual(s.filterRoots, ['/ws/a'])
   assert.deepEqual(s.filterLanguages, ['Rust'])

@@ -52,10 +52,9 @@ use super::{install, ExtHostManager};
 /// `mcp_manager` is `Option` because it can legitimately be absent at the boot
 /// call site: in `--daemon` mode, `build_startup` builds `ext_manager` and runs
 /// this loop BEFORE `run_daemon` builds the (possibly `Proxy`) `McpManager` for
-/// that session. When absent, extension tools are simply not advertised for
-/// that process — routing them through the global MCP daemon's `Proxy` wire
-/// protocol is a later wave (see [`McpManager::register_extension_tools`]'s
-/// docs). `contributes.sub_agents` needs no action here at all — see the module
+/// that session. Session activation re-registers once a manager exists. A proxy
+/// keeps extension tools locally alongside shared MCP tools, dispatching through
+/// this process's extension host. `contributes.sub_agents` needs no action here — see the module
 /// docs. `contributes.models`/`contributes.panels`: wave B-models / wave D.
 pub fn register_contributions(
     ext: &InstalledExtension,

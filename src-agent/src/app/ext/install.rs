@@ -147,6 +147,7 @@ pub fn install_dev_dir(src_dir: &Path) -> Result<InstalledExtension> {
         tier: enum_wire(&manifest.tier),
         granted: manifest.requires.iter().map(enum_wire).collect(),
         enabled: true,
+        activation: Default::default(),
         kind: enum_wire(&manifest.kind),
         exec: manifest.runtime.exec.clone(),
     })
@@ -394,6 +395,7 @@ fn unpack(zip_bytes: &[u8], dest_root: &Path) -> Result<InstalledExtension> {
         tier: enum_wire(&manifest.tier),
         granted: manifest.requires.iter().map(enum_wire).collect(),
         enabled: true,
+        activation: Default::default(),
         kind: enum_wire(&manifest.kind),
         exec: manifest.runtime.exec.clone(),
     })

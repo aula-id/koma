@@ -3,6 +3,87 @@ use super::*;
 use crate::app::state::SessionRuntime;
 
 #[test]
+fn mode_switch_restricts_captured_context_and_discards_only_target_stream() {
+    let mut rest = AppStateRest::new();
+    rest.sessions.push(SessionRuntime::new());
+    let guard = rest.sessions[1].plan_read_only.clone();
+    let (old_tx, old_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (other_tx, other_rx) = tokio::sync::mpsc::unbounded_channel();
+    rest.sessions[1].active_rx = Some(old_rx);
+    rest.sessions[1].waiting = true;
+    rest.sessions[0].active_rx = Some(other_rx);
+    rest.sessions[0].waiting = true;
+    rest.set_agent_mode_at(1, AgentMode::Plan);
+    assert!(guard.load(std::sync::atomic::Ordering::Acquire));
+    assert!(rest.sessions[1].active_rx.is_none());
+    assert!(!rest.sessions[1].waiting);
+    assert!(old_tx.send(crate::service::StreamEvent::Done).is_err());
+    assert!(other_tx.send(crate::service::StreamEvent::Done).is_ok());
+    assert!(rest.sessions[0].waiting);
+    assert!(!rest.sessions[0]
+        .plan_read_only
+        .load(std::sync::atomic::Ordering::Acquire));
+
+    // Re-selecting the same mode must not interrupt a valid new request.
+    let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
+    rest.sessions[1].active_rx = Some(new_rx);
+    rest.sessions[1].waiting = true;
+    rest.set_agent_mode_at(1, AgentMode::Plan);
+    assert!(new_tx.send(crate::service::StreamEvent::Done).is_ok());
+    assert!(rest.sessions[1].waiting);
+}
+
+#[test]
+fn leaving_plan_invalidates_old_approval_park_before_reentry() {
+    use crate::dto::chat::{FunctionCall, ToolCall};
+    let mut rest = AppStateRest::new();
+    rest.set_agent_mode(AgentMode::Plan);
+    let rt = rest.fg_mut();
+    rt.awaiting_approval = true;
+    rt.waiting = true;
+    rt.pending_tool_calls.push(ToolCall {
+        id: "old-plan".into(),
+        kind: "function".into(),
+        function: FunctionCall {
+            name: "plan_ready".into(),
+            arguments: "{}".into(),
+        },
+    });
+    rest.set_agent_mode(AgentMode::Auto);
+    rest.set_agent_mode(AgentMode::Plan);
+    assert!(!rest.fg().awaiting_approval);
+    assert!(rest.fg().pending_tool_calls.is_empty());
+    assert!(rest.fg().approved_plan.is_none());
+    assert!(rest
+        .fg()
+        .plan_read_only
+        .load(std::sync::atomic::Ordering::Acquire));
+}
+
+#[test]
+fn plan_entry_preserves_drained_tool_round_but_revokes_old_compact_seed() {
+    use crate::dto::chat::{FunctionCall, ToolCall};
+    let mut rest = AppStateRest::new();
+    let rt = rest.fg_mut();
+    rt.waiting = true;
+    rt.pending_plan_seed = true;
+    rt.pending_plan_seed_body = Some("old approved body".into());
+    rt.pending_tool_calls.push(ToolCall {
+        id: "enter-plan".into(),
+        kind: "function".into(),
+        function: FunctionCall {
+            name: "plan_enter".into(),
+            arguments: "{}".into(),
+        },
+    });
+    rest.set_agent_mode(AgentMode::Plan);
+    assert!(rest.fg().waiting);
+    assert_eq!(rest.fg().pending_tool_calls[0].id, "enter-plan");
+    assert!(!rest.fg().pending_plan_seed);
+    assert!(rest.fg().pending_plan_seed_body.is_none());
+}
+
+#[test]
 fn agent_mode_and_sdlc_phase_are_per_session() {
     let mut rest = AppStateRest::new();
     // Second session slot (background).

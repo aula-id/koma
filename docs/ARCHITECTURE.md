@@ -143,7 +143,17 @@ The model emits `tool_calls` during streaming. On `Done`, `advance_turn`:
    `start_stream_task` again. The loop continues until the model returns no more
    tool calls or `MAX_AGENT_STEPS` (40) is reached.
 
-There is **no plan gate** — tools run immediately on the first model call.
+Normal execution does not require a separate planning step. In Plan mode, the
+runtime restricts tools to permitted investigation and planning operations;
+`plan_ready` pauses for approval before implementation. Tool execution checks
+the live mode, including calls proposed before a mode change. Built-in, MCP, and
+delegated tools follow the same Plan restriction. All MCP tools are currently
+unavailable in Plan: server annotations alone are not trusted capability policy.
+Changing mode stops an active model response requested under the previous mode
+and invalidates an old plan approval park. An operation already dispatched
+cannot be rolled back by changing mode. Plan approval uses the reviewed
+`plan_ready` body; compact execution retains that exact body instead of rereading
+a possibly changed `plan.md`.
 
 **Tool trait** (defined in `tool/mod.rs`):
 
@@ -255,58 +265,173 @@ reasoning text to become the content so it shows in the foreground and persists.
 
 ---
 
-## 8. Short-Send (Non-Destructive Token Efficiency)
+## 8. Dual-Rail Short-Send (DRSS)
 
-**File:** `src-agent/src/app/runtime/shortsend/`
+The terminal footer shows `17% ↑51.5K[49.4K] ↓1.3M $232.9321 [!]`:
+percentage is the latest provider-reported full input divided by that request's
+effective context window, after DRSS shaping (including system text and tool
+schemas). Before the first report, a local estimate is marked `~`. Once reported,
+input, cache and percentage remain visible together through subsequent requests,
+missing-usage responses and failures until fresh positive prompt usage arrives.
+Cached tokens in dim brackets are part of input, not added to it; a reported cold
+cache stays visible as `[0]`. Output and cost remain cumulative. A missing
+dispatch-time limit shows `—%`
+until the next request. The paired prompt/limit snapshot travels to attached
+clients and does not alter history, budgeting, or billed usage. When the latest
+request uses condensed archive context or shortened message bodies, `[!]` becomes
+a bold, shimmering `[DRSS]`. An enabled setting or index-only pass does not light
+it up; the next uncondensed request restores `[!]`. The local animation continues
+between turns without marking the session busy or changing polling cadence.
 
-The differentiator for budget models. `shape()` is a **pure transform** over the
-API-bound history clone; the stored conversation, `messages.json`, and the
-rendered transcript are never touched.
+**Files:** `src-agent/src/app/runtime/shortsend/`, `src-agent/src/model/msglog/drss.rs`,
+`src-agent/src/service/context_limits/`
 
-**Dual rail:**
+DRSS shapes a clone of the outgoing request. The displayed conversation,
+`messages.json`, and original SQLite message bodies remain unchanged. SQLite
+stores derived search terms, content fingerprints, and an archive boundary.
+
+```text
+History rail: full original conversation -> display + messages.json
+                                |
+                                +-> outgoing clone
+Request rail: [A system] [B deterministic archive index] [C live context] -> [D reply]
 ```
-Stored conversation  (messages.json + in-memory Conversation)  ← full, never compressed
-Wire payload clone   ← shape() compresses this before POST
+
+A stays unchanged by DRSS. Before shaping each outgoing request, the request
+builder appends the live mode and approval state to A's uncached tail. This
+runtime-generated block counts toward the token budget and survives normal
+trimming and oversized recovery unchanged. Mode and permission come from live
+runtime state, never from historical approvals in B or C. The request-only block
+does not alter the user-visible history rail.
+
+B is a separate ordinary user-role context message before C, never appended to
+the system prompt. It contains the current objective,
+kickoff charter, historical user constraint quotes, matching archive excerpts,
+and indexed term occurrence/message counts with exact message IDs. B is bounded
+to 2,000 estimated tokens or 2% of the operating window, whichever is smaller.
+Oversized history expands B to at most 12,000 tokens or 5% of the window. Its
+recovery handoff quotes the kickoff and recent omitted user/tool messages, includes
+message endings and term counts, and reserves space for exact read references.
+It does not invoke an inference model, read stored reasoning, or reuse the legacy
+rolling summary. Excerpts are historical evidence; live user messages take
+precedence within the current runtime mode. Both the archive index and recovery
+handoff state that historical instructions and approvals cannot authorize
+implementation or change the mode. Assistant excerpts require a history/plan
+request in the raw user message; assistant/tool text supplies search relevance only. Per-message indexing
+keeps at most 512 distinct terms, with exact repetition counts for those terms.
+
+B is snapshotted in the derived `drss_memory` table. Fresh diagnostic relevance is
+captured when B is built, then its exact bytes are reused while C grows through
+tool continuations, including after a process restart. B refreshes when the raw
+user request, objective/charter/provenance, archive range, recovery references, or
+summary token budget changes. New evidence stays available in C and through
+`message_find` / `message_load`. `/clear` and resend invalidate the snapshot.
+This preserves the A–B–C ordering without reranking the prefix on every tool step;
+the normal 60–75% bands and the 300k ceiling still apply.
+
+**Context discovery:** a dedicated, unauthenticated client reads OpenRouter's
+public `/api/v1/models` catalog. It sends no provider/OAuth credentials. Matching
+uses an optional explicit alias, exact IDs/canonical slugs, normalized punctuation
+and word order, then a constrained one-character spelling tolerance. Versions,
+snapshot dates, and tiers remain distinct. Ambiguous/fuzzy matches cannot raise
+the 128k fallback and may lower it. For unresolved provider-prefixed names, the
+public `/api/v1/model/{author}/{slug}` endpoint can resolve OpenRouter aliases.
+The actual dispatched model ID is never rewritten.
+
+Catalog results have a 24-hour memory/disk cache, a five-minute failure retry,
+and stale-cache fallback. Requests have a three-second timeout and bounded
+response size. A smaller known native-endpoint limit or user override wins.
+OAuth metadata is an estimate of the named model, not a guarantee about a hidden
+backend. Match provenance and effective limits are written to the session's
+`drss-context.json` for diagnosis.
+
+```text
+W = min(detected context window, optional smaller override, 300,000)
+C target = 60% W
+C normal operating ceiling = 75% W
+A + B + C + tool schemas + framing + reserved D + margin <= W
 ```
 
-**Engage decision** (made in `start_stream_task`, upstream of `shape`):
+For a detected 1M model, W is 300k: C targets 180k and can grow to 225k.
+System/tools/output requirements can lower those C budgets. Once C exceeds its
+ceiling, oldest indexed completed units leave the outgoing clone until it reaches
+the target. The persisted boundary prevents old units returning on the next turn,
+so C grows through the 60–75% band before another cut. Cache warmth and message
+counts do not override these token bands. Token counts are conservative estimates;
+provider tokenization and image accounting can differ.
 
-```
-usable = context_window - BASE_OVERHEAD (10 000 tokens)
+Recovery runs before the first provider request; no failed model call or manual
+`/compact` is required. If an old session has messages in its transcript missing
+from SQLite, DRSS writes exact copies into `drss_recovery` with separate stable
+keys and an FTS index. Original archive rows/IDs, usage, and `messages.json` remain
+unchanged. Covered recovery keys persist alongside the regular boundary so the
+next send does not reintroduce omitted legacy text. `/clear` and resend reset
+coverage while keeping the exact copies readable.
 
-cache_warm = provider_caches
-             AND tokens_cached > 0
-             AND last_send_at elapsed < cold_window
-             (cold_window: 300s sliding-cache, 120s standard)
+The latest user request, unfinished/live tool round, attachments, and messages
+without a durable original or recovery copy are protected. Assistant tool calls and all their results stay together.
+If protected live context exceeds the normal 75% band, recovery can borrow spare
+room within W, after accounting for A, the actual B, schemas, framing, margin, and
+a useful reply (up to 4,096 reserved tokens, proportionally less on small models).
+The 300k maximum never increases. Only when that complete budget still overflows
+do large assistant/tool bodies become read-pointer stubs, largest first and only
+until the request fits. Calls, arguments, replay metadata, and the active user
+request stay intact.
 
-engage_pct = cache_warm ? ENGAGE_WARM_PCT (80%) : ENGAGE_COLD_PCT (20%)
+`message_find` discovers messages with bounded deterministic excerpts near the
+matching text. It defaults to the current session, latest first, 10 results;
+`skip`/`limit` page results (maximum 20 per page, skip up to 10,000). Role, project
+scope, inclusive `after` and exclusive `before` timestamps, and oldest/relevance
+ordering are optional. Timestamps require seconds and an explicit timezone.
+Time ordering applies before limiting candidates, including across project
+sessions. Unknown original times on recovery copies are null, sort last for date
+ordering, and are excluded by time filters. A time-limited or unavailable-sibling
+search reports incomplete coverage instead of claiming exhaustion. Search pages
+are a live view, so new matching messages can shift skip offsets.
 
-sticky engage/disengage (hysteresis):
-  enter if conv_tokens > engage_pct × usable
-  exit  if conv_tokens < DISENGAGE_PCT (15%) × usable
-```
+Search responses cap previews at 400 Unicode characters and the entire response
+at 6,000 characters / 12,000 UTF-8 bytes. `next_skip` advances by the number actually
+returned, with `has_more` and plain instructions for refining or continuing a
+search. Previews contain only message content; stored reasoning and attachment
+reload details are excluded from search results.
 
-**`shape()` pipeline** (only when `short_send_enabled` and `summarizing = true`):
+`message_load({ref, offset, max_chars})` reads the exact selected message. A ref
+identifies the session plus original message ID or recovery key. Project refs
+resolve only to registered sessions in the same canonical bucket. Current-session
+`message_id` / `archive_key` references from DRSS are also supported. Reads return
+at most 3,000 Unicode characters, including embedded NUL, with timestamp, role,
+total length and `next_offset`; attachment hints have a separate bounded header.
+Legacy `message_find({message_id|archive_key, offset, limit})` reads still work.
+DRSS protects both tools' returned pages from restubbing and advertises
+`message_load` for exact recall. Both schemas have plain object roots; runtime
+validation enforces exclusive modes without provider-sensitive root unions.
 
-1. Kill-switch check (`settings.short_send_enabled`).
-2. Engage gate (`summarizing` flag from upstream).
-3. Guard: skip when history length ≤ 3 (too short to compress).
-4. Post-compaction guard: bail when `history[1]` starts with `[summary of earlier conversation]` (a `/compact` summary is already present — stacking would break it).
-5. Best-effort fold via `update_summary` (no-op unless verbatim tail has grown past `TAIL_HI_PCT` (15%) of usable).
-6. Read rolling summary from `messages.sqlite` → bail if none (nothing to compress against yet).
-7. Compute verbatim tail: messages after `sum.covers_up_to` (the live exchange + any un-folded tail).
-8. Rehydrate blobs (summarised region only): content-search first (keyword LIKE on message text, up to 3 direct matches), fallback to snippet router (secondary LLM) when no keyword overlap. Max `MAX_REHYDRATE = 3`.
-9. **B-placement:** summary + blob recalls appended to the SYSTEM message content (after `CACHE_SPLIT_MARK`), NOT emitted as a synthetic assistant turn. Landing after the mark means it rides the uncached volatile tail and does not bust the cached head.
-10. Output: `[modified system, verbatim tail...]`.
+A request that still cannot fit its protected input/metadata or cannot store
+required recovery copies fails explicitly; the history rail remains intact. `/clear` resets the active index range; resend truncation invalidates stale
+boundary/index entries.
 
-**`update_summary` fold** (inside `shape`, step 5):
+**Objective precedence:** explicit user goal > approved mission's single active
+open leaf > immutable kickoff charter. Assistant drafts never set the objective.
+Repeated goal/clear phrases during tool continuations do not rewrite provenance.
 
-- Token-band hysteresis: only folds when tail tokens > `TAIL_HI_PCT` (15%) of usable; folds down to `TAIL_FLOOR_PCT` (5%) of usable.
-- Snaps the fold boundary to a completed-exchange edge (never folds the live in-progress exchange).
-- Uses `shortsend_summary_prompt()` (from `src-misc/shortsend-summary.txt`) as system for the secondary model call. Reasoning is OFF on this call (bleed guard).
-- Persists new summary to `summary` table in `messages.sqlite`.
+**Settings:** `short_send_enabled` is the master switch. `context_window_limit`
+(0 = automatic) can lower the operating ceiling; `context_model_alias` supplies
+an explicit OpenRouter capability ID. Both are exposed in GUI session settings
+and persisted in session `settings.json`. `max_output_tokens` requests a reply
+limit (a positive custom value takes priority; 0 = 128k), clamped by available
+room and provider output metadata. Sub-agent requests share the 128k default
+and clamp on every host, including direct xAI. Context and reply ceilings are
+separate: a 128k context fallback does not leave room for a full 128k reply. Generic
+chat completions, Anthropic, and Command Code receive this calculated limit.
+Codex OAuth rejects output-limit fields, so its output is provider-controlled;
+input shaping still reserves reply room.
+Legacy `short_send_engage_n`, `short_send_tail_n`, and `sliding_cache` fields remain
+readable for compatibility but no longer control DRSS. Their controls and edit
+handlers are removed from General settings; saving current settings leaves these
+legacy values untouched.
 
-**Contrast with `/compact`:** `/compact` is destructive — it rewrites `messages.json` and the in-memory conversation. Short-send is non-destructive: the wire payload is the only thing that changes.
+`/compact` is a separate, explicitly requested operation that rewrites the visible
+conversation. DRSS never invokes it.
 
 ---
 
@@ -320,13 +445,17 @@ Each session has `messages.sqlite` alongside `messages.json`. Tables:
 |---|---|
 | `messages` | Append-only log: role, content, created_at, prompt_tokens, completion_tokens, cost |
 | `blobs` | One row per "heavy" message (code fence, large text, tool output): id, msg_id, kind, token_est, snippet |
-| `summary` | Single row (id=1): rolling summary text, covers_up_to, sent_start, updated_at |
+| `summary` | Legacy rolling-summary record (unused by deterministic DRSS) |
+| `drss_index` / `drss_terms` | Derived content fingerprints and bounded term counts |
+| `drss_state` | Active archive range and persisted outgoing boundary |
+| `drss_memory` | Bounded deterministic B snapshot and refresh-input fingerprint |
+| `drss_recovery` / `drss_recovery_fts` | Exact legacy copies, independent read keys, coverage, and keyword index |
 
 Heavy thresholds: `token_est >= 400` (≈1 600 chars) for general messages, `>= 150` for tool outputs, or any message containing a triple-backtick fence. Kind: `"code"`, `"tool_output"`, or `"large_text"`.
 
 Snippet extraction skips leading noise lines (box-drawing, fences, blank lines) so the first snippet character is real semantic text; leading noise would otherwise make blobs unsearchable.
 
-`search_blobs(terms, max_msg_id)` does case-insensitive LIKE-OR over message content, ranked by distinct-term-match count. The archive is append-only; `messages` rows are never updated or deleted. Writes are best-effort (callers ignore errors).
+The DRSS `drss_index` / `drss_terms` tables provide deterministic search and counts. Original message content is preserved by DRSS. Explicit resend can truncate abandoned history; `/compact` preserves the archive. Archive appends are best-effort, so DRSS protects any live message it cannot match to an archived record.
 
 The archive survives `/compact` — it is never rewritten on compaction.
 
@@ -346,7 +475,7 @@ The system message content is assembled as:
 CACHE_SPLIT_MARK  (two invisible Unicode chars U+2062 U+2061)
 ["\n\n# Project files (top level)\n" + dir listing]         ← VOLATILE (uncached)
 ["\n\n# Project summary\n" + awareness text]                ← VOLATILE (uncached)
-[short-send summary + blob recalls (when engaged)]          ← VOLATILE (uncached)
+[current runtime mode + approval state]                     ← VOLATILE (uncached)
 ```
 
 `to_wire` splits at `CACHE_SPLIT_MARK`, attaches `cache_control: ephemeral` to the
@@ -354,9 +483,17 @@ head part only, and emits the tail as a second uncached part. The plan-word stee
 chosen ONCE per `OpenRouterClient` construction (once per session) so the prefix is
 byte-stable across all requests in that session.
 
+Direct xAI chat-completions calls (OAuth or API key) also send `x-grok-conv-id`
+using the client's stable cache-routing ID. Streaming, one-shot requests, retries,
+and refreshed credentials reuse the ID. The header is scoped to `api.x.ai` and
+its regional subdomains; OpenRouter and other providers keep their own routing.
+xAI prefix caching remains best-effort: changing A, refreshing B, changing tool
+schemas, or provider cache eviction can still reduce cache hits. A content-block
+cache marker does not make the remaining prefix independent of those changes.
+
 `usage.prompt_tokens_details.cached_tokens` from the response drives the
 `tokens_cached` readout and the `provider_caches` latch (once any response reports
-cache hits, the flag is never reset — used by the short-send warmth calculation).
+cache hits, the flag is never reset). DRSS uses its fixed token bands independently.
 
 ---
 
@@ -369,10 +506,12 @@ cache hits, the flag is never reset — used by the short-send warmth calculatio
   `supported_parameters`. The `/effort` menu is only offered for capable models.
   For models where reasoning is mandatory (`mandatory: true`), the "off" option is
   not shown; instead `reasoning: {exclude: true}` is used on secondary/utility calls.
-- **No plan gate.** Tools run on the first model call; there is no forced plan step.
-- **Context length preference.** `context_length_for` prefers
-  `top_provider.context_length` (what the serving provider actually enforces) over
-  the nominal `context_length`. Falls back to 128 000 tokens.
+- **Mode-aware execution.** Normal execution has no forced planning step. Plan
+  mode permits investigation and proposal preparation, then waits for approval
+  through `plan_ready`; the runtime enforces permitted tools.
+- **Context length preference.** `context_length_for` uses the smaller positive
+  serving-provider / nominal context length, matching DRSS. Missing, null, and
+  zero values are unknown; callers use the shared 128 000-token fallback.
 - **Provider routing.** `provider_routing_for(slug)` sets `only: [slug], allow_fallbacks: false`
   for non-empty slugs; omits the field entirely for empty slugs (OpenRouter default routing).
 - **`reasoning: {exclude: true}`.** Used on ALL secondary / utility calls
@@ -429,9 +568,10 @@ Esc from overlay              → Chat (or prior detail)
 │       └── <uuid>/              ← one directory per session
 │           ├── settings.json    ← api_key, model, provider, name, effort,
 │           │                      workdir[], compaction, awareness_*, classifier_*,
-│           │                      allowed_folders[], short_send_enabled, sliding_cache
+│           │                      allowed_folders[], short_send_enabled,
+│           │                      context_window_limit, context_model_alias, max_output_tokens
 │           ├── messages.json      ← Vec<ChatMessage> (full transcript; reasoning #[serde(skip)])
-│           ├── messages.sqlite    ← append-only archive (messages + blobs + summary tables)
+│           ├── messages.sqlite    ← append-only archive (messages + blobs + legacy summary + derived DRSS tables)
 │           └── images/          ← pasted/screenshot attachments
 ├── run/
 │   ├── <session_id>.sock        ← session-daemon socket
@@ -448,6 +588,20 @@ global visual preferences. All per-session config lives in `settings.json`.
 plain-string value is deserialized as a one-element vec). The first non-empty
 entry is the effective workspace (`Session::workdir()`); all entries contribute to
 the harness workspace allow-set and the multi-workspace `[N]` index.
+
+Extension installation is global, but `InstalledExtension.activation` defaults to
+`on_demand` (including legacy entries). A `global` extension is active everywhere;
+otherwise its id must appear in the session's persisted `active_extensions` list.
+`/extension use` selects or unloads an extension for the current session. Workspace
+roots, MCP tool advertisements and dispatch, extension agent definitions, published
+context, and extension-initiated prompts/tasks all follow that activation decision.
+The session's `extension_workspace_roots` records managed roots for reconciliation;
+missing provenance triggers one-time cleanup of known legacy secondary roots.
+User roots and the primary workspace remain intact. The system prompt names the
+current roots even for a single workspace, while the visible history stays unchanged.
+Session daemons keep extension tool registrations locally even when ordinary MCP
+tools use the shared proxy. Proxy cache refreshes preserve these local tools, and
+calls dispatch to the session's extension host.
 
 ---
 
@@ -477,7 +631,15 @@ At request time, `start_stream_task` appends to the system message content BEFOR
 2. `CACHE_SPLIT_MARK` (the cache/uncached boundary).
 3. Volatile tail: `# Project files (top level)` dir listing (from `DirCache`).
 4. Volatile tail: `# Project summary` awareness text (from `awareness::summarize`).
-5. (When short-send engaged) rolling summary + recalled blob blocks.
+5. Volatile tail: current runtime mode, implementation approval state, and the
+   permitted next action, rebuilt from live state on every dispatch.
+DRSS then inserts B as a separate context message after the system message; it does not modify the system text.
+
+The embedded general instructions qualify "act" and "skip writing out a plan"
+by the current mode. During Plan mode the model describes proposed changes,
+calls `plan_ready`, and waits; archived approvals and quoted tool results cannot
+release that gate. The runtime checks permission again before executing tools,
+so a conversation summary or an in-flight response cannot supply authorization.
 
 The multi-workspace `[N]` convention (how the model should prefix tool paths when
 multiple workdirs are configured) is documented in `src-misc/system-tools.txt`.
@@ -496,7 +658,7 @@ multiple workdirs are configured) is documented in `src-misc/system-tools.txt`.
 | Model | `src-agent/src/model/settings.rs` | `Settings` (per-session config, `settings.json`) |
 | Model | `src-agent/src/model/store.rs` | Filesystem registry: `list_sessions`, `create_session`, `rename_session`, PID locking |
 | Model | `src-agent/src/model/memory.rs` | `load_memory` (reads `memory/MEMORY.md`) |
-| Model | `src-agent/src/model/msglog.rs` | SQLite archive: `append`, `totals`, blob indexing, `search_blobs`, rolling summary CRUD |
+| Model | `src-agent/src/model/msglog.rs` | SQLite archive: `append`, `totals`, blob indexing, deterministic DRSS index, legacy summary CRUD |
 | Service | `src-agent/src/service/mod.rs` | `StreamEvent` enum definition |
 | Service | `src-agent/src/service/openrouter.rs` | `OpenRouterClient`: `stream_complete`, `complete`, `complete_with`, `classify_with`, `summarize_fold`, `pick_blobs`, `effort_caps`, `context_length_for` |
 | Controller | `src-agent/src/controller/input.rs` | `handle_key` → `Action`; `handle_paste` |
@@ -537,8 +699,6 @@ multiple workdirs are configured) is documented in `src-misc/system-tools.txt`.
 | Misc | `src-misc/system-tools.txt` | Tool-usage guidance + multi-workspace `[N]` convention (embedded) |
 | Misc | `src-misc/classifier-prompt.txt` | PC policy prompt (embedded) |
 | Misc | `src-misc/classifier-toolcall.txt` | TAC policy prompt (embedded) |
-| Misc | `src-misc/shortsend-summary.txt` | Fold model system prompt (embedded) |
-| Misc | `src-misc/shortsend-router.txt` | Blob-router model system prompt (embedded) |
 | Misc | `src-misc/wanderer.json` | Whimsical plan lead-in word corpus (embedded) |
 
 ---

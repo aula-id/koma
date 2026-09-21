@@ -60,6 +60,10 @@ pub struct ExtRowWire {
     pub tier: String,
     pub kind: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub activation: String,
+    #[serde(default)]
+    pub active: bool,
     pub running: bool,
     pub description: String,
     pub granted: Vec<String>,

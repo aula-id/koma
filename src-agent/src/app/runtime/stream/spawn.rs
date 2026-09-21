@@ -14,6 +14,10 @@ use crate::service::openrouter::OpenRouterClient;
 /// runs against that session's own workspace + dir cache.
 pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::ToolCtx {
     let rt = &state.rest.sessions[sess_idx];
+    rt.plan_read_only.store(
+        rt.agent_mode == crate::app::state::AgentMode::Plan,
+        std::sync::atomic::Ordering::Release,
+    );
     let session_ref = rt.session.as_ref();
     // The session's EFFECTIVE cwd: the live `cd` override when set, else the
     // configured workdir. This drives `bash` (its `current_dir`) and the dir
@@ -134,6 +138,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         .collect();
     let search_engine = session_ref.map(|s| s.settings.search_engine.clone());
     crate::tool::ToolCtx {
+        plan_read_only: rt.plan_read_only.clone(),
         workspace,
         workspaces,
         dir_cache: rt.dir_cache.clone(),
@@ -309,6 +314,12 @@ fn spawn_task_with_id(
     // Main. Keep the refreshed copy in rest so this daemon is warmed for the next
     // settings-dependent operation too.
     state.rest.config = crate::model::app_config::AppConfig::load();
+    if let Err(error) =
+        super::super::commands::extensions::refresh_session_if_needed(state, sess_idx, handle)
+    {
+        state.rest.sessions[sess_idx].set_toast(error.to_string());
+        return Err(SpawnFailReason::Unresolved);
+    }
 
     // Snapshot inputs before borrowing state mutably below — identical to the
     // `/task` command's construction so the two paths can never diverge. All
@@ -397,6 +408,7 @@ fn spawn_task_with_id(
         state.rest.sessions[sess_idx].agent_mode,
         overrides,
         initial_injects,
+        state.rest.models_cache.as_deref(),
     )
     .ok_or(SpawnFailReason::Unresolved)?;
     state.rest.sessions[sess_idx].subagents.push(sub);

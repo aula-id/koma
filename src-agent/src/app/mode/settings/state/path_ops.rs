@@ -16,6 +16,7 @@ impl SettingsState {
             SettingField::Provider => Some(&mut self.provider),
             SettingField::Name => Some(&mut self.name),
             SettingField::SubagentMaxTurns => Some(&mut self.subagent_max_turns),
+            SettingField::MaxOutputTokens => Some(&mut self.max_output_tokens),
             SettingField::Workdir
             | SettingField::AllowedFolders
             | SettingField::Accent
@@ -23,7 +24,6 @@ impl SettingsState {
             | SettingField::AwarenessEnabled
             | SettingField::ClassifierEnabled
             | SettingField::ShortSendEnabled
-            | SettingField::SlidingCache
             | SettingField::BashSaving
             | SettingField::CodingAutosave
             | SettingField::InternetMode

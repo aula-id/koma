@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 /// A minimal `ToolCtx` for tests — `seqthink` never touches it.
 fn test_ctx() -> ToolCtx {
     ToolCtx {
+        plan_read_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         workspace: std::path::PathBuf::from("."),
         workspaces: vec![std::path::PathBuf::from(".")],
         dir_cache: Arc::new(RwLock::new(crate::tool::DirCache::default())),

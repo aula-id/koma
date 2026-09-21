@@ -76,7 +76,11 @@ pub struct SettingsState {
     pub allowed_folders: Vec<String>,
     /// Draft: short-send token-saver master switch.
     pub short_send_enabled: bool,
-    /// Draft: cache-warmth-adaptive summarization toggle.
+    /// Legacy snapshot value only; not editable and ignored by deterministic DRSS.
+    pub short_send_engage_n: String,
+    /// Legacy snapshot value only; not editable and ignored by deterministic DRSS.
+    pub short_send_tail_n: String,
+    /// Legacy snapshot value only; not editable and ignored by deterministic DRSS.
     pub sliding_cache: bool,
     /// Draft: bash output saving (filtered + tee-to-disk) toggle.
     pub bash_saving: bool,
@@ -88,6 +92,8 @@ pub struct SettingsState {
     pub mouse_capture: MouseCapture,
     /// Draft: max agentic turns per sub-agent (numeric, string for editing).
     pub subagent_max_turns: String,
+    /// Draft: interactive max_tokens (0 = auto; numeric string).
+    pub max_output_tokens: String,
     /// The session's effective working directory, captured at construction. Used
     /// as the base for resolving workspace-relative paths in the FS picker.
     pub cwd: PathBuf,
@@ -261,12 +267,15 @@ impl SettingsState {
             classifier_enabled: session.settings.classifier_enabled,
             allowed_folders,
             short_send_enabled: session.settings.short_send_enabled,
+            short_send_engage_n: session.settings.short_send_engage_n.to_string(),
+            short_send_tail_n: session.settings.short_send_tail_n.to_string(),
             sliding_cache: session.settings.sliding_cache,
             bash_saving: session.settings.bash_saving,
             coding_autosave: session.settings.coding_autosave,
             internet_mode: session.settings.internet_mode,
             mouse_capture: session.settings.mouse_capture,
             subagent_max_turns: session.settings.subagent_max_turns.to_string(),
+            max_output_tokens: session.settings.max_output_tokens.to_string(),
             cwd: effective_cwd,
             list_editing: false,
             list_sel: 0,
@@ -328,9 +337,6 @@ impl SettingsState {
             SettingField::ShortSendEnabled => {
                 self.short_send_enabled = !self.short_send_enabled;
             }
-            SettingField::SlidingCache => {
-                self.sliding_cache = !self.sliding_cache;
-            }
             SettingField::BashSaving => {
                 self.bash_saving = !self.bash_saving;
             }
@@ -347,7 +353,7 @@ impl SettingsState {
                 self.list_editing = true;
                 self.list_sel = 0;
             }
-            SettingField::SubagentMaxTurns => {
+            SettingField::SubagentMaxTurns | SettingField::MaxOutputTokens => {
                 self.editing = true;
             }
             _ => {
@@ -360,7 +366,11 @@ impl SettingsState {
     /// For numeric fields, only digits are accepted.
     pub fn push_char(&mut self, c: char) {
         let f = self.current_field();
-        if f == SettingField::SubagentMaxTurns && !c.is_ascii_digit() {
+        if matches!(
+            f,
+            SettingField::SubagentMaxTurns | SettingField::MaxOutputTokens
+        ) && !c.is_ascii_digit()
+        {
             return;
         }
         if let Some(s) = self.text_draft_mut(f) {

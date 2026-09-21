@@ -128,6 +128,33 @@ pub struct RunCli {
     pub session: Option<String>,
     /// Optional absolute working directory for the session-daemon spawn (`--workdir` / `--cwd`).
     pub workdir: Option<String>,
+    /// Optional Main-model pick (`--model`): same slug as agent `model:` —
+    /// catalogue `name` | `model_id` | `uuid` (see `find_model_entry_by_slug`).
+    /// Only sets the session Main role (via `SetSessionMain`); never mutates other roles.
+    pub model: Option<String>,
+    /// Optional reasoning effort (`--effort`): `off`/`none`/`default`/`low`/`high`/….
+    pub effort: Option<String>,
+    /// Optional agent mode (`--mode`): `auto`/`normal`/`plan`/`yolo`/`sdlc`.
+    /// `yolo` requires security on + yolo armed (headless arms automatically when
+    /// `--mode yolo` or when `--security on` is paired with yolo).
+    pub mode: Option<String>,
+    /// Optional security daemon toggle (`--security on|off`).
+    /// `on` starts the security daemon (autocheck strat) and is required for yolo;
+    /// `off` stops it and disarms yolo.
+    pub security: Option<bool>,
+    /// Optional reply limit (`--max-tokens N`). `0` = 128k fallback, bounded by context.
+    pub max_tokens: Option<u32>,
+    /// DRSS master switch and context overrides, matching General settings.
+    pub short_send: Option<bool>,
+    pub context_window_limit: Option<u64>,
+    pub context_model_alias: Option<String>,
+    /// Session-local extension selection; global activation policy is unchanged.
+    pub extensions: Vec<String>,
+    pub unload_extensions: Vec<String>,
+    /// Inspect/configure an existing session without submitting a prompt.
+    pub status: bool,
+    /// Invalid flags must fail before a session is started or changed.
+    pub error: Option<String>,
 }
 
 impl Default for RunCli {
@@ -140,6 +167,18 @@ impl Default for RunCli {
             timeout_sec: 14_400,
             session: None,
             workdir: None,
+            model: None,
+            effort: None,
+            mode: None,
+            security: None,
+            max_tokens: None,
+            short_send: None,
+            context_window_limit: None,
+            context_model_alias: None,
+            extensions: Vec::new(),
+            unload_extensions: Vec::new(),
+            status: false,
+            error: None,
         }
     }
 }
@@ -268,6 +307,15 @@ pub struct Opts {
     pub unknown_command: Option<String>,
 }
 
+/// Parse `on`/`off`/`true`/`false`/`1`/`0` (case-insensitive). Unknown → `None`.
+pub(crate) fn parse_on_off(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "on" | "true" | "1" | "yes" => Some(true),
+        "off" | "false" | "0" | "no" => Some(false),
+        _ => None,
+    }
+}
+
 /// Print `koma <version>` to STDOUT and return the process exit code (`0`).
 ///
 /// Handles `--version`/`-V` (#75). Unlike [`crate::app::print_daemon_usage`] this is
@@ -314,9 +362,25 @@ pub fn print_help() -> i32 {
          \x20 --help, -h                     print this help and exit\n\
          \n\
          koma run:\n\
-         \x20 koma run --prompt '…' [--name NAME] [--workdir DIR] [--once] [--timeout SECS]\n\
-         \x20 koma run --prompt-file PATH [--name NAME] [--workdir DIR] [--once] [--timeout SECS]\n\
-         \x20   --once     wait until idle (default timeout 14400s); omit to submit and detach\n\
+         \x20 koma run --prompt '…' [options]\n\
+         \x20 koma run --prompt-file PATH [options]\n\
+         \x20 koma run --session ID --status [options]\n\
+         \x20   --name NAME          session display name\n\
+         \x20   --workdir|--cwd DIR  session working directory\n\
+         \x20   --session ID         attach existing session (else mint)\n\
+         \x20   --model SLUG         set Main only (name|model_id|uuid; same as agent model:)\n\
+         \x20   --effort LEVEL       off|none|default|low|medium|high|…\n\
+         \x20   --mode MODE          auto|normal|plan|yolo|sdlc\n\
+         \x20   --security on|off    start/stop security daemon (yolo needs on)\n\
+         \x20   --max-tokens N       reply limit (0=128k fallback; bounded by context)\n\
+         \x20   --short-send on|off  enable/disable DRSS for this session\n\
+         \x20   --context-window-limit N  context override (0=detected; max 300000)\n\
+         \x20   --context-model-alias ID  model name used for context detection\n\
+         \x20   --extension ID       load an extension in this session (repeatable)\n\
+         \x20   --unload-extension ID  unload an on-demand extension (repeatable)\n\
+         \x20   --status             report applied settings/extensions; no prompt\n\
+         \x20   --once               wait until idle (default timeout 14400s)\n\
+         \x20   --timeout SECS       --once wall clock\n\
          \x20   exit 0 ok · 1 error · 2 timeout · 3 approval-parked\n\
          \x20   uses the default session-daemon path (not standalone / alone)\n\
          \n\
@@ -421,6 +485,16 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
         "--prompt-file",
         "--timeout",
         "--workdir",
+        "--model",
+        "--effort",
+        "--mode",
+        "--security",
+        "--max-tokens",
+        "--short-send",
+        "--context-window-limit",
+        "--context-model-alias",
+        "--extension",
+        "--unload-extension",
     ];
     let mut positionals: Vec<&String> = Vec::new();
     {
@@ -512,71 +586,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
             opts.lsp = Some(crate::lsp::LspCli::parse(&lsp_args));
         }
         Some("run") => {
-            // Headless one-shot: parse flags from the full argv (order-free).
-            // Inherit top-level `--session` / `--cwd` if the user put them before `run`.
-            let mut run = RunCli {
-                session: opts.session.clone(),
-                workdir: opts.cwd.clone(),
-                ..Default::default()
-            };
-            let mut i = 0usize;
-            while i < all.len() {
-                let a = all[i].as_str();
-                match a {
-                    "--name" => {
-                        if let Some(v) = all.get(i + 1) {
-                            run.name = Some(v.clone());
-                            i += 2;
-                            continue;
-                        }
-                    }
-                    "--prompt" => {
-                        if let Some(v) = all.get(i + 1) {
-                            run.prompt = Some(v.clone());
-                            i += 2;
-                            continue;
-                        }
-                    }
-                    "--prompt-file" => {
-                        if let Some(v) = all.get(i + 1) {
-                            run.prompt_file = Some(v.clone());
-                            i += 2;
-                            continue;
-                        }
-                    }
-                    "--timeout" => {
-                        if let Some(v) = all.get(i + 1) {
-                            if let Ok(secs) = v.parse::<u64>() {
-                                run.timeout_sec = secs;
-                            }
-                            i += 2;
-                            continue;
-                        }
-                    }
-                    "--session" => {
-                        if let Some(v) = all.get(i + 1) {
-                            run.session = Some(v.clone());
-                            i += 2;
-                            continue;
-                        }
-                    }
-                    "--workdir" | "--cwd" => {
-                        if let Some(v) = all.get(i + 1) {
-                            run.workdir = Some(v.clone());
-                            i += 2;
-                            continue;
-                        }
-                    }
-                    "--once" => {
-                        run.once = true;
-                        i += 1;
-                        continue;
-                    }
-                    _ => {}
-                }
-                i += 1;
-            }
-            opts.run = Some(run);
+            opts.run = Some(run_args::parse(&all[1..]));
         }
         Some("daemon") => {
             opts.subcommand = Some(
@@ -615,6 +625,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
 
     opts
 }
+
+#[path = "cli_run.rs"]
+mod run_args;
 
 #[cfg(test)]
 #[path = "cli_test.rs"]

@@ -128,8 +128,8 @@ export default function HelpTab() {
             <SectionHeader title="Tabs & panels" desc="What each tab and sidebar panel is for." />
             <InfoRow label="Chat">The permanent first tab — it can't be closed.</InfoRow>
             <InfoRow label="Settings">
-              Appearance (theme picker) and session preferences (name, working directories, short-send, sliding
-              cache, bash shorts, internet mode). Opened from the gear at the bottom of the activity bar; closeable.
+              Appearance (theme picker) and session preferences (name, working directories, short-send, context
+              and reply limits, bash shorts, internet mode). Opened from the gear at the bottom of the activity bar; closeable.
             </InfoRow>
             <InfoRow label="Diff tabs">
               Click a row under the Explorer's "File changed" section to open a side-by-side diff. If the workspace

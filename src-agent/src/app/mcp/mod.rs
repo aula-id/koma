@@ -79,10 +79,94 @@ use crate::model::app_config::{McpServerEntry, McpTransport};
 // (`namespace_tools`/`sanitize_server_name`/`flatten_result`) live in the
 // sibling `proxy`/`util` modules (file size); re-imported here so every
 // existing bare call site in this file keeps compiling unchanged.
+#[cfg(test)]
+mod activation_tests;
 mod proxy;
 mod util;
 use proxy::proxy_request;
 use util::flatten_result;
+
+/// Session exposure applies to extension tools and extension-owned bundled MCP
+/// servers. Ordinary user-configured MCP servers remain available as before.
+pub(crate) fn tool_active_in_session(
+    name: &str,
+    config: &crate::model::app_config::AppConfig,
+    selected: &[String],
+) -> bool {
+    let matches =
+        |owner: &str| name.starts_with(&format!("mcp__{}__", util::sanitize_server_name(owner)));
+    for ext in &config.installed_extensions {
+        if matches(&ext.id) && !ext.active_in(selected) {
+            return false;
+        }
+    }
+    for server in &config.mcp_servers {
+        if matches(&server.name) {
+            // Legacy bundled servers predate ext_id; infer ownership from the
+            // executable's package path just as uninstall does.
+            let legacy_owner = crate::model::store::extensions_dir().ok().and_then(|root| {
+                config.installed_extensions.iter().find(|e| {
+                    std::path::Path::new(server.command.trim()).starts_with(root.join(&e.id))
+                })
+            });
+            if let Some(id) = server.ext_id.as_ref().or(legacy_owner.map(|e| &e.id)) {
+                if !config
+                    .installed_extensions
+                    .iter()
+                    .any(|e| &e.id == id && e.active_in(selected))
+                {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+#[test]
+fn extension_and_bundled_tools_follow_session_activation() {
+    use crate::model::app_config::{
+        AppConfig, ExtensionActivation, InstalledExtension, McpServerEntry,
+    };
+    let mut config = AppConfig::default();
+    config.installed_extensions.push(InstalledExtension {
+        id: "run.koma.scoped".into(),
+        enabled: true,
+        ..Default::default()
+    });
+    config.mcp_servers.push(McpServerEntry {
+        name: "bundled-server".into(),
+        ext_id: Some("run.koma.scoped".into()),
+        ..Default::default()
+    });
+    let tools = ["mcp__run_koma_scoped__read", "mcp__bundled_server__read"];
+    for name in tools {
+        assert!(!tool_active_in_session(name, &config, &[]));
+        assert!(tool_active_in_session(
+            name,
+            &config,
+            &["run.koma.scoped".into()]
+        ));
+    }
+    assert!(tool_active_in_session(
+        "mcp__user_server__read",
+        &config,
+        &[]
+    ));
+    config.installed_extensions[0].activation = ExtensionActivation::Global;
+    for name in tools {
+        assert!(tool_active_in_session(name, &config, &[]));
+    }
+    config.installed_extensions[0].enabled = false;
+    for name in tools {
+        assert!(!tool_active_in_session(
+            name,
+            &config,
+            &["run.koma.scoped".into()]
+        ));
+    }
+}
 
 // The connect machinery (`connect_all`/`connect_proxy`/`reconnect`/
 // `spawn_connect`, roughly the first half of `impl McpManager`) lives in the
@@ -254,9 +338,10 @@ pub struct McpManager {
     /// through `ExtHostManager::invoke`. `None` until the first extension tool is
     /// registered (or ever, on a build with no extensions installed) — there is
     /// exactly one `ExtHostManager` per process, so the last-registered clone wins
-    /// (they are always the same `Arc`). Only meaningful on the `Local` backend;
-    /// see [`Self::register_extension_tools`]'s docs for why `Proxy` is a no-op.
+    /// (they are always the same `Arc`). Extensions execute in this session daemon
+    /// even when ordinary MCP servers use the global proxy.
     ext_manager: Mutex<Option<Arc<crate::app::ext::ExtHostManager>>>,
+    proxy_extension_tools: Mutex<Vec<DiscoveredTool>>,
 }
 
 impl McpManager {
@@ -281,7 +366,8 @@ impl McpManager {
             }
             // Proxy: serve from the cache primed at connect / refreshed on reconnect.
             McpBackend::Proxy { cache, .. } => {
-                cache.lock().unwrap_or_else(|p| p.into_inner()).0.clone()
+                let defs = cache.lock().unwrap_or_else(|p| p.into_inner()).0.clone();
+                self.with_proxy_extension_tools((defs, Vec::new())).0
             }
         }
     }
@@ -297,7 +383,8 @@ impl McpManager {
             }
             // Proxy: serve the cached names (kept in lockstep with the cached defs).
             McpBackend::Proxy { cache, .. } => {
-                cache.lock().unwrap_or_else(|p| p.into_inner()).1.clone()
+                let names = cache.lock().unwrap_or_else(|p| p.into_inner()).1.clone();
+                self.with_proxy_extension_tools((Vec::new(), names)).1
             }
         }
     }
@@ -328,6 +415,33 @@ impl McpManager {
     ///   later-added/removed server is eventually reflected; a non-empty result there
     ///   clears the confirmed-empty marker.
     pub fn advertise_cached(self: &Arc<Self>) -> (Vec<ToolDef>, Vec<String>) {
+        self.with_proxy_extension_tools(self.advertise_servers_cached())
+    }
+
+    fn with_proxy_extension_tools(
+        &self,
+        (mut defs, mut names): (Vec<ToolDef>, Vec<String>),
+    ) -> (Vec<ToolDef>, Vec<String>) {
+        for t in self
+            .proxy_extension_tools
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+        {
+            defs.push(ToolDef {
+                kind: "function".into(),
+                function: ToolFunctionDef {
+                    name: t.namespaced.clone(),
+                    description: t.description.clone(),
+                    parameters: t.parameters.clone(),
+                },
+            });
+            names.push(t.namespaced.clone());
+        }
+        (defs, names)
+    }
+
+    fn advertise_servers_cached(self: &Arc<Self>) -> (Vec<ToolDef>, Vec<String>) {
         use std::sync::atomic::Ordering;
 
         // Local: pure in-memory snapshot walk — serve live, no cache needed.
@@ -666,6 +780,18 @@ impl McpManager {
         namespaced_name: &str,
         args: &serde_json::Value,
     ) -> Result<String, String> {
+        let extension_tool = self
+            .proxy_extension_tools
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|t| t.namespaced == namespaced_name)
+            .cloned();
+        if let Some(tool) = extension_tool {
+            if let ToolSource::Extension(id) = tool.source {
+                return self.invoke_extension_tool(&id, &tool.original, namespaced_name, args);
+            }
+        }
         let (handle, snapshot) = match &self.backend {
             McpBackend::Local { handle, snapshot } => (handle, snapshot),
             // PROXY: forward the call to the global daemon. `server_uuid` is left
@@ -726,25 +852,7 @@ impl McpManager {
 
         let (peer, original) = match dispatch {
             Dispatch::Ext { ext_id, original } => {
-                let ext_manager = self
-                    .ext_manager
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .clone();
-                let Some(ext_manager) = ext_manager else {
-                    return Err(format!(
-                        "extension tool '{namespaced_name}': extension host not available"
-                    ));
-                };
-                let params = serde_json::json!({ "name": original, "args": args });
-                return match ext_manager.invoke(&ext_id, "tool.call", params) {
-                    Ok(v) => Ok(match v.get("output") {
-                        Some(serde_json::Value::String(s)) => s.clone(),
-                        Some(other) => other.to_string(),
-                        None => v.to_string(),
-                    }),
-                    Err(e) => Err(format!("extension tool '{namespaced_name}' failed: {e:#}")),
-                };
+                return self.invoke_extension_tool(&ext_id, &original, namespaced_name, args);
             }
             Dispatch::Server(peer, original) => (peer, original),
         };
@@ -789,6 +897,32 @@ impl McpManager {
         }
     }
 
+    fn invoke_extension_tool(
+        &self,
+        ext_id: &str,
+        original: &str,
+        namespaced_name: &str,
+        args: &serde_json::Value,
+    ) -> Result<String, String> {
+        let manager = self
+            .ext_manager
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+            .ok_or_else(|| {
+                format!("extension tool '{namespaced_name}': extension host not available")
+            })?;
+        let params = serde_json::json!({"name":original,"args":args});
+        match manager.invoke(ext_id, "tool.call", params) {
+            Ok(v) => Ok(match v.get("output") {
+                Some(serde_json::Value::String(s)) => s.clone(),
+                Some(other) => other.to_string(),
+                None => v.to_string(),
+            }),
+            Err(e) => Err(format!("extension tool '{namespaced_name}' failed: {e:#}")),
+        }
+    }
+
     /// Register an extension's `contributes.tools` as extension-dispatched tools,
     /// namespaced `mcp__<ext>__<tool>` (reusing [`util::sanitize_server_name`] on
     /// the extension id), advertised alongside regular MCP server tools via
@@ -804,11 +938,8 @@ impl McpManager {
     /// never from inside `ExtHostManager` itself, which has no visibility into
     /// this manager.
     ///
-    /// Local-backend only: a session daemon proxying to the global MCP daemon
-    /// (`Proxy` backend) has no wire-protocol support yet for routing a call
-    /// through to an extension living in a DIFFERENT process's `ExtHostManager` —
-    /// that is a later wave. On `Proxy` this is a silent no-op (matches
-    /// `spawn_connect`'s own Local-only guard).
+    /// A proxy keeps extension tools locally alongside its shared-server cache.
+    /// Refreshing that cache never removes locally registered extension tools.
     pub fn register_extension_tools(
         &self,
         ext_id: &str,
@@ -817,7 +948,16 @@ impl McpManager {
     ) {
         let snapshot = match &self.backend {
             McpBackend::Local { snapshot, .. } => snapshot,
-            McpBackend::Proxy { .. } => return,
+            McpBackend::Proxy { .. } => {
+                let mut local = self
+                    .proxy_extension_tools
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
+                local.retain(|t| !matches!(&t.source, ToolSource::Extension(id) if id == ext_id));
+                local.extend(util::namespace_ext_tools(ext_id, tools));
+                *self.ext_manager.lock().unwrap_or_else(|p| p.into_inner()) = Some(ext_manager);
+                return;
+            }
         };
         let discovered = util::namespace_ext_tools(ext_id, tools);
         {
@@ -825,24 +965,27 @@ impl McpManager {
             snap.tools
                 .retain(|t| !matches!(&t.source, ToolSource::Extension(id) if id == ext_id));
             snap.tools.extend(discovered);
-            snap.generation = snap.generation.wrapping_add(1);
         }
         *self.ext_manager.lock().unwrap_or_else(|p| p.into_inner()) = Some(ext_manager);
     }
 
     /// Remove every tool previously registered for `ext_id` via
     /// [`Self::register_extension_tools`] (uninstall or disable). Called by
-    /// [`crate::app::ext::register::purge_contributions`]. A no-op on the `Proxy`
-    /// backend, or if `ext_id` had nothing registered.
+    /// [`crate::app::ext::register::purge_contributions`]. A no-op if nothing is registered.
     pub fn purge_extension_tools(&self, ext_id: &str) {
         let snapshot = match &self.backend {
             McpBackend::Local { snapshot, .. } => snapshot,
-            McpBackend::Proxy { .. } => return,
+            McpBackend::Proxy { .. } => {
+                self.proxy_extension_tools
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .retain(|t| !matches!(&t.source, ToolSource::Extension(id) if id == ext_id));
+                return;
+            }
         };
         let mut snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
         snap.tools
             .retain(|t| !matches!(&t.source, ToolSource::Extension(id) if id == ext_id));
-        snap.generation = snap.generation.wrapping_add(1);
     }
 }
 

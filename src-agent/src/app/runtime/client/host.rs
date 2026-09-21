@@ -1152,6 +1152,11 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     cfg.palette,
                     String::new(),
                     d.subagent_max_turns,
+                    d.short_send_engage_n,
+                    d.short_send_tail_n,
+                    d.max_output_tokens,
+                    d.context_window_limit,
+                    d.context_model_alias,
                 );
             }
             // GUI /agents dashboard opened while detached (StartScreen / swapper): there is

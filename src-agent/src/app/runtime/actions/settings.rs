@@ -30,12 +30,12 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             s.classifier_enabled,
             s.allowed_folders.clone(),
             s.short_send_enabled,
-            s.sliding_cache,
             s.bash_saving,
             s.coding_autosave,
             s.internet_mode,
             s.mouse_capture,
             s.subagent_max_turns.clone(),
+            s.max_output_tokens.clone(),
             s.providers.clone(),
             s.oauth_drafts.clone(),
             s.models.clone(),
@@ -55,12 +55,12 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         classifier_enabled,
         allowed_folders,
         short_send_enabled,
-        sliding_cache,
         bash_saving,
         coding_autosave,
         internet_mode,
         mouse_capture,
         subagent_max_turns,
+        max_output_tokens,
         provider_drafts,
         oauth_drafts,
         model_drafts,
@@ -315,9 +315,8 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             // Short-send kill switch: no client rebuild needed; the
             // shape() call reads this flag per-send.
             sess.settings.short_send_enabled = short_send_enabled;
-            // Sliding-cache toggle: no client rebuild needed; a later
-            // wave's summarization logic reads this flag per-send.
-            sess.settings.sliding_cache = sliding_cache;
+            // Obsolete count/cache fields are compatibility data, not drafts.
+            // Leave their stored values untouched when saving current settings.
             // Bash-saving toggle: no client rebuild needed; the tool
             // context reads this flag per-spawn.
             sess.settings.bash_saving = bash_saving;
@@ -333,6 +332,9 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             // empty/invalid input so the user can never disable the safety cap.
             let parsed_turns: u32 = subagent_max_turns.parse().unwrap_or(0);
             sess.settings.subagent_max_turns = parsed_turns.max(1);
+            // Interactive max_tokens: 0 = auto; soft-cap 1_000_000; invalid → 0.
+            let parsed_out: u32 = max_output_tokens.parse().unwrap_or(0);
+            sess.settings.max_output_tokens = parsed_out.min(1_000_000);
             // But DO refresh the system-prompt roster so any mode-gated agents
             // stay in sync on a mid-session mode change (rebuild reads in-memory
             // settings; nothing else here rebuilds).

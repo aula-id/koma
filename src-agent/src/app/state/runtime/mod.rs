@@ -232,6 +232,12 @@ pub struct SessionRuntime {
     /// current prompt, not a cumulative sum; set from `StreamEvent::Usage` each
     /// response, 0 on a cold prefix or a provider that doesn't report cache stats.
     pub tokens_cached: u64,
+    /// Stable footer sample: latest provider report, or a local estimate only
+    /// before the first report. Its input/cache/window values stay together.
+    pub context_usage: Option<crate::service::context_limits::ContextUsage>,
+    /// In-flight request metadata used to pair fresh usage with its own window.
+    /// Kept separate so starting another tool round cannot replace the readout.
+    pub pending_context_usage: Option<crate::service::context_limits::ContextUsage>,
     /// Tool calls emitted by the in-flight stream, stashed on
     /// `StreamEvent::ToolCalls` and consumed by `advance_turn` once the stream
     /// finalises. Empty when the model returned a plain (final) answer.
@@ -272,8 +278,8 @@ pub struct SessionRuntime {
     /// tool-call classifier's (TAC) conversation context in `process_tools`, so the
     /// classifier — which keeps running as the safety net — is TOLD the plan was
     /// approved and ALLOWS the tool calls that carry it out, flagging only genuinely
-    /// off-plan / destructive actions. Cleared on the next genuine user submit and on
-    /// (re)entering Plan mode, so it never leaks past the plan's execution window.
+    /// off-plan / destructive actions. Retained across follow-up user turns;
+    /// cleared on Plan re-entry or denial. It applies only to the reviewed plan.
     pub approved_plan: Option<String>,
     /// SDLC-specific TAC authorization context. Set by mission-approval handlers
     /// instead of `approved_plan`, so the TAC classifier sees an SDLC-appropriate
@@ -410,12 +416,21 @@ pub struct SessionRuntime {
     /// the buffer. Purely in-memory / transient — `SessionRuntime` is rebuilt fresh
     /// each launch (it is never serialised), so this is never persisted.
     pub pending_ext_prompts: Vec<(String, String)>,
+    /// Last reconciled extension policy and selection. Kept per session because
+    /// unrelated provider/config reloads must not hide a pending scope change.
+    pub extension_scope: Option<(
+        Vec<crate::model::app_config::InstalledExtension>,
+        Vec<String>,
+    )>,
     /// THIS session's tool-approval / lifecycle mode (per-session, not global).
     /// Shift+Tab and `/mode` mutate the FOREGROUND session via
     /// [`super::AppStateRest::set_agent_mode`]; stream/harness paths that already
     /// know a `sess_idx` must read `sessions[sess_idx].agent_mode` so a
     /// background session never inherits another session's SDLC/Plan/Yolo envelope.
     pub agent_mode: super::types::AgentMode,
+    /// Shared live restriction for deferred tools and delegates. Updated before
+    /// a mode transition; captured contexts cannot retain old write permission.
+    pub plan_read_only: Arc<std::sync::atomic::AtomicBool>,
     /// Mode to restore when THIS session leaves `Plan`.
     pub plan_return_mode: Option<super::types::AgentMode>,
     /// Mode to restore when THIS session leaves SDLC.
@@ -442,8 +457,11 @@ pub struct SessionRuntime {
     /// Carries identity + integrity guards so a stale seed from a prior session, mission,
     /// contract, or generation can never inject.
     pub pending_mission_seed: Option<MissionSeedArm>,
-    /// One-shot: after plan-approval compact, seed plan.md on THIS session.
+    /// One-shot: after plan-approval compact, seed the approved body on THIS session.
     pub pending_plan_seed: bool,
+    /// Full immutable body from the approved `plan_ready` call. Never reconstructed
+    /// from plan.md or conversation history after approval.
+    pub pending_plan_seed_body: Option<String>,
     /// Monotonic counter bumped whenever the SDLC session leaves or a new mission is
     /// approved. The `pending_mission_seed` arm stores the generation at arm time;
     /// the consumer checks it matches so a seed from a prior SDLC session/mission
@@ -612,10 +630,6 @@ pub struct SessionRuntime {
     /// Latched true the first time a response reports `cached_tokens > 0`, meaning
     /// the active provider supports and is using a prompt cache. Never reset.
     pub provider_caches: bool,
-    /// Sticky engage-state for the cache-warmth-adaptive summarization hysteresis.
-    /// Set true when the summarizer engages; a later wave reads and writes it.
-    #[allow(dead_code)]
-    pub summarizing: bool,
     /// Wall-clock instant of the most-recent send (user turn start). Stamped by
     /// the submit handler in a later wave; used to estimate prompt-cache warmth.
     #[allow(dead_code)]
@@ -711,6 +725,8 @@ impl SessionRuntime {
             tokens_out: 0,
             cost: 0.0,
             tokens_cached: 0,
+            context_usage: None,
+            pending_context_usage: None,
             pending_tool_calls: Vec::new(),
             agent_steps: 0,
             main_stall_nudges: 0,
@@ -739,7 +755,9 @@ impl SessionRuntime {
             pending_bash_nudges: Vec::new(),
             pending_subagent_nudges: Vec::new(),
             pending_ext_prompts: Vec::new(),
+            extension_scope: None,
             agent_mode: super::types::AgentMode::default(),
+            plan_read_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             plan_return_mode: None,
             sdlc_return_mode: None,
             sdlc_prev_short_send: None,
@@ -751,6 +769,7 @@ impl SessionRuntime {
             sdlc_assess_entry_branch: None,
             pending_mission_seed: None,
             pending_plan_seed: false,
+            pending_plan_seed_body: None,
             sdlc_mission_generation: 0,
             sdlc_keeper_due: false,
             pending_sdlc_keeper_llm: None,
@@ -784,7 +803,6 @@ impl SessionRuntime {
             compact_pending: None,
             held_lock: None,
             provider_caches: false,
-            summarizing: false,
             last_send_at: None,
             was_working: false,
             finished_unseen: false,

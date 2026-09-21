@@ -21,8 +21,8 @@ use crate::model::app_config::InstalledExtension;
 use crate::model::store;
 
 /// Verify + unpack a downloaded extension zip, upsert + persist the registry, register
-/// its `contributes` + any manifest-declared MCP servers, auto-start it if daemon-kind,
-/// and widen the active session's workspace roots — the ON-LOOP tail of an install, run
+/// manifest-declared MCP servers, and restore contributions/startup for extensions
+/// active in this session — the ON-LOOP tail of an install, run
 /// AFTER the network download (`ext::ext_store::kick_off_store_install` / the daemon hub's
 /// own fetch) lands. `id` is the id the artifact was REQUESTED for (used only for the
 /// debug-unsigned-fallback log line — the manifest's OWN id, read back out of the zip by
@@ -64,6 +64,14 @@ pub(in crate::app::runtime) fn install_extension_core(
     })?;
 
     state.rest.config.upsert_extension(ext.clone());
+    let ext = state
+        .rest
+        .config
+        .installed_extensions
+        .iter()
+        .find(|e| e.id == ext.id)
+        .cloned()
+        .unwrap_or(ext);
     // Auto-register any manifest-declared bundled MCP servers (e.g. a standalone
     // stdio server shipped alongside the extension's own daemon) BEFORE the single
     // save+reload below, so a fresh install never needs the user to hand-add an
@@ -86,7 +94,17 @@ pub(in crate::app::runtime) fn install_extension_core(
     // Register contributions (tools → live MCP snapshot) + auto-start a daemon-kind
     // child. Both best-effort: a failure is logged, not fatal — the extension is
     // installed on disk + in the registry regardless.
-    if let Some(mgr) = &ext_mgr {
+    if let Some(mgr) = ext_mgr.as_ref().filter(|_| {
+        ext.active_in(
+            state
+                .rest
+                .fg()
+                .session
+                .as_ref()
+                .map(|s| s.settings.active_extensions.as_slice())
+                .unwrap_or_default(),
+        )
+    }) {
         if let Err(e) = crate::app::ext::register::register_contributions(&ext, mcp.as_ref(), mgr) {
             store::append_global_error_log(
                 "ext-install",
@@ -109,13 +127,13 @@ pub(in crate::app::runtime) fn install_extension_core(
     {
         let installed_list = state.rest.config.installed_extensions.clone();
         let added = match state.rest.fg_mut().session.as_mut() {
-            Some(sess) => crate::model::ext_workspace::inject_extension_workspaces(
+            Some(sess) => crate::model::ext_workspace::sync_extension_workspaces(
                 &installed_list,
-                &mut sess.settings.workdir,
+                &mut sess.settings,
             ),
-            None => Vec::new(),
+            None => false,
         };
-        if !added.is_empty() {
+        if added {
             if let Some(roots) = state.rest.fg().session.as_ref().map(|s| s.workdirs()) {
                 crate::tool::dircache::reindex(roots, state.rest.fg().dir_cache.clone());
             }

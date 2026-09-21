@@ -229,7 +229,7 @@ pub(crate) fn build_startup(
     state.rest.sec_token = sec_token;
     state.rest.sec_manager = Some(sec);
 
-    // Build the extension host manager and auto-start every ENABLED daemon-kind
+    // Build the extension host manager and auto-start each session-active daemon-kind
     // extension recorded in the config registry. Best-effort: each start is offloaded
     // onto the blocking pool (`ensure_started` blocks on its handshake, so running it on
     // the main thread would stall a slow/hung extension into boot) and any failure is
@@ -251,11 +251,20 @@ pub(crate) fn build_startup(
     // `None` in `--daemon` mode at this point (`run_daemon` builds its — possibly
     // `Proxy` — manager AFTER `build_startup` returns), so extension tools are
     // simply not registered for that process yet; see
-    // `app::ext::register::register_contributions`'s docs for the "later wave"
-    // note on routing extension tools through the global MCP daemon's proxy wire.
+    // Activation registers again after the session's final manager is available;
+    // proxy-backed sessions keep extension tools locally.
     let mcp_for_ext = state.rest.mcp_manager.clone();
     for installed in &state.rest.config.installed_extensions {
-        if installed.enabled && installed.kind == "daemon" {
+        if installed.active_in(
+            state
+                .rest
+                .fg()
+                .session
+                .as_ref()
+                .map(|s| s.settings.active_extensions.as_slice())
+                .unwrap_or_default(),
+        ) && installed.kind == "daemon"
+        {
             let mgr = Arc::clone(&ext);
             let installed = installed.clone();
             let mcp_for_ext = mcp_for_ext.clone();
@@ -293,19 +302,12 @@ pub(crate) fn build_startup(
     }
     state.rest.ext_manager = Some(ext);
 
-    // Widen the active session's workspace roots with every ENABLED extension's declared
-    // `workspace_dir` (validated + created), so agent writes into an extension's state dir
-    // pass the harness. In `--daemon` mode there is NO session here yet (install_daemon_session
-    // sets it and re-runs this same injection), so this only fires for the TUI returning-user
-    // path. In-memory only (no save): the roots are re-derived from the CURRENT enabled set on
-    // every boot, and `warm_session` below reindexes the dir cache over the widened roots.
+    // Reconcile session-active extension roots. In daemon mode the session is installed
+    // later; warm_session persists selection/provenance and reindexes current roots.
     if state.rest.fg().session.is_some() {
         let installed = state.rest.config.installed_extensions.clone();
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-            crate::model::ext_workspace::inject_extension_workspaces(
-                &installed,
-                &mut sess.settings.workdir,
-            );
+            crate::model::ext_workspace::sync_extension_workspaces(&installed, &mut sess.settings);
         }
     }
 
@@ -490,16 +492,11 @@ pub(crate) fn install_daemon_session(
     // Seed this session's cumulative token counters from its own (possibly empty) ledger.
     state.rest.load_token_totals(0, &sess_path);
 
-    // Widen this daemon session's workspace roots with enabled extensions' `workspace_dir`s
-    // (see `build_startup` — this is the daemon-path equivalent, where the session finally
-    // exists). Done BEFORE `warm_session` so its reindex covers the new roots. In-memory only.
+    // Reconcile session-active roots before warm_session persists and indexes them.
     {
         let installed = state.rest.config.installed_extensions.clone();
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-            crate::model::ext_workspace::inject_extension_workspaces(
-                &installed,
-                &mut sess.settings.workdir,
-            );
+            crate::model::ext_workspace::sync_extension_workspaces(&installed, &mut sess.settings);
         }
     }
 
@@ -848,6 +845,13 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
                 crate::app::mcp::McpManager::connect_all(&handle, &state.rest.config.mcp_servers)
             }
         });
+    }
+
+    // The final MCP manager may replace the inert one used during session warmup.
+    // Register active extension tools into this manager (including proxy-local tools).
+    let idx = state.rest.foreground;
+    if let Err(error) = super::commands::extensions::refresh_session(&mut state, idx, &handle) {
+        crate::model::store::append_global_error_log("extension activation", &error.to_string());
     }
 
     // Ensure the OAuth keep-alive daemon is running when there are OAuth connections.
