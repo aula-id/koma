@@ -36,14 +36,14 @@ fn ctx() -> ToolCtx {
 #[test]
 fn short_output_passes_through() {
     let raw = "hello\nworld".to_string();
-    assert_eq!(clip_tool_output("read", raw.clone()), raw);
+    assert_eq!(clip_tool_output("read", raw.clone(), None), raw);
 }
 
 #[test]
 fn char_cap_wins_over_line_cap() {
     // One long line — well under 20 lines, over 20k chars.
     let raw = "x".repeat(MAX_TOOL_OUTPUT_CHARS + 50);
-    let out = clip_tool_output("read", raw);
+    let out = clip_tool_output("read", raw, None);
     assert!(out.contains("[truncated:"));
     assert!(out.contains("offset/limit"));
     let body = out.split("\n\n[truncated:").next().unwrap();
@@ -57,7 +57,7 @@ fn line_cap_applies_when_under_char_budget() {
         .map(|i| format!("line-{i}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let out = clip_tool_output("bash", raw);
+    let out = clip_tool_output("bash", raw, None);
     assert!(out.contains("[truncated:"));
     let body = out.split("\n\n[truncated:").next().unwrap();
     assert_eq!(line_count(body), MAX_TOOL_OUTPUT_LINES);
@@ -73,7 +73,7 @@ fn subagent_output_is_not_clipped() {
         .map(|i| format!("report-{i}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let out = clip_tool_output("task", raw.clone());
+    let out = clip_tool_output("task", raw.clone(), None);
     assert_eq!(out, raw);
     assert!(!out.contains("[truncated:"));
 }
@@ -82,7 +82,7 @@ fn subagent_output_is_not_clipped() {
 fn media_workdir_sentinel_survives_clip() {
     let mut raw = String::from("MEDIA_WORKDIR:/tmp/koma/media\n");
     raw.push_str(&"y\n".repeat(40));
-    let out = clip_tool_output("web_download", raw);
+    let out = clip_tool_output("web_download", raw, None);
     assert!(out.starts_with("MEDIA_WORKDIR:/tmp/koma/media\n"));
     assert!(out.contains("[truncated:"));
 }

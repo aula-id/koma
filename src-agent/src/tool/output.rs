@@ -77,12 +77,9 @@ fn canonical_json(value: &Value) -> String {
 
 /// Clip a tool result: **chars first** (20k), then 20 lines. Sub-agent
 /// reports pass through unchanged. Preserves a leading `MEDIA_WORKDIR:`
-/// sentinel so the download side-effect still fires.
-pub fn clip_tool_output(name: &str, raw: String) -> String {
-    clip_tool_output_inner(name, raw, None)
-}
-
-fn clip_tool_output_inner(name: &str, raw: String, spill: Option<&Path>) -> String {
+/// sentinel so the download side-effect still fires. `spill` is the session
+/// tmp path of the unclipped body, when we wrote one.
+fn clip_tool_output(name: &str, raw: String, spill: Option<&Path>) -> String {
     if is_subagent_output(name) {
         return raw;
     }
@@ -147,7 +144,7 @@ pub fn finish_tool_output(ctx: &ToolCtx, name: &str, args: &Value, raw: String) 
     } else {
         None
     };
-    let mut out = clip_tool_output_inner(name, raw, spill.as_deref());
+    let mut out = clip_tool_output(name, raw, spill.as_deref());
     if count >= 2 {
         if !out.ends_with('\n') {
             out.push('\n');
