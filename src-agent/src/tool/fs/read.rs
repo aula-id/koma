@@ -13,9 +13,9 @@ impl Tool for Read {
         "read"
     }
     fn description(&self) -> &'static str {
-        "Read a workspace-relative file. Returns line-numbered content. Default is 20 lines / 20k chars — \
-         always set offset/limit to page, or use grep for one pattern. A full-file dump wipes the context window. \
-         For a file's imports and dependents, use graph_query."
+        "Read a workspace-relative file (also session tmp/ tool logs). Returns line-numbered content. \
+         Default is 20 lines / 20k chars — always set offset/limit to page, or use grep for one pattern. \
+         A full-file dump wipes the context window. For a file's imports and dependents, use graph_query."
     }
     fn parameters(&self) -> Value {
         json!({

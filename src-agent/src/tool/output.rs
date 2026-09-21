@@ -7,8 +7,10 @@
 
 use super::ToolCtx;
 use crate::config::{MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_OUTPUT_LINES};
+use crate::model::store::session_tool_tmp_dir;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// Tools whose result is a sub-agent report (or a control message about one).
@@ -77,6 +79,10 @@ fn canonical_json(value: &Value) -> String {
 /// reports pass through unchanged. Preserves a leading `MEDIA_WORKDIR:`
 /// sentinel so the download side-effect still fires.
 pub fn clip_tool_output(name: &str, raw: String) -> String {
+    clip_tool_output_inner(name, raw, None)
+}
+
+fn clip_tool_output_inner(name: &str, raw: String, spill: Option<&Path>) -> String {
     if is_subagent_output(name) {
         return raw;
     }
@@ -110,20 +116,39 @@ pub fn clip_tool_output(name: &str, raw: String) -> String {
         }
         let kept_chars = text.chars().count();
         let kept_lines = line_count(&text);
+        let where_full = match spill {
+            Some(path) => format!(
+                " Full output: {} — read that file with offset/limit. Do not dump the whole file.",
+                path.display()
+            ),
+            None => " Page with offset/limit, or grep one path/pattern. A large dump wipes the context window.".to_string(),
+        };
         out.push_str(&format!(
             "\n[truncated: kept {kept_chars} chars / {kept_lines} lines of {orig_chars} chars / {orig_lines} lines \
-             (max {MAX_TOOL_OUTPUT_CHARS} chars, then {MAX_TOOL_OUTPUT_LINES} lines). \
-             Page with offset/limit, or grep one path/pattern. A large dump wipes the context window.]"
+             (max {MAX_TOOL_OUTPUT_CHARS} chars, then {MAX_TOOL_OUTPUT_LINES} lines).{where_full}]"
         ));
     }
     out
 }
 
-/// Clip, then append a repeat warning when this exact call has been seen before.
+/// Clip, spill the unclipped body to `<session>/tmp/` when truncated, then
+/// append a repeat warning when this exact call has been seen before.
 pub fn finish_tool_output(ctx: &ToolCtx, name: &str, args: &Value, raw: String) -> String {
     let count = ctx.call_track.hit(name, args);
-    let mut out = clip_tool_output(name, raw);
-    if count >= 2 && !is_subagent_output(name) {
+    if is_subagent_output(name) {
+        return raw;
+    }
+    let (_, body) = split_media_sentinel(raw.clone());
+    let truncated =
+        body.chars().count() > MAX_TOOL_OUTPUT_CHARS || line_count(&body) > MAX_TOOL_OUTPUT_LINES;
+    let spill = if truncated {
+        existing_full_output(&body)
+            .or_else(|| spill_full_output(ctx.session_dir.as_deref(), name, &body))
+    } else {
+        None
+    };
+    let mut out = clip_tool_output_inner(name, raw, spill.as_deref());
+    if count >= 2 {
         if !out.ends_with('\n') {
             out.push('\n');
         }
@@ -131,6 +156,91 @@ pub fn finish_tool_output(ctx: &ToolCtx, name: &str, args: &Value, raw: String) 
         out.push_str(&repeat_notice(name, count));
     }
     out
+}
+
+/// Reuse a bash-style `full-output: <path>` pointer when the tool already
+/// teed the complete dump — no second copy.
+fn existing_full_output(body: &str) -> Option<PathBuf> {
+    for line in body.lines() {
+        let Some(rest) = line.strip_prefix("full-output:") else {
+            continue;
+        };
+        let path = rest.trim();
+        if path.is_empty() {
+            continue;
+        }
+        let p = PathBuf::from(path);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Write the unclipped body to `<session_dir>/tmp/<epoch>_<tool>.txt`.
+/// Best-effort: a spill failure must never break the tool result.
+fn spill_full_output(session_dir: Option<&Path>, name: &str, body: &str) -> Option<PathBuf> {
+    let session_dir = session_dir?;
+    let dir = session_tool_tmp_dir(session_dir);
+    std::fs::create_dir_all(&dir).ok()?;
+    let epoch_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    let path = dir.join(format!("{epoch_ms}_{}.txt", tool_slug(name)));
+    std::fs::write(&path, body).ok()?;
+    gc_tmp_dir(&dir);
+    Some(path.canonicalize().unwrap_or(path))
+}
+
+fn tool_slug(name: &str) -> String {
+    let mut slug = String::with_capacity(name.len());
+    let mut last_dash = false;
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    slug.trim_matches('-').chars().take(40).collect()
+}
+
+/// Keep at most 50 spills / 100 MiB in `<session>/tmp/`. Oldest (epoch-prefixed
+/// names) go first. Silent on IO errors.
+fn gc_tmp_dir(dir: &Path) {
+    const MAX_COUNT: usize = 50;
+    const MAX_BYTES: u64 = 100 * 1024 * 1024;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let mut files: Vec<(String, u64)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("txt") {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        files.push((name.to_string(), size));
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut total: u64 = files.iter().map(|(_, s)| s).sum();
+    let mut count = files.len();
+    for (name, size) in files.iter() {
+        if count <= MAX_COUNT && total <= MAX_BYTES {
+            break;
+        }
+        if std::fs::remove_file(dir.join(name)).is_ok() {
+            total = total.saturating_sub(*size);
+            count -= 1;
+        }
+    }
 }
 
 fn repeat_notice(name: &str, count: u32) -> String {

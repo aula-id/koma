@@ -129,6 +129,75 @@ fn grep_and_bash_repeat_use_their_own_wording() {
 }
 
 #[test]
+fn truncated_bash_spills_into_session_tmp() {
+    let dir = std::env::temp_dir().join(format!("koma-tool-tmp-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut t = ctx();
+    t.session_dir = Some(dir.clone());
+
+    let raw = (0..80)
+        .map(|i| format!("line-{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let out = finish_tool_output(&t, "bash", &json!({"command": "seq 80"}), raw.clone());
+
+    assert!(out.contains("[truncated:"));
+    assert!(out.contains("Full output:"));
+    assert!(out.contains("offset/limit"));
+    assert!(!out.contains("line-20"));
+
+    let tmp = dir.join("tmp");
+    let spills: Vec<_> = std::fs::read_dir(&tmp)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+    assert_eq!(spills.len(), 1);
+    let saved = std::fs::read_to_string(&spills[0]).unwrap();
+    assert_eq!(saved, raw);
+    assert!(out.contains(&spills[0].to_string_lossy().to_string()) || out.contains("tmp"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn reuses_existing_full_output_pointer() {
+    let dir = std::env::temp_dir().join(format!("koma-tool-tee-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut t = ctx();
+    t.session_dir = Some(dir.clone());
+
+    let tee = dir.join("already.log");
+    std::fs::write(&tee, "THE-REAL-LOG\n").unwrap();
+    let mut raw = (0..40)
+        .map(|i| format!("x{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    raw.push_str(&format!("\nfull-output: {}\nexit code: 0", tee.display()));
+
+    let out = finish_tool_output(&t, "bash", &json!({"command": "ls"}), raw);
+    assert!(out.contains(&tee.display().to_string()));
+    let tmp = dir.join("tmp");
+    assert!(
+        !tmp.exists() || std::fs::read_dir(&tmp).unwrap().next().is_none(),
+        "should reuse full-output instead of writing a second copy"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn short_output_does_not_spill() {
+    let dir = std::env::temp_dir().join(format!("koma-tool-short-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut t = ctx();
+    t.session_dir = Some(dir.clone());
+    let _ = finish_tool_output(&t, "bash", &json!({"command": "echo"}), "ok".into());
+    assert!(!dir.join("tmp").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn subagent_is_not_tracked() {
     let t = ctx();
     let args = json!({"agent": "explore", "prompt": "look around"});
