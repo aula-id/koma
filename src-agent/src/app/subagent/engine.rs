@@ -576,6 +576,9 @@ pub async fn run_agent_loop(
             );
             convo.push_tool(call.id.clone(), result);
         }
+        if let Some(notice) = crate::tool::drain_repeat_notices(&ctx.repeat_notices) {
+            convo.push_user(notice);
+        }
         // Turn committed (assistant + every tool result): snapshot the history
         // so the UI sees this step's tool round.
         emit(&tx, AgentEvent::Snapshot(convo.messages().to_vec()));

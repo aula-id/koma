@@ -3,8 +3,8 @@
 //! `bash` is RISKY — it requires user approval in Normal mode. Its safety
 //! relies entirely on the approval gate, not path-sandboxing (unlike the
 //! filesystem tools). Output is captured (stdout + stderr) and capped at the
-//! last `MAX_TOOL_OUTPUT_CHARS` characters so verbose build output doesn't
-//! flood the context.
+//! last `MAX_READ_CHARS` characters (90k) so verbose build output doesn't
+//! flood the context. The tool clipper then also applies the 2000-line cap.
 
 use super::{Tool, ToolCtx};
 use anyhow::Result;
@@ -317,7 +317,7 @@ pub(crate) fn finalize_output(
         return format_captured_output(raw, &exit_code_str);
     }
 
-    const MAX_CHARS: usize = crate::config::MAX_TOOL_OUTPUT_CHARS;
+    const MAX_CHARS: usize = crate::config::MAX_READ_CHARS;
     let will_truncate = raw.chars().count() > MAX_CHARS;
     // `None` (OS reported no code — rendered as `?`) is treated as non-clean too,
     // since it's ambiguous whether the command actually succeeded.
@@ -444,7 +444,7 @@ fn gc_log_dir(log_dir: &Path) {
 }
 
 /// Run `command` via `sh -c` in `cwd`, capturing stdout+stderr, and return the
-/// combined output: ANSI-stripped, capped to the LAST [`crate::config::MAX_TOOL_OUTPUT_CHARS`]
+/// combined output: ANSI-stripped, capped to the LAST [`crate::config::MAX_READ_CHARS`]
 /// chars, with a trailing `exit code: N` line. Bounded by `timeout_ms` (the child
 /// keeps running on a drain thread past the timeout, but the caller is freed with a
 /// timeout message so the UI/turn never stalls).
@@ -469,7 +469,7 @@ pub fn run_shell_capture(command: &str, cwd: &Path, timeout_ms: u64) -> String {
 }
 
 /// Format captured command output: ANSI must already be stripped. Applies the
-/// shared output cap (last [`crate::config::MAX_TOOL_OUTPUT_CHARS`] chars), adds a
+/// shared output cap (last [`crate::config::MAX_READ_CHARS`] chars), adds a
 /// truncation notice when trimmed, ensures a trailing newline, and appends
 /// `exit code: <code>`. Shared by [`run_shell_capture`] and `git_operator`. Thin
 /// wrapper over [`format_captured_output_tee`] with no tee path — wording is
@@ -490,7 +490,7 @@ pub(crate) fn format_captured_output_tee(
     exit_code: &str,
     tee_path: Option<&Path>,
 ) -> String {
-    const MAX_CHARS: usize = crate::config::MAX_TOOL_OUTPUT_CHARS;
+    const MAX_CHARS: usize = crate::config::MAX_READ_CHARS;
     let truncated;
     let tail: String = if text.chars().count() > MAX_CHARS {
         truncated = true;
@@ -535,7 +535,7 @@ impl Tool for Bash {
     }
     fn description(&self) -> &'static str {
         "Run a shell command in the workspace. Use for cargo, build commands, and general shell tasks. \
-         Output is capped at 20k chars / 20 lines — narrow the command or pipe through head/grep; do not dump huge logs. \
+         Output is capped at 90k chars / 2000 lines — narrow the command or pipe through head/grep; do not dump huge logs. \
          For git operations, use the git_operator tool instead — it handles SSH key injection and \
          destructive-operation guards automatically. Output is captured (stdout+stderr). \
          Output of known noisy commands (cargo, git, npm, pip, docker, make) is auto-compressed; a [filter: <name>, N -> M lines] marker shows when. \

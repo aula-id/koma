@@ -3,13 +3,15 @@
 //! Large dumps (10k-line reads, chatty bash, fat MCP payloads) blow the
 //! context window and force DRSS to cut the conversation — the model then
 //! re-reads the same file and loops. Cap every result except sub-agent
-//! reports, and warn when the exact same *cacheable* read is repeated.
-//! git_* and other non-cacheable tools are not tracked: their results are
-//! protocol sentinels or side effects, and a `[repeat:]` suffix becomes
-//! part of the value a parser persists.
+//! reports. `read`, `bash`, `grep`, and `glob` use a wider window so one
+//! call covers a normal file or a build log.
+//! A repeated call is a notice only: the warning is queued beside the
+//! result, never appended to it, so a parser cannot persist the suffix.
 
 use super::ToolCtx;
-use crate::config::{MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_OUTPUT_LINES};
+use crate::config::{
+    MAX_READ_CHARS, MAX_READ_LINES, MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_OUTPUT_LINES,
+};
 use crate::model::store::session_tool_tmp_dir;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -23,30 +25,37 @@ pub fn is_subagent_output(name: &str) -> bool {
     matches!(name, "task" | "task_output" | "task_send" | "task_kill")
 }
 
-/// Repeat tracking is only for cacheable inspection tools, where an identical
-/// re-call is a loop. git_* is excluded as a family (sentinels are parsed as
-/// the whole suffix — a nudge was persisted as the SSH identity path).
-/// Everything else is non-cacheable: side effects, stateful commands, or a
-/// protocol the runtime strips before the model sees it.
+/// Repeat tracking is every tool except a sub-agent report. The notice is
+/// queued beside the result, so a sentinel or side-effect string stays
+/// byte-identical to what the tool returned.
 pub fn repeat_tracked(name: &str) -> bool {
-    if name.starts_with("git_") || is_subagent_output(name) {
-        return false;
+    !is_subagent_output(name)
+}
+
+/// `read`, `bash` (including `bash_output`), `grep`, and `glob` share the
+/// wide window. Everything else uses the general tool cap.
+fn output_caps(name: &str) -> (usize, usize) {
+    if matches!(name, "read" | "bash" | "bash_output" | "grep" | "glob") {
+        (MAX_READ_CHARS, MAX_READ_LINES)
+    } else {
+        (MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_OUTPUT_LINES)
     }
-    matches!(
-        name,
-        "read"
-            | "grep"
-            | "glob"
-            | "dir_list"
-            | "graph_query"
-            | "recall"
-            | "message_find"
-            | "message_load"
-            | "web_search"
-            | "web_fetch"
-            | "web_page"
-            | "web_search_full"
-    )
+}
+
+/// Fresh notice queue. The parent session holds one; a sub-agent spawn
+/// replaces `ToolCtx::repeat_notices` with another so the two loops do not
+/// share warnings.
+pub fn new_repeat_notices() -> Arc<Mutex<Vec<String>>> {
+    Arc::new(Mutex::new(Vec::new()))
+}
+
+/// Take every queued repeat notice, joined by a blank line. `None` if empty.
+pub fn drain_repeat_notices(notices: &Mutex<Vec<String>>) -> Option<String> {
+    let mut guard = notices.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_empty() {
+        return None;
+    }
+    Some(std::mem::take(&mut *guard).join("\n\n"))
 }
 
 /// Per-session counter of exact tool calls (name + canonical arguments).
@@ -60,8 +69,8 @@ impl CallTrack {
         Arc::new(Self::default())
     }
 
-    /// Increment and return the new count for this exact name+args pair.
-    /// Sub-agent, git_*, and other non-cacheable tools are not tracked.
+    /// Sub-agent reports are not tracked. Every other tool is: a repeat is a
+    /// notice, not a rewrite of the result.
     pub fn hit(&self, name: &str, args: &Value) -> u32 {
         if !repeat_tracked(name) {
             return 1;
@@ -104,32 +113,29 @@ fn canonical_json(value: &Value) -> String {
     }
 }
 
-/// Clip a tool result: **chars first** (20k), then 20 lines. Sub-agent
-/// reports pass through unchanged. Preserves a leading `MEDIA_WORKDIR:`
-/// sentinel so the download side-effect still fires. `spill` is the session
-/// tmp path of the unclipped body, when we wrote one.
+/// Clip a tool result: **chars first**, then lines. `read`, `bash`, `grep`,
+/// and `glob` use the wide window; every other tool uses the general cap. Sub-agent reports pass through unchanged. Preserves a leading
+/// `MEDIA_WORKDIR:` sentinel so the download side-effect still fires. `spill`
+/// is the session tmp path of the unclipped body, when we wrote one.
 fn clip_tool_output(name: &str, raw: String, spill: Option<&Path>) -> String {
     if is_subagent_output(name) {
         return raw;
     }
 
+    let (max_chars, max_lines) = output_caps(name);
     let (sentinel, body) = split_media_sentinel(raw);
     let orig_chars = body.chars().count();
     let orig_lines = line_count(&body);
-    let mut text = if orig_chars > MAX_TOOL_OUTPUT_CHARS {
-        body.chars().take(MAX_TOOL_OUTPUT_CHARS).collect()
+    let mut text = if orig_chars > max_chars {
+        body.chars().take(max_chars).collect()
     } else {
         body
     };
-    if line_count(&text) > MAX_TOOL_OUTPUT_LINES {
-        text = text
-            .lines()
-            .take(MAX_TOOL_OUTPUT_LINES)
-            .collect::<Vec<_>>()
-            .join("\n");
+    if line_count(&text) > max_lines {
+        text = text.lines().take(max_lines).collect::<Vec<_>>().join("\n");
     }
 
-    let truncated = orig_chars > MAX_TOOL_OUTPUT_CHARS || orig_lines > MAX_TOOL_OUTPUT_LINES;
+    let truncated = orig_chars > max_chars || orig_lines > max_lines;
     let mut out = String::new();
     if let Some(line) = sentinel {
         out.push_str(&line);
@@ -151,35 +157,35 @@ fn clip_tool_output(name: &str, raw: String, spill: Option<&Path>) -> String {
         };
         out.push_str(&format!(
             "\n[truncated: kept {kept_chars} chars / {kept_lines} lines of {orig_chars} chars / {orig_lines} lines \
-             (max {MAX_TOOL_OUTPUT_CHARS} chars, then {MAX_TOOL_OUTPUT_LINES} lines).{where_full}]"
+             (max {max_chars} chars, then {max_lines} lines).{where_full}]"
         ));
     }
     out
 }
 
 /// Clip, spill the unclipped body to `<session>/tmp/` when truncated, then
-/// append a repeat warning when this exact call has been seen before.
+/// queue a repeat warning when this exact call has been seen before.
+/// The returned string is the tool result only — the notice is not part of it.
 pub fn finish_tool_output(ctx: &ToolCtx, name: &str, args: &Value, raw: String) -> String {
     let count = ctx.call_track.hit(name, args);
     if is_subagent_output(name) {
         return raw;
     }
+    let (max_chars, max_lines) = output_caps(name);
     let (_, body) = split_media_sentinel(raw.clone());
-    let truncated =
-        body.chars().count() > MAX_TOOL_OUTPUT_CHARS || line_count(&body) > MAX_TOOL_OUTPUT_LINES;
+    let truncated = body.chars().count() > max_chars || line_count(&body) > max_lines;
     let spill = if truncated {
         existing_full_output(&body)
             .or_else(|| spill_full_output(ctx.session_dir.as_deref(), name, &body))
     } else {
         None
     };
-    let mut out = clip_tool_output(name, raw, spill.as_deref());
+    let out = clip_tool_output(name, raw, spill.as_deref());
     if repeat_tracked(name) && count >= 2 {
-        if !out.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push('\n');
-        out.push_str(&repeat_notice(name, count));
+        ctx.repeat_notices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(repeat_notice(name, count));
     }
     out
 }

@@ -104,7 +104,7 @@ fn tee_written_when_output_would_truncate() {
         saving: true,
         log_dir: Some(dir.path().to_path_buf()),
     };
-    const MAX_CHARS: usize = crate::config::MAX_TOOL_OUTPUT_CHARS;
+    const MAX_CHARS: usize = crate::config::MAX_READ_CHARS;
     let raw = "a".repeat(MAX_CHARS + 10);
     let out = finalize_output("cat bigfile", raw, ShellExit::Code(Some(0)), &opts);
 

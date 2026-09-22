@@ -1,6 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use super::*;
+use crate::config::{
+    MAX_READ_CHARS, MAX_READ_LINES, MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_OUTPUT_LINES,
+};
 use crate::tool::{CallTrack, ToolCtx};
 use serde_json::json;
 use std::sync::{Arc, RwLock};
@@ -30,6 +33,7 @@ fn ctx() -> ToolCtx {
         sdlc_active_node_id: None,
         search_engine: None,
         call_track: CallTrack::new(),
+        repeat_notices: new_repeat_notices(),
     }
 }
 
@@ -41,9 +45,10 @@ fn short_output_passes_through() {
 
 #[test]
 fn char_cap_wins_over_line_cap() {
-    // One long line — well under 20 lines, over 20k chars.
+    // One long line, over the general char cap. write stays on that cap.
+    // bash/grep/glob share the smaller window with read.
     let raw = "x".repeat(MAX_TOOL_OUTPUT_CHARS + 50);
-    let out = clip_tool_output("read", raw, None);
+    let out = clip_tool_output("write", raw, None);
     assert!(out.contains("[truncated:"));
     assert!(out.contains("offset/limit"));
     let body = out.split("\n\n[truncated:").next().unwrap();
@@ -53,18 +58,65 @@ fn char_cap_wins_over_line_cap() {
 
 #[test]
 fn line_cap_applies_when_under_char_budget() {
-    let raw = (0..50)
+    let raw = (0..MAX_TOOL_OUTPUT_LINES + 1)
         .map(|i| format!("line-{i}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let out = clip_tool_output("bash", raw, None);
+    let out = clip_tool_output("write", raw, None);
     assert!(out.contains("[truncated:"));
     let body = out.split("\n\n[truncated:").next().unwrap();
     assert_eq!(line_count(body), MAX_TOOL_OUTPUT_LINES);
     assert!(body.chars().count() < MAX_TOOL_OUTPUT_CHARS);
     assert!(body.contains("line-0"));
-    assert!(body.contains("line-19"));
-    assert!(!body.contains("line-20"));
+    assert!(body.contains(&format!("line-{}", MAX_TOOL_OUTPUT_LINES - 1)));
+    assert!(!body.contains(&format!("line-{MAX_TOOL_OUTPUT_LINES}")));
+}
+
+#[test]
+fn wide_window_tools_match_read() {
+    let under = (0..100)
+        .map(|i| format!("line-{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for name in ["bash", "bash_output", "grep", "glob"] {
+        assert_eq!(
+            clip_tool_output(name, under.clone(), None),
+            under,
+            "{name} must not clip a 100-line body"
+        );
+    }
+    let over = (0..MAX_READ_LINES + 1)
+        .map(|i| format!("l{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for name in ["bash", "grep", "glob"] {
+        let out = clip_tool_output(name, over.clone(), None);
+        assert!(out.contains("[truncated:"), "{name}");
+        let body = out.split("\n\n[truncated:").next().unwrap();
+        assert_eq!(line_count(body), MAX_READ_LINES, "{name}");
+    }
+}
+
+#[test]
+fn read_line_cap_is_2000() {
+    let raw = (0..MAX_READ_LINES + 1)
+        .map(|i| format!("l{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let out = clip_tool_output("read", raw, None);
+    assert!(out.contains("[truncated:"));
+    let body = out.split("\n\n[truncated:").next().unwrap();
+    assert_eq!(line_count(body), MAX_READ_LINES);
+    assert!(out.contains(&MAX_READ_LINES.to_string()));
+}
+
+#[test]
+fn read_char_cap_is_90k() {
+    let raw = "x".repeat(MAX_READ_CHARS + 10);
+    let out = clip_tool_output("read", raw, None);
+    assert!(out.contains("[truncated:"));
+    let body = out.split("\n\n[truncated:").next().unwrap();
+    assert_eq!(body.chars().count(), MAX_READ_CHARS);
 }
 
 #[test]
@@ -81,7 +133,7 @@ fn subagent_output_is_not_clipped() {
 #[test]
 fn media_workdir_sentinel_survives_clip() {
     let mut raw = String::from("MEDIA_WORKDIR:/tmp/koma/media\n");
-    raw.push_str(&"y\n".repeat(40));
+    raw.push_str(&"y\n".repeat(MAX_TOOL_OUTPUT_LINES + 5));
     let out = clip_tool_output("web_download", raw, None);
     assert!(out.starts_with("MEDIA_WORKDIR:/tmp/koma/media\n"));
     assert!(out.contains("[truncated:"));
@@ -103,15 +155,18 @@ fn repeat_warns_only_on_exact_same_args() {
     let other = json!({"path": "desk.rs", "offset": 20, "limit": 20});
 
     let first = finish_tool_output(&t, "read", &same, "ok".into());
-    assert!(!first.contains("[repeat:"));
+    assert_eq!(first, "ok");
 
     let second = finish_tool_output(&t, "read", &same, "ok".into());
-    assert!(second.contains("[repeat:"));
-    assert!(second.contains("2 times"));
-    assert!(second.contains("path/offset/limit"));
+    assert_eq!(second, "ok");
+    let notices = drain_repeat_notices(&t.repeat_notices).unwrap();
+    assert!(notices.contains("[repeat:"));
+    assert!(notices.contains("2 times"));
+    assert!(notices.contains("path/offset/limit"));
 
     let paged = finish_tool_output(&t, "read", &other, "ok".into());
-    assert!(!paged.contains("[repeat:"));
+    assert_eq!(paged, "ok");
+    assert!(drain_repeat_notices(&t.repeat_notices).is_none());
 }
 
 #[test]
@@ -120,17 +175,22 @@ fn grep_repeat_uses_its_own_wording() {
     let grep = json!({"pattern": "TODO", "path": "src"});
     let _ = finish_tool_output(&t, "grep", &grep, "hit".into());
     let again = finish_tool_output(&t, "grep", &grep, "hit".into());
-    assert!(again.contains("exact grep"));
+    assert_eq!(again, "hit");
+    let notices = drain_repeat_notices(&t.repeat_notices).unwrap();
+    assert!(notices.contains("exact grep"));
 }
 
 #[test]
-fn repeat_skips_git_and_non_cacheable() {
+fn repeat_notice_does_not_touch_the_result() {
     let t = ctx();
     let cred = json!({"action": "select", "key": "id_thebokeh"});
     let raw = "__git_cred_select__::id_thebokeh";
     let _ = finish_tool_output(&t, "git_cred", &cred, raw.into());
     let again = finish_tool_output(&t, "git_cred", &cred, raw.into());
     assert_eq!(again, raw);
+    let notices = drain_repeat_notices(&t.repeat_notices).unwrap();
+    assert!(notices.contains("[repeat:"));
+    assert!(notices.contains("git_cred"));
     assert!(!again.contains("[repeat:"));
 
     for name in [
@@ -144,7 +204,14 @@ fn repeat_skips_git_and_non_cacheable() {
         let args = json!({"x": 1});
         let _ = finish_tool_output(&t, name, &args, "ok".into());
         let second = finish_tool_output(&t, name, &args, "ok".into());
-        assert!(!second.contains("[repeat:"), "{name} is not cacheable");
+        assert_eq!(second, "ok", "{name} result must stay the tool return");
+        let queued = drain_repeat_notices(&t.repeat_notices).unwrap();
+        assert!(queued.contains("[repeat:"), "{name} still warns");
+        if name == "bash" {
+            assert!(queued.contains("exact command"), "{name}");
+        } else {
+            assert!(queued.contains(name), "{name}");
+        }
     }
 }
 
@@ -155,16 +222,17 @@ fn truncated_bash_spills_into_session_tmp() {
     let mut t = ctx();
     t.session_dir = Some(dir.clone());
 
-    let raw = (0..80)
+    let raw = (0..MAX_READ_LINES + 1)
         .map(|i| format!("line-{i}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let out = finish_tool_output(&t, "bash", &json!({"command": "seq 80"}), raw.clone());
+    let out = finish_tool_output(&t, "bash", &json!({"command": "seq"}), raw.clone());
 
     assert!(out.contains("[truncated:"));
     assert!(out.contains("Full output:"));
     assert!(out.contains("offset/limit"));
-    assert!(!out.contains("line-20"));
+    assert!(out.contains("line-0"));
+    assert!(!out.contains(&format!("line-{MAX_READ_LINES}")));
 
     let tmp = dir.join("tmp");
     let spills: Vec<_> = std::fs::read_dir(&tmp)
@@ -226,4 +294,5 @@ fn subagent_is_not_tracked() {
     assert!(!first.contains("[repeat:"));
     assert!(!second.contains("[repeat:"));
     assert!(!second.contains("[truncated:"));
+    assert!(drain_repeat_notices(&t.repeat_notices).is_none());
 }

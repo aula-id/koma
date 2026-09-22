@@ -591,6 +591,9 @@ pub struct SessionRuntime {
     /// Shared into every [`crate::tool::ToolCtx`] so repeated read/grep/bash
     /// with the same arguments can warn the model.
     pub call_track: Arc<crate::tool::CallTrack>,
+    /// Repeat notices queued for this session's conversation. Drained into a
+    /// user message before the next model hop. Sub-agents do not share it.
+    pub repeat_notices: Arc<std::sync::Mutex<Vec<String>>>,
     /// Project-awareness summary (Phase 2): a few-sentence digest of the
     /// project's depth-1 docs, produced by a secondary model at startup and
     /// after `/compact`. Appended to the first System message on every request
@@ -797,6 +800,7 @@ impl SessionRuntime {
             active_cwd: None,
             dir_cache: Arc::new(RwLock::new(DirCache::default())),
             call_track: crate::tool::CallTrack::new(),
+            repeat_notices: crate::tool::new_repeat_notices(),
             awareness_summary: None,
             #[cfg(feature = "linker")]
             graph_summary: None,
