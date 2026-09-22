@@ -135,8 +135,7 @@ pub fn evaluate(session_dir: &Path) -> KeeperReport {
         let open = graph::list_open(&conn).unwrap_or_default();
         let sealed = graph::list_sealed(&conn).unwrap_or_default();
         if open.is_empty() && !sealed.is_empty() {
-            let inject =
-                crate::model::sdlc::lane::keeper_ship_hint(&mission.lane).to_string();
+            let inject = crate::model::sdlc::lane::keeper_ship_hint(&mission.lane).to_string();
             report.inject = Some(inject);
         }
     }

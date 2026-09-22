@@ -120,6 +120,12 @@ pub struct RunCli {
     pub prompt: Option<String>,
     /// Path to a prompt file (`--prompt-file`). Mutually exclusive with [`Self::prompt`].
     pub prompt_file: Option<String>,
+    /// Inline extra system-prompt suffix (`--system`). Mutually exclusive with
+    /// [`Self::system_file`]. Appended last, after coding / security / yolo.
+    pub system: Option<String>,
+    /// Path to extra system-prompt suffix (`--system-file`). Mutually exclusive
+    /// with [`Self::system`].
+    pub system_file: Option<String>,
     /// When true, block until the agent is idle (or timeout / approval).
     pub once: bool,
     /// Wall-clock seconds for `--once` (default 14400 = 4h).
@@ -163,6 +169,8 @@ impl Default for RunCli {
             name: None,
             prompt: None,
             prompt_file: None,
+            system: None,
+            system_file: None,
             once: false,
             timeout_sec: 14_400,
             session: None,
@@ -376,6 +384,8 @@ pub fn print_help() -> i32 {
          \x20   --short-send on|off  enable/disable DRSS for this session\n\
          \x20   --context-window-limit N  context override (0=detected; max 300000)\n\
          \x20   --context-model-alias ID  model name used for context detection\n\
+         \x20   --system TEXT       append to the bottom of the system prompt\n\
+         \x20   --system-file PATH  same, from a file (not with --system)\n\
          \x20   --extension ID       load an extension in this session (repeatable)\n\
          \x20   --unload-extension ID  unload an on-demand extension (repeatable)\n\
          \x20   --status             report applied settings/extensions; no prompt\n\
@@ -483,6 +493,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
         "--name",
         "--prompt",
         "--prompt-file",
+        "--system",
+        "--system-file",
         "--timeout",
         "--workdir",
         "--model",

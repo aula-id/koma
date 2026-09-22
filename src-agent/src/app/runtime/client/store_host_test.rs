@@ -114,8 +114,7 @@ fn installed_extensions_projects_registry_fields() {
 /// `read_ext_manifest_info` returns the id as name when no manifest exists.
 #[test]
 fn read_ext_manifest_info_falls_back_to_id_on_missing_manifest() {
-    let (name, panels) =
-        read_ext_manifest_info("run.koma.definitely-not-installed.test-fixture");
+    let (name, panels) = read_ext_manifest_info("run.koma.definitely-not-installed.test-fixture");
     assert_eq!(name, "run.koma.definitely-not-installed.test-fixture");
     assert!(panels.is_empty());
 }

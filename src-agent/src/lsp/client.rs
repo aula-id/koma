@@ -380,11 +380,7 @@ impl LspManager {
     fn runtime_rows(&self) -> Vec<LspRuntimeServer> {
         let mut out = Vec::with_capacity(self.servers.len());
         for (id, session) in &self.servers {
-            let open_docs = self
-                .docs
-                .values()
-                .filter(|d| d.server_id == *id)
-                .count() as u32;
+            let open_docs = self.docs.values().filter(|d| d.server_id == *id).count() as u32;
             out.push(session.to_runtime_row(open_docs));
         }
         out.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
@@ -913,13 +909,7 @@ impl LspManager {
                 ));
             }
             // Server ready — notify under lock (no long RPC).
-            self.finish_did_open_notify(
-                &spawn_id,
-                uri,
-                language_id,
-                text,
-                root_path,
-            )?;
+            self.finish_did_open_notify(&spawn_id, uri, language_id, text, root_path)?;
             return Ok(DidOpenPrep::Done);
         }
 
@@ -991,13 +981,8 @@ impl LspManager {
                     continue;
                 }
             }
-            let _ = self.finish_did_open_notify(
-                &spawn_id,
-                q.uri,
-                &q.language_id,
-                &q.text,
-                q.root_path,
-            );
+            let _ =
+                self.finish_did_open_notify(&spawn_id, q.uri, &q.language_id, &q.text, q.root_path);
         }
         Ok(())
     }
@@ -1148,7 +1133,6 @@ impl LspManager {
     }
 }
 
-
 impl ServerSession {
     /// True when the reader marked the session dead or the OS process has exited.
     fn is_dead(&self) -> bool {
@@ -1261,11 +1245,7 @@ impl ServerSession {
                 state.progress.percentage,
             )
         } else if state.phase == "error" {
-            (
-                Some("Stopped".into()),
-                state.error.clone(),
-                None,
-            )
+            (Some("Stopped".into()), state.error.clone(), None)
         } else if state.phase == "starting" {
             (Some("Starting".into()), None, None)
         } else {
@@ -1292,7 +1272,11 @@ impl ServerSession {
         self.io.notify(method, params)
     }
 
-    fn request(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+    fn request(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
         self.io.request(method, params)
     }
 }
@@ -1307,7 +1291,11 @@ impl SessionIo {
         write_message(&self.stdin, &msg)
     }
 
-    fn request(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+    fn request(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx): (Sender<PendingReply>, Receiver<PendingReply>) = mpsc::channel();
         {
@@ -1505,9 +1493,7 @@ fn reader_loop<R: Read>(stdout: R, ctx: ReaderCtx) {
                 continue;
             }
             let id = match id_val {
-                serde_json::Value::Number(n) => n
-                    .as_u64()
-                    .or_else(|| n.as_i64().map(|i| i as u64)),
+                serde_json::Value::Number(n) => n.as_u64().or_else(|| n.as_i64().map(|i| i as u64)),
                 serde_json::Value::String(s) => s.parse().ok(),
                 _ => None,
             };
@@ -1525,7 +1511,10 @@ fn reader_loop<R: Read>(stdout: R, ctx: ReaderCtx) {
                         .to_string();
                     let _ = tx.send(PendingReply::Err(msg));
                 } else {
-                    let result = msg.get("result").cloned().unwrap_or(serde_json::Value::Null);
+                    let result = msg
+                        .get("result")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
                     let _ = tx.send(PendingReply::Ok(result));
                 }
             }
@@ -1758,10 +1747,7 @@ fn handle_publish_diagnostics(params: &serde_json::Value, push: &dyn Fn(String))
             .and_then(|s| s.get("character"))
             .and_then(|v| v.as_u64())
             .unwrap_or(character as u64) as u32;
-        let severity = d
-            .get("severity")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(1) as u8;
+        let severity = d.get("severity").and_then(|v| v.as_u64()).unwrap_or(1) as u8;
         let message = d
             .get("message")
             .and_then(|m| m.as_str())
@@ -1927,7 +1913,10 @@ fn abs_path(root: &str, path: &str) -> Result<PathBuf, String> {
         return Ok(rel.to_path_buf());
     }
     for c in rel.components() {
-        if matches!(c, std::path::Component::ParentDir | std::path::Component::RootDir) {
+        if matches!(
+            c,
+            std::path::Component::ParentDir | std::path::Component::RootDir
+        ) {
             return Err("path escapes workspace".into());
         }
     }
@@ -2069,11 +2058,7 @@ fn parse_one_completion(it: &serde_json::Value) -> Option<LspCompletionItem> {
     let additional_text_edits = it
         .get("additionalTextEdits")
         .and_then(|a| a.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(parse_text_edit)
-                .collect::<Vec<_>>()
-        })
+        .map(|arr| arr.iter().filter_map(parse_text_edit).collect::<Vec<_>>())
         .filter(|v| !v.is_empty());
     let data = it.get("data").cloned();
     let commit_characters = it
@@ -2163,10 +2148,7 @@ fn markup_to_string(v: &serde_json::Value) -> String {
             return s.to_string();
         }
         if let Some(s) = obj.get("language").and_then(|x| x.as_str()) {
-            let val = obj
-                .get("value")
-                .and_then(|x| x.as_str())
-                .unwrap_or("");
+            let val = obj.get("value").and_then(|x| x.as_str()).unwrap_or("");
             return format!("```{s}\n{val}\n```");
         }
     }
@@ -2178,7 +2160,11 @@ fn parse_locations(result: &serde_json::Value) -> Vec<LspLocation> {
         return Vec::new();
     }
     if let Some(arr) = result.as_array() {
-        return arr.iter().filter_map(parse_one_location).take(200).collect();
+        return arr
+            .iter()
+            .filter_map(parse_one_location)
+            .take(200)
+            .collect();
     }
     parse_one_location(result).into_iter().collect()
 }
@@ -2234,7 +2220,11 @@ fn configuration_reply(msg: &serde_json::Value, server_id: &str) -> serde_json::
                 defaults
                     .get(section)
                     .cloned()
-                    .or_else(|| defaults.get(section.strip_prefix("rust-analyzer.").unwrap_or(section)).cloned())
+                    .or_else(|| {
+                        defaults
+                            .get(section.strip_prefix("rust-analyzer.").unwrap_or(section))
+                            .cloned()
+                    })
                     .unwrap_or_else(|| serde_json::json!({}))
             })
             .collect(),
@@ -2343,7 +2333,10 @@ mod tests {
 
     #[test]
     fn language_id_php() {
-        assert_eq!(language_id_for_path("app/Http/Controllers/UserController.php"), "php");
+        assert_eq!(
+            language_id_for_path("app/Http/Controllers/UserController.php"),
+            "php"
+        );
         assert_eq!(language_id_for_path("resources/views/welcome.phtml"), "php");
     }
 

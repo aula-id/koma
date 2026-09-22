@@ -506,8 +506,17 @@ fn build_walker(base: &Path) -> ignore::Walk {
                 let name = entry.file_name().to_string_lossy();
                 if matches!(
                     name.as_ref(),
-                    ".git" | ".koma" | "node_modules" | "target" | "dist" | "build" | ".next"
-                        | "vendor" | "__pycache__" | ".venv" | "venv"
+                    ".git"
+                        | ".koma"
+                        | "node_modules"
+                        | "target"
+                        | "dist"
+                        | "build"
+                        | ".next"
+                        | "vendor"
+                        | "__pycache__"
+                        | ".venv"
+                        | "venv"
                 ) {
                     return false;
                 }

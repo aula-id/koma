@@ -267,11 +267,8 @@ fn handle_ctrl_x_history_delete(
                     .transpose()
                     .ok()
                     .flatten();
-                let _ = crate::remote::sessions::delete_session_over_ssh(
-                    &target,
-                    auth.as_ref(),
-                    &uuid,
-                );
+                let _ =
+                    crate::remote::sessions::delete_session_over_ssh(&target, auth.as_ref(), &uuid);
                 let discovered =
                     crate::remote::sessions::list_sessions_over_ssh(&target, auth.as_ref())
                         .unwrap_or_default();

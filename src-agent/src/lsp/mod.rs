@@ -51,9 +51,7 @@ pub enum LspCli {
         force: bool,
     },
     /// `koma lsp uninstall <id>`
-    Uninstall {
-        id: String,
-    },
+    Uninstall { id: String },
     /// Bare / unknown → print usage.
     Usage,
 }
@@ -204,9 +202,6 @@ mod tests {
     #[test]
     fn parse_bare_is_usage() {
         assert!(matches!(LspCli::parse(&[]), LspCli::Usage));
-        assert!(matches!(
-            LspCli::parse(&["nope".into()]),
-            LspCli::Usage
-        ));
+        assert!(matches!(LspCli::parse(&["nope".into()]), LspCli::Usage));
     }
 }

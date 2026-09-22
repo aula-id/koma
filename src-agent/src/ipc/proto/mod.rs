@@ -443,6 +443,12 @@ pub enum ClientRequest {
         context_window_limit: Option<u64>,
         context_model_alias: Option<String>,
     },
+    /// Persist extra text at the bottom of this session's system prompt (after
+    /// coding / security / yolo / plan / SDLC). Headless `koma run --system`
+    /// / `--system-file`. Re-applied on every `rebuild_system`.
+    SetSessionSystem {
+        text: String,
+    },
 
     /// GUI composer EFFORT picker opened: derive the `/effort` menu for the
     /// foreground session's current (Main-role) model, reusing
@@ -670,10 +676,22 @@ pub enum ClientRequest {
 
     // ─── GUI terminal view (host-local, never crosses daemon socket) ────
     /// Forwarded from GuiReq::TerminalCreate — PTY creation is host-local.
-    TerminalCreate { id: String, cwd: Option<String> },
-    TerminalInput { id: String, data: String },
-    TerminalResize { id: String, cols: u16, rows: u16 },
-    TerminalKill { id: String },
+    TerminalCreate {
+        id: String,
+        cwd: Option<String>,
+    },
+    TerminalInput {
+        id: String,
+        data: String,
+    },
+    TerminalResize {
+        id: String,
+        cols: u16,
+        rows: u16,
+    },
+    TerminalKill {
+        id: String,
+    },
 }
 
 // ─── daemon -> client ────────────────────────────────────────────────────────
@@ -691,7 +709,9 @@ pub struct DaemonFrame {
 #[allow(dead_code)]
 pub enum DaemonEvent {
     /// Build-skew handshake (task #142): sent VERY FIRST on attach.
-    Hello { version: String },
+    Hello {
+        version: String,
+    },
     /// A full state projection — sent on attach and on resync. Boxed.
     Snapshot(Box<StateSnapshot>),
     /// An incremental update folded onto the existing shadow.
@@ -718,7 +738,9 @@ pub enum DaemonEvent {
     /// entirely client-side in `render_loop`/`client_run` (it detaches — or kills, then
     /// detaches — and attaches a freshly minted id); the shadow treats it as a non-visual
     /// no-op.
-    NewSession { kill: bool },
+    NewSession {
+        kill: bool,
+    },
     /// One-shot: instruct the CONTROLLING client to ATTACH to ANOTHER session's daemon (the
     /// extension `sessions.switch` hand-off to a session this daemon does not own, W7). A
     /// broker `sessions.switch` whose target uuid is NOT a live session in THIS daemon sets
@@ -729,7 +751,9 @@ pub enum DaemonEvent {
     /// (via its keyed socket). Payload-free beyond the target `session_id`. The TUI shadow
     /// treats it as a non-visual no-op (it MAY ignore the hand-off); GUI wiring lands in a
     /// later wave. Zero attached clients → structural no-op.
-    AttachSession { session_id: String },
+    AttachSession {
+        session_id: String,
+    },
     /// One-shot: signal the foreground client to connect to a remote host via SSH (the
     /// `/remote host_id` hand-off in thin-client mode). Mirrors `OpenSwapper`/`NewSession`:
     /// `Action::RemoteConnect` sets `state.rest.connect_remote_pending`; the hub drains it
@@ -973,7 +997,9 @@ pub enum DaemonEvent {
     /// [`ClientRequest::ListInstalledExtensions`] AND the re-push after a successful
     /// [`ClientRequest::InstallExtension`] / [`ClientRequest::UninstallExtension`]. The GUI
     /// host re-pushes it as an `InstalledExtensions` envelope; the TUI shadow ignores it.
-    InstalledExtensions { items: Vec<InstalledExtWire> },
+    InstalledExtensions {
+        items: Vec<InstalledExtWire>,
+    },
     /// One-shot result of an install/uninstall op. On success the authoritative registry
     /// reply is the following [`InstalledExtensions`] push; this carries the ok/error status
     /// (echoing `id` so the GUI can clear that card's pending spinner). `ok: false` +

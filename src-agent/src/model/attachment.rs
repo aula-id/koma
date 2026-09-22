@@ -287,11 +287,7 @@ pub fn paste_marker(n: usize) -> String {
 /// Disk is preferred for body bytes; if the file is missing the marker is left
 /// unchanged so the user still sees the chip reference. Image markers are
 /// never touched. Order of appearance in `text` is preserved.
-pub fn expand_paste_markers(
-    text: &str,
-    attachments: &[Attachment],
-    session_dir: &Path,
-) -> String {
+pub fn expand_paste_markers(text: &str, attachments: &[Attachment], session_dir: &Path) -> String {
     const PREFIX: &str = "[Pasted Text #";
     // Index pasted-text attachments by marker_n for O(1) lookup.
     let paste_by_n: std::collections::HashMap<usize, &Attachment> = attachments

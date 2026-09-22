@@ -1,8 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use super::*;
 use crate::model::sdlc::handoff::{
-    validate_handoff, ChildProposal, HandoffStatus, HandoffUpdates, SdlcHandoff,
-    ValidatedHandoff, CURRENT_HANDOFF_VERSION,
+    validate_handoff, ChildProposal, HandoffStatus, HandoffUpdates, SdlcHandoff, ValidatedHandoff,
+    CURRENT_HANDOFF_VERSION,
 };
 use rusqlite::Connection;
 
@@ -329,8 +329,7 @@ fn rejects_cycle_and_deep_tree() {
 #[test]
 fn cancellation_is_not_verification() {
     let conn = mem();
-    replace_nodes_from_checklist(&conn, &flat(&[("a", "cancelled"), ("b", "pending")]))
-        .unwrap();
+    replace_nodes_from_checklist(&conn, &flat(&[("a", "cancelled"), ("b", "pending")])).unwrap();
     let b_id = list_all(&conn)
         .unwrap()
         .into_iter()
@@ -987,8 +986,7 @@ fn latest_verified_commit_shas_extracts_correctly() {
         .unwrap();
 
     // Node b: verify with commit only
-    set_verify_bit_with_evidence(&conn, &b_id, true, Some("build ok | commit:ff00aa1"))
-        .unwrap();
+    set_verify_bit_with_evidence(&conn, &b_id, true, Some("build ok | commit:ff00aa1")).unwrap();
 
     let node_ids = vec![a_id.clone(), b_id.clone()];
     let shas = latest_verified_commit_shas(&conn, &node_ids).unwrap();
@@ -1091,8 +1089,12 @@ fn auto_claim_first_open_leaf_claims_pending() {
     let again = auto_claim_first_open_leaf(&conn).unwrap().expect("adopt");
     assert_eq!(again.0, claimed.0);
     let items = graph_as_todo_items(&conn).unwrap();
-    assert!(items.iter().any(|i| i.content == "first" && i.status == crate::app::mode::todo::TodoStatus::InProgress));
-    assert!(items.iter().any(|i| i.content == "second" && i.status == crate::app::mode::todo::TodoStatus::Pending));
+    assert!(items.iter().any(
+        |i| i.content == "first" && i.status == crate::app::mode::todo::TodoStatus::InProgress
+    ));
+    assert!(items
+        .iter()
+        .any(|i| i.content == "second" && i.status == crate::app::mode::todo::TodoStatus::Pending));
 }
 
 #[test]
@@ -1146,7 +1148,10 @@ fn auto_claim_order_follows_insert_not_updated_at() {
     .unwrap();
 
     let claimed = auto_claim_first_open_leaf(&conn).unwrap().expect("claim");
-    assert_eq!(claimed.1, "first", "claim order must follow rowid/insert, not updated_at");
+    assert_eq!(
+        claimed.1, "first",
+        "claim order must follow rowid/insert, not updated_at"
+    );
 
     // Seal first via verify; next auto-claim must be second (insert order).
     set_verify_bit_with_evidence(&conn, &claimed.0, true, Some("ok")).unwrap();
@@ -1157,10 +1162,16 @@ fn auto_claim_order_follows_insert_not_updated_at() {
     // Projection order: first (done), second (active), third (pending) by rowid.
     assert_eq!(items.len(), 3);
     assert_eq!(items[0].content, "first");
-    assert_eq!(items[0].status, crate::app::mode::todo::TodoStatus::Completed);
+    assert_eq!(
+        items[0].status,
+        crate::app::mode::todo::TodoStatus::Completed
+    );
     assert!(items[0].node_id.is_some());
     assert_eq!(items[1].content, "second");
-    assert_eq!(items[1].status, crate::app::mode::todo::TodoStatus::InProgress);
+    assert_eq!(
+        items[1].status,
+        crate::app::mode::todo::TodoStatus::InProgress
+    );
     assert_eq!(items[1].node_id.as_deref(), Some(next.0.as_str()));
     assert_eq!(items[2].content, "third");
     assert_eq!(items[2].status, crate::app::mode::todo::TodoStatus::Pending);
@@ -1198,13 +1209,18 @@ fn graph_as_todo_items_preserves_distinct_ids_for_duplicate_titles() {
 }
 
 fn frozen(rows: &[(&str, &str)]) -> Vec<FrozenChecklistUpdate> {
-    rows.iter().map(|(content, status)| FrozenChecklistUpdate {
-        id: None, content: (*content).into(), status: (*status).into(),
-    }).collect()
+    rows.iter()
+        .map(|(content, status)| FrozenChecklistUpdate {
+            id: None,
+            content: (*content).into(),
+            status: (*status).into(),
+        })
+        .collect()
 }
 
 fn event_count(conn: &Connection) -> i64 {
-    conn.query_row("SELECT COUNT(*) FROM sdlc_events", [], |r| r.get(0)).unwrap()
+    conn.query_row("SELECT COUNT(*) FROM sdlc_events", [], |r| r.get(0))
+        .unwrap()
 }
 
 #[test]
@@ -1214,14 +1230,29 @@ fn frozen_handover_is_order_independent_and_preserves_order() {
         replace_nodes_from_checklist(&conn, &flat(&[("a", "active"), ("b", "pending")])).unwrap();
         let original: Vec<_> = list_all(&conn).unwrap().into_iter().map(|n| n.id).collect();
         let mut rows = frozen(&[("a", "blocked"), ("b", "active")]);
-        if reverse { rows.reverse(); }
-        assert_eq!(apply_frozen_checklist(&conn, &rows).unwrap(), Some((original[1].clone(), "b".into())));
-        assert_eq!(list_all(&conn).unwrap().into_iter().map(|n| n.id).collect::<Vec<_>>(), original);
+        if reverse {
+            rows.reverse();
+        }
+        assert_eq!(
+            apply_frozen_checklist(&conn, &rows).unwrap(),
+            Some((original[1].clone(), "b".into()))
+        );
+        assert_eq!(
+            list_all(&conn)
+                .unwrap()
+                .into_iter()
+                .map(|n| n.id)
+                .collect::<Vec<_>>(),
+            original
+        );
         let mut amendment = snapshot_checklist(&conn).unwrap();
         amendment.push(flat(&[("c", "pending")]).remove(0));
         replace_nodes_from_checklist(&conn, &amendment).unwrap();
         update_node_status(&conn, &original[1], "blocked").unwrap();
-        assert_eq!(auto_claim_first_open_leaf(&conn).unwrap().unwrap().0, original[0]);
+        assert_eq!(
+            auto_claim_first_open_leaf(&conn).unwrap().unwrap().0,
+            original[0]
+        );
     }
 }
 
@@ -1250,7 +1281,14 @@ fn frozen_membership_alias_unknown_and_seal_errors_are_atomic() {
         frozen(&[("a", "done"), ("a", "done")]),
         frozen(&[("a", "done"), ("unknown", "pending")]),
         frozen(&[("a", "done"), ("b", "done")]),
-        vec![FrozenChecklistUpdate { id: Some("unknown".into()), content: "a".into(), status: "done".into() }, frozen(&[("b", "pending")]).remove(0)],
+        vec![
+            FrozenChecklistUpdate {
+                id: Some("unknown".into()),
+                content: "a".into(),
+                status: "done".into(),
+            },
+            frozen(&[("b", "pending")]).remove(0),
+        ],
     ] {
         assert!(apply_frozen_checklist(&conn, &rows).is_err());
         assert_eq!(graph_fingerprint(&conn).unwrap(), before);
@@ -1266,10 +1304,18 @@ fn frozen_membership_alias_unknown_and_seal_errors_are_atomic() {
 #[test]
 fn frozen_matching_uses_raw_titles_then_real_parent_labels() {
     let conn = mem();
-    let mut nodes = flat(&[("parent", "pending"), ("child", "pending"), ("parent › child", "pending")]);
+    let mut nodes = flat(&[
+        ("parent", "pending"),
+        ("child", "pending"),
+        ("parent › child", "pending"),
+    ]);
     nodes[1].parent_title = Some("parent".into());
     replace_nodes_from_checklist(&conn, &nodes).unwrap();
-    let mut rows = frozen(&[("parent", "pending"), ("child", "pending"), ("parent › child", "active")]);
+    let mut rows = frozen(&[
+        ("parent", "pending"),
+        ("child", "pending"),
+        ("parent › child", "active"),
+    ]);
     let owner = apply_frozen_checklist(&conn, &rows).unwrap().unwrap();
     assert_eq!(owner.0, stable_id_for_title("parent › child"));
     rows[1].content = "parent › child".into();
@@ -1282,8 +1328,16 @@ fn frozen_matching_uses_raw_titles_then_real_parent_labels() {
 fn frozen_ambiguity_is_not_removed_by_consumed_explicit_rows() {
     let conn = mem();
     replace_nodes_from_checklist(&conn, &flat(&[("a", "pending"), ("b", "pending")])).unwrap();
-    conn.execute("UPDATE sdlc_nodes SET title = 'a'", []).unwrap();
-    let rows = vec![FrozenChecklistUpdate { id: Some(stable_id_for_title("a")), content: "a".into(), status: "pending".into() }, frozen(&[("a", "pending")]).remove(0)];
+    conn.execute("UPDATE sdlc_nodes SET title = 'a'", [])
+        .unwrap();
+    let rows = vec![
+        FrozenChecklistUpdate {
+            id: Some(stable_id_for_title("a")),
+            content: "a".into(),
+            status: "pending".into(),
+        },
+        frozen(&[("a", "pending")]).remove(0),
+    ];
     assert!(apply_frozen_checklist(&conn, &rows).is_err());
 }
 
@@ -1314,7 +1368,9 @@ fn structural_trimmed_parent_lookup_preserves_raw_titles_and_ids() {
     let mut rows = flat(&[(" parent ", "pending"), (" child ", "pending")]);
     rows[1].parent_title = Some(" parent ".into());
     replace_nodes_from_checklist(&conn, &rows).unwrap();
-    let child = get_node(&conn, &stable_id_for_title(" child ")).unwrap().unwrap();
+    let child = get_node(&conn, &stable_id_for_title(" child "))
+        .unwrap()
+        .unwrap();
     assert_eq!(child.title, " child ");
     assert_eq!(child.parent_id, Some(stable_id_for_title(" parent ")));
 }
@@ -1344,7 +1400,13 @@ fn verify_competing_ownership_rejected_without_evidence_and_pending_allowed() {
     let before = graph_fingerprint(&conn).unwrap();
     let events = event_count(&conn);
     for pass in [false, true] {
-        assert!(set_verify_bit_with_evidence(&conn, &stable_id_for_title("b"), pass, Some("must rollback")).is_err());
+        assert!(set_verify_bit_with_evidence(
+            &conn,
+            &stable_id_for_title("b"),
+            pass,
+            Some("must rollback")
+        )
+        .is_err());
         assert_eq!(graph_fingerprint(&conn).unwrap(), before);
         assert_eq!(event_count(&conn), events);
     }
@@ -1369,13 +1431,30 @@ fn frozen_parent_noop_and_final_leaf_exclusivity() {
     replace_nodes_from_checklist(&conn, &rows).unwrap();
     let before = graph_fingerprint(&conn).unwrap();
     let events = event_count(&conn);
-    assert!(apply_frozen_checklist(&conn, &frozen(&[("p", "active"), ("c", "cancelled"), ("b", "active")])).is_err());
+    assert!(apply_frozen_checklist(
+        &conn,
+        &frozen(&[("p", "active"), ("c", "cancelled"), ("b", "active")])
+    )
+    .is_err());
     assert_eq!(graph_fingerprint(&conn).unwrap(), before);
     assert_eq!(event_count(&conn), events);
-    assert_eq!(apply_frozen_checklist(&conn, &frozen(&[("p", "active"), ("p › c", "active"), ("b", "pending")])).unwrap().unwrap().0, stable_id_for_title("c"));
+    assert_eq!(
+        apply_frozen_checklist(
+            &conn,
+            &frozen(&[("p", "active"), ("p › c", "active"), ("b", "pending")])
+        )
+        .unwrap()
+        .unwrap()
+        .0,
+        stable_id_for_title("c")
+    );
     assert_eq!(event_count(&conn), events);
     update_node_status(&conn, &stable_id_for_title("p"), "pending").unwrap();
-    assert!(apply_frozen_checklist(&conn, &frozen(&[("p", "active"), ("c", "active"), ("b", "pending")])).is_err());
+    assert!(apply_frozen_checklist(
+        &conn,
+        &frozen(&[("p", "active"), ("c", "active"), ("b", "pending")])
+    )
+    .is_err());
 }
 
 #[test]
@@ -1387,7 +1466,11 @@ fn frozen_sealed_parent_noop_and_rollup_failure_are_atomic() {
     set_verify_bit_with_evidence(&conn, &stable_id_for_title("c"), true, None).unwrap();
     let before = graph_fingerprint(&conn).unwrap();
     let events = event_count(&conn);
-    assert!(apply_frozen_checklist(&conn, &frozen(&[("p", "done"), ("p › c", "done")])).unwrap().is_none());
+    assert!(
+        apply_frozen_checklist(&conn, &frozen(&[("p", "done"), ("p › c", "done")]))
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(graph_fingerprint(&conn).unwrap(), before);
     assert_eq!(event_count(&conn), events);
     conn.execute_batch("CREATE TRIGGER reject_rollup BEFORE INSERT ON sdlc_events WHEN NEW.kind = 'rollup' BEGIN SELECT RAISE(ABORT, 'rollup rejected'); END;").unwrap();
@@ -1402,5 +1485,11 @@ fn frozen_cancellation_excludes_history_and_never_creates_members() {
     replace_nodes_from_checklist(&conn, &flat(&[("a", "pending"), ("b", "pending")])).unwrap();
     apply_frozen_checklist(&conn, &frozen(&[("a", "cancelled"), ("b", "active")])).unwrap();
     assert!(apply_frozen_checklist(&conn, &frozen(&[("a", "pending"), ("b", "active")])).is_err());
-    assert_eq!(apply_frozen_checklist(&conn, &frozen(&[("b", "active")])).unwrap().unwrap().0, stable_id_for_title("b"));
+    assert_eq!(
+        apply_frozen_checklist(&conn, &frozen(&[("b", "active")]))
+            .unwrap()
+            .unwrap()
+            .0,
+        stable_id_for_title("b")
+    );
 }

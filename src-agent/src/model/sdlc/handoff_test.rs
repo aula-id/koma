@@ -424,7 +424,8 @@ fn extract_handoff_only_start_marker_returns_none() {
 
 #[test]
 fn extract_handoff_invalid_json_returns_none() {
-    let report = "text\n<!-- SDLC_HANDOFF_JSON_START -->\nnot json at all\n<!-- SDLC_HANDOFF_JSON_END -->";
+    let report =
+        "text\n<!-- SDLC_HANDOFF_JSON_START -->\nnot json at all\n<!-- SDLC_HANDOFF_JSON_END -->";
     assert!(extract_handoff_from_report(report).is_none());
 }
 

@@ -100,7 +100,9 @@ pub const CATALOG: &[ServerSpec] = &[
         // Multi-binary package; binary field is the primary (json). Installer
         // also exposes vscode-html-language-server and vscode-css-language-server.
         binary: "vscode-json-language-server",
-        extensions: &["json", "jsonc", "html", "htm", "xhtml", "css", "scss", "less"],
+        extensions: &[
+            "json", "jsonc", "html", "htm", "xhtml", "css", "scss", "less",
+        ],
         kind: InstallKind::Npm,
         package: "vscode-langservers-extracted",
         args: &["--stdio"],
@@ -208,7 +210,10 @@ mod tests {
     fn find_by_extension_php() {
         let s = find_by_extension("php").expect("php");
         assert_eq!(s.id, "intelephense");
-        assert_eq!(find_by_extension("phtml").map(|s| s.id), Some("intelephense"));
+        assert_eq!(
+            find_by_extension("phtml").map(|s| s.id),
+            Some("intelephense")
+        );
     }
 
     #[test]

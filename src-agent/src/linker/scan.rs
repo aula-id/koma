@@ -825,10 +825,7 @@ struct SourceFile {
 /// Walk all roots and collect source files.
 ///
 /// Returns `None` if `cancel` is set mid-walk.
-fn collect_source_files(
-    roots: &[PathBuf],
-    cancel: Option<&AtomicBool>,
-) -> Option<Vec<SourceFile>> {
+fn collect_source_files(roots: &[PathBuf], cancel: Option<&AtomicBool>) -> Option<Vec<SourceFile>> {
     let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
     let mut files = Vec::new();
 

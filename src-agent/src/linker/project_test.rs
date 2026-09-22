@@ -137,7 +137,8 @@ fn config_cache_requires_explicit_rebuild() {
     std::fs::create_dir_all(&src).unwrap();
 
     // Initial config: gcc only.
-    let json1 = r#"[{"directory":".","file":"src/main.c","arguments":["gcc","-I","/old","src/main.c"]}]"#;
+    let json1 =
+        r#"[{"directory":".","file":"src/main.c","arguments":["gcc","-I","/old","src/main.c"]}]"#;
     std::fs::write(root.join("compile_commands.json"), json1).unwrap();
 
     let mut index = ProjectIndex::new();
@@ -150,7 +151,8 @@ fn config_cache_requires_explicit_rebuild() {
     assert_eq!(flags1.include_paths, vec!["/old".to_string()]);
 
     // Change the config file on disk WITHOUT rebuilding cache.
-    let json2 = r#"[{"directory":".","file":"src/main.c","arguments":["gcc","-I","/new","src/main.c"]}]"#;
+    let json2 =
+        r#"[{"directory":".","file":"src/main.c","arguments":["gcc","-I","/new","src/main.c"]}]"#;
     std::fs::write(root.join("compile_commands.json"), json2).unwrap();
 
     // Cache should still have old value.

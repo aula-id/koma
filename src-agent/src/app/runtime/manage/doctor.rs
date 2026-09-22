@@ -855,8 +855,7 @@ fn check_language_servers() -> CheckResult {
         ));
     }
     details.push(
-        "optional — install with: koma lsp install --all  (or install.sh --with-lsp)"
-            .to_string(),
+        "optional — install with: koma lsp install --all  (or install.sh --with-lsp)".to_string(),
     );
     let headline = format!(
         "Language servers ({managed} managed, {on_path} on PATH, {missing}/{total} missing)"

@@ -101,8 +101,7 @@ pub fn uninstall_one(id: &str) -> Result<()> {
     let _spec = catalog::find(id).ok_or_else(|| anyhow!("unknown language server id: {id}"))?;
     let dir = manifest::server_dir(id)?;
     if dir.exists() {
-        std::fs::remove_dir_all(&dir)
-            .with_context(|| format!("remove {}", dir.display()))?;
+        std::fs::remove_dir_all(&dir).with_context(|| format!("remove {}", dir.display()))?;
         println!("removed {}", dir.display());
     } else {
         println!("nothing to remove for {id} (not koma-managed)");
@@ -211,8 +210,7 @@ fn host_triple_parts() -> Result<(&'static str, &'static str)> {
 fn prepare_server_dir(id: &str) -> Result<PathBuf> {
     let dir = manifest::server_dir(id)?;
     if dir.exists() {
-        std::fs::remove_dir_all(&dir)
-            .with_context(|| format!("clear {}", dir.display()))?;
+        std::fs::remove_dir_all(&dir).with_context(|| format!("clear {}", dir.display()))?;
     }
     let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).with_context(|| format!("create {}", bin.display()))?;
@@ -272,7 +270,12 @@ fn install_github_gz(spec: &ServerSpec, progress: &mut Option<ProgressFn>) -> Re
     }
     ensure_executable(&dest)?;
     report(progress, spec.id, 95, None);
-    write_manifest(spec, &tag, "github", &format!("bin/{}", exe_name(spec.binary)))?;
+    write_manifest(
+        spec,
+        &tag,
+        "github",
+        &format!("bin/{}", exe_name(spec.binary)),
+    )?;
     println!("installed {} {} → {}", spec.id, tag, dest.display());
     Ok(())
 }
@@ -380,8 +383,8 @@ fn extract_zip_bytes(bytes: &[u8], dest: &Path) -> Result<()> {
         if let Some(parent) = out_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut out = File::create(&out_path)
-            .with_context(|| format!("create {}", out_path.display()))?;
+        let mut out =
+            File::create(&out_path).with_context(|| format!("create {}", out_path.display()))?;
         std::io::copy(&mut file, &mut out)?;
     }
     Ok(())
@@ -407,7 +410,10 @@ fn find_named_file(root: &Path, name: &str) -> Option<PathBuf> {
 
 fn install_npm(spec: &ServerSpec, progress: &mut Option<ProgressFn>) -> Result<()> {
     let npm = resolve::find_on_path("npm").ok_or_else(|| {
-        anyhow!("npm not found on PATH — install Node.js to manage {}", spec.id)
+        anyhow!(
+            "npm not found on PATH — install Node.js to manage {}",
+            spec.id
+        )
     })?;
     let dir = prepare_server_dir(spec.id)?;
     report(progress, spec.id, 10, None);
@@ -539,7 +545,10 @@ fn install_pip_venv(spec: &ServerSpec, progress: &mut Option<ProgressFn>) -> Res
     let python = resolve::find_on_path("python3")
         .or_else(|| resolve::find_on_path("python"))
         .ok_or_else(|| {
-            anyhow!("python3 not found on PATH — install Python 3 to manage {}", spec.id)
+            anyhow!(
+                "python3 not found on PATH — install Python 3 to manage {}",
+                spec.id
+            )
         })?;
     let dir = prepare_server_dir(spec.id)?;
     let venv = dir.join("venv");

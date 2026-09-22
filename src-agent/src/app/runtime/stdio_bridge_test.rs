@@ -41,9 +41,11 @@ async fn proxy_forwards_frames_both_ways() {
     let (client_stdout_w, mut client_stdout_r) = duplex(64 * 1024);
 
     let bridge = tokio::spawn(async move {
-        proxy_frames(sock_bridge, &mut { client_stdin_r }, &mut { client_stdout_w })
-            .await
-            .unwrap();
+        proxy_frames(sock_bridge, &mut { client_stdin_r }, &mut {
+            client_stdout_w
+        })
+        .await
+        .unwrap();
     });
 
     let client_to_daemon = b"{\"type\":\"Attach\"}";
@@ -96,9 +98,11 @@ async fn stdio_eof_does_not_inject_quit_daemon() {
     let (client_stdout_w, _client_stdout_r) = duplex(64 * 1024);
 
     let bridge = tokio::spawn(async move {
-        proxy_frames(sock_bridge, &mut { client_stdin_r }, &mut { client_stdout_w })
-            .await
-            .unwrap();
+        proxy_frames(sock_bridge, &mut { client_stdin_r }, &mut {
+            client_stdout_w
+        })
+        .await
+        .unwrap();
     });
 
     let detach = br#"{"type":"Detach"}"#;

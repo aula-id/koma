@@ -39,9 +39,7 @@ fn rows_none_without_grant() {
     let providers = [def("demo", "Demo Login", "device_code")];
     assert!(ext_oauth_rows_for("ext.a", true, &[], &providers).is_empty());
     // An unrelated grant does not unlock it either.
-    assert!(
-        ext_oauth_rows_for("ext.a", true, &["agents:read".to_string()], &providers).is_empty()
-    );
+    assert!(ext_oauth_rows_for("ext.a", true, &["agents:read".to_string()], &providers).is_empty());
 }
 
 /// A disabled extension contributes no rows even when granted + declaring providers.
@@ -60,9 +58,7 @@ fn rows_none_when_disabled() {
 /// Granted + enabled but declaring NO providers → no rows.
 #[test]
 fn rows_none_without_declared_providers() {
-    assert!(
-        ext_oauth_rows_for("ext.a", true, &["oauth:contribute".to_string()], &[]).is_empty()
-    );
+    assert!(ext_oauth_rows_for("ext.a", true, &["oauth:contribute".to_string()], &[]).is_empty());
 }
 
 /// Multiple declared providers → one row each, ids kept distinct.
@@ -206,8 +202,7 @@ fn poll_success_maps_token() {
 #[test]
 fn poll_success_minimal_token() {
     // Only access_token → the rest default to None.
-    let d =
-        decide_poll(&json!({ "status": "success", "token": { "access_token": "at-only" } }));
+    let d = decide_poll(&json!({ "status": "success", "token": { "access_token": "at-only" } }));
     assert_eq!(
         d,
         PollDecision::Success(ExtToken {

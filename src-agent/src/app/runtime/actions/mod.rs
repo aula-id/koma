@@ -539,8 +539,7 @@ pub(in crate::app::runtime) fn apply_action(
                 }
                 state.rest.cursor_end();
                 state.rest.palette_sel = 0;
-                state.rest.fg_mut().status =
-                    "follow-up loaded — edit and Enter to re-queue".into();
+                state.rest.fg_mut().status = "follow-up loaded — edit and Enter to re-queue".into();
             }
         }
 

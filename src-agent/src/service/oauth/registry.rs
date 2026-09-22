@@ -17,12 +17,7 @@ use crate::model::app_config::OAuthProvider;
 /// which OpenCode denies). Effort is carried in `reasoning.effort`, never as an
 /// id suffix. 9router's `-high`/`-review`/`-none` ids are ITS OWN aliases and
 /// 404/entitlement-fail here.
-pub const CODEX_MODELS: &[&str] = &[
-    "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.3-codex-spark",
-];
+pub const CODEX_MODELS: &[&str] = &["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"];
 
 /// Synthesize a `GET /models`-shaped catalogue from [`CODEX_MODELS`] so the
 /// EXISTING omnisearch machinery (`filter_models` + the model-modal renderer)
@@ -264,10 +259,7 @@ mod tests {
         assert!(!CODEX_MODELS.iter().any(|m| m.contains("-pro")));
         // Required plain ids.
         for id in ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"] {
-            assert!(
-                CODEX_MODELS.contains(&id),
-                "CODEX_MODELS missing {id}"
-            );
+            assert!(CODEX_MODELS.contains(&id), "CODEX_MODELS missing {id}");
         }
         // Static catalogue mirrors CODEX_MODELS 1:1.
         let cat = codex_static_catalogue();
@@ -281,10 +273,7 @@ mod tests {
     fn bundled_codex_overlay_covers_static_picker_ids() {
         // models.json is the effort authority; every picker id must appear there
         // so effort_menu can return minimal|low|medium|high|xhigh.
-        let raw = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../models.json"
-        ));
+        let raw = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../models.json"));
         let v: serde_json::Value = serde_json::from_str(raw).expect("models.json parses");
         let arr = v
             .get("https://chatgpt.com/backend-api/codex")
@@ -318,10 +307,7 @@ mod tests {
 
     #[test]
     fn bundled_xai_overlay_has_grok_46_and_low_high_only() {
-        let raw = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../models.json"
-        ));
+        let raw = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../models.json"));
         let v: serde_json::Value = serde_json::from_str(raw).expect("models.json parses");
         let arr = v
             .get("https://api.x.ai/v1")

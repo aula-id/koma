@@ -402,9 +402,7 @@ fn regression_model_cmd_mod_use_dedup() {
     // model_cmd.rs -> model_cmd_test.rs via #[path]
     let test_file_edges: Vec<_> = model_cmd_edges
         .iter()
-        .filter(
-            |e| matches!(&e.target, EdgeTarget::File(p) if p.ends_with("model_cmd_test.rs")),
-        )
+        .filter(|e| matches!(&e.target, EdgeTarget::File(p) if p.ends_with("model_cmd_test.rs")))
         .collect();
     assert_eq!(
         test_file_edges.len(),
@@ -671,8 +669,7 @@ fn p2_full_vs_incremental_parity() {
         .cloned()
         .unwrap_or_default();
 
-    let (inc_path, _inc_lang, inc_edges, inc_refs) =
-        scan_file(&src.join("lib.rs"), &pi).unwrap();
+    let (inc_path, _inc_lang, inc_edges, inc_refs) = scan_file(&src.join("lib.rs"), &pi).unwrap();
     assert_eq!(inc_path, lib_path);
     assert_eq!(inc_edges.len(), full_edges.len());
     assert!(inc_edges
@@ -892,7 +889,9 @@ fn collect_watchable_dirs_excludes_target_and_node_modules() {
         .map(|d| d.to_string_lossy().replace('\\', "/"))
         .collect();
     assert!(
-        joined.iter().any(|d| d.ends_with("/src") || d.ends_with("/src/nested")),
+        joined
+            .iter()
+            .any(|d| d.ends_with("/src") || d.ends_with("/src/nested")),
         "expected src dirs in {joined:?}"
     );
     assert!(

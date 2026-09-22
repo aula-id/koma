@@ -388,7 +388,8 @@ pub fn search_messages_before(
             break;
         }
         let batch_lim = limit - out.len() as i64;
-        let batch = search_messages_capped(session_dir, raw_query, batch_lim * 3, role, max_msg_id)?;
+        let batch =
+            search_messages_capped(session_dir, raw_query, batch_lim * 3, role, max_msg_id)?;
         for h in batch {
             if h.id > max_msg_id {
                 continue;

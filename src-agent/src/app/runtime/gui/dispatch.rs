@@ -761,10 +761,12 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::TutorialChat { id, messages } => {
             let messages = messages
                 .into_iter()
-                .map(|m| crate::app::runtime::client::tutorial_host::TutorialMsg {
-                    role: m.role,
-                    content: m.content,
-                })
+                .map(
+                    |m| crate::app::runtime::client::tutorial_host::TutorialMsg {
+                        role: m.role,
+                        content: m.content,
+                    },
+                )
                 .collect();
             let _ = ctx.ctl.send(HostCtl::TutorialChat { id, messages });
         }

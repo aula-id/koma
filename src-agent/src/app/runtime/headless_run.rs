@@ -59,6 +59,7 @@ fn run_inner(cli: RunCli) -> Result<i32> {
         anyhow::ensure!(!prompt.trim().is_empty(), "prompt is empty");
         Some(prompt)
     };
+    let system_extra = resolve_system(&cli)?;
     let workdir = resolve_workdir(cli.workdir.as_deref())?;
     let session_id = cli
         .session
@@ -80,12 +81,12 @@ fn run_inner(cli: RunCli) -> Result<i32> {
     let conn = attach_session_headless(&rt.handle().clone(), &session_id, workdir.as_deref())
         .with_context(|| format!("attach session {session_id}"))?;
     // Always detach, including a rejected setup. Never abandon a submitted daemon turn.
-    let result = run_attached(&conn, &cli, prompt);
+    let result = run_attached(&conn, &cli, prompt, system_extra);
     finish(&conn, &rt);
     result
 }
 
-fn has_setup(cli: &RunCli) -> bool {
+fn has_setup(cli: &RunCli, system_extra: &Option<String>) -> bool {
     cli.name.is_some()
         || cli.model.is_some()
         || cli.effort.is_some()
@@ -95,22 +96,28 @@ fn has_setup(cli: &RunCli) -> bool {
         || cli.short_send.is_some()
         || cli.context_window_limit.is_some()
         || cli.context_model_alias.is_some()
+        || system_extra.is_some()
         || !cli.extensions.is_empty()
         || !cli.unload_extensions.is_empty()
 }
 
-fn run_attached(conn: &Connection, cli: &RunCli, prompt: Option<String>) -> Result<i32> {
+fn run_attached(
+    conn: &Connection,
+    cli: &RunCli,
+    prompt: Option<String>,
+    system_extra: Option<String>,
+) -> Result<i32> {
     let mut state = request_state(conn, Duration::from_secs(10))?;
-    if state.awaiting_approval && (prompt.is_some() || has_setup(cli)) {
+    if state.awaiting_approval && (prompt.is_some() || has_setup(cli, &system_extra)) {
         eprintln!("session awaiting approval; not submitting");
         return Ok(EXIT_APPROVAL);
     }
-    if has_setup(cli) {
+    if has_setup(cli, &system_extra) {
         anyhow::ensure!(
             !state.working,
             "session is working; finish the current turn before changing run settings"
         );
-        state = apply_run_setup(conn, cli, state)?;
+        state = apply_run_setup(conn, cli, state, system_extra.as_deref())?;
     }
     if let Some(prompt) = prompt {
         conn.req_tx
@@ -128,7 +135,12 @@ fn run_attached(conn: &Connection, cli: &RunCli, prompt: Option<String>) -> Resu
     Ok(EXIT_OK)
 }
 
-fn apply_run_setup(conn: &Connection, cli: &RunCli, mut state: RunState) -> Result<RunState> {
+fn apply_run_setup(
+    conn: &Connection,
+    cli: &RunCli,
+    mut state: RunState,
+    system_extra: Option<&str>,
+) -> Result<RunState> {
     // Resolve/check the entire requested selection before changing any settings.
     for id in cli.extensions.iter().chain(&cli.unload_extensions) {
         let ext = state
@@ -209,6 +221,18 @@ fn apply_run_setup(conn: &Connection, cli: &RunCli, mut state: RunState) -> Resu
             state.mode == mode,
             "daemon did not enter requested mode '{mode}' (current: {})",
             state.mode
+        );
+    }
+    if let Some(text) = system_extra {
+        state = apply_request(
+            conn,
+            ClientRequest::SetSessionSystem {
+                text: text.to_string(),
+            },
+        )?;
+        anyhow::ensure!(
+            state.system_extra,
+            "daemon did not apply session system text"
         );
     }
     if cli.max_tokens.is_some()
@@ -373,6 +397,10 @@ fn print_state(state: &RunState, include_available: bool) {
     println!("max_tokens={}", state.max_output_tokens);
     println!("context_window_limit={}", state.context_window_limit);
     println!("context_model_alias={}", state.context_model_alias);
+    println!(
+        "system_extra={}",
+        if state.system_extra { "on" } else { "off" }
+    );
     let active: Vec<_> = state
         .extensions
         .iter()
@@ -445,6 +473,26 @@ fn resolve_prompt(cli: &RunCli) -> Result<String> {
         (Some(_), Some(_)) => bail!("pass only one of --prompt or --prompt-file"),
         (None, None) => bail!("missing --prompt or --prompt-file"),
     }
+}
+
+fn resolve_system(cli: &RunCli) -> Result<Option<String>> {
+    let text = match (&cli.system, &cli.system_file) {
+        (None, None) => return Ok(None),
+        (Some(_), Some(_)) => bail!("pass only one of --system or --system-file"),
+        (Some(s), None) => s.clone(),
+        (None, Some(path)) => {
+            let path = expand_user(path);
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?
+        }
+    };
+    let text = text.trim().to_string();
+    anyhow::ensure!(!text.is_empty(), "system text is empty");
+    anyhow::ensure!(
+        text.chars().count() <= crate::model::session::MAX_SESSION_SYSTEM_CHARS,
+        "system text exceeds {} characters",
+        crate::model::session::MAX_SESSION_SYSTEM_CHARS
+    );
+    Ok(Some(text))
 }
 
 fn resolve_workdir(raw: Option<&str>) -> Result<Option<PathBuf>> {

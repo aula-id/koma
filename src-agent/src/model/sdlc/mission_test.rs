@@ -127,8 +127,7 @@ fn seed_capsule_shows_verify_status_on_sealed() {
             owned_paths: vec![],
         },
     ];
-    let cap =
-        build_seed_capsule_with_all(&m, &[], &sealed, &[], &std::collections::HashMap::new());
+    let cap = build_seed_capsule_with_all(&m, &[], &sealed, &[], &std::collections::HashMap::new());
     assert!(cap.contains("task1 (t1) (UNVERIFIED)"));
     assert!(cap.contains("task2 (t2) (verified)"));
 }
@@ -717,8 +716,7 @@ fn tool_sandbox_roots_pins_to_bound_when_live_mismatches() {
 #[test]
 fn integrate_gate_requires_live_binding_and_frozen_target() {
     use crate::model::sdlc::graph::{
-        ensure_tables, replace_nodes_from_checklist, set_verify_bit_with_evidence,
-        ChecklistNode,
+        ensure_tables, replace_nodes_from_checklist, set_verify_bit_with_evidence, ChecklistNode,
     };
     use rusqlite::Connection;
     use std::process::Command;
@@ -929,8 +927,7 @@ fn is_ancestor_detects_related_history() {
 #[test]
 fn cleanup_done_mission_removes_integrated_resources_then_resets() {
     use crate::model::sdlc::graph::{
-        ensure_tables, replace_nodes_from_checklist, set_verify_bit_with_evidence,
-        ChecklistNode,
+        ensure_tables, replace_nodes_from_checklist, set_verify_bit_with_evidence, ChecklistNode,
     };
 
     let stamp = std::time::SystemTime::now()
@@ -1146,8 +1143,7 @@ fn capsule_hierarchical_shows_commit_sha_for_sealed() {
 #[test]
 fn integrate_gate_rejects_when_sealed_leaf_has_no_commit_evidence() {
     use crate::model::sdlc::graph::{
-        ensure_tables, replace_nodes_from_checklist, set_verify_bit_with_evidence,
-        ChecklistNode,
+        ensure_tables, replace_nodes_from_checklist, set_verify_bit_with_evidence, ChecklistNode,
     };
     use rusqlite::Connection;
     use std::process::Command;
@@ -1243,8 +1239,7 @@ fn integrate_gate_rejects_when_sealed_leaf_has_no_commit_evidence() {
 #[test]
 fn integrate_gate_accepts_when_commit_shas_are_reachable() {
     use crate::model::sdlc::graph::{
-        ensure_tables, replace_nodes_from_checklist, set_verify_bit_with_evidence,
-        ChecklistNode,
+        ensure_tables, replace_nodes_from_checklist, set_verify_bit_with_evidence, ChecklistNode,
     };
     use rusqlite::Connection;
     use std::process::Command;
@@ -1506,18 +1501,18 @@ fn verify_path_never_invokes_git_commit() {
 
 #[test]
 fn bind_preflight_warns_on_main_target() {
-    let warns = bind_preflight_warnings(std::path::Path::new("/nonexistent-repo-xyz"), Some("main"));
-    assert!(
-        warns.iter().any(|w| w.contains("main/master")),
-        "{warns:?}"
-    );
+    let warns =
+        bind_preflight_warnings(std::path::Path::new("/nonexistent-repo-xyz"), Some("main"));
+    assert!(warns.iter().any(|w| w.contains("main/master")), "{warns:?}");
 }
 
 #[test]
 fn bind_preflight_warns_detached_or_missing_repo() {
     let warns = bind_preflight_warnings(std::path::Path::new("/nonexistent-repo-xyz"), None);
     assert!(
-        warns.iter().any(|w| w.contains("detached") || w.contains("HEAD")),
+        warns
+            .iter()
+            .any(|w| w.contains("detached") || w.contains("HEAD")),
         "{warns:?}"
     );
 }

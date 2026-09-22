@@ -93,8 +93,7 @@ fn ext_panel_reply_serde_roundtrip() {
         payload: None,
         error: Some("extension not available".into()),
     };
-    let back2: DaemonEvent =
-        serde_json::from_slice(&serde_json::to_vec(&err).unwrap()).unwrap();
+    let back2: DaemonEvent = serde_json::from_slice(&serde_json::to_vec(&err).unwrap()).unwrap();
     assert_eq!(back2, err);
 }
 
@@ -118,7 +117,6 @@ fn connect_failed_serde_roundtrip() {
     let req = ClientRequest::ConnectFailed {
         error: "ssh: auth failed".into(),
     };
-    let back: ClientRequest =
-        serde_json::from_slice(&serde_json::to_vec(&req).unwrap()).unwrap();
+    let back: ClientRequest = serde_json::from_slice(&serde_json::to_vec(&req).unwrap()).unwrap();
     assert_eq!(back, req);
 }

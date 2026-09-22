@@ -140,12 +140,7 @@ pub(super) fn handle_submit(
     let had_image = attachments.iter().any(|a| a.is_image());
     // Expand `[Pasted Text #N]` → machine fences BEFORE msglog / push, using the
     // session dir so disk is SoT for body bytes.
-    let session_dir = state
-        .rest
-        .fg()
-        .session
-        .as_ref()
-        .map(|s| s.path.clone());
+    let session_dir = state.rest.fg().session.as_ref().map(|s| s.path.clone());
     let text = if let Some(dir) = session_dir.as_ref() {
         crate::model::attachment::expand_paste_markers(&text, &attachments, dir)
     } else {

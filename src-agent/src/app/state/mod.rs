@@ -38,12 +38,12 @@ pub use rest::RemoteConnectRequest;
 pub use types::{AgentMode, ToastKind};
 // Public surface for the upcoming multi-session stages; not yet referenced
 // outside this module while there is a single foreground session.
-pub use runtime::ActiveSkill;
-#[allow(unused_imports)]
-pub use runtime::SessionRuntime;
 pub use runtime::attach::{
     collapse_paste_fences_to_markers, nearest_marker_span, HistoryRecallEntry,
 };
+pub use runtime::ActiveSkill;
+#[allow(unused_imports)]
+pub use runtime::SessionRuntime;
 // The extension-injection turn budget (cost-DoS guard): shared by the deferred-drain
 // injection gate and the `chat.prompt` broker so both consult the SAME ceiling.
 pub use runtime::HistorianBatch;

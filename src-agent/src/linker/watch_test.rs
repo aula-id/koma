@@ -188,7 +188,10 @@ fn collect_watchable_dirs_skips_pruned() {
         .map(|d| d.to_string_lossy().replace('\\', "/"))
         .collect();
     assert!(
-        as_str.iter().any(|d| d.ends_with("/src") || d == &root.join("src").to_string_lossy().replace('\\', "/")),
+        as_str
+            .iter()
+            .any(|d| d.ends_with("/src")
+                || d == &root.join("src").to_string_lossy().replace('\\', "/")),
         "src must be watched: {as_str:?}"
     );
     assert!(

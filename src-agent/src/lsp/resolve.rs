@@ -293,7 +293,11 @@ fn looks_like_broken_toolchain_proxy(text: &str) -> bool {
 /// Best-effort `--version` / `version` probe. Returns the first useful line of
 /// **successful** stdout/stderr. Never treats error text as a version.
 fn probe_version(bin: &Path) -> Option<String> {
-    for args in [["--version"].as_slice(), ["version"].as_slice(), ["-V"].as_slice()] {
+    for args in [
+        ["--version"].as_slice(),
+        ["version"].as_slice(),
+        ["-V"].as_slice(),
+    ] {
         let output = Command::new(bin).args(args.iter().copied()).output().ok()?;
         if !output.status.success() {
             continue;

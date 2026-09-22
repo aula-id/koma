@@ -253,7 +253,10 @@ fn chat_request_usage_fields_serialize_by_dialect() {
         max_tokens: None,
     };
     let d_json = serde_json::to_value(&direct).unwrap();
-    assert!(d_json.get("usage").is_none(), "direct must omit usage: {d_json}");
+    assert!(
+        d_json.get("usage").is_none(),
+        "direct must omit usage: {d_json}"
+    );
     assert_eq!(d_json["stream_options"]["include_usage"], true);
 
     let oneshot_direct = ChatRequest {

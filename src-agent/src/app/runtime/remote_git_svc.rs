@@ -92,9 +92,10 @@ fn handle_req(req: RemoteGitReq, session: Option<&str>) -> RemoteGitRep {
         }
         RemoteGitReq::Fetch => op_with_status(git_remote::git_fetch(session), session),
         RemoteGitReq::Pull => op_with_status(git_remote::git_pull(session), session),
-        RemoteGitReq::Push { mode, root } => {
-            op_with_status(git_remote::git_push(mode, root.as_deref(), session), session)
-        }
+        RemoteGitReq::Push { mode, root } => op_with_status(
+            git_remote::git_push(mode, root.as_deref(), session),
+            session,
+        ),
         RemoteGitReq::Stash => op_with_status(git_stash::git_stash(session), session),
         RemoteGitReq::StashPop => op_with_status(git_stash::git_stash_pop(session), session),
         RemoteGitReq::StashList => RemoteGitRep::StashList(git_stash::git_stash_list(session)),
@@ -103,8 +104,7 @@ fn handle_req(req: RemoteGitReq, session: Option<&str>) -> RemoteGitRep {
         }
         RemoteGitReq::Repos => {
             let repos = git_repos::discover_repos(session);
-            let active = git_repos::active_repo(session)
-                .map(|p| p.to_string_lossy().into_owned());
+            let active = git_repos::active_repo(session).map(|p| p.to_string_lossy().into_owned());
             RemoteGitRep::Repos(git_repos::RepoListResult { repos, active })
         }
         RemoteGitReq::SetActiveRepo { root } => {

@@ -101,10 +101,7 @@ impl RemoteFsClient {
 
     /// Cached roots (may be empty until SettingsValues arrives).
     pub fn roots(&self) -> Vec<String> {
-        self.roots
-            .lock()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+        self.roots.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
     /// Cached roots as `PathBuf`s (for API parity with local `workdirs`).
@@ -143,10 +140,7 @@ impl RemoteFsClient {
     /// Download save-as runs the native dialog on THIS host after the remote
     /// bytes arrive — the remote thin client only reads; the laptop writes.
     pub fn handle_file_ctl(&self, ctl: &super::HostCtl, push: &dyn Fn(String)) {
-        let save_as = matches!(
-            ctl,
-            super::HostCtl::FileDownloadBytes { save_as: true, .. }
-        );
+        let save_as = matches!(ctl, super::HostCtl::FileDownloadBytes { save_as: true, .. });
         let req = match hostctl_to_req(ctl) {
             Some(r) => r,
             None => return,

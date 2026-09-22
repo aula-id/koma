@@ -140,11 +140,7 @@ impl BashJob {
     /// Format a finished job's output the way synchronous `Bash::run` would via
     /// [`crate::tool::shell::finalize_output`] — used when FG completion delivers
     /// a tool result (not a `bash_output` poll).
-    pub fn format_tool_result(
-        &self,
-        saving: bool,
-        log_dir: Option<&std::path::Path>,
-    ) -> String {
+    pub fn format_tool_result(&self, saving: bool, log_dir: Option<&std::path::Path>) -> String {
         use crate::tool::shell::{finalize_output, OutputOpts, ShellExit};
 
         let raw = self.output_snapshot();
@@ -450,10 +446,7 @@ pub fn spawn_bash_job(
                         // Drain the wait so we don't zombie.
                         let _ = child.wait();
                         timed_out_ms = Some(timeout_ms.unwrap_or(0));
-                        break Err(std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            "timeout",
-                        ));
+                        break Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"));
                     }
                     thread::sleep(Duration::from_millis(50));
                 }

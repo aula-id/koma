@@ -199,7 +199,14 @@ pub(super) fn handle_file_ctl(
             expected_fingerprint,
             request_id,
         } => {
-            let r = exec_file_save(root, path, content, expected_fingerprint, request_id, workdirs);
+            let r = exec_file_save(
+                root,
+                path,
+                content,
+                expected_fingerprint,
+                request_id,
+                workdirs,
+            );
             emit(
                 push,
                 &PushEnvelope::FileSave {

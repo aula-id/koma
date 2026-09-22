@@ -43,18 +43,11 @@ fn full_requires_tree_or_three_leaves() {
     assert!(validate_lane_graph("full", &[node("one", None)], 1).is_err());
     assert!(validate_lane_graph(
         "full",
-        &[
-            node("a", None),
-            node("b", None),
-            node("c", None),
-        ],
+        &[node("a", None), node("b", None), node("c", None),],
         1
     )
     .is_ok());
-    assert!(validate_lane_graph(
-        "full",
-        &[node("epic", None), node("leaf", Some("epic"))],
-        1
-    )
-    .is_ok());
+    assert!(
+        validate_lane_graph("full", &[node("epic", None), node("leaf", Some("epic"))], 1).is_ok()
+    );
 }

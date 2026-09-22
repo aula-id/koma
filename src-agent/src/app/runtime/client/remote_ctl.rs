@@ -204,14 +204,7 @@ pub(super) fn spawn_connect_worker(
 ) {
     std::thread::spawn(move || {
         remote_connect_worker(
-            attempt_id,
-            host_id,
-            state_tx,
-            ready_tx,
-            pw_rx,
-            cancelled,
-            shared,
-            handle,
+            attempt_id, host_id, state_tx, ready_tx, pw_rx, cancelled, shared, handle,
         );
     });
 }
@@ -357,28 +350,27 @@ fn remote_connect_worker(
                 return;
             }
             // Prefer encrypted store (shared with TUI) before prompting the UI.
-            let password = if let Some(password) =
-                crate::remote::secrets::get_remote_password(&host_id)
-            {
-                password_from_store = true;
-                password
-            } else {
-                push_state(
-                    "auth_required",
-                    Some(&user_str),
-                    Some(&host_str),
-                    None,
-                    None,
-                    Vec::new(),
-                );
-                match pw_rx.recv() {
-                    Ok(password) if !is_cancelled() => password,
-                    _ => {
-                        shared.finish(attempt_id);
-                        return;
+            let password =
+                if let Some(password) = crate::remote::secrets::get_remote_password(&host_id) {
+                    password_from_store = true;
+                    password
+                } else {
+                    push_state(
+                        "auth_required",
+                        Some(&user_str),
+                        Some(&host_str),
+                        None,
+                        None,
+                        Vec::new(),
+                    );
+                    match pw_rx.recv() {
+                        Ok(password) if !is_cancelled() => password,
+                        _ => {
+                            shared.finish(attempt_id);
+                            return;
+                        }
                     }
-                }
-            };
+                };
             shared.clear_password(attempt_id);
             Some(password)
         }
@@ -733,29 +725,16 @@ fn remote_session_worker(
     shared.finish(attempt_id);
     // Best-effort Coding-panel thin client. Failure is non-fatal — File* will
     // surface errors when used; chat still works via the bridge above.
-    let fs = super::remote_fs_client::RemoteFsClient::start(
-        &handle,
-        &ctx,
-        cwd.as_deref(),
-    )
-    .ok();
+    let fs = super::remote_fs_client::RemoteFsClient::start(&handle, &ctx, cwd.as_deref()).ok();
     // Best-effort Source Control thin client. Failure is non-fatal — Git* will
     // surface unavailable when used; chat still works via the bridge above.
-    let git = super::remote_git_client::RemoteGitClient::start(
-        &handle,
-        &ctx,
-        Some(&session_id),
-    )
-    .ok();
+    let git =
+        super::remote_git_client::RemoteGitClient::start(&handle, &ctx, Some(&session_id)).ok();
     // Best-effort Import-Graph thin client (linker feature). Failure is
     // non-fatal — ImportGraph* will surface unavailable when used.
     #[cfg(feature = "linker")]
-    let linker = super::remote_linker_client::RemoteLinkerClient::start(
-        &handle,
-        &ctx,
-        cwd.as_deref(),
-    )
-    .ok();
+    let linker =
+        super::remote_linker_client::RemoteLinkerClient::start(&handle, &ctx, cwd.as_deref()).ok();
     if let Err(error) = connected_tx.send(ActiveRemote {
         attempt_id,
         connection,

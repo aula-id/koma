@@ -81,9 +81,8 @@ pub(crate) fn remote_command(program: &str, args: &[&str]) -> Result<String> {
     }
     // Inner script runs inside bash -ilc. Source cargo env explicitly too:
     // some setups only append it to a non-sourced file, and it's cheap/idempotent.
-    let mut inner = String::from(
-        r#"[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env" 2>/dev/null; exec "#,
-    );
+    let mut inner =
+        String::from(r#"[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env" 2>/dev/null; exec "#);
     inner.push_str(&shell_quote(program));
     for arg in args {
         if arg.contains('\0') || arg.contains('\n') {

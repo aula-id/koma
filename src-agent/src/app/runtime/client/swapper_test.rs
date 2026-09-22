@@ -62,10 +62,7 @@ fn remote_snapshot_tags_rows_and_preserves_foreground_session() {
         Some("alice@example.test")
     );
     assert_eq!(
-        hub.history[0]
-            .path
-            .file_name()
-            .and_then(|n| n.to_str()),
+        hub.history[0].path.file_name().and_then(|n| n.to_str()),
         Some("hist-1")
     );
     // Live ids must not also appear in history even if the payload double-listed them.
@@ -148,7 +145,5 @@ fn remote_history_row_carries_host_and_uuid_filename() {
         Some("dead-uuid")
     );
     assert_eq!(row.remote_host.as_deref(), Some("alice@example.test"));
-    assert!(!row
-        .path
-        .starts_with(std::path::Path::new("/"))); // synthetic, not a real laptop path root
+    assert!(!row.path.starts_with(std::path::Path::new("/"))); // synthetic, not a real laptop path root
 }

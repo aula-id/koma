@@ -266,13 +266,13 @@ pub(super) fn finish_tool_round(
     // ordinary todos are only for the TUI /todo overlay outside Plan/SDLC).
     let mode = state.rest.sessions[sess_idx].agent_mode;
     state.rest.sessions[sess_idx].plan_todos = match mode {
-        crate::app::state::AgentMode::Plan | crate::app::state::AgentMode::Sdlc => state
-            .rest
-            .sessions[sess_idx]
-            .session
-            .as_ref()
-            .map(|sess| crate::app::mode::todo::load_current_todos_for_mode(sess, mode))
-            .unwrap_or_default(),
+        crate::app::state::AgentMode::Plan | crate::app::state::AgentMode::Sdlc => {
+            state.rest.sessions[sess_idx]
+                .session
+                .as_ref()
+                .map(|sess| crate::app::mode::todo::load_current_todos_for_mode(sess, mode))
+                .unwrap_or_default()
+        }
         _ => Vec::new(),
     };
 

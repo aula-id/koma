@@ -25,12 +25,7 @@ pub fn find_marker_spans(text: &str) -> Vec<MarkerSpan> {
     out
 }
 
-fn collect_prefix_spans(
-    text: &str,
-    prefix: &str,
-    kind: AttachmentKind,
-    out: &mut Vec<MarkerSpan>,
-) {
+fn collect_prefix_spans(text: &str, prefix: &str, kind: AttachmentKind, out: &mut Vec<MarkerSpan>) {
     for (i, _) in text.match_indices(prefix) {
         let after_prefix = &text[i + prefix.len()..];
         let digits: String = after_prefix

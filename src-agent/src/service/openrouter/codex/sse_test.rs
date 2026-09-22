@@ -12,9 +12,8 @@ fn output_text_delta() {
 
 #[test]
 fn reasoning_summary_delta() {
-    let e =
-        parse_event(r#"{"type":"response.reasoning_summary_text.delta","delta":"thinking"}"#)
-            .unwrap();
+    let e = parse_event(r#"{"type":"response.reasoning_summary_text.delta","delta":"thinking"}"#)
+        .unwrap();
     match e {
         ResponsesEvent::ReasoningSummaryTextDelta { delta } => assert_eq!(delta, "thinking"),
         other => panic!("wrong variant: {other:?}"),
@@ -128,9 +127,8 @@ fn completed_usage_defaults_when_absent() {
 
 #[test]
 fn failed_event() {
-    let e =
-        parse_event(r#"{"type":"response.failed","response":{"error":{"message":"boom"}}}"#)
-            .unwrap();
+    let e = parse_event(r#"{"type":"response.failed","response":{"error":{"message":"boom"}}}"#)
+        .unwrap();
     match e {
         ResponsesEvent::Failed { response } => {
             let msg = response.unwrap()["error"]["message"]

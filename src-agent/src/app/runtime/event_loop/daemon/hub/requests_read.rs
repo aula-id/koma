@@ -169,14 +169,8 @@ impl DaemonHub {
     /// GUI Usage panel: compute LAST-7-DAYS preview from THIS daemon host's
     /// `~/.koma/usage.sqlite` and reply one-shot. Read-only; no attach/snapshot.
     /// Bridged so a remote-attached GUI sees the session machine's ledger.
-    pub(super) fn usage_preview(
-        &mut self,
-        idx: usize,
-        session: Option<String>,
-        scope: String,
-    ) {
-        let result =
-            crate::app::runtime::client::diff::compute_usage_preview(session.as_deref());
+    pub(super) fn usage_preview(&mut self, idx: usize, session: Option<String>, scope: String) {
+        let result = crate::app::runtime::client::diff::compute_usage_preview(session.as_deref());
         self.send_to(
             idx,
             DaemonEvent::UsagePreview {

@@ -177,12 +177,7 @@ fn rejects_disallowed_and_invalid_sources() {
     put(&ws.join("nested/a.png"), PNG);
     let session_a = base.join("sessions/session-a");
     std::fs::create_dir_all(session_a.join("images")).unwrap();
-    let ctx = ctx(
-        ws.clone(),
-        vec![ws.clone()],
-        scratch,
-        Some(session_a),
-    );
+    let ctx = ctx(ws.clone(), vec![ws.clone()], scratch, Some(session_a));
     for p in [
         &other,
         &persistent_root,
@@ -205,9 +200,7 @@ fn rejects_disallowed_and_invalid_sources() {
         std::os::unix::fs::symlink(&outside, ws.join("escape.png")).unwrap();
         assert!(read_validated_image(&ctx, "escape.png").is_err());
         // Symlink from session images/ out of allowlist must fail after canonicalize.
-        let escape_in_images = base
-            .join("sessions/session-a/images")
-            .join("99-escape.png");
+        let escape_in_images = base.join("sessions/session-a/images").join("99-escape.png");
         std::os::unix::fs::symlink(&outside, &escape_in_images).unwrap();
         assert!(read_validated_image(&ctx, "images/99-escape.png").is_err());
     }

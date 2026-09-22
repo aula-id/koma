@@ -777,7 +777,10 @@ fn request_scan_single_flight_no_stacked_spawns() {
 
     // Thrash: many supersede requests while a worker may be running.
     for _ in 0..20 {
-        request_scan(&state, vec![PathBuf::from("/nonexistent_for_single_flight")]);
+        request_scan(
+            &state,
+            vec![PathBuf::from("/nonexistent_for_single_flight")],
+        );
     }
     std::thread::sleep(std::time::Duration::from_millis(50));
 

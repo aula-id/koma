@@ -23,8 +23,7 @@ fn lists_companions_and_skips_entry_files() {
 
 #[test]
 fn lists_subdir_companions_one_level_deep() {
-    let tmp =
-        std::env::temp_dir().join(format!("koma-guard-test-subdir-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("koma-guard-test-subdir-{}", std::process::id()));
     let refs = tmp.join("references");
     std::fs::create_dir_all(&refs).unwrap();
     std::fs::write(tmp.join("SKILL.md"), "# skill").unwrap();
@@ -40,8 +39,7 @@ fn lists_subdir_companions_one_level_deep() {
 
 #[test]
 fn flat_skill_dir_shows_no_companions() {
-    let tmp =
-        std::env::temp_dir().join(format!("koma-guard-test-empty-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("koma-guard-test-empty-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).unwrap();
     std::fs::write(tmp.join("SKILL.md"), "# skill").unwrap();
     // No other files.

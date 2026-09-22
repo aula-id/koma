@@ -86,8 +86,7 @@ fn map_detail_counts_contributions_and_reads_requires() {
 /// unsigned shape `(empty, None)` — the caller's dev-unsigned trigger.
 #[test]
 fn parse_integrity_json_reads_or_degrades() {
-    let (sha, sig) =
-        parse_integrity_json(r#"{"sha256":"3b1f","signature":"MEUCIQ==","size":123}"#);
+    let (sha, sig) = parse_integrity_json(r#"{"sha256":"3b1f","signature":"MEUCIQ==","size":123}"#);
     assert_eq!(sha, "3b1f");
     assert_eq!(sig.as_deref(), Some("MEUCIQ=="));
 

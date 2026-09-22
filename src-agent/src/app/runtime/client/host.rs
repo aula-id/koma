@@ -36,8 +36,8 @@ use super::push_proto::{
     push_remote_state, push_route_list, push_settings_values, push_switching, push_usage_preview,
 };
 use super::store_host;
-use super::tutorial_host;
 use super::swapper::build_local_hub;
+use super::tutorial_host;
 use super::{push_loop, render, HostCtl, StreamView};
 
 /// Resolve a saved/ad-hoc remote target + session into [`HostStep::RemoteAttach`].
@@ -245,9 +245,9 @@ pub(in crate::app::runtime) fn run_host_relay(
     ));
     // Host-spawned language servers for Monaco (completion/hover/definition/diagnostics).
     // Shared across swapper/attached like TerminalManager so open docs survive attach.
-    let lsp_manager = std::sync::Arc::new(std::sync::Mutex::new(
-        crate::lsp::LspManager::new(push.clone()),
-    ));
+    let lsp_manager = std::sync::Arc::new(std::sync::Mutex::new(crate::lsp::LspManager::new(
+        push.clone(),
+    )));
 
     // Startup: attach directly to `--session`, else open cold into the swapper.
     // With `remote_target` + `session`, open a second-window remote attach
@@ -255,7 +255,13 @@ pub(in crate::app::runtime) fn run_host_relay(
     let mut step = if let (Some(session_id), Some(target_str)) =
         (opts.session.clone(), opts.remote_target.clone())
     {
-        match bootstrap_remote_attach_step(&target_str, &session_id, opts.remote_key.as_deref(), opts.remote_port, opts.cwd.clone()) {
+        match bootstrap_remote_attach_step(
+            &target_str,
+            &session_id,
+            opts.remote_key.as_deref(),
+            opts.remote_port,
+            opts.cwd.clone(),
+        ) {
             Ok(step) => step,
             Err(e) => {
                 crate::model::store::append_global_error_log(
@@ -709,24 +715,22 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     .and_then(super::diff::session_workdirs_for)
                     .unwrap_or_default();
                 let session = current.map(str::to_string);
-                std::thread::spawn(move || {
-                    match &ctl {
-                        HostCtl::FileContentSearch { .. } | HostCtl::FileContentReplace { .. } => {
-                            super::content_search::handle_content_ctl(
-                                &ctl,
-                                &push2,
-                                &workdirs,
-                                session.as_deref(),
-                            );
-                        }
-                        _ => {
-                            super::file_ops::handle_file_ctl(
-                                &ctl,
-                                &push2,
-                                &workdirs,
-                                session.as_deref(),
-                            );
-                        }
+                std::thread::spawn(move || match &ctl {
+                    HostCtl::FileContentSearch { .. } | HostCtl::FileContentReplace { .. } => {
+                        super::content_search::handle_content_ctl(
+                            &ctl,
+                            &push2,
+                            &workdirs,
+                            session.as_deref(),
+                        );
+                    }
+                    _ => {
+                        super::file_ops::handle_file_ctl(
+                            &ctl,
+                            &push2,
+                            &workdirs,
+                            session.as_deref(),
+                        );
                     }
                 });
             }
@@ -972,9 +976,19 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 super::lsp_host::spawn_lsp_uninstall(P::clone(push), id);
             }
 
-            Ok(HostCtl::LspDidOpen { root, path, language_id, text }) => {
+            Ok(HostCtl::LspDidOpen {
+                root,
+                path,
+                language_id,
+                text,
+            }) => {
                 super::lsp_host::handle_client_ctl(
-                    HostCtl::LspDidOpen { root, path, language_id, text },
+                    HostCtl::LspDidOpen {
+                        root,
+                        path,
+                        language_id,
+                        text,
+                    },
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
@@ -1018,21 +1032,55 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
-            Ok(HostCtl::LspCompletionResolve { root, path, item, request_id }) => {
+            Ok(HostCtl::LspCompletionResolve {
+                root,
+                path,
+                item,
+                request_id,
+            }) => {
                 super::lsp_host::handle_client_ctl(
-                    HostCtl::LspCompletionResolve { root, path, item, request_id },
+                    HostCtl::LspCompletionResolve {
+                        root,
+                        path,
+                        item,
+                        request_id,
+                    },
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
-            Ok(HostCtl::LspHover { root, path, line, character, request_id }) => {
+            Ok(HostCtl::LspHover {
+                root,
+                path,
+                line,
+                character,
+                request_id,
+            }) => {
                 super::lsp_host::handle_client_ctl(
-                    HostCtl::LspHover { root, path, line, character, request_id },
+                    HostCtl::LspHover {
+                        root,
+                        path,
+                        line,
+                        character,
+                        request_id,
+                    },
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
-            Ok(HostCtl::LspDefinition { root, path, line, character, request_id }) => {
+            Ok(HostCtl::LspDefinition {
+                root,
+                path,
+                line,
+                character,
+                request_id,
+            }) => {
                 super::lsp_host::handle_client_ctl(
-                    HostCtl::LspDefinition { root, path, line, character, request_id },
+                    HostCtl::LspDefinition {
+                        root,
+                        path,
+                        line,
+                        character,
+                        request_id,
+                    },
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
@@ -1056,9 +1104,17 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
-            Ok(HostCtl::LspDocumentSymbol { root, path, request_id }) => {
+            Ok(HostCtl::LspDocumentSymbol {
+                root,
+                path,
+                request_id,
+            }) => {
                 super::lsp_host::handle_client_ctl(
-                    HostCtl::LspDocumentSymbol { root, path, request_id },
+                    HostCtl::LspDocumentSymbol {
+                        root,
+                        path,
+                        request_id,
+                    },
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
@@ -2012,9 +2068,19 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
             }
             Ok(HostCtl::HistoryPage { .. }) => {}
 
-            Ok(HostCtl::LspDidOpen { root, path, language_id, text }) => {
+            Ok(HostCtl::LspDidOpen {
+                root,
+                path,
+                language_id,
+                text,
+            }) => {
                 super::lsp_host::handle_client_ctl(
-                    HostCtl::LspDidOpen { root, path, language_id, text },
+                    HostCtl::LspDidOpen {
+                        root,
+                        path,
+                        language_id,
+                        text,
+                    },
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
@@ -2058,21 +2124,55 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
-            Ok(HostCtl::LspCompletionResolve { root, path, item, request_id }) => {
+            Ok(HostCtl::LspCompletionResolve {
+                root,
+                path,
+                item,
+                request_id,
+            }) => {
                 super::lsp_host::handle_client_ctl(
-                    HostCtl::LspCompletionResolve { root, path, item, request_id },
+                    HostCtl::LspCompletionResolve {
+                        root,
+                        path,
+                        item,
+                        request_id,
+                    },
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
-            Ok(HostCtl::LspHover { root, path, line, character, request_id }) => {
+            Ok(HostCtl::LspHover {
+                root,
+                path,
+                line,
+                character,
+                request_id,
+            }) => {
                 super::lsp_host::handle_client_ctl(
-                    HostCtl::LspHover { root, path, line, character, request_id },
+                    HostCtl::LspHover {
+                        root,
+                        path,
+                        line,
+                        character,
+                        request_id,
+                    },
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
-            Ok(HostCtl::LspDefinition { root, path, line, character, request_id }) => {
+            Ok(HostCtl::LspDefinition {
+                root,
+                path,
+                line,
+                character,
+                request_id,
+            }) => {
                 super::lsp_host::handle_client_ctl(
-                    HostCtl::LspDefinition { root, path, line, character, request_id },
+                    HostCtl::LspDefinition {
+                        root,
+                        path,
+                        line,
+                        character,
+                        request_id,
+                    },
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
@@ -2096,9 +2196,17 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
-            Ok(HostCtl::LspDocumentSymbol { root, path, request_id }) => {
+            Ok(HostCtl::LspDocumentSymbol {
+                root,
+                path,
+                request_id,
+            }) => {
                 super::lsp_host::handle_client_ctl(
-                    HostCtl::LspDocumentSymbol { root, path, request_id },
+                    HostCtl::LspDocumentSymbol {
+                        root,
+                        path,
+                        request_id,
+                    },
                     std::sync::Arc::clone(lsp_manager),
                 );
             }
@@ -2371,9 +2479,7 @@ fn host_remote(
             }
         }
         push_loop::HostTransition::RemoteAttach {
-            session_id,
-            cwd,
-            ..
+            session_id, cwd, ..
         } => {
             *current = None;
             HostStep::RemoteAttach {

@@ -69,6 +69,7 @@ mod host_config;
 pub(crate) mod import_graph;
 mod input;
 mod keys;
+mod lsp_host;
 mod project;
 mod project_config;
 mod push_intercept;
@@ -80,16 +81,15 @@ pub(crate) mod remote;
 mod remote_ctl;
 mod remote_fs_client;
 mod remote_git_client;
-mod lsp_host;
 #[cfg(feature = "linker")]
 mod remote_linker_client;
 mod render;
 mod shadow;
 mod store_host;
-pub(crate) mod tutorial_host;
 mod swapper;
 mod swapper_keys;
 mod terminal_host;
+pub(crate) mod tutorial_host;
 
 #[cfg(test)]
 #[path = "analytics_test.rs"]
@@ -948,10 +948,22 @@ pub(super) enum HostCtl {
     CancelRemoteConnect,
 
     // ─── GUI terminal view ──────────────────────────────────────────────
-    TerminalCreate { id: String, cwd: Option<String> },
-    TerminalInput { id: String, data: String },
-    TerminalResize { id: String, cols: u16, rows: u16 },
-    TerminalKill { id: String },
+    TerminalCreate {
+        id: String,
+        cwd: Option<String>,
+    },
+    TerminalInput {
+        id: String,
+        data: String,
+    },
+    TerminalResize {
+        id: String,
+        cols: u16,
+        rows: u16,
+    },
+    TerminalKill {
+        id: String,
+    },
 
     /// Pull one page of older chat history held after a windowed first Snapshot.
     /// `before` is the FE's current oldest display idx (exclusive upper bound).
@@ -1029,8 +1041,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
         if let Some(ref k) = opts.remote_key {
             rt.key = Some(k.clone());
         }
-        let host_id =
-            crate::remote::secrets::host_id_for_address(&rt.user, &rt.host, rt.port);
+        let host_id = crate::remote::secrets::host_id_for_address(&rt.user, &rt.host, rt.port);
         let pre_resolved = crate::remote::auth::resolve_ssh_auth(
             &rt,
             host_id.as_deref(),
@@ -1240,7 +1251,8 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                         session_id: req.session_id.as_deref(),
                                         host_id: req.host_id.as_deref(),
                                         pre_resolved: Some(pre_resolved),
-                                        interactive: crate::remote::auth::InteractivePassword::TuiModal,
+                                        interactive:
+                                            crate::remote::auth::InteractivePassword::TuiModal,
                                         terminal: Some(&mut terminal),
                                     },
                                 );
@@ -1354,15 +1366,13 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                 match resume_password {
                                     Some(pw) => Ok(Some(pw)),
                                     None => (|| {
-                                        let mut rt =
-                                            crate::remote::parse_target(&attach_target)?;
+                                        let mut rt = crate::remote::parse_target(&attach_target)?;
                                         if let Some(ref k) = attach_key {
                                             rt.key = Some(k.clone());
                                         }
-                                        let host_id =
-                                            crate::remote::secrets::host_id_for_address(
-                                                &rt.user, &rt.host, rt.port,
-                                            );
+                                        let host_id = crate::remote::secrets::host_id_for_address(
+                                            &rt.user, &rt.host, rt.port,
+                                        );
                                         let resolved = crate::remote::auth::resolve_ssh_auth(
                                             &rt,
                                             host_id.as_deref(),
@@ -1382,119 +1392,128 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                     ClientState::Swapper(hub)
                                 }
                                 Ok(prefilled) => {
-                            let result = remote_attach(
-                                &mut terminal,
-                                &attach_target,
-                                attach_key.as_deref(),
-                                prefilled.as_deref(),
-                                new_session,
-                                if new_session {
-                                    None
-                                } else {
-                                    Some(session_id.as_str())
-                                },
-                            );
+                                    let result = remote_attach(
+                                        &mut terminal,
+                                        &attach_target,
+                                        attach_key.as_deref(),
+                                        prefilled.as_deref(),
+                                        new_session,
+                                        if new_session {
+                                            None
+                                        } else {
+                                            Some(session_id.as_str())
+                                        },
+                                    );
 
-                            // Re-own terminal after remote session (remote may have
-                            // joined our alt-screen; refresh guard cleanly).
-                            drop(terminal);
-                            drop(_guard);
-                            _guard = TerminalGuard::enter()?;
-                            crate::app::runtime::actions::apply_mouse_capture(
-                                crate::model::settings::MouseCapture::Auto,
-                            );
-                            let backend = CrosstermBackend::new(stdout());
-                            terminal = Terminal::new(backend)?;
-                            terminal.clear()?;
+                                    // Re-own terminal after remote session (remote may have
+                                    // joined our alt-screen; refresh guard cleanly).
+                                    drop(terminal);
+                                    drop(_guard);
+                                    _guard = TerminalGuard::enter()?;
+                                    crate::app::runtime::actions::apply_mouse_capture(
+                                        crate::model::settings::MouseCapture::Auto,
+                                    );
+                                    let backend = CrosstermBackend::new(stdout());
+                                    terminal = Terminal::new(backend)?;
+                                    terminal.clear()?;
 
-                            match result {
-                                Ok(crate::remote::client::RemoteExit::Resume { .. })
-                                | Ok(crate::remote::client::RemoteExit::NewSession { .. }) => {
-                                    // The user opened the swapper inside the remote
-                                    // session — rebuild the remote hub.
-                                    if let Ok(rt) = crate::remote::parse_target(&host) {
-                                        // Keep the existing target/auth context when returning
-                                        // from a remote session; a password prompt must not be
-                                        // repeated merely because the user opened `/resume`.
-                                        let (rt, password, remote_id, remote_cwd) =
-                                            match remote_resume.take() {
-                                                Some((saved, password, id, cwd)) => {
-                                                    (saved, password, id, cwd)
-                                                }
-                                                None => (rt, None, None, None),
-                                            };
-                                        remote_resume = Some((
-                                            rt.clone(),
-                                            password.clone(),
-                                            remote_id.clone(),
-                                            remote_cwd,
-                                        ));
-                                        prev_session = current_session_id.take();
-                                        let hub = build_remote_hub(
-                                            &rt,
-                                            password.as_deref(),
-                                            remote_id.as_deref(),
-                                        );
-                                        ClientState::Swapper(hub)
-                                    } else {
-                                        // Can't parse target — degrade to local swapper.
-                                        prev_session = current_session_id.take();
-                                        remote_resume = None;
-                                        ClientState::Swapper(build_local_hub(
-                                            prev_session.as_deref(),
-                                        ))
-                                    }
-                                }
-                                Ok(crate::remote::client::RemoteExit::Exit) => {
-                                    // Ordinary remote QUIT means detach and return to the local
-                                    // client; it must never reopen the remote hub.
-                                    // ControlMaster already closed in run_remote_client_with_cwd.
-                                    remote_resume = None;
-                                    match prev_session.take() {
-                                        Some(previous) => {
-                                            match attach_session(&mut terminal, &handle, &previous)
-                                            {
-                                                Ok(conn) => {
-                                                    current_session_id = Some(previous);
-                                                    ClientState::Attached(conn)
-                                                }
-                                                Err(error) => {
-                                                    crate::model::store::append_global_error_log(
+                                    match result {
+                                        Ok(crate::remote::client::RemoteExit::Resume {
+                                            ..
+                                        })
+                                        | Ok(crate::remote::client::RemoteExit::NewSession {
+                                            ..
+                                        }) => {
+                                            // The user opened the swapper inside the remote
+                                            // session — rebuild the remote hub.
+                                            if let Ok(rt) = crate::remote::parse_target(&host) {
+                                                // Keep the existing target/auth context when returning
+                                                // from a remote session; a password prompt must not be
+                                                // repeated merely because the user opened `/resume`.
+                                                let (rt, password, remote_id, remote_cwd) =
+                                                    match remote_resume.take() {
+                                                        Some((saved, password, id, cwd)) => {
+                                                            (saved, password, id, cwd)
+                                                        }
+                                                        None => (rt, None, None, None),
+                                                    };
+                                                remote_resume = Some((
+                                                    rt.clone(),
+                                                    password.clone(),
+                                                    remote_id.clone(),
+                                                    remote_cwd,
+                                                ));
+                                                prev_session = current_session_id.take();
+                                                let hub = build_remote_hub(
+                                                    &rt,
+                                                    password.as_deref(),
+                                                    remote_id.as_deref(),
+                                                );
+                                                ClientState::Swapper(hub)
+                                            } else {
+                                                // Can't parse target — degrade to local swapper.
+                                                prev_session = current_session_id.take();
+                                                remote_resume = None;
+                                                ClientState::Swapper(build_local_hub(
+                                                    prev_session.as_deref(),
+                                                ))
+                                            }
+                                        }
+                                        Ok(crate::remote::client::RemoteExit::Exit) => {
+                                            // Ordinary remote QUIT means detach and return to the local
+                                            // client; it must never reopen the remote hub.
+                                            // ControlMaster already closed in run_remote_client_with_cwd.
+                                            remote_resume = None;
+                                            match prev_session.take() {
+                                                Some(previous) => {
+                                                    match attach_session(
+                                                        &mut terminal,
+                                                        &handle,
+                                                        &previous,
+                                                    ) {
+                                                        Ok(conn) => {
+                                                            current_session_id = Some(previous);
+                                                            ClientState::Attached(conn)
+                                                        }
+                                                        Err(error) => {
+                                                            crate::model::store::append_global_error_log(
                                                         "client",
                                                         &format!(
                                                             "could not reconnect to session {previous}: {error:#}"
                                                         ),
                                                     );
-                                                    ClientState::Swapper(build_local_hub(None))
+                                                            ClientState::Swapper(build_local_hub(
+                                                                None,
+                                                            ))
+                                                        }
+                                                    }
                                                 }
+                                                None => break,
                                             }
                                         }
-                                        None => break,
+                                        Err(_) => {
+                                            if let Some((rt, password, remote_id, _cwd)) =
+                                                remote_resume.take()
+                                            {
+                                                remote_resume = Some((
+                                                    rt.clone(),
+                                                    password.clone(),
+                                                    remote_id.clone(),
+                                                    None,
+                                                ));
+                                                ClientState::Swapper(build_remote_hub(
+                                                    &rt,
+                                                    password.as_deref(),
+                                                    remote_id.as_deref(),
+                                                ))
+                                            } else {
+                                                prev_session = current_session_id.take();
+                                                ClientState::Swapper(build_local_hub(
+                                                    prev_session.as_deref(),
+                                                ))
+                                            }
+                                        }
                                     }
-                                }
-                                Err(_) => {
-                                    if let Some((rt, password, remote_id, _cwd)) =
-                                        remote_resume.take()
-                                    {
-                                        remote_resume = Some((
-                                            rt.clone(),
-                                            password.clone(),
-                                            remote_id.clone(),
-                                            None,
-                                        ));
-                                        ClientState::Swapper(build_remote_hub(
-                                            &rt,
-                                            password.as_deref(),
-                                            remote_id.as_deref(),
-                                        ))
-                                    } else {
-                                        prev_session = current_session_id.take();
-                                        ClientState::Swapper(build_local_hub(
-                                            prev_session.as_deref(),
-                                        ))
-                                    }
-                                }
-                            }
                                 } // Ok(prefilled)
                             } // match prefilled_result
                         } else {
@@ -1532,10 +1551,9 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                 Some(pw) => Some(pw.clone()),
                                 None => {
                                     let rt = target.clone();
-                                    let host_id =
-                                        crate::remote::secrets::host_id_for_address(
-                                            &rt.user, &rt.host, rt.port,
-                                        );
+                                    let host_id = crate::remote::secrets::host_id_for_address(
+                                        &rt.user, &rt.host, rt.port,
+                                    );
                                     match crate::remote::auth::resolve_ssh_auth(
                                         &rt,
                                         host_id.as_deref(),
@@ -1656,12 +1674,8 @@ fn remote_attach(
     } else {
         crate::remote::auth::InteractivePassword::TuiModal
     };
-    let resolved = crate::remote::auth::resolve_ssh_auth(
-        &target,
-        host_id.as_deref(),
-        password,
-        interactive,
-    )?;
+    let resolved =
+        crate::remote::auth::resolve_ssh_auth(&target, host_id.as_deref(), password, interactive)?;
 
     let retained_password = resolved.password.clone();
     let auth_ref = resolved.auth.as_ref();

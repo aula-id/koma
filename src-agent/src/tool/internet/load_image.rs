@@ -186,9 +186,8 @@ fn resolve_session_image_n(ctx: &ToolCtx, n: usize) -> Result<PathBuf> {
         .session_dir
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("no active session; cannot resolve image_n"))?;
-    resolve_image_marker_in_session(session, n).ok_or_else(|| {
-        anyhow::anyhow!("no session image found for [Image #{n}] under images/")
-    })
+    resolve_image_marker_in_session(session, n)
+        .ok_or_else(|| anyhow::anyhow!("no session image found for [Image #{n}] under images/"))
 }
 
 /// Public helper: resolve marker N under a session directory (messages.json then glob).
@@ -228,12 +227,9 @@ fn resolve_marker_from_images_dir(images_dir: &Path, n: usize) -> Option<PathBuf
         .map(|e| e.path())
         .filter(|p| {
             p.is_file()
-                && p.file_name()
-                    .and_then(|f| f.to_str())
-                    .is_some_and(|name| {
-                        name.starts_with(&prefix)
-                            && crate::model::attachment::has_image_extension(name)
-                    })
+                && p.file_name().and_then(|f| f.to_str()).is_some_and(|name| {
+                    name.starts_with(&prefix) && crate::model::attachment::has_image_extension(name)
+                })
         })
         .collect();
     matches.sort();
@@ -260,8 +256,7 @@ fn allowed_canonical_path(ctx: &ToolCtx, canonical: &Path) -> bool {
             .canonicalize()
             .map(|scratch| canonical.starts_with(&scratch))
             .unwrap_or(false)
-    }) || session_images_canonical(ctx)
-        .is_some_and(|images| canonical.starts_with(&images))
+    }) || session_images_canonical(ctx).is_some_and(|images| canonical.starts_with(&images))
 }
 
 /// Extract `[Image #N]` marker numbers from text (same grammar as composer).

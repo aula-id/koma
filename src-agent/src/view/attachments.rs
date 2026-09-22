@@ -226,7 +226,8 @@ fn draw_paste_editor(
             let segs = crate::app::mode::editor::wrap_segments(&chars, wrap_w);
             if li == ed.row {
                 for (si, (start, end)) in segs.iter().enumerate() {
-                    if ed.col >= *start && (ed.col < *end || (ed.col == *end && si + 1 == segs.len()))
+                    if ed.col >= *start
+                        && (ed.col < *end || (ed.col == *end && si + 1 == segs.len()))
                     {
                         cursor_visual = v + si;
                         break;

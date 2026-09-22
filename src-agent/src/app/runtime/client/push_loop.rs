@@ -24,8 +24,8 @@ use super::project_config::{push_config, ConfigProjection};
 use super::push_intercept;
 use super::push_proto::{
     push_analytics, push_ext_op_result, push_file_diff, push_installed_extensions,
-    push_remote_state, push_store_catalogue, push_store_detail, push_switching, push_tutorial_chat_done,
-    push_usage_preview, PushMsg,
+    push_remote_state, push_store_catalogue, push_store_detail, push_switching,
+    push_tutorial_chat_done, push_usage_preview, PushMsg,
 };
 use super::render::{advance_local_animations, ConnectRemoteRequest, FRAME_BUDGET};
 use super::shadow::apply_frame;
@@ -191,8 +191,9 @@ pub(super) fn push_loop(
     remote_git: Option<&super::remote_git_client::RemoteGitClient>,
     // When set, Import Graph ops go to `koma remote-linker` over SSH (local
     // session_workdirs_for / local linker daemon are wrong for remote attach).
-    #[cfg(feature = "linker")]
-    remote_linker: Option<&super::remote_linker_client::RemoteLinkerClient>,
+    #[cfg(feature = "linker")] remote_linker: Option<
+        &super::remote_linker_client::RemoteLinkerClient,
+    >,
 ) -> HostTransition {
     use std::sync::mpsc::TryRecvError;
 
@@ -933,7 +934,7 @@ pub(super) fn push_loop(
                         }
                     }
                 }
-                                // USAGE PANEL preview fetch: NEVER touches the daemon (host-side ledger
+                // USAGE PANEL preview fetch: NEVER touches the daemon (host-side ledger
                 // read only, regardless of attach state) — spawn the blocking sqlite work
                 // off this thread; the result is drained + pushed below at (b-quin).
                 // `scope` AND `session` both ride along so the reply can echo them.
@@ -1001,53 +1002,42 @@ pub(super) fn push_loop(
                     super::lsp_host::spawn_lsp_uninstall_attached(lsp_tx.clone(), id);
                 }
 
-
-                Ok(super::HostCtl::LspDidOpen { root, path, language_id, text }) => {
-
+                Ok(super::HostCtl::LspDidOpen {
+                    root,
+                    path,
+                    language_id,
+                    text,
+                }) => {
                     super::lsp_host::handle_client_ctl(
-
-                        super::HostCtl::LspDidOpen { root, path, language_id, text },
-
+                        super::HostCtl::LspDidOpen {
+                            root,
+                            path,
+                            language_id,
+                            text,
+                        },
                         std::sync::Arc::clone(lsp_manager),
-
                     );
-
                 }
 
                 Ok(super::HostCtl::LspDidChange { root, path, text }) => {
-
                     super::lsp_host::handle_client_ctl(
-
                         super::HostCtl::LspDidChange { root, path, text },
-
                         std::sync::Arc::clone(lsp_manager),
-
                     );
-
                 }
 
                 Ok(super::HostCtl::LspDidSave { root, path, text }) => {
-
                     super::lsp_host::handle_client_ctl(
-
                         super::HostCtl::LspDidSave { root, path, text },
-
                         std::sync::Arc::clone(lsp_manager),
-
                     );
-
                 }
 
                 Ok(super::HostCtl::LspDidClose { root, path }) => {
-
                     super::lsp_host::handle_client_ctl(
-
                         super::HostCtl::LspDidClose { root, path },
-
                         std::sync::Arc::clone(lsp_manager),
-
                     );
-
                 }
 
                 Ok(super::HostCtl::LspCompletion {
@@ -1073,40 +1063,59 @@ pub(super) fn push_loop(
                     );
                 }
 
-                Ok(super::HostCtl::LspCompletionResolve { root, path, item, request_id }) => {
-
+                Ok(super::HostCtl::LspCompletionResolve {
+                    root,
+                    path,
+                    item,
+                    request_id,
+                }) => {
                     super::lsp_host::handle_client_ctl(
-
-                        super::HostCtl::LspCompletionResolve { root, path, item, request_id },
-
+                        super::HostCtl::LspCompletionResolve {
+                            root,
+                            path,
+                            item,
+                            request_id,
+                        },
                         std::sync::Arc::clone(lsp_manager),
-
                     );
-
                 }
 
-                Ok(super::HostCtl::LspHover { root, path, line, character, request_id }) => {
-
+                Ok(super::HostCtl::LspHover {
+                    root,
+                    path,
+                    line,
+                    character,
+                    request_id,
+                }) => {
                     super::lsp_host::handle_client_ctl(
-
-                        super::HostCtl::LspHover { root, path, line, character, request_id },
-
+                        super::HostCtl::LspHover {
+                            root,
+                            path,
+                            line,
+                            character,
+                            request_id,
+                        },
                         std::sync::Arc::clone(lsp_manager),
-
                     );
-
                 }
 
-                Ok(super::HostCtl::LspDefinition { root, path, line, character, request_id }) => {
-
+                Ok(super::HostCtl::LspDefinition {
+                    root,
+                    path,
+                    line,
+                    character,
+                    request_id,
+                }) => {
                     super::lsp_host::handle_client_ctl(
-
-                        super::HostCtl::LspDefinition { root, path, line, character, request_id },
-
+                        super::HostCtl::LspDefinition {
+                            root,
+                            path,
+                            line,
+                            character,
+                            request_id,
+                        },
                         std::sync::Arc::clone(lsp_manager),
-
                     );
-
                 }
 
                 Ok(super::HostCtl::LspReferences {
@@ -1117,9 +1126,7 @@ pub(super) fn push_loop(
                     include_declaration,
                     request_id,
                 }) => {
-
                     super::lsp_host::handle_client_ctl(
-
                         super::HostCtl::LspReferences {
                             root,
                             path,
@@ -1128,23 +1135,23 @@ pub(super) fn push_loop(
                             include_declaration,
                             request_id,
                         },
-
                         std::sync::Arc::clone(lsp_manager),
-
                     );
-
                 }
 
-                Ok(super::HostCtl::LspDocumentSymbol { root, path, request_id }) => {
-
+                Ok(super::HostCtl::LspDocumentSymbol {
+                    root,
+                    path,
+                    request_id,
+                }) => {
                     super::lsp_host::handle_client_ctl(
-
-                        super::HostCtl::LspDocumentSymbol { root, path, request_id },
-
+                        super::HostCtl::LspDocumentSymbol {
+                            root,
+                            path,
+                            request_id,
+                        },
                         std::sync::Arc::clone(lsp_manager),
-
                     );
-
                 }
                 // Extension STORE browse/detail/installed-list: NEVER touches the
                 // daemon (host-side only, regardless of attach state) — spawn the
@@ -1253,12 +1260,10 @@ pub(super) fn push_loop(
                                     .as_deref()
                                     .and_then(super::diff::session_workdirs_for)
                                     .unwrap_or_default();
-                                let configured_roots =
-                                    crate::linker::client::canonical_roots(&wds);
+                                let configured_roots = crate::linker::client::canonical_roots(&wds);
                                 let configured_root_map =
                                     crate::linker::client::configured_root_map(&wds);
-                                let resolved_session =
-                                    session_id.or_else(|| current_owned.clone());
+                                let resolved_session = session_id.or_else(|| current_owned.clone());
                                 super::import_graph::spawn_import_graph_attached(
                                     import_graph_tx.clone(),
                                     super::import_graph::ImportGraphJob {
@@ -1285,8 +1290,7 @@ pub(super) fn push_loop(
                                     .and_then(super::diff::session_workdirs_for)
                                     .map(|wds| crate::linker::client::canonical_roots(&wds))
                                     .unwrap_or_default();
-                                let resolved_session =
-                                    session_id.or_else(|| current_owned.clone());
+                                let resolved_session = session_id.or_else(|| current_owned.clone());
                                 super::import_graph::spawn_import_graph_impact_attached(
                                     impact_tx.clone(),
                                     path,
@@ -1303,8 +1307,7 @@ pub(super) fn push_loop(
                                     .as_deref()
                                     .and_then(super::diff::session_workdirs_for)
                                     .unwrap_or_default();
-                                let configured_roots =
-                                    crate::linker::client::canonical_roots(&wds);
+                                let configured_roots = crate::linker::client::canonical_roots(&wds);
                                 let configured_root_map =
                                     crate::linker::client::configured_root_map(&wds);
                                 super::import_graph::spawn_import_graph_reindex_attached(

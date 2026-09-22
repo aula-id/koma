@@ -8,6 +8,8 @@
 //! construct `mcp_manager` on demand when the daemon booted with zero MCP servers
 //! (see `actions::mcp::ensure_mcp_manager`).
 
+use anyhow::ensure;
+
 use crate::app::state::AppState;
 use crate::ipc::proto::DaemonEvent;
 
@@ -532,12 +534,7 @@ impl DaemonHub {
     }
 
     /// Headless / IPC: start or stop the security daemon (panel-free).
-    pub(super) fn set_security_enabled(
-        &mut self,
-        idx: usize,
-        state: &mut AppState,
-        enabled: bool,
-    ) {
+    pub(super) fn set_security_enabled(&mut self, idx: usize, state: &mut AppState, enabled: bool) {
         let result = if enabled {
             crate::app::runtime::actions::security::handle_security_start(state)
         } else {
@@ -549,6 +546,31 @@ impl DaemonHub {
     /// Headless / IPC: arm or disarm Layer-1 YOLO (refuses arm if sec daemon down).
     pub(super) fn set_yolo_armed(&mut self, idx: usize, state: &mut AppState, armed: bool) {
         let result = crate::app::runtime::actions::security::handle_set_yolo_armed(state, armed);
+        self.ack_or_error(idx, result);
+    }
+
+    /// Headless `koma run --system` / `--system-file`: persist extra system-prompt
+    /// text and rebuild so it sits under coding / security / yolo.
+    pub(super) fn set_session_system(&mut self, idx: usize, state: &mut AppState, text: String) {
+        let result = (|| {
+            let sess = state
+                .rest
+                .fg_mut()
+                .session
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("No active session."))?;
+            let trimmed = text.trim();
+            anyhow::ensure!(!trimmed.is_empty(), "session system text is empty");
+            anyhow::ensure!(
+                trimmed.chars().count() <= crate::model::session::MAX_SESSION_SYSTEM_CHARS,
+                "session system text exceeds {} characters",
+                crate::model::session::MAX_SESSION_SYSTEM_CHARS
+            );
+            sess.settings.session_system_extra = trimmed.to_string();
+            sess.rebuild_system();
+            sess.save()?;
+            Ok(())
+        })();
         self.ack_or_error(idx, result);
     }
 

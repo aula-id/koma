@@ -65,10 +65,10 @@ impl Manifest {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let raw = std::fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
-        let m: Manifest = serde_json::from_str(&raw)
-            .with_context(|| format!("parse {}", path.display()))?;
+        let raw =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let m: Manifest =
+            serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
         Ok(m)
     }
 
@@ -79,8 +79,7 @@ impl Manifest {
         let path = manifest_path()?;
         let tmp = path.with_extension("json.tmp");
         let raw = serde_json::to_string_pretty(self).context("serialize lsp manifest")?;
-        std::fs::write(&tmp, raw.as_bytes())
-            .with_context(|| format!("write {}", tmp.display()))?;
+        std::fs::write(&tmp, raw.as_bytes()).with_context(|| format!("write {}", tmp.display()))?;
         std::fs::rename(&tmp, &path)
             .with_context(|| format!("rename {} → {}", tmp.display(), path.display()))?;
         Ok(())
@@ -214,8 +213,7 @@ pub fn ensure_executable(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let meta = std::fs::metadata(path)
-            .with_context(|| format!("stat {}", path.display()))?;
+        let meta = std::fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
         let mut perms = meta.permissions();
         let mode = perms.mode();
         // u+rwx, g+rx, o+rx

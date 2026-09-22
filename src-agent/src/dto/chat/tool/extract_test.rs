@@ -115,8 +115,7 @@ fn wrapped_json_form_still_works_regression() {
 
 #[test]
 fn standalone_harmony_call() {
-    let content =
-        "Here is the call:\n<function=say_hi>\n<parameter=name>Bob\n</function>\nDone.";
+    let content = "Here is the call:\n<function=say_hi>\n<parameter=name>Bob\n</function>\nDone.";
     let (cleaned, calls) = extract_text_tool_calls(content);
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].function.name, "say_hi");
@@ -133,8 +132,7 @@ fn standalone_harmony_call() {
 
 #[test]
 fn no_markup_leak_in_cleaned_content() {
-    let content =
-        "Prose\n<tool_call>\n<function=tool>\n<parameter=x>1\n</tool_call>\nMore prose";
+    let content = "Prose\n<tool_call>\n<function=tool>\n<parameter=x>1\n</tool_call>\nMore prose";
     let (cleaned, calls) = extract_text_tool_calls(content);
     assert_eq!(calls.len(), 1);
     assert!(!cleaned.contains("<tool_call>"));
@@ -273,6 +271,36 @@ fn argkv_key_without_value_is_skipped() {
 }
 
 #[test]
+fn argkv_inline_no_newlines() {
+    // Laguna compact form: name glued to the first <arg_key>, pairs on one line.
+    let inner = concat!(
+        "grep",
+        "<arg_key>output_mode</arg_key><arg_value>content</arg_value>",
+        "<arg_key>path</arg_key>",
+        "<arg_value>/home/islab/.cybergym-koma/tasks/arvo-10400/workspace/repo-vul/src-vul/graphicsmagick/coders/png.c</arg_value>",
+        "<arg_key>pattern</arg_key><arg_value>mng_get_long</arg_value>",
+    );
+    let (name, args) = parse_arg_key_value_call(inner).expect("should parse");
+    assert_eq!(name, "grep");
+    let v: serde_json::Value = serde_json::from_str(&args).unwrap();
+    assert_eq!(
+        v["output_mode"],
+        serde_json::Value::String("content".to_string())
+    );
+    assert_eq!(
+        v["path"],
+        serde_json::Value::String(
+            "/home/islab/.cybergym-koma/tasks/arvo-10400/workspace/repo-vul/src-vul/graphicsmagick/coders/png.c"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        v["pattern"],
+        serde_json::Value::String("mng_get_long".to_string())
+    );
+}
+
+#[test]
 fn argkv_multiline_value() {
     let inner = "write\n<arg_key>text</arg_key>\n<arg_value>line one\nline two</arg_value>";
     let (name, args) = parse_arg_key_value_call(inner).expect("should parse");
@@ -315,6 +343,35 @@ fn wrapped_argkv_laguna_glob() {
         serde_json::Value::String("**/*.cff".to_string())
     );
     assert!(cleaned.contains("Let me look at existing files:"));
+    assert!(!cleaned.contains("<tool_call>"));
+    assert!(!cleaned.contains("<arg_key>"));
+}
+
+#[test]
+fn wrapped_argkv_inline_laguna_grep() {
+    // Live Laguna-XS corpus (arvo:10400): prose + one-line <tool_call>grep<arg_key>…
+    let content = concat!(
+        "Let me search for what the expected minimum should be:",
+        "<tool_call>grep",
+        "<arg_key>output_mode</arg_key><arg_value>content</arg_value>",
+        "<arg_key>path</arg_key>",
+        "<arg_value>/home/islab/.cybergym-koma/tasks/arvo-10400/workspace/repo-vul/src-vul/graphicsmagick/coders/png.c</arg_value>",
+        "<arg_key>pattern</arg_key><arg_value>mng_get_long</arg_value>",
+        "</tool_call>",
+    );
+    let (cleaned, calls) = extract_text_tool_calls(content);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].function.name, "grep");
+    let v: serde_json::Value = serde_json::from_str(&calls[0].function.arguments).unwrap();
+    assert_eq!(
+        v["output_mode"],
+        serde_json::Value::String("content".to_string())
+    );
+    assert_eq!(
+        v["pattern"],
+        serde_json::Value::String("mng_get_long".to_string())
+    );
+    assert!(cleaned.contains("expected minimum"));
     assert!(!cleaned.contains("<tool_call>"));
     assert!(!cleaned.contains("<arg_key>"));
 }

@@ -185,17 +185,13 @@ pub fn seed_charter_if_empty(settings: &mut Settings, last_user: &str) -> bool {
 }
 
 /// Ranked resolve: user > mission active leaf > charter > none.
-pub fn resolve_effective_goal(
-    settings: &Settings,
-    mission: Option<&MissionSnap>,
-) -> EffectiveGoal {
+pub fn resolve_effective_goal(settings: &Settings, mission: Option<&MissionSnap>) -> EffectiveGoal {
     let charter = settings.session_charter.trim().to_string();
     let user_goal = settings.session_goal.trim();
     let stored = GoalSource::parse(&settings.session_goal_source);
 
     // 1. User-owned text. Legacy: non-empty goal with source none still counts as user.
-    let user_owned = !user_goal.is_empty()
-        && matches!(stored, GoalSource::User | GoalSource::None);
+    let user_owned = !user_goal.is_empty() && matches!(stored, GoalSource::User | GoalSource::None);
     if user_owned {
         return EffectiveGoal {
             source: GoalSource::User,
@@ -256,10 +252,7 @@ pub fn load_mission_snap(session_dir: &std::path::Path) -> Option<MissionSnap> {
     }
     let conn = crate::model::msglog::open(session_dir).ok()?;
     let open = crate::model::sdlc::graph::list_open_leaves(&conn).ok()?;
-    let actives: Vec<_> = open
-        .into_iter()
-        .filter(|n| n.status == "active")
-        .collect();
+    let actives: Vec<_> = open.into_iter().filter(|n| n.status == "active").collect();
     // Multiple actives = invalid; don't pick randomly.
     if actives.len() == 1 {
         let a = &actives[0];
@@ -465,7 +458,10 @@ mod tests {
         let mut s = Settings::default();
         assert!(seed_charter_if_empty(&mut s, "Implement no-HITL goals"));
         assert_eq!(s.session_charter, "Implement no-HITL goals");
-        assert!(!seed_charter_if_empty(&mut s, "second message does not overwrite"));
+        assert!(!seed_charter_if_empty(
+            &mut s,
+            "second message does not overwrite"
+        ));
         assert_eq!(s.session_charter, "Implement no-HITL goals");
     }
 
@@ -500,7 +496,8 @@ mod refresh_tests {
         settings.session_goal_msg_id = 42;
         let charter = settings.session_charter.clone();
         for _ in 0..10 {
-            let repeated = refresh_goal_state(&mut settings, Some("goal: fix context recall"), None);
+            let repeated =
+                refresh_goal_state(&mut settings, Some("goal: fix context recall"), None);
             assert!(!repeated.settings_changed && !repeated.objective_changed);
             assert_eq!(settings.session_goal_msg_id, 42);
         }
@@ -543,11 +540,20 @@ mod refresh_tests {
         let first = refresh_goal_state(&mut settings, Some("initial task"), Some(&mission));
         assert!(first.objective_changed);
         assert_eq!(first.wire.source, "mission");
-        assert!(!refresh_goal_state(&mut settings, Some("continue"), Some(&mission)).objective_changed);
+        assert!(
+            !refresh_goal_state(&mut settings, Some("continue"), Some(&mission)).objective_changed
+        );
         mission.active_leaf = Some(("second".into(), "Validate context".into()));
-        assert!(refresh_goal_state(&mut settings, Some("continue"), Some(&mission)).objective_changed);
-        assert!(!refresh_goal_state(&mut settings, Some("continue"), Some(&mission)).objective_changed);
-        assert!(refresh_goal_state(&mut settings, Some("goal: fix recall"), Some(&mission)).objective_changed);
+        assert!(
+            refresh_goal_state(&mut settings, Some("continue"), Some(&mission)).objective_changed
+        );
+        assert!(
+            !refresh_goal_state(&mut settings, Some("continue"), Some(&mission)).objective_changed
+        );
+        assert!(
+            refresh_goal_state(&mut settings, Some("goal: fix recall"), Some(&mission))
+                .objective_changed
+        );
         mission.active_leaf = Some(("third".into(), "Review context".into()));
         let masked = refresh_goal_state(&mut settings, Some("goal: fix recall"), Some(&mission));
         assert!(!masked.objective_changed);

@@ -161,8 +161,7 @@ fn push_paste_quote_band_lines(out: &mut Vec<Line<'static>>, d: PasteQuoteDraw<'
     } = d;
     // Label row — preserve spaces in chip label path (usually no WS issue).
     let label = format!("[Pasted Text #{n}]");
-    let wrapped =
-        crate::view::markdown::wrap_spans_preserve(&[Span::styled(label, *text)], inner);
+    let wrapped = crate::view::markdown::wrap_spans_preserve(&[Span::styled(label, *text)], inner);
     for visual in wrapped {
         let line_text: String = visual.iter().map(|s| s.content.as_ref()).collect();
         out.push(band_row(

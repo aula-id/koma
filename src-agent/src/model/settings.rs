@@ -346,6 +346,10 @@ pub struct Settings {
     /// overwritten once non-empty by the stream-start seeder.
     #[serde(default)]
     pub session_charter: String,
+    /// Extra system-prompt suffix from `koma run --system` / `--system-file`.
+    /// Empty = none. Re-applied at the bottom of every `rebuild_system`.
+    #[serde(default)]
+    pub session_system_extra: String,
     /// Last applied effective-objective fingerprint (`user:…` / `mission:{id}` /
     /// `charter:…`) for transition detection. Empty = never applied.
     #[serde(default)]
@@ -546,6 +550,7 @@ impl Default for Settings {
             session_goal_msg_id: 0,
             session_goal_source: String::new(),
             session_charter: String::new(),
+            session_system_extra: String::new(),
             session_objective_fp: String::new(),
             sliding_cache: default_sliding_cache(),
             bash_saving: true,
@@ -673,8 +678,7 @@ mod max_output_tokens_tests {
         assert_eq!(Settings::default().max_output_tokens, 0);
         let s: Settings = serde_json::from_str("{}").expect("empty object");
         assert_eq!(s.max_output_tokens, 0);
-        let s: Settings =
-            serde_json::from_str(r#"{"max_output_tokens":8192}"#).expect("explicit");
+        let s: Settings = serde_json::from_str(r#"{"max_output_tokens":8192}"#).expect("explicit");
         assert_eq!(s.max_output_tokens, 8192);
     }
 }

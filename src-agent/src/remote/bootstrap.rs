@@ -76,7 +76,9 @@ enum CheckOutcome {
     /// Remote binary missing / unreadable — install without asking.
     NeedsInstallMissing,
     /// Remote version differs from local — ask before overwriting.
-    NeedsUpdate { observed: String },
+    NeedsUpdate {
+        observed: String,
+    },
 }
 
 fn parse_semantic_version(value: &str) -> Option<SemanticVersion> {
@@ -204,7 +206,12 @@ where
     }
 }
 
-fn install_and_verify<Q, I, P>(local: &str, mut query: Q, mut install: I, mut progress: P) -> Result<()>
+fn install_and_verify<Q, I, P>(
+    local: &str,
+    mut query: Q,
+    mut install: I,
+    mut progress: P,
+) -> Result<()>
 where
     Q: FnMut() -> Result<String>,
     I: FnMut() -> Result<()>,
@@ -261,9 +268,7 @@ where
         }
         CheckOutcome::NeedsUpdate { observed } => {
             if !confirm_update(&observed)? {
-                anyhow::bail!(
-                    "remote update declined (local {local}, remote {observed})"
-                );
+                anyhow::bail!("remote update declined (local {local}, remote {observed})");
             }
             install_and_verify(local, query, install, progress)?;
             Ok(true)
@@ -361,7 +366,14 @@ fn run_install_phase(
         )
     });
 
-    spin_until_done(terminal, host_label, palette, BootstrapStage::Installing, &rx, &worker)?;
+    spin_until_done(
+        terminal,
+        host_label,
+        palette,
+        BootstrapStage::Installing,
+        &rx,
+        &worker,
+    )?;
     match worker.join() {
         Ok(res) => res,
         Err(_) => Err(anyhow::anyhow!("remote bootstrap thread panicked")),
