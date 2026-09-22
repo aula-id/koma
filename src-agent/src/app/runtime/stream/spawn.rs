@@ -161,7 +161,6 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         sdlc_active_node_id: rt.sdlc_pending_node_id.clone(),
         search_engine,
         call_track: rt.call_track.clone(),
-        repeat_notices: rt.repeat_notices.clone(),
     }
 }
 
@@ -335,9 +334,6 @@ fn spawn_task_with_id(
     // sandbox trust boundary: on any failure the spawn is rejected outright, never
     // silently widened back to the session workspace.
     narrow_ctx_to_workspace(&mut ctx, overrides.as_ref())?;
-    // Sub-agent drains its own repeat notices. Sharing the parent queue would
-    // race, and the child would never see the warning during its own loop.
-    ctx.repeat_notices = crate::tool::new_repeat_notices();
     let (session_dir, config, settings, awareness, memory_md) = {
         let rt = &state.rest.sessions[sess_idx];
         let sess = match rt.session.as_ref() {

@@ -42,7 +42,6 @@ impl Archive {
             search_engine: None,
             plan_read_only: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             call_track: crate::tool::CallTrack::new(),
-            repeat_notices: crate::tool::new_repeat_notices(),
         }
     }
 }

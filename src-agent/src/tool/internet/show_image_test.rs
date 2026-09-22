@@ -28,7 +28,6 @@ fn make_ctx(internet_mode: InternetMode) -> ToolCtx {
         sdlc_active_node_id: None,
         search_engine: None,
         call_track: crate::tool::CallTrack::new(),
-        repeat_notices: crate::tool::new_repeat_notices(),
     }
 }
 

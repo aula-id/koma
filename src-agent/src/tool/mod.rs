@@ -16,7 +16,7 @@
 use anyhow::{bail, Result};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 
 pub mod cd;
 pub mod dircache;
@@ -43,7 +43,7 @@ pub mod task;
 pub mod todo;
 
 pub use dircache::DirCache;
-pub use output::{drain_repeat_notices, new_repeat_notices, CallTrack};
+pub use output::CallTrack;
 pub(crate) use plan_policy::{delegated_tool_allowed_in_plan, plan_tool_call_allowed};
 
 /// True for built-in tools that mutate the workspace, run arbitrary shell
@@ -532,14 +532,10 @@ pub struct ToolCtx {
     /// The session's preferred search engine URL template (e.g.
     /// `https://html.duckduckgo.com/html/?q={query}`).
     pub search_engine: Option<String>,
-    /// Exact tool-call fingerprints seen this session (name + canonical args).
-    /// Shared with deferred workers and sub-agents so a repeated read/grep/
-    /// command can warn the model.
+    /// Exact tool-call fingerprints seen this session (name + canonical args +
+    /// unclipped-body digest). Shared with deferred workers and sub-agents so
+    /// a repeated inspection dump can be stubbed.
     pub call_track: Arc<CallTrack>,
-    /// Repeat warnings for this conversation. Not shared with a sub-agent:
-    /// spawn replaces this with a fresh queue so the child drains its own
-    /// notices into its own transcript.
-    pub repeat_notices: Arc<Mutex<Vec<String>>>,
 }
 
 /// Parse a `[N]` workspace-index prefix from the start of a path string.

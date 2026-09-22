@@ -292,16 +292,6 @@ pub(super) fn finish_tool_round(
         }
     }
 
-    if let Some(joined) =
-        crate::tool::drain_repeat_notices(&state.rest.sessions[sess_idx].repeat_notices)
-    {
-        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-            let _ = crate::model::msglog::append(&sess.path, Role::User, &joined, None, None);
-            sess.conversation.push_user(joined);
-            let _ = sess.save();
-        }
-    }
-
     // Apply the validated workdir side effect: append each media dir so the
     // downloaded file appears in @-autocomplete.
     if !media_dirs.is_empty() {
@@ -454,15 +444,6 @@ pub(crate) fn deny_all_pending(state: &mut AppState, sess_idx: usize, reason: &s
             sess.conversation.push_tool(id.clone(), reason.to_string());
         }
         let _ = sess.save();
-    }
-    if let Some(joined) =
-        crate::tool::drain_repeat_notices(&state.rest.sessions[sess_idx].repeat_notices)
-    {
-        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-            let _ = crate::model::msglog::append(&sess.path, Role::User, &joined, None, None);
-            sess.conversation.push_user(joined);
-            let _ = sess.save();
-        }
     }
     let rt = &mut state.rest.sessions[sess_idx];
     rt.pending_tool_calls.clear();

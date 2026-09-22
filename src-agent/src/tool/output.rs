@@ -5,8 +5,9 @@
 //! re-reads the same file and loops. Cap every result except sub-agent
 //! reports. `read`, `bash`, `grep`, and `glob` use a wider window so one
 //! call covers a normal file or a build log.
-//! A repeated call is a notice only: the warning is queued beside the
-//! result, never appended to it, so a parser cannot persist the suffix.
+//! A repeated inspection dump (same args, same unclipped bytes) is replaced
+//! with a short stub pointing at `message_find`. Protocol payloads
+//! (`git_*`, `cd`, `skill`, sentinels) are never rewritten.
 
 use super::ToolCtx;
 use crate::config::{
@@ -14,6 +15,7 @@ use crate::config::{
 };
 use crate::model::store::session_tool_tmp_dir;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -25,11 +27,24 @@ pub fn is_subagent_output(name: &str) -> bool {
     matches!(name, "task" | "task_output" | "task_send" | "task_kill")
 }
 
-/// Repeat tracking is every tool except a sub-agent report. The notice is
-/// queued beside the result, so a sentinel or side-effect string stays
-/// byte-identical to what the tool returned.
+/// Inspection dumps whose duplicate body would re-fill the context window.
+/// Protocol / recovery tools are not on this list: replacing their return
+/// would drop a sentinel or the `message_find` escape hatch.
 pub fn repeat_tracked(name: &str) -> bool {
-    !is_subagent_output(name)
+    matches!(
+        name,
+        "read"
+            | "bash"
+            | "bash_output"
+            | "grep"
+            | "glob"
+            | "dir_list"
+            | "web_search"
+            | "web_fetch"
+            | "web_page"
+            | "graph_query"
+            | "recall"
+    )
 }
 
 /// `read`, `bash` (including `bash_output`), `grep`, and `glob` share the
@@ -42,23 +57,8 @@ fn output_caps(name: &str) -> (usize, usize) {
     }
 }
 
-/// Fresh notice queue. The parent session holds one; a sub-agent spawn
-/// replaces `ToolCtx::repeat_notices` with another so the two loops do not
-/// share warnings.
-pub fn new_repeat_notices() -> Arc<Mutex<Vec<String>>> {
-    Arc::new(Mutex::new(Vec::new()))
-}
-
-/// Take every queued repeat notice, joined by a blank line. `None` if empty.
-pub fn drain_repeat_notices(notices: &Mutex<Vec<String>>) -> Option<String> {
-    let mut guard = notices.lock().unwrap_or_else(|e| e.into_inner());
-    if guard.is_empty() {
-        return None;
-    }
-    Some(std::mem::take(&mut *guard).join("\n\n"))
-}
-
-/// Per-session counter of exact tool calls (name + canonical arguments).
+/// Per-session counter of exact tool results (name + canonical arguments +
+/// sha256 of the unclipped body).
 #[derive(Default)]
 pub struct CallTrack {
     counts: Mutex<HashMap<String, u32>>,
@@ -69,18 +69,24 @@ impl CallTrack {
         Arc::new(Self::default())
     }
 
-    /// Sub-agent reports are not tracked. Every other tool is: a repeat is a
-    /// notice, not a rewrite of the result.
-    pub fn hit(&self, name: &str, args: &Value) -> u32 {
+    /// Inspection dumps are tracked. Sub-agent reports and protocol tools are
+    /// not: a repeat of those must stay byte-identical to the payload.
+    pub fn hit(&self, name: &str, args: &Value, raw: &str) -> u32 {
         if !repeat_tracked(name) {
             return 1;
         }
-        let key = fingerprint(name, args);
+        let key = format!("{}:{}", fingerprint(name, args), content_digest(raw));
         let mut guard = self.counts.lock().unwrap_or_else(|e| e.into_inner());
         let n = guard.entry(key).or_insert(0);
         *n = n.saturating_add(1);
         *n
     }
+}
+
+fn content_digest(raw: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(raw.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 /// Stable identity for "same exact grep / command / offset/limit".
@@ -163,13 +169,17 @@ fn clip_tool_output(name: &str, raw: String, spill: Option<&Path>) -> String {
     out
 }
 
-/// Clip, spill the unclipped body to `<session>/tmp/` when truncated, then
-/// queue a repeat warning when this exact call has been seen before.
-/// The returned string is the tool result only — the notice is not part of it.
+/// Clip, spill the unclipped body to `<session>/tmp/` when truncated.
+/// A true duplicate inspection dump (same args, same unclipped bytes) is
+/// replaced with a stub so the body is not re-ingested. On a stub, skip
+/// clip and spill — the tool still ran; the first call already wrote history.
 pub fn finish_tool_output(ctx: &ToolCtx, name: &str, args: &Value, raw: String) -> String {
-    let count = ctx.call_track.hit(name, args);
     if is_subagent_output(name) {
         return raw;
+    }
+    let count = ctx.call_track.hit(name, args, &raw);
+    if repeat_tracked(name) && count >= 2 && !raw.starts_with("MEDIA_WORKDIR:") {
+        return repeat_stub(count);
     }
     let (max_chars, max_lines) = output_caps(name);
     let (_, body) = split_media_sentinel(raw.clone());
@@ -180,14 +190,7 @@ pub fn finish_tool_output(ctx: &ToolCtx, name: &str, args: &Value, raw: String) 
     } else {
         None
     };
-    let out = clip_tool_output(name, raw, spill.as_deref());
-    if repeat_tracked(name) && count >= 2 {
-        ctx.repeat_notices
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(repeat_notice(name, count));
-    }
-    out
+    clip_tool_output(name, raw, spill.as_deref())
 }
 
 /// Reuse a bash-style `full-output: <path>` pointer when the tool already
@@ -275,25 +278,13 @@ fn gc_tmp_dir(dir: &Path) {
     }
 }
 
-fn repeat_notice(name: &str, count: u32) -> String {
-    match name {
-        "read" => format!(
-            "[repeat: you already read this exact path/offset/limit {count} times. \
-             Change offset/limit, or grep a different pattern.]"
-        ),
-        "grep" => format!(
-            "[repeat: you already ran this exact grep {count} times. \
-             Change the pattern, path, or glob — grep one file at a time.]"
-        ),
-        "bash" => format!(
-            "[repeat: you already ran this exact command {count} times. \
-             Change the command, or pipe through head/grep.]"
-        ),
-        other => format!(
-            "[repeat: you already ran this exact {other} {count} times with the same arguments. \
-             Change offset/limit, the pattern, or the command.]"
-        ),
-    }
+fn repeat_stub(count: u32) -> String {
+    format!(
+        "[repeat: this exact call already produced this exact result {count} times. \
+         The body is omitted so it is not re-ingested. Use message_find with role=tool \
+         and a short query (path, pattern, or a distinctive line), then message_load \
+         the ref if the text is needed.]"
+    )
 }
 
 fn split_media_sentinel(raw: String) -> (Option<String>, String) {

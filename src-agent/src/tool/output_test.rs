@@ -33,7 +33,6 @@ fn ctx() -> ToolCtx {
         sdlc_active_node_id: None,
         search_engine: None,
         call_track: CallTrack::new(),
-        repeat_notices: new_repeat_notices(),
     }
 }
 
@@ -149,69 +148,70 @@ fn fingerprint_sorts_object_keys() {
 }
 
 #[test]
-fn repeat_warns_only_on_exact_same_args() {
+fn same_args_same_body_stubs_the_tool_result() {
     let t = ctx();
     let same = json!({"path": "desk.rs", "offset": 0, "limit": 20});
-    let other = json!({"path": "desk.rs", "offset": 20, "limit": 20});
+    let body = "THE-UNIQUE-BODY";
 
-    let first = finish_tool_output(&t, "read", &same, "ok".into());
-    assert_eq!(first, "ok");
+    let first = finish_tool_output(&t, "read", &same, body.into());
+    assert_eq!(first, body);
 
-    let second = finish_tool_output(&t, "read", &same, "ok".into());
-    assert_eq!(second, "ok");
-    let notices = drain_repeat_notices(&t.repeat_notices).unwrap();
-    assert!(notices.contains("[repeat:"));
-    assert!(notices.contains("2 times"));
-    assert!(notices.contains("path/offset/limit"));
-
-    let paged = finish_tool_output(&t, "read", &other, "ok".into());
-    assert_eq!(paged, "ok");
-    assert!(drain_repeat_notices(&t.repeat_notices).is_none());
+    let second = finish_tool_output(&t, "read", &same, body.into());
+    assert!(second.contains("message_find"), "{second}");
+    assert!(second.contains("[repeat:"), "{second}");
+    assert!(!second.contains(body), "duplicate body must not be re-ingested");
 }
 
 #[test]
-fn grep_repeat_uses_its_own_wording() {
+fn same_args_different_body_is_not_stubbed() {
     let t = ctx();
-    let grep = json!({"pattern": "TODO", "path": "src"});
-    let _ = finish_tool_output(&t, "grep", &grep, "hit".into());
-    let again = finish_tool_output(&t, "grep", &grep, "hit".into());
-    assert_eq!(again, "hit");
-    let notices = drain_repeat_notices(&t.repeat_notices).unwrap();
-    assert!(notices.contains("exact grep"));
+    let args = json!({"path": "desk.rs", "offset": 0, "limit": 20});
+    let first = finish_tool_output(&t, "read", &args, "body-a".into());
+    let second = finish_tool_output(&t, "read", &args, "body-b".into());
+    assert_eq!(first, "body-a");
+    assert_eq!(second, "body-b");
+    assert!(!second.contains("[repeat:"));
 }
 
 #[test]
-fn repeat_notice_does_not_touch_the_result() {
+fn same_body_different_args_is_not_stubbed() {
+    let t = ctx();
+    let a = json!({"path": "desk.rs", "offset": 0, "limit": 20});
+    let b = json!({"path": "desk.rs", "offset": 20, "limit": 20});
+    let first = finish_tool_output(&t, "read", &a, "ok".into());
+    let second = finish_tool_output(&t, "read", &b, "ok".into());
+    assert_eq!(first, "ok");
+    assert_eq!(second, "ok");
+}
+
+#[test]
+fn git_cred_sentinel_stays_byte_identical() {
     let t = ctx();
     let cred = json!({"action": "select", "key": "id_thebokeh"});
     let raw = "__git_cred_select__::id_thebokeh";
     let _ = finish_tool_output(&t, "git_cred", &cred, raw.into());
     let again = finish_tool_output(&t, "git_cred", &cred, raw.into());
     assert_eq!(again, raw);
-    let notices = drain_repeat_notices(&t.repeat_notices).unwrap();
-    assert!(notices.contains("[repeat:"));
-    assert!(notices.contains("git_cred"));
-    assert!(!again.contains("[repeat:"));
+}
 
+#[test]
+fn protocol_tools_are_not_stubbed() {
+    let t = ctx();
     for name in [
         "git_operator",
         "git_worktree",
-        "bash",
-        "write",
         "cd",
         "skill",
+        "plan_enter",
+        "web_download",
+        "message_find",
+        "message_load",
+        "write",
     ] {
         let args = json!({"x": 1});
         let _ = finish_tool_output(&t, name, &args, "ok".into());
         let second = finish_tool_output(&t, name, &args, "ok".into());
         assert_eq!(second, "ok", "{name} result must stay the tool return");
-        let queued = drain_repeat_notices(&t.repeat_notices).unwrap();
-        assert!(queued.contains("[repeat:"), "{name} still warns");
-        if name == "bash" {
-            assert!(queued.contains("exact command"), "{name}");
-        } else {
-            assert!(queued.contains(name), "{name}");
-        }
     }
 }
 
@@ -294,5 +294,4 @@ fn subagent_is_not_tracked() {
     assert!(!first.contains("[repeat:"));
     assert!(!second.contains("[repeat:"));
     assert!(!second.contains("[truncated:"));
-    assert!(drain_repeat_notices(&t.repeat_notices).is_none());
 }
