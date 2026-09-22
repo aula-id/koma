@@ -59,3 +59,16 @@ fn nonexistent_dir_shows_no_companions() {
     let msg = list_companions(&fake, "ghost");
     assert!(msg.contains("(no companion files in skill directory)"));
 }
+
+#[test]
+fn git_sentinel_payload_ignores_a_trailing_notice() {
+    let raw = "__git_cred_select__::id_thebokeh\n\n[repeat: poisoned]";
+    assert_eq!(
+        super::git_sentinel_payload(raw, crate::tool::git_cred::GIT_CRED_SELECT_PREFIX),
+        Some("id_thebokeh")
+    );
+    assert_eq!(
+        super::git_sentinel_payload("plain list", crate::tool::git_cred::GIT_CRED_SELECT_PREFIX),
+        None
+    );
+}

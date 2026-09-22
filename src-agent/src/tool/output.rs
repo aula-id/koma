@@ -3,7 +3,10 @@
 //! Large dumps (10k-line reads, chatty bash, fat MCP payloads) blow the
 //! context window and force DRSS to cut the conversation — the model then
 //! re-reads the same file and loops. Cap every result except sub-agent
-//! reports, and warn when the exact same call is repeated.
+//! reports, and warn when the exact same *cacheable* read is repeated.
+//! git_* and other non-cacheable tools are not tracked: their results are
+//! protocol sentinels or side effects, and a `[repeat:]` suffix becomes
+//! part of the value a parser persists.
 
 use super::ToolCtx;
 use crate::config::{MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_OUTPUT_LINES};
@@ -20,6 +23,32 @@ pub fn is_subagent_output(name: &str) -> bool {
     matches!(name, "task" | "task_output" | "task_send" | "task_kill")
 }
 
+/// Repeat tracking is only for cacheable inspection tools, where an identical
+/// re-call is a loop. git_* is excluded as a family (sentinels are parsed as
+/// the whole suffix — a nudge was persisted as the SSH identity path).
+/// Everything else is non-cacheable: side effects, stateful commands, or a
+/// protocol the runtime strips before the model sees it.
+pub fn repeat_tracked(name: &str) -> bool {
+    if name.starts_with("git_") || is_subagent_output(name) {
+        return false;
+    }
+    matches!(
+        name,
+        "read"
+            | "grep"
+            | "glob"
+            | "dir_list"
+            | "graph_query"
+            | "recall"
+            | "message_find"
+            | "message_load"
+            | "web_search"
+            | "web_fetch"
+            | "web_page"
+            | "web_search_full"
+    )
+}
+
 /// Per-session counter of exact tool calls (name + canonical arguments).
 #[derive(Default)]
 pub struct CallTrack {
@@ -32,9 +61,9 @@ impl CallTrack {
     }
 
     /// Increment and return the new count for this exact name+args pair.
-    /// Sub-agent tools are not tracked.
+    /// Sub-agent, git_*, and other non-cacheable tools are not tracked.
     pub fn hit(&self, name: &str, args: &Value) -> u32 {
-        if is_subagent_output(name) {
+        if !repeat_tracked(name) {
             return 1;
         }
         let key = fingerprint(name, args);
@@ -145,7 +174,7 @@ pub fn finish_tool_output(ctx: &ToolCtx, name: &str, args: &Value, raw: String) 
         None
     };
     let mut out = clip_tool_output(name, raw, spill.as_deref());
-    if count >= 2 {
+    if repeat_tracked(name) && count >= 2 {
         if !out.ends_with('\n') {
             out.push('\n');
         }

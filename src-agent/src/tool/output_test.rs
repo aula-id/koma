@@ -115,17 +115,37 @@ fn repeat_warns_only_on_exact_same_args() {
 }
 
 #[test]
-fn grep_and_bash_repeat_use_their_own_wording() {
+fn grep_repeat_uses_its_own_wording() {
     let t = ctx();
     let grep = json!({"pattern": "TODO", "path": "src"});
     let _ = finish_tool_output(&t, "grep", &grep, "hit".into());
     let again = finish_tool_output(&t, "grep", &grep, "hit".into());
     assert!(again.contains("exact grep"));
+}
 
-    let cmd = json!({"command": "ls -la"});
-    let _ = finish_tool_output(&t, "bash", &cmd, "out".into());
-    let again = finish_tool_output(&t, "bash", &cmd, "out".into());
-    assert!(again.contains("exact command"));
+#[test]
+fn repeat_skips_git_and_non_cacheable() {
+    let t = ctx();
+    let cred = json!({"action": "select", "key": "id_thebokeh"});
+    let raw = "__git_cred_select__::id_thebokeh";
+    let _ = finish_tool_output(&t, "git_cred", &cred, raw.into());
+    let again = finish_tool_output(&t, "git_cred", &cred, raw.into());
+    assert_eq!(again, raw);
+    assert!(!again.contains("[repeat:"));
+
+    for name in [
+        "git_operator",
+        "git_worktree",
+        "bash",
+        "write",
+        "cd",
+        "skill",
+    ] {
+        let args = json!({"x": 1});
+        let _ = finish_tool_output(&t, name, &args, "ok".into());
+        let second = finish_tool_output(&t, name, &args, "ok".into());
+        assert!(!second.contains("[repeat:"), "{name} is not cacheable");
+    }
 }
 
 #[test]
