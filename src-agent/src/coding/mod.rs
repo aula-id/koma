@@ -3,6 +3,7 @@
 
 mod language;
 pub(crate) mod persistence;
+mod tasks;
 #[cfg(feature = "gui")]
 mod transport;
 mod workspace;
@@ -22,6 +23,7 @@ static SHUTTING_DOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 pub(crate) fn shutdown() {
     SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::Release);
     transport::shutdown();
+    tasks::shutdown();
     language::shutdown();
 }
 
@@ -70,6 +72,19 @@ pub(crate) enum Operation {
         options: Value,
     },
     ConfigRead,
+    TaskDefinitions,
+    TaskRuns,
+    TaskStart {
+        task_id: String,
+        fingerprint: String,
+    },
+    TaskStop {
+        run_id: String,
+    },
+    TaskOutput {
+        run_id: String,
+        after: u64,
+    },
     ConfigEnsure,
     ConfigWrite {
         config: Value,
@@ -228,6 +243,8 @@ pub(crate) fn worker_main() -> anyhow::Result<()> {
     struct Cleanup;
     impl Drop for Cleanup {
         fn drop(&mut self) {
+            SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::Release);
+            tasks::shutdown();
             language::shutdown();
         }
     }

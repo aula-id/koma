@@ -39,6 +39,7 @@ flate2 = "1"
 ed25519-dalek = "2"
 koma-extension = { path = "../src-extension" }
 portable-pty = "0.8"
+process-wrap = { version = "9.1", default-features = false, features = ["std", "job-object"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 sha2 = "0.10"
 rmcp = { version = "1.8", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "macros"] }

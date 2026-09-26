@@ -13,12 +13,26 @@ fn root(request: &Request) -> Result<PathBuf> {
 }
 
 pub(super) fn execute(request: &Request) -> Result<Value> {
+    // Existing processes remain inspectable/stoppable even after root deletion.
+    match &request.operation {
+        Operation::TaskRuns => return super::tasks::runs(&request.workspace),
+        Operation::TaskStop { run_id } => return super::tasks::stop(&request.workspace, run_id),
+        Operation::TaskOutput { run_id, after } => {
+            return super::tasks::output(&request.workspace, run_id, *after)
+        }
+        _ => {}
+    }
     let canonical = root(request)?;
     let workdirs = vec![PathBuf::from(&request.workspace.root)];
     let r = &request.workspace.root;
     match &request.operation {
         Operation::Hello => Ok(json!({"protocol":1,"root":canonical.to_string_lossy(),
-            "capabilities":["paths","read","save","config"], "version":env!("CARGO_PKG_VERSION")})),
+            "capabilities":["paths","read","save","config","tasks"], "version":env!("CARGO_PKG_VERSION")})),
+        Operation::TaskDefinitions => super::tasks::definitions(&canonical),
+        Operation::TaskStart {
+            task_id,
+            fingerprint,
+        } => super::tasks::start(&request.workspace, &canonical, task_id, fingerprint),
         Operation::Read { path } => Ok(serde_json::to_value(file_ops::exec_file_read(
             r,
             path,
@@ -109,24 +123,7 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
             }
             Ok(Value::Null)
         }
-        Operation::ConfigRead => {
-            let path = canonical.join(".koma/coding.json");
-            if !path.exists() {
-                return Ok(json!({"version":1}));
-            }
-            let actual = path.canonicalize()?;
-            anyhow::ensure!(
-                actual.starts_with(&canonical),
-                "Coding configuration is outside the workspace"
-            );
-            anyhow::ensure!(
-                actual.metadata()?.len() <= 1024 * 1024,
-                "Coding configuration exceeds 1 MiB"
-            );
-            let config: Value = serde_json::from_slice(&std::fs::read(actual)?)?;
-            validate_config(&config)?;
-            Ok(config)
-        }
+        Operation::ConfigRead => read_config(&canonical),
         Operation::ConfigWrite { config } => {
             validate_config(config)?;
             let dir = canonical.join(".koma");
@@ -161,6 +158,25 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
         }
         _ => anyhow::bail!("Operation is not a workspace operation"),
     }
+}
+
+pub(super) fn read_config(root: &Path) -> Result<Value> {
+    let path = root.join(".koma/coding.json");
+    if !path.exists() {
+        return Ok(json!({"version":1}));
+    }
+    let actual = path.canonicalize()?;
+    anyhow::ensure!(
+        actual.starts_with(root),
+        "Coding configuration is outside the workspace"
+    );
+    anyhow::ensure!(
+        actual.metadata()?.len() <= 1024 * 1024,
+        "Coding configuration exceeds 1 MiB"
+    );
+    let config: Value = serde_json::from_slice(&std::fs::read(actual)?)?;
+    validate_config(&config)?;
+    Ok(config)
 }
 
 fn validate_config(config: &Value) -> Result<()> {

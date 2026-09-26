@@ -70,6 +70,7 @@ dependencies = [
  "objc2-app-kit",
  "percent-encoding",
  "portable-pty",
+ "process-wrap",
  "pulldown-cmark",
  "rand 0.8.6",
  "ratatui",
