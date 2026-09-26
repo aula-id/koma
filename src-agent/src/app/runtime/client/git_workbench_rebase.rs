@@ -5,6 +5,31 @@ pub(crate) struct Step {
     pub action: String,
     pub message: String,
 }
+// Only remove our UUID-named helper directories once Git's sequencer is done.
+// This also handles a later native Continue/Abort after a conflicted rebase.
+pub(super) fn cleanup(root: &Path) {
+    let Ok(dir) = text(root, &["rev-parse", "--absolute-git-dir"]) else {
+        return;
+    };
+    let dir = PathBuf::from(dir.trim());
+    if dir.join("rebase-merge").exists() || dir.join("rebase-apply").exists() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name
+            .strip_prefix("koma-rebase-")
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+            && entry.file_type().is_ok_and(|t| t.is_dir())
+        {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
 fn clean(root: &Path) -> Result<(), String> {
     if !git(root, &["status", "--porcelain=v1", "-z"])?.is_empty() {
         return Err("Commit or stash all changes before interactive rebase".into());
@@ -25,6 +50,7 @@ fn clean(root: &Path) -> Result<(), String> {
 }
 pub(super) fn plan(root: &Path, base: &str) -> Result<Value, String> {
     clean(root)?;
+    cleanup(root);
     let base = oid(root, base)?;
     let head = oid(root, "HEAD")?;
     let branch = text(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])
@@ -56,6 +82,8 @@ pub(super) fn plan(root: &Path, base: &str) -> Result<Value, String> {
     Ok(json!({"base":base,"head":head,"branch":branch.trim(),"steps":steps}))
 }
 fn quote(s: &str) -> String {
+    #[cfg(windows)]
+    let s = s.replace('\\', "/");
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 pub(super) fn start(root: &Path, base: &str, head: &str, steps: &[Step]) -> Result<Value, String> {

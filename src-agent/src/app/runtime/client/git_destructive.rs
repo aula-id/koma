@@ -275,6 +275,7 @@ pub(crate) fn git_op_abort(kind: &str, session: Option<&str>) -> GitOpResult {
         Some(out) if out.status.success() => {
             if kind == "rebase" {
                 super::git_remote::clear_pending_rebase(&root);
+                super::git_workbench::cleanup_rebase(&root);
             }
             op_ok(OP)
         }
@@ -373,6 +374,7 @@ pub(crate) fn git_op_continue(kind: &str, session: Option<&str>) -> GitOpResult 
                         super::git_remote::clear_pending_rebase(&root);
                     }
                 }
+                if kind == "rebase" { super::git_workbench::cleanup_rebase(&root); }
                 op_ok(OP)
             }
             Some(out) => {

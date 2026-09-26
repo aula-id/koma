@@ -13,6 +13,9 @@ mod diff;
 #[path = "git_workbench_rebase.rs"]
 mod rebase;
 pub(crate) use rebase::editor_helper;
+pub(super) fn cleanup_rebase(root: &Path) {
+    rebase::cleanup(root);
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -286,6 +289,13 @@ fn stash_ref(root: &Path, expected: &str) -> Result<String, String> {
         })
         .ok_or_else(|| "Stash changed or was removed; refresh the list".into())
 }
+fn configured_remote(root: &Path, remote: &str) -> Result<(), String> {
+    name(remote)?;
+    if !text(root, &["remote"])?.lines().any(|r| r == remote) {
+        return Err("Remote no longer exists; refresh the list".into());
+    }
+    Ok(())
+}
 fn execute(root: &Path, action: &Action) -> Result<Value, String> {
     use Action::*;
     match action {
@@ -325,7 +335,17 @@ fn execute(root: &Path, action: &Action) -> Result<Value, String> {
                 return Err("Commit message is empty".into());
             }
             let backup = format!("refs/koma/recovery/{}", uuid::Uuid::new_v4());
-            git(root, &["update-ref", &backup, head])?;
+            git(
+                root,
+                &[
+                    "update-ref",
+                    "--create-reflog",
+                    "-m",
+                    "Koma amend backup",
+                    &backup,
+                    head,
+                ],
+            )?;
             let result = done(root, &["commit", "--amend", "-m", message]);
             super::git_remote::invalidate_rebase_proofs(root);
             result
@@ -345,7 +365,7 @@ fn execute(root: &Path, action: &Action) -> Result<Value, String> {
         } => {
             name(branch)?;
             if let Some(remote) = remote {
-                name(remote)?;
+                configured_remote(root, remote)?;
                 done(
                     root,
                     &["push", remote, "--delete", &format!("refs/heads/{branch}")],
@@ -369,7 +389,7 @@ fn execute(root: &Path, action: &Action) -> Result<Value, String> {
         TagDelete { name: tag, remote } => {
             name(tag)?;
             if let Some(remote) = remote {
-                name(remote)?;
+                configured_remote(root, remote)?;
                 done(
                     root,
                     &["push", remote, "--delete", &format!("refs/tags/{tag}")],
@@ -380,7 +400,7 @@ fn execute(root: &Path, action: &Action) -> Result<Value, String> {
         }
         TagPush { name: tag, remote } => {
             name(tag)?;
-            name(remote)?;
+            configured_remote(root, remote)?;
             done(
                 root,
                 &["push", remote, &format!("refs/tags/{tag}:refs/tags/{tag}")],
@@ -473,6 +493,17 @@ fn execute(root: &Path, action: &Action) -> Result<Value, String> {
                 .any(|s| s.is_empty() || s.starts_with('-'))
             {
                 return Err("Both remote URLs are required".into());
+            }
+            configured_remote(root, remote)?;
+            git(
+                root,
+                &[
+                    "check-ref-format",
+                    &format!("refs/remotes/{new_name}/probe"),
+                ],
+            )?;
+            if remote != new_name && text(root, &["remote"])?.lines().any(|r| r == new_name) {
+                return Err("A remote with that name already exists".into());
             }
             git(root, &["remote", "set-url", remote, url])?;
             git(root, &["remote", "set-url", "--push", remote, push_url])?;

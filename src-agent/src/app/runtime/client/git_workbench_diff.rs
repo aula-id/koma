@@ -129,52 +129,56 @@ fn hunks(root: &Path, a: &str, b: &str) -> Result<Vec<Hunk>, String> {
             ));
         }
         let patch = String::from_utf8(out.stdout).map_err(|e| e.to_string())?;
-        let mut result: Vec<Hunk> = Vec::new();
-        let mut id = 0;
-        for line in patch.split_inclusive('\n') {
-            if line.starts_with("@@ ") {
-                let start = line
-                    .split_whitespace()
-                    .nth(1)
-                    .and_then(|s| s.trim_start_matches('-').split(',').next())
-                    .and_then(|s| s.parse::<usize>().ok())
-                    .ok_or("Invalid diff hunk")?;
-                result.push(Hunk {
-                    header: line.trim_end().into(),
-                    old_start: if line
-                        .split_whitespace()
-                        .nth(1)
-                        .is_some_and(|s| s.ends_with(",0"))
-                    {
-                        start
-                    } else {
-                        start.saturating_sub(1)
-                    },
-                    rows: Vec::new(),
-                });
-            } else if let Some(h) = result.last_mut() {
-                if line.starts_with("\\ No newline") {
-                    if let Some(r) = h.rows.last_mut() {
-                        r.text.pop();
-                    }
-                    continue;
-                }
-                let k = &line[..1];
-                if matches!(k, " " | "+" | "-") {
-                    id += 1;
-                    h.rows.push(Row {
-                        id,
-                        kind: k.into(),
-                        text: line[1..].into(),
-                    });
-                }
-            }
-        }
-        Ok(result)
+        parse_hunks(&patch)
     })();
     let _ = std::fs::remove_dir_all(tmp);
     result
 }
+fn parse_hunks(patch: &str) -> Result<Vec<Hunk>, String> {
+    let mut result: Vec<Hunk> = Vec::new();
+    let mut id = 0;
+    for line in patch.split_inclusive('\n') {
+        if line.starts_with("@@ ") {
+            let start = line
+                .split_whitespace()
+                .nth(1)
+                .and_then(|s| s.trim_start_matches('-').split(',').next())
+                .and_then(|s| s.parse::<usize>().ok())
+                .ok_or("Invalid diff hunk")?;
+            result.push(Hunk {
+                header: line.trim_end().into(),
+                old_start: if line
+                    .split_whitespace()
+                    .nth(1)
+                    .is_some_and(|s| s.ends_with(",0"))
+                {
+                    start
+                } else {
+                    start.saturating_sub(1)
+                },
+                rows: Vec::new(),
+            });
+        } else if let Some(h) = result.last_mut() {
+            if line.starts_with("\\ No newline") {
+                if let Some(r) = h.rows.last_mut() {
+                    r.text.pop();
+                }
+                continue;
+            }
+            let k = &line[..1];
+            if matches!(k, " " | "+" | "-") {
+                id += 1;
+                h.rows.push(Row {
+                    id,
+                    kind: k.into(),
+                    text: line[1..].into(),
+                });
+            }
+        }
+    }
+    Ok(result)
+}
+
 fn selected_text(original: &str, hunks: &[Hunk], selection: &[usize]) -> Result<String, String> {
     let source: Vec<_> = original.split_inclusive('\n').collect();
     let mut out = String::new();
@@ -222,6 +226,88 @@ fn selected_text(original: &str, hunks: &[Hunk], selection: &[usize]) -> Result<
     }
     Ok(out)
 }
+// Partial operations are only meaningful for regular text with stable modes.
+// Git clean filters and working-tree encodings can change unrelated bytes, so
+// those files keep the existing whole-file staging controls.
+fn partial_allowed(root: &Path, path: &str, staged: bool, index: &str) -> Result<bool, String> {
+    if index.starts_with("160000") || index.starts_with("120000") {
+        return Ok(false);
+    }
+    let attributes = git(
+        root,
+        &[
+            "check-attr",
+            "-z",
+            "filter",
+            "working-tree-encoding",
+            "--",
+            path,
+        ],
+    )?;
+    let parts: Vec<_> = attributes.split(|b| *b == 0).collect();
+    if parts
+        .chunks_exact(3)
+        .any(|p| p[2] != b"unspecified" && p[2] != b"unset")
+    {
+        return Ok(false);
+    }
+    let mut args = vec!["diff", "--raw", "-z", "--no-ext-diff", "--no-renames"];
+    if staged {
+        args.push("--cached");
+    }
+    args.extend(["--", path]);
+    let raw = text(root, &args)?;
+    for header in raw.split('\0').filter(|s| s.starts_with(':')) {
+        let modes: Vec<_> = header.split_whitespace().take(2).collect();
+        if modes.len() == 2
+            && modes[0] != ":000000"
+            && modes[1] != "000000"
+            && &modes[0][1..] != modes[1]
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+fn target_text(
+    root: &Path,
+    path: &str,
+    staged: bool,
+    a: &Option<Vec<u8>>,
+    b: &Option<Vec<u8>>,
+) -> Result<String, String> {
+    let raw = utf8(b)?;
+    if staged || a.is_none() {
+        return Ok(raw);
+    }
+    // Git supplies the canonical text after its CRLF/attributes conversion.
+    // Applying all rows reconstructs that text without writing a temporary blob.
+    let patch = text(
+        root,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--no-renames",
+            "--text",
+            "--unified=3",
+            "--",
+            path,
+        ],
+    )?;
+    let rows = parse_hunks(&patch)?;
+    let ids: Vec<_> = rows
+        .iter()
+        .flat_map(|h| h.rows.iter())
+        .filter(|r| r.kind != " ")
+        .map(|r| r.id)
+        .collect();
+    if ids.is_empty() {
+        return utf8(a);
+    }
+    selected_text(&utf8(a)?, &rows, &ids)
+}
 pub(super) fn inspect(
     root: &Path,
     path: &str,
@@ -241,7 +327,13 @@ pub(super) fn inspect(
             String::new(),
         )
     } else {
-        sides(root, path, staged)?
+        let (a, mut b, index) = sides(root, path, staged)?;
+        if staged {
+            if let Some(old) = old_path {
+                b = blob(root, &format!("HEAD:{old}"))?;
+            }
+        }
+        (a, b, index)
     };
     let token = snapshot(&a, &b, &index);
     if let Some(mime) = mime(path) {
@@ -253,8 +345,13 @@ pub(super) fn inspect(
         );
     }
     let original = utf8(&a)?;
-    let modified = utf8(&b)?;
-    let partial = commit.is_none() && old_path.is_none() && !index.starts_with("160000");
+    let partial =
+        commit.is_none() && old_path.is_none() && partial_allowed(root, path, staged, &index)?;
+    let modified = if partial {
+        target_text(root, path, staged, &a, &b)?
+    } else {
+        utf8(&b)?
+    };
     let rows = if partial {
         hunks(root, &original, &modified)?
     } else {
@@ -275,21 +372,23 @@ pub(super) fn stage(
     if token != snapshot(&a, &b, &index) {
         return Err("File or index changed; refresh the diff before staging".into());
     }
-    if index.starts_with("160000") || index.starts_with("120000") {
+    if !partial_allowed(root, path, staged, &index)? {
         return Err("Use whole-file staging for this file".into());
     }
     let source = utf8(&a)?;
-    let target = utf8(&b)?;
+    let target = target_text(root, path, staged, &a, &b)?;
     let hunks = hunks(root, &source, &target)?;
     let next = selected_text(&source, &hunks, lines)?;
     if b.is_none() && next.is_empty() {
         git(root, &["update-index", "--force-remove", "--", path])?;
     } else {
-        let result = run(
-            root,
-            &["hash-object", "-w", "--stdin"],
-            Some(next.as_bytes()),
-        )?;
+        let clean_path = format!("--path={path}");
+        let mut args = vec!["hash-object", "-w", "--stdin"];
+        // Untracked files have no Git diff to apply the clean conversion yet.
+        if !staged && a.is_none() {
+            args.push(&clean_path);
+        }
+        let result = run(root, &args, Some(next.as_bytes()))?;
         if !result.status.success() {
             return Err(super::super::git::git_failure(
                 &result,
@@ -314,7 +413,16 @@ pub(super) fn stage(
                 "100644"
             }
         };
-        let mode = index.split_whitespace().next().unwrap_or(default_mode);
+        let head_entry = if staged && index.is_empty() {
+            text(root, &["ls-tree", "-z", "HEAD", "--", path])?
+        } else {
+            String::new()
+        };
+        let mode = index
+            .split_whitespace()
+            .next()
+            .or_else(|| head_entry.split_whitespace().next())
+            .unwrap_or(default_mode);
         git(
             root,
             &["update-index", "--add", "--cacheinfo", mode, &hash, path],
@@ -327,6 +435,14 @@ pub(super) fn conflict(root: &Path, path: &str) -> Result<Value, String> {
     let entries = text(root, &["ls-files", "--unmerged", "-z", "--", path])?;
     if entries.is_empty() {
         return Err("This file is no longer conflicted; refresh status".into());
+    }
+    if entries
+        .split('\0')
+        .any(|e| e.starts_with("120000") || e.starts_with("160000"))
+    {
+        return Err(
+            "Resolve symlink and submodule conflicts with whole-file Git operations".into(),
+        );
     }
     let base = blob(root, &format!(":1:{path}"))?;
     let current = blob(root, &format!(":2:{path}"))?;
@@ -353,6 +469,9 @@ pub(super) fn resolve(
         return Err("Conflict or file changed; reload before saving".into());
     }
     let abs = safe_path(root, path)?;
+    if before["binary"].as_bool() == Some(true) && choice.is_none() {
+        return Err("Choose a whole version for a binary conflict".into());
+    }
     let value = match choice {
         Some("current") => blob(root, &format!(":2:{path}"))?,
         Some("incoming") => blob(root, &format!(":3:{path}"))?,
@@ -375,7 +494,29 @@ pub(super) fn resolve(
         return Err("Resolve every conflict marker before marking resolved".into());
     }
     match value {
-        Some(b) => std::fs::write(abs, b).map_err(|e| e.to_string())?,
+        Some(b) => {
+            std::fs::write(&abs, b).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            if let Some(stage) = match choice {
+                Some("current") => Some("2"),
+                Some("incoming") => Some("3"),
+                _ => None,
+            } {
+                use std::os::unix::fs::PermissionsExt;
+                let entries = text(root, &["ls-files", "--unmerged", "-z", "--", path])?;
+                if let Some(mode) = entries.split('\0').find_map(|entry| {
+                    let fields: Vec<_> = entry.split_whitespace().take(3).collect();
+                    (fields.len() == 3 && fields[2] == stage).then(|| fields[0])
+                }) {
+                    let permissions = std::fs::Permissions::from_mode(if mode == "100755" {
+                        0o755
+                    } else {
+                        0o644
+                    });
+                    std::fs::set_permissions(&abs, permissions).map_err(|e| e.to_string())?;
+                }
+            }
+        }
         None => {
             if abs.exists() {
                 std::fs::remove_file(abs).map_err(|e| e.to_string())?;

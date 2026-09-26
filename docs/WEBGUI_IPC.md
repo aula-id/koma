@@ -543,3 +543,55 @@ Test the full round trip in the desktop GUI:
 For the UI-only sidebar/tab pattern, see
 [`WEBGUI_SIDEBAR_TABS.md`](WEBGUI_SIDEBAR_TABS.md). For the broader GUI
 architecture, see [`ARCH_DESIGN_WEBGUI.md`](ARCH_DESIGN_WEBGUI.md).
+
+## Repository-bound Git workbench
+
+The extended Git views use one correlated request/reply pair. Existing GitStatus,
+GitOp and graph messages remain unchanged.
+
+```json
+{
+  "t": "req",
+  "r": "GitWorkbench",
+  "request": {
+    "root": "/work/project",
+    "requestId": "workbench-123-1",
+    "action": { "kind": "diff", "path": "README.md", "staged": false }
+  }
+}
+```
+
+```json
+{
+  "k": "GitWorkbench",
+  "root": "/work/project",
+  "requestId": "workbench-123-1",
+  "data": null,
+  "error": "Repository changed; reopen this Git view"
+}
+```
+
+`lib/gitWorkbench.ts` owns the TypeScript action union and pending request map;
+`client/git_workbench.rs` owns Rust DTOs, processing, and reply serialization.
+`git_workbench_diff.rs` handles partial staging, conflict resolution, images, and
+blame; `git_workbench_rebase.rs` handles planning and the native sequencer helper.
+The reply is serialized directly with the `GitWorkbench` tag by that module.
+
+- Requests carry the repository root and a unique request ID. The host checks
+  the active root before entering the existing Git transaction mutex.
+- Attached local requests run in workers and return through the push loop;
+  detached requests use a worker callback. SSH sessions forward the same DTOs
+  through `RemoteGitReq::Workbench` / `RemoteGitRep::Workbench`.
+- Diff/conflict replies include a snapshot token. StageLines/Resolve verify the
+  snapshot again before changing the index or file. The frontend sends selected
+  row IDs, never an arbitrary patch or shell command.
+- Workbench mutations refresh Git status, graph, branch, and stash data, including
+  on failure so a conflict-producing operation can expose Continue/Abort.
+- Session changes cancel pending frontend requests. Late replies with no matching
+  request are ignored. Requests time out with an explicit unknown-outcome message;
+  a frontend timeout does not terminate an already-running Git process.
+- A remote Koma without Workbench support returns an operation error with update/
+  reconnect guidance, rather than leaving a pending view indefinitely.
+
+See [the native review checklist](GIT_WORKBENCH_REVIEW.md) for entry points,
+workflow expectations, and current limits.
