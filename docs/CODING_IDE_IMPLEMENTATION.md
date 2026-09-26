@@ -161,3 +161,17 @@ Preview literal and regex replacements with include/exclude filters; cancel must
 leave disk and buffers untouched. Apply, undo, and explicitly Save All. Modify a
 candidate after preview and confirm no partial application. Verify capture
 replacement, literal dollar text, CRLF/UTF-16 preservation on save, and limits.
+
+- Optional project editor settings, language-specific overrides, snippets and
+  editor keybindings now load from `.koma/coding.json`. The palette creates a
+  missing config with exclusive creation, then uses the normal editor and
+  fingerprint-protected Save. Settings never reshape Koma's workspace UI.
+  See `CODING_PROJECT_SETTINGS.md` for supported fields and examples.
+
+### Native review: project settings
+
+Use different indentation/snippets/bindings in two dropdown roots and verify
+isolation. Edit/save settings while both editors are open; remove an override
+and check defaults return. Try malformed JSON, invalid keys, existing config,
+external config updates followed by focus, and SSH configurations. Confirm
+project commands do not leak into other workspaces or the chat composer.

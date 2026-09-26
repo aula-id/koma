@@ -1,3 +1,4 @@
+import { codingSnippets, getCodingConfig } from './coding-config'
 import { showCodingRefactor, type RefactorContext } from '../components/CodingRefactor'
 import { type WorkspaceEdit } from './coding-edits'
 import { useKoma } from '../store/koma'
@@ -774,6 +775,23 @@ export function ensureLspProviders(
     })
     return materializeLocations(converted, req, getRoots)
   }
+  monaco.languages.registerCompletionItemProvider('*', {
+    provideCompletionItems: async (model, pos, _context, token) => {
+      const rp = modelToRootPath(model, getRoots())
+      if (!rp) return { suggestions: [] }
+      const version = model.getVersionId(), hostId = useKoma.getState().remoteState.hostId ?? 'local'
+      try {
+        const config = await getCodingConfig({ hostId, root: rp.root })
+        if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version || (useKoma.getState().remoteState.hostId ?? 'local') !== hostId) return { suggestions: [] }
+        const word = model.getWordUntilPosition(pos)
+        return { suggestions: codingSnippets(config, languageIdForPath(rp.path)).map(snippet => ({
+          label: snippet.prefix, kind: monaco.languages.CompletionItemKind.Snippet, documentation: snippet.description,
+          insertText: snippet.body, insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          range: { startLineNumber: pos.lineNumber, endLineNumber: pos.lineNumber, startColumn: word.startColumn, endColumn: word.endColumn },
+        })) }
+      } catch { return { suggestions: [] } }
+    },
+  })
   monaco.editor.registerCommand('koma.previewWorkspaceEdit', (_accessor, context: unknown) => showCodingRefactor(context as RefactorContext))
   monaco.languages.registerCodeActionProvider('*', {
     provideCodeActions: async (model, selection, context, token) => {

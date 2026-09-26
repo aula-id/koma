@@ -63,6 +63,7 @@ pub(crate) enum Operation {
         options: Value,
     },
     ConfigRead,
+    ConfigEnsure,
     ConfigWrite {
         config: Value,
     },

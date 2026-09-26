@@ -9,7 +9,7 @@ export type CodingReply = {
   error?: string
 }
 export type CodingOperation =
-  | { op: 'hello' | 'configRead' | 'backups' }
+  | { op: 'hello' | 'configRead' | 'configEnsure' | 'backups' }
   | { op: 'paths'; query: string }
   | { op: 'replacePreview'; options: { query: string; replacement: string; caseSensitive: boolean; wholeWord: boolean; isRegex: boolean; includeGlob: string | null; excludeGlob: string | null } }
   | { op: 'lsp'; body: Record<string, unknown> }
@@ -32,6 +32,7 @@ export type CodingConfig = {
   toolchains?: Record<string, unknown>
   environment?: Record<string, string>
   snippets?: Record<string, unknown>
+  keybindings?: unknown[]
   tasks?: unknown[]
   debug?: unknown[]
   tests?: unknown[]

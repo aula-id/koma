@@ -1,6 +1,7 @@
 import { receiveGitReply, cancelGitRequests, type GitReply, type GitToolTab } from '../lib/gitWorkbench'
 import { create } from 'zustand'
 import { codingRequest, resolveCodingReply } from '../lib/coding-service'
+import { invalidateCodingConfig } from '../lib/coding-config'
 import { sendCodingLanguage } from '../lib/coding-language'
 import { backupCodingDocument, forgetCodingDraft, recordCodingHistory } from '../lib/coding-recovery'
 import type { McpServer, Provider, Model, ModelListEntry, RouteEntry } from '../types/config'
@@ -4707,6 +4708,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         set((s) => ({ coding: reduceFileSave(s.coding, env) }))
         if (!env.error) {
           const workspace = { hostId: get().remoteState.hostId ?? 'local', root: env.root }
+          if (env.path === '.koma/coding.json') invalidateCodingConfig(workspace)
           if (before.savedContent != null) recordCodingHistory(workspace, env.path, before.savedContent, 'Before save')
           recordCodingHistory(workspace, env.path, pending.content, 'Saved')
           const saved = get().coding.files[key]

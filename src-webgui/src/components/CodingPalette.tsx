@@ -23,6 +23,7 @@ const commands: Command[] = [
   { id: 'editor.action.triggerSuggest', title: 'Trigger Suggestions', editor: true },
   { id: 'editor.action.commentLine', title: 'Toggle Line Comment', editor: true },
   { id: 'editor.action.toggleWordWrap', title: 'Toggle Word Wrap', editor: true },
+  { id: 'projectSettings', title: 'Open Project Coding Settings' },
   { id: 'saveAll', title: 'Save All Open Files' },
   { id: 'recovery', title: 'Recover Unsaved Files' },
   { id: 'history', title: 'Show Local History', editor: true },
@@ -122,7 +123,16 @@ export function CodingPalette() {
     if (command.id === 'files') { setMode('files'); setQuery(''); return }
     setMode(null)
     const store = useKoma.getState()
-    if (command.id === 'saveAll') { for (const tab of store.ui.tabs) if (tab.kind === 'codingFile' && !tab.preview) store.saveCodingFile(tab.root, tab.path) }
+    if (command.id === 'projectSettings') {
+      const root = store.coding.activeRoot ?? store.settingsValues?.workdir?.[0]
+      if (root) {
+        const workspace = { hostId, root }
+        void codingRequest(workspace, { op: 'configEnsure' }).then(() => {
+          if ((useKoma.getState().remoteState.hostId ?? 'local') === hostId) useKoma.getState().openCodingFile(root, '.koma/coding.json')
+        }).catch(error => useKoma.setState(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, kind: 'error', text: String(error.message ?? error) } } } }))
+      }
+    }
+    else if (command.id === 'saveAll') { for (const tab of store.ui.tabs) if (tab.kind === 'codingFile' && !tab.preview) store.saveCodingFile(tab.root, tab.path) }
     else if (command.id === 'recovery') showCodingHistory()
     else if (command.id === 'history' && activeTab?.kind === 'codingFile') showCodingHistory(activeTab.root, activeTab.path)
     else if (command.id === 'terminal') store.openTerminalTab(`coding-${Date.now()}`, 'Terminal')

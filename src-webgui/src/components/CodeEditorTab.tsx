@@ -23,6 +23,7 @@ import { isTabVisible, normalizeGroups } from '../store/editorGroups'
 import { BrailleSpinner } from './BrailleSpinner'
 import { CodingFileViewer } from './CodingFileViewer'
 import { EditorChrome } from './EditorChrome'
+import { configureCodingEditor } from '../lib/coding-editor-config'
 import { showCodingRefactor } from './CodingRefactor'
 import { undoWorkspaceEdit } from '../lib/coding-edits'
 import { showCodingHistory } from './CodingHistory'
@@ -211,6 +212,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     })
     monaco.editor.setTheme(theme)
     editorRef.current = editor
+    const stopConfiguration = configureCodingEditor(editor, { hostId: useKoma.getState().remoteState.hostId ?? 'local', root: tab.root }, tab.path)
 
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       useKoma.getState().saveCodingFile(tab.root, tab.path)
@@ -371,6 +373,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     return () => {
       window.removeEventListener('koma-reveal-line', onReveal)
       window.removeEventListener('koma-coding-command', onCodingCommand)
+      stopConfiguration()
       sub.dispose()
       registerLspDidChangeFlusher(tab.root, tab.path, null)
       if (lspChangeTimerRef.current) clearTimeout(lspChangeTimerRef.current)

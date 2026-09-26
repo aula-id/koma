@@ -79,6 +79,36 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
             )
             .map_err(anyhow::Error::msg)
         }
+        Operation::ConfigEnsure => {
+            let dir = canonical.join(".koma");
+            std::fs::create_dir_all(&dir)?;
+            anyhow::ensure!(
+                dir.canonicalize()?.starts_with(&canonical),
+                "Coding directory is outside the workspace"
+            );
+            let path = dir.join("coding.json");
+            if path.exists() {
+                anyhow::ensure!(
+                    path.canonicalize()?.starts_with(&canonical),
+                    "Coding configuration is outside the workspace"
+                );
+            } else {
+                use std::io::Write;
+                match std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                {
+                    Ok(mut file) => {
+                        file.write_all(b"{\n  \"version\": 1,\n  \"editor\": {},\n  \"snippets\": {},\n  \"keybindings\": []\n}\n")?;
+                        file.sync_all()?;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Ok(Value::Null)
+        }
         Operation::ConfigRead => {
             let path = canonical.join(".koma/coding.json");
             if !path.exists() {
@@ -150,7 +180,7 @@ fn validate_config(config: &Value) -> Result<()> {
             anyhow::ensure!(v.is_object(), "{field} must be an object");
         }
     }
-    for field in ["tasks", "debug", "tests"] {
+    for field in ["tasks", "debug", "tests", "keybindings"] {
         if let Some(v) = config.get(field) {
             anyhow::ensure!(v.is_array(), "{field} must be an array");
         }
