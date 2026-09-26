@@ -1,3 +1,5 @@
+import { openGitTool } from './gitWorkbenchShared'
+import { Settings2 } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { ArrowRightLeft, Cloud, GitBranch, Tag } from 'lucide-react'
 import { AccordionSection } from './AccordionSection'
@@ -40,6 +42,7 @@ function RefRow({
       {/* Current-branch marker — a small filled dot, mirroring the accent
           tone BranchSwitcher/GraphRow already use for "this is HEAD". */}
       {b.isCurrent && <span className="h-1.5 w-1.5 flex-none rounded-full bg-koma-accent" />}
+      <RowAction title={`Manage ${b.kind === 'tag' ? 'tag' : 'branch'}`} onClick={() => openGitTool(b.kind === 'tag' ? 'tags' : 'branches', { target: b.kind === 'tag' ? b.name : `${b.kind}:${b.name}` })}><Settings2 size={12} /></RowAction>
       {onCheckout && (
         <RowAction title={`Checkout ${b.name}`} onClick={onCheckout}>
           <ArrowRightLeft size={12} />

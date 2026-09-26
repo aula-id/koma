@@ -1,3 +1,5 @@
+import { openGitTool } from '../gitWorkbenchShared'
+import { History } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import {
   Check,
@@ -532,6 +534,10 @@ export function CodingPanel() {
     setCtxMenu(null)
   }, [activeRoot, refreshCodingDir])
 
+  const gitRoot = useKoma(s => s.git.root)
+  const contextAbsolute = activeRoot && ctxMenu ? `${activeRoot.replace(/[\\/]$/, '')}/${ctxMenu.path}`.replace(/\\/g, '/') : ''
+  const gitPrefix = gitRoot ? gitRoot.replace(/\\/g, '/').replace(/\/$/, '') + '/' : ''
+  const contextGitPath = gitPrefix && contextAbsolute.startsWith(gitPrefix) ? contextAbsolute.slice(gitPrefix.length) : null
   const rootKey = activeRoot ? fileKey(activeRoot, '') : null
   const rootDir = rootKey ? dirs[rootKey] : null
   const roots = useMemo(() => workdir.slice(), [workdir])
@@ -823,6 +829,7 @@ export function CodingPanel() {
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.preventDefault()}
         >
+          {!ctxMenu.isDir && contextGitPath && gitRoot && <button type="button" className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-90 hover:bg-koma-hover" onClick={() => { openGitTool('blame', { root: gitRoot, path: contextGitPath }); setCtxMenu(null) }}><History size={12} className="opacity-70" />Blame HEAD</button>}
           {!ctxMenu.isDir && isMarkdownPath(ctxMenu.path) && (
             <button
               type="button"

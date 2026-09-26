@@ -108,7 +108,7 @@ export function GraphDetail() {
             return (
               <div
                 key={`${f.status}:${f.path}`}
-                onClick={() => openCommitDiffTab(selectedSha, f.path)}
+                onClick={() => openCommitDiffTab(selectedSha, f.path, f.origPath ?? undefined)}
                 title={f.origPath ? `${f.origPath} -> ${f.path}` : f.path}
                 className="group flex cursor-pointer items-center gap-1.5 rounded px-1 py-1 hover:bg-koma-hover"
               >

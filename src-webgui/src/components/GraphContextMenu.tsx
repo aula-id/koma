@@ -1,3 +1,4 @@
+import { openGitTool } from './gitWorkbenchShared'
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -423,6 +424,9 @@ export function GraphContextMenu({ x, y, target, onClose }: Props) {
         />
       ) : target.kind === 'commit' ? (
         <>
+          <MenuItem icon={<GitPullRequestArrow size={13} />} disabled={!currentBranch} onClick={() => { openGitTool('rebase', { target: target.sha }); onClose() }}>Interactive rebase after here…</MenuItem>
+          <MenuItem icon={<GitBranchPlus size={13} />} onClick={() => { openGitTool('tags', { commit: target.sha }); onClose() }}>Create tag here…</MenuItem>
+          <Separator />
           <MenuItem icon={<GitCommitHorizontal size={13} />} onClick={() => setMode('confirmCheckout')}>
             Checkout commit
           </MenuItem>
@@ -455,6 +459,7 @@ export function GraphContextMenu({ x, y, target, onClose }: Props) {
         </>
       ) : (
         <>
+          <MenuItem icon={<GitBranchPlus size={13} />} onClick={() => { openGitTool(target.refKind === 'tag' ? 'tags' : 'branches', { target: target.refKind === 'tag' ? target.name : `${target.refKind === 'head' ? 'local' : target.refKind}:${target.name}` }); onClose() }}>Manage {target.refKind === 'tag' ? 'tag' : 'branch'}…</MenuItem>
           {target.refKind !== 'tag' && (
             <MenuItem
               icon={<GitCommitHorizontal size={13} />}

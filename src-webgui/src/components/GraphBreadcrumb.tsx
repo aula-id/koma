@@ -1,3 +1,4 @@
+import { openGitTool } from './gitWorkbenchShared'
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { Activity, Archive, ArchiveRestore, GitBranch, RefreshCw } from 'lucide-react'
@@ -93,6 +94,7 @@ export function GraphBreadcrumb() {
             same trigger + portal idiom as GitPanel's header, so "Branch"
             here opens the identical branch-switcher rather than a duplicate. */}
         <BranchSwitcher variant="icon" />
+        <ToolbarButton title="Manage stashes" onClick={() => openGitTool('stashes')}><Archive size={12} /></ToolbarButton>
         <ToolbarButton title="Stash changes" onClick={gitStash} disabled={workTreeClean}>
           <Archive size={12} />
         </ToolbarButton>

@@ -483,6 +483,7 @@ function RootLayout() {
 
 // Monaco DiffEditor is HEAVY — lazy so its chunk never loads until the first
 // diff tab is opened (a tiny spinner covers the one-time chunk fetch).
+const GitWorkbenchTab = lazy(() => import('../components/GitWorkbenchTab'))
 const DiffTab = lazy(() => import('../components/DiffTab'))
 
 // Settings page — lazy so its chunk only loads when the gear is first clicked.
@@ -537,7 +538,9 @@ function DiffFallback() {
 function TabBody({ tab }: { tab: Exclude<Tab, { kind: 'chat' }> }) {
   return (
     <Suspense fallback={<DiffFallback />}>
-      {tab.kind === 'diff' ? (
+      {tab.kind === 'gitTool' ? (
+        <GitWorkbenchTab tab={tab} />
+      ) : tab.kind === 'diff' ? (
         <DiffTab tab={tab} />
       ) : tab.kind === 'settings' ? (
         <SettingsTab />

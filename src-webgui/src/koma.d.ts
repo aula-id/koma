@@ -2,6 +2,7 @@ declare global {
   // JS -> Rust request payloads, tagged { t: 'req', ...GuiReq } by
   // useKoma().req() (see src/store/koma.ts).
   type GuiReq =
+    | { r: 'GitWorkbench'; request: import('./lib/gitWorkbench').GitRequest }
     | { r: 'Ready' }
     | { r: 'Submit'; text: string }
     | { r: 'SelectSession'; id: string }

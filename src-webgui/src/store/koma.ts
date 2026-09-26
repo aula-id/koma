@@ -1,3 +1,4 @@
+import { receiveGitReply, cancelGitRequests, type GitReply, type GitToolTab } from '../lib/gitWorkbench'
 import { create } from 'zustand'
 import type { McpServer, Provider, Model, ModelListEntry, RouteEntry } from '../types/config'
 import {
@@ -798,6 +799,7 @@ export type InstalledExtDetail = {
 // `{ kind: 'session' }` variant (multi-session tabs, deferred but planned) slots
 // in additively without disturbing existing consumers.
 export type Tab =
+  | GitToolTab
   | { id: 'chat'; kind: 'chat' }
   // The singleton Settings page (VSCode-style), opened from the ActivityBar gear.
   // Deduped by the fixed id 'settings'; closeable like a diff tab.
@@ -906,6 +908,7 @@ export type Tab =
   | { id: string; kind: 'terminal'; terminalId: string; title: string }
 
 export type PushEnvelope =
+  | ({ k: 'GitWorkbench' } & GitReply)
   | {
       k: 'Snapshot'
       session: string
@@ -2394,7 +2397,7 @@ type KomaState = {
   // Open (or focus) a Monaco diff tab for `path` at commit `sha` vs its first
   // parent — distinct `commitdiff:${sha}:${path}` id from openDiffTab/
   // openGitDiffTab (never collides). Marks loading + fires the GitCommitDiff req.
-  openCommitDiffTab: (sha: string, path: string) => void
+  openCommitDiffTab: (sha: string, path: string, oldPath?: string) => void
   push: (env: PushEnvelope) => void
   // JS -> Rust: typed request helper, tags the envelope { t: 'req', ...g }.
   req: (g: GuiReq) => void
@@ -3137,6 +3140,7 @@ export const useKoma = create<KomaState>((set, get) => ({
 
   push: (env) => {
     switch (env.k) {
+      case 'GitWorkbench': receiveGitReply(env); break
       case 'Snapshot': {
         // A Snapshot whose session id differs from the current one is a session
         // SWITCH. Captured BEFORE the set so it's readable AFTER (to sync the stream
@@ -3144,6 +3148,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         // reasoning (it belongs to the old session — don't let it bleed into the new
         // view until the next send clears it) + reset the editor tabs.
         const switched = env.session !== get().session.id
+        if (switched) cancelGitRequests()
         // Re-attaching the same session id is still a GUI bootstrap even though
         // it must not discard that session's existing tabs/slices.
         const bootstrapping = !!get().ui.bootstrap
@@ -3289,6 +3294,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         break
       }
       case 'Switching':
+        cancelGitRequests()
         set((s) => {
           // Prefer an optimistic label ResumePalette already raised (the
           // friendly name the user clicked); otherwise resolve the target id
@@ -5283,6 +5289,14 @@ export const useKoma = create<KomaState>((set, get) => ({
     get().req({ r: 'GitStatus' })
   },
   openGitDiffTab: (path, staged) => {
+    const root = get().git.root
+    if (root) {
+      const id = `gittool:${root}:diff:${staged}:${path}`
+      const entry = [...get().git.staged, ...get().git.unstaged].find(e => e.path === path)
+      set(s => ({ ui: { ...s.ui, tabs: s.ui.tabs.some(t => t.id === id) ? s.ui.tabs : [...s.ui.tabs,
+        { id, kind: 'gitTool', view: 'diff', root, path, staged, oldPath: entry?.origPath ?? undefined, title: `${tabBaseName(path)}${staged ? ' (staged)' : ''}` }], activeTabId: id } }))
+      return
+    }
     const id = `gitdiff:${staged ? 'staged' : 'unstaged'}:${path}`
     set((s) => {
       const exists = s.ui.tabs.some((t) => t.id === id)
@@ -5766,7 +5780,14 @@ export const useKoma = create<KomaState>((set, get) => ({
     set((s) => ({ activity: { ...s.activity, loading: true, path: p } }))
     get().req({ r: 'GitActivity', path: p, limit: 800 })
   },
-  openCommitDiffTab: (sha, path) => {
+  openCommitDiffTab: (sha, path, oldPath) => {
+    const root = get().git.root
+    if (root) {
+      const id = `gittool:${root}:diff:${sha}:${path}`
+      set(s => ({ ui: { ...s.ui, tabs: s.ui.tabs.some(t => t.id === id) ? s.ui.tabs : [...s.ui.tabs,
+        { id, kind: 'gitTool', view: 'diff', root, path, commit: sha, oldPath, title: `${tabBaseName(path)} @ ${sha.slice(0, 7)}` }], activeTabId: id } }))
+      return
+    }
     const id = `commitdiff:${sha}:${path}`
     set((s) => {
       const exists = s.ui.tabs.some((t) => t.id === id)
@@ -6002,6 +6023,8 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
   closeTab: (id, opts) => {
     if (id === 'chat') return
+    const gitTab = get().ui.tabs.find(t => t.id === id)
+    if (gitTab?.kind === 'gitTool' && gitTab.dirty && !opts?.force) return
     // When closing a terminal tab, tell the host to kill the PTY.
     {
       const closing = get().ui.tabs.find((t) => t.id === id)

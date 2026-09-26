@@ -137,6 +137,8 @@ function tabVisual(
       return { Icon: Terminal, label: tab.title, title: tab.title }
     case 'terminal':
       return { Icon: SquareTerminal, label: tab.title, title: tab.title }
+    case 'gitTool':
+      return { Icon: GitGraph, label: `${tab.dirty ? '● ' : ''}${tab.title}`, title: `${tab.root} · ${tab.path ?? tab.title}` }
     case 'diff':
       return {
         Icon: FileDiff,
@@ -387,6 +389,11 @@ export function TabBar({ groupId, focused }: Props) {
 
   const requestClose = useCallback(
     (tab: Tab, e?: ReactMouseEvent) => {
+      if (tab.kind === 'gitTool' && tab.dirty) {
+        e?.stopPropagation()
+        setDirtyClose({ id: tab.id, title: tab.title })
+        return
+      }
       if (tab.kind === 'codingFile' && !tab.preview) {
         const fs = codingDirty[fileKey(tab.root, tab.path)]
         if (fs?.dirty) {
