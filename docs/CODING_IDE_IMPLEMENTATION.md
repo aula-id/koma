@@ -148,3 +148,16 @@ while preview is open. Exercise UTF-16/supplementary characters, spaces, `#` and
 `%` in filenames. Check supported quick fixes and the unavailable explanation
 for code actions requiring server commands/resource operations. Added pure edit
 regressions cover UTF-16 offsets, insertion order, overlaps and invalid ranges.
+
+- Replace All now builds a read-only native plan using the existing regex/glob
+  matcher and opens the shared multi-file preview. Apply/undo uses the same
+  revision/fingerprint protections and explicit-save buffers as refactoring.
+  Oversized plans fail instead of applying a truncated prefix. Literal search
+  treats `$` in replacement text literally; regex mode supports captures.
+
+### Native review: replacement
+
+Preview literal and regex replacements with include/exclude filters; cancel must
+leave disk and buffers untouched. Apply, undo, and explicitly Save All. Modify a
+candidate after preview and confirm no partial application. Verify capture
+replacement, literal dollar text, CRLF/UTF-16 preservation on save, and limits.

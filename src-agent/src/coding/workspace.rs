@@ -48,6 +48,37 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
                 json!({"path":path,"fingerprint":read.fingerprint,"error":read.error,"binary":read.binary,"tooLarge":read.too_large})
             }).collect::<Vec<_>>()))
         }
+        Operation::ReplacePreview { options } => {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Options {
+                query: String,
+                replacement: String,
+                case_sensitive: bool,
+                whole_word: bool,
+                is_regex: bool,
+                include_glob: Option<String>,
+                exclude_glob: Option<String>,
+            }
+            let options: Options = serde_json::from_value(options.clone())?;
+            use crate::app::runtime::client::content_search::{preview_replacements, ContentQuery};
+            preview_replacements(
+                ContentQuery {
+                    root: r,
+                    path: "",
+                    query: &options.query,
+                    case_sensitive: options.case_sensitive,
+                    whole_word: options.whole_word,
+                    is_regex: options.is_regex,
+                    include_glob: options.include_glob.as_deref(),
+                    exclude_glob: options.exclude_glob.as_deref(),
+                    request_id: &request.id,
+                },
+                &options.replacement,
+                &workdirs,
+            )
+            .map_err(anyhow::Error::msg)
+        }
         Operation::ConfigRead => {
             let path = canonical.join(".koma/coding.json");
             if !path.exists() {

@@ -212,12 +212,18 @@ pub(super) fn query(
         .map_err(|_| "Coding LSP manager lock failed")?
         .extended_request(&workspace.root, path, method, params.clone())?;
     let response = pending.wait_raw()?;
-    let manager = manager.lock().map_err(|_| "Coding LSP manager lock failed")?;
-    if method == "textDocument/rename" { manager.validate_edit_versions(&response)?; }
+    let manager = manager
+        .lock()
+        .map_err(|_| "Coding LSP manager lock failed")?;
+    if method == "textDocument/rename" {
+        manager.validate_edit_versions(&response)?;
+    }
     if method == "textDocument/codeAction" {
         if let Some(actions) = response.as_array() {
             for action in actions {
-                if let Some(edit) = action.get("edit") { manager.validate_edit_versions(edit)?; }
+                if let Some(edit) = action.get("edit") {
+                    manager.validate_edit_versions(edit)?;
+                }
             }
         }
     }

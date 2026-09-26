@@ -1,6 +1,6 @@
 import { receiveGitReply, cancelGitRequests, type GitReply, type GitToolTab } from '../lib/gitWorkbench'
 import { create } from 'zustand'
-import { resolveCodingReply } from '../lib/coding-service'
+import { codingRequest, resolveCodingReply } from '../lib/coding-service'
 import { sendCodingLanguage } from '../lib/coding-language'
 import { backupCodingDocument, forgetCodingDraft, recordCodingHistory } from '../lib/coding-recovery'
 import type { McpServer, Provider, Model, ModelListEntry, RouteEntry } from '../types/config'
@@ -6752,52 +6752,28 @@ export const useKoma = create<KomaState>((set, get) => ({
     })
   },
   replaceCodingContentAll: (root) => {
-    const search = get().coding.search
+    const state = get(), search = state.coding.search
     if (!root || !search.query.trim() || search.replacing) return
-    // Skip if any open dirty buffer under this root — replace writes disk and would clobber.
-    const dirtyOpen = get().ui.tabs.some((t) => {
-      if (t.kind !== 'codingFile' || t.root !== root) return false
-      const f = get().coding.files[fileKey(root, t.path)]
-      return !!f?.dirty
-    })
-    if (dirtyOpen) {
-      set((s) => ({
-        coding: {
-          ...s.coding,
-          search: {
-            ...s.coding.search,
-            replaceError: 'Save or discard dirty editor tabs before Replace All',
-            lastReplaceSummary: null,
-          },
-        },
-      }))
-      return
-    }
     const requestId = mintRequestId()
-    set((s) => ({
-      coding: {
-        ...s.coding,
-        search: {
-          ...s.coding.search,
-          replacing: true,
-          replaceError: null,
-          lastReplaceSummary: null,
-          _replaceReq: requestId,
-        },
-      },
-    }))
-    get().req({
-      r: 'FileContentReplace',
-      root,
-      path: '',
-      query: search.query,
-      replacement: search.replace,
-      caseSensitive: search.caseSensitive,
-      wholeWord: search.wholeWord,
-      isRegex: search.isRegex,
-      includeGlob: search.includeGlob.trim() || null,
-      excludeGlob: search.excludeGlob.trim() || null,
-      requestId,
+    const workspace = { hostId: state.remoteState.hostId ?? 'local', root }
+    const generation = state.coding._sessionGen
+    const snapshot = state.coding.files
+    set(s => ({ coding: { ...s.coding, search: { ...s.coding.search, replacing: true, replaceError: null, lastReplaceSummary: null, _replaceReq: requestId } } }))
+    void codingRequest<{ files: Array<{ path: string; before: string; after: string; fingerprint: string }>; matchCount: number; skipped: number }>(workspace, { op: 'replacePreview', options: {
+      query: search.query, replacement: search.replace, caseSensitive: search.caseSensitive, wholeWord: search.wholeWord, isRegex: search.isRegex,
+      includeGlob: search.includeGlob.trim() || null, excludeGlob: search.excludeGlob.trim() || null,
+    } }).then(async result => {
+      const { showCodingRefactor } = await import('../components/CodingRefactor')
+      if (get().coding.search._replaceReq !== requestId || get().coding._sessionGen !== generation || (get().remoteState.hostId ?? 'local') !== workspace.hostId) return
+      const files = result.files.map(file => {
+        const initial = snapshot[fileKey(root, file.path)]
+        if (initial && (initial.dirty || initial.saving || initial.loading || initial.conflict || initial.content !== file.before)) throw new Error(`Save or resolve ${file.path} before replacing its disk contents`)
+        return { ...file, initial, savedContent: file.before }
+      })
+      set(s => ({ coding: { ...s.coding, search: { ...s.coding.search, replacing: false, lastReplaceSummary: `${files.length} files ready for preview${result.skipped ? `; ${result.skipped} binary/large files skipped` : ''}` } } }))
+      if (files.length) showCodingRefactor({ workspace, path: files[0].path, position: { line: 0, character: 0 }, mode: 'prepared', label: 'Replace All', snapshot, generation, staged: { workspace, files, label: 'Replace All', generation } })
+    }).catch(error => {
+      if (get().coding.search._replaceReq === requestId) set(s => ({ coding: { ...s.coding, search: { ...s.coding.search, replacing: false, replaceError: error instanceof Error ? error.message : String(error) } } }))
     })
   },
   openCodingSearchHit: (root, path, line, col = 1) => {

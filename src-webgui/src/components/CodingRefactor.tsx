@@ -11,7 +11,7 @@ import { BrailleSpinner } from './BrailleSpinner'
 
 export type RefactorContext = {
   workspace: WorkspaceRef; path: string; position: EditPosition; word?: string
-  mode: 'rename' | 'edit'; edit?: WorkspaceEdit; label?: string
+  mode: 'rename' | 'edit' | 'prepared'; edit?: WorkspaceEdit; staged?: StagedEdit; label?: string
   snapshot: Record<string, CodingFileState>; generation: number
 }
 export function showCodingRefactor(context: RefactorContext) {
@@ -50,7 +50,8 @@ export function CodingRefactor() {
   }
   useEffect(() => {
     if (!context) return
-    if (context.mode === 'edit' && context.edit) void stage(context, context.edit, context.label ?? 'Code action')
+    if (context.mode === 'prepared' && context.staged) { setStaged(context.staged); setSelected(0) }
+    else if (context.mode === 'edit' && context.edit) void stage(context, context.edit, context.label ?? 'Code action')
     else { input.current?.focus(); input.current?.select() }
   }, [context])
   useEffect(() => {

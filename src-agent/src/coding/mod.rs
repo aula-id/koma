@@ -59,6 +59,9 @@ pub(crate) enum Operation {
         content: String,
         fingerprint: String,
     },
+    ReplacePreview {
+        options: Value,
+    },
     ConfigRead,
     ConfigWrite {
         config: Value,
