@@ -127,7 +127,7 @@ export function CodingHistory() {
       const fingerprint = context.disk ? snapshot.fingerprint! : before?.fingerprint ?? backup?.fingerprint ?? ''
       // Keep the original fingerprint: externally changed disk files must still reject Save.
       useKoma.setState(s => ({ coding: { ...s.coding, files: { ...s.coding.files,
-        [key]: { ...(before ?? emptyFileState()), content, savedContent, fingerprint, dirty: content !== savedContent, loading: false, conflict: context.disk ? false : before?.conflict ?? false, error: null },
+        [key]: { ...(before ?? emptyFileState()), content, savedContent, fingerprint, dirty: content !== savedContent, manualSaveRequired: content !== savedContent, loading: false, conflict: context.disk ? false : before?.conflict ?? false, error: null },
       } } }))
       if (content !== savedContent) backupCodingDocument(workspace, selected.path, { content, savedContent, fingerprint })
       else forgetCodingDraft(workspace, selected.path)

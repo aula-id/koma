@@ -13,6 +13,7 @@ import {
   setGoToDefinitionHandler,
   warmCodeLensCache,
   registerLspDidChangeFlusher,
+  flushPendingLspDidChange,
 } from '../lib/monaco-lsp'
 import { codingAskInChatPayload } from '../lib/codingRef'
 import { viewerKindForPath, type ViewerKind } from '../lib/viewerKind'
@@ -22,6 +23,8 @@ import { isTabVisible, normalizeGroups } from '../store/editorGroups'
 import { BrailleSpinner } from './BrailleSpinner'
 import { CodingFileViewer } from './CodingFileViewer'
 import { EditorChrome } from './EditorChrome'
+import { showCodingRefactor } from './CodingRefactor'
+import { undoWorkspaceEdit } from '../lib/coding-edits'
 import { showCodingHistory } from './CodingHistory'
 import { isMarkdownPath } from '../lib/markdownPreview'
 
@@ -112,7 +115,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     if (fileState.error) return fileState.error
     if (fileState.binary) return 'Binary'
     if (fileState.tooLarge) return 'Too large'
-    if (fileState.dirty) return codingAutosave ? 'Modified · autosave on' : 'Modified'
+    if (fileState.dirty) return fileState.manualSaveRequired ? 'Modified · save to apply' : codingAutosave ? 'Modified · autosave on' : 'Modified'
     return 'Saved'
   }, [fileState, codingAutosave])
 
@@ -121,7 +124,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       clearTimeout(autosaveTimerRef.current)
       autosaveTimerRef.current = null
     }
-    if (!codingAutosave) return
+    if (!codingAutosave || fileState?.manualSaveRequired) return
     if (!fileState?.dirty) return
     if (fileState.content == null) return
     if (fileState.saving || fileState.conflict || fileState.binary || fileState.tooLarge || fileState.error) {
@@ -132,7 +135,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     autosaveTimerRef.current = setTimeout(() => {
       autosaveTimerRef.current = null
       const cur = useKoma.getState().coding.files[fileKey(tab.root, tab.path)]
-      if (!cur?.dirty || cur.content == null || cur.saving || cur.conflict) return
+      if (!cur?.dirty || cur.content == null || cur.saving || cur.conflict || cur.manualSaveRequired) return
       if (cur.binary || cur.tooLarge || cur.error) return
       if (cur.content === (cur.savedContent ?? '')) return
       if (!useKoma.getState().settingsValues?.codingAutosave) return
@@ -147,6 +150,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     }
   }, [
     codingAutosave,
+    fileState?.manualSaveRequired,
     fileState?.dirty,
     fileState?.content,
     fileState?.savedContent,
@@ -221,6 +225,20 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       void editor.getAction('editor.action.referenceSearch.trigger')?.run()
     })
 
+    editor.addAction({ id: 'koma.rename', label: 'Rename Symbol…', keybindings: [monaco.KeyCode.F2], contextMenuGroupId: 'navigation', contextMenuOrder: 1.5, run: async () => {
+      const model = editor.getModel(), position = editor.getPosition()
+      if (!model || !position) return
+      const version = model.getVersionId()
+      await flushPendingLspDidChange(tab.root, tab.path)
+      if (model.isDisposed() || model.getVersionId() !== version) return
+      const state = useKoma.getState()
+      showCodingRefactor({ workspace: { hostId: state.remoteState.hostId ?? 'local', root: tab.root }, path: tab.path,
+        position: { line: position.lineNumber - 1, character: position.column - 1 }, word: model.getWordAtPosition(position)?.word,
+        mode: 'rename', snapshot: state.coding.files, generation: state.coding._sessionGen })
+    } })
+    editor.addAction({ id: 'koma.undoWorkspaceEdit', label: 'Undo Workspace Edit', run: () => {
+      try { undoWorkspaceEdit() } catch (error) { const message = error instanceof Error ? error.message : String(error); useKoma.setState(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, text: message, kind: 'error' } } } }) }
+    } })
     // Selection → composer: `@path:start-end` + fenced buffer text, then focus chat.
     editor.addAction({
       id: 'koma.askInChat',

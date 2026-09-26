@@ -15,6 +15,7 @@ export type CodingFileState = {
   dirty: boolean
   loading: boolean
   saving: boolean
+  manualSaveRequired: boolean // previews/restores must not trigger autosave
   // Snapshot actually sent to disk; a reply must never acknowledge newer edits.
   pendingSave: { requestId: string; content: string } | null
   saveQueued: boolean // explicit Save pressed again while a write is in flight
@@ -134,6 +135,7 @@ export function emptyFileState(partial?: Partial<CodingFileState>): CodingFileSt
     dirty: false,
     loading: false,
     saving: false,
+    manualSaveRequired: false,
     pendingSave: null,
     saveQueued: false,
     conflict: false,
@@ -367,6 +369,7 @@ export function reduceFileSave(coding: CodingSlice, env: FileSavePush): CodingSl
         ...prev,
         content,
         savedContent: pending.content,
+        manualSaveRequired: false,
         fingerprint: env.fingerprint || prev.fingerprint,
         dirty: content !== pending.content,
         saving: false,

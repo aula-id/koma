@@ -1,3 +1,5 @@
+import { showCodingRefactor, type RefactorContext } from '../components/CodingRefactor'
+import { type WorkspaceEdit } from './coding-edits'
 import { useKoma } from '../store/koma'
 import { queryCodingLanguage } from './coding-language'
 // Monaco ↔ host LSP bridge: pending request map + provider registration +
@@ -772,6 +774,23 @@ export function ensureLspProviders(
     })
     return materializeLocations(converted, req, getRoots)
   }
+  monaco.editor.registerCommand('koma.previewWorkspaceEdit', (_accessor, context: unknown) => showCodingRefactor(context as RefactorContext))
+  monaco.languages.registerCodeActionProvider('*', {
+    provideCodeActions: async (model, selection, context, token) => {
+      const rp = modelToRootPath(model, getRoots())
+      if (!rp) return { actions: [], dispose() {} }
+      const state = useKoma.getState()
+      type Action = { title: string; kind?: string; edit?: WorkspaceEdit; command?: unknown; disabled?: { reason: string }; isPreferred?: boolean }
+      const diagnostics = context.markers.map(m => ({ range: protocolRange(m), message: m.message, severity: m.severity === monaco.MarkerSeverity.Error ? 1 : m.severity === monaco.MarkerSeverity.Warning ? 2 : 3, code: typeof m.code === 'object' ? m.code.value : m.code, source: m.source }))
+      const result = await extended<Action[]>(model, 'textDocument/codeAction', { range: protocolRange(selection), context: { diagnostics, only: context.only ? [context.only] : undefined, triggerKind: context.trigger === monaco.languages.CodeActionTriggerType.Invoke ? 1 : 2 } }, token)
+      const actions: monaco.languages.CodeAction[] = (result ?? []).map(action => ({
+        title: action.title, kind: action.kind, isPreferred: action.isPreferred,
+        disabled: action.disabled?.reason ?? (!action.edit || action.command ? 'This action requires a server command or resolve step that is not supported yet' : undefined),
+        command: action.edit && !action.command ? { id: 'koma.previewWorkspaceEdit', title: action.title, arguments: [{ workspace: { hostId: state.remoteState.hostId ?? 'local', root: rp.root }, path: rp.path, position: { line: selection.startLineNumber - 1, character: selection.startColumn - 1 }, mode: 'edit', label: action.title, edit: action.edit, snapshot: state.coding.files, generation: state.coding._sessionGen } satisfies RefactorContext] } : undefined,
+      }))
+      return { actions, dispose() {} }
+    },
+  })
   monaco.languages.registerImplementationProvider('*', { provideImplementation: (m, p, t) => locations(m, p, t, 'textDocument/implementation') })
   monaco.languages.registerTypeDefinitionProvider('*', { provideTypeDefinition: (m, p, t) => locations(m, p, t, 'textDocument/typeDefinition') })
 

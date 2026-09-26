@@ -13,6 +13,7 @@ import { RenameOverlay } from '../components/RenameOverlay'
 import { OmniSearchPalette } from '../components/OmniSearchPalette'
 import { CodingPalette } from '../components/CodingPalette'
 import { CodingHistory } from '../components/CodingHistory'
+import { CodingRefactor } from '../components/CodingRefactor'
 import { startCodingDiskMonitor } from '../lib/coding-disk'
 import { SwitchingOverlay } from '../components/SwitchingOverlay'
 import { RemotePasswordPrompt } from '../components/RemotePasswordPrompt'
@@ -446,6 +447,7 @@ function RootLayout() {
       {omnisearchOpen && <OmniSearchPalette onClose={closeOmniSearch} />}
       <CodingPalette />
       <CodingHistory />
+      <CodingRefactor />
       <SwitchingOverlay
         onCancel={() => {
           // Best-effort bail of a pre-attach swap. If Snapshot already landed

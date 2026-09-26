@@ -14,12 +14,16 @@ const commands: Command[] = [
   { id: 'editor.action.formatSelection', title: 'Format Selection', editor: true },
   { id: 'editor.action.goToImplementation', title: 'Go to Implementation', editor: true },
   { id: 'editor.action.goToTypeDefinition', title: 'Go to Type Definition', editor: true },
+  { id: 'koma.rename', title: 'Rename Symbol…', shortcut: 'F2', editor: true },
+  { id: 'editor.action.quickFix', title: 'Quick Fix / Code Actions', shortcut: 'Ctrl/Cmd+.', editor: true },
+  { id: 'koma.undoWorkspaceEdit', title: 'Undo Workspace Edit', editor: true },
   { id: 'save', title: 'Save File', shortcut: 'Ctrl/Cmd+S', editor: true },
   { id: 'editor.action.revealDefinition', title: 'Go to Definition', shortcut: 'F12', editor: true },
   { id: 'editor.action.referenceSearch.trigger', title: 'Find References', shortcut: 'Shift+F12', editor: true },
   { id: 'editor.action.triggerSuggest', title: 'Trigger Suggestions', editor: true },
   { id: 'editor.action.commentLine', title: 'Toggle Line Comment', editor: true },
   { id: 'editor.action.toggleWordWrap', title: 'Toggle Word Wrap', editor: true },
+  { id: 'saveAll', title: 'Save All Open Files' },
   { id: 'recovery', title: 'Recover Unsaved Files' },
   { id: 'history', title: 'Show Local History', editor: true },
   { id: 'terminal', title: 'Open Terminal' },
@@ -118,7 +122,8 @@ export function CodingPalette() {
     if (command.id === 'files') { setMode('files'); setQuery(''); return }
     setMode(null)
     const store = useKoma.getState()
-    if (command.id === 'recovery') showCodingHistory()
+    if (command.id === 'saveAll') { for (const tab of store.ui.tabs) if (tab.kind === 'codingFile' && !tab.preview) store.saveCodingFile(tab.root, tab.path) }
+    else if (command.id === 'recovery') showCodingHistory()
     else if (command.id === 'history' && activeTab?.kind === 'codingFile') showCodingHistory(activeTab.root, activeTab.path)
     else if (command.id === 'terminal') store.openTerminalTab(`coding-${Date.now()}`, 'Terminal')
     else if (command.id === 'settings') store.openSettingsTab()

@@ -783,6 +783,20 @@ impl LspManager {
         Ok(LspPendingRequest { io: session.io.clone(), method, params })
     }
 
+    pub(crate) fn validate_edit_versions(&self, edit: &serde_json::Value) -> Result<(), String> {
+        if let Some(changes) = edit.get("documentChanges").and_then(serde_json::Value::as_array) {
+            for change in changes {
+                let Some(document) = change.get("textDocument") else { continue };
+                let Some(version) = document.get("version").and_then(serde_json::Value::as_i64) else { continue };
+                let uri = document.get("uri").and_then(serde_json::Value::as_str).ok_or("Language edit has no URI")?;
+                if self.docs.get(uri).is_none_or(|doc| i64::from(doc.version) != version) {
+                    return Err("Language edit targets an obsolete document version".into());
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Resolve URI + clone SessionIo so the caller can drop `LspManager` before
     /// the blocking request wait. Also revives a dead server if needed.
     fn uri_io(&mut self, root: &str, path: &str) -> Result<(String, SessionIo), String> {
@@ -1974,20 +1988,8 @@ fn abs_path(root: &str, path: &str) -> Result<PathBuf, String> {
 }
 
 fn path_to_uri(path: &Path) -> String {
-    // Manual file:// URI — avoids depending on url crate feature flags.
-    let s = path.to_string_lossy();
-    #[cfg(windows)]
-    {
-        let norm = s.replace('\\', "/");
-        if norm.starts_with('/') {
-            return format!("file://{norm}");
-        }
-        return format!("file:///{norm}");
-    }
-    #[cfg(not(windows))]
-    {
-        format!("file://{s}")
-    }
+    url::Url::from_file_path(path).map(|uri| uri.to_string())
+        .unwrap_or_else(|_| format!("file://{}", path.to_string_lossy()))
 }
 
 /// Map a file path to the Monaco / LSP language id (best-effort).

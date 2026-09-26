@@ -128,3 +128,23 @@ selection and document, and undo. Type while formatting runs: the old result mus
 not replace new text. Check signature help, inlay hints, implementation/type
 navigation, unsupported capabilities, server crash/reopen, and remote host
 switching. Verify restoring history immediately changes hover/diagnostics.
+
+- Rename Symbol (F2) and text-edit code actions open a multi-file diff preview.
+  Apply validates current buffers and disk fingerprints for every file, records
+  inverse history, and changes buffers together. Autosave is held for these
+  buffers and restored drafts until explicit Save; Save All is in the palette.
+  Undo Workspace Edit restores buffers only when every target still matches the
+  applied content. File resource operations, command-only code actions and
+  unresolved actions are explicitly unavailable in this increment.
+- Workspace edits are bounded to 100 files/20 MiB and the initiating root.
+  LSP document versions and UTF-16 ranges are checked; overlapping edits fail
+  without partial application. File URIs now escape reserved path characters.
+
+### Native review: refactoring
+
+Rename a symbol across multiple files, inspect diffs, apply, undo the workspace
+edit, and save explicitly with autosave enabled. Try typing or modifying disk
+while preview is open. Exercise UTF-16/supplementary characters, spaces, `#` and
+`%` in filenames. Check supported quick fixes and the unavailable explanation
+for code actions requiring server commands/resource operations. Added pure edit
+regressions cover UTF-16 offsets, insertion order, overlaps and invalid ranges.
