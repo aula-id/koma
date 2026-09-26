@@ -11,7 +11,7 @@ two-pane layout, visual tokens, and interaction patterns.
 | Host/workspace identity and independent coding lifecycle | In progress |
 | Document views, recovery, history, external changes | Pending |
 | Language packs, toolchains, environment selection | Pending |
-| Quick Open, commands, outline, navigation, settings | Pending |
+| Quick Open, commands, outline, navigation, settings | In progress |
 | Workspace edits, formatting, rename, code actions, LSP extensions | Pending |
 | Search/replace preview and task runner | Pending |
 | Debug Adapter Protocol and debugger UI | Pending |
@@ -45,3 +45,25 @@ external changes, recovery, cross-file undo, install interruption, environment
 selection, debug attach/detach, discovery/run/cancel/rerun of tests, and SSH
 reconnect. Native review covers Koma's Windows, Linux, and macOS targets. A
 successful compile is not evidence of native workflow correctness.
+
+## Delivered increments
+
+- Workspace-scoped language server process IDs avoid collisions between roots
+  using the same language server.
+- Native coding RPC carries host/root and request identity, with bounded queues
+  and independent SSH channels. Existing file/editor and LSP frontend routing
+  has not yet migrated to this service. SSH requires the updated remote binary.
+- Quick Open (`Ctrl/Cmd+P`) searches one dropdown root or all configured roots;
+  command palette (`Ctrl/Cmd+Shift+P`) exposes editor actions. File traversal
+  respects ignore rules, limits depth/file count, and reports truncated results.
+- Monaco Go to Symbol uses the existing document-symbol LSP bridge, rejecting
+  replies for an obsolete model version.
+- Recovery/history storage and project configuration RPC are foundation APIs;
+  their editor UI integration is a separate increment.
+
+### Native review: navigation
+
+Open two roots, find a file with Quick Open in each, then choose All workspaces.
+Check keyboard navigation, Escape/focus, Unicode paths, ignored directories,
+empty results, and a disconnected remote. Open Go to Symbol in a supported
+language, edit while results arrive, and verify stale results are ignored.

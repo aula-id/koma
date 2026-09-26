@@ -601,7 +601,7 @@ fn run_request_job(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
 /// coalesces to the latest text per path. Requests use a fixed pool so CodeLens
 /// fanout cannot explode OS threads. Replies still go through the manager's
 /// push sink.
-pub(super) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
+pub(crate) fn handle_client_ctl(ctl: HostCtl, mgr: Arc<Mutex<LspManager>>) {
     let workers = lsp_workers();
     match ctl {
         HostCtl::LspDidOpen {

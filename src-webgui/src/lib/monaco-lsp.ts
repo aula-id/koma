@@ -681,6 +681,38 @@ export function ensureLspProviders(
   })
 
   // VS Code-style "N references" CodeLens above symbols — off by default.
+  monaco.languages.registerDocumentSymbolProvider(selector, {
+    provideDocumentSymbols: async (model, token) => {
+      const loc = modelToRootPath(model, getRoots())
+      if (!loc) return []
+      const version = model.getVersionId()
+      const requestId = mintId('symbols')
+      const pending = trackDocumentSymbol(requestId)
+      req({ r: 'LspDocumentSymbol', ...loc, requestId })
+      try {
+        const symbols = await pending
+        if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return []
+        const range = (r: LspDocumentSymbol['range']): monaco.IRange => ({
+          startLineNumber: r.startLine + 1, startColumn: r.startCharacter + 1,
+          endLineNumber: r.endLine + 1, endColumn: r.endCharacter + 1,
+        })
+        const roots: monaco.languages.DocumentSymbol[] = []
+        const stack: monaco.languages.DocumentSymbol[] = []
+        for (const symbol of symbols) {
+          const node: monaco.languages.DocumentSymbol = {
+            name: symbol.name, detail: '', kind: Math.max(0, symbol.kind - 1), tags: [],
+            range: range(symbol.range), selectionRange: range(symbol.selectionRange), children: [],
+          }
+          while (stack.length && (!monaco.Range.containsRange(stack[stack.length - 1].range, node.range) || monaco.Range.equalsRange(stack[stack.length - 1].range, node.range))) stack.pop()
+          if (stack.length) stack[stack.length - 1].children!.push(node)
+          else roots.push(node)
+          stack.push(node)
+        }
+        return roots
+      } catch { return [] }
+    },
+  })
+
   if (!CODELENS_ENABLED) return
   const CODELENS_PEEK_REFS = 'koma.codelens.peekReferences'
   monaco.editor.registerCommand(

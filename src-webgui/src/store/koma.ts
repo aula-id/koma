@@ -1,5 +1,6 @@
 import { receiveGitReply, cancelGitRequests, type GitReply, type GitToolTab } from '../lib/gitWorkbench'
 import { create } from 'zustand'
+import { resolveCodingReply } from '../lib/coding-service'
 import type { McpServer, Provider, Model, ModelListEntry, RouteEntry } from '../types/config'
 import {
   initialCoding,
@@ -908,6 +909,7 @@ export type Tab =
   | { id: string; kind: 'terminal'; terminalId: string; title: string }
 
 export type PushEnvelope =
+  | import('../lib/coding-service').CodingReply
   | ({ k: 'GitWorkbench' } & GitReply)
   | {
       k: 'Snapshot'
@@ -3140,6 +3142,7 @@ export const useKoma = create<KomaState>((set, get) => ({
 
   push: (env) => {
     switch (env.k) {
+      case 'CodingReply': resolveCodingReply(env); break
       case 'GitWorkbench': receiveGitReply(env); break
       case 'Snapshot': {
         // A Snapshot whose session id differs from the current one is a session

@@ -1798,6 +1798,7 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
     terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
     lsp_manager: &std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
 ) -> HostStep {
+    crate::coding::remember_remote(&ctx.host_id, &ctx.target, ctx.password(), &ctx.koma_path);
     *current = None;
     push_state.reset();
 
@@ -2260,6 +2261,7 @@ fn host_remote_attach(
     terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
     lsp_manager: &std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
 ) -> HostStep {
+    crate::coding::remember_remote(&ctx.host_id, &ctx.target, ctx.password(), &ctx.koma_path);
     let _ = lsp_manager.lock().map(|mut mgr| mgr.cleanup_all());
     let (remote_state_tx, remote_state_rx) =
         std::sync::mpsc::channel::<super::remote_ctl::RemoteStateUpdate>();

@@ -1,0 +1,172 @@
+//! Each root owns its language processes, independently of chat attachments.
+use super::WorkspaceRef;
+use crate::app::runtime::client::{lsp_host, HostCtl};
+use crate::lsp::LspManager;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
+static MANAGERS: OnceLock<Mutex<HashMap<WorkspaceRef, Arc<Mutex<LspManager>>>>> = OnceLock::new();
+
+#[derive(Deserialize)]
+#[serde(tag = "r", rename_all_fields = "camelCase")]
+enum Message {
+    LspDidOpen {
+        path: String,
+        language_id: String,
+        text: String,
+    },
+    LspDidChange {
+        path: String,
+        text: String,
+    },
+    LspDidSave {
+        path: String,
+        text: Option<String>,
+    },
+    LspDidClose {
+        path: String,
+    },
+    LspCompletion {
+        path: String,
+        line: u32,
+        character: u32,
+        trigger_kind: u32,
+        trigger_character: Option<String>,
+        request_id: String,
+    },
+    LspCompletionResolve {
+        path: String,
+        item: Box<crate::lsp::LspCompletionItem>,
+        request_id: String,
+    },
+    LspHover {
+        path: String,
+        line: u32,
+        character: u32,
+        request_id: String,
+    },
+    LspDefinition {
+        path: String,
+        line: u32,
+        character: u32,
+        request_id: String,
+    },
+    LspReferences {
+        path: String,
+        line: u32,
+        character: u32,
+        include_declaration: bool,
+        request_id: String,
+    },
+    LspDocumentSymbol {
+        path: String,
+        request_id: String,
+    },
+}
+
+pub(super) fn dispatch(workspace: &WorkspaceRef, body: &Value) -> Result<Value, String> {
+    let msg: Message = serde_json::from_value(body.clone()).map_err(|e| e.to_string())?;
+    let manager = {
+        let mut managers = MANAGERS
+            .get_or_init(Default::default)
+            .lock()
+            .map_err(|_| "Coding LSP manager lock failed")?;
+        Arc::clone(managers.entry(workspace.clone()).or_insert_with(|| {
+            let workspace = workspace.clone();
+            Arc::new(Mutex::new(LspManager::new(move |json| {
+                if let Ok(event) = serde_json::from_str::<Value>(&json) {
+                    super::event(json!({"k":"CodingEvent","workspace":workspace,"event":event}));
+                }
+            })))
+        }))
+    };
+    let root = workspace.root.clone();
+    let ctl = match msg {
+        Message::LspDidOpen {
+            path,
+            language_id,
+            text,
+        } => HostCtl::LspDidOpen {
+            root,
+            path,
+            language_id,
+            text,
+        },
+        Message::LspDidChange { path, text } => HostCtl::LspDidChange { root, path, text },
+        Message::LspDidSave { path, text } => HostCtl::LspDidSave { root, path, text },
+        Message::LspDidClose { path } => HostCtl::LspDidClose { root, path },
+        Message::LspCompletion {
+            path,
+            line,
+            character,
+            trigger_kind,
+            trigger_character,
+            request_id,
+        } => HostCtl::LspCompletion {
+            root,
+            path,
+            line,
+            character,
+            trigger_kind,
+            trigger_character,
+            request_id,
+        },
+        Message::LspCompletionResolve {
+            path,
+            item,
+            request_id,
+        } => HostCtl::LspCompletionResolve {
+            root,
+            path,
+            item,
+            request_id,
+        },
+        Message::LspHover {
+            path,
+            line,
+            character,
+            request_id,
+        } => HostCtl::LspHover {
+            root,
+            path,
+            line,
+            character,
+            request_id,
+        },
+        Message::LspDefinition {
+            path,
+            line,
+            character,
+            request_id,
+        } => HostCtl::LspDefinition {
+            root,
+            path,
+            line,
+            character,
+            request_id,
+        },
+        Message::LspReferences {
+            path,
+            line,
+            character,
+            include_declaration,
+            request_id,
+        } => HostCtl::LspReferences {
+            root,
+            path,
+            line,
+            character,
+            include_declaration,
+            request_id,
+        },
+        Message::LspDocumentSymbol { path, request_id } => HostCtl::LspDocumentSymbol {
+            root,
+            path,
+            request_id,
+        },
+    };
+    lsp_host::handle_client_ctl(ctl, manager);
+    Ok(Value::Null)
+}

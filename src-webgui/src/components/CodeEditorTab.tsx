@@ -341,8 +341,18 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     }
     window.addEventListener('koma-reveal-line', onReveal)
 
+    const onCodingCommand = (event: Event) => {
+      const command = (event as CustomEvent<{ id: string; tabId: string }>).detail
+      if (command?.tabId !== tab.id) return
+      editor.focus()
+      if (command.id === 'save') useKoma.getState().saveCodingFile(tab.root, tab.path)
+      else void editor.getAction(command.id)?.run()
+    }
+    window.addEventListener('koma-coding-command', onCodingCommand)
+
     return () => {
       window.removeEventListener('koma-reveal-line', onReveal)
+      window.removeEventListener('koma-coding-command', onCodingCommand)
       sub.dispose()
       registerLspDidChangeFlusher(tab.root, tab.path, null)
       if (lspChangeTimerRef.current) clearTimeout(lspChangeTimerRef.current)

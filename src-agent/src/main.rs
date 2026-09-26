@@ -43,6 +43,7 @@
 
 mod app;
 mod cli;
+mod coding;
 mod config;
 mod controller;
 mod dto;
@@ -61,6 +62,9 @@ mod tool;
 mod view;
 
 fn main() -> anyhow::Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("coding-worker") {
+        return coding::worker_main();
+    }
     // Install a panic hook that logs to ~/.koma/error.log before exiting.
     // Daemon stderr goes to /dev/null, so the default hook's eprintln is invisible.
     // This makes every panic (including .expect()/.unwrap() failures) diagnosable.

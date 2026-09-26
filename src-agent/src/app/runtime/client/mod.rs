@@ -70,7 +70,7 @@ mod host_config;
 pub(crate) mod import_graph;
 mod input;
 mod keys;
-mod lsp_host;
+pub(crate) mod lsp_host;
 mod project;
 mod project_config;
 mod push_intercept;
@@ -288,7 +288,7 @@ pub(in crate::app::runtime) struct StreamView {
 /// live daemon via the shared `live_req` sender — so this carries only the
 /// session-lifecycle intents the client-thread owns.
 #[derive(Clone)]
-pub(super) enum HostCtl {
+pub(crate) enum HostCtl {
     /// The webview page booted / reloaded: re-push the full authoritative state.
     Ready,
     /// Attach to this existing session UUID (a hub `SelectSession` pick).

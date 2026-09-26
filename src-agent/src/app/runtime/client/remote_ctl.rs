@@ -41,6 +41,7 @@ impl RemoteCtx {
 
     /// Build a short-lived askpass context for one SSH operation.
     pub fn make_auth(&self) -> anyhow::Result<Option<SshAuth>> {
+        crate::coding::remember_remote(&self.host_id, &self.target, self.password(), &self.koma_path);
         match self.password.as_ref() {
             Some(pw) => Ok(Some(SshAuth::from_password(pw.clone())?)),
             None => Ok(None),
