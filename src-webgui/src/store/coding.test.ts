@@ -7,6 +7,7 @@ import {
   reduceFileDelete,
   reduceFileRename,
   reduceFileSave,
+  reduceFileRead,
   reduceFileTree,
   type CodingSlice,
 } from './coding'
@@ -83,6 +84,7 @@ const withCaches = (partial: Partial<CodingSlice> = {}): CodingSlice => ({
         fingerprint: 'fp1',
         dirty: true,
         saving: true,
+        pendingSave: { requestId: 'save-1', content: 'edited' },
       }),
     },
   })
@@ -95,12 +97,50 @@ const withCaches = (partial: Partial<CodingSlice> = {}): CodingSlice => ({
   assert.equal(saved.files[key]?.fingerprint, 'fp2')
 
   const conflicted = reduceFileSave(dirty, {
-    k: 'FileSave', root, path: 'src/a.ts', requestId: 'save-2', fingerprint: '', error: 'conflict',
+    k: 'FileSave', root, path: 'src/a.ts', requestId: 'save-1', fingerprint: '', error: 'conflict',
   })
   assert.equal(conflicted.files[key]?.dirty, true)
   assert.equal(conflicted.files[key]?.saving, false)
   assert.equal(conflicted.files[key]?.conflict, true)
   assert.equal(conflicted.files[key]?.content, 'edited')
+}
+
+// A save acknowledges the sent snapshot, even when typing or undo continues.
+{
+  const key = fileKey(root, 'src/a.ts')
+  for (const content of ['newer edits', 'old']) {
+    const duringSave = withCaches({ files: { [key]: emptyFileState({
+      content, savedContent: 'old', fingerprint: 'fp1', dirty: content !== 'old',
+      saving: true, pendingSave: { requestId: 'save-current', content: 'sent snapshot' },
+    }) } })
+    const reply = { k: 'FileSave' as const, root, path: 'src/a.ts', requestId: 'save-current', fingerprint: 'fp2', error: null }
+    assert.equal(reduceFileSave(duringSave, { ...reply, requestId: 'stale' }), duringSave)
+    const saved = reduceFileSave(duringSave, reply)
+    assert.equal(saved.files[key].content, content)
+    assert.equal(saved.files[key].savedContent, 'sent snapshot')
+    assert.equal(saved.files[key].dirty, true)
+    assert.equal(saved.files[key].pendingSave, null)
+    assert.equal(reduceFileSave(saved, reply), saved) // Duplicate reply is inert.
+  }
+}
+
+// A reread must not authorize an edited buffer to overwrite newer disk content.
+{
+  const key = fileKey(root, 'src/a.ts')
+  const dirty = withCaches({
+    _readReq: { [key]: 'read-current' },
+    files: { [key]: emptyFileState({ content: 'local edits', savedContent: 'old', fingerprint: 'old-fp', dirty: true }) },
+  })
+  const reply = { k: 'FileRead' as const, root, path: 'src/a.ts', requestId: 'read-current', content: 'external edits', fingerprint: 'new-fp', binary: false, tooLarge: false, error: null }
+  const next = reduceFileRead(dirty, reply)
+  assert.equal(next.files[key].content, 'local edits')
+  assert.equal(next.files[key].fingerprint, 'old-fp')
+  assert.equal(next.files[key].conflict, true)
+  const failed = reduceFileRead(dirty, { ...reply, content: null, error: 'Permission denied' })
+  assert.equal(failed.files[key].content, 'local edits')
+  assert.equal(failed.files[key].dirty, true)
+  const closed = withCaches()
+  assert.equal(reduceFileRead(closed, reply), closed)
 }
 
 // Safe autosave preconditions (mirrors CodeEditorTab's 750ms guard).

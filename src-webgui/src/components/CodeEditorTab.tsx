@@ -95,7 +95,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     fileState.content != null &&
     !fileState.binary &&
     !fileState.tooLarge &&
-    !fileState.error &&
+    !fileState.loading &&
     !fileState.conflict
   )
   const openPreview = isMarkdownPath(tab.path)
@@ -411,7 +411,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     }
 
     editor.updateOptions({
-      readOnly: fileState.binary || fileState.tooLarge || !!fileState.error || fileState.conflict,
+      readOnly: fileState.binary || fileState.tooLarge || fileState.loading || fileState.conflict,
     })
 
     // Go-to-def / Problems may open this tab before content is ready — apply
@@ -429,13 +429,13 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       // Second pass after layout / late model attach.
       setTimeout(apply, 50)
     }
-    // Intentionally omit `loading` and `fingerprint` — both flip without content
-    // changes and used to re-enter setValue/setEOL for free (React #185 on split).
+    // Fingerprint changes do not require touching the model. Loading only
+    // updates readOnly; unchanged content never triggers setValue/setEOL.
   }, [
     fileState?.content,
     fileState?.binary,
     fileState?.tooLarge,
-    fileState?.error,
+    fileState?.loading,
     fileState?.conflict,
     tab.path,
     tab.root,
@@ -542,7 +542,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
           onRevert={() => revertCodingFile(tab.root, tab.path)}
         />
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-[12px] text-koma-dim">
-          <div>File changed on disk — save was rejected.</div>
+          <div>{fileState.error?.replace(/^conflict:\s*/i, '') ?? 'File changed on disk — save was rejected.'}</div>
           <button
             type="button"
             onClick={() => revertCodingFile(tab.root, tab.path)}

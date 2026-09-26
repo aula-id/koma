@@ -339,26 +339,22 @@ export function TabBar({ groupId, focused }: Props) {
   // Compact dirty signature string — avoids allocating nested objects every
   // coding.files tick (useShallow would still see new child refs each time).
   const codingDirtySig = useKoma((s) => {
-    const parts: string[] = []
+    const parts: [string, string][] = []
     for (const [k, f] of Object.entries(s.coding.files)) {
       if (!f || !(f.dirty || f.conflict || f.saving)) continue
       parts.push(
-        `${k}:${f.dirty ? 1 : 0}${f.conflict ? 1 : 0}${f.error ? 1 : 0}${f.binary ? 1 : 0}${
+        [k, `${f.dirty ? 1 : 0}${f.conflict ? 1 : 0}${f.error ? 1 : 0}${f.binary ? 1 : 0}${
           f.tooLarge ? 1 : 0
-        }${f.saving ? 1 : 0}${f.savedContent === null ? 1 : 0}`,
+        }${f.saving ? 1 : 0}${f.savedContent === null ? 1 : 0}`],
       )
     }
-    parts.sort()
-    return parts.join('|')
+    parts.sort((a, b) => a[0].localeCompare(b[0]))
+    return JSON.stringify(parts)
   })
   const codingDirty = useMemo(() => {
     const out: Record<string, CodingDirtyFlags> = {}
     if (!codingDirtySig) return out
-    for (const part of codingDirtySig.split('|')) {
-      const colon = part.indexOf(':')
-      if (colon < 0) continue
-      const k = part.slice(0, colon)
-      const f = part.slice(colon + 1)
+    for (const [k, f] of JSON.parse(codingDirtySig) as [string, string][]) {
       out[k] = {
         dirty: f[0] === '1',
         conflict: f[1] === '1',
@@ -396,6 +392,11 @@ export function TabBar({ groupId, focused }: Props) {
       }
       if (tab.kind === 'codingFile' && !tab.preview) {
         const fs = codingDirty[fileKey(tab.root, tab.path)]
+        if (fs?.saving) {
+          e?.stopPropagation()
+          setAwaitingAutosaveClose({ id: tab.id, title: tab.title })
+          return
+        }
         if (fs?.dirty) {
           e?.stopPropagation()
           if (codingAutosave && !fs.conflict && !fs.error && !fs.binary && !fs.tooLarge) {
@@ -427,11 +428,18 @@ export function TabBar({ groupId, focused }: Props) {
     } else if (fs.error || fs.conflict) {
       setAwaitingAutosaveClose(null)
       setDirtyClose({ id: tab.id, title: tab.title })
-    } else if (!fs.dirty && !fs.saving) {
-      setAwaitingAutosaveClose(null)
-      closeTab(tab.id, { force: true })
+    } else if (!fs.saving) {
+      if (!fs.dirty) {
+        setAwaitingAutosaveClose(null)
+        closeTab(tab.id, { force: true })
+      } else if (codingAutosave) {
+        saveCodingFile(tab.root, tab.path)
+      } else {
+        setAwaitingAutosaveClose(null)
+        setDirtyClose({ id: tab.id, title: tab.title })
+      }
     }
-  }, [awaitingAutosaveClose, closeTab, codingDirty, ui.tabs])
+  }, [awaitingAutosaveClose, closeTab, codingAutosave, codingDirty, saveCodingFile, ui.tabs])
 
   const applyOverflowDom = useCallback((left: boolean, right: boolean) => {
     const prev = overflowRef.current

@@ -4682,19 +4682,25 @@ export const useKoma = create<KomaState>((set, get) => ({
         )
         set((s) => ({ coding: reduceFileRead(s.coding, env) }))
         break
-      case 'FileSave':
+      case 'FileSave': {
+        const key = fileKey(env.root, env.path)
+        const before = get().coding.files[key]
+        const pending = before?.pendingSave
+        if (!pending || pending.requestId !== env.requestId) break
         set((s) => ({ coding: reduceFileSave(s.coding, env) }))
         if (!env.error) {
-          const key = fileKey(env.root, env.path)
-          const content = get().coding.files[key]?.content
           get().req({
             r: 'LspDidSave',
             root: env.root,
             path: env.path,
-            text: content ?? null,
+            text: pending.content,
           })
+          if (before.saveQueued && get().coding.files[key]?.dirty) {
+            get().saveCodingFile(env.root, env.path)
+          }
         }
         break
+      }
       case 'FileContentSearch':
         set((s) => ({ coding: reduceFileContentSearch(s.coding, env) }))
         break
@@ -5047,6 +5053,7 @@ export const useKoma = create<KomaState>((set, get) => ({
       g.r === 'FileContentReplace'
     const ipc = window.ipc
     if (!ipc || typeof ipc.postMessage !== 'function') {
+      if (g.r === 'FileSave') get().push({ k: 'FileSave', root: g.root, path: g.path, requestId: g.requestId, fingerprint: '', error: 'IPC unavailable — save was not sent' })
       if (isCodingReq) {
         const text = 'IPC unavailable — coding request was not sent'
         set((s) => {
@@ -5062,6 +5069,7 @@ export const useKoma = create<KomaState>((set, get) => ({
     try {
       ipc.postMessage(JSON.stringify({ t: 'req', ...g }))
     } catch (e) {
+      if (g.r === 'FileSave') get().push({ k: 'FileSave', root: g.root, path: g.path, requestId: g.requestId, fingerprint: '', error: 'IPC error — save was not sent' })
       if (isCodingReq) {
         const msg = e instanceof Error ? e.message : String(e)
         const text = `IPC error — coding request failed: ${msg}`
@@ -6040,6 +6048,8 @@ export const useKoma = create<KomaState>((set, get) => ({
       const closing = get().ui.tabs.find((t) => t.id === id)
       return closing && closing.kind === 'codingFile' && !closing.preview ? closing : null
     })()
+    // A close/discard cannot cancel a write already accepted by the host.
+    if (closingCoding && get().coding.files[fileKey(closingCoding.root, closingCoding.path)]?.saving) return
     if (closingCoding && !opts?.force) {
       const f = get().coding.files[fileKey(closingCoding.root, closingCoding.path)]
       if (f?.dirty) return
@@ -6363,6 +6373,7 @@ export const useKoma = create<KomaState>((set, get) => ({
     // + loading:true on every open remounted Monaco against a thrashing buffer
     // (setValue ↔ updateCodingContent → React #185) during edge-drop splits.
     const cached = get().coding.files[key]
+    if (force && cached?.saving) return
     const reuseBuffer = !force && cached?.content != null && !cached.loading
     const requestId = reuseBuffer ? null : mintRequestId()
     set((s) => {
@@ -6444,13 +6455,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             conflict: false,
             loading: true,
           })
-        : emptyFileState({
-            content: prev?.content ?? null,
-            savedContent: prev?.savedContent ?? null,
-            fingerprint: prev?.fingerprint ?? '',
-            dirty: prev?.dirty ?? false,
-            loading: true,
-          })
+        : { ...(prev ?? emptyFileState()), loading: true }
       return {
         ui: normalizeGroups(ui),
         coding: {
@@ -6469,12 +6474,17 @@ export const useKoma = create<KomaState>((set, get) => ({
   saveCodingFile: (root, path) => {
     const key = fileKey(root, path)
     const file = get().coding.files[key]
-    if (!file || file.content == null || file.saving) return
+    if (!file || file.content == null || file.loading || file.conflict || file.binary || file.tooLarge) return
+    if (file.saving) {
+      set((s) => ({ coding: { ...s.coding, files: { ...s.coding.files, [key]: { ...file, saveQueued: true } } } }))
+      return
+    }
+    if (!file.dirty) return
     const requestId = mintRequestId()
     set((s) => ({
       coding: {
         ...s.coding,
-        files: { ...s.coding.files, [key]: { ...file, saving: true, conflict: false, error: null } },
+        files: { ...s.coding.files, [key]: { ...file, saving: true, pendingSave: { requestId, content: file.content! }, saveQueued: false, error: null } },
       },
     }))
     get().req({
@@ -6513,9 +6523,17 @@ export const useKoma = create<KomaState>((set, get) => ({
     get().req({ r: 'FileCreate', root, path, kind, requestId: mintRequestId() })
   },
   renameCodingItem: (root, oldPath, newPath) => {
+    if (Object.entries(get().coding.files).some(([key, file]) => file.saving && key.startsWith(root + ':') && (codingIsPathOrDescendant(key.slice(root.length + 1), oldPath) || codingIsPathOrDescendant(key.slice(root.length + 1), newPath)))) {
+      set(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, text: 'Wait for the file to finish saving before renaming', kind: 'error' } } } })
+      return
+    }
     get().req({ r: 'FileRename', root, oldPath, newPath, requestId: mintRequestId() })
   },
   deleteCodingItem: (root, path) => {
+    if (Object.entries(get().coding.files).some(([key, file]) => file.saving && key.startsWith(root + ':') && codingIsPathOrDescendant(key.slice(root.length + 1), path))) {
+      set(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, text: 'Wait for the file to finish saving before deleting', kind: 'error' } } } })
+      return
+    }
     get().req({ r: 'FileDelete', root, path, requestId: mintRequestId() })
   },
   uploadCodingFile: async (root, dirPath, file, overwrite = true) => {

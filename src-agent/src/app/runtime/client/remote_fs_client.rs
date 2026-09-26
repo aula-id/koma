@@ -146,6 +146,29 @@ impl RemoteFsClient {
             None => return,
         };
         let rep = self.request(req);
+        // A transport error still needs the original file/request identity.
+        // A generic FileTree error leaves save/read state stuck in the editor.
+        if let RemoteFsRep::Error { error, .. } = &rep {
+            let env = match ctl {
+                super::HostCtl::FileSave { root, path, request_id, .. } => Some(PushEnvelope::FileSave {
+                    root: root.clone(), path: path.clone(), request_id: request_id.clone(),
+                    fingerprint: String::new(),
+                    error: Some(format!("conflict: could not confirm whether the remote save completed ({error}). Your local edits are retained; compare with the remote file before reloading.")),
+                }),
+                super::HostCtl::FileRead { root, path, request_id } => Some(PushEnvelope::FileRead {
+                    root: root.clone(), path: path.clone(), request_id: request_id.clone(),
+                    content: None, fingerprint: String::new(), binary: false, too_large: false,
+                    error: Some(error.clone()),
+                }),
+                _ => None,
+            };
+            if let Some(env) = env {
+                if let Ok(json) = serde_json::to_string(&env) {
+                    push(json);
+                }
+                return;
+            }
+        }
         let rep = match rep {
             RemoteFsRep::DownloadBytes(r) if save_as => {
                 RemoteFsRep::DownloadBytes(super::file_ops::finalize_download_bytes(r, true))

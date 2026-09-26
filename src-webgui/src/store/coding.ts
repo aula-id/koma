@@ -15,6 +15,9 @@ export type CodingFileState = {
   dirty: boolean
   loading: boolean
   saving: boolean
+  // Snapshot actually sent to disk; a reply must never acknowledge newer edits.
+  pendingSave: { requestId: string; content: string } | null
+  saveQueued: boolean // explicit Save pressed again while a write is in flight
   conflict: boolean // stale save was rejected
   error: string | null
   binary: boolean
@@ -131,6 +134,8 @@ export function emptyFileState(partial?: Partial<CodingFileState>): CodingFileSt
     dirty: false,
     loading: false,
     saving: false,
+    pendingSave: null,
+    saveQueued: false,
     conflict: false,
     error: null,
     binary: false,
@@ -262,10 +267,16 @@ export function reduceFileTree(coding: CodingSlice, env: FileTreePush): CodingSl
 /** Apply a FileRead push into the coding slice (stale-reply guarded). */
 export function reduceFileRead(coding: CodingSlice, env: FileReadPush): CodingSlice {
   const key = fileKey(env.root, env.path)
-  if (coding._readReq[key] && coding._readReq[key] !== env.requestId) return coding
+  if (coding._readReq[key] !== env.requestId) return coding
   const prev = coding.files[key]
-  // Don't clobber local dirty edits with a late re-read unless there was no prior content.
-  if (prev?.dirty && prev.content != null && !env.error && !env.binary && !env.tooLarge) {
+  const { [key]: _completed, ...remainingReads } = coding._readReq
+  coding = { ...coding, _readReq: remainingReads }
+  // Read results cannot replace an edited or saving buffer, including on errors.
+  // Keep its original fingerprint: accepting a newer disk fingerprint here would
+  // incorrectly authorize overwriting an external change with the old buffer.
+  if ((prev?.dirty || prev?.saving) && prev.content != null) {
+    const changed = !env.error && env.fingerprint !== prev.fingerprint
+
     return {
       ...coding,
       files: {
@@ -273,11 +284,8 @@ export function reduceFileRead(coding: CodingSlice, env: FileReadPush): CodingSl
         [key]: {
           ...prev,
           loading: false,
-          // Keep fingerprint from disk so a later save can detect conflict.
-          fingerprint: env.fingerprint || prev.fingerprint,
-          error: null,
-          binary: false,
-          tooLarge: false,
+          conflict: prev.conflict || (!prev.saving && (changed || !!env.error || env.binary || env.tooLarge)),
+          error: env.error ?? (changed && !prev.saving ? 'File changed on disk; local edits were kept' : prev.error),
         },
       },
     }
@@ -331,9 +339,10 @@ export function reduceFileRead(coding: CodingSlice, env: FileReadPush): CodingSl
 export function reduceFileSave(coding: CodingSlice, env: FileSavePush): CodingSlice {
   const key = fileKey(env.root, env.path)
   const prev = coding.files[key]
-  if (!prev) return coding
+  const pending = prev?.pendingSave
+  if (!prev || !pending || pending.requestId !== env.requestId) return coding
   if (env.error) {
-    // Conflict / failure: keep dirty content, flag conflict.
+    // Failed writes leave both the baseline and current edit untouched.
     return {
       ...coding,
       files: {
@@ -341,13 +350,15 @@ export function reduceFileSave(coding: CodingSlice, env: FileSavePush): CodingSl
         [key]: {
           ...prev,
           saving: false,
-          conflict: true,
+          pendingSave: null,
+          saveQueued: false,
+          conflict: prev.conflict || /^conflict(?::|$)/i.test(env.error),
           error: env.error,
         },
       },
     }
   }
-  const content = prev.content ?? prev.savedContent ?? ''
+  const content = prev.content ?? pending.content
   return {
     ...coding,
     files: {
@@ -355,10 +366,12 @@ export function reduceFileSave(coding: CodingSlice, env: FileSavePush): CodingSl
       [key]: {
         ...prev,
         content,
-        savedContent: content,
+        savedContent: pending.content,
         fingerprint: env.fingerprint || prev.fingerprint,
-        dirty: false,
+        dirty: content !== pending.content,
         saving: false,
+        pendingSave: null,
+        saveQueued: false,
         conflict: false,
         error: null,
       },
