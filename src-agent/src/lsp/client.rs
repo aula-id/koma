@@ -430,11 +430,12 @@ impl LspManager {
             .to_ascii_lowercase();
         let spec = catalog::find_by_extension(&ext)
             .ok_or_else(|| format!("no language server for .{ext}"))?;
-        let (spawn_id, binary, args) = resolve_spawn(spec, &ext)?;
+        let (server_kind, binary, args) = resolve_spawn(spec, &ext)?;
         let root_path = PathBuf::from(root);
         if !root_path.is_absolute() {
             return Err("workspace root must be absolute".into());
         }
+        let spawn_id = workspace_server_id(&server_kind, &root_path);
 
         // Dead/zombie session: revive (re-opens sibling docs) or just free the slot.
         if self.servers.get(&spawn_id).is_some_and(|s| s.is_dead()) {
@@ -883,11 +884,12 @@ impl LspManager {
             .to_ascii_lowercase();
         let spec = catalog::find_by_extension(&ext)
             .ok_or_else(|| format!("no language server for .{ext}"))?;
-        let (spawn_id, binary, args) = resolve_spawn(spec, &ext)?;
+        let (server_kind, binary, args) = resolve_spawn(spec, &ext)?;
         let root_path = PathBuf::from(root);
         if !root_path.is_absolute() {
             return Err("workspace root must be absolute".into());
         }
+        let spawn_id = workspace_server_id(&server_kind, &root_path);
 
         if self.servers.get(&spawn_id).is_some_and(|s| s.is_dead()) {
             let has_siblings = self.docs.values().any(|d| d.server_id == spawn_id);
@@ -1813,6 +1815,7 @@ fn push_runtime_snapshot(
 }
 
 fn display_name_for(spawn_id: &str, spec: &ServerSpec) -> String {
+    let spawn_id = spawn_id.split('@').next().unwrap_or(spawn_id);
     if let Some(rest) = spawn_id.strip_prefix("vscode-langservers:") {
         return match rest {
             "vscode-html-language-server" => "HTML Language Server".into(),
@@ -1822,6 +1825,13 @@ fn display_name_for(spawn_id: &str, spec: &ServerSpec) -> String {
         };
     }
     spec.name.to_string()
+}
+
+/// Runtime identity includes the root; two projects using the same language
+/// must never compete for a process configured for only one project.
+fn workspace_server_id(kind: &str, root: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{kind}@{:x}", Sha256::digest(root.to_string_lossy().as_bytes()))
 }
 
 // ─── Spawn resolution ────────────────────────────────────────────────────────
@@ -2325,6 +2335,20 @@ fn collect_document_symbol(v: &serde_json::Value, out: &mut Vec<LspDocumentSymbo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn language_servers_are_isolated_by_workspace() {
+        let a = workspace_server_id("vtsls", Path::new("/projects/a"));
+        let b = workspace_server_id("vtsls", Path::new("/projects/b"));
+        assert_ne!(a, b);
+        assert_eq!(a, workspace_server_id("vtsls", Path::new("/projects/a")));
+        assert_ne!(a, workspace_server_id("gopls", Path::new("/projects/a")));
+        let spec = catalog::find("vscode-langservers").unwrap();
+        assert_eq!(
+            display_name_for(&workspace_server_id("vscode-langservers:vscode-html-language-server", Path::new("/projects/a")), spec),
+            "HTML Language Server"
+        );
+    }
 
     #[test]
     fn language_id_rust() {
