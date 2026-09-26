@@ -558,7 +558,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   // returned text, e.g. SVG without NULs). Don't wait for FileRead — the viewer
   // fetches bytes itself via FileDownloadBytes.
   const viewKind = viewerKindForPath(tab.path)
-  if (viewKind !== 'text' && !fileState?.error && !fileState?.tooLarge) {
+  if (viewKind !== 'text' && (!fileState?.error || fileState.binary) && !fileState?.tooLarge) {
     return (
       <div className="flex h-full w-full flex-col">
         <EditorChrome
@@ -585,7 +585,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       <div className="flex h-full w-full flex-col">
         <EditorChrome path={tab.path} onTogglePreview={openPreview} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-[12px] text-koma-dim">
-          <div>Binary file — no preview</div>
+          <div>{fileState.error ?? 'Binary file — no preview'}</div>
           <button
             type="button"
             onClick={() => useKoma.getState().downloadCodingFile(tab.root, tab.path)}

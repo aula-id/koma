@@ -4695,6 +4695,12 @@ export const useKoma = create<KomaState>((set, get) => ({
             path: env.path,
             text: pending.content,
           })
+          // didSave describes disk, but the open LSP document may already be
+          // newer. Reassert that buffer after the save notification.
+          const latest = get().coding.files[key]?.content
+          if (latest != null && latest !== pending.content) {
+            get().req({ r: 'LspDidChange', root: env.root, path: env.path, text: latest })
+          }
           if (before.saveQueued && get().coding.files[key]?.dirty) {
             get().saveCodingFile(env.root, env.path)
           }

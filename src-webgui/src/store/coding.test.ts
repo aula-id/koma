@@ -276,6 +276,32 @@ assert.equal(useKoma.getState().ui.activeTabId, 'chat')
   assert.equal(useKoma.getState().settingsValues?.codingAutosave, false)
 }
 
+// Repeated Save queues the latest buffer; didSave reports only acknowledged text.
+{
+  const sent: { r: string; content?: string; text?: string; requestId?: string }[] = []
+  browser.window = { ipc: { postMessage: (json) => { sent.push(JSON.parse(json)) } } }
+  const key = fileKey(root, 'queued.ts')
+  useKoma.setState({ coding: withCaches({ files: { [key]: emptyFileState({
+    content: 'first', savedContent: 'old', fingerprint: 'fp1', dirty: true,
+  }) } }) })
+  useKoma.getState().saveCodingFile(root, 'queued.ts')
+  const first = sent.find(r => r.r === 'FileSave')!
+  useKoma.getState().updateCodingContent(root, 'queued.ts', 'second')
+  useKoma.getState().saveCodingFile(root, 'queued.ts')
+  useKoma.getState().updateCodingContent(root, 'queued.ts', 'latest')
+  assert.equal(sent.filter(r => r.r === 'FileSave').length, 1)
+  useKoma.getState().push({ k: 'FileSave', root, path: 'queued.ts', requestId: first.requestId!, fingerprint: 'fp2', error: null })
+  const saves = sent.filter(r => r.r === 'FileSave')
+  assert.equal(saves.length, 2)
+  assert.equal(saves[1].content, 'latest')
+  assert.equal(sent.find(r => r.r === 'LspDidSave')?.text, 'first')
+  assert.equal(sent.find(r => r.r === 'LspDidChange')?.text, 'latest')
+  assert.equal(useKoma.getState().coding.files[key].dirty, true)
+  useKoma.getState().push({ k: 'FileSave', root, path: 'queued.ts', requestId: saves[1].requestId!, fingerprint: 'fp3', error: null })
+  assert.equal(useKoma.getState().coding.files[key].dirty, false)
+  assert.equal(useKoma.getState().coding.files[key].savedContent, 'latest')
+}
+
 // Missing IPC is a production req behavior, not an inlined helper implementation.
 browser.window = {
   confirm: () => {
