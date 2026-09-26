@@ -7,6 +7,7 @@ import {
   CircleHelp,
   Code2,
   Columns2,
+  Eye,
   FileDiff,
   GitGraph,
   GraduationCap,
@@ -37,6 +38,7 @@ import { createPortal } from 'react-dom'
 import { useShallow } from 'zustand/react/shallow'
 import { hasCodingPathDrag, readCodingPathDragData } from '../lib/codingRef'
 import { fileKey } from '../store/coding'
+import { isMarkdownPath } from '../lib/markdownPreview'
 import {
   MAX_GROUPS,
   groupOf,
@@ -106,6 +108,7 @@ function tabVisual(
     case 'extension':
       return { Icon: Puzzle, label: tab.title, title: tab.title }
     case 'codingFile': {
+      if (tab.preview) return { Icon: Eye, label: `Preview: ${tab.title}`, title: `Preview: ${tab.path}` }
       const isNew = !!dirty?.dirty && !!dirty.savedContentNull
       return {
         Icon: Code2,
@@ -164,6 +167,8 @@ function TabContextMenu({
   const splitTab = useKoma((s) => s.splitTab)
   const toggleSplitDir = useKoma((s) => s.toggleSplitDir)
   const splitDir = useKoma((s) => s.ui.splitDir)
+  const tab = useKoma((s) => s.ui.tabs.find((t) => t.id === state.tabId))
+  const openCodingFile = useKoma((s) => s.openCodingFile)
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ left: state.x, top: state.y })
 
@@ -199,6 +204,22 @@ function TabContextMenu({
       className="overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm"
       onContextMenu={(e) => e.preventDefault()}
     >
+      {tab?.kind === 'codingFile' && (tab.preview || isMarkdownPath(tab.path)) && (
+        <>
+          <button
+            type="button"
+            className={item}
+            onClick={() => {
+              openCodingFile(tab.root, tab.path, { preview: !tab.preview })
+              onClose()
+            }}
+          >
+            {tab.preview ? <Code2 size={13} /> : <Eye size={13} />}
+            {tab.preview ? 'Open Source' : 'Open Markdown Preview'}
+          </button>
+          <div className="my-1 border-t border-koma-border" />
+        </>
+      )}
       {canSplit ? (
         <>
           <button
@@ -366,7 +387,7 @@ export function TabBar({ groupId, focused }: Props) {
 
   const requestClose = useCallback(
     (tab: Tab, e?: ReactMouseEvent) => {
-      if (tab.kind === 'codingFile') {
+      if (tab.kind === 'codingFile' && !tab.preview) {
         const fs = codingDirty[fileKey(tab.root, tab.path)]
         if (fs?.dirty) {
           e?.stopPropagation()

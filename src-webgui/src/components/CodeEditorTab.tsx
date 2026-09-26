@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
-import { Code2, Download, RotateCcw, Save, X } from 'lucide-react'
+import { Download, X } from 'lucide-react'
 import { initMonaco, applyKomaTheme, readMonoFont, langFromPath } from '../lib/monaco-setup'
 import {
   ensureLspProviders,
@@ -21,6 +21,8 @@ import { fileKey } from '../store/coding'
 import { isTabVisible, normalizeGroups } from '../store/editorGroups'
 import { BrailleSpinner } from './BrailleSpinner'
 import { CodingFileViewer } from './CodingFileViewer'
+import { EditorChrome } from './EditorChrome'
+import { isMarkdownPath } from '../lib/markdownPreview'
 
 type CodingTab = Extract<Tab, { kind: 'codingFile' }>
 
@@ -96,6 +98,9 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     !fileState.error &&
     !fileState.conflict
   )
+  const openPreview = isMarkdownPath(tab.path)
+    ? () => useKoma.getState().openCodingFile(tab.root, tab.path, { preview: true })
+    : undefined
   const canSave = !!(canEdit && fileState?.dirty && !fileState.saving)
   const canRevert = !!(fileState && (fileState.dirty || fileState.conflict) && !fileState.saving)
 
@@ -528,6 +533,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       <div className="flex h-full w-full flex-col">
         <EditorChrome
           path={tab.path}
+          onTogglePreview={openPreview}
           status={status}
           canSave={false}
           canRevert={canRevert}
@@ -557,6 +563,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       <div className="flex h-full w-full flex-col">
         <EditorChrome
           path={tab.path}
+          onTogglePreview={openPreview}
           status={fileState?.binary ? status : kindStatus(viewKind)}
           canSave={false}
           canRevert={false}
@@ -576,7 +583,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   if (fileState?.binary) {
     return (
       <div className="flex h-full w-full flex-col">
-        <EditorChrome path={tab.path} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
+        <EditorChrome path={tab.path} onTogglePreview={openPreview} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-[12px] text-koma-dim">
           <div>Binary file — no preview</div>
           <button
@@ -594,7 +601,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   if (fileState?.tooLarge) {
     return (
       <div className="flex h-full w-full flex-col">
-        <EditorChrome path={tab.path} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
+        <EditorChrome path={tab.path} onTogglePreview={openPreview} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-[12px] text-koma-dim">
           File too large to edit
         </div>
@@ -604,7 +611,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   if (fileState?.error && fileState.content === null) {
     return (
       <div className="flex h-full w-full flex-col">
-        <EditorChrome path={tab.path} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
+        <EditorChrome path={tab.path} onTogglePreview={openPreview} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-[12px] text-koma-dim">
           {fileState.error}
         </div>
@@ -616,6 +623,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     <div className="flex h-full w-full flex-col">
       <EditorChrome
         path={tab.path}
+        onTogglePreview={openPreview}
         status={status}
         canSave={canSave}
         canRevert={canRevert}
@@ -681,57 +689,4 @@ function kindStatus(kind: ViewerKind): string {
     default:
       return 'Preview'
   }
-}
-
-function EditorChrome({
-  path,
-  status,
-  canSave,
-  canRevert,
-  saving,
-  onSave,
-  onRevert,
-}: {
-  path: string
-  status: string
-  canSave: boolean
-  canRevert: boolean
-  saving: boolean
-  onSave: () => void
-  onRevert: () => void
-}) {
-  // Density via container query — no RO/setState. Narrow split panes hide the
-  // full path (title still has it) and drop the status text so Save/Revert stay.
-  return (
-    <div className="@container/pathbar flex h-8 min-w-0 flex-none items-center gap-2 border-b border-koma-border bg-koma-panel px-3 text-[12px] @max-xs/pathbar:gap-1.5 @max-xs/pathbar:px-2 @max-[12rem]/pathbar:px-1.5">
-      <Code2 size={13} className="flex-none text-koma-dim" />
-      <span
-        className="min-w-0 flex-1 truncate font-mono text-koma-fg @max-[12rem]/pathbar:hidden"
-        title={path}
-      >
-        {path}
-      </span>
-      <span className="min-w-0 flex-none truncate text-[11px] text-koma-dim @max-xs/pathbar:max-w-[5rem] @max-[12rem]/pathbar:hidden">
-        {status}
-      </span>
-      <button
-        type="button"
-        onClick={onRevert}
-        disabled={!canRevert || saving}
-        title="Revert"
-        className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:opacity-30"
-      >
-        <RotateCcw size={13} />
-      </button>
-      <button
-        type="button"
-        onClick={onSave}
-        disabled={!canSave}
-        title="Save"
-        className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:opacity-30"
-      >
-        <Save size={13} />
-      </button>
-    </div>
-  )
 }

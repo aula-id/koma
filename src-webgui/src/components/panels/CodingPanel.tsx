@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  Eye,
   File,
   Folder,
   FolderOpen,
@@ -16,6 +17,7 @@ import {
   X,
 } from 'lucide-react'
 import { useKoma } from '../../store/koma'
+import { isMarkdownPath } from '../../lib/markdownPreview'
 import {
   setCodingPathDragData,
 } from '../../lib/codingRef'
@@ -821,6 +823,19 @@ export function CodingPanel() {
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.preventDefault()}
         >
+          {!ctxMenu.isDir && isMarkdownPath(ctxMenu.path) && (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-90 hover:bg-koma-hover"
+              onClick={() => {
+                openCodingFile(activeRoot, ctxMenu.path, { preview: true })
+                setCtxMenu(null)
+              }}
+            >
+              <Eye size={12} className="opacity-70" />
+              Open Markdown Preview
+            </button>
+          )}
           <button
             type="button"
             className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-90 hover:bg-koma-hover"

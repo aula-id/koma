@@ -46,6 +46,17 @@ function GuiCodeEditorPage() {
         </div>
 
         <div>
+          <h3 className="mb-1 text-base font-semibold text-koma-fg">Markdown Preview</h3>
+          <p>
+            For .md and .markdown files, use the eye button in the editor bar or
+            right-click the file or tab and choose Open Markdown Preview. A
+            read-only preview tab follows the editor content, including unsaved
+            changes. Use Open Source in the preview bar to return to editing.
+            Relative images and file links resolve within the workspace.
+          </p>
+        </div>
+
+        <div>
           <h3 className="mb-1 text-base font-semibold text-koma-fg">Language servers (LSP)</h3>
           <p>
             Host-spawned language servers (not Monaco workers) attach when a matching

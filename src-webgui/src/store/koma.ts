@@ -48,6 +48,7 @@ import {
 } from '../lib/lsp-bridge'
 import { resolveFilePreviewBytes } from '../lib/filePreview'
 import { codingRefToken } from '../lib/codingRef'
+import { codingTabId, isMarkdownPath } from '../lib/markdownPreview'
 
 export type { CodingSlice, CodingFileState, DirState, FileTreeEntry } from './coding'
 export type { LspDiagnostic }
@@ -899,7 +900,7 @@ export type Tab =
   | { id: string; kind: 'extension'; extId: string; panelId: string; title: string }
   // Coding panel file editor tab. `root` is the absolute workspace root;
   // `path` is relative to root. Stable id `coding:${root}:${path}`.
-  | { id: string; kind: 'codingFile'; root: string; path: string; title: string }
+  | { id: string; kind: 'codingFile'; root: string; path: string; title: string; preview?: boolean }
   // Interactive terminal tab. `terminalId` is the PTY session id (host-minted);
   // content is an xterm.js instance reading from TerminalOutput push envelopes.
   | { id: string; kind: 'terminal'; terminalId: string; title: string }
@@ -2715,6 +2716,7 @@ type KomaState = {
     path: string,
     opts?: {
       force?: boolean
+      preview?: boolean
       groupId?: EditorGroupId
       beforeId?: string | null
       split?: { side: 'before' | 'after'; dir: SplitDir }
@@ -4702,7 +4704,7 @@ export const useKoma = create<KomaState>((set, get) => ({
           for (const t of open) {
             const f = get().coding.files[fileKey(root, t.path)]
             if (f && !f.dirty) {
-              get().openCodingFile(root, t.path, { force: true })
+              get().openCodingFile(root, t.path, { force: true, preview: t.preview })
             }
           }
           // Re-run search so results reflect post-replace state.
@@ -4748,12 +4750,21 @@ export const useKoma = create<KomaState>((set, get) => ({
           }
           // Remap codingFile tabs for the renamed path and every descendant.
           let activeTabId = s.ui.activeTabId
+          const tabGroup = { ...s.ui.tabGroup }
+          const groupActive = { ...s.ui.groupActive }
           const tabs = s.ui.tabs.map((t) => {
             if (t.kind !== 'codingFile' || t.root !== env.root) return t
             const mapped = codingRemapPath(t.path, env.oldPath, env.newPath)
             if (mapped == null) return t
-            const newId = `coding:${env.root}:${mapped}`
+            const newId = codingTabId(env.root, mapped, t.preview)
             if (s.ui.activeTabId === t.id) activeTabId = newId
+            if (tabGroup[t.id]) {
+              tabGroup[newId] = tabGroup[t.id]
+              delete tabGroup[t.id]
+            }
+            for (const gid of Object.keys(groupActive)) {
+              if (groupActive[gid] === t.id) groupActive[gid] = newId
+            }
             return {
               ...t,
               id: newId,
@@ -4772,7 +4783,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             ])
             for (const p of parents) get().refreshCodingDir(env.root, p)
           })
-          return { coding, ui: { ...s.ui, tabs, activeTabId } }
+          return { coding, ui: normalizeGroups({ ...s.ui, tabs, activeTabId, tabGroup, groupActive }) }
         })
         break
       case 'FileDelete':
@@ -6004,7 +6015,7 @@ export const useKoma = create<KomaState>((set, get) => ({
     // collected an explicit force (floating dirty-close popover).
     const closingCoding = (() => {
       const closing = get().ui.tabs.find((t) => t.id === id)
-      return closing && closing.kind === 'codingFile' ? closing : null
+      return closing && closing.kind === 'codingFile' && !closing.preview ? closing : null
     })()
     if (closingCoding && !opts?.force) {
       const f = get().coding.files[fileKey(closingCoding.root, closingCoding.path)]
@@ -6044,6 +6055,15 @@ export const useKoma = create<KomaState>((set, get) => ({
         const key = fileKey(closingCoding.root, closingCoding.path)
         const { [key]: _dropped, ...files } = coding.files
         const { [key]: _req, ..._readReq } = coding._readReq
+        // A surviving read-only preview must show the saved text after discard.
+        // It shares the buffer, but never owns or discards the source's edits.
+        if (_dropped && tabs.some((t) => t.kind === 'codingFile' && t.preview && t.root === closingCoding.root && t.path === closingCoding.path)) {
+          files[key] = emptyFileState({
+            content: _dropped.savedContent ?? '',
+            savedContent: _dropped.savedContent,
+            fingerprint: _dropped.fingerprint,
+          })
+        }
         coding = { ...coding, files, _readReq }
       }
 
@@ -6312,7 +6332,8 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
   setActiveCodingRoot: (root) => set((s) => ({ coding: { ...s.coding, activeRoot: root } })),
   openCodingFile: (root, path, opts) => {
-    const id = `coding:${root}:${path}`
+    const preview = !!opts?.preview && isMarkdownPath(path)
+    const id = codingTabId(root, path, preview)
     const key = fileKey(root, path)
     const force = !!opts?.force
     // Reuse an already-loaded buffer for activate/split/move. Forcing a FileRead
@@ -6326,7 +6347,7 @@ export const useKoma = create<KomaState>((set, get) => ({
       const exists = baseUi.tabs.some((t) => t.id === id)
       let tabs: Tab[] = exists
         ? baseUi.tabs
-        : [...baseUi.tabs, { id, kind: 'codingFile', root, path, title: codingBaseName(path) }]
+        : [...baseUi.tabs, { id, kind: 'codingFile', root, path, title: codingBaseName(path), preview }]
       let ui = { ...baseUi, tabs, activeTabId: id }
 
       const targetGroup =
