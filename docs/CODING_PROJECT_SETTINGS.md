@@ -46,7 +46,8 @@ Snippets use standard tab stops/placeholders; `body` may also be an array of
 lines. Language keys are LSP language IDs (`typescriptreact` for TSX,
 `javascriptreact` for JSX). `*` snippets apply to every language.
 
-Other configuration sections reserved by the implementation plan (toolchains,
-tasks, debug, tests and environment selection) are not activated by this editor
-settings increment. Format-on-save is also not implemented yet; use Format
-Document/Selection explicitly.
+Project `tasks` now configure Run/Build/Test commands; see
+[Project tasks](CODING_TASKS.md) for the schema, execution behavior, and native
+review cases. Toolchains, debug, structured tests and environment selection
+remain reserved for later increments. Format-on-save is also not implemented
+yet; use Format Document/Selection explicitly.

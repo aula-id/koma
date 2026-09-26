@@ -1,4 +1,5 @@
-import { Activity, AlertCircle, AlertTriangle, FoldVertical, Server } from 'lucide-react'
+import { Activity, AlertCircle, AlertTriangle, FoldVertical, Server, Terminal } from 'lucide-react'
+import { showCodingTasks } from './CodingTasks'
 import { useKoma, visiblePlanTodos } from '../store/koma'
 import { BranchSwitcher } from './BranchSwitcher'
 import { BrailleSpinner } from './BrailleSpinner'
@@ -157,6 +158,10 @@ export function UsageFooter() {
         <FoldVertical size={12} />
       </button>
 
+      {/* Workspace tasks retain their own process/output scope. */}
+      <button type="button" onClick={() => showCodingTasks()} aria-label="Project tasks" title="Run / Build / Test tasks" className="flex h-4 flex-none items-center gap-1 rounded px-1 text-koma-dim hover:bg-koma-hover hover:text-koma-fg">
+        <Terminal size={11} /><span className="max-[720px]:hidden">Tasks</span>
+      </button>
       {/* Language Servers badge — live runtime / progress drawer */}
       <button
         type="button"

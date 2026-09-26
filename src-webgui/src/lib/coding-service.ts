@@ -18,6 +18,10 @@ export type CodingOperation =
   | { op: 'inspect'; paths: string[] }
   | { op: 'save'; path: string; content: string; fingerprint: string }
   | { op: 'configWrite'; config: CodingConfig }
+  | { op: 'taskDefinitions' | 'taskRuns' }
+  | { op: 'taskStart'; taskId: string; fingerprint: string }
+  | { op: 'taskStop'; runId: string }
+  | { op: 'taskOutput'; runId: string; after: number }
   | { op: 'backup'; document: CodingBackup }
   | { op: 'backupRead'; windowId: string; path: string; revision: number }
   | { op: 'forgetBackup'; windowId: string; path: string; revision: number }
@@ -33,9 +37,36 @@ export type CodingConfig = {
   environment?: Record<string, string>
   snippets?: Record<string, unknown>
   keybindings?: unknown[]
-  tasks?: unknown[]
+  tasks?: CodingTask[]
   debug?: unknown[]
   tests?: unknown[]
+}
+export type CodingTask = {
+  id: string
+  label: string
+  command: string
+  args?: string[]
+  group?: 'run' | 'build' | 'test'
+  cwd?: string
+  env?: Record<string, string>
+  timeoutMs?: number
+}
+export type CodingTaskRun = {
+  id: string
+  workspace: WorkspaceRef
+  taskId: string
+  label: string
+  group: 'run' | 'build' | 'test'
+  command: string
+  args: string[]
+  cwd: string
+  started: number
+  ended: number | null
+  status: 'running' | 'stopping' | 'succeeded' | 'failed' | 'stopped'
+  exitCode: number | null
+  error: string | null
+  outputComplete: boolean
+  sequence: number
 }
 export type CodingBackup = {
   windowId: string

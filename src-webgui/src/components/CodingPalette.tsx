@@ -4,6 +4,7 @@ import { useKoma } from '../store/koma'
 import { codingRequest } from '../lib/coding-service'
 import { BrailleSpinner } from './BrailleSpinner'
 import { showCodingHistory } from './CodingHistory'
+import { showCodingTasks } from './CodingTasks'
 
 type Command = { id: string; title: string; shortcut?: string; editor?: boolean }
 const commands: Command[] = [
@@ -24,6 +25,10 @@ const commands: Command[] = [
   { id: 'editor.action.commentLine', title: 'Toggle Line Comment', editor: true },
   { id: 'editor.action.toggleWordWrap', title: 'Toggle Word Wrap', editor: true },
   { id: 'projectSettings', title: 'Open Project Coding Settings' },
+  { id: 'tasks', title: 'Tasks: Show Output and Running Tasks' },
+  { id: 'taskRun', title: 'Tasks: Run Task…' },
+  { id: 'taskBuild', title: 'Tasks: Build…' },
+  { id: 'taskTest', title: 'Tasks: Test…' },
   { id: 'saveAll', title: 'Save All Open Files' },
   { id: 'recovery', title: 'Recover Unsaved Files' },
   { id: 'history', title: 'Show Local History', editor: true },
@@ -134,6 +139,10 @@ export function CodingPalette() {
     }
     else if (command.id === 'saveAll') { for (const tab of store.ui.tabs) if (tab.kind === 'codingFile' && !tab.preview) store.saveCodingFile(tab.root, tab.path) }
     else if (command.id === 'recovery') showCodingHistory()
+    else if (command.id === 'tasks') showCodingTasks()
+    else if (command.id === 'taskRun') showCodingTasks('run')
+    else if (command.id === 'taskBuild') showCodingTasks('build')
+    else if (command.id === 'taskTest') showCodingTasks('test')
     else if (command.id === 'history' && activeTab?.kind === 'codingFile') showCodingHistory(activeTab.root, activeTab.path)
     else if (command.id === 'terminal') store.openTerminalTab(`coding-${Date.now()}`, 'Terminal')
     else if (command.id === 'settings') store.openSettingsTab()

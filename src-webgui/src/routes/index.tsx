@@ -12,6 +12,7 @@ import { ResumePalette } from '../components/ResumePalette'
 import { RenameOverlay } from '../components/RenameOverlay'
 import { OmniSearchPalette } from '../components/OmniSearchPalette'
 import { CodingPalette } from '../components/CodingPalette'
+import { CodingTasks } from '../components/CodingTasks'
 import { CodingHistory } from '../components/CodingHistory'
 import { CodingRefactor } from '../components/CodingRefactor'
 import { startCodingDiskMonitor } from '../lib/coding-disk'
@@ -446,6 +447,7 @@ function RootLayout() {
       {overlay === 'rename' && <RenameOverlay onClose={() => setOverlay('none')} />}
       {omnisearchOpen && <OmniSearchPalette onClose={closeOmniSearch} />}
       <CodingPalette />
+      <CodingTasks />
       <CodingHistory />
       <CodingRefactor />
       <SwitchingOverlay

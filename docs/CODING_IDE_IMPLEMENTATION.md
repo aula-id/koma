@@ -181,12 +181,28 @@ project commands do not leak into other workspaces or the chat composer.
   overwrite a concurrently opened/edited model. History/refactor diff editors
   load Monaco on demand so these overlays do not add it to the startup bundle.
 
+### Task runner increment
+
+- Added explicit `.koma/coding.json` Run/Build/Test tasks, independent native
+  process ownership, workspace-scoped run history, paged bounded output, Stop,
+  optional deadlines, and process-group/job cleanup. Starting tasks validates
+  the displayed definition fingerprint and prevents concurrent duplicates.
+- Added Tasks footer/palette entries and a compact panel with its own workspace
+  dropdown, command preview, output selection, and Stop. Closing the panel or
+  switching the main workspace/chat/host leaves existing tasks running.
+- Configuration and native acceptance cases are documented in
+  [Project tasks](CODING_TASKS.md). Noninteractive execution is supported;
+  durable SSH adoption, interactive task terminals, task dependencies, automatic
+  discovery, and problem matchers remain future work. Regression sources are
+  supplied; functional execution remains with the user.
+
 ## Work still required for the full accepted plan
 
 The delivered increments are not full VS Code parity. Remaining work includes
 managed language packs/toolchains/system prerequisite installation across the
-full catalogue, task supervision, DAP debugger, Test Explorer, persistent SSH
-job adoption, complete document/view identity across hosts and chat sessions,
+full catalogue, task discovery/dependencies/problem matchers, DAP debugger,
+Test Explorer, persistent SSH job adoption, complete document/view identity
+across hosts and chat sessions,
 event-driven tree reconciliation, navigation history/outline UI, semantic
 tokens, format-on-save, and command/resource/resolve code-action support.
 Native/platform acceptance and regression execution remain with the user.
