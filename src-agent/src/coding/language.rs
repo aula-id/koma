@@ -215,6 +215,9 @@ pub(super) fn query(
     let manager = manager
         .lock()
         .map_err(|_| "Coding LSP manager lock failed")?;
+    if method == "textDocument/semanticTokens/full" {
+        return Ok(json!({"legend":manager.semantic_legend(&workspace.root, path)?,"data":response.get("data")}));
+    }
     if method == "textDocument/rename" {
         manager.validate_edit_versions(&response)?;
     }

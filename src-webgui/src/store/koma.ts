@@ -2,6 +2,7 @@ import { receiveGitReply, cancelGitRequests, type GitReply, type GitToolTab } fr
 import { create } from 'zustand'
 import { codingRequest, resolveCodingReply } from '../lib/coding-service'
 import { invalidateCodingConfig } from '../lib/coding-config'
+import { formatBeforeSave } from '../lib/coding-save'
 import { sendCodingLanguage } from '../lib/coding-language'
 import { backupCodingDocument, forgetCodingDraft, recordCodingHistory } from '../lib/coding-recovery'
 import type { McpServer, Provider, Model, ModelListEntry, RouteEntry } from '../types/config'
@@ -3093,6 +3094,10 @@ function clearImportGraphRetry() {
   importGraphRetryAttempt = 0
 }
 
+// Each host retains its documents and editor layout independently of chat.
+// Replies for a background host are replayed only into that host's view.
+type CodingHostView = { coding: CodingSlice; ui: KomaState['ui']; replies: PushEnvelope[] }
+const codingHostViews = new Map<string, CodingHostView>()
 export const useKoma = create<KomaState>((set, get) => ({
   session: initialSession,
   hub: initialHub,
@@ -3149,6 +3154,10 @@ export const useKoma = create<KomaState>((set, get) => ({
       case 'CodingReply': resolveCodingReply(env); break
       case 'CodingEvent': {
         if (env.workspace.hostId !== (get().remoteState.hostId ?? 'local')) break
+        if (env.event.k === 'FileSystemChanged') {
+          window.dispatchEvent(new CustomEvent('koma-coding-disk', { detail: env.workspace }))
+          break
+        }
         const event = env.event as PushEnvelope
         // Only language events are accepted from a coding worker.
         if (!event.k.startsWith('Lsp')) break
@@ -3232,15 +3241,15 @@ export const useKoma = create<KomaState>((set, get) => ({
             // that held "indexing workspace" over WebKit while the fat Snapshot
             // still parsed, freezing Mac/Linux reopen. Real warm-up still shows
             // when the host emits Loading{active:true}.
-            ui: {
+            ui: normalizeGroups<KomaState['ui']>({
               ...s.ui,
               switchingTo: null,
               ...(switched || bootstrapping
                 ? {
                     ...(switched
                       ? {
-                          tabs: [makeChatTab(), ...get().ui.tabs.filter((t) => t.kind === 'terminal')],
-                          activeTabId: 'chat',
+                          tabs: [makeChatTab(), ...s.ui.tabs.filter((t) => t.kind === 'terminal' || t.kind === 'codingFile')],
+                          activeTabId: s.ui.tabs.some(t => t.id === s.ui.activeTabId && t.kind === 'codingFile') ? s.ui.activeTabId : 'chat',
                         }
                       : {}),
                     // Keep a real host Loading envelope; never synthesize pending.
@@ -3255,7 +3264,7 @@ export const useKoma = create<KomaState>((set, get) => ({
                     },
                   }
                 : {}),
-            },
+            }),
             // A genuine switch also drops the OLD session's git/graph/activity
             // slices — they're host-driven for the PREVIOUS repo/session and
             // must not bleed into the new one until each panel's own
@@ -3283,12 +3292,7 @@ export const useKoma = create<KomaState>((set, get) => ({
                   },
                   graph: { ...initialGraph, graphMode: s.graph.graphMode },
                   importGraph: initialImportGraph,
-                  // Coding panel is session/workdir-scoped — drop open docs + tree
-                  // cache so session A's files never render under session B.
-                  coding: {
-                    ...initialCoding,
-                    _sessionGen: s.coding._sessionGen + 1,
-                  },
+                  // Coding documents belong to the host/workspace, not chat.
                   repos: [],
                   activeRepoRoot: null,
                 }
@@ -4984,6 +4988,10 @@ export const useKoma = create<KomaState>((set, get) => ({
         set(() => ({ remoteHosts: env.hosts }))
         break
       case 'RemoteState':
+        if ((get().remoteState.hostId ?? 'local') !== (env.hostId ?? 'local')) {
+          const state = get()
+          codingHostViews.set(state.remoteState.hostId ?? 'local', { coding: state.coding, ui: state.ui, replies: [] })
+        }
         // Leaving a remote attach (disconnect / back to hub / connect bounce) must
         // clear session.id so routes flip StartScreen — same job as detachSession
         // after kill. Host no longer owns this GUI session once RemoteState says
@@ -5006,7 +5014,18 @@ export const useKoma = create<KomaState>((set, get) => ({
         }
         set((s) => {
           const hostChanged = (s.remoteState.hostId ?? 'local') !== (env.hostId ?? 'local')
-          const languageReset = hostChanged ? { lspDiagnostics: {}, lspDiagCounts: { errors: 0, warnings: 0 }, lspRuntime: [] } : {}
+          const languageReset = hostChanged ? { lspDiagnostics: {}, lspDiagCounts: { errors: 0, warnings: 0 }, lspRuntime: [], lspServers: [], lspProgress: {} } : {}
+          const hostView = codingHostViews.get(env.hostId ?? 'local')
+          const restoredUi = hostChanged ? normalizeGroups({
+            ...s.ui,
+            tabs: [makeChatTab(), ...(hostView?.ui.tabs.filter(t => t.kind === 'codingFile') ?? [])],
+            activeTabId: hostView?.ui.tabs.some(t => t.id === hostView.ui.activeTabId && t.kind === 'codingFile') ? hostView.ui.activeTabId : 'chat',
+            groups: hostView?.ui.groups ?? [DEFAULT_GROUP], tabGroup: hostView?.ui.tabGroup ?? {},
+            groupActive: hostView?.ui.groupActive ?? { [DEFAULT_GROUP]: 'chat' },
+            activeGroupId: hostView?.ui.activeGroupId ?? DEFAULT_GROUP,
+            splitDir: hostView?.ui.splitDir ?? 'row', groupSizes: hostView?.ui.groupSizes ?? { [DEFAULT_GROUP]: 1 },
+          }) : s.ui
+          const codingReset = hostChanged ? { coding: { ...(hostView?.coding ?? initialCoding), _sessionGen: s.coding._sessionGen + 1 } } : {}
           const remoteState = {
             state: env.state,
             hostId: env.hostId ?? null,
@@ -5017,24 +5036,31 @@ export const useKoma = create<KomaState>((set, get) => ({
             sessions: env.sessions ?? [],
           }
           if (env.state === 'connected' || env.state === 'disconnected' || env.state === 'ready') {
-            return { ...languageReset, remoteState, ui: { ...s.ui, switchingTo: null } }
+            return { ...languageReset, ...codingReset, remoteState, ui: { ...restoredUi, switchingTo: null } }
           }
           if (env.state === 'error') {
             const text = env.error ? `SSH: ${env.error}` : 'SSH connection failed'
             const seq = s.ui.toastSeq + 1
             return {
               ...languageReset,
+              ...codingReset,
               remoteState,
               ui: {
-                ...s.ui,
+                ...restoredUi,
                 switchingTo: null,
                 toastSeq: seq,
                 toast: { id: seq, text, kind: 'error' as const },
               },
             }
           }
-          return { ...languageReset, remoteState }
+          return { ...languageReset, ...codingReset, remoteState, ui: restoredUi }
         })
+        {
+          const host = get().remoteState.hostId ?? 'local'
+          const view = codingHostViews.get(host)
+          const replies = view?.replies.splice(0) ?? []
+          for (const reply of replies) get().push(reply)
+        }
         break
       case 'RemotePathPicker':
         // Keep the previous dir list while state=listing (host sends dirs:[] on
@@ -5072,6 +5098,18 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
 
   req: (g) => {
+    if (['FileTree', 'FileRead', 'FileSave', 'FileCreate', 'FileRename', 'FileDelete', 'FileWriteBytes', 'FileDownloadBytes', 'FileContentSearch'].includes(g.r) && 'root' in g && typeof g.root === 'string') {
+      const hostId = get().remoteState.hostId ?? 'local'
+      const deliver = (value: Record<string, unknown>) => {
+        const reply = { ...g, ...value, k: g.r, requestId: 'requestId' in g ? g.requestId : '' } as unknown as PushEnvelope
+        if (reply.k === 'FileDownloadBytes' && resolveFilePreviewBytes(reply.requestId, reply.bytesB64, reply.error, reply.tooLarge)) return
+        if ((get().remoteState.hostId ?? 'local') === hostId) get().push(reply)
+        else codingHostViews.get(hostId)?.replies.push(reply)
+      }
+      void codingRequest<Record<string, unknown>>({ hostId, root: g.root }, { op: 'file', body: g as unknown as Record<string, unknown> })
+        .then(deliver).catch(error => deliver({ error: String(error.message ?? error), entries: [], results: [], content: null, fingerprint: '', binary: false, tooLarge: false }))
+      return
+    }
     if (['LspDidOpen', 'LspDidChange', 'LspDidSave', 'LspDidClose', 'LspCompletion', 'LspCompletionResolve', 'LspHover', 'LspDefinition', 'LspReferences', 'LspDocumentSymbol'].includes(g.r) && 'root' in g && typeof g.root === 'string') {
       const workspace = { hostId: get().remoteState.hostId ?? 'local', root: g.root }
       void sendCodingLanguage(workspace, g as unknown as Record<string, unknown>).catch(error => {
@@ -6357,7 +6395,7 @@ export const useKoma = create<KomaState>((set, get) => ({
       // tracks on macOS/Windows WebViews after the session died.
       ui: normalizeGroups({
         ...s.ui,
-        tabs: [makeChatTab(), ...s.ui.tabs.filter((t) => t.kind === 'terminal')],
+        tabs: [makeChatTab(), ...s.ui.tabs.filter((t) => t.kind === 'terminal' || t.kind === 'codingFile')],
         activeTabId: 'chat',
         groups: [DEFAULT_GROUP],
         tabGroup: {},
@@ -6518,15 +6556,30 @@ export const useKoma = create<KomaState>((set, get) => ({
     if (requestId) get().req({ r: 'FileRead', root, path, requestId })
     if (opts?.groupId || opts?.split) get().syncStreamView()
   },
-  saveCodingFile: (root, path) => {
+  saveCodingFile: async (root, path) => {
     const key = fileKey(root, path)
-    const file = get().coding.files[key]
+    let file = get().coding.files[key]
     if (!file || file.content == null || file.loading || file.conflict || file.binary || file.tooLarge) return
     if (file.saving) {
       set((s) => ({ coding: { ...s.coding, files: { ...s.coding.files, [key]: { ...file, saveQueued: true } } } }))
       return
     }
     if (!file.dirty) return
+    const before = file
+    const hostId = get().remoteState.hostId ?? 'local'
+    const generation = get().coding._sessionGen
+    try {
+      const formatted = await formatBeforeSave({ hostId, root }, path, file.content!)
+      if ((get().remoteState.hostId ?? 'local') !== hostId || get().coding._sessionGen !== generation || get().coding.files[key] !== before) return
+      if (formatted !== file.content) get().updateCodingContent(root, path, formatted)
+      file = get().coding.files[key]
+    } catch (error) {
+      if ((get().remoteState.hostId ?? 'local') === hostId && get().coding.files[key] === before) {
+        const text = `Save canceled: ${error instanceof Error ? error.message : String(error)}`
+        set(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, text, kind: 'error' } } } })
+      }
+      return
+    }
     const requestId = mintRequestId()
     set((s) => ({
       coding: {
@@ -6538,7 +6591,7 @@ export const useKoma = create<KomaState>((set, get) => ({
       r: 'FileSave',
       root,
       path,
-      content: file.content,
+      content: file.content!,
       expectedFingerprint: file.fingerprint,
       requestId,
     })

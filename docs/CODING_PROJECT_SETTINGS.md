@@ -51,3 +51,9 @@ Project `tasks` now configure Run/Build/Test commands; see
 review cases. Toolchains, debug, structured tests and environment selection
 remain reserved for later increments. Format-on-save is also not implemented
 yet; use Format Document/Selection explicitly.
+
+The editor now supports `"formatOnSave": true` (default false) and
+`"semanticHighlighting": false` (default true). Both accept per-language editor
+overrides. Formatting errors leave the file unsaved; disable format-on-save or
+repair the language server before retrying. The project configuration document
+is exempt so an invalid setting cannot prevent its own repair.

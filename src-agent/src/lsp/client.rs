@@ -767,6 +767,7 @@ impl LspManager {
             "textDocument/inlayHint" => ("textDocument/inlayHint", "inlayHintProvider"),
             "textDocument/implementation" => ("textDocument/implementation", "implementationProvider"),
             "textDocument/typeDefinition" => ("textDocument/typeDefinition", "typeDefinitionProvider"),
+            "textDocument/semanticTokens/full" => ("textDocument/semanticTokens/full", "semanticTokensProvider"),
             _ => return Err("Unsupported language operation".into()),
         };
         if !params.is_object() { return Err("Language parameters must be an object".into()); }
@@ -781,6 +782,13 @@ impl LspManager {
         }
         params["textDocument"] = serde_json::json!({"uri":uri});
         Ok(LspPendingRequest { io: session.io.clone(), method, params })
+    }
+
+    pub(crate) fn semantic_legend(&self, root: &str, path: &str) -> Result<serde_json::Value, String> {
+        let (_, server_id) = self.uri_server(root, path)?;
+        let session = self.servers.get(&server_id).ok_or("Language server is unavailable")?;
+        let caps = session.capabilities.lock().map_err(|_| "LSP capability lock failed")?;
+        Ok(caps.pointer("/semanticTokensProvider/legend").cloned().unwrap_or_default())
     }
 
     pub(crate) fn validate_edit_versions(&self, edit: &serde_json::Value) -> Result<(), String> {
@@ -1240,6 +1248,12 @@ impl ServerSession {
                     "codeAction": { "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["quickfix", "refactor", "source.organizeImports"] } } },
                     "signatureHelp": { "signatureInformation": { "documentationFormat": ["plaintext", "markdown"], "parameterInformation": { "labelOffsetSupport": true } } },
                     "inlayHint": { "dynamicRegistration": false },
+                    "semanticTokens": {
+                        "dynamicRegistration": false, "requests": { "full": true },
+                        "tokenTypes": ["namespace","type","class","enum","interface","struct","typeParameter","parameter","variable","property","enumMember","event","function","method","macro","keyword","modifier","comment","string","number","regexp","operator","decorator"],
+                        "tokenModifiers": ["declaration","definition","readonly","static","deprecated","abstract","async","modification","documentation","defaultLibrary"],
+                        "formats": ["relative"], "overlappingTokenSupport": false, "multilineTokenSupport": false
+                    },
                     "implementation": { "linkSupport": true },
                     "typeDefinition": { "linkSupport": true },
                     "hover": {

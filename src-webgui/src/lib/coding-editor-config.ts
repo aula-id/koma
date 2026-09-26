@@ -41,6 +41,7 @@ export function configureCodingEditor(editor: monaco.editor.IStandaloneCodeEdito
       const wordWrap = settings.wordWrap ?? 'on'
       if (!['on', 'off', 'wordWrapColumn', 'bounded'].includes(String(wordWrap))) throw new Error('Invalid editor.wordWrap')
       editor.updateOptions({
+        'semanticHighlighting.enabled': settings.semanticHighlighting !== false,
         wordWrap: wordWrap as 'on' | 'off' | 'wordWrapColumn' | 'bounded',
         minimap: { enabled: settings.minimap === true },
         inlayHints: { enabled: settings.inlayHints === false ? 'off' : 'on' },

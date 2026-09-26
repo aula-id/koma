@@ -206,3 +206,29 @@ across hosts and chat sessions,
 event-driven tree reconciliation, navigation history/outline UI, semantic
 tokens, format-on-save, and command/resource/resolve code-action support.
 Native/platform acceptance and regression execution remain with the user.
+
+## Editor and document lifecycle increment
+
+- Added opt-in `editor.formatOnSave`, including language overrides. Save All and
+  autosave share the guarded pipeline; changed buffers/hosts discard stale
+  formatting, and failures leave the buffer unsaved with a visible error. The
+  configuration document itself always remains saveable.
+- Added full-document semantic tokens with server-legend translation, optional
+  Outline panel, per-host Back/Forward navigation (Alt+Left/Right), and retained
+  cursor/scroll view state. Outline is available from the coding palette.
+- Chat switches preserve coding tabs/buffers. Switching hosts banks their coding
+  buffers/layout separately and replays pending file replies into the originating
+  host when it becomes visible again. Media/editor views remount across hosts.
+- File tree, read/save, create/rename/delete, upload/download and content search
+  now route through the independent workspace coding service. Save-as dialogs
+  stay on the local GUI even when file bytes come from SSH. Transport frame limits
+  accommodate the existing 25 MiB binary-file limit.
+- Added debounced native filesystem notifications with bounded watcher retention
+  and existing fingerprint-based conflict checks. Five-second polling remains as
+  fallback for unsupported filesystems, disconnected watches, and evicted roots.
+
+Native review: preserve dirty files and splits across chat/host transitions;
+open identical paths on two hosts, including binary previews; switch while a
+save/read/rename is pending. Exercise format-on-save with concurrent typing and
+failure, Outline after edits, Back/Forward, semantic colors, and external
+create/rename/delete. Functional/platform execution remains with the user.

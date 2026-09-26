@@ -9,7 +9,8 @@ export type CodingReply = {
   error?: string
 }
 export type CodingOperation =
-  | { op: 'hello' | 'configRead' | 'configEnsure' | 'backups' }
+  | { op: 'file'; body: Record<string, unknown> }
+  | { op: 'hello' | 'watch' | 'configRead' | 'configEnsure' | 'backups' }
   | { op: 'paths'; query: string }
   | { op: 'replacePreview'; options: { query: string; replacement: string; caseSensitive: boolean; wholeWord: boolean; isRegex: boolean; includeGlob: string | null; excludeGlob: string | null } }
   | { op: 'lsp'; body: Record<string, unknown> }
@@ -108,7 +109,8 @@ export function codingRequest<T>(workspace: WorkspaceRef, operation: CodingOpera
       reject(error)
     }
     const abort = () => finishError(new Error('Canceled'))
-    const timer = setTimeout(() => finishError(new Error('Coding operation timed out; check its outcome before retrying')), 30_000)
+    const timeout = operation.op === 'file' && operation.body.saveAs === true ? 600_000 : 30_000
+    const timer = setTimeout(() => finishError(new Error('Coding operation timed out; check its outcome before retrying')), timeout)
     pending.set(id, {
       workspace: { ...workspace }, resolve: (value) => resolve(value as T), reject,
       cleanup: () => { clearTimeout(timer); signal?.removeEventListener('abort', abort) },

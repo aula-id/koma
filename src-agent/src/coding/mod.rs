@@ -4,6 +4,7 @@
 mod language;
 pub(crate) mod persistence;
 mod tasks;
+mod watch;
 #[cfg(feature = "gui")]
 mod transport;
 mod workspace;
@@ -24,6 +25,7 @@ pub(crate) fn shutdown() {
     SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::Release);
     transport::shutdown();
     tasks::shutdown();
+    watch::shutdown();
     language::shutdown();
 }
 
@@ -54,6 +56,10 @@ pub(crate) struct Request {
 #[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub(crate) enum Operation {
     Hello,
+    Watch,
+    File {
+        body: Value,
+    },
     Paths {
         query: String,
     },
@@ -169,6 +175,16 @@ impl Service {
                     } else {
                         transport::request(&request)
                     };
+                let result = result.and_then(|value| {
+                    if let Operation::File { body } = &request.operation {
+                        if body.get("r").and_then(Value::as_str) == Some("FileDownloadBytes") && body.get("saveAs").and_then(Value::as_bool) == Some(true) {
+                            use crate::app::runtime::client::file_ops;
+                            let read: file_ops::FileDownloadBytesResult = serde_json::from_value(value).map_err(|e| e.to_string())?;
+                            return serde_json::to_value(file_ops::finalize_download_bytes(read, true)).map_err(|e| e.to_string());
+                        }
+                    }
+                    Ok(value)
+                });
                 let envelope = match result {
                     Ok(value) => {
                         json!({"k":"CodingReply", "id":request.id, "workspace":request.workspace, "result":value})
@@ -245,6 +261,7 @@ pub(crate) fn worker_main() -> anyhow::Result<()> {
         fn drop(&mut self) {
             SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::Release);
             tasks::shutdown();
+            watch::shutdown();
             language::shutdown();
         }
     }
@@ -262,13 +279,13 @@ pub(crate) fn worker_main() -> anyhow::Result<()> {
     loop {
         let mut line = Vec::new();
         let n = std::io::Read::by_ref(&mut input)
-            .take(32 * 1024 * 1024 + 1)
+            .take(48 * 1024 * 1024 + 1)
             .read_until(b'\n', &mut line)?;
         if n == 0 {
             break;
         }
         anyhow::ensure!(
-            n <= 32 * 1024 * 1024 && line.last() == Some(&b'\n'),
+            n <= 48 * 1024 * 1024 && line.last() == Some(&b'\n'),
             "Coding frame exceeds limit"
         );
         let request: Request = serde_json::from_slice(&line)?;

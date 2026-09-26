@@ -729,6 +729,30 @@ export function ensureLspProviders(
       return result?.map(edit) ?? []
     },
   })
+  const semanticLegend = {
+    tokenTypes: ['namespace','type','class','enum','interface','struct','typeParameter','parameter','variable','property','enumMember','event','function','method','macro','keyword','modifier','comment','string','number','regexp','operator','decorator'],
+    tokenModifiers: ['declaration','definition','readonly','static','deprecated','abstract','async','modification','documentation','defaultLibrary'],
+  }
+  monaco.languages.registerDocumentSemanticTokensProvider('*', {
+    getLegend: () => semanticLegend,
+    releaseDocumentSemanticTokens() {},
+    provideDocumentSemanticTokens: async (model, _last, token) => {
+      const value = await extended<{ legend: typeof semanticLegend; data: number[] | null }>(model, 'textDocument/semanticTokens/full', {}, token)
+      if (!value?.data || !value.legend?.tokenTypes || !value.legend.tokenModifiers || value.data.length % 5 || value.data.length > 2_000_000) return null
+      const data = [...value.data]
+      for (let i = 0; i < data.length; i += 5) {
+        if (!data.slice(i, i + 5).every(n => Number.isInteger(n) && n >= 0 && n <= 0xffffffff)) return null
+        data[i + 3] = Math.max(0, semanticLegend.tokenTypes.indexOf(value.legend.tokenTypes[data[i + 3]]))
+        let bits = 0
+        for (let bit = 0; bit < Math.min(32, value.legend.tokenModifiers.length); bit++) {
+          const target = semanticLegend.tokenModifiers.indexOf(value.legend.tokenModifiers[bit])
+          if (target >= 0 && (data[i + 4] & (1 << bit))) bits |= 1 << target
+        }
+        data[i + 4] = bits >>> 0
+      }
+      return { data: new Uint32Array(data) }
+    },
+  })
   monaco.languages.registerDocumentRangeFormattingEditProvider('*', {
     provideDocumentRangeFormattingEdits: async (model, selection, options, token) => {
       const result = await extended<ProtocolEdit[]>(model, 'textDocument/rangeFormatting', { range: protocolRange(selection), options }, token)

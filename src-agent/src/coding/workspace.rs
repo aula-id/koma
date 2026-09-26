@@ -39,6 +39,8 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
             &request.id,
             &workdirs,
         ))?),
+        Operation::File { body } => file_operation(request, body, &workdirs),
+        Operation::Watch => super::watch::watch(&request.workspace, &canonical),
         Operation::Save {
             path,
             content,
@@ -275,4 +277,120 @@ mod tests {
         assert!(validate_config(&json!({"version":2})).is_err());
         assert!(validate_config(&json!({"version":1,"tasks":{}})).is_err());
     }
+}
+
+fn file_operation(request: &Request, body: &Value, workdirs: &[PathBuf]) -> Result<Value> {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "r", rename_all_fields = "camelCase")]
+    enum FileOperation {
+        FileDownloadBytes {
+            path: String,
+        },
+        FileTree {
+            path: String,
+        },
+        FileRead {
+            path: String,
+        },
+        FileSave {
+            path: String,
+            content: String,
+            expected_fingerprint: String,
+        },
+        FileCreate {
+            path: String,
+            kind: String,
+        },
+        FileRename {
+            old_path: String,
+            new_path: String,
+        },
+        FileDelete {
+            path: String,
+        },
+        FileWriteBytes {
+            path: String,
+            bytes_b64: String,
+            overwrite: bool,
+        },
+        FileContentSearch {
+            path: String,
+            query: String,
+            case_sensitive: bool,
+            whole_word: bool,
+            is_regex: bool,
+            include_glob: Option<String>,
+            exclude_glob: Option<String>,
+        },
+    }
+    let r = &request.workspace.root;
+    let id = &request.id;
+    Ok(
+        match serde_json::from_value::<FileOperation>(body.clone())? {
+            FileOperation::FileDownloadBytes { path } => {
+                serde_json::to_value(file_ops::exec_file_download_bytes(r, &path, id, workdirs))?
+            }
+            FileOperation::FileTree { path } => {
+                serde_json::to_value(file_ops::exec_file_tree(r, &path, id, workdirs))?
+            }
+            FileOperation::FileRead { path } => {
+                serde_json::to_value(file_ops::exec_file_read(r, &path, id, workdirs))?
+            }
+            FileOperation::FileSave {
+                path,
+                content,
+                expected_fingerprint,
+            } => serde_json::to_value(file_ops::exec_file_save(
+                r,
+                &path,
+                &content,
+                &expected_fingerprint,
+                id,
+                workdirs,
+            ))?,
+            FileOperation::FileCreate { path, kind } => {
+                serde_json::to_value(file_ops::exec_file_create(r, &path, &kind, id, workdirs))?
+            }
+            FileOperation::FileRename { old_path, new_path } => serde_json::to_value(
+                file_ops::exec_file_rename(r, &old_path, &new_path, id, workdirs),
+            )?,
+            FileOperation::FileDelete { path } => {
+                serde_json::to_value(file_ops::exec_file_delete(r, &path, id, workdirs))?
+            }
+            FileOperation::FileWriteBytes {
+                path,
+                bytes_b64,
+                overwrite,
+            } => serde_json::to_value(file_ops::exec_file_write_bytes(
+                r, &path, &bytes_b64, overwrite, id, workdirs,
+            ))?,
+            FileOperation::FileContentSearch {
+                path,
+                query,
+                case_sensitive,
+                whole_word,
+                is_regex,
+                include_glob,
+                exclude_glob,
+            } => {
+                use crate::app::runtime::client::content_search::{
+                    exec_file_content_search, ContentQuery,
+                };
+                serde_json::to_value(exec_file_content_search(
+                    ContentQuery {
+                        root: r,
+                        path: &path,
+                        query: &query,
+                        case_sensitive,
+                        whole_word,
+                        is_regex,
+                        include_glob: include_glob.as_deref(),
+                        exclude_glob: exclude_glob.as_deref(),
+                        request_id: id,
+                    },
+                    workdirs,
+                ))?
+            }
+        },
+    )
 }

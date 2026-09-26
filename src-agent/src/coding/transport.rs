@@ -77,10 +77,10 @@ fn connect(remote: Remote) -> anyhow::Result<Connection> {
                 let mut line = Vec::new();
                 let n = output
                     .by_ref()
-                    .take(32 * 1024 * 1024 + 1)
+                    .take(48 * 1024 * 1024 + 1)
                     .read_until(b'\n', &mut line)?;
                 anyhow::ensure!(
-                    n > 0 && n <= 32 * 1024 * 1024 && line.last() == Some(&b'\n'),
+                    n > 0 && n <= 48 * 1024 * 1024 && line.last() == Some(&b'\n'),
                     "Coding connection closed or incompatible; update remote Koma"
                 );
                 Ok(serde_json::from_slice(&line)?)

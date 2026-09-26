@@ -1,6 +1,6 @@
 import { useKoma } from '../store/koma'
 import { emptyFileState, fileKey, type FileReadPush } from '../store/coding'
-import { codingRequest } from './coding-service'
+import { codingRequest, workspaceKey, type WorkspaceRef } from './coding-service'
 
 /** Polling fallback also works over SSH and on filesystems without watch events.
  * Responses are scoped to a host/session and the exact pre-request buffer. */
@@ -8,6 +8,7 @@ export function startCodingDiskMonitor() {
   let running = false
   let stopped = false
   const controller = new AbortController()
+  const watches = new Map<string, number>()
   const poll = async () => {
     if (running || stopped || document.visibilityState === 'hidden') return
     running = true
@@ -24,6 +25,13 @@ export function startCodingDiskMonitor() {
     }
     const valid = () => !stopped && (useKoma.getState().remoteState.hostId ?? 'local') === hostId && useKoma.getState().coding._sessionGen === generation
     try {
+      for (const root of new Set([...roots.keys(), ...(state.settingsValues?.workdir ?? [])])) {
+        const workspace = { hostId, root }, key = workspaceKey(workspace)
+        if (Date.now() - (watches.get(key) ?? 0) > 30_000) {
+          watches.set(key, Date.now())
+          void codingRequest(workspace, { op: 'watch' }, controller.signal).catch(() => { watches.delete(key) })
+        }
+      }
       for (const [root, paths] of roots) {
         const list = [...paths]
         for (let offset = 0; offset < list.length; offset += 32) {
@@ -60,8 +68,23 @@ export function startCodingDiskMonitor() {
     } finally { running = false }
   }
   const focus = () => { void poll() }
+  let changedTimer: ReturnType<typeof setTimeout> | undefined
+  const changed = (event: Event) => {
+    const workspace = (event as CustomEvent<WorkspaceRef>).detail
+    if ((useKoma.getState().remoteState.hostId ?? 'local') !== workspace.hostId) return
+    clearTimeout(changedTimer)
+    changedTimer = setTimeout(() => {
+      if ((useKoma.getState().remoteState.hostId ?? 'local') !== workspace.hostId) return
+      focus()
+      const state = useKoma.getState()
+      for (const key of Object.keys(state.coding.dirs).filter(key => key.startsWith(workspace.root + ':')).slice(-32)) {
+        if (!state.coding.dirs[key].loading) state.refreshCodingDir(workspace.root, key.slice(workspace.root.length + 1))
+      }
+    }, 150)
+  }
   const interval = setInterval(focus, 5000)
   window.addEventListener('focus', focus)
+  window.addEventListener('koma-coding-disk', changed)
   document.addEventListener('visibilitychange', focus)
-  return () => { stopped = true; controller.abort(); clearInterval(interval); window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', focus) }
+  return () => { stopped = true; controller.abort(); clearInterval(interval); clearTimeout(changedTimer); window.removeEventListener('koma-coding-disk', changed); window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', focus) }
 }

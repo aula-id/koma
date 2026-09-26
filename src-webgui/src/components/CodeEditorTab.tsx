@@ -24,6 +24,8 @@ import { BrailleSpinner } from './BrailleSpinner'
 import { CodingFileViewer } from './CodingFileViewer'
 import { EditorChrome } from './EditorChrome'
 import { configureCodingEditor } from '../lib/coding-editor-config'
+import { recordCodingLocation, navigateCodingHistory } from '../lib/coding-navigation'
+import { CodingOutline } from './CodingOutline'
 import { showCodingRefactor } from './CodingRefactor'
 import { undoWorkspaceEdit } from '../lib/coding-edits'
 import { showCodingHistory } from './CodingHistory'
@@ -38,8 +40,16 @@ const LSP_CHANGE_MS = 120
 // CodeLens ref-counts are expensive (documentSymbol + N references RPCs) and
 // share the host LSP mutex with hover/completion. Only warm on open / save idle.
 const CODELENS_IDLE_MS = 2500
+const viewStates = new Map<string, monaco.editor.ICodeEditorViewState>()
 
 export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
+  const host = useKoma(s => s.remoteState.hostId ?? 'local')
+  return <WorkspaceCodeEditor key={JSON.stringify([host, tab.id])} tab={tab} />
+}
+function WorkspaceCodeEditor({ tab }: { tab: CodingTab }) {
+  const hostId = useKoma(s => s.remoteState.hostId ?? 'local')
+  const viewKey = JSON.stringify([hostId, tab.root, tab.path])
+  const [outlineOpen, setOutlineOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelRef = useRef<monaco.editor.ITextModel | null>(null)
@@ -212,6 +222,15 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     })
     monaco.editor.setTheme(theme)
     editorRef.current = editor
+    const rememberLocation = () => {
+      const position = editor.getPosition()
+      if (position && editor.hasTextFocus()) recordCodingLocation(hostId, { root: tab.root, path: tab.path, line: position.lineNumber, column: position.column })
+    }
+    const cursor = editor.onDidChangeCursorPosition(rememberLocation)
+    const focus = editor.onDidFocusEditorText(rememberLocation)
+    editor.addAction({ id: 'koma.outline', label: 'Toggle Document Outline', run: () => setOutlineOpen(value => !value) })
+    editor.addAction({ id: 'koma.navigateBack', label: 'Go Back', keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.LeftArrow], run: () => navigateCodingHistory(-1) })
+    editor.addAction({ id: 'koma.navigateForward', label: 'Go Forward', keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.RightArrow], run: () => navigateCodingHistory(1) })
     const stopConfiguration = configureCodingEditor(editor, { hostId: useKoma.getState().remoteState.hostId ?? 'local', root: tab.root }, tab.path)
 
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
@@ -374,6 +393,10 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       window.removeEventListener('koma-reveal-line', onReveal)
       window.removeEventListener('koma-coding-command', onCodingCommand)
       stopConfiguration()
+      cursor.dispose(); focus.dispose()
+      const view = editor.saveViewState()
+      if (view) viewStates.set(viewKey, view)
+      if (viewStates.size > 100) viewStates.delete(viewStates.keys().next().value!)
       sub.dispose()
       registerLspDidChangeFlusher(tab.root, tab.path, null)
       if (lspChangeTimerRef.current) clearTimeout(lspChangeTimerRef.current)
@@ -385,7 +408,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       modelRef.current = null
       lspOpenedRef.current = false
     }
-  }, [tab.root, tab.path])
+  }, [tab.root, tab.path, hostId])
 
   // Parent uses display:none for inactive panes; force layout on reveal so the
   // editor isn't stuck at 0×0 after WebKit skips ResizeObserver.
@@ -438,7 +461,11 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
         }
       }
       stampModelPath(model, tab.root, tab.path)
-      if (editor.getModel() !== model) editor.setModel(model)
+      if (editor.getModel() !== model) {
+        editor.setModel(model)
+        const view = viewStates.get(viewKey)
+        if (view) editor.restoreViewState(view)
+      }
       modelRef.current = model
     } finally {
       // Clear only this generation after Monaco has flushed model events.
@@ -478,6 +505,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     fileState?.conflict,
     tab.path,
     tab.root,
+    hostId,
   ])
 
   // Attach LSP when content is ready AND the matching server is installed.
@@ -564,6 +592,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     tab.path,
     tab.root,
     lspServers,
+    hostId,
     req,
   ])
 
@@ -682,8 +711,9 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
           </button>
         </div>
       )}
-      <div className="relative min-h-0 flex-1">
-        <div ref={containerRef} className="absolute inset-0" />
+      <div className="relative flex min-h-0 flex-1">
+        <div className="relative min-w-0 flex-1"><div ref={containerRef} className="absolute inset-0" /></div>
+        {outlineOpen && <CodingOutline root={tab.root} path={tab.path} onClose={() => setOutlineOpen(false)} />}
         {fileState?.loading && (
           <div className="pointer-events-none absolute right-2 top-2 text-koma-dim">
             <BrailleSpinner size={14} className="opacity-70" />

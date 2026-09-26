@@ -10,6 +10,9 @@ type Command = { id: string; title: string; shortcut?: string; editor?: boolean 
 const commands: Command[] = [
   { id: 'files', title: 'Go to File', shortcut: 'Ctrl/Cmd+P' },
   { id: 'editor.action.quickOutline', title: 'Go to Symbol in Editor', shortcut: 'Ctrl/Cmd+Shift+O', editor: true },
+  { id: 'koma.outline', title: 'Toggle Document Outline', editor: true },
+  { id: 'koma.navigateBack', title: 'Go Back', shortcut: 'Alt+Left', editor: true },
+  { id: 'koma.navigateForward', title: 'Go Forward', shortcut: 'Alt+Right', editor: true },
   { id: 'editor.action.gotoLine', title: 'Go to Line', shortcut: 'Ctrl/Cmd+G', editor: true },
   { id: 'editor.action.formatDocument', title: 'Format Document', shortcut: 'Shift+Alt+F', editor: true },
   { id: 'editor.action.formatSelection', title: 'Format Selection', editor: true },
