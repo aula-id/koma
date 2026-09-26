@@ -96,13 +96,12 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     fileState.content != null &&
     !fileState.binary &&
     !fileState.tooLarge &&
-    !fileState.loading &&
-    !fileState.conflict
+    !fileState.loading
   )
   const openPreview = isMarkdownPath(tab.path)
     ? () => useKoma.getState().openCodingFile(tab.root, tab.path, { preview: true })
     : undefined
-  const canSave = !!(canEdit && fileState?.dirty && !fileState.saving)
+  const canSave = !!(canEdit && fileState?.dirty && !fileState.saving && !fileState.conflict)
   const canRevert = !!(fileState && (fileState.dirty || fileState.conflict) && !fileState.saving)
 
   const status = useMemo(() => {
@@ -539,33 +538,6 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     req,
   ])
 
-  if (fileState?.conflict) {
-    return (
-      <div className="flex h-full w-full flex-col">
-        <EditorChrome
-          path={tab.path}
-          onTogglePreview={openPreview}
-          onHistory={() => showCodingHistory(tab.root, tab.path)}
-          status={status}
-          canSave={false}
-          canRevert={canRevert}
-          saving={!!fileState.saving}
-          onSave={() => saveCodingFile(tab.root, tab.path)}
-          onRevert={() => revertCodingFile(tab.root, tab.path)}
-        />
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-[12px] text-koma-dim">
-          <div>{fileState.error?.replace(/^conflict:\s*/i, '') ?? 'File changed on disk — save was rejected.'}</div>
-          <button
-            type="button"
-            onClick={() => revertCodingFile(tab.root, tab.path)}
-            className="text-koma-fg underline hover:opacity-80"
-          >
-            Reload from disk
-          </button>
-        </div>
-      </div>
-    )
-  }
   // Known media / office types always use the binary viewer (even if FileRead
   // returned text, e.g. SVG without NULs). Don't wait for FileRead — the viewer
   // fetches bytes itself via FileDownloadBytes.
@@ -648,6 +620,10 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
         onSave={() => saveCodingFile(tab.root, tab.path)}
         onRevert={() => revertCodingFile(tab.root, tab.path)}
       />
+      {fileState?.conflict && <div className="flex flex-none items-center gap-2 border-b border-koma-border bg-koma-accent/10 px-3 py-1.5 text-[12px] text-koma-fg">
+        <span className="min-w-0 flex-1">File changed on disk. Your edits are kept.</span>
+        <button onClick={() => showCodingHistory(tab.root, tab.path, true)} className="flex-none rounded border border-koma-border px-2 py-0.5 text-[11px] hover:bg-koma-hover">Compare and resolve</button>
+      </div>}
       {missingServer && (
         <div className="flex flex-none items-center gap-2 border-b border-koma-border bg-koma-accent/10 px-3 py-1.5 text-[12px] text-koma-fg">
           <span className="min-w-0 flex-1 truncate opacity-85">

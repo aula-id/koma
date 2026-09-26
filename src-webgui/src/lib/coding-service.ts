@@ -12,6 +12,7 @@ export type CodingOperation =
   | { op: 'hello' | 'configRead' | 'backups' }
   | { op: 'paths'; query: string }
   | { op: 'read'; path: string }
+  | { op: 'inspect'; paths: string[] }
   | { op: 'save'; path: string; content: string; fingerprint: string }
   | { op: 'configWrite'; config: CodingConfig }
   | { op: 'backup'; document: CodingBackup }

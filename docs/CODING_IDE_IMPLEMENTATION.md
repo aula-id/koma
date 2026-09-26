@@ -89,3 +89,23 @@ with a delayed backup, two windows editing the same path, restore while editing,
 and an external disk change before saving recovered content. Regression source
 covers monotonic revisions, tombstones and host-scoped history; execution is
 left to the user.
+
+- External-change detection polls open documents every five seconds and on
+  focus/visibility, including SSH. Unchanged files return fingerprints only.
+  Clean buffers reload; edited buffers retain text and expose Compare and
+  resolve. Choosing the editor version adopts the compared disk baseline but
+  leaves the buffer unsaved; Save still checks for subsequent disk changes.
+  This is a polling fallback, not yet an event-driven filesystem watcher/tree
+  reconciler. Missing/non-text files keep the buffer and report an error.
+- Editor saves now use a synced temporary file and atomic replacement, preserving
+  mode and resolving contained symlinks to their targets. Read-only files and
+  Unix hardlinks are rejected explicitly. In-process editor saves serialize;
+  an unrelated process can still race between hash validation and replacement.
+
+### Native review: disk changes
+
+Change a clean file externally and verify reload without activating a different
+file. Repeat with unsaved edits, compare both versions, keep the editor version,
+then change disk again before Save to confirm another conflict. Check symlink,
+permissions, read-only files, SSH loss, and rename/delete outside Koma. Atomic
+save regression source is included; platform execution remains with the user.

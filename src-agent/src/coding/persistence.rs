@@ -203,6 +203,15 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
             .write(true)
             .open(&tmp)?;
         if let Ok(meta) = path.metadata() {
+            anyhow::ensure!(!meta.permissions().readonly(), "File is read-only");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                anyhow::ensure!(
+                    meta.nlink() <= 1,
+                    "Atomic save would break hard links; save to a separate file"
+                );
+            }
             file.set_permissions(meta.permissions())?;
         }
         file.write_all(bytes)?;

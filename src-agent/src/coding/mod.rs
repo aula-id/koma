@@ -2,7 +2,7 @@
 //! All operations carry their host and root; UI selection is never a routing key.
 
 mod language;
-mod persistence;
+pub(crate) mod persistence;
 mod transport;
 mod workspace;
 
@@ -43,6 +43,9 @@ pub(crate) enum Operation {
     },
     Read {
         path: String,
+    },
+    Inspect {
+        paths: Vec<String>,
     },
     Save {
         path: String,

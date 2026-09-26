@@ -511,3 +511,26 @@ fn coding_stale_save_keeps_externally_changed_bytes() {
     assert_eq!(std::fs::read(&path).unwrap(), b"external\r\n");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+#[cfg(unix)]
+fn atomic_save_preserves_symlink_and_mode_and_rejects_hardlinks() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let (dir, root, workdirs) = temp_workspace("atomic-save");
+    let target = dir.join("target.txt");
+    std::fs::write(&target, b"old\n").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+    symlink("target.txt", dir.join("link.txt")).unwrap();
+    let read = exec_file_read(&root, "link.txt", "read", &workdirs);
+    let saved = exec_file_save(&root, "link.txt", "new\n", &read.fingerprint, "save", &workdirs);
+    assert!(saved.error.is_none(), "{:?}", saved.error);
+    assert!(dir.join("link.txt").symlink_metadata().unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "new\n");
+    assert_eq!(target.metadata().unwrap().permissions().mode() & 0o777, 0o640);
+    std::fs::hard_link(&target, dir.join("hard.txt")).unwrap();
+    let rejected = exec_file_save(&root, "target.txt", "replacement\n", &saved.fingerprint, "hard", &workdirs);
+    assert!(rejected.error.as_deref().unwrap_or("").contains("hard links"));
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "new\n");
+    assert!(!std::fs::read_dir(&dir).unwrap().flatten().any(|entry| entry.file_name().to_string_lossy().starts_with(".koma-write-")));
+    std::fs::remove_dir_all(dir).unwrap();
+}

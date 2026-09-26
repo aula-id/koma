@@ -6537,7 +6537,7 @@ export const useKoma = create<KomaState>((set, get) => ({
           ...s.coding,
           files: {
             ...s.coding.files,
-            [key]: { ...prev, content: normalized, dirty, conflict: false },
+            [key]: { ...prev, content: normalized, dirty },
           },
         },
       }

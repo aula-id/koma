@@ -13,6 +13,7 @@ import { RenameOverlay } from '../components/RenameOverlay'
 import { OmniSearchPalette } from '../components/OmniSearchPalette'
 import { CodingPalette } from '../components/CodingPalette'
 import { CodingHistory } from '../components/CodingHistory'
+import { startCodingDiskMonitor } from '../lib/coding-disk'
 import { SwitchingOverlay } from '../components/SwitchingOverlay'
 import { RemotePasswordPrompt } from '../components/RemotePasswordPrompt'
 import { RemotePathPicker } from '../components/RemotePathPicker'
@@ -75,6 +76,7 @@ function useNeedsOnboarding() {
 }
 
 function RootLayout() {
+  useEffect(startCodingDiskMonitor, [])
   // Resolved once — window.__komaOS is injected by the Rust host before the app
   // boots and never changes for the lifetime of the window.
   const [platform] = useState(getPlatform)

@@ -38,6 +38,16 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
             &workdirs,
         ))?),
         Operation::Paths { query } => paths(&canonical, query),
+        Operation::Inspect { paths } => {
+            anyhow::ensure!(
+                paths.len() <= 32,
+                "Inspect at most 32 documents per request"
+            );
+            Ok(json!(paths.iter().map(|path| {
+                let read = file_ops::exec_file_read(r, path, &request.id, &workdirs);
+                json!({"path":path,"fingerprint":read.fingerprint,"error":read.error,"binary":read.binary,"tooLarge":read.too_large})
+            }).collect::<Vec<_>>()))
+        }
         Operation::ConfigRead => {
             let path = canonical.join(".koma/coding.json");
             if !path.exists() {

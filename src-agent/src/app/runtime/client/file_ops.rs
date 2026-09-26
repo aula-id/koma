@@ -478,6 +478,14 @@ pub(crate) fn exec_file_save(
         Err(e) => return fail(String::new(), e),
     };
 
+    // Serialize editor writes inside this process, including legacy and native
+    // coding RPC callers. An atomic rename prevents partial/truncated files.
+    static SAVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _save_guard = match SAVE_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(_) => return fail(String::new(), "file save lock failed".into()),
+    };
+
     let original = match std::fs::read(&abs) {
         Ok(bytes) => Some(bytes),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -520,7 +528,7 @@ pub(crate) fn exec_file_save(
             return fail(String::new(), format!("failed to create parent dirs: {e}"));
         }
     }
-    if let Err(e) = std::fs::write(&abs, &bytes) {
+    if let Err(e) = crate::coding::persistence::atomic_write(&abs, &bytes) {
         return fail(String::new(), format!("failed to write file: {e}"));
     }
     FileSaveResult {

@@ -2,25 +2,25 @@ import { useEffect, useRef, useState } from 'react'
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
 import { History, RotateCcw, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
-import { emptyFileState, fileKey } from '../store/coding'
+import { emptyFileState, fileKey, type FileReadPush } from '../store/coding'
 import { codingRequest, codingWindowId, type CodingBackup, type WorkspaceRef } from '../lib/coding-service'
-import { backupCodingDocument, checkpointCodingDocument, flushCodingRecovery } from '../lib/coding-recovery'
+import { backupCodingDocument, checkpointCodingDocument, flushCodingRecovery, forgetCodingDraft } from '../lib/coding-recovery'
 import { initMonaco, langFromPath, readMonoFont } from '../lib/monaco-setup'
 import { BrailleSpinner } from './BrailleSpinner'
 
-type Context = { workspace: WorkspaceRef; path?: string }
+type Context = { workspace: WorkspaceRef; path?: string; disk?: boolean }
 type Entry = { id?: number; path: string; reason?: string; created?: number; updated?: number; windowId?: string; revision?: number }
-export function showCodingHistory(root?: string, path?: string) {
+export function showCodingHistory(root?: string, path?: string, disk = false) {
   const state = useKoma.getState()
   root ??= state.coding.activeRoot ?? state.settingsValues?.workdir?.[0]
-  if (root) window.dispatchEvent(new CustomEvent('koma-coding-history', { detail: { workspace: { hostId: state.remoteState.hostId ?? 'local', root }, path } }))
+  if (root) window.dispatchEvent(new CustomEvent('koma-coding-history', { detail: { workspace: { hostId: state.remoteState.hostId ?? 'local', root }, path, disk } }))
 }
 
 export function CodingHistory() {
   const [context, setContext] = useState<Context | null>(null)
   const [entries, setEntries] = useState<Entry[]>([])
   const [selected, setSelected] = useState<Entry | null>(null)
-  const [snapshot, setSnapshot] = useState<{ content: string; backup?: CodingBackup; baseline: string } | null>(null)
+  const [snapshot, setSnapshot] = useState<{ content: string; backup?: CodingBackup; baseline: string; fingerprint?: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [reload, setReload] = useState(0)
@@ -60,12 +60,15 @@ export function CodingHistory() {
     closeButton.current?.focus()
     const controller = new AbortController()
     setBusy(true)
-    const load = context.path
+    const load = context.disk
+      ? Promise.resolve({ documents: [{ id: -1, path: context.path!, reason: 'Current disk version', created: Date.now() }], truncated: false })
+      : context.path
       ? codingRequest<Entry[]>(context.workspace, { op: 'history', path: context.path }, controller.signal).then(rows => ({ documents: rows.map(r => ({ ...r, path: context.path! })), truncated: false }))
       : codingRequest<{ documents: Entry[]; truncated: boolean }>(context.workspace, { op: 'backups' }, controller.signal)
     void load.then(result => {
       if (controller.signal.aborted) return
       setEntries(result.documents); setTruncated(result.truncated)
+      if (context.disk) setSelected(result.documents[0] ?? null)
     }).catch(e => { if (!controller.signal.aborted) setError(e.message) })
       .finally(() => { if (!controller.signal.aborted) setBusy(false) })
     return () => controller.abort()
@@ -75,7 +78,12 @@ export function CodingHistory() {
     if (!context || !selected) return
     const controller = new AbortController()
     setBusy(true); setError(null)
-    const load = selected.id != null
+    const load = context.disk
+      ? codingRequest<Omit<FileReadPush, 'k'>>(context.workspace, { op: 'read', path: selected.path }, controller.signal).then(value => {
+        if (value.error || value.binary || value.tooLarge || value.content == null) throw new Error(value.error ?? 'Disk file cannot be loaded as text. Your buffer is unchanged.')
+        return { content: value.content, fingerprint: value.fingerprint }
+      })
+      : selected.id != null
       ? codingRequest<{ content: string }>(context.workspace, { op: 'historyRead', checkpoint: selected.id }, controller.signal).then(value => ({ content: value.content }))
       : codingRequest<CodingBackup>(context.workspace, { op: 'backupRead', path: selected.path, windowId: selected.windowId!, revision: selected.revision! }, controller.signal).then(backup => ({ content: backup.content, backup }))
     void load.then(value => {
@@ -99,7 +107,7 @@ export function CodingHistory() {
     editor.setModel({ original, modified })
     return () => { editor.dispose(); original.dispose(); modified.dispose() }
   }, [snapshot, selected])
-  const restore = async () => {
+  const restore = async (keepEditor = false) => {
     if (!context || !selected || !snapshot) return
     const { workspace } = context
     const key = fileKey(workspace.root, selected.path)
@@ -114,14 +122,15 @@ export function CodingHistory() {
       if ((state.remoteState.hostId ?? 'local') !== workspace.hostId || state.coding.files[key] !== before) throw new Error('The workspace or document changed. Reopen the preview.')
       const backup = snapshot.backup
       if (!backup && !before) throw new Error('Open the document before restoring its history.')
-      const savedContent = before?.savedContent ?? backup?.savedContent ?? null
-      const content = snapshot.content
-      const fingerprint = before?.fingerprint ?? backup?.fingerprint ?? ''
+      const savedContent = context.disk ? snapshot.content : before?.savedContent ?? backup?.savedContent ?? null
+      const content = keepEditor ? before!.content! : snapshot.content
+      const fingerprint = context.disk ? snapshot.fingerprint! : before?.fingerprint ?? backup?.fingerprint ?? ''
       // Keep the original fingerprint: externally changed disk files must still reject Save.
       useKoma.setState(s => ({ coding: { ...s.coding, files: { ...s.coding.files,
-        [key]: { ...(before ?? emptyFileState()), content, savedContent, fingerprint, dirty: content !== savedContent, loading: false, error: null },
+        [key]: { ...(before ?? emptyFileState()), content, savedContent, fingerprint, dirty: content !== savedContent, loading: false, conflict: context.disk ? false : before?.conflict ?? false, error: null },
       } } }))
-      backupCodingDocument(workspace, selected.path, { content, savedContent, fingerprint })
+      if (content !== savedContent) backupCodingDocument(workspace, selected.path, { content, savedContent, fingerprint })
+      else forgetCodingDraft(workspace, selected.path)
       state.openCodingFile(workspace.root, selected.path)
       setContext(null)
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
@@ -140,9 +149,9 @@ export function CodingHistory() {
   }
   if (!context) return null
   return <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 p-5" onMouseDown={close}>
-    <div role="dialog" aria-modal="true" aria-label={context.path ? 'Local History' : 'Recover Unsaved Files'} className="flex h-[min(620px,85vh)] w-[min(1000px,95vw)] flex-col overflow-hidden rounded-md border border-koma-border bg-koma-panel shadow-xl" onMouseDown={e => e.stopPropagation()} onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); close() } }}>
+    <div role="dialog" aria-modal="true" aria-label={context.disk ? 'Resolve Disk Changes' : context.path ? 'Local History' : 'Recover Unsaved Files'} className="flex h-[min(620px,85vh)] w-[min(1000px,95vw)] flex-col overflow-hidden rounded-md border border-koma-border bg-koma-panel shadow-xl" onMouseDown={e => e.stopPropagation()} onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); close() } }}>
       <div className="flex h-9 flex-none items-center gap-2 border-b border-koma-border px-3 text-[12px] text-koma-fg">
-        <History size={13}/><span className="min-w-0 flex-1 truncate">{context.path ? `Local History · ${context.path}` : `Recover Unsaved Files · ${context.workspace.root}`}</span>
+        <History size={13}/><span className="min-w-0 flex-1 truncate">{context.disk ? `Resolve Disk Changes · ${context.path}` : context.path ? `Local History · ${context.path}` : `Recover Unsaved Files · ${context.workspace.root}`}</span>
         {busy && <BrailleSpinner size={13}/>}
         <button ref={closeButton} aria-label="Close" onClick={close} className="rounded p-1 text-koma-dim hover:bg-koma-hover"><X size={13}/></button>
       </div>
@@ -161,7 +170,8 @@ export function CodingHistory() {
       </div>
       <div className="flex flex-none items-center justify-end gap-2 border-t border-koma-border px-3 py-2 text-[11px]">
         {selected?.windowId && <button disabled={busy || selected.windowId === codingWindowId} onClick={() => void discard()} className="rounded px-2 py-1 text-koma-dim hover:bg-koma-hover disabled:opacity-40">{discardArmed ? 'Confirm discard' : 'Discard draft'}</button>}
-        <button disabled={busy || !snapshot} onClick={() => void restore()} className="flex items-center gap-1 rounded border border-koma-border px-2 py-1 text-koma-fg hover:bg-koma-hover disabled:opacity-40"><RotateCcw size={12}/>Restore to editor</button>
+        {context.disk && <button disabled={busy || !snapshot} onClick={() => void restore(true)} className="rounded border border-koma-border px-2 py-1 text-koma-fg hover:bg-koma-hover disabled:opacity-40">Keep editor version</button>}
+        <button disabled={busy || !snapshot} onClick={() => void restore()} className="flex items-center gap-1 rounded border border-koma-border px-2 py-1 text-koma-fg hover:bg-koma-hover disabled:opacity-40"><RotateCcw size={12}/>{context.disk ? 'Use disk version' : 'Restore to editor'}</button>
       </div>
     </div>
   </div>
