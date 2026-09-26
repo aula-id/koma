@@ -818,6 +818,9 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // `git_host` module (shared with `push_loop`'s attached twin) — see there
             // for the per-op reasoning (mutations push a `GitOp`/`KeyOp` reply THEN a
             // follow-up refreshed `GitStatus`/`KeyList`).
+            Ok(HostCtl::GitWorkbench { request }) => {
+                super::git_workbench::spawn(P::clone(push), request, current.map(str::to_string));
+            }
             Ok(HostCtl::GitStatus) => {
                 git_host::spawn_git_status(P::clone(push), current.map(str::to_string));
             }

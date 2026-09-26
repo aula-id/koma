@@ -333,9 +333,16 @@ pub(crate) fn git_op_continue(kind: &str, session: Option<&str>) -> GitOpResult 
             let orig_head = git(&root, &["rev-parse", "--verify", "ORIG_HEAD"], None)
                 .filter(|o| o.status.success())
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-            git(&root, &["symbolic-ref", "--quiet", "--short", "HEAD"], None)
+            // Rebase detaches HEAD; its own state retains the original branch.
+            ["rebase-merge/head-name", "rebase-apply/head-name"].iter().find_map(|name| {
+                let output = git(&root, &["rev-parse", "--git-path", name], None)?;
+                if !output.status.success() { return None; }
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let branch = std::fs::read_to_string(root.join(path)).ok()?;
+                branch.trim().strip_prefix("refs/heads/").map(str::to_string)
+            }).or_else(|| git(&root, &["symbolic-ref", "--quiet", "--short", "HEAD"], None)
                 .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()))
                 .filter(|branch| {
                     orig_head.as_deref().is_some_and(|old_tip| {
                         super::git_remote::has_pending_rebase(&root, branch, old_tip)

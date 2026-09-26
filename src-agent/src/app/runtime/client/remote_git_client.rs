@@ -105,6 +105,10 @@ impl RemoteGitClient {
             None => return,
         };
         let rep = self.request(req);
+        if let (super::HostCtl::GitWorkbench { request }, RemoteGitRep::Error { error }) = (ctl, &rep) {
+            super::git_workbench::emit(push, super::git_workbench::Reply::error(request, format!("{error}. Reconnect or update remote Koma if this operation is unsupported.")));
+            return;
+        }
         push_rep(push, rep);
     }
 
@@ -125,6 +129,7 @@ impl Drop for RemoteGitClient {
 
 fn hostctl_to_req(ctl: &super::HostCtl) -> Option<RemoteGitReq> {
     match ctl {
+        super::HostCtl::GitWorkbench { request } => Some(RemoteGitReq::Workbench(request.clone())),
         super::HostCtl::GitStatus => Some(RemoteGitReq::Status),
         super::HostCtl::GitDiff { path, staged } => Some(RemoteGitReq::Diff {
             path: path.clone(),
@@ -214,6 +219,7 @@ fn hostctl_to_req(ctl: &super::HostCtl) -> Option<RemoteGitReq> {
 
 fn push_rep(push: &dyn Fn(String), rep: RemoteGitRep) {
     match rep {
+        RemoteGitRep::Workbench(r) => super::git_workbench::emit(push, r),
         RemoteGitRep::Status(r) => push_git_status(push, r),
         RemoteGitRep::Diff(r) => push_git_diff(push, r),
         RemoteGitRep::Op { result, status } => {

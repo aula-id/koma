@@ -211,7 +211,7 @@ pub(crate) fn set_current_key(session: Option<&str>, name: Option<String>) {
 /// environment-derived, unvalidated home-dir/`~/.koma` prefix, and
 /// `GIT_SSH_COMMAND` is run through `/bin/sh -c`, so a bare `'` in the path
 /// would otherwise break out of the quoting and inject shell syntax.
-fn ssh_command_for(root: &Path) -> Option<String> {
+pub(super) fn ssh_command_for(root: &Path) -> Option<String> {
     let name = assigned_key(root)?;
     let key_path = key_private_path(&name)?;
     let key_str = key_path.to_string_lossy();

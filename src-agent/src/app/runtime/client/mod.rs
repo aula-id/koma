@@ -52,6 +52,7 @@ pub(crate) mod content_search;
 pub(crate) mod diff;
 pub(crate) mod file_ops;
 pub(crate) mod git;
+pub(crate) mod git_workbench;
 pub(crate) mod git_activity;
 pub(crate) mod git_branch;
 pub(crate) mod git_destructive;
@@ -356,6 +357,7 @@ pub(super) enum HostCtl {
     /// state — the host already has direct git access. Serviced off-thread (git is
     /// blocking); see [`compute_git_status`]. Carries no session — the receiving
     /// loop supplies its OWN foreground-session id (`current`/`current_owned`).
+    GitWorkbench { request: git_workbench::Request },
     GitStatus,
     /// Host-side GIT DIFF fetch for the GIT panel's file-row click (`path` is the
     /// clicked entry's path; `staged` selects index-vs-HEAD when `true`, worktree-vs-

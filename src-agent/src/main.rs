@@ -91,6 +91,8 @@ fn main() -> anyhow::Result<()> {
         }));
     }
 
+    if let Some(result) = app::git_editor_helper() { return result; }
+
     // --- short-circuit: `--version`/`-V`/`--help`/`-h` (#75) ---
     // Must run BEFORE any side effect (legacy-dir migration, catalogue overlay init,
     // daemon spawn) — these just print and exit, they must not touch disk or state.

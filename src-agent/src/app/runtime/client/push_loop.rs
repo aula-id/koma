@@ -242,6 +242,7 @@ pub(super) fn push_loop(
     // doc). No coalescing needed — each is a self-contained, per-request reply. A
     // `GitOp` mutation's worker ALSO recomputes + resends over `git_status_tx`
     // (reusing the channel below), refreshing the panel right after every op.
+    let (workbench_tx, workbench_rx) = std::sync::mpsc::channel::<super::git_workbench::Reply>();
     let (git_status_tx, git_status_rx) = std::sync::mpsc::channel::<super::git::GitStatusResult>();
     let (git_diff_tx, git_diff_rx) = std::sync::mpsc::channel::<super::git::GitDiffResult>();
     let (git_op_tx, git_op_rx) = std::sync::mpsc::channel::<super::git::GitOpResult>();
@@ -667,7 +668,8 @@ pub(super) fn push_loop(
                 // routes through `koma remote-git` (never laptop tooling against remote paths).
                 // SSH-key vault (Key*) stays host-local below — keys live in ~/.koma/keys
                 // on the GUI host.
-                Ok(ctl @ super::HostCtl::GitStatus)
+                Ok(ctl @ super::HostCtl::GitWorkbench { .. })
+                | Ok(ctl @ super::HostCtl::GitStatus)
                 | Ok(ctl @ super::HostCtl::GitDiff { .. })
                 | Ok(ctl @ super::HostCtl::GitStage { .. })
                 | Ok(ctl @ super::HostCtl::GitUnstage { .. })
@@ -703,6 +705,11 @@ pub(super) fn push_loop(
                         push_remote_git_unavailable(&ctl, push);
                     } else {
                         match ctl {
+                            super::HostCtl::GitWorkbench { request } => {
+                                let tx = workbench_tx.clone();
+                                let session = current_owned.clone();
+                                std::thread::spawn(move || { let _ = tx.send(super::git_workbench::handle(request, session.as_deref())); });
+                            }
                             super::HostCtl::GitStatus => {
                                 git_host::spawn_git_status_attached(
                                     git_status_tx.clone(),
@@ -1646,6 +1653,7 @@ pub(super) fn push_loop(
         // key-reveal/key-op fetches, in the SAME order as before — split out into
         // `git_drain::drain_git_replies` for file size (pure code motion, no
         // behaviour change).
+        while let Ok(reply) = workbench_rx.try_recv() { super::git_workbench::emit(push, reply); }
         drain_git_replies(
             push,
             &git_status_rx,
@@ -1803,6 +1811,7 @@ fn push_remote_git_unavailable(ctl: &super::HostCtl, push: &dyn Fn(String)) {
     };
     const ERR: &str = "remote-git unavailable";
     match ctl {
+        super::HostCtl::GitWorkbench { request } => super::git_workbench::emit(push, super::git_workbench::Reply::error(request, "Remote Git unavailable; reconnect or update the remote Koma installation")),
         super::HostCtl::GitDiff { path, staged } => {
             push_git_diff(
                 push,

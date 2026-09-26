@@ -19,6 +19,7 @@ use super::client::git_stash::StashListResult;
 pub(crate) enum RemoteGitReq {
     /// Optional handshake: report version + bound session id.
     Hello,
+    Workbench(super::client::git_workbench::Request),
     Status,
     Diff {
         path: String,
@@ -113,6 +114,7 @@ pub(crate) enum RemoteGitRep {
         version: String,
         session: Option<String>,
     },
+    Workbench(super::client::git_workbench::Reply),
     Status(GitStatusResult),
     Diff(GitDiffResult),
     /// Mutation result, optionally followed by a fresh status (host pushes both).

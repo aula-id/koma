@@ -72,6 +72,7 @@ fn handle_req(req: RemoteGitReq, session: Option<&str>) -> RemoteGitRep {
             version: env!("CARGO_PKG_VERSION").to_string(),
             session: session.map(str::to_string),
         },
+        RemoteGitReq::Workbench(request) => RemoteGitRep::Workbench(super::client::git_workbench::handle(request, session)),
         RemoteGitReq::Status => RemoteGitRep::Status(git::compute_git_status(session)),
         RemoteGitReq::Diff { path, staged } => {
             RemoteGitRep::Diff(git::compute_git_diff(&path, staged, session))

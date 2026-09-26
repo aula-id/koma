@@ -587,7 +587,8 @@ pub(crate) fn git_unstage(paths: &[String], session: Option<&str>) -> GitOpResul
     let Some(root) = repo_root_for(session) else {
         return op_err(OP, "not a git repository");
     };
-    let mut args: Vec<&str> = vec!["restore", "--staged", "--"];
+    let has_head = git_cmd(&root, &["rev-parse", "--verify", "HEAD"]).is_some_and(|o| o.status.success());
+    let mut args: Vec<&str> = if has_head { vec!["restore", "--staged", "--"] } else { vec!["rm", "--cached", "-f", "--"] };
     args.extend(paths.iter().map(String::as_str));
     match git_cmd(&root, &args) {
         Some(out) if out.status.success() => op_ok(OP),
