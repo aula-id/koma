@@ -323,6 +323,7 @@ pub(crate) fn connect_command(
 }
 
 /// Independent coding channel, retained across chat/root selection changes.
+#[cfg(feature = "gui")]
 pub(crate) fn coding_worker_command(target: &RemoteTarget, auth: Option<&SshAuth>, koma_path: &str) -> Result<StdCommand> {
     let mut cmd = StdCommand::new("ssh");
     apply_std_ssh_base(&mut cmd, target, auth);

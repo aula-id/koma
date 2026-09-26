@@ -13,7 +13,7 @@ two-pane layout, visual tokens, and interaction patterns.
 | Language packs, toolchains, environment selection | Pending |
 | Quick Open, commands, outline, navigation, settings | In progress |
 | Workspace edits, formatting, rename, code actions, LSP extensions | In progress |
-| Search/replace preview and task runner | Pending |
+| Search/replace preview and task runner | In progress |
 | Debug Adapter Protocol and debugger UI | Pending |
 | Test Explorer and complete language catalogue | Pending |
 | Cross-platform integration and native acceptance | Pending |
@@ -175,3 +175,18 @@ isolation. Edit/save settings while both editors are open; remove an override
 and check defaults return. Try malformed JSON, invalid keys, existing config,
 external config updates followed by focus, and SSH configurations. Confirm
 project commands do not leak into other workspaces or the chat composer.
+
+- Final cache checks bind cached Monaco models to their original host and clear
+  the visible diagnostics/runtime list on host changes. A late Peek read cannot
+  overwrite a concurrently opened/edited model. History/refactor diff editors
+  load Monaco on demand so these overlays do not add it to the startup bundle.
+
+## Work still required for the full accepted plan
+
+The delivered increments are not full VS Code parity. Remaining work includes
+managed language packs/toolchains/system prerequisite installation across the
+full catalogue, task supervision, DAP debugger, Test Explorer, persistent SSH
+job adoption, complete document/view identity across hosts and chat sessions,
+event-driven tree reconciliation, navigation history/outline UI, semantic
+tokens, format-on-save, and command/resource/resolve code-action support.
+Native/platform acceptance and regression execution remain with the user.

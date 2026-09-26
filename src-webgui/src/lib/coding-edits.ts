@@ -66,7 +66,8 @@ export async function applyStagedEdit(edit: StagedEdit) {
     return { coding: { ...s.coding, files } }
   })
   undo.push(edit)
-  while (undo.length > 10) undo.shift()
+  const retainedBytes = () => undo.reduce((sum, edit) => sum + edit.files.reduce((n, file) => n + file.before.length + file.after.length, 0), 0)
+  while (undo.length > 10 || retainedBytes() > 50 * 1024 * 1024) undo.shift()
   for (const file of edit.files) {
     backupCodingDocument(edit.workspace, file.path, { content: file.after, savedContent: file.savedContent, fingerprint: file.fingerprint })
     useKoma.getState().openCodingFile(edit.workspace.root, file.path)

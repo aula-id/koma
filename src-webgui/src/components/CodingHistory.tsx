@@ -1,11 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
 import { History, RotateCcw, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { emptyFileState, fileKey, type FileReadPush } from '../store/coding'
 import { codingRequest, codingWindowId, type CodingBackup, type WorkspaceRef } from '../lib/coding-service'
 import { backupCodingDocument, checkpointCodingDocument, flushCodingRecovery, forgetCodingDraft } from '../lib/coding-recovery'
-import { initMonaco, langFromPath, readMonoFont } from '../lib/monaco-setup'
 import { BrailleSpinner } from './BrailleSpinner'
 
 type Context = { workspace: WorkspaceRef; path?: string; disk?: boolean }
@@ -97,15 +95,24 @@ export function CodingHistory() {
   }, [selected, context])
   useEffect(() => {
     if (!snapshot || !container.current || !selected) return
-    initMonaco()
-    const original = monaco.editor.createModel(snapshot.baseline, langFromPath(selected.path))
-    const modified = monaco.editor.createModel(snapshot.content, langFromPath(selected.path))
-    const editor = monaco.editor.createDiffEditor(container.current, {
-      readOnly: true, originalEditable: false, automaticLayout: true, minimap: { enabled: false },
-      renderSideBySide: true, fontFamily: readMonoFont(), fontSize: 12, scrollBeyondLastLine: false,
-    })
-    editor.setModel({ original, modified })
-    return () => { editor.dispose(); original.dispose(); modified.dispose() }
+    const element = container.current
+    let stopped = false
+    let dispose: (() => void) | undefined
+    // Keep Monaco out of the startup bundle; comparison editors load on demand.
+    void Promise.all([import('monaco-editor/esm/vs/editor/editor.api'), import('../lib/monaco-setup')]).then(([monaco, { initMonaco, langFromPath, readMonoFont, applyKomaTheme }]) => {
+      if (stopped) return
+      initMonaco()
+      monaco.editor.setTheme(applyKomaTheme())
+      const original = monaco.editor.createModel(snapshot.baseline, langFromPath(selected.path))
+      const modified = monaco.editor.createModel(snapshot.content, langFromPath(selected.path))
+      const editor = monaco.editor.createDiffEditor(element, {
+        readOnly: true, originalEditable: false, automaticLayout: true, minimap: { enabled: false },
+        renderSideBySide: true, fontFamily: readMonoFont(), fontSize: 12, scrollBeyondLastLine: false,
+      })
+      editor.setModel({ original, modified })
+      dispose = () => { editor.dispose(); original.dispose(); modified.dispose() }
+    }).catch(error => { if (!stopped) setError(error instanceof Error ? error.message : String(error)) })
+    return () => { stopped = true; dispose?.() }
   }, [snapshot, selected])
   const restore = async (keepEditor = false) => {
     if (!context || !selected || !snapshot) return

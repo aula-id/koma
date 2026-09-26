@@ -413,6 +413,11 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     try {
       const uri = monacoUriFromPath(tab.root, tab.path)
       let model = monaco.editor.getModel(uri)
+      const hostId = useKoma.getState().remoteState.hostId ?? 'local'
+      if (model && (model as unknown as { __komaHost?: string }).__komaHost !== hostId) {
+        model.dispose()
+        model = null
+      }
       if (!model) {
         model = monaco.editor.createModel(next, lang, uri)
         model.setEOL(monaco.editor.EndOfLineSequence.LF)

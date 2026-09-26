@@ -1,5 +1,8 @@
 # Coding save reliability review
 
+This records the earlier save-fix increment. Later recovery, conflict, atomic-save
+and refactoring changes are documented in [Coding IDE implementation](CODING_IDE_IMPLEMENTATION.md).
+
 This update addresses save acknowledgements and file-format preservation. It
 keeps the existing editor layout and controls. Native functional testing is
 left to the user; regression cases are included but were not executed here.

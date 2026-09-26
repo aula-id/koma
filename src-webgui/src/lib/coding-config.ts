@@ -9,6 +9,7 @@ export function getCodingConfig(workspace: WorkspaceRef): Promise<CodingConfig> 
   const promise = codingRequest<CodingConfig>(workspace, { op: 'configRead' })
   const entry = { promise, expires: Date.now() + 5000 }
   cache.set(key, entry)
+  if (cache.size > 32) cache.delete(cache.keys().next().value!)
   void promise.catch(() => { if (cache.get(key) === entry) cache.delete(key) })
   return promise
 }

@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
 import { X } from 'lucide-react'
 import { useKoma, type CodingFileState } from '../store/koma'
 import { type WorkspaceRef } from '../lib/coding-service'
 import { queryCodingLanguage } from '../lib/coding-language'
 import { applyStagedEdit, stageWorkspaceEdit, type WorkspaceEdit, type StagedEdit } from '../lib/coding-edits'
 import { type EditPosition } from '../lib/workspace-edit-text'
-import { initMonaco, langFromPath, readMonoFont } from '../lib/monaco-setup'
 import { BrailleSpinner } from './BrailleSpinner'
 
 export type RefactorContext = {
@@ -57,12 +55,21 @@ export function CodingRefactor() {
   useEffect(() => {
     const file = staged?.files[selected]
     if (!file || !view.current) return
-    initMonaco()
-    const original = monaco.editor.createModel(file.before, langFromPath(file.path))
-    const modified = monaco.editor.createModel(file.after, langFromPath(file.path))
-    const editor = monaco.editor.createDiffEditor(view.current, { readOnly: true, originalEditable: false, automaticLayout: true, minimap: { enabled: false }, fontFamily: readMonoFont(), fontSize: 12, scrollBeyondLastLine: false })
-    editor.setModel({ original, modified })
-    return () => { editor.dispose(); original.dispose(); modified.dispose() }
+    const element = view.current
+    let stopped = false
+    let dispose: (() => void) | undefined
+    // Keep Monaco out of the startup bundle; comparison editors load on demand.
+    void Promise.all([import('monaco-editor/esm/vs/editor/editor.api'), import('../lib/monaco-setup')]).then(([monaco, { initMonaco, langFromPath, readMonoFont, applyKomaTheme }]) => {
+      if (stopped) return
+      initMonaco()
+      monaco.editor.setTheme(applyKomaTheme())
+      const original = monaco.editor.createModel(file.before, langFromPath(file.path))
+      const modified = monaco.editor.createModel(file.after, langFromPath(file.path))
+      const editor = monaco.editor.createDiffEditor(element, { readOnly: true, originalEditable: false, automaticLayout: true, minimap: { enabled: false }, fontFamily: readMonoFont(), fontSize: 12, scrollBeyondLastLine: false })
+      editor.setModel({ original, modified })
+      dispose = () => { editor.dispose(); original.dispose(); modified.dispose() }
+    }).catch(error => { if (!stopped) setError(error instanceof Error ? error.message : String(error)) })
+    return () => { stopped = true; dispose?.() }
   }, [staged, selected])
   const rename = async () => {
     if (!context || !name.trim()) return

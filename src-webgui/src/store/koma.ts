@@ -5005,6 +5005,8 @@ export const useKoma = create<KomaState>((set, get) => ({
           }
         }
         set((s) => {
+          const hostChanged = (s.remoteState.hostId ?? 'local') !== (env.hostId ?? 'local')
+          const languageReset = hostChanged ? { lspDiagnostics: {}, lspDiagCounts: { errors: 0, warnings: 0 }, lspRuntime: [] } : {}
           const remoteState = {
             state: env.state,
             hostId: env.hostId ?? null,
@@ -5015,12 +5017,13 @@ export const useKoma = create<KomaState>((set, get) => ({
             sessions: env.sessions ?? [],
           }
           if (env.state === 'connected' || env.state === 'disconnected' || env.state === 'ready') {
-            return { remoteState, ui: { ...s.ui, switchingTo: null } }
+            return { ...languageReset, remoteState, ui: { ...s.ui, switchingTo: null } }
           }
           if (env.state === 'error') {
             const text = env.error ? `SSH: ${env.error}` : 'SSH connection failed'
             const seq = s.ui.toastSeq + 1
             return {
+              ...languageReset,
               remoteState,
               ui: {
                 ...s.ui,
@@ -5030,7 +5033,7 @@ export const useKoma = create<KomaState>((set, get) => ({
               },
             }
           }
-          return { remoteState }
+          return { ...languageReset, remoteState }
         })
         break
       case 'RemotePathPicker':

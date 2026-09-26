@@ -96,18 +96,14 @@ export function registerLspDidChangeFlusher(
 }
 
 /**
- * Run the registered flusher (if any) and yield one macrotask so the host
- * notify worker can coalesce/send didChange before completion/resolve RPC.
+ * Queue the latest buffer before a language query. The coding transport awaits
+ * notification acknowledgement; ordering does not depend on a timing delay.
  */
 export async function flushPendingLspDidChange(root: string, path: string): Promise<void> {
   const flush = pendingDidChangeFlush.get(didChangeFlushKey(root, path))
   if (!flush) return
   flush()
-  // Host notify worker coalesces didChange on a short quiet window (~16ms) and
-  // always flushes pending changes before other notify jobs. One frame is not
-  // enough when the request pool races the notify thread; wait a tick past the
-  // coalesce window so the server buffer is current.
-  await new Promise<void>((r) => setTimeout(r, 20))
+
 }
 
 // ─── CodeLens reference-count cache ──────────────────────────────────────────
@@ -294,7 +290,7 @@ const MARKER_OWNER = 'koma-lsp'
 
 export function applyDiagnosticsToMonaco(uri: string, diagnostics: LspDiagnostic[]): void {
   const models = monaco.editor.getModels()
-  // Match by path suffix — Monaco models may use inmemory: or file:// URIs.
+  // Match exact decoded file paths; a suffix match could target another file.
   const abs = uriToPath(uri)
   const model = models.find((m) => {
     const mu = m.uri.toString()
@@ -342,18 +338,12 @@ export async function ensureModelForUri(
   getRoots: RootsFn,
   preferText?: string | null,
 ): Promise<monaco.editor.ITextModel | null> {
+  const hostId = useKoma.getState().remoteState.hostId ?? 'local'
+  const generation = useKoma.getState().coding._sessionGen
   const existing = monaco.editor.getModel(monaco.Uri.parse(uriStr))
   if (existing) {
-    if (preferText != null) {
-      const next = preferText.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-      existing.setEOL(monaco.editor.EndOfLineSequence.LF)
-      if (existing.getValue(monaco.editor.EndOfLinePreference.LF) !== next) {
-        // Tab content is authoritative when provided.
-        existing.setValue(next)
-        existing.setEOL(monaco.editor.EndOfLineSequence.LF)
-      }
-    }
-    return existing
+    if ((existing as unknown as { __komaHost?: string }).__komaHost === hostId) return existing
+    existing.dispose()
   }
 
   const abs = uriToPath(uriStr)
@@ -377,17 +367,11 @@ export async function ensureModelForUri(
   const uri = monaco.Uri.parse(uriStr)
   const normalized = (text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
 
-  // Another concurrent ensure may have created it.
+  if ((useKoma.getState().remoteState.hostId ?? 'local') !== hostId || useKoma.getState().coding._sessionGen !== generation) return null
+  // A concurrent open/edit is authoritative. Never replace it with this read's
+  // older disk snapshot, even when the text differs.
   const raced = monaco.editor.getModel(uri)
-  if (raced) {
-    raced.setEOL(monaco.editor.EndOfLineSequence.LF)
-    if (raced.getValue(monaco.editor.EndOfLinePreference.LF) !== normalized) {
-      raced.setValue(normalized)
-      raced.setEOL(monaco.editor.EndOfLineSequence.LF)
-    }
-    stampModelPath(raced, split.root, split.path)
-    return raced
-  }
+  if (raced) return raced
 
   const model = monaco.editor.createModel(normalized, langFromPath(split.path), uri)
   model.setEOL(monaco.editor.EndOfLineSequence.LF)
@@ -412,6 +396,8 @@ async function materializeLocations(
   req: ReqFn,
   getRoots: RootsFn,
 ): Promise<monaco.languages.Location[]> {
+  const hostId = useKoma.getState().remoteState.hostId ?? 'local'
+  const generation = useKoma.getState().coding._sessionGen
   const out: monaco.languages.Location[] = []
   // Dedupe URI loads. Cap unique files so a popular symbol cannot stampede FileRead.
   const seen = new Set<string>()
@@ -421,6 +407,7 @@ async function materializeLocations(
       seen.add(l.uri)
       await ensureModelForUri(l.uri, req, getRoots)
     }
+    if ((useKoma.getState().remoteState.hostId ?? 'local') !== hostId || useKoma.getState().coding._sessionGen !== generation) return []
     if (monaco.editor.getModel(monaco.Uri.parse(l.uri))) {
       out.push(locationToMonaco(l))
     }
@@ -1063,7 +1050,8 @@ export function stampModelPath(
   root: string,
   path: string,
 ): void {
-  const m = model as unknown as { __komaRoot?: string; __komaPath?: string }
+  const m = model as unknown as { __komaRoot?: string; __komaPath?: string; __komaHost?: string }
+  m.__komaHost = useKoma.getState().remoteState.hostId ?? 'local'
   m.__komaRoot = root
   m.__komaPath = path
 }

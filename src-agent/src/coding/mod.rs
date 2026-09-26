@@ -3,15 +3,22 @@
 
 mod language;
 pub(crate) mod persistence;
+#[cfg(feature = "gui")]
 mod transport;
 mod workspace;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+#[cfg(feature = "gui")]
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex, OnceLock};
 
+#[cfg(feature = "gui")]
 pub(crate) use transport::remember_remote;
+#[cfg(not(feature = "gui"))]
+pub(crate) fn remember_remote(_: &str, _: &crate::remote::RemoteTarget, _: Option<&str>, _: &str) {}
 static SHUTTING_DOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "gui")]
 pub(crate) fn shutdown() {
     SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::Release);
     transport::shutdown();
@@ -117,11 +124,13 @@ impl Operation {
     }
 }
 
+#[cfg(feature = "gui")]
 pub(crate) struct Service {
     queue: mpsc::SyncSender<Request>,
     language_queue: mpsc::SyncSender<Request>,
 }
 
+#[cfg(feature = "gui")]
 impl Service {
     pub fn new(push: impl Fn(String) + Send + Sync + 'static) -> Self {
         let push: Arc<dyn Fn(String) + Send + Sync> = Arc::new(push);
