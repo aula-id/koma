@@ -1,4 +1,4 @@
-import { Code2, Eye, RotateCcw, Save } from 'lucide-react'
+import { Code2, Eye, History, RotateCcw, Save } from 'lucide-react'
 
 export function EditorChrome({
   path,
@@ -10,6 +10,7 @@ export function EditorChrome({
   onRevert,
   preview = false,
   onTogglePreview,
+  onHistory,
 }: {
   path: string
   status: string
@@ -20,6 +21,7 @@ export function EditorChrome({
   onRevert?: () => void
   preview?: boolean
   onTogglePreview?: () => void
+  onHistory?: () => void
 }) {
   // Density via container query — no RO/setState. Narrow split panes hide the
   // full path (title still has it) and drop the status text so Save/Revert stay.
@@ -46,6 +48,7 @@ export function EditorChrome({
           {preview ? <Code2 size={13} /> : <Eye size={13} />}
         </button>
       )}
+      {onHistory && <button type="button" onClick={onHistory} title="Local History" aria-label="Local History" className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"><History size={13}/></button>}
       {onRevert && <button
         type="button"
         onClick={onRevert}

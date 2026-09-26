@@ -60,7 +60,11 @@ pub(crate) enum Operation {
         document: persistence::Backup,
     },
     Backups,
-    BackupRead { window_id: String, path: String, revision: u64 },
+    BackupRead {
+        window_id: String,
+        path: String,
+        revision: u64,
+    },
     ForgetBackup {
         window_id: String,
         path: String,

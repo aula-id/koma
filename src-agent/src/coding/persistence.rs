@@ -28,6 +28,11 @@ fn connect() -> Result<Connection> {
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
     }
     let db = Connection::open(dir.join("state.sqlite3"))?;
+    initialize(&db)?;
+    Ok(db)
+}
+
+fn initialize(db: &Connection) -> Result<()> {
     db.busy_timeout(std::time::Duration::from_secs(5))?;
     db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
         CREATE TABLE IF NOT EXISTS coding_backups (
@@ -39,11 +44,14 @@ fn connect() -> Result<Connection> {
             path TEXT NOT NULL, content TEXT NOT NULL, reason TEXT NOT NULL,
             created INTEGER NOT NULL, bytes INTEGER NOT NULL);
         CREATE INDEX IF NOT EXISTS coding_history_document ON coding_history(host,root,path,created);")?;
-    Ok(db)
+    Ok(())
 }
 
 pub(super) fn execute(request: &Request) -> Result<Value> {
-    let db = connect()?;
+    execute_on(&connect()?, request)
+}
+
+fn execute_on(db: &Connection, request: &Request) -> Result<Value> {
     let w = &request.workspace;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
@@ -63,7 +71,10 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
                 "Invalid recovery identity"
             );
             let body = serde_json::to_string(document)?;
-            anyhow::ensure!(body.len() <= 24 * 1024 * 1024, "Recovery snapshot exceeds limit");
+            anyhow::ensure!(
+                body.len() <= 24 * 1024 * 1024,
+                "Recovery snapshot exceeds limit"
+            );
             db.execute(
                 "INSERT INTO coding_backups(host,root,path,window_id,revision,body,updated)
                 VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(host,root,path,window_id) DO UPDATE SET
@@ -84,22 +95,34 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
         Operation::Backups => {
             // List metadata only; loading many full drafts would exhaust the
             // WebView and exceed the transport frame limit.
-            let mut stmt = db.prepare("SELECT path,window_id,revision,updated FROM coding_backups
+            let mut stmt = db.prepare(
+                "SELECT path,window_id,revision,updated FROM coding_backups
                 WHERE host=?1 AND root=?2 AND COALESCE(json_extract(body,'$.view.discarded'),0)=0
-                ORDER BY updated DESC LIMIT 201")?;
-            let rows = stmt.query_map(params![w.host_id,w.root], |r| Ok(json!({
+                ORDER BY updated DESC LIMIT 201",
+            )?;
+            let rows = stmt.query_map(params![w.host_id, w.root], |r| {
+                Ok(json!({
                 "path":r.get::<_,String>(0)?, "windowId":r.get::<_,String>(1)?,
-                "revision":r.get::<_,i64>(2)?, "updated":r.get::<_,i64>(3)?})))?;
-            let mut documents = rows.collect::<Result<Vec<_>,_>>()?;
+                "revision":r.get::<_,i64>(2)?, "updated":r.get::<_,i64>(3)?}))
+            })?;
+            let mut documents = rows.collect::<Result<Vec<_>, _>>()?;
             let truncated = documents.len() > 200;
             documents.truncate(200);
             Ok(json!({"documents":documents,"truncated":truncated}))
         }
-        Operation::BackupRead { window_id, path, revision } => {
-            let body: String = db.query_row("SELECT body FROM coding_backups
+        Operation::BackupRead {
+            window_id,
+            path,
+            revision,
+        } => {
+            let body: String = db
+                .query_row(
+                    "SELECT body FROM coding_backups
                 WHERE host=?1 AND root=?2 AND window_id=?3 AND path=?4 AND revision=?5
                 AND COALESCE(json_extract(body,'$.view.discarded'),0)=0",
-                params![w.host_id,w.root,window_id,path,revision], |r| r.get(0))
+                    params![w.host_id, w.root, window_id, path, revision],
+                    |r| r.get(0),
+                )
                 .context("Recovery entry changed or was discarded; refresh the list")?;
             Ok(serde_json::from_str(&body)?)
         }
@@ -194,4 +217,108 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         let _ = std::fs::remove_file(&tmp);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coding::WorkspaceRef;
+
+    fn request(host: &str, operation: Operation) -> Request {
+        Request {
+            id: "test".into(),
+            workspace: WorkspaceRef {
+                host_id: host.into(),
+                root: "/workspace".into(),
+            },
+            operation,
+        }
+    }
+    fn backup(revision: u64, content: &str) -> Operation {
+        Operation::Backup {
+            document: Backup {
+                window_id: "window".into(),
+                path: "main.rs".into(),
+                revision,
+                content: content.into(),
+                saved_content: Some("original".into()),
+                fingerprint: "fingerprint".into(),
+                view: Value::Null,
+            },
+        }
+    }
+    #[test]
+    fn late_drafts_cannot_resurrect_discarded_content() {
+        let db = Connection::open_in_memory().unwrap();
+        initialize(&db).unwrap();
+        execute_on(&db, &request("local", backup(2, "newer"))).unwrap();
+        execute_on(&db, &request("local", backup(1, "older"))).unwrap();
+        let read = Operation::BackupRead {
+            window_id: "window".into(),
+            path: "main.rs".into(),
+            revision: 2,
+        };
+        assert_eq!(
+            execute_on(&db, &request("local", read.clone())).unwrap()["content"],
+            "newer"
+        );
+        assert!(execute_on(&db, &request("ssh-other", read.clone())).is_err());
+        execute_on(
+            &db,
+            &request(
+                "local",
+                Operation::ForgetBackup {
+                    window_id: "window".into(),
+                    path: "main.rs".into(),
+                    revision: 3,
+                },
+            ),
+        )
+        .unwrap();
+        execute_on(&db, &request("local", backup(2, "late"))).unwrap();
+        assert!(execute_on(&db, &request("local", read)).is_err());
+        let rows = execute_on(&db, &request("local", Operation::Backups)).unwrap();
+        assert_eq!(rows["documents"], json!([]));
+        execute_on(&db, &request("local", backup(4, "new edit"))).unwrap();
+        assert_eq!(
+            execute_on(&db, &request("local", Operation::Backups)).unwrap()["documents"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+    #[test]
+    fn history_is_host_scoped_and_drafts_are_not_history_evictions() {
+        let db = Connection::open_in_memory().unwrap();
+        initialize(&db).unwrap();
+        execute_on(&db, &request("local", backup(1, "unsaved"))).unwrap();
+        let row = execute_on(
+            &db,
+            &request(
+                "local",
+                Operation::Checkpoint {
+                    path: "main.rs".into(),
+                    content: "saved".into(),
+                    reason: "Saved".into(),
+                },
+            ),
+        )
+        .unwrap();
+        let read = Operation::HistoryRead {
+            checkpoint: row["id"].as_i64().unwrap(),
+        };
+        assert_eq!(
+            execute_on(&db, &request("local", read.clone())).unwrap()["content"],
+            "saved"
+        );
+        assert!(execute_on(&db, &request("other", read)).is_err());
+        assert_eq!(
+            execute_on(&db, &request("local", Operation::Backups)).unwrap()["documents"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
 }

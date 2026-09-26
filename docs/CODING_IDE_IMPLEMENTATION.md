@@ -9,7 +9,7 @@ two-pane layout, visual tokens, and interaction patterns.
 | Milestone | State |
 | --- | --- |
 | Host/workspace identity and independent coding lifecycle | In progress |
-| Document views, recovery, history, external changes | Pending |
+| Document views, recovery, history, external changes | In progress |
 | Language packs, toolchains, environment selection | Pending |
 | Quick Open, commands, outline, navigation, settings | In progress |
 | Workspace edits, formatting, rename, code actions, LSP extensions | Pending |
@@ -67,3 +67,25 @@ Open two roots, find a file with Quick Open in each, then choose All workspaces.
 Check keyboard navigation, Escape/focus, Unicode paths, ignored directories,
 empty results, and a disconnected remote. Open Go to Symbol in a supported
 language, edit while results arrive, and verify stale results are ignored.
+
+- Recovery snapshots are written during edits (300 ms throttle, plus visibility
+  and unload flush). Save/explicit discard writes a revision tombstone. Remote
+  drafts stay on the local machine under their original host/root identity.
+- Local History records before/after save and before restore/revert. The editor
+  history button opens a read-only diff; restoring changes the unsaved buffer.
+  `Recover Unsaved Files` in the command palette lists durable workspace drafts.
+  Old-window entries remain available until explicitly discarded.
+- Recovery stores at most 24 MiB per draft; history retains 30 days and 500 MiB
+  per host, independently of unsaved drafts. Errors are visible through toasts.
+  Abrupt process termination can lose edits not yet acknowledged by storage;
+  this increment does not claim synchronous durability on every keystroke.
+
+### Native review: recovery/history
+
+Edit a file, wait for the snapshot write, restart, and use Recover Unsaved Files.
+Compare before restoring, save, then inspect Local History. Repeat on SSH while
+switching chat sessions and disconnecting. Exercise typing during save, discard
+with a delayed backup, two windows editing the same path, restore while editing,
+and an external disk change before saving recovered content. Regression source
+covers monotonic revisions, tombstones and host-scoped history; execution is
+left to the user.

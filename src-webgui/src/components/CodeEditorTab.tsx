@@ -22,6 +22,7 @@ import { isTabVisible, normalizeGroups } from '../store/editorGroups'
 import { BrailleSpinner } from './BrailleSpinner'
 import { CodingFileViewer } from './CodingFileViewer'
 import { EditorChrome } from './EditorChrome'
+import { showCodingHistory } from './CodingHistory'
 import { isMarkdownPath } from '../lib/markdownPreview'
 
 type CodingTab = Extract<Tab, { kind: 'codingFile' }>
@@ -544,6 +545,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
         <EditorChrome
           path={tab.path}
           onTogglePreview={openPreview}
+          onHistory={() => showCodingHistory(tab.root, tab.path)}
           status={status}
           canSave={false}
           canRevert={canRevert}
@@ -574,6 +576,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
         <EditorChrome
           path={tab.path}
           onTogglePreview={openPreview}
+          onHistory={() => showCodingHistory(tab.root, tab.path)}
           status={fileState?.binary ? status : kindStatus(viewKind)}
           canSave={false}
           canRevert={false}
@@ -593,7 +596,8 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   if (fileState?.binary) {
     return (
       <div className="flex h-full w-full flex-col">
-        <EditorChrome path={tab.path} onTogglePreview={openPreview} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
+        <EditorChrome path={tab.path} onTogglePreview={openPreview}
+          onHistory={() => showCodingHistory(tab.root, tab.path)} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-[12px] text-koma-dim">
           <div>{fileState.error ?? 'Binary file — no preview'}</div>
           <button
@@ -611,7 +615,8 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   if (fileState?.tooLarge) {
     return (
       <div className="flex h-full w-full flex-col">
-        <EditorChrome path={tab.path} onTogglePreview={openPreview} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
+        <EditorChrome path={tab.path} onTogglePreview={openPreview}
+          onHistory={() => showCodingHistory(tab.root, tab.path)} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-[12px] text-koma-dim">
           File too large to edit
         </div>
@@ -621,7 +626,8 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   if (fileState?.error && fileState.content === null) {
     return (
       <div className="flex h-full w-full flex-col">
-        <EditorChrome path={tab.path} onTogglePreview={openPreview} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
+        <EditorChrome path={tab.path} onTogglePreview={openPreview}
+          onHistory={() => showCodingHistory(tab.root, tab.path)} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-[12px] text-koma-dim">
           {fileState.error}
         </div>
@@ -634,6 +640,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       <EditorChrome
         path={tab.path}
         onTogglePreview={openPreview}
+          onHistory={() => showCodingHistory(tab.root, tab.path)}
         status={status}
         canSave={canSave}
         canRevert={canRevert}

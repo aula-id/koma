@@ -12,6 +12,7 @@ import { ResumePalette } from '../components/ResumePalette'
 import { RenameOverlay } from '../components/RenameOverlay'
 import { OmniSearchPalette } from '../components/OmniSearchPalette'
 import { CodingPalette } from '../components/CodingPalette'
+import { CodingHistory } from '../components/CodingHistory'
 import { SwitchingOverlay } from '../components/SwitchingOverlay'
 import { RemotePasswordPrompt } from '../components/RemotePasswordPrompt'
 import { RemotePathPicker } from '../components/RemotePathPicker'
@@ -442,6 +443,7 @@ function RootLayout() {
       {overlay === 'rename' && <RenameOverlay onClose={() => setOverlay('none')} />}
       {omnisearchOpen && <OmniSearchPalette onClose={closeOmniSearch} />}
       <CodingPalette />
+      <CodingHistory />
       <SwitchingOverlay
         onCancel={() => {
           // Best-effort bail of a pre-attach swap. If Snapshot already landed

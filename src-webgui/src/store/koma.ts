@@ -1,6 +1,7 @@
 import { receiveGitReply, cancelGitRequests, type GitReply, type GitToolTab } from '../lib/gitWorkbench'
 import { create } from 'zustand'
 import { resolveCodingReply } from '../lib/coding-service'
+import { backupCodingDocument, forgetCodingDraft, recordCodingHistory } from '../lib/coding-recovery'
 import type { McpServer, Provider, Model, ModelListEntry, RouteEntry } from '../types/config'
 import {
   initialCoding,
@@ -4692,6 +4693,14 @@ export const useKoma = create<KomaState>((set, get) => ({
         if (!pending || pending.requestId !== env.requestId) break
         set((s) => ({ coding: reduceFileSave(s.coding, env) }))
         if (!env.error) {
+          const workspace = { hostId: get().remoteState.hostId ?? 'local', root: env.root }
+          if (before.savedContent != null) recordCodingHistory(workspace, env.path, before.savedContent, 'Before save')
+          recordCodingHistory(workspace, env.path, pending.content, 'Saved')
+          const saved = get().coding.files[key]
+          if (saved?.dirty && saved.content != null) backupCodingDocument(workspace, env.path, {
+            content: saved.content, savedContent: saved.savedContent, fingerprint: saved.fingerprint,
+          })
+          else forgetCodingDraft(workspace, env.path)
           get().req({
             r: 'LspDidSave',
             root: env.root,
@@ -6064,6 +6073,7 @@ export const useKoma = create<KomaState>((set, get) => ({
       if (f?.dirty) return
     }
     if (closingCoding) {
+      if (opts?.force) forgetCodingDraft({ hostId: get().remoteState.hostId ?? 'local', root: closingCoding.root }, closingCoding.path)
       get().req({ r: 'LspDidClose', root: closingCoding.root, path: closingCoding.path })
       // Close-without-save must drop the dirty buffer + Monaco model; otherwise
       // reopen restores unsaved edits (reduceFileRead refuses to clobber dirty).
@@ -6506,6 +6516,11 @@ export const useKoma = create<KomaState>((set, get) => ({
     })
   },
   revertCodingFile: (root, path) => {
+    if (get().coding.files[fileKey(root, path)]?.saving) return
+    const current = get().coding.files[fileKey(root, path)]
+    const workspace = { hostId: get().remoteState.hostId ?? 'local', root }
+    if (current?.content != null && current.dirty) recordCodingHistory(workspace, path, current.content, 'Before revert')
+    forgetCodingDraft(workspace, path)
     get().openCodingFile(root, path, { force: true })
   },
   updateCodingContent: (root, path, content) => {
@@ -6527,6 +6542,12 @@ export const useKoma = create<KomaState>((set, get) => ({
         },
       }
     })
+    const latest = get().coding.files[key]
+    const workspace = { hostId: get().remoteState.hostId ?? 'local', root }
+    if (latest?.dirty && latest.content != null) backupCodingDocument(workspace, path, {
+      content: latest.content, savedContent: latest.savedContent, fingerprint: latest.fingerprint,
+    })
+    else if (latest && !latest.saving) forgetCodingDraft(workspace, path)
   },
   createCodingItem: (root, path, kind) => {
     get().req({ r: 'FileCreate', root, path, kind, requestId: mintRequestId() })
