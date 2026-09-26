@@ -1,3 +1,5 @@
+import { useKoma } from '../store/koma'
+import { queryCodingLanguage } from './coding-language'
 // Monaco ↔ host LSP bridge: pending request map + provider registration +
 // diagnostic markers. Providers talk JSON-RPC through GuiReq; replies land as
 // PushEnvelope variants handled in the koma store, which resolves the matching
@@ -294,7 +296,7 @@ export function applyDiagnosticsToMonaco(uri: string, diagnostics: LspDiagnostic
   const model = models.find((m) => {
     const mu = m.uri.toString()
     if (mu === uri) return true
-    if (abs && (mu.endsWith(abs) || mu.includes(abs))) return true
+    if (abs && uriToPath(mu) === abs) return true
     return false
   })
   if (!model) {
@@ -712,6 +714,66 @@ export function ensureLspProviders(
       } catch { return [] }
     },
   })
+
+  const extended = async <T,>(model: monaco.editor.ITextModel, method: string, params: Record<string, unknown>, token: monaco.CancellationToken): Promise<T | null> => {
+    const rp = modelToRootPath(model, getRoots())
+    if (!rp || token.isCancellationRequested) return null
+    const version = model.getVersionId()
+    const hostId = useKoma.getState().remoteState.hostId ?? 'local'
+    await flushPendingLspDidChange(rp.root, rp.path)
+    try {
+      const result = await queryCodingLanguage<T>({ hostId, root: rp.root }, rp.path, method, params)
+      if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version || (useKoma.getState().remoteState.hostId ?? 'local') !== hostId) return null
+      return result
+    } catch { return null }
+  }
+  type ProtocolRange = { start: { line: number; character: number }; end: { line: number; character: number } }
+  type ProtocolEdit = { range: ProtocolRange; newText: string }
+  const range = (r: ProtocolRange): monaco.IRange => ({ startLineNumber: r.start.line + 1, startColumn: r.start.character + 1, endLineNumber: r.end.line + 1, endColumn: r.end.character + 1 })
+  const edit = (e: ProtocolEdit): monaco.languages.TextEdit => ({ range: range(e.range), text: e.newText })
+  const position = (p: monaco.Position) => ({ line: p.lineNumber - 1, character: p.column - 1 })
+  const protocolRange = (r: monaco.IRange) => ({ start: { line: r.startLineNumber - 1, character: r.startColumn - 1 }, end: { line: r.endLineNumber - 1, character: r.endColumn - 1 } })
+  monaco.languages.registerDocumentFormattingEditProvider('*', {
+    provideDocumentFormattingEdits: async (model, options, token) => {
+      const result = await extended<ProtocolEdit[]>(model, 'textDocument/formatting', { options }, token)
+      return result?.map(edit) ?? []
+    },
+  })
+  monaco.languages.registerDocumentRangeFormattingEditProvider('*', {
+    provideDocumentRangeFormattingEdits: async (model, selection, options, token) => {
+      const result = await extended<ProtocolEdit[]>(model, 'textDocument/rangeFormatting', { range: protocolRange(selection), options }, token)
+      return result?.map(edit) ?? []
+    },
+  })
+  monaco.languages.registerSignatureHelpProvider('*', {
+    signatureHelpTriggerCharacters: ['(', ','], signatureHelpRetriggerCharacters: [')'],
+    provideSignatureHelp: async (model, pos, token, context) => {
+      const result = await extended<{ signatures: Array<{ label: string; documentation?: string | { value: string }; parameters?: Array<{ label: string | [number, number]; documentation?: string | { value: string } }> }>; activeSignature?: number; activeParameter?: number }>(model, 'textDocument/signatureHelp', { position: position(pos), context: { triggerKind: context.triggerKind, triggerCharacter: context.triggerCharacter, isRetrigger: context.isRetrigger } }, token)
+      if (!result) return null
+      const documentation = (d?: string | { value: string }) => typeof d === 'string' ? d : d ? { value: d.value, isTrusted: false } : undefined
+      return { value: { signatures: result.signatures.map(s => ({ ...s, documentation: documentation(s.documentation), parameters: (s.parameters ?? []).map(p => ({ ...p, documentation: documentation(p.documentation) })) })), activeSignature: result.activeSignature ?? 0, activeParameter: result.activeParameter ?? 0 }, dispose() {} }
+    },
+  })
+  monaco.languages.registerInlayHintsProvider('*', {
+    provideInlayHints: async (model, selection, token) => {
+      type Hint = { position: { line: number; character: number }; label: string | Array<{ value: string }>; kind?: number; paddingLeft?: boolean; paddingRight?: boolean }
+      const result = await extended<Hint[]>(model, 'textDocument/inlayHint', { range: protocolRange(selection) }, token)
+      return { hints: (result ?? []).map(h => ({ position: { lineNumber: h.position.line + 1, column: h.position.character + 1 }, label: typeof h.label === 'string' ? h.label : h.label.map(p => p.value).join(''), kind: h.kind === 2 ? monaco.languages.InlayHintKind.Parameter : monaco.languages.InlayHintKind.Type, paddingLeft: h.paddingLeft, paddingRight: h.paddingRight })), dispose() {} }
+    },
+  })
+  type Location = { uri?: string; range?: ProtocolRange; targetUri?: string; targetSelectionRange?: ProtocolRange; targetRange?: ProtocolRange }
+  const locations = async (model: monaco.editor.ITextModel, pos: monaco.Position, token: monaco.CancellationToken, method: string) => {
+    const result = await extended<Location | Location[]>(model, method, { position: position(pos) }, token)
+    const found = result == null ? [] : Array.isArray(result) ? result : [result]
+    const converted: LspLocation[] = found.flatMap(l => {
+      const uri = l.uri ?? l.targetUri
+      const r = l.range ?? l.targetSelectionRange ?? l.targetRange
+      return uri && r ? [{ uri, range: { startLine: r.start.line, startCharacter: r.start.character, endLine: r.end.line, endCharacter: r.end.character } }] : []
+    })
+    return materializeLocations(converted, req, getRoots)
+  }
+  monaco.languages.registerImplementationProvider('*', { provideImplementation: (m, p, t) => locations(m, p, t, 'textDocument/implementation') })
+  monaco.languages.registerTypeDefinitionProvider('*', { provideTypeDefinition: (m, p, t) => locations(m, p, t, 'textDocument/typeDefinition') })
 
   if (!CODELENS_ENABLED) return
   const CODELENS_PEEK_REFS = 'koma.codelens.peekReferences'

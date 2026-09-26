@@ -166,3 +166,11 @@ pub(super) fn request(request: &Request) -> Result<Value, String> {
     }
     Ok(reply.get("result").cloned().unwrap_or(Value::Null))
 }
+
+pub(super) fn shutdown() {
+    if let Some(connections) = CONNECTIONS.get() {
+        if let Ok(mut connections) = connections.lock() {
+            connections.clear();
+        }
+    }
+}

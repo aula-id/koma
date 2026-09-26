@@ -11,6 +11,8 @@ export type CodingReply = {
 export type CodingOperation =
   | { op: 'hello' | 'configRead' | 'backups' }
   | { op: 'paths'; query: string }
+  | { op: 'lsp'; body: Record<string, unknown> }
+  | { op: 'lspQuery'; path: string; method: string; params: Record<string, unknown> }
   | { op: 'read'; path: string }
   | { op: 'inspect'; paths: string[] }
   | { op: 'save'; path: string; content: string; fingerprint: string }

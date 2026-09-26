@@ -12,7 +12,7 @@ two-pane layout, visual tokens, and interaction patterns.
 | Document views, recovery, history, external changes | In progress |
 | Language packs, toolchains, environment selection | Pending |
 | Quick Open, commands, outline, navigation, settings | In progress |
-| Workspace edits, formatting, rename, code actions, LSP extensions | Pending |
+| Workspace edits, formatting, rename, code actions, LSP extensions | In progress |
 | Search/replace preview and task runner | Pending |
 | Debug Adapter Protocol and debugger UI | Pending |
 | Test Explorer and complete language catalogue | Pending |
@@ -51,8 +51,9 @@ successful compile is not evidence of native workflow correctness.
 - Workspace-scoped language server process IDs avoid collisions between roots
   using the same language server.
 - Native coding RPC carries host/root and request identity, with bounded queues
-  and independent SSH channels. Existing file/editor and LSP frontend routing
-  has not yet migrated to this service. SSH requires the updated remote binary.
+  and independent SSH channels. Language requests now use this service; legacy
+  file/editor operations have not yet fully migrated. SSH requires the updated
+  remote binary.
 - Quick Open (`Ctrl/Cmd+P`) searches one dropdown root or all configured roots;
   command palette (`Ctrl/Cmd+Shift+P`) exposes editor actions. File traversal
   respects ignore rules, limits depth/file count, and reports truncated results.
@@ -109,3 +110,21 @@ file. Repeat with unsaved edits, compare both versions, keep the editor version,
 then change disk again before Save to confirm another conflict. Check symlink,
 permissions, read-only files, SSH loss, and rename/delete outside Koma. Atomic
 save regression source is included; platform execution remains with the user.
+
+- Existing document notifications/completion/hover/navigation now route through
+  workspace-owned language managers, with notification acknowledgement before
+  dependent requests. Format document/selection, signature help, inlay hints,
+  implementation and type-definition providers check server capabilities and
+  discard results after cancellation, edits or host changes.
+- History/external reload applies model edits with undo boundaries and updates
+  the language document. Conflicted buffers remain editable with Save blocked
+  until explicit resolution. Language processes are cleaned up on GUI close or
+  coding-worker EOF. Persistent SSH job adoption remains a later milestone.
+
+### Native review: language features
+
+Open two projects using the same server, exercise completion in both, format a
+selection and document, and undo. Type while formatting runs: the old result must
+not replace new text. Check signature help, inlay hints, implementation/type
+navigation, unsupported capabilities, server crash/reopen, and remote host
+switching. Verify restoring history immediately changes hover/diagnostics.

@@ -231,6 +231,7 @@ pub struct ServerSession {
     io: SessionIo,
     /// Live phase + `$/progress` (reader + control loop).
     runtime: Arc<Mutex<RuntimeState>>,
+    capabilities: Mutex<serde_json::Value>,
 }
 
 /// Cheap clone of the pieces needed to talk to a live server without holding
@@ -252,7 +253,7 @@ pub struct LspPendingRequest {
 }
 
 impl LspPendingRequest {
-    fn wait_raw(self) -> Result<serde_json::Value, String> {
+    pub(crate) fn wait_raw(self) -> Result<serde_json::Value, String> {
         self.io.request(self.method, self.params)
     }
 
@@ -753,6 +754,35 @@ impl LspManager {
         })
     }
 
+    /// Feature-gated JSON LSP requests. The caller cannot select arbitrary
+    /// protocol methods or supply another document URI.
+    pub(crate) fn extended_request(&mut self, root: &str, path: &str, method: &str, mut params: serde_json::Value) -> Result<LspPendingRequest, String> {
+        let (method, capability) = match method {
+            "textDocument/formatting" => ("textDocument/formatting", "documentFormattingProvider"),
+            "textDocument/rangeFormatting" => ("textDocument/rangeFormatting", "documentRangeFormattingProvider"),
+            "textDocument/prepareRename" => ("textDocument/prepareRename", "renameProvider"),
+            "textDocument/rename" => ("textDocument/rename", "renameProvider"),
+            "textDocument/codeAction" => ("textDocument/codeAction", "codeActionProvider"),
+            "textDocument/signatureHelp" => ("textDocument/signatureHelp", "signatureHelpProvider"),
+            "textDocument/inlayHint" => ("textDocument/inlayHint", "inlayHintProvider"),
+            "textDocument/implementation" => ("textDocument/implementation", "implementationProvider"),
+            "textDocument/typeDefinition" => ("textDocument/typeDefinition", "typeDefinitionProvider"),
+            _ => return Err("Unsupported language operation".into()),
+        };
+        if !params.is_object() { return Err("Language parameters must be an object".into()); }
+        let (uri, server_id) = self.uri_server(root, path)?;
+        self.ensure_server_alive(&server_id)?;
+        let session = self.servers.get(&server_id).ok_or("Language server is unavailable")?;
+        let capabilities = session.capabilities.lock().map_err(|_| "LSP capability lock failed")?;
+        let supported = capabilities.get(capability).is_some_and(|v| v.as_bool() == Some(true) || v.is_object());
+        if !supported { return Err(format!("Language server does not support {method}")); }
+        if method == "textDocument/prepareRename" && capabilities.pointer("/renameProvider/prepareSupport").and_then(serde_json::Value::as_bool) != Some(true) {
+            return Err("Language server does not support prepareRename".into());
+        }
+        params["textDocument"] = serde_json::json!({"uri":uri});
+        Ok(LspPendingRequest { io: session.io.clone(), method, params })
+    }
+
     /// Resolve URI + clone SessionIo so the caller can drop `LspManager` before
     /// the blocking request wait. Also revives a dead server if needed.
     fn uri_io(&mut self, root: &str, path: &str) -> Result<(String, SessionIo), String> {
@@ -1190,6 +1220,14 @@ impl ServerSession {
                         "contextSupport": true,
                         "completionItemKind": { "valueSet": null }
                     },
+                    "formatting": { "dynamicRegistration": false },
+                    "rangeFormatting": { "dynamicRegistration": false },
+                    "rename": { "prepareSupport": true },
+                    "codeAction": { "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["quickfix", "refactor", "source.organizeImports"] } } },
+                    "signatureHelp": { "signatureInformation": { "documentationFormat": ["plaintext", "markdown"], "parameterInformation": { "labelOffsetSupport": true } } },
+                    "inlayHint": { "dynamicRegistration": false },
+                    "implementation": { "linkSupport": true },
+                    "typeDefinition": { "linkSupport": true },
                     "hover": {
                         "contentFormat": ["plaintext", "markdown"]
                     },
@@ -1224,7 +1262,8 @@ impl ServerSession {
             }],
             "initializationOptions": initialization_options_for(&self.id)
         });
-        let _caps = self.request("initialize", init_params)?;
+        let initialized = self.request("initialize", init_params)?;
+        *self.capabilities.lock().map_err(|_| "LSP capability lock failed")? = initialized.get("capabilities").cloned().unwrap_or_default();
         self.notify("initialized", serde_json::json!({}))?;
         {
             let mut st = self.runtime.lock().unwrap_or_else(|p| p.into_inner());
@@ -1438,6 +1477,7 @@ fn spawn_server_process(
             pending,
         },
         runtime,
+        capabilities: Mutex::new(serde_json::Value::Null),
     })
 }
 

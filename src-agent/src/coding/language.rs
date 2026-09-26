@@ -68,20 +68,7 @@ enum Message {
 
 pub(super) fn dispatch(workspace: &WorkspaceRef, body: &Value) -> Result<Value, String> {
     let msg: Message = serde_json::from_value(body.clone()).map_err(|e| e.to_string())?;
-    let manager = {
-        let mut managers = MANAGERS
-            .get_or_init(Default::default)
-            .lock()
-            .map_err(|_| "Coding LSP manager lock failed")?;
-        Arc::clone(managers.entry(workspace.clone()).or_insert_with(|| {
-            let workspace = workspace.clone();
-            Arc::new(Mutex::new(LspManager::new(move |json| {
-                if let Ok(event) = serde_json::from_str::<Value>(&json) {
-                    super::event(json!({"k":"CodingEvent","workspace":workspace,"event":event}));
-                }
-            })))
-        }))
-    };
+    let manager = manager(workspace)?;
     let root = workspace.root.clone();
     let ctl = match msg {
         Message::LspDidOpen {
@@ -167,6 +154,74 @@ pub(super) fn dispatch(workspace: &WorkspaceRef, body: &Value) -> Result<Value, 
             request_id,
         },
     };
-    lsp_host::handle_client_ctl(ctl, manager);
+    // A notification ACK means the server pipe has received it. Query callers
+    // can await the workspace lane instead of relying on timing sleeps.
+    match ctl {
+        HostCtl::LspDidOpen {
+            root,
+            path,
+            language_id,
+            text,
+        } => manager
+            .lock()
+            .map_err(|_| "Coding LSP lock failed")?
+            .did_open(&root, &path, &language_id, &text)?,
+        HostCtl::LspDidChange { root, path, text } => manager
+            .lock()
+            .map_err(|_| "Coding LSP lock failed")?
+            .did_change(&root, &path, &text)?,
+        HostCtl::LspDidSave { root, path, text } => manager
+            .lock()
+            .map_err(|_| "Coding LSP lock failed")?
+            .did_save(&root, &path, text.as_deref())?,
+        HostCtl::LspDidClose { root, path } => manager
+            .lock()
+            .map_err(|_| "Coding LSP lock failed")?
+            .did_close_path(&root, &path)?,
+        ctl => lsp_host::handle_client_ctl(ctl, manager),
+    }
     Ok(Value::Null)
+}
+
+fn manager(workspace: &WorkspaceRef) -> Result<Arc<Mutex<LspManager>>, String> {
+    Ok({
+        let mut managers = MANAGERS
+            .get_or_init(Default::default)
+            .lock()
+            .map_err(|_| "Coding LSP manager lock failed")?;
+        Arc::clone(managers.entry(workspace.clone()).or_insert_with(|| {
+            let workspace = workspace.clone();
+            Arc::new(Mutex::new(LspManager::new(move |json| {
+                if let Ok(event) = serde_json::from_str::<Value>(&json) {
+                    super::event(json!({"k":"CodingEvent","workspace":workspace,"event":event}));
+                }
+            })))
+        }))
+    })
+}
+
+pub(super) fn query(
+    workspace: &WorkspaceRef,
+    path: &str,
+    method: &str,
+    params: &Value,
+) -> Result<Value, String> {
+    let manager = manager(workspace)?;
+    let pending = manager
+        .lock()
+        .map_err(|_| "Coding LSP manager lock failed")?
+        .extended_request(&workspace.root, path, method, params.clone())?;
+    pending.wait_raw()
+}
+
+pub(super) fn shutdown() {
+    if let Some(managers) = MANAGERS.get() {
+        if let Ok(mut managers) = managers.lock() {
+            for (_, manager) in managers.drain() {
+                if let Ok(mut manager) = manager.lock() {
+                    manager.cleanup_all();
+                }
+            }
+        }
+    }
 }

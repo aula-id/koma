@@ -1,6 +1,7 @@
 import { receiveGitReply, cancelGitRequests, type GitReply, type GitToolTab } from '../lib/gitWorkbench'
 import { create } from 'zustand'
 import { resolveCodingReply } from '../lib/coding-service'
+import { sendCodingLanguage } from '../lib/coding-language'
 import { backupCodingDocument, forgetCodingDraft, recordCodingHistory } from '../lib/coding-recovery'
 import type { McpServer, Provider, Model, ModelListEntry, RouteEntry } from '../types/config'
 import {
@@ -911,6 +912,7 @@ export type Tab =
 
 export type PushEnvelope =
   | import('../lib/coding-service').CodingReply
+  | { k: 'CodingEvent'; workspace: import('../lib/coding-service').WorkspaceRef; event: { k: string; [key: string]: unknown } }
   | ({ k: 'GitWorkbench' } & GitReply)
   | {
       k: 'Snapshot'
@@ -3144,6 +3146,17 @@ export const useKoma = create<KomaState>((set, get) => ({
   push: (env) => {
     switch (env.k) {
       case 'CodingReply': resolveCodingReply(env); break
+      case 'CodingEvent': {
+        if (env.workspace.hostId !== (get().remoteState.hostId ?? 'local')) break
+        const event = env.event as PushEnvelope
+        // Only language events are accepted from a coding worker.
+        if (!event.k.startsWith('Lsp')) break
+        if (event.k === 'LspRuntime' && event.replace) {
+          const incoming = new Set(event.servers.map(row => row.id))
+          get().push({ ...event, replace: false, removed: [...(event.removed ?? []), ...get().lspRuntime.filter(row => row.root === env.workspace.root && !incoming.has(row.id)).map(row => row.id)] })
+        } else get().push(event)
+        break
+      }
       case 'GitWorkbench': receiveGitReply(env); break
       case 'Snapshot': {
         // A Snapshot whose session id differs from the current one is a session
@@ -5054,6 +5067,16 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
 
   req: (g) => {
+    if (['LspDidOpen', 'LspDidChange', 'LspDidSave', 'LspDidClose', 'LspCompletion', 'LspCompletionResolve', 'LspHover', 'LspDefinition', 'LspReferences', 'LspDocumentSymbol'].includes(g.r) && 'root' in g && typeof g.root === 'string') {
+      const workspace = { hostId: get().remoteState.hostId ?? 'local', root: g.root }
+      void sendCodingLanguage(workspace, g as unknown as Record<string, unknown>).catch(error => {
+        const requestId = 'requestId' in g ? g.requestId : null
+        if (typeof requestId === 'string') {
+          get().push({ k: g.r, requestId, error: String(error.message ?? error) } as PushEnvelope)
+        }
+      })
+      return
+    }
     // Coding panel ops have no other UI feedback path when the host bridge is
     // missing or throws — surface a toast rather than silently spinning. Do
     // NOT treat a successful postMessage as delivery success; only missing/

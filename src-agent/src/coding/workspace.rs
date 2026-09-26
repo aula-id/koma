@@ -89,6 +89,12 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
             crate::coding::persistence::atomic_write(&dest, &bytes)?;
             Ok(config.clone())
         }
+        Operation::LspQuery {
+            path,
+            method,
+            params,
+        } => super::language::query(&request.workspace, path, method, params)
+            .map_err(anyhow::Error::msg),
         Operation::Lsp { body } => {
             super::language::dispatch(&request.workspace, body).map_err(anyhow::Error::msg)
         }

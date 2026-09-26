@@ -201,7 +201,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       bracketPairColorization: { enabled: true },
       guides: { indentation: true, bracketPairs: false },
       stickyScroll: { enabled: true },
-      inlayHints: { enabled: 'off' },
+      inlayHints: { enabled: 'on' },
       // Dim CodeLens to match VS Code secondary chrome.
       // (color comes from editorCodeLens.foreground theme token)
     })
@@ -401,7 +401,10 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
         // save/fingerprint tick was still emitting didChange on some WebKit builds.
         if (cur !== next) {
           const pos = editor.getPosition()
-          model.setValue(next)
+          model.pushStackElement()
+          model.pushEditOperations([], [{ range: model.getFullModelRange(), text: next }], () => null)
+          model.pushStackElement()
+          if (lspOpenedRef.current) useKoma.getState().req({ r: 'LspDidChange', root: tab.root, path: tab.path, text: next })
           model.setEOL(monaco.editor.EndOfLineSequence.LF)
           if (pos) editor.setPosition(pos)
         } else if (model.getEndOfLineSequence() !== monaco.editor.EndOfLineSequence.LF) {
@@ -421,7 +424,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     }
 
     editor.updateOptions({
-      readOnly: fileState.binary || fileState.tooLarge || fileState.loading || fileState.conflict,
+      readOnly: fileState.binary || fileState.tooLarge || fileState.loading,
     })
 
     // Go-to-def / Problems may open this tab before content is ready — apply

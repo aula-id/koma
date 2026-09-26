@@ -678,6 +678,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         "gui",
                         "titlebar close -> closing",
                     );
+                    crate::coding::shutdown();
                     *control_flow = ControlFlow::Exit;
                 }
                 WinCmd::Resize(dir) => {
@@ -694,6 +695,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 ..
             } => {
                 crate::model::store::append_global_error_log("gui", "window close requested");
+                crate::coding::shutdown();
                 *control_flow = ControlFlow::Exit;
             }
             _ => {}

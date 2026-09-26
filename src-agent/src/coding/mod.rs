@@ -11,6 +11,13 @@ use serde_json::{json, Value};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 
 pub(crate) use transport::remember_remote;
+static SHUTTING_DOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(crate) fn shutdown() {
+    SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::Release);
+    transport::shutdown();
+    language::shutdown();
+}
+
 static EVENTS: OnceLock<Arc<dyn Fn(String) + Send + Sync>> = OnceLock::new();
 pub(super) fn event(value: Value) {
     if let Some(push) = EVENTS.get() {
@@ -58,6 +65,11 @@ pub(crate) enum Operation {
     },
     Lsp {
         body: Value,
+    },
+    LspQuery {
+        path: String,
+        method: String,
+        params: Value,
     },
     Backup {
         document: persistence::Backup,
@@ -181,6 +193,9 @@ impl Service {
 }
 
 fn execute(request: &Request) -> Result<Value, String> {
+    if SHUTTING_DOWN.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("Coding service is shutting down".into());
+    }
     if request.id.len() > 200
         || request.workspace.host_id.len() > 200
         || request.workspace.root.len() > 32768
@@ -197,6 +212,13 @@ fn execute(request: &Request) -> Result<Value, String> {
 /// the service never mixes diagnostic logs into stdout.
 pub(crate) fn worker_main() -> anyhow::Result<()> {
     use std::io::{BufRead, Read, Write};
+    struct Cleanup;
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            language::shutdown();
+        }
+    }
+    let _cleanup = Cleanup;
     let stdin = std::io::stdin();
     let mut input = stdin.lock();
     let output = Arc::new(Mutex::new(std::io::stdout()));
