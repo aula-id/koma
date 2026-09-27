@@ -38,11 +38,13 @@ export function ComputerToolCall({ call }: { call: ToolCallView }) {
   const done = call.status === 'done'
   const recovery = typeof result?.recovery?.user_action === 'string' ? result.recovery.user_action : null
   const summary = !done ? 'Working…' : error || (uncertain ? 'Outcome uncertain. Check the next observation before continuing.' : result ? call.name === 'computer_act' && typeof result.completed === 'number' ? `${result.completed} input${result.completed === 1 ? '' : 's'} completed` : call.name === 'computer_windows' && Array.isArray(result.windows) ? `${result.windows.length} windows available` : 'Completed' : call.output || 'Completed')
-  return <div className="rounded-md border border-koma-border bg-koma-panel/30 text-xs"><details>
+  // Keep the text on the active palette's readable foreground. Semantic colors
+  // are cues on the icons, not low-contrast tints across the entire message.
+  return <div className="rounded-md border border-koma-border bg-koma-panel/30 text-xs text-koma-fg"><details>
     <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2">
-      {!done ? <LoaderCircle size={13} className="shrink-0 animate-spin text-koma-dim" /> : error || uncertain ? <AlertCircle size={13} className="shrink-0 text-koma-warn" /> : <Check size={13} className="shrink-0 text-koma-accent" />}
-      <span className="shrink-0">{labels[call.name] || call.name}</span><span className={`min-w-0 flex-1 ${error || uncertain ? 'text-koma-warn' : 'truncate text-koma-dim'}`}>{summary}</span><ChevronDown size={12} className="shrink-0 text-koma-dim" />
+      {!done ? <LoaderCircle size={13} className="shrink-0 animate-spin text-koma-accent" /> : error || uncertain ? <AlertCircle size={13} className={`shrink-0 ${error ? 'text-koma-error' : 'text-koma-warn'}`} /> : <Check size={13} className="shrink-0 text-koma-accent" />}
+      <span className="shrink-0">{labels[call.name] || call.name}</span><span className={`min-w-0 flex-1 ${error || uncertain ? 'text-koma-fg' : 'truncate text-koma-dim'}`}>{summary}</span><ChevronDown size={12} className="shrink-0 text-koma-dim" />
     </summary>
     <div className="max-h-64 space-y-2 overflow-auto border-t border-koma-border p-3 text-[11px] text-koma-dim"><p>Request</p><pre className="whitespace-pre-wrap break-all">{call.args}</pre>{call.output && <><p>Result</p><pre className="whitespace-pre-wrap break-all">{call.output}</pre></>}</div>
-  </details>{recovery && <p role="status" className="border-t border-koma-border px-3 py-2 text-xs leading-relaxed text-koma-warn"><strong>Computer control stopped. </strong>{recovery}</p>}</div>
+  </details>{recovery && <p role="status" className="border-t border-koma-border px-3 py-2 text-xs leading-relaxed text-koma-fg"><strong>Computer control stopped. </strong>{recovery}</p>}</div>
 }
