@@ -925,6 +925,8 @@ export type Tab =
   | { id: string; kind: 'terminal'; terminalId: string; title: string }
 
 export type PushEnvelope =
+  | { k: 'Computer'; status: import('../types/computer').ComputerStatus }
+  | { k: 'ComputerError'; message: string }
   | import('../lib/coding-service').CodingReply
   | { k: 'CodingEvent'; clientId?: string; workspace: import('../lib/coding-service').WorkspaceRef; event: { k: string; [key: string]: unknown } }
   | ({ k: 'GitWorkbench' } & GitReply)
@@ -2138,6 +2140,8 @@ export function resolveActivityBarOrder(savedOrder: string[], allIds: string[]):
 }
 
 type KomaState = {
+  computer: import('../types/computer').ComputerStatus | null
+  computerError: string | null
   session: SessionSlice
   hub: HubSlice
   palette: PaletteColors
@@ -3114,6 +3118,8 @@ function clearImportGraphRetry() {
 type CodingHostView = { coding: CodingSlice; ui: KomaState['ui']; replies: PushEnvelope[] }
 const codingHostViews = new Map<string, CodingHostView>()
 export const useKoma = create<KomaState>((set, get) => ({
+  computer: null,
+  computerError: null,
   session: initialSession,
   hub: initialHub,
   palette: initialPalette,
@@ -3166,6 +3172,10 @@ export const useKoma = create<KomaState>((set, get) => ({
 
   push: (env) => {
     switch (env.k) {
+      case 'Computer':
+        if (env.status.session === get().session.id) set({ computer: env.status, computerError: null })
+        break
+      case 'ComputerError': set({ computerError: env.message }); break
       case 'CodingReply': resolveCodingReply(env); break
       case 'CodingEvent': {
         if (env.clientId && env.clientId !== codingWindowId) break
@@ -3208,7 +3218,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         // reasoning (it belongs to the old session — don't let it bleed into the new
         // view until the next send clears it) + reset the editor tabs.
         const switched = env.session !== get().session.id
-        if (switched) cancelGitRequests()
+        if (switched) { cancelGitRequests(); set({ computer: null, computerError: null }) }
         // Re-attaching the same session id is still a GUI bootstrap even though
         // it must not discard that session's existing tabs/slices.
         const bootstrapping = !!get().ui.bootstrap

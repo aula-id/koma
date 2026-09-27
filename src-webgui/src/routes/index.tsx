@@ -7,6 +7,7 @@ import { TAB_DRAG_MIME, TabBar } from '../components/TabBar'
 import { StartScreen } from '../components/StartScreen'
 import { Onboarding } from '../components/Onboarding'
 import { Titlebar, getPlatform } from '../components/Titlebar'
+import { ComputerPanel } from '../components/ComputerPanel'
 import { ResizeHandles } from '../components/ResizeHandles'
 import { ActivityBar } from '../components/ActivityBar'
 import { Sidebar, type SidebarView } from '../components/Sidebar'
@@ -488,6 +489,7 @@ function RootLayout() {
       />
       <RemotePathPicker />
       <ToastContainer />
+      <ComputerPanel />
       <ResizeHandles />
       {/* Hide while remote cwd picker is open — Ctrl+Enter / right-click must
           not surface the global copy/paste/resume menu over the path dialog. */}

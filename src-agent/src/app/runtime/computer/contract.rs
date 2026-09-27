@@ -68,7 +68,7 @@ impl Transform {
             self.desktop.y + y * self.desktop.height / self.height as f64,
         ))
     }
-    #[cfg(any(feature = "gui", test))]
+    #[cfg(any(all(feature = "gui", target_os = "linux"), test))]
     pub fn crop(&self, bounds: Rect) -> Result<Self> {
         if !bounds.valid()
             || bounds.x.fract() != 0.0
@@ -208,11 +208,13 @@ pub struct Reply {
     pub capabilities: Option<Capabilities>,
     pub observation: Option<Observation>,
     /// One-shot IPC only. Ingest removes bytes before projecting the status.
+    #[serde(with = "png_wire")]
     pub png: Vec<u8>,
 }
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Status {
     pub session: String,
+    pub desktop: String,
     pub generation: String,
     pub enabled: bool,
     pub paused: bool,
@@ -224,6 +226,7 @@ pub struct Status {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Control {
+    Register { desktop: String },
     Enable { capabilities: Capabilities },
     ListWindows,
     InspectWindow { window: String },
@@ -231,4 +234,40 @@ pub enum Control {
     Resume,
     Stop,
     Result(Box<Reply>),
+}
+
+// JSON arrays would expand a 20 MiB PNG beyond the IPC frame limit. Base64
+// keeps one-shot image payloads bounded while preserving the exact PNG bytes.
+mod png_wire {
+    use base64::Engine;
+    use serde::{Deserialize, Deserializer, Serializer};
+    pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(bytes))
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        if text.len() > (20_usize * 1024 * 1024).div_ceil(3) * 4 {
+            return Err(serde::de::Error::custom("computer PNG exceeds 20 MiB"));
+        }
+        base64::engine::general_purpose::STANDARD
+            .decode(text)
+            .map_err(serde::de::Error::custom)
+    }
+}
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+    #[test]
+    fn one_shot_png_roundtrip_is_base64_and_byte_identical() {
+        let control = Control::Result(Box::new(Reply {
+            png: vec![1, 2, 3],
+            ..Default::default()
+        }));
+        let wire = serde_json::to_string(&control).unwrap();
+        assert!(wire.contains("AQID"));
+        assert_eq!(serde_json::from_str::<Control>(&wire).unwrap(), control);
+        assert!(!serde_json::to_string(&Status::default())
+            .unwrap()
+            .contains("png"));
+    }
 }

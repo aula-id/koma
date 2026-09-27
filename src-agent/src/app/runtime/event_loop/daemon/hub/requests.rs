@@ -76,6 +76,7 @@ impl DaemonHub {
                     is_controller,
                     attached: false,
                     approval_channel: true,
+                    computer_desktop: None,
                     last_seq: 0,
                     // Not delta-eligible until its Attach seeds this baseline.
                     last_snapshot: None,

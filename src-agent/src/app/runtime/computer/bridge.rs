@@ -46,6 +46,10 @@ pub fn dispatch(state: &mut AppState, index: usize, call: &ToolCall) {
     let accepts_images = main_accepts_images(state, index);
     let rt = &mut state.rest.sessions[index];
     let result = (|| -> anyhow::Result<()> {
+        anyhow::ensure!(
+            rt.computer.status.session == rt.id,
+            "computer controller belongs to a different session"
+        );
         let args: serde_json::Value = serde_json::from_str(
             &crate::dto::chat::sanitize_tool_arguments(&call.function.arguments),
         )?;
@@ -87,7 +91,8 @@ pub fn dispatch(state: &mut AppState, index: usize, call: &ToolCall) {
     }
 }
 pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
-    if !rt.computer.accepts(owner, &reply)
+    if rt.id != reply.session
+        || !rt.computer.accepts(owner, &reply)
         || (!reply.id.starts_with("gui:") && !rt.pending_tool_tasks.contains(&reply.id))
     {
         return;
@@ -300,7 +305,8 @@ mod approval_tests {
         rt.computer
             .enable(
                 1,
-                "s",
+                &rt.id,
+                "fixture",
                 Capabilities {
                     capture: true,
                     focus: true,
@@ -333,7 +339,8 @@ mod approval_tests {
         rt.computer
             .enable(
                 1,
-                "s",
+                &rt.id,
+                "fixture",
                 Capabilities {
                     capture: true,
                     focus: true,

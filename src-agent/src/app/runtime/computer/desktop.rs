@@ -9,6 +9,18 @@ use std::sync::{
 #[cfg(target_os = "linux")]
 mod x11;
 
+/// Connection registration identifies the GUI's desktop, never the daemon's
+/// inherited display environment (a daemon may outlive several GUI logins).
+pub fn identity() -> String {
+    if let Ok(display) = std::env::var("WAYLAND_DISPLAY") {
+        format!("wayland:{display}")
+    } else if let Ok(display) = std::env::var("DISPLAY") {
+        format!("x11:{display}")
+    } else {
+        format!("{}:local", std::env::consts::OS)
+    }
+}
+
 pub fn capabilities() -> Capabilities {
     #[cfg(target_os = "linux")]
     {
@@ -37,14 +49,18 @@ pub struct Worker {
 }
 impl Worker {
     pub fn status(&mut self, status: &Status) {
-        if self.generation != status.generation || !status.enabled || status.paused {
+        if self.generation != status.generation
+            || !status.enabled
+            || status.paused
+            || status.desktop != identity()
+        {
             self.cancelled.store(true, Ordering::SeqCst);
             self.cancelled = Arc::new(AtomicBool::new(false));
             self.seen.clear();
         }
         self.generation = status.generation.clone();
         self.session = status.session.clone();
-        self.active = status.enabled && !status.paused;
+        self.active = status.enabled && !status.paused && status.desktop == identity();
     }
     pub fn cancel(&mut self) {
         self.active = false;
@@ -99,7 +115,7 @@ fn run(request: &Request, cancelled: &Arc<AtomicBool>) -> Reply {
             .map_err(|_| anyhow::anyhow!("previous native controller is still stopping"))?;
         Ok(file)
     })();
-    let _lock = match lock {
+    let lock = match lock {
         Ok(lock) => lock,
         Err(e) => {
             return Reply {
@@ -111,6 +127,10 @@ fn run(request: &Request, cancelled: &Arc<AtomicBool>) -> Reply {
             }
         }
     };
+    let _lock = scopeguard::guard(lock, |file| {
+        let _ = file.unlock();
+    });
+    #[cfg(target_os = "linux")]
     if let Operation::Observe { crop: Some(bounds) } = &request.operation {
         return super::enrichment::crop(request, *bounds).unwrap_or_else(|e| Reply {
             id: request.id.clone(),
@@ -169,6 +189,7 @@ mod tests {
         );
         worker.status(&Status {
             enabled: true,
+            desktop: identity(),
             session: "s".into(),
             generation: "new".into(),
             ..Default::default()
@@ -179,6 +200,7 @@ mod tests {
         );
         worker.status(&Status {
             enabled: true,
+            desktop: identity(),
             session: "s".into(),
             generation: "g".into(),
             ..Default::default()

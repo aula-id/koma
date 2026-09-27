@@ -18,6 +18,10 @@ pub fn ocr_binary() -> PathBuf {
     };
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
+            let sibling = parent.join(name);
+            if sibling.is_file() {
+                return sibling;
+            }
             let bundled = parent.join("ocr").join(name);
             if bundled.is_file() {
                 return bundled;
@@ -41,7 +45,7 @@ pub fn enrich(reply: &mut Reply, cancelled: &AtomicBool) {
         Ok(elements) => {
             obs.elements = elements;
             obs.accessibility_status =
-                "AT-SPI selected-window labels, roles, states and bounds; values not read".into();
+                "AT-SPI selected-window labels, roles, states and bounds; bounded to 256 nodes, 12 levels and 750 ms; values not read".into();
         }
         Err(e) => obs.accessibility_status = format!("unavailable: {e}"),
     }
@@ -52,7 +56,7 @@ pub fn enrich(reply: &mut Reply, cancelled: &AtomicBool) {
         Ok(elements) => {
             obs.elements.extend(elements);
             obs.ocr_status =
-                "Tesseract local English OCR; text is not evidence of interactivity".into();
+                "Tesseract local English OCR; at most 256 words / 256 KiB / two seconds; text is not evidence of interactivity".into();
         }
         Err(e) => obs.ocr_status = format!("unavailable: {e}"),
     }
@@ -81,9 +85,16 @@ fn ocr(png: &[u8], obs: &Observation, cancelled: &AtomicBool) -> Result<Vec<Elem
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     if let Some(parent) = binary.parent().filter(|p| !p.as_os_str().is_empty()) {
-        let data = parent.join("tessdata");
-        if data.is_dir() {
-            cmd.env("TESSDATA_PREFIX", data);
+        for relative in [
+            "tessdata",
+            "../share/tesseract-ocr/5/tessdata",
+            "../share/tesseract-ocr/4.00/tessdata",
+        ] {
+            let data = parent.join(relative);
+            if data.join("eng.traineddata").is_file() {
+                cmd.env("TESSDATA_PREFIX", data);
+                break;
+            }
         }
     }
     let mut child = cmd.spawn()?;

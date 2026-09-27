@@ -1,10 +1,10 @@
 //! Shared execution safety boundary, exercised with a deterministic desktop.
 use super::*;
 use anyhow::{bail, Result};
-#[cfg(any(feature = "gui", test))]
+#[cfg(any(all(feature = "gui", target_os = "linux"), test))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(any(feature = "gui", test))]
+#[cfg(any(all(feature = "gui", target_os = "linux"), test))]
 pub trait Desktop {
     fn windows(&mut self) -> Result<Vec<Window>>;
     fn select(&mut self, id: &str) -> Result<Window>;
@@ -81,15 +81,39 @@ pub fn validate_actions(obs: &Observation, actions: &[Action], caps: &Capabiliti
                     || keys.len() > 5
                     || keys.iter().any(|k| {
                         k.is_empty() || k.len() > 64 || k.chars().any(char::is_control)
+                    })
+                    || keys.iter().take(keys.len().saturating_sub(1)).any(|k| {
+                        !matches!(
+                            k.as_str(),
+                            "Shift"
+                                | "Shift_L"
+                                | "Shift_R"
+                                | "Control"
+                                | "Ctrl"
+                                | "Control_L"
+                                | "Control_R"
+                                | "Alt"
+                                | "Alt_L"
+                                | "Alt_R"
+                                | "Super"
+                                | "Super_L"
+                                | "Super_R"
+                                | "Meta"
+                                | "Meta_L"
+                                | "Meta_R"
+                                | "Command"
+                        )
                     }) =>
             {
                 bail!("invalid key chord or keyboard unsupported")
             }
             Action::Type { text }
-                if (text.contains('\n') || text.contains('\r') || text.contains('\t'))
-                    && i + 1 != actions.len() =>
+                if text.char_indices().any(|(offset, c)| {
+                    matches!(c, '\n' | '\r' | '\t')
+                        && (i + 1 != actions.len() || offset + c.len_utf8() != text.len())
+                }) =>
             {
-                bail!("text containing navigation keys must end the sequence")
+                bail!("a typed navigation key must be the final character of the sequence; observe before continuing")
             }
             // Key events can navigate; conservatively end every chord sequence.
             Action::Key { .. } | Action::Scroll { .. } if i + 1 != actions.len() => {
@@ -103,7 +127,7 @@ pub fn validate_actions(obs: &Observation, actions: &[Action], caps: &Capabiliti
     }
     Ok(())
 }
-#[cfg(any(feature = "gui", test))]
+#[cfg(any(all(feature = "gui", target_os = "linux"), test))]
 pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicBool) -> Reply {
     let mut reply = Reply {
         id: request.id.clone(),
@@ -322,6 +346,51 @@ mod fixture_tests {
         }
         fn release(&mut self) {
             self.released = true;
+        }
+    }
+    #[test]
+    fn navigation_inside_a_single_action_cannot_send_followup_input() {
+        let mut desktop = Fixture {
+            captures: 0,
+            inputs: 0,
+            fail_at: usize::MAX,
+            released: false,
+            focus: true,
+            closed: false,
+        };
+        let cancelled = AtomicBool::new(false);
+        let mut request = Request {
+            id: "select".into(),
+            session: "s".into(),
+            generation: "g".into(),
+            operation: Operation::Select {
+                window: "fixture".into(),
+                generation: "g".into(),
+            },
+            observation: None,
+        };
+        request.observation = execute(&mut desktop, &request, &cancelled).observation;
+        for action in [
+            Action::Type {
+                text: "navigate\nthen type".into(),
+            },
+            Action::Type {
+                text: "tab\tthen type".into(),
+            },
+            Action::Key {
+                keys: vec!["Return".into(), "a".into()],
+            },
+        ] {
+            request.operation = Operation::Act {
+                observation: request.observation.as_ref().unwrap().id.clone(),
+                actions: vec![action],
+                observe: true,
+            };
+            let result = execute(&mut desktop, &request, &cancelled);
+            assert!(result.error.is_some());
+            assert_eq!(result.completed, 0);
+            assert_eq!(desktop.inputs, 0);
+            assert_eq!(desktop.captures, 1);
         }
     }
     #[test]

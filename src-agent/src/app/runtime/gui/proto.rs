@@ -25,6 +25,7 @@ pub(super) enum UserEvent {
 /// titlebar to drive these.
 #[derive(Clone, Copy)]
 pub(super) enum WinCmd {
+    ComputerViewer,
     Drag,
     Minimize,
     ToggleMax,

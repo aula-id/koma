@@ -132,6 +132,8 @@ pub(super) struct HubClient {
     /// client can never receive a delta before its snapshot (critique #2).
     pub(super) attached: bool,
     pub(super) approval_channel: bool,
+    /// Registered only by the native local GUI relay; absent for TUI/remote clients.
+    pub(super) computer_desktop: Option<String>,
     /// PER-CLIENT monotonic frame seq (blocker #1): the seq of the last frame this
     /// client was sent; its next frame is `last_seq + 1`. Owned per connection — the
     /// `DaemonFrame.seq` contract is "monotonic PER CONNECTION", so each client's

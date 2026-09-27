@@ -20,6 +20,25 @@ fn extents(conn: &Connection, obj: &Object) -> Result<Rect> {
         height: h as f64,
     })
 }
+fn children(
+    conn: &Connection,
+    obj: &Object,
+    limit: usize,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<Vec<Object>> {
+    let p = accessible(conn, obj)?;
+    let count: i32 = p.get_property("ChildCount")?;
+    let mut result = Vec::new();
+    for index in 0..(count.max(0) as usize).min(limit) {
+        ensure!(
+            Instant::now() < deadline && !cancelled.load(Ordering::SeqCst),
+            "accessibility deadline exceeded"
+        );
+        result.push(p.call("GetChildAtIndex", &(index as i32,))?);
+    }
+    Ok(result)
+}
 pub fn extract(obs: &Observation, cancelled: &AtomicBool) -> Result<Vec<Element>> {
     let deadline = Instant::now() + Duration::from_millis(750);
     let session = Builder::session()?
@@ -34,7 +53,7 @@ pub fn extract(obs: &Observation, cancelled: &AtomicBool) -> Result<Vec<Element>
         "org.a11y.atspi.Registry".into(),
         OwnedObjectPath::try_from("/org/a11y/atspi/accessible/root")?,
     );
-    let apps: Vec<Object> = accessible(&conn, &root)?.call("GetChildren", &())?;
+    let apps = children(&conn, &root, 128, deadline, cancelled)?;
     let expected: u32 = obs
         .window
         .id
@@ -59,7 +78,7 @@ pub fn extract(obs: &Observation, cancelled: &AtomicBool) -> Result<Vec<Element>
         if pid != expected {
             continue;
         }
-        let children: Vec<Object> = accessible(&conn, &app)?.call("GetChildren", &())?;
+        let children = children(&conn, &app, 64, deadline, cancelled)?;
         for window in children.into_iter().take(64) {
             ensure!(Instant::now() < deadline, "accessibility deadline exceeded");
             let p = accessible(&conn, &window)?;
@@ -132,7 +151,13 @@ pub fn extract(obs: &Observation, cancelled: &AtomicBool) -> Result<Vec<Element>
                 });
             }
         }
-        let children: Vec<Object> = p.call("GetChildren", &())?;
+        let children = children(
+            &conn,
+            &obj,
+            256usize.saturating_sub(visited.len() + queue.len()),
+            deadline,
+            cancelled,
+        )?;
         for child in children
             .into_iter()
             .take(256usize.saturating_sub(visited.len() + queue.len()))

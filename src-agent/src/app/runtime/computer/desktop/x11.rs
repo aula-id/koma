@@ -29,8 +29,19 @@ unsafe extern "C" fn error_handler(
 }
 pub fn capabilities() -> Capabilities {
     match X11::open(Arc::new(AtomicBool::new(false))) {
-        Ok(x) => Capabilities {capture:true,windows:true,focus:true,pointer:x.test.is_some(),keyboard:x.test.is_some(), accessibility:std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some(), ocr:crate::app::runtime::computer::enrichment::ocr_available(),
-            limitations:vec!["X11: fully visible windows only; typing requires characters present in the active keyboard map. Floating viewer unavailable; accessibility requires a uniquely matching AT-SPI window.".into()],..Default::default()},
+        Ok(x) => Capabilities {
+            capture: true,
+            windows: true,
+            focus: true,
+            pointer: x.test.is_some(),
+            keyboard: x.test.is_some(),
+            floating: true,
+            accessibility: std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some(),
+            ocr: crate::app::runtime::computer::enrichment::ocr_available(),
+            limitations: vec![
+                "X11: fully visible windows only; typing requires characters present in the active keyboard map. Floating viewer cannot be excluded from X11 capture; obstructed targets are rejected. Accessibility requires a uniquely matching AT-SPI window.".into()
+            ],
+        },
         Err(e)=>Capabilities {limitations:vec![e.to_string()],..Default::default()},
     }
 }
@@ -411,11 +422,13 @@ impl Desktop for X11 {
             "window too large"
         );
         let raw = unsafe { (self.x.XGetImage)(self.display, xid, 0, 0, w, h, !0, xlib::ZPixmap) };
+        let guard = scopeguard::guard(raw, |image| unsafe {
+            if !image.is_null() {
+                (self.x.XDestroyImage)(image);
+            }
+        });
         self.sync()?;
         ensure!(!raw.is_null(), "capture failed");
-        let guard = scopeguard::guard(raw, |image| unsafe {
-            (self.x.XDestroyImage)(image);
-        });
         let mut image = image::RgbImage::new(w, h);
         let masks = unsafe { [(*raw).red_mask, (*raw).green_mask, (*raw).blue_mask] };
         ensure!(masks.iter().all(|v| *v != 0), "unsupported X11 visual");
@@ -430,6 +443,10 @@ impl Desktop for X11 {
         }
         let mut png = std::io::Cursor::new(vec![]);
         image.write_to(&mut png, image::ImageFormat::Png)?;
+        ensure!(
+            png.get_ref().len() <= 20 * 1024 * 1024,
+            "captured PNG exceeds the 20 MiB observation limit"
+        );
         Ok((
             Transform {
                 desktop: window.geometry,
@@ -485,7 +502,7 @@ impl Desktop for X11 {
                     .chars()
                     .map(|c| {
                         self.mapped(match c {
-                            '\n' => 0xff0d,
+                            '\n' | '\r' => 0xff0d,
                             '\t' => 0xff09,
                             c if (c as u32) < 256 => c as c_ulong,
                             c => 0x01000000 | c as c_ulong,
@@ -508,7 +525,22 @@ impl Desktop for X11 {
                 let codes = keys
                     .iter()
                     .map(|k| {
-                        let name = CString::new(k.as_str())?;
+                        let name = CString::new(match k.as_str() {
+                            "Control" | "Ctrl" => "Control_L",
+                            "Shift" => "Shift_L",
+                            "Alt" => "Alt_L",
+                            "Super" | "Command" => "Super_L",
+                            "Meta" => "Meta_L",
+                            "Enter" => "Return",
+                            "Esc" => "Escape",
+                            "Backspace" => "BackSpace",
+                            "Space" => "space",
+                            "ArrowLeft" => "Left",
+                            "ArrowRight" => "Right",
+                            "ArrowUp" => "Up",
+                            "ArrowDown" => "Down",
+                            other => other,
+                        })?;
                         let symbol = unsafe { (self.x.XStringToKeysym)(name.as_ptr()) };
                         ensure!(symbol != 0, "unknown X11 key name");
                         Ok(self.mapped(symbol)?.0)
@@ -546,5 +578,120 @@ impl Drop for X11 {
             (self.x.XCloseDisplay)(self.display);
         };
         OWN.with(|v| v.set(ptr::null_mut()));
+    }
+}
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+    use std::io::BufRead;
+    #[test]
+    #[ignore = "opens a disposable X11 window and injects input; run explicitly on a local desktop"]
+    fn native_fixture_round_trip() {
+        let directory = std::env::temp_dir().join(format!("koma-native-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let cleanup = scopeguard::guard(directory, |p| {
+            let _ = std::fs::remove_dir_all(p);
+        });
+        let source = cleanup.join("fixture.c");
+        let binary = cleanup.join("fixture");
+        let state = cleanup.join("state");
+        std::fs::write(
+            &source,
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../docs/testing/computer-fixture.c"
+            )),
+        )
+        .unwrap();
+        assert!(std::process::Command::new("cc")
+            .arg(&source)
+            .args(["-lX11", "-o"])
+            .arg(&binary)
+            .status()
+            .unwrap()
+            .success());
+        let child = std::process::Command::new(&binary)
+            .arg(&state)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut child = scopeguard::guard(child, |mut child| {
+            let _ = child.kill();
+            let _ = child.wait();
+        });
+        let mut line = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let id = line.trim().to_string();
+        assert!(!id.is_empty());
+        let token = Arc::new(AtomicBool::new(false));
+        let mut desktop = X11::open(token.clone()).unwrap();
+        for _ in 0..100 {
+            if desktop.windows().unwrap().iter().any(|w| w.id == id) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let mut request = Request {
+            id: "select".into(),
+            session: "fixture".into(),
+            generation: "g".into(),
+            operation: Operation::Select {
+                window: id,
+                generation: "g".into(),
+            },
+            observation: None,
+        };
+        let first =
+            crate::app::runtime::computer::executor::execute(&mut desktop, &request, &token);
+        assert!(first.error.is_none(), "{:?}", first.error);
+        assert!(!first.png.is_empty());
+        request.observation = first.observation;
+        request.id = "click".into();
+        request.operation = Operation::Act {
+            observation: request.observation.as_ref().unwrap().id.clone(),
+            actions: vec![Action::Click {
+                x: Some(40.0),
+                y: Some(40.0),
+                element: None,
+                button: Button::Left,
+            }],
+            observe: true,
+        };
+        let clicked =
+            crate::app::runtime::computer::executor::execute(&mut desktop, &request, &token);
+        assert!(clicked.error.is_none(), "{:?}", clicked.error);
+        assert_eq!(clicked.completed, 1);
+        request.observation = clicked.observation;
+        request.id = "type".into();
+        request.operation = Operation::Act {
+            observation: request.observation.as_ref().unwrap().id.clone(),
+            actions: vec![Action::Type {
+                text: "Koma42".into(),
+            }],
+            observe: false,
+        };
+        let typed =
+            crate::app::runtime::computer::executor::execute(&mut desktop, &request, &token);
+        assert!(typed.error.is_none(), "{:?}", typed.error);
+        assert_eq!(typed.completed, 1);
+        assert!(typed.png.is_empty());
+        for _ in 0..100 {
+            if std::fs::read_to_string(&state).unwrap_or_default() == "1\nKoma42" {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(std::fs::read_to_string(&state).unwrap(), "1\nKoma42");
+        request.id = "observe".into();
+        request.operation = Operation::Observe { crop: None };
+        let observed =
+            crate::app::runtime::computer::executor::execute(&mut desktop, &request, &token);
+        assert!(observed.error.is_none(), "{:?}", observed.error);
+        assert_ne!(first.png, observed.png);
+        assert!(desktop.held.is_empty());
+        assert!(desktop.buttons.is_empty());
     }
 }

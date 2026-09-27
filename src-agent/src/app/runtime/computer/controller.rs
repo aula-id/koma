@@ -34,6 +34,7 @@ impl Controller {
         &mut self,
         owner: u64,
         session: &str,
+        desktop: &str,
         capabilities: Capabilities,
         lock_path: &std::path::Path,
     ) -> Result<()> {
@@ -53,6 +54,7 @@ impl Controller {
         self.used.clear();
         self.status = Status {
             session: session.into(),
+            desktop: desktop.into(),
             generation: uuid::Uuid::new_v4().to_string(),
             enabled: true,
             capabilities,
@@ -73,8 +75,15 @@ impl Controller {
         self.status.message = reason.into();
         self.changed = true;
         // Retain owner until the disabled status has been delivered by the hub.
-        self.lock = None;
+        self.release_lock();
         pending
+    }
+    fn release_lock(&mut self) {
+        if let Some(file) = self.lock.take() {
+            // Explicitly unlock before closing: concurrent process creation can
+            // briefly inherit the open file description until exec completes.
+            let _ = file.unlock();
+        }
     }
     pub fn pause(&mut self, pause: bool) -> Option<String> {
         let pending = self.pending.take().map(|(r, _)| r.id);
@@ -170,6 +179,12 @@ impl Controller {
     }
 }
 
+impl Drop for Controller {
+    fn drop(&mut self) {
+        self.release_lock();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,8 +200,11 @@ mod tests {
         assert!(a
             .begin("before-enable".into(), Operation::Windows, false)
             .is_err());
-        a.enable(1, "s", caps.clone(), &path).unwrap();
-        assert!(b.enable(2, "other", caps.clone(), &path).is_err());
+        a.enable(1, "s", "fixture", caps.clone(), &path).unwrap();
+        let inherited = a.lock.as_ref().unwrap().try_clone().unwrap();
+        assert!(b
+            .enable(2, "other", "fixture", caps.clone(), &path)
+            .is_err());
         a.begin("call".into(), Operation::Windows, false).unwrap();
         let r = a.outbound.clone().unwrap();
         let reply = Reply {
@@ -204,7 +222,8 @@ mod tests {
         assert!(a.begin("call".into(), Operation::Windows, false).is_err());
         a.stop("disconnect");
         assert!(!a.accepts(1, &reply));
-        b.enable(2, "other", caps, &path).unwrap();
+        b.enable(2, "other", "fixture", caps, &path).unwrap();
+        drop(inherited);
         drop(a);
         drop(b);
         let _ = std::fs::remove_file(path);

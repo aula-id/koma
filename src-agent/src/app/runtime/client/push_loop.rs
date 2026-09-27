@@ -198,6 +198,8 @@ pub(super) fn push_loop(
     use std::sync::mpsc::TryRecvError;
     #[cfg(feature = "gui")]
     let mut computer_worker = crate::app::runtime::computer::desktop::Worker::default();
+    #[cfg(feature = "gui")]
+    let mut computer_requested = false;
 
     // The shadow is a real AppState reconstructed purely from frames (identical to
     // `render_loop`); the first Snapshot replaces the neutral placeholder.
@@ -414,7 +416,13 @@ pub(super) fn push_loop(
                 // The page (re)booted: re-push the full authoritative state this frame.
                 Ok(super::HostCtl::Ready) => {
                     #[cfg(feature = "gui")]
-                    { computer_worker.cancel(); let _=req_tx.send(ClientRequest::Computer(crate::app::runtime::computer::Control::Stop)); }
+                    {
+                        computer_worker.cancel();
+                        if computer_requested {
+                            let _ = req_tx.send(ClientRequest::Computer(crate::app::runtime::computer::Control::Stop));
+                            computer_requested = false;
+                        }
+                    }
                     last.reset();
                     dirty = true;
                     need_snapshot = true;
@@ -613,7 +621,11 @@ pub(super) fn push_loop(
                     if remote_ctx.is_none() {
                         use crate::app::runtime::computer::{Control, desktop};
                         let control = match action.as_str() {
-                            "enable" => Some(Control::Enable { capabilities: desktop::capabilities() }),
+                            "enable" => {
+                                computer_requested = true;
+                                let _ = req_tx.send(ClientRequest::Computer(Control::Register { desktop: desktop::identity() }));
+                                Some(Control::Enable { capabilities: desktop::capabilities() })
+                            },
                             "windows" => Some(Control::ListWindows),
                             "select" => window.map(|window|Control::InspectWindow {window}),
                             "pause" => { computer_worker.cancel(); Some(Control::Pause) },
@@ -1543,6 +1555,7 @@ pub(super) fn push_loop(
                     #[cfg(feature = "gui")]
                     match &frame.event {
                         DaemonEvent::ComputerStatus(status) if remote_ctx.is_none() => {
+                            computer_requested = status.enabled;
                             computer_worker.status(status);
                             push(serde_json::json!({"k":"Computer","status":status}).to_string());
                         }
