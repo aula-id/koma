@@ -6,6 +6,7 @@ license = "Apache-2.0"
 
 [build-dependencies]
 winresource = "0.1"
+cc = { version = "1", optional = true }
 
 [dependencies]
 scopeguard = "1.2"
@@ -98,7 +99,7 @@ muda = { version = "0.19", optional = true, default-features = false }
 
 [features]
 default = ["gui", "linker"]
-gui = ["dep:zbus", "dep:x11-dl", "dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd", "dep:muda"]
+gui = ["dep:cc", "dep:zbus", "dep:x11-dl", "dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd", "dep:muda"]
 linker = [
     "dep:tree-sitter",
     "dep:tree-sitter-rust",

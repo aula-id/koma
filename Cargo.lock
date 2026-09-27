@@ -51,6 +51,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "base64",
+ "cc",
  "dirs",
  "dom_smoothie",
  "ed25519-dalek",

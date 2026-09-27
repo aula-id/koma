@@ -9,5 +9,5 @@ pub(crate) use controller::Controller;
 #[cfg(feature = "gui")]
 pub(crate) mod desktop;
 
-#[cfg(all(feature = "gui", target_os = "linux"))]
+#[cfg(feature = "gui")]
 pub(crate) mod enrichment;

@@ -68,7 +68,7 @@ impl Transform {
             self.desktop.y + y * self.desktop.height / self.height as f64,
         ))
     }
-    #[cfg(any(all(feature = "gui", target_os = "linux"), test))]
+    #[cfg(any(feature = "gui", test))]
     pub fn crop(&self, bounds: Rect) -> Result<Self> {
         if !bounds.valid()
             || bounds.x.fract() != 0.0

@@ -1,10 +1,10 @@
 //! Shared execution safety boundary, exercised with a deterministic desktop.
 use super::*;
 use anyhow::{bail, Result};
-#[cfg(any(all(feature = "gui", target_os = "linux"), test))]
+#[cfg(any(feature = "gui", test))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(any(all(feature = "gui", target_os = "linux"), test))]
+#[cfg(any(feature = "gui", test))]
 pub trait Desktop {
     fn windows(&mut self) -> Result<Vec<Window>>;
     fn select(&mut self, id: &str) -> Result<Window>;
@@ -75,6 +75,13 @@ pub fn validate_actions(obs: &Observation, actions: &[Action], caps: &Capabiliti
             Action::Type { text } if !caps.keyboard || text.len() > 8192 => {
                 bail!("keyboard unsupported or text too long")
             }
+            Action::Type { text }
+                if text
+                    .chars()
+                    .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t')) =>
+            {
+                bail!("use a final named key action for control characters")
+            }
             Action::Key { keys }
                 if !caps.keyboard
                     || keys.is_empty()
@@ -127,7 +134,7 @@ pub fn validate_actions(obs: &Observation, actions: &[Action], caps: &Capabiliti
     }
     Ok(())
 }
-#[cfg(any(all(feature = "gui", target_os = "linux"), test))]
+#[cfg(any(feature = "gui", test))]
 pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicBool) -> Reply {
     let mut reply = Reply {
         id: request.id.clone(),
@@ -156,9 +163,13 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                     .ok_or_else(|| anyhow::anyhow!("select a window first"))?;
                 let window = desktop.inspect(&obs.window.id)?;
                 if matches!(request.operation, Operation::Act { .. })
-                    && (window.geometry != obs.window.geometry || !window.focused)
+                    && (window.geometry != obs.window.geometry
+                        || window.title != obs.window.title
+                        || !window.focused)
                 {
-                    bail!("window moved, resized, closed, or focus changed; observe again");
+                    bail!(
+                        "window moved, resized, closed, navigated, or focus changed; observe again"
+                    );
                 }
                 window
             }
@@ -377,6 +388,9 @@ mod fixture_tests {
             Action::Type {
                 text: "tab\tthen type".into(),
             },
+            Action::Type {
+                text: "escape\u{1b}then type".into(),
+            },
             Action::Key {
                 keys: vec!["Return".into(), "a".into()],
             },
@@ -469,6 +483,12 @@ mod fixture_tests {
         assert_eq!(result.completed, 0);
         assert_eq!(d.inputs, 4);
         d.focus = true;
+        r.observation.as_mut().unwrap().window.title = "previous page".into();
+        let result = execute(&mut d, &r, &cancel);
+        assert_eq!(result.completed, 0);
+        assert_eq!(d.inputs, 4);
+        assert!(result.error.unwrap().contains("navigated"));
+        r.observation.as_mut().unwrap().window.title = d.window().title;
         r.observation.as_mut().unwrap().window.geometry.width = 90.0;
         let result = execute(&mut d, &r, &cancel);
         assert_eq!(result.completed, 0);

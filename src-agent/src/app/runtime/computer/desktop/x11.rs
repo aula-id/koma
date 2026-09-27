@@ -39,7 +39,7 @@ pub fn capabilities() -> Capabilities {
             accessibility: std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some(),
             ocr: crate::app::runtime::computer::enrichment::ocr_available(),
             limitations: vec![
-                "X11: fully visible windows only; typing requires characters present in the active keyboard map. Floating viewer cannot be excluded from X11 capture; obstructed targets are rejected. Accessibility requires a uniquely matching AT-SPI window.".into()
+                "X11: fully visible windows only. Unicode typing temporarily uses an unused keycode and restores it; the target must support Unicode keysyms. Floating viewer cannot be excluded from X11 capture; obstructed targets are rejected. Accessibility requires a uniquely matching AT-SPI window.".into()
             ],
         },
         Err(e)=>Capabilities {limitations:vec![e.to_string()],..Default::default()},
@@ -54,6 +54,7 @@ pub struct X11 {
     held: Vec<u32>,
     buttons: Vec<u32>,
     target: Option<Window>,
+    temporary_key: Option<(u8, Vec<c_ulong>, c_ulong)>,
 }
 impl X11 {
     pub fn open(cancelled: Arc<AtomicBool>) -> Result<Self> {
@@ -82,6 +83,7 @@ impl X11 {
             held: vec![],
             buttons: vec![],
             target: None,
+            temporary_key: None,
         })
     }
     fn sync(&self) -> Result<()> {
@@ -267,6 +269,20 @@ impl X11 {
             self.property(self.root, "_NET_ACTIVE_WINDOW")?.first() == Some(&xid),
             "focus changed"
         );
+        let mut keys = [0 as std::os::raw::c_char; 32];
+        unsafe {
+            (self.x.XQueryKeymap)(self.display, keys.as_mut_ptr());
+        }
+        ensure!(
+            (0..256u32).all(|key| keys[key as usize / 8] as u8 & (1 << (key % 8)) == 0
+                || self.held.contains(&key)),
+            "Physical keyboard input detected; take over or release keys before continuing"
+        );
+        let mut state: xlib::XkbStateRec = unsafe { std::mem::zeroed() };
+        let status = unsafe { (self.x.XkbGetState)(self.display, 0x0100, &mut state) };
+        ensure!(status == 0 && state.group == 0 && state.latched_mods == 0
+            && u32::from(state.locked_mods) & !xlib::Mod2Mask == 0 && state.ptr_buttons == 0,
+            "Release mouse buttons and locked/sticky modifiers, and use the primary keyboard group before input");
         self.unobstructed(xid, target.geometry)
     }
     fn key(&mut self, code: u32, down: bool) -> Result<()> {
@@ -317,6 +333,61 @@ impl X11 {
             "character needs an unsupported keyboard group"
         );
         Ok((u32::from(code), symbol != first))
+    }
+    fn reserve_unicode_key(&mut self) -> Result<()> {
+        if self.temporary_key.is_some() {
+            return Ok(());
+        }
+        self.guard_input()?;
+        let (mut first, mut last, mut per_key) = (0, 0, 0);
+        unsafe {
+            (self.x.XDisplayKeycodes)(self.display, &mut first, &mut last);
+        }
+        let raw = unsafe {
+            (self.x.XGetKeyboardMapping)(self.display, first as u8, last - first + 1, &mut per_key)
+        };
+        ensure!(
+            !raw.is_null() && per_key > 0,
+            "Cannot inspect X11 keyboard map"
+        );
+        let map = scopeguard::guard(raw, |p| unsafe {
+            (self.x.XFree)(p.cast());
+        });
+        let entries =
+            unsafe { std::slice::from_raw_parts(*map, ((last - first + 1) * per_key) as usize) };
+        for key in (first..=last).rev() {
+            let offset = ((key - first) * per_key) as usize;
+            let symbols = &entries[offset..offset + per_key as usize];
+            if symbols.iter().all(|v| *v == 0) {
+                self.temporary_key = Some((key as u8, symbols.to_vec(), 0));
+                return Ok(());
+            }
+        }
+        bail!("No unused X11 keycode is available for Unicode typing");
+    }
+    fn unicode_key(&mut self, symbol: c_ulong) -> Result<u32> {
+        self.reserve_unicode_key()?;
+        self.guard_input()?;
+        let (key, original, current) = self
+            .temporary_key
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Unicode key allocation failed"))?;
+        let mut replacement = vec![symbol; original.len()];
+        unsafe {
+            (self.x.XChangeKeyboardMapping)(
+                self.display,
+                i32::from(*key),
+                replacement.len() as i32,
+                replacement.as_mut_ptr(),
+                1,
+            );
+        }
+        *current = symbol;
+        let code = u32::from(*key);
+        self.sync()?;
+        // Let the target process MappingNotify before delivering the key event.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        Ok(code)
     }
 }
 impl Desktop for X11 {
@@ -498,19 +569,34 @@ impl Desktop for X11 {
                 }
             }
             Action::Type { text } => {
-                let keys = text
+                let symbols = text
                     .chars()
-                    .map(|c| {
-                        self.mapped(match c {
-                            '\n' | '\r' => 0xff0d,
-                            '\t' => 0xff09,
-                            c if (c as u32) < 256 => c as c_ulong,
-                            c => 0x01000000 | c as c_ulong,
-                        })
+                    .map(|c| match c {
+                        '\n' | '\r' => 0xff0d,
+                        '\t' => 0xff09,
+                        c if (c as u32) < 256 => c as c_ulong,
+                        c => 0x01000000 | c as c_ulong,
                     })
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Vec<_>>();
+                if symbols.iter().any(|s| self.mapped(*s).is_err()) {
+                    self.reserve_unicode_key()?;
+                }
                 let shift = self.mapped(0xffe1)?.0;
-                for (key, shifted) in keys {
+                for symbol in symbols {
+                    let (key, shifted, temporary) = match self.mapped(symbol) {
+                        Ok((key, shifted))
+                            if self
+                                .temporary_key
+                                .as_ref()
+                                .is_none_or(|(reserved, _, _)| key != u32::from(*reserved)) =>
+                        {
+                            (key, shifted, false)
+                        }
+                        // Xlib's keysym cache may still describe the previous
+                        // temporary mapping. Always remap that code and allow
+                        // the target to consume its event before restoring it.
+                        _ => (self.unicode_key(symbol)?, false, true),
+                    };
                     if shifted {
                         self.key(shift, true)?;
                     }
@@ -518,6 +604,9 @@ impl Desktop for X11 {
                     self.key(key, false)?;
                     if shifted {
                         self.key(shift, false)?;
+                    }
+                    if temporary {
+                        std::thread::sleep(std::time::Duration::from_millis(30));
                     }
                 }
             }
@@ -567,6 +656,29 @@ impl Desktop for X11 {
                     (t.XTestFakeButtonEvent)(self.display, button, 0, 0);
                 }
                 (self.x.XSync)(self.display, 0);
+            }
+        }
+        if let Some((key, mut original, symbol)) = self.temporary_key.take() {
+            // Do not overwrite a layout change made by the user during control.
+            let mut count = 0;
+            let current = unsafe { (self.x.XGetKeyboardMapping)(self.display, key, 1, &mut count) };
+            let ours = !current.is_null() && count > 0 && unsafe { *current == symbol };
+            if !current.is_null() {
+                unsafe {
+                    (self.x.XFree)(current.cast());
+                }
+            }
+            if ours {
+                unsafe {
+                    (self.x.XChangeKeyboardMapping)(
+                        self.display,
+                        i32::from(key),
+                        original.len() as i32,
+                        original.as_mut_ptr(),
+                        1,
+                    );
+                    (self.x.XSync)(self.display, 0);
+                }
             }
         }
     }

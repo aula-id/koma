@@ -52,13 +52,21 @@ impl Controller {
         self.lock = Some(file);
         self.owner = Some(owner);
         self.used.clear();
+        let message = if capabilities.capture {
+            "Ready; select a window".into()
+        } else {
+            format!(
+                "Capture unavailable: {}",
+                capabilities.limitations.join("; ")
+            )
+        };
         self.status = Status {
             session: session.into(),
             desktop: desktop.into(),
             generation: uuid::Uuid::new_v4().to_string(),
             enabled: true,
             capabilities,
-            message: "Ready; select a window".into(),
+            message,
             ..Status::default()
         };
         self.changed = true;
@@ -175,7 +183,12 @@ impl Controller {
     pub fn expired(&self) -> bool {
         self.pending
             .as_ref()
-            .is_some_and(|(_, t)| t.elapsed() > Duration::from_secs(30))
+            .is_some_and(|(request, t)| {
+                // Only an explicit human source-picker operation gets time for
+                // portal consent. Model input keeps its short, non-replayed deadline.
+                let seconds = if matches!(&request.operation, Operation::InspectWindow { window } if window == "portal:choose") { 120 } else { 30 };
+                t.elapsed() > Duration::from_secs(seconds)
+            })
     }
 }
 

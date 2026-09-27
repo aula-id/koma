@@ -1,8 +1,9 @@
 //! Bounded local extraction. Failures never discard a valid screenshot.
 use super::*;
 use anyhow::{ensure, Result};
+use std::io::Read;
+#[cfg(not(target_os = "macos"))]
 use std::{
-    io::Read,
     path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
@@ -10,6 +11,7 @@ use std::{
 #[cfg(target_os = "linux")]
 mod atspi;
 
+#[cfg(not(target_os = "macos"))]
 pub fn ocr_binary() -> PathBuf {
     let name = if cfg!(windows) {
         "tesseract.exe"
@@ -30,24 +32,28 @@ pub fn ocr_binary() -> PathBuf {
     }
     PathBuf::from(name)
 }
+#[cfg(not(target_os = "macos"))]
 pub fn ocr_available() -> bool {
     let binary = ocr_binary();
     binary.is_file()
         || std::env::var_os("PATH")
             .is_some_and(|paths| std::env::split_paths(&paths).any(|p| p.join(&binary).is_file()))
 }
+#[cfg(not(target_os = "macos"))]
 pub fn enrich(reply: &mut Reply, cancelled: &AtomicBool) {
     let Some(obs) = reply.observation.as_mut() else {
         return;
     };
     #[cfg(target_os = "linux")]
-    match atspi::extract(obs, cancelled) {
-        Ok(elements) => {
-            obs.elements = elements;
-            obs.accessibility_status =
+    if !obs.window.id.starts_with("portal:") {
+        match atspi::extract(obs, cancelled) {
+            Ok(elements) => {
+                obs.elements = elements;
+                obs.accessibility_status =
                 "AT-SPI selected-window labels, roles, states and bounds; bounded to 256 nodes, 12 levels and 750 ms; values not read".into();
+            }
+            Err(e) => obs.accessibility_status = format!("unavailable: {e}"),
         }
-        Err(e) => obs.accessibility_status = format!("unavailable: {e}"),
     }
     if cancelled.load(Ordering::SeqCst) {
         return;
@@ -61,6 +67,7 @@ pub fn enrich(reply: &mut Reply, cancelled: &AtomicBool) {
         Err(e) => obs.ocr_status = format!("unavailable: {e}"),
     }
 }
+#[cfg(not(target_os = "macos"))]
 fn ocr(png: &[u8], obs: &Observation, cancelled: &AtomicBool) -> Result<Vec<Element>> {
     let dir = std::env::temp_dir().join(format!("koma-ocr-{}", uuid::Uuid::new_v4()));
     let mut builder = std::fs::DirBuilder::new();
@@ -120,6 +127,7 @@ fn ocr(png: &[u8], obs: &Observation, cancelled: &AtomicBool) -> Result<Vec<Elem
         .read_to_string(&mut text)?;
     Ok(parse_tsv(&text, obs))
 }
+#[cfg(any(not(target_os = "macos"), test))]
 fn parse_tsv(text: &str, obs: &Observation) -> Vec<Element> {
     text.lines()
         .skip(1)

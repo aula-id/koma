@@ -83,6 +83,7 @@ export function ComputerPanel() {
           <button className={button} onClick={() => control('take_over')}>Take over</button>
           {current?.capabilities.floating && <button className={button} onClick={() => window.ipc?.postMessage(JSON.stringify({t:'win',a:'computer-viewer'}))}>Detach preview</button>}
           <button className={button} disabled={current?.busy || current?.paused || !current?.capabilities.windows} onClick={() => control('windows')}>Refresh windows</button>
+          {current?.capabilities.capture && !current.capabilities.windows && <button className={button} disabled={current.busy || current.paused} onClick={() => control('select', 'portal:choose')}>Choose window in system dialog</button>}
         </>}
       </div>
       {enabled && !!current?.windows.length && <label className="px-2 pb-2">Observe window
