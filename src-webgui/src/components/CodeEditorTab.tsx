@@ -514,9 +514,9 @@ function WorkspaceCodeEditor({ tab }: { tab: CodingTab }) {
   // Attach LSP when content is ready AND the matching server is installed.
   useEffect(() => {
     const restart = (event: Event) => {
-      const workspace = (event as CustomEvent<{ hostId: string; root: string }>).detail
+      const workspace = (event as CustomEvent<{ hostId: string; root?: string }>).detail
       const store = useKoma.getState()
-      if (workspace.hostId !== (store.remoteState.hostId ?? 'local') || workspace.root !== tab.root) return
+      if (workspace.hostId !== (store.remoteState.hostId ?? 'local') || workspace.root && workspace.root !== tab.root) return
       const model = modelRef.current
       if (!model || model.isDisposed()) return
       lspOpenedRef.current = true

@@ -1079,7 +1079,6 @@ pub(super) fn summary(workspace: &WorkspaceRef, id: &str) -> Result<Value> {
     Ok(find(workspace, id)?.summary())
 }
 
-#[cfg(unix)]
 pub(super) fn has_active() -> bool {
     registry()
         .lock()

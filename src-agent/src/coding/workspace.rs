@@ -62,6 +62,7 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
     let r = &request.workspace.root;
     match &request.operation {
         Operation::LspReleaseClient => unreachable!(),
+        Operation::ServiceInfo | Operation::ServiceUpgrade => unreachable!(),
         Operation::Hello => Ok(json!({"protocol":1,"root":canonical.to_string_lossy(),
             "capabilities":["paths","read","save","config","tasks","packs","debug"], "version":env!("CARGO_PKG_VERSION")})),
         Operation::TaskDefinitions => super::tasks::definitions(&canonical),

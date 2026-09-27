@@ -4,6 +4,8 @@
 mod cargo_tests;
 #[cfg(unix)]
 mod daemon;
+#[cfg(windows)]
+mod daemon_windows;
 mod debug;
 pub(crate) fn cargo_tests_main() -> anyhow::Result<()> {
     cargo_tests::main()
@@ -28,12 +30,12 @@ mod watch;
 mod workspace;
 
 use serde::{Deserialize, Serialize};
-#[cfg(any(feature = "gui", not(unix)))]
+#[cfg(any(feature = "gui", not(any(unix, windows))))]
 use serde_json::json;
 use serde_json::Value;
 #[cfg(feature = "gui")]
 use std::sync::mpsc;
-#[cfg(any(feature = "gui", not(unix)))]
+#[cfg(any(feature = "gui", not(any(unix, windows))))]
 use std::sync::Mutex;
 use std::sync::{Arc, OnceLock};
 
@@ -81,6 +83,8 @@ pub(crate) struct Request {
 #[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub(crate) enum Operation {
     Hello,
+    ServiceInfo,
+    ServiceUpgrade,
     Watch,
     ResourceJournals,
     ResourceRecoveryPreview {
@@ -365,6 +369,31 @@ impl Service {
     }
 }
 
+static SERVICE_CLIENTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static SERVICE_DRAIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(super) fn service_build() -> String {
+    static BUILD: OnceLock<String> = OnceLock::new();
+    BUILD
+        .get_or_init(|| {
+            use sha2::{Digest, Sha256};
+            use std::io::Read;
+            let digest = (|| -> std::io::Result<String> {
+                let mut file = std::fs::File::open(std::env::current_exe()?)?;
+                let mut hash = Sha256::new();
+                let mut bytes = [0; 65536];
+                loop {
+                    let n = file.read(&mut bytes)?;
+                    if n == 0 {
+                        break;
+                    }
+                    hash.update(&bytes[..n]);
+                }
+                Ok(format!("{:x}", hash.finalize()))
+            })();
+            digest.unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string())
+        })
+        .clone()
+}
 fn execute(request: &Request) -> Result<Value, String> {
     if SHUTTING_DOWN.load(std::sync::atomic::Ordering::Acquire) {
         return Err("Coding service is shutting down".into());
@@ -375,6 +404,17 @@ fn execute(request: &Request) -> Result<Value, String> {
         || request.workspace.root.len() > 32768
     {
         return Err("Invalid coding request identity".into());
+    }
+    if matches!(
+        request.operation,
+        Operation::ServiceInfo | Operation::ServiceUpgrade
+    ) {
+        if matches!(request.operation, Operation::ServiceUpgrade) {
+            SERVICE_DRAIN.store(true, std::sync::atomic::Ordering::Release);
+        }
+        return Ok(
+            serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"build":service_build(),"upgradePending":SERVICE_DRAIN.load(std::sync::atomic::Ordering::Acquire),"clients":SERVICE_CLIENTS.load(std::sync::atomic::Ordering::Acquire),"activeJobs":tasks::has_active()||debug::has_active()}),
+        );
     }
     if request.operation.local_metadata() {
         return persistence::execute(request).map_err(|e| format!("{e:#}"));
@@ -391,7 +431,11 @@ pub(crate) fn worker_main() -> anyhow::Result<()> {
     {
         return daemon::proxy();
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        return daemon_windows::proxy();
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         worker_stdio()
     }
@@ -401,12 +445,16 @@ pub(crate) fn daemon_main() -> anyhow::Result<()> {
     {
         daemon::run()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        anyhow::bail!("Persistent coding service requires a Unix host")
+        return daemon_windows::run();
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        anyhow::bail!("Persistent coding service is unavailable on this host")
     }
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn worker_stdio() -> anyhow::Result<()> {
     use std::io::{BufRead, Read, Write};
     struct Cleanup;

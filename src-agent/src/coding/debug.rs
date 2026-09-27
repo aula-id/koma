@@ -1079,7 +1079,6 @@ mod tests {
     }
 }
 
-#[cfg(unix)]
 pub(super) fn has_active() -> bool {
     registry()
         .lock()

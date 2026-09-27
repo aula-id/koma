@@ -3164,6 +3164,10 @@ export const useKoma = create<KomaState>((set, get) => ({
           break
         }
         if (env.workspace.hostId !== (get().remoteState.hostId ?? 'local')) break
+        if (env.event.k === 'LspTransportConnected') {
+          window.dispatchEvent(new CustomEvent('koma-lsp-restart', { detail: { hostId: env.workspace.hostId } }))
+          break
+        }
         if (env.event.k === 'LspWorkspaceRestart') {
           window.dispatchEvent(new CustomEvent('koma-lsp-restart', { detail: env.workspace }))
           break

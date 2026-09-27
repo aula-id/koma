@@ -20,7 +20,7 @@ use std::{
     time::{Duration, Instant},
 };
 const FRAME: u64 = 48 * 1024 * 1024;
-const PROTOCOL: &str = "coding-v2";
+const PROTOCOL: &str = "coding-v3";
 fn directory() -> Result<PathBuf> {
     let dir = crate::model::store::base_dir()?.join("run/coding-service");
     std::fs::create_dir_all(&dir)?;
@@ -89,8 +89,54 @@ fn connection() -> Result<UnixStream> {
     }
 }
 pub(super) fn proxy() -> Result<()> {
-    let stream = connection()?;
-    let mut input = stream.try_clone()?;
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let (mut input, mut reader) = loop {
+        let stream = connection()?;
+        let mut writer = stream.try_clone()?;
+        let mut reader = BufReader::new(stream);
+        let probe = |writer: &mut UnixStream,
+                     reader: &mut BufReader<UnixStream>,
+                     op: &str|
+         -> Result<serde_json::Value> {
+            let mut data = serde_json::to_vec(
+                &json!({"id":"service-probe","workspace":{"hostId":"local","root":"/"},"op":op}),
+            )?;
+            data.push(b'\n');
+            writer.write_all(&data)?;
+            writer.flush()?;
+            loop {
+                let line = read_frame(reader)?
+                    .context("Coding service disconnected during version negotiation")?;
+                let value: serde_json::Value = serde_json::from_slice(&line)?;
+                if value["id"] == "service-probe" {
+                    anyhow::ensure!(
+                        value["error"].is_null(),
+                        "Coding service needs a protocol upgrade: {}",
+                        value["error"]
+                    );
+                    return Ok(value["result"].clone());
+                }
+                std::io::stdout().write_all(&line)?;
+            }
+        };
+        writer.set_read_timeout(Some(Duration::from_secs(5)))?;
+        let info = probe(&mut writer, &mut reader, "serviceInfo")?;
+        if info["build"].as_str() != Some(&super::service_build()) {
+            let _ = probe(&mut writer, &mut reader, "serviceUpgrade")?;
+            if info["activeJobs"] == false && info["clients"].as_u64().unwrap_or(2) <= 1 {
+                drop(writer);
+                drop(reader);
+                anyhow::ensure!(
+                    Instant::now() < deadline,
+                    "Previous coding service has not finished draining"
+                );
+                std::thread::sleep(Duration::from_millis(200));
+                continue;
+            }
+        }
+        writer.set_read_timeout(None)?;
+        break (writer, reader);
+    };
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
         let mut reader = stdin.lock();
@@ -101,7 +147,6 @@ pub(super) fn proxy() -> Result<()> {
         }
         let _ = input.shutdown(std::net::Shutdown::Both);
     });
-    let mut reader = BufReader::new(stream);
     let stdout = std::io::stdout();
     let mut output = stdout.lock();
     while let Some(line) = read_frame(&mut reader)? {
@@ -130,6 +175,7 @@ fn serve(stream: UnixStream, clients: Clients, count: Arc<AtomicUsize>) -> Resul
     impl Drop for Count {
         fn drop(&mut self) {
             self.0.fetch_sub(1, Ordering::AcqRel);
+            super::SERVICE_CLIENTS.fetch_sub(1, Ordering::AcqRel);
         }
     }
     let _count = Count(count);
@@ -181,6 +227,7 @@ fn serve(stream: UnixStream, clients: Clients, count: Arc<AtomicUsize>) -> Resul
     result
 }
 pub(super) fn run() -> Result<()> {
+    let _ = super::service_build();
     let dir = directory()?;
     let path = socket()?;
     let lock = OpenOptions::new()
@@ -235,6 +282,7 @@ pub(super) fn run() -> Result<()> {
                     continue;
                 }
                 count.fetch_add(1, Ordering::AcqRel);
+                super::SERVICE_CLIENTS.fetch_add(1, Ordering::AcqRel);
                 let clients = clients.clone();
                 let count = count.clone();
                 std::thread::spawn(move || {
@@ -249,7 +297,9 @@ pub(super) fn run() -> Result<()> {
             || super::debug::has_active()
         {
             idle = Instant::now();
-        } else if idle.elapsed() > Duration::from_secs(1800) {
+        } else if idle.elapsed() > Duration::from_secs(1800)
+            || super::SERVICE_DRAIN.load(Ordering::Acquire)
+        {
             break;
         }
         std::thread::sleep(Duration::from_millis(100));

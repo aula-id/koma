@@ -35,6 +35,7 @@ pub(crate) fn remember_remote(
 }
 
 struct Connection {
+    ready: bool,
     child: Child,
     input: ChildStdin,
     replies: mpsc::Receiver<Result<Value, String>>,
@@ -99,6 +100,7 @@ fn connect(remote: Remote) -> anyhow::Result<Connection> {
         }
     });
     Ok(Connection {
+        ready: false,
         child,
         input,
         replies,
@@ -146,6 +148,14 @@ pub(super) fn request(request: &Request) -> Result<Value, String> {
             reply.get("id").and_then(Value::as_str) == Some(&request.id),
             "Coding reply identity mismatch"
         );
+        if !connection.ready {
+            connection.ready = true;
+            // A replacement daemon has no document snapshots. Reopen mounted
+            // buffers after negotiation, without replaying the original request.
+            super::event(
+                serde_json::json!({"k":"CodingEvent","workspace":request.workspace,"event":{"k":"LspTransportConnected"}}),
+            );
+        }
         Ok(reply)
     })();
     if result.is_err() {
