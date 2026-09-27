@@ -58,7 +58,8 @@ fn fingerprint_is_stable_for_unchanged_file() {
     let a = compute_fingerprint(&path);
     let b = compute_fingerprint(&path);
     assert_eq!(a, b);
-    assert_eq!(a.len(), 16);
+    // SHA-256 of the exact on-disk bytes, not the former 64-bit fingerprint.
+    assert_eq!(a, "401d4c7580941a9506c1a2f462bdb463113136933d6ec6b8cf07a3f992eb31bb");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

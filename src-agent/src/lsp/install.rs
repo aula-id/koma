@@ -797,10 +797,10 @@ mod tests {
     }
 
     #[test]
-    fn lua_zls_nil_not_managed_yet() {
-        for id in ["lua-language-server", "zls", "nil"] {
+    fn additional_language_servers_have_managed_installers() {
+        for id in ["lua-language-server", "zls", "nil", "phpactor"] {
             let spec = catalog::find(id).expect(id);
-            assert!(!managed_install_supported(spec), "{id}");
+            assert!(managed_install_supported(spec), "{id}");
         }
     }
 }
