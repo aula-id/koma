@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { taskProblems } from '../lib/coding-task-problems'
+import { pathToUri } from '../lib/lsp-bridge'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { FileCog, Play, RefreshCw, Square, Terminal, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { codingRequest, workspaceKey, type CodingTask, type CodingTaskRun, type WorkspaceRef } from '../lib/coding-service'
 import { BrailleSpinner } from './BrailleSpinner'
+
+const CodingTaskTerminal = lazy(() => import('./CodingTaskTerminal'))
 
 type Group = 'run' | 'build' | 'test'
 type Definitions = { tasks: CodingTask[]; fingerprint: string }
@@ -27,6 +31,7 @@ export function CodingTasks() {
   const [runs, setRuns] = useState<CodingTaskRun[]>([])
   const [runId, setRunId] = useState('')
   const [chunks, setChunks] = useState<Chunk[]>([])
+  const [outputFor, setOutputFor] = useState('')
   const [truncated, setTruncated] = useState(false)
   const [configError, setConfigError] = useState('')
   const [error, setError] = useState('')
@@ -112,7 +117,7 @@ export function CodingTasks() {
   }, [open, scope, refresh])
 
   useEffect(() => {
-    setChunks([]); setTruncated(false); setOutputError(''); setFollow(true)
+    setOutputFor(`${scope}:${runId}`); setChunks([]); setTruncated(false); setOutputError(''); setFollow(true)
     if (!open || !workspace || !runId) return
     const controller = new AbortController()
     let after = 0
@@ -145,6 +150,8 @@ export function CodingTasks() {
     if (follow && output.current) output.current.scrollTop = output.current.scrollHeight
   }, [chunks, follow])
 
+  const visibleChunks = outputFor === `${scope}:${runId}` ? chunks : []
+  const problems = useMemo(() => taskProblems(visibleChunks.map(c => c.text).join('')), [visibleChunks])
   if (!open) return null
   const choices = definitions?.tasks.filter(t => (t.group ?? 'run') === group) ?? []
   const task = choices.find(t => t.id === taskId)
@@ -210,14 +217,19 @@ export function CodingTasks() {
         {!runs.length && <option value="">No runs in this workspace</option>}
         {[...runs].reverse().map(r => <option key={r.id} value={r.id}>{r.label} · {r.status}{r.exitCode !== null ? ` (${r.exitCode})` : ''} · {new Date(r.started).toLocaleTimeString()}</option>)}
       </select>
-      <label className="flex items-center gap-1 text-koma-dim"><input type="checkbox" checked={follow} onChange={e => setFollow(e.target.checked)} />Follow</label>
+      {!run?.interactive && <label className="flex items-center gap-1 text-koma-dim"><input type="checkbox" checked={follow} onChange={e => setFollow(e.target.checked)} />Follow</label>}
       <button className={button} disabled={!live(run) || busy || run?.status === 'stopping'} title="Stop task and its subprocesses" onClick={() => void act('stop')}><Square size={11} />Stop</button>
     </div>
     {run?.error && <div className="flex-none px-3 py-1 text-koma-error">{run.error}</div>}
     {truncated && <div className="flex-none px-3 text-koma-dim">Earlier output was discarded. Showing retained output.</div>}
-    <pre ref={output} tabIndex={0} aria-label="Task output" className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] select-text" onScroll={() => {
+    {problems.length > 0 && <details className="max-h-24 flex-none overflow-auto border-b border-koma-border px-3 py-1"><summary className="cursor-pointer text-koma-dim">{problems.length} source locations</summary>{problems.map(p => <button key={`${p.path}:${p.line}:${p.column}`} className="block w-full truncate text-left text-koma-dim hover:text-koma-fg" title={p.message} onClick={() => {
+      if (!workspace || !run) return
+      if ((useKoma.getState().remoteState.hostId ?? 'local') !== workspace.hostId) { setError('Switch to this host to open task source locations.'); return }
+      useKoma.getState().openDiagnostic(new URL(pathToUri(`${workspace.root}/${run.cwd}`, p.path)).toString(), p.line - 1, p.column - 1)
+    }}>{p.path}:{p.line}:{p.column} · {p.message}</button>)}</details>}
+    {run?.interactive && workspace ? <Suspense fallback={<div className="p-3 text-koma-dim">Loading terminal…</div>}><CodingTaskTerminal key={`${scope}:${runId}`} workspace={workspace} runId={runId} chunks={visibleChunks} running={run.status === 'running'} onError={setError} /></Suspense> : <pre ref={output} tabIndex={0} aria-label="Task output" className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] select-text" onScroll={() => {
       const node = output.current
       if (node && node.scrollHeight - node.scrollTop - node.clientHeight > 40) setFollow(false)
-    }}>{chunks.length ? chunks.map(c => <span key={c.seq} className={c.stream === 'stderr' ? 'text-koma-warn' : c.stream === 'system' ? 'text-koma-dim' : ''}>{c.text}</span>) : <span className="text-koma-dim">{live(run) ? 'Waiting for output…' : 'No output'}</span>}</pre>
+    }}>{visibleChunks.length ? visibleChunks.map(c => <span key={c.seq} className={c.stream === 'stderr' ? 'text-koma-warn' : c.stream === 'system' ? 'text-koma-dim' : ''}>{c.text}</span>) : <span className="text-koma-dim">{live(run) ? 'Waiting for output…' : 'No output'}</span>}</pre>}
   </section>
 }

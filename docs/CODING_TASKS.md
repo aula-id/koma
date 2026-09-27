@@ -155,3 +155,28 @@ later steps. The task output identifies each step. Timeouts apply per step.
 steps run; the final task still reports failure. Test Explorer uses this for
 selected cases that need separate commands. Ordinary dependency steps default
 to stopping on the first failure.
+
+## Interactive tasks and source locations
+
+Set `interactive: true` on a task to give it a real PTY, keyboard input and terminal
+resize. Tasks uses the same terminal palette/font as Koma's existing terminal.
+Closing the panel does not stop the task. Opening its run replays retained terminal
+output; very old screen state cannot be reconstructed after buffer truncation.
+Input is bounded and queued separately so a program that stops reading does not
+block Stop. Large pastes may report backpressure and should be retried in smaller
+pieces, not automatically duplicated.
+
+```json
+{"id":"shell","label":"Project shell","command":"bash","interactive":true}
+```
+
+Use a suitable executable such as `pwsh` on Windows. Unix tasks own a session /
+process group; Stop terminates their foreground and original process groups before
+reaping. Windows ConPTY launches a gated helper, assigns it to a kill-on-close job
+object, and only then releases the real command. This avoids a child-spawn race
+before job assignment. Native platform execution remains an acceptance requirement.
+
+Common GCC/Clang, Rust, TypeScript and Python output locations are listed above
+output as clickable source links. Paths are resolved against the task's workspace
+and working directory; links require that host to be active. The text is never
+interpreted as HTML. Up to 200 distinct retained locations are shown.

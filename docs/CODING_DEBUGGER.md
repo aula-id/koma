@@ -46,9 +46,11 @@ Initialization waits for `initialized`, sends breakpoints, and sends
 `configurationDone` when advertised before awaiting launch completion. References
 from scopes/variables/stack/watch are invalidated after resume. Up to eight live
 sessions and 32 retained session summaries are held per native host process.
-Reverse `runInTerminal` requests are explicitly unsupported in this increment;
-use an adapter's internal console. Debug processes currently end with the coding
-worker, so network-loss adoption is a separate milestone.
+Integrated `runInTerminal` requests use workspace-owned PTY tasks. Open their
+input/output with the debugger terminal button. External terminal and shell-
+interpreted argument requests are explicitly rejected. Terminal cwd must stay
+inside the workspace, and launch-session teardown stops its terminal tasks. Unix remote sessions use the persistent coding service and can be adopted after
+SSH reconnect; Windows remote workers retain their original connection lifecycle.
 
 Native acceptance (not executed by the implementation agent): each managed adapter
 on each supported OS, breakpoints set before/after launch, condition rejection,

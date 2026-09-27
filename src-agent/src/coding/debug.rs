@@ -107,12 +107,14 @@ struct Session {
     id: String,
     workspace: WorkspaceRef,
     profile: Profile,
-    writer: Mutex<Option<Box<dyn Write + Send>>>,
+    writer: Mutex<Option<mpsc::SyncSender<Vec<u8>>>>,
     child: Mutex<Option<Box<dyn ChildWrapper>>>,
     pending: Mutex<BTreeMap<u64, mpsc::SyncSender<Result<Value, String>>>>,
     seq: AtomicU64,
+    reverse_requests: AtomicU64,
     closed: AtomicBool,
     state: Mutex<State>,
+    terminals: Mutex<Vec<String>>,
 }
 static SESSIONS: OnceLock<Mutex<VecDeque<Arc<Session>>>> = OnceLock::new();
 fn registry() -> &'static Mutex<VecDeque<Arc<Session>>> {
@@ -129,7 +131,7 @@ fn get(workspace: &WorkspaceRef, id: &str) -> Result<Arc<Session>> {
 }
 fn snapshot(s: &Session) -> Value {
     let state = s.state.lock().unwrap();
-    json!({"id":s.id,"workspace":s.workspace,"label":s.profile.label,"request":s.profile.request,"status":state.status,"error":state.error,"capabilities":state.capabilities,"sequence":state.sequence,"generation":state.generation,"breakpoints":state.breakpoints})
+    json!({"id":s.id,"workspace":s.workspace,"label":s.profile.label,"request":s.profile.request,"status":state.status,"error":state.error,"capabilities":state.capabilities,"sequence":state.sequence,"generation":state.generation,"breakpoints":state.breakpoints,"terminalTaskIds":*s.terminals.lock().unwrap()})
 }
 pub(super) fn sessions(workspace: &WorkspaceRef) -> Result<Value> {
     Ok(json!(registry()
@@ -148,7 +150,7 @@ pub(super) fn events(workspace: &WorkspaceRef, id: &str, after: u64) -> Result<V
     )
 }
 fn snapshot_unlocked(s: &Session, state: &State) -> Value {
-    json!({"id":s.id,"status":state.status,"error":state.error,"generation":state.generation,"capabilities":state.capabilities,"breakpoints":state.breakpoints})
+    json!({"id":s.id,"status":state.status,"error":state.error,"generation":state.generation,"capabilities":state.capabilities,"breakpoints":state.breakpoints,"terminalTaskIds":*s.terminals.lock().unwrap()})
 }
 fn emit(s: &Session, event: &str, mut body: Value) {
     if let Some(output) = body
@@ -179,13 +181,37 @@ fn emit(s: &Session, event: &str, mut body: Value) {
 fn send(s: &Session, value: &Value) -> Result<()> {
     let data = serde_json::to_vec(value)?;
     anyhow::ensure!(data.len() <= FRAME, "DAP message exceeds limit");
-    let mut writer = s.writer.lock().unwrap();
-    let writer = writer.as_mut().context("Debug adapter is not connected")?;
-    write!(writer, "Content-Length: {}\r\n\r\n", data.len())?;
-    writer.write_all(&data)?;
-    writer.flush()?;
+    let mut frame = format!("Content-Length: {}\r\n\r\n", data.len()).into_bytes();
+    frame.extend(data);
+    s.writer
+        .lock()
+        .unwrap()
+        .as_ref()
+        .context("Debug adapter is not connected")?
+        .try_send(frame)
+        .map_err(|_| anyhow::anyhow!("Debug adapter write queue is full or disconnected"))?;
     Ok(())
 }
+fn connect_writer(s: &Arc<Session>, mut writer: Box<dyn Write + Send>) -> Result<()> {
+    let (sender, receiver) = mpsc::sync_channel::<Vec<u8>>(8);
+    *s.writer.lock().unwrap() = Some(sender);
+    let owner = s.clone();
+    std::thread::Builder::new()
+        .name("coding-debug-writer".into())
+        .spawn(move || {
+            while let Ok(frame) = receiver.recv() {
+                if let Err(error) = writer.write_all(&frame).and_then(|_| writer.flush()) {
+                    if !owner.closed.load(Ordering::Acquire) {
+                        end(&owner, Some(error.to_string()));
+                        kill(&owner);
+                    }
+                    break;
+                }
+            }
+        })?;
+    Ok(())
+}
+
 fn begin(
     s: &Session,
     command: &str,
@@ -235,6 +261,11 @@ fn end(s: &Session, error: Option<String>) {
     drop(state);
     for (_, tx) in std::mem::take(&mut *s.pending.lock().unwrap()) {
         let _ = tx.send(Err("Debug adapter disconnected".into()));
+    }
+    if s.profile.request == "launch" {
+        for task in s.terminals.lock().unwrap().iter() {
+            let _ = super::tasks::stop(&s.workspace, task);
+        }
     }
 }
 fn kill(s: &Session) {
@@ -329,11 +360,43 @@ fn read_loop(s: Arc<Session>, reader: Box<dyn Read + Send>) {
                 }
             }
             Some("request") => {
-                let seq = s.seq.fetch_add(1, Ordering::Relaxed) + 1;
-                let _ = send(
-                    &s,
-                    &json!({"seq":seq,"type":"response","request_seq":msg["seq"],"command":msg["command"],"success":false,"message":"This client does not support adapter reverse requests"}),
-                );
+                if msg["command"] != "runInTerminal"
+                    || s.reverse_requests
+                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                            if n < 4 {
+                                Some(n + 1)
+                            } else {
+                                None
+                            }
+                        })
+                        .is_err()
+                {
+                    let seq = s.seq.fetch_add(1, Ordering::Relaxed) + 1;
+                    let _ = send(
+                        &s,
+                        &json!({"seq":seq,"type":"response","request_seq":msg["seq"],"command":msg["command"],"success":false,"message":"Unsupported or busy adapter reverse request"}),
+                    );
+                    continue;
+                }
+                let owner = s.clone();
+                std::thread::spawn(move || {
+                    let result = if msg["command"] == "runInTerminal" {
+                        run_terminal(&owner, &msg["arguments"])
+                    } else {
+                        Err(anyhow::anyhow!("Unsupported adapter reverse request"))
+                    };
+                    let seq = owner.seq.fetch_add(1, Ordering::Relaxed) + 1;
+                    let response = match result {
+                        Ok(body) => {
+                            json!({"seq":seq,"type":"response","request_seq":msg["seq"],"command":msg["command"],"success":true,"body":body})
+                        }
+                        Err(error) => {
+                            json!({"seq":seq,"type":"response","request_seq":msg["seq"],"command":msg["command"],"success":false,"message":error.to_string()})
+                        }
+                    };
+                    let _ = send(&owner, &response);
+                    owner.reverse_requests.fetch_sub(1, Ordering::AcqRel);
+                });
             }
             _ => {}
         }
@@ -511,7 +574,9 @@ fn start_profile(
         child: Mutex::new(None),
         pending: Mutex::new(BTreeMap::new()),
         seq: AtomicU64::new(0),
+        reverse_requests: AtomicU64::new(0),
         closed: AtomicBool::new(false),
+        terminals: Mutex::new(Vec::new()),
         state: Mutex::new(State {
             status: "starting".into(),
             error: None,
@@ -652,17 +717,17 @@ fn setup(s: &Arc<Session>, root: &Path, points: BTreeMap<String, Value>) -> Resu
         };
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
         reader = Box::new(stream.try_clone()?);
-        *s.writer.lock().unwrap() = Some(Box::new(stream));
+        connect_writer(s, Box::new(stream))?;
     } else {
         reader = Box::new(stdout);
-        *s.writer.lock().unwrap() = Some(Box::new(stdin));
+        connect_writer(s, Box::new(stdin))?;
     }
     let owner = s.clone();
     std::thread::spawn(move || read_loop(owner, reader));
     let capabilities = call(
         s,
         "initialize",
-        json!({"clientID":"koma","clientName":"Koma","adapterID":s.profile.adapter,"pathFormat":"path","linesStartAt1":true,"columnsStartAt1":true,"supportsVariableType":true,"supportsRunInTerminalRequest":false,"supportsStartDebuggingRequest":false,"supportsProgressReporting":false}),
+        json!({"clientID":"koma","clientName":"Koma","adapterID":s.profile.adapter,"pathFormat":"path","linesStartAt1":true,"columnsStartAt1":true,"supportsVariableType":true,"supportsRunInTerminalRequest":true,"supportsStartDebuggingRequest":false,"supportsProgressReporting":false}),
     )?;
     s.state.lock().unwrap().capabilities = capabilities.clone();
     let launching = begin(s, &s.profile.request, s.profile.configuration.clone())?;
@@ -842,4 +907,91 @@ mod tests {
 }
 
 #[cfg(unix)]
-pub(super) fn has_active() -> bool { registry().lock().unwrap().iter().any(|session|!session.closed.load(Ordering::Acquire)) }
+pub(super) fn has_active() -> bool {
+    registry()
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|session| !session.closed.load(Ordering::Acquire))
+}
+
+fn run_terminal(s: &Session, args: &Value) -> Result<Value> {
+    anyhow::ensure!(
+        args["kind"]
+            .as_str()
+            .is_none_or(|kind| kind == "integrated"),
+        "Use the integrated debug terminal"
+    );
+    anyhow::ensure!(
+        args["argsCanBeInterpretedByShell"] != true,
+        "Shell-interpreted adapter arguments are not supported"
+    );
+    let values: Vec<String> = serde_json::from_value(args["args"].clone())?;
+    anyhow::ensure!(
+        !values.is_empty()
+            && values.len() <= 256
+            && values.iter().all(|v| v.len() <= 32768 && !v.contains('\0')),
+        "Invalid debug terminal arguments"
+    );
+    let root = PathBuf::from(&s.workspace.root).canonicalize()?;
+    let cwd = PathBuf::from(args["cwd"].as_str().unwrap_or(&s.workspace.root)).canonicalize()?;
+    anyhow::ensure!(
+        cwd.starts_with(&root) && cwd.is_dir(),
+        "Debug terminal cwd must be inside the workspace"
+    );
+    let mut env = BTreeMap::new();
+    let mut remove = Vec::new();
+    if let Some(fields) = args["env"].as_object() {
+        anyhow::ensure!(fields.len() <= 100, "Too many debug environment entries");
+        for (key, value) in fields {
+            anyhow::ensure!(
+                !key.is_empty() && !key.contains(['=', '\0']),
+                "Invalid debug environment key"
+            );
+            if value.is_null() {
+                remove.push(key.clone());
+            } else {
+                let value = value
+                    .as_str()
+                    .context("Debug environment values must be strings or null")?;
+                anyhow::ensure!(!value.contains('\0'), "Invalid debug environment value");
+                env.insert(key.clone(), value.to_string());
+            }
+        }
+    }
+    let mut terminals = s.terminals.lock().unwrap();
+    anyhow::ensure!(
+        !s.closed.load(Ordering::Acquire) && terminals.len() < 4,
+        "Debug session is closed or has too many terminals"
+    );
+    let run = super::tasks::run_commands(
+        &s.workspace,
+        &root,
+        &format!("debug-terminal:{}:{}", s.id, terminals.len()),
+        args["title"].as_str().unwrap_or("Debug terminal"),
+        vec![
+            json!({"command":values[0],"args":&values[1..],"cwd":cwd.strip_prefix(&root)?.to_string_lossy(),"env":env,"envRemove":remove,"interactive":true}),
+        ],
+    )?;
+    let id = run["id"].as_str().unwrap().to_string();
+    terminals.push(id.clone());
+    drop(terminals);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        anyhow::ensure!(!s.closed.load(Ordering::Acquire), "Debug session ended");
+        if let Some(pid) = super::tasks::process_id(&s.workspace, &id)? {
+            #[cfg(windows)]
+            return Ok(json!({"shellProcessId":pid}));
+            #[cfg(not(windows))]
+            return Ok(json!({"processId":pid}));
+        }
+        let summary = super::tasks::summary(&s.workspace, &id)?;
+        anyhow::ensure!(
+            matches!(summary["status"].as_str(), Some("queued" | "running"))
+                && Instant::now() < deadline,
+            "Debug terminal failed to start: {}",
+            summary["error"]
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}

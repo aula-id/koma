@@ -7,6 +7,7 @@ mod debug;
 pub(crate) mod environment;
 mod language;
 mod packs;
+mod pty;
 pub(crate) mod persistence;
 pub(crate) mod provision;
 mod resources;
@@ -163,6 +164,8 @@ pub(crate) enum Operation {
     TaskStop {
         run_id: String,
     },
+    TaskInput { run_id: String, data: String },
+    TaskResize { run_id: String, rows: u16, cols: u16 },
     TaskOutput {
         run_id: String,
         after: u64,
@@ -426,3 +429,5 @@ pub(crate) fn provision_main() -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("Missing component"))?,
     )
 }
+
+#[cfg(windows)] pub(crate) fn pty_gate_main() -> anyhow::Result<()> {pty::gated_main()}

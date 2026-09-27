@@ -268,3 +268,11 @@ Lazy code-action resolution, advertised server commands and preview-mediated
 `workspace/applyEdit` are connected. File create/rename/delete uses native
 preflight, inverse journals, rollback and disk-guarded Undo; see
 [resource edits](CODING_RESOURCE_EDITS.md) for limits and acceptance.
+
+### Interactive Tasks
+
+Tasks now offers configured PTY execution, queued input, resize, process-tree
+cancellation and source-location links for common compiler/traceback output.
+The terminal reuses Koma's existing palette and font. Windows uses a startup gate
+before releasing the real command into its job object. Platform testing remains
+with the user; see [Tasks](CODING_TASKS.md).

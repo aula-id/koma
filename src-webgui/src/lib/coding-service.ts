@@ -41,6 +41,8 @@ export type CodingOperation =
   | { op: 'taskDefinitions' | 'taskRuns' }
   | { op: 'taskStart'; taskId: string; fingerprint: string }
   | { op: 'taskStop'; runId: string }
+  | { op: 'taskInput'; runId: string; data: string }
+  | { op: 'taskResize'; runId: string; rows: number; cols: number }
   | { op: 'taskOutput'; runId: string; after: number }
   | { op: 'backup'; document: CodingBackup }
   | { op: 'backupRead'; windowId: string; path: string; revision: number }
@@ -69,9 +71,11 @@ export type CodingTask = {
   group?: 'run' | 'build' | 'test'
   cwd?: string
   env?: Record<string, string>
+  envRemove?: string[]
   timeoutMs?: number
   dependsOn?: string[]
   continueOnError?: boolean
+  interactive?: boolean
 }
 export type CodingTaskRun = {
   id: string
@@ -87,6 +91,7 @@ export type CodingTaskRun = {
   status: 'queued' | 'running' | 'stopping' | 'succeeded' | 'failed' | 'stopped'
   exitCode: number | null
   error: string | null
+  interactive: boolean
   outputComplete: boolean
   sequence: number
 }

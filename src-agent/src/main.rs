@@ -62,6 +62,8 @@ mod tool;
 mod view;
 
 fn main() -> anyhow::Result<()> {
+    #[cfg(windows)]
+    if std::env::args().nth(1).as_deref() == Some("coding-pty-gate") { return coding::pty_gate_main(); }
     if std::env::args().nth(1).as_deref() == Some("coding-daemon") { return coding::daemon_main(); }
     if std::env::args().nth(1).as_deref() == Some("coding-provision") {
         return coding::provision_main();

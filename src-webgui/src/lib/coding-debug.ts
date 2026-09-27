@@ -2,7 +2,7 @@ import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api'
 import { codingRequest, workspaceKey, type WorkspaceRef } from './coding-service'
 export type Breakpoint = { line: number; condition?: string; hitCondition?: string; logMessage?: string }
 export type Breakpoints = Record<string, Breakpoint[]>
-export type DebugSession = { id: string; label: string; request: string; status: string; error: string | null; generation: number; capabilities: Record<string, unknown>; breakpoints: Record<string, { breakpoints?: { verified: boolean; line?: number; message?: string }[] }> }
+export type DebugSession = { id: string; label: string; request: string; status: string; error: string | null; generation: number; terminalTaskIds?: string[]; capabilities: Record<string, unknown>; breakpoints: Record<string, { breakpoints?: { verified: boolean; line?: number; message?: string }[] }> }
 const cache = new Map<string, Breakpoints>()
 const key = (w: WorkspaceRef) => `koma.debug.breakpoints.${workspaceKey(w)}`
 export function breakpoints(w: WorkspaceRef): Breakpoints {

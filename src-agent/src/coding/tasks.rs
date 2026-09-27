@@ -34,11 +34,15 @@ struct Task {
     #[serde(default)]
     env: BTreeMap<String, String>,
     #[serde(default)]
+    env_remove: Vec<String>,
+    #[serde(default)]
     timeout_ms: Option<u64>,
     #[serde(default)]
     depends_on: Vec<String>,
     #[serde(default)]
     continue_on_error: bool,
+    #[serde(default)]
+    interactive: bool,
 }
 fn default_group() -> String {
     "run".into()
@@ -98,6 +102,14 @@ fn load(root: &Path) -> Result<(Vec<Task>, String)> {
             "Invalid task environment"
         );
         anyhow::ensure!(
+            task.env_remove.len() <= 100
+                && task
+                    .env_remove
+                    .iter()
+                    .all(|key| !key.is_empty() && !key.contains(['=', '\0'])),
+            "Invalid removed environment keys"
+        );
+        anyhow::ensure!(
             task.timeout_ms
                 .is_none_or(|v| (100..=86_400_000).contains(&v)),
             "Task timeoutMs must be between 100 and 86400000"
@@ -134,6 +146,26 @@ struct State {
     sequence: u64,
     readers: usize,
 }
+enum TaskChild {
+    Pipe(Box<dyn ChildWrapper>),
+    Pty(super::pty::Process),
+}
+impl TaskChild {
+    fn start_kill(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Pipe(child) => child.start_kill(),
+            Self::Pty(child) => child.kill(),
+        }
+    }
+    fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
+        match self {
+            Self::Pipe(child) => child
+                .try_wait()
+                .map(|status| status.map(|s| s.code().unwrap_or(-1))),
+            Self::Pty(child) => child.try_wait(),
+        }
+    }
+}
 pub(super) type OutputObserver = Arc<dyn Fn(&str, &str) + Send + Sync>;
 struct Run {
     observer: Option<OutputObserver>,
@@ -143,7 +175,7 @@ struct Run {
     reserved: Vec<String>,
     started: u64,
     // A single lock serializes Stop against process exit; output uses a separate lock.
-    child: Mutex<Option<Box<dyn ChildWrapper>>>,
+    child: Mutex<Option<TaskChild>>,
     canceled: std::sync::atomic::AtomicBool,
     state: Mutex<State>,
 }
@@ -165,7 +197,7 @@ impl Run {
     fn summary(&self) -> Value {
         let s = self.state.lock().unwrap();
         json!({"id":self.id,"workspace":self.workspace,"taskId":self.task.id,"label":self.task.label,
-            "group":self.task.group,"command":self.task.command,"args":self.task.args,"cwd":self.task.cwd,
+            "group":self.task.group,"interactive":self.task.interactive,"command":self.task.command,"args":self.task.args,"cwd":self.task.cwd,
             "started":self.started,"ended":s.ended,"status":s.status,"exitCode":s.exit_code,
             "error":s.error,"outputComplete":s.readers == 0,"sequence":s.sequence})
     }
@@ -443,10 +475,11 @@ pub(super) fn run_observed(
 fn start_recipe(
     workspace: &WorkspaceRef,
     root: &Path,
-    task: Task,
+    mut task: Task,
     steps: Vec<Task>,
     observer: Option<OutputObserver>,
 ) -> Result<Value> {
+    task.interactive = steps.iter().any(|step| step.interactive);
     for step in &steps {
         let cwd = root
             .join(&step.cwd)
@@ -543,6 +576,39 @@ fn launch_step(run: &Arc<Run>, root: &Path, task: &Task) -> Result<()> {
         } else {
             super::environment::executable(root, &task.command)?.into_os_string()
         };
+    if task.interactive {
+        let mut env = super::environment::variables(root, &task.command)?;
+        env.extend(task.env.clone());
+        let mut slot = run.child.lock().unwrap();
+        anyhow::ensure!(
+            !run.canceled.load(std::sync::atomic::Ordering::Acquire),
+            "Task stopped"
+        );
+        let (child, reader) = super::pty::Process::spawn(
+            Path::new(&executable),
+            &task.args,
+            &cwd,
+            &env,
+            &task.env_remove,
+        )?;
+        *slot = Some(TaskChild::Pty(child));
+        {
+            let mut state = run.state.lock().unwrap();
+            state.status = "running";
+            state.readers += 1;
+        }
+        drop(slot);
+        let reader_run = run.clone();
+        if let Err(error) = std::thread::Builder::new()
+            .name("coding-task-pty".into())
+            .spawn(move || read_output(reader_run, "terminal", reader))
+        {
+            run.state.lock().unwrap().readers -= 1;
+            let _ = stop_run(run, Some(error.to_string()));
+            return Err(error.into());
+        }
+        return Ok(());
+    }
     let mut command = Command::new(executable);
     command
         .args(&task.args)
@@ -552,6 +618,9 @@ fn launch_step(run: &Arc<Run>, root: &Path, task: &Task) -> Result<()> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for key in &task.env_remove {
+        command.env_remove(key);
+    }
     let mut slot = run.child.lock().unwrap();
     anyhow::ensure!(
         !run.canceled.load(std::sync::atomic::Ordering::Acquire),
@@ -567,7 +636,7 @@ fn launch_step(run: &Arc<Run>, root: &Path, task: &Task) -> Result<()> {
         .stderr()
         .take()
         .context("Task stderr is unavailable")?;
-    *slot = Some(child);
+    *slot = Some(TaskChild::Pipe(child));
     {
         let mut s = run.state.lock().unwrap();
         s.status = "running";
@@ -604,6 +673,8 @@ fn read_output(run: Arc<Run>, stream: &'static str, mut pipe: Box<dyn Read + Sen
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            #[cfg(unix)]
+            Err(e) if stream == "terminal" && e.raw_os_error() == Some(libc::EIO) => break,
             Err(e) => {
                 run.append("system", format!("\nOutput read failed: {e}\n"));
                 break;
@@ -700,9 +771,7 @@ fn supervise(run: Arc<Run>, root: std::path::PathBuf, steps: Vec<Task>) {
                     Ok(None) => false,
                     result => {
                         let _ = slot.as_mut().unwrap().start_kill();
-                        outcome = result
-                            .map(|exit| exit.unwrap().code().unwrap_or(-1))
-                            .map_err(|e| e.to_string());
+                        outcome = result.map(|exit| exit.unwrap()).map_err(|e| e.to_string());
                         slot.take();
                         true
                     }
@@ -1006,4 +1075,40 @@ pub(super) fn summary(workspace: &WorkspaceRef, id: &str) -> Result<Value> {
 }
 
 #[cfg(unix)]
-pub(super) fn has_active() -> bool { registry().lock().unwrap().iter().any(|run|active(&run.state.lock().unwrap())) }
+pub(super) fn has_active() -> bool {
+    registry()
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|run| active(&run.state.lock().unwrap()))
+}
+
+pub(super) fn input(workspace: &WorkspaceRef, id: &str, data: &str) -> Result<Value> {
+    anyhow::ensure!(data.len() <= 65536, "Terminal input exceeds 64 KiB");
+    let run = find(workspace, id)?;
+    let mut slot = run.child.lock().unwrap();
+    match slot.as_mut() {
+        Some(TaskChild::Pty(child)) => child.input(data)?,
+        _ => anyhow::bail!("This task has no active terminal"),
+    };
+    Ok(json!({}))
+}
+pub(super) fn resize(workspace: &WorkspaceRef, id: &str, rows: u16, cols: u16) -> Result<Value> {
+    let run = find(workspace, id)?;
+    let slot = run.child.lock().unwrap();
+    match slot.as_ref() {
+        Some(TaskChild::Pty(child)) => child.resize(rows, cols)?,
+        _ => anyhow::bail!("This task has no active terminal"),
+    };
+    Ok(json!({}))
+}
+
+pub(super) fn process_id(workspace: &WorkspaceRef, id: &str) -> Result<Option<u32>> {
+    let run = find(workspace, id)?;
+    let slot = run.child.lock().unwrap();
+    Ok(match slot.as_ref() {
+        Some(TaskChild::Pipe(child)) => Some(child.id()),
+        Some(TaskChild::Pty(child)) => child.process_id(),
+        None => None,
+    })
+}

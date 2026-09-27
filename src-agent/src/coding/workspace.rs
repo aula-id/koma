@@ -41,6 +41,8 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
         Operation::DebugStop { session_id } => {
             return super::debug::stop(&request.workspace, session_id)
         }
+        Operation::TaskInput { run_id, data } => return super::tasks::input(&request.workspace, run_id, data),
+        Operation::TaskResize { run_id, rows, cols } => return super::tasks::resize(&request.workspace, run_id, *rows, *cols),
         Operation::TaskRuns => return super::tasks::runs(&request.workspace),
         Operation::TaskStop { run_id } => return super::tasks::stop(&request.workspace, run_id),
         Operation::TaskOutput { run_id, after } => {
