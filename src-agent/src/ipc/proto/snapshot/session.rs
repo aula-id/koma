@@ -43,6 +43,8 @@ pub struct SessionSnapshot {
     pub subagents: Vec<SubAgentSnapshot>,
     pub pending_subagents: Vec<PendingSubagentSnapshot>,
     pub resolved_model_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_routes: Vec<crate::app::resolve::RoleResolution>,
     /// Queued mid-turn follow-up / steer messages (full text). Drives the pending
     /// panel between transcript + composer and lets clients edit/remove per item.
     /// Empty = no panel. Cap is enforced daemon-side (5).

@@ -205,6 +205,11 @@ impl SettingsState {
         // out-of-band) falls back to idx 0 so the row surfaces for re-pick rather
         // than vanishing.
         let map_entry = |m: &crate::model::app_config::ModelEntry, session_only: bool| {
+            let source = m
+                .source_uuid
+                .as_ref()
+                .and_then(|u| config.models.iter().find(|e| &e.uuid == u))
+                .unwrap_or(m);
             // Resolve `provider_uuid` against the MERGED provider cycle: real
             // providers first, then OAuth conns offset by `providers.len()`. A
             // dangling uuid (neither resolves) falls back to idx 0 for *display*
@@ -212,23 +217,23 @@ impl SettingsState {
             // later Esc/save cannot silently rebind the model to providers[0]
             // (koma free). See `actions/settings.rs::to_entry`.
             let provider_idx = config
-                .provider_index_by_uuid(&m.provider_uuid)
+                .provider_index_by_uuid(&source.provider_uuid)
                 .or_else(|| {
                     config
-                        .oauth_index_by_uuid(&m.provider_uuid)
+                        .oauth_index_by_uuid(&source.provider_uuid)
                         .map(|i| config.providers.len() + i)
                 })
                 .unwrap_or(0);
             ModelDraft {
                 uuid: m.uuid.clone(),
-                name: m.name.clone(),
-                model_id: m.model_id.clone(),
+                name: source.name.clone(),
+                model_id: source.model_id.clone(),
                 provider_idx,
                 // Authoritative binding — never drop this on an index miss.
-                provider_uuid: m.provider_uuid.clone(),
+                provider_uuid: source.provider_uuid.clone(),
                 // Fold the legacy single-role field into the multi-role list on load.
                 roles: m.effective_roles(),
-                route: m.route.clone(),
+                route: source.route.clone(),
                 session_only,
                 // Carry the clone-source identity through the settings editor so a
                 // save that doesn't touch this model preserves the GUI picker match.

@@ -51,6 +51,8 @@ pub(super) enum PushEnvelope {
     /// Structural / commit tick (the catch-all): the full committed transcript +
     /// title + palette for `session`. `state` is always `"attached"`.
     Snapshot {
+        #[serde(rename = "modelRoutes", skip_serializing_if = "Vec::is_empty")]
+        model_routes: Vec<crate::app::resolve::RoleResolution>,
         session: String,
         state: &'static str,
         messages: Vec<PushMsg>,

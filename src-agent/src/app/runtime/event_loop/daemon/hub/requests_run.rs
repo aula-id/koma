@@ -10,7 +10,7 @@ pub(crate) fn run_state(state: &AppState) -> anyhow::Result<RunState> {
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("No active session."))?;
     let settings = &sess.settings;
-    let resolved = crate::app::resolve::resolve_role(
+    let resolved = crate::app::resolve::resolve_role_dispatch(
         &state.rest.config,
         settings,
         crate::model::app_config::ModelRole::Main,
@@ -29,6 +29,7 @@ pub(crate) fn run_state(state: &AppState) -> anyhow::Result<RunState> {
             .iter()
             .map(|p| p.display().to_string())
             .collect(),
+        model_routes: crate::app::resolve::role_resolutions(&state.rest.config, settings),
         model: resolved.map(|r| r.model_id).unwrap_or_default(),
         effort: settings.effort.clone(),
         mode: rt.agent_mode.label().into(),

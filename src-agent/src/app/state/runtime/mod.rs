@@ -234,6 +234,7 @@ pub struct SessionRuntime {
     pub tokens_cached: u64,
     /// Stable footer sample: latest provider report, or a local estimate only
     /// before the first report. Its input/cache/window values stay together.
+    pub model_routes: Vec<crate::app::resolve::RoleResolution>,
     pub context_usage: Option<crate::service::context_limits::ContextUsage>,
     /// In-flight request metadata used to pair fresh usage with its own window.
     /// Kept separate so starting another tool round cannot replace the readout.
@@ -729,6 +730,7 @@ impl SessionRuntime {
             tokens_out: 0,
             cost: 0.0,
             tokens_cached: 0,
+            model_routes: Vec::new(),
             context_usage: None,
             pending_context_usage: None,
             pending_tool_calls: Vec::new(),

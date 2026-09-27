@@ -161,6 +161,7 @@ pub fn diff(
     if prev.global.providers != next.global.providers
         || prev.global.config_models != next.global.config_models
         || prev.global.session_models != next.global.session_models
+        || prev.global.main_configured != next.global.main_configured
         || prev.global.mcp_servers != next.global.mcp_servers
     {
         return DiffResult::full();
@@ -241,6 +242,7 @@ pub fn diff(
             // A model change (settings override or global catalogue edit) has no
             // incremental delta; resync so the header updates immediately.
             || p.resolved_model_id != n.resolved_model_id
+            || p.model_routes != n.model_routes
             || p.pending_steer != n.pending_steer;
         if structural {
             return DiffResult::full();

@@ -687,6 +687,9 @@ fn push_snapshot_if_changed(
         // Fold the agent mode in so a pure mode switch (no transcript change) re-emits the
         // Snapshot — the composer selector updates the instant `SetMode` lands.
         mode.hash(&mut h);
+        serde_json::to_string(&fg.model_routes)
+            .unwrap_or_default()
+            .hash(&mut h);
         palette.bg.hash(&mut h);
         palette.fg.hash(&mut h);
         // Fold the fuller palette roles in so a theme swap that keeps bg/fg but
@@ -807,6 +810,9 @@ fn push_snapshot_if_changed(
         session.hash(&mut h);
         title.hash(&mut h);
         mode.hash(&mut h);
+        serde_json::to_string(&fg.model_routes)
+            .unwrap_or_default()
+            .hash(&mut h);
         palette.bg.hash(&mut h);
         palette.fg.hash(&mut h);
         palette.accent.hash(&mut h);
@@ -979,6 +985,7 @@ fn push_snapshot_if_changed(
                 .map(|m| m.len())
                 .unwrap_or(windowed.len());
             let env = PushEnvelope::Snapshot {
+                model_routes: fg.model_routes.clone(),
                 session: session.to_string(),
                 state: "attached",
                 messages: windowed,

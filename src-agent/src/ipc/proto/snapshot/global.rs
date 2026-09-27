@@ -39,6 +39,8 @@ pub struct GlobalSnapshot {
     pub providers: Vec<crate::model::app_config::ProviderConn>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config_models: Vec<crate::model::app_config::ModelEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_configured: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub session_models: Vec<crate::model::app_config::ModelEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
