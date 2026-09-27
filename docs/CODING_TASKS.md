@@ -150,3 +150,8 @@ precedence. Discovery does not execute project commands. `dependsOn: ["task-id"]
 adds sequential prerequisites; cycles and missing IDs are rejected. Shared
 prerequisites run once per invocation. A failed or canceled prerequisite prevents
 later steps. The task output identifies each step. Timeouts apply per step.
+
+`continueOnError: true` allows a task step to finish unsuccessfully while later
+steps run; the final task still reports failure. Test Explorer uses this for
+selected cases that need separate commands. Ordinary dependency steps default
+to stopping on the first failure.

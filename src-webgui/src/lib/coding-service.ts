@@ -9,6 +9,10 @@ export type CodingReply = {
   error?: string
 }
 export type CodingOperation =
+  | { op: 'testDefinitions' | 'testRuns' }
+  | { op: 'testStart'; profileId: string; fingerprint: string; mode: 'discover' | 'run' | 'failed'; previous?: string; selection: string[] }
+  | { op: 'testResults' | 'testStop'; runId: string }
+  | { op: 'testDebug'; runId: string; itemId: string; breakpoints: Record<string, unknown> }
   | { op: 'debugDefinitions' | 'debugSessions' }
   | { op: 'debugStart'; profileId: string; fingerprint: string; file?: string; breakpoints: Record<string, unknown> }
   | { op: 'debugEvents'; sessionId: string; after: number }
@@ -61,6 +65,7 @@ export type CodingTask = {
   env?: Record<string, string>
   timeoutMs?: number
   dependsOn?: string[]
+  continueOnError?: boolean
 }
 export type CodingTaskRun = {
   id: string

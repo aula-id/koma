@@ -37,6 +37,8 @@ struct Task {
     timeout_ms: Option<u64>,
     #[serde(default)]
     depends_on: Vec<String>,
+    #[serde(default)]
+    continue_on_error: bool,
 }
 fn default_group() -> String {
     "run".into()
@@ -132,7 +134,9 @@ struct State {
     sequence: u64,
     readers: usize,
 }
+pub(super) type OutputObserver = Arc<dyn Fn(&str, &str) + Send + Sync>;
 struct Run {
+    observer: Option<OutputObserver>,
     id: String,
     workspace: WorkspaceRef,
     task: Task,
@@ -166,6 +170,9 @@ impl Run {
             "error":s.error,"outputComplete":s.readers == 0,"sequence":s.sequence})
     }
     fn append(&self, stream: &'static str, text: String) {
+        if let Some(observer) = &self.observer {
+            observer(stream, &text);
+        }
         let mut s = self.state.lock().unwrap();
         s.sequence += 1;
         let seq = s.sequence;
@@ -391,7 +398,7 @@ pub(super) fn start(
         Ok(())
     }
     visit(id, &all, &mut visiting, &mut done, &mut ordered)?;
-    start_recipe(workspace, root, task, ordered)
+    start_recipe(workspace, root, task, ordered, None)
 }
 
 /// Internal callers supply a concrete, already-reviewed sequence of commands.
@@ -407,6 +414,20 @@ pub(super) fn run_commands(
         !commands.is_empty() && commands.len() <= 100,
         "Invalid command sequence"
     );
+    run_observed(workspace, root, id, label, commands, None)
+}
+pub(super) fn run_observed(
+    workspace: &WorkspaceRef,
+    root: &Path,
+    id: &str,
+    label: &str,
+    commands: Vec<Value>,
+    observer: Option<OutputObserver>,
+) -> Result<Value> {
+    anyhow::ensure!(
+        !commands.is_empty() && commands.len() <= 100,
+        "Invalid command sequence"
+    );
     let mut steps = Vec::new();
     for (i, mut value) in commands.into_iter().enumerate() {
         value["id"] = json!(format!("{id}:{i}"));
@@ -416,7 +437,7 @@ pub(super) fn run_commands(
     let mut task = steps[0].clone();
     task.id = id.into();
     task.label = label.into();
-    start_recipe(workspace, root, task, steps)
+    start_recipe(workspace, root, task, steps, observer)
 }
 
 fn start_recipe(
@@ -424,6 +445,7 @@ fn start_recipe(
     root: &Path,
     task: Task,
     steps: Vec<Task>,
+    observer: Option<OutputObserver>,
 ) -> Result<Value> {
     for step in &steps {
         let cwd = root
@@ -469,6 +491,7 @@ fn start_recipe(
         registry.remove(i);
     }
     let run = Arc::new(Run {
+        observer,
         id: uuid::Uuid::new_v4().to_string(),
         workspace: workspace.clone(),
         task,
@@ -648,6 +671,7 @@ pub(super) fn stop(workspace: &WorkspaceRef, id: &str) -> Result<Value> {
 }
 fn supervise(run: Arc<Run>, root: std::path::PathBuf, steps: Vec<Task>) {
     let mut outcome = Ok(0);
+    let mut previous_failure = None;
     for step in &steps {
         if run.canceled.load(std::sync::atomic::Ordering::Acquire) {
             break;
@@ -689,8 +713,21 @@ fn supervise(run: Arc<Run>, root: std::path::PathBuf, steps: Vec<Task>) {
             }
             std::thread::sleep(Duration::from_millis(100));
         }
+        // Drain each step before launching the next so streaming observers see
+        // one complete command at a time, including its trailing output.
+        while run.state.lock().unwrap().readers > 0 {
+            std::thread::sleep(Duration::from_millis(10));
+        }
         if !matches!(outcome, Ok(0)) {
-            break;
+            if !step.continue_on_error {
+                break;
+            }
+            previous_failure = Some(outcome.clone());
+        }
+    }
+    if matches!(outcome, Ok(0)) {
+        if let Some(failure) = previous_failure {
+            outcome = failure;
         }
     }
     let mut s = run.state.lock().unwrap();
@@ -962,4 +999,8 @@ fn discover(root: &Path, tasks: &mut Vec<Task>) -> Result<()> {
         add("make:build", "Make", "build", "make", vec![])?;
     }
     Ok(())
+}
+
+pub(super) fn summary(workspace: &WorkspaceRef, id: &str) -> Result<Value> {
+    Ok(find(workspace, id)?.summary())
 }

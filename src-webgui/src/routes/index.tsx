@@ -1,3 +1,4 @@
+import { CodingTests } from '../components/CodingTests'
 import { CodingDebug } from '../components/CodingDebug'
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
@@ -452,6 +453,7 @@ function RootLayout() {
       <CodingTasks />
       <CodingPacks />
       <CodingDebug />
+      <CodingTests />
       <CodingHistory />
       <CodingRefactor />
       <SwitchingOverlay

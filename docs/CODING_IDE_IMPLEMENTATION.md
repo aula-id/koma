@@ -15,7 +15,7 @@ two-pane layout, visual tokens, and interaction patterns.
 | Workspace edits, formatting, rename, code actions, LSP extensions | In progress |
 | Search/replace preview and task runner | In progress |
 | Debug Adapter Protocol and debugger UI | Initial implementation; native acceptance pending |
-| Test Explorer and complete language catalogue | Pending |
+| Test Explorer and complete language catalogue | Built-in runners delivered; catalogue parity pending |
 | Cross-platform integration and native acceptance | Pending |
 
 ## Product decisions
@@ -245,3 +245,11 @@ The debugger provides a workspace/session selector, launch/attach, persistent
 breakpoints, conditions, stepping, call stacks, variables and watch expressions.
 See [debugger configuration and acceptance](CODING_DEBUGGER.md). Adapter reverse
 terminal requests and native cross-platform acceptance remain outstanding.
+
+### Test Explorer
+
+Workspace-bound discovery, run selection, cancellation, failed-test reruns and
+structured results now use the shared task supervisor. Python/Go/Node tests can
+launch a DAP session; other runners can select a project debug profile. See
+[Test Explorer](CODING_TEST_EXPLORER.md) for the supported runner contracts,
+current Node/Cargo identity limits and native acceptance.

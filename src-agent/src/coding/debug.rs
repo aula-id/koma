@@ -423,10 +423,34 @@ pub(super) fn start(
         current == fingerprint,
         "Debug profiles changed; refresh before starting"
     );
-    let mut profile = profiles
+    let profile = profiles
         .into_iter()
         .find(|p| p.id == profile_id)
         .context("Unknown debug profile")?;
+    start_profile(workspace, root, profile, file, breakpoints)
+}
+pub(super) fn start_custom(
+    workspace: &WorkspaceRef,
+    root: &Path,
+    profile: Value,
+    file: Option<&str>,
+    breakpoints: &Value,
+) -> Result<Value> {
+    start_profile(
+        workspace,
+        root,
+        serde_json::from_value(profile)?,
+        file,
+        breakpoints,
+    )
+}
+fn start_profile(
+    workspace: &WorkspaceRef,
+    root: &Path,
+    mut profile: Profile,
+    file: Option<&str>,
+    breakpoints: &Value,
+) -> Result<Value> {
     let file = if let Some(file) = file {
         let p = root.join(file).canonicalize()?;
         anyhow::ensure!(

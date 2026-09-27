@@ -1,3 +1,4 @@
+import { showCodingTests } from './CodingTests'
 import { showCodingDebug } from './CodingDebug'
 import { useEffect, useRef, useState } from 'react'
 import { File, Search, Terminal, X } from 'lucide-react'
@@ -30,6 +31,7 @@ const commands: Command[] = [
   { id: 'editor.action.commentLine', title: 'Toggle Line Comment', editor: true },
   { id: 'editor.action.toggleWordWrap', title: 'Toggle Word Wrap', editor: true },
   { id: 'projectSettings', title: 'Open Project Coding Settings' },
+  { id: 'tests', title: 'Tests: Discover, Run and Debug' },
   { id: 'debug', title: 'Debug: Launch, Attach and Inspect' },
   { id: 'koma.toggleBreakpoint', title: 'Toggle Breakpoint', shortcut: 'F9', editor: true },
   { id: 'packs', title: 'Language Packs: Install, Update and Select Environment' },
@@ -147,6 +149,7 @@ export function CodingPalette() {
     }
     else if (command.id === 'saveAll') { for (const tab of store.ui.tabs) if (tab.kind === 'codingFile' && !tab.preview) store.saveCodingFile(tab.root, tab.path) }
     else if (command.id === 'recovery') showCodingHistory()
+    else if (command.id === 'tests') showCodingTests()
     else if (command.id === 'debug') showCodingDebug()
     else if (command.id === 'packs') showCodingPacks()
     else if (command.id === 'tasks') showCodingTasks()

@@ -15,6 +15,11 @@ fn root(request: &Request) -> Result<PathBuf> {
 pub(super) fn execute(request: &Request) -> Result<Value> {
     // Existing processes remain inspectable/stoppable even after root deletion.
     match &request.operation {
+        Operation::TestRuns => return super::tests::runs(&request.workspace),
+        Operation::TestResults { run_id } => {
+            return super::tests::results(&request.workspace, run_id)
+        }
+        Operation::TestStop { run_id } => return super::tests::stop(&request.workspace, run_id),
         Operation::DebugSessions => return super::debug::sessions(&request.workspace),
         Operation::DebugEvents { session_id, after } => {
             return super::debug::events(&request.workspace, session_id, *after)
@@ -62,6 +67,30 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
         ))?),
         Operation::File { body } => file_operation(request, body, &workdirs),
         Operation::Watch => super::watch::watch(&request.workspace, &canonical),
+        Operation::TestDefinitions => super::tests::definitions(&canonical),
+        Operation::TestStart {
+            profile_id,
+            fingerprint,
+            mode,
+            previous,
+            selection,
+        } => super::tests::start(
+            &request.workspace,
+            &canonical,
+            profile_id,
+            fingerprint,
+            mode,
+            previous.as_deref(),
+            selection,
+        ),
+        Operation::TestDebug {
+            run_id,
+            item_id,
+            breakpoints,
+        } => super::tests::debug(&request.workspace, &canonical, run_id, item_id, breakpoints),
+        Operation::TestRuns | Operation::TestResults { .. } | Operation::TestStop { .. } => {
+            unreachable!()
+        }
         Operation::DebugDefinitions => super::debug::definitions(&canonical),
         Operation::DebugStart {
             profile_id,

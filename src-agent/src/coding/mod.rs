@@ -8,6 +8,7 @@ mod packs;
 pub(crate) mod persistence;
 pub(crate) mod provision;
 mod tasks;
+mod tests;
 #[cfg(feature = "gui")]
 mod transport;
 mod watch;
@@ -62,6 +63,26 @@ pub(crate) struct Request {
 pub(crate) enum Operation {
     Hello,
     Watch,
+    TestDefinitions,
+    TestRuns,
+    TestStart {
+        profile_id: String,
+        fingerprint: String,
+        mode: String,
+        previous: Option<String>,
+        selection: Vec<String>,
+    },
+    TestResults {
+        run_id: String,
+    },
+    TestStop {
+        run_id: String,
+    },
+    TestDebug {
+        run_id: String,
+        item_id: String,
+        breakpoints: Value,
+    },
     DebugDefinitions,
     DebugSessions,
     DebugStart {
