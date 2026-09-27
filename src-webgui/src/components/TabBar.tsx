@@ -291,9 +291,17 @@ type Props = {
 // create adjacent panes. All tab kinds share this renderer so the interaction
 // grammar cannot drift between file, diff, terminal, settings, and extension tabs.
 const CHEVRON_ON =
-  'flex w-6 flex-none items-center justify-center text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100'
+  'flex w-6 flex-none items-center justify-center text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100 @max-[11rem]/tabstrip:w-5'
 const CHEVRON_OFF =
-  'flex w-6 flex-none items-center justify-center text-koma-fg pointer-events-none opacity-0'
+  'flex w-6 flex-none items-center justify-center text-koma-fg pointer-events-none opacity-0 @max-[11rem]/tabstrip:w-5'
+
+function paintChevron(button: HTMLButtonElement | null, enabled: boolean) {
+  if (!button) return
+  button.disabled = !enabled
+  button.tabIndex = enabled ? 0 : -1
+  button.setAttribute('aria-hidden', enabled ? 'false' : 'true')
+  button.className = enabled ? CHEVRON_ON : CHEVRON_OFF
+}
 
 export function TabBar({ groupId, focused }: Props) {
   // Subscribe to strip-relevant ui fields only. groupSizes is deliberately
@@ -382,6 +390,16 @@ export function TabBar({ groupId, focused }: Props) {
   // Last overflow flags applied via DOM — NEVER React state. ResizeObserver →
   // setCanScroll* was still the #185 site (componentStack → TabBar) on split.
   const overflowRef = useRef({ left: false, right: false })
+  // Keep disabled DOM-owned, including initial mount. A disabled JSX prop
+  // makes React suppress onClick even after button.disabled is cleared here.
+  const setLeftButton = useCallback((button: HTMLButtonElement | null) => {
+    leftBtnRef.current = button
+    paintChevron(button, overflowRef.current.left)
+  }, [])
+  const setRightButton = useCallback((button: HTMLButtonElement | null) => {
+    rightBtnRef.current = button
+    paintChevron(button, overflowRef.current.right)
+  }, [])
 
   const requestClose = useCallback(
     (tab: Tab, e?: ReactMouseEvent) => {
@@ -445,20 +463,8 @@ export function TabBar({ groupId, focused }: Props) {
     const prev = overflowRef.current
     if (prev.left === left && prev.right === right) return
     overflowRef.current = { left, right }
-    const lb = leftBtnRef.current
-    const rb = rightBtnRef.current
-    if (lb) {
-      lb.disabled = !left
-      lb.tabIndex = left ? 0 : -1
-      lb.setAttribute('aria-hidden', left ? 'false' : 'true')
-      lb.className = left ? CHEVRON_ON : CHEVRON_OFF
-    }
-    if (rb) {
-      rb.disabled = !right
-      rb.tabIndex = right ? 0 : -1
-      rb.setAttribute('aria-hidden', right ? 'false' : 'true')
-      rb.className = right ? CHEVRON_ON : CHEVRON_OFF
-    }
+    paintChevron(leftBtnRef.current, left)
+    paintChevron(rightBtnRef.current, right)
   }, [])
 
   const checkOverflow = useCallback(() => {
@@ -484,6 +490,8 @@ export function TabBar({ groupId, focused }: Props) {
     }
     const observer = new ResizeObserver(schedule)
     observer.observe(el)
+    // Labels can grow without changing the strip width or tab count.
+    for (const tab of el.children) observer.observe(tab)
     el.addEventListener('scroll', schedule, { passive: true })
     schedule()
     return () => {
@@ -491,7 +499,7 @@ export function TabBar({ groupId, focused }: Props) {
       el.removeEventListener('scroll', schedule)
       if (raf) cancelAnimationFrame(raf)
     }
-  }, [checkOverflow, tabs.length, ui.groups.length])
+  }, [checkOverflow, tabs, ui.groups.length])
 
   // Reveal the active tab once when selection or strip membership changes.
   useEffect(() => {
@@ -596,14 +604,14 @@ export function TabBar({ groupId, focused }: Props) {
     >
       {/* Always reserve chevron width; enable/disable via DOM only (no setState). */}
       <button
-        ref={leftBtnRef}
+        ref={setLeftButton}
         type="button"
         onClick={() => scroll(-1)}
-        disabled
         aria-label="Scroll tabs left"
+        title="Scroll tabs left"
         aria-hidden="true"
         tabIndex={-1}
-        className={`${CHEVRON_OFF} @max-[11rem]/tabstrip:w-5`}
+        className={CHEVRON_OFF}
       >
         <ChevronLeft size={14} />
       </button>
@@ -683,14 +691,14 @@ export function TabBar({ groupId, focused }: Props) {
         })}
       </div>
       <button
-        ref={rightBtnRef}
+        ref={setRightButton}
         type="button"
         onClick={() => scroll(1)}
-        disabled
         aria-label="Scroll tabs right"
+        title="Scroll tabs right"
         aria-hidden="true"
         tabIndex={-1}
-        className={`${CHEVRON_OFF} @max-[11rem]/tabstrip:w-5`}
+        className={CHEVRON_OFF}
       >
         <ChevronRight size={14} />
       </button>
