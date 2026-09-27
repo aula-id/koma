@@ -1,5 +1,5 @@
-// macOS GUI-only SDK bridge. No capture stream or timer: captureImage is called
-// only for an explicit observation. All desktop strings are returned as data.
+// macOS GUI-only SDK bridge. Captures serve model observations or ephemeral live
+// preview frames. Only model observations run enrichment. Desktop strings are data.
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <ImageIO/ImageIO.h>
@@ -153,7 +153,7 @@ static void unobstructed(NSDictionary *w) {
             continue;
         CGRect overlap = CGRectIntersection(r, windowBounds(above));
         require(CGRectIsNull(overlap) || CGRectIsEmpty(overlap),
-                "Target obstructed by another window; move the preview");
+                "Target obstructed by another window; ask the user to clear it before reactivating control");
     }
     require(found, "Target no longer visible");
 }
@@ -444,7 +444,7 @@ static void accessibility(NSDictionary *w, CGRect desktop, size_t width, size_t 
         }
     }
 }
-static NSDictionary *capture(NSString *identity) API_AVAILABLE(macos(14.0)) {
+static NSDictionary *capture(NSString *identity, bool enrich) API_AVAILABLE(macos(14.0)) {
     check();
     NSDictionary *w = lookup(identity);
     CGRect desktop = windowBounds(w);
@@ -480,7 +480,7 @@ static NSDictionary *capture(NSString *identity) API_AVAILABLE(macos(14.0)) {
     require(configuration.width > 0 && configuration.height > 0 &&
                 configuration.width * configuration.height <= 32000000,
             "Capture dimensions exceed limit");
-    configuration.showsCursor = NO;
+    configuration.showsCursor = !enrich;
     configuration.ignoreShadowsSingleWindow = YES;
     configuration.shouldBeOpaque = YES;
     __block id capturedImage = nil;
@@ -515,6 +515,13 @@ static NSDictionary *capture(NSString *identity) API_AVAILABLE(macos(14.0)) {
     bool encoded = CGImageDestinationFinalize(encoder);
     CFRelease(encoder);
     require(encoded && data.length <= 20 * 1024 * 1024, "PNG encoding failed or exceeds limit");
+    if (!enrich) {
+        return @{
+            @"png" : [data base64EncodedStringWithOptions:0],
+            @"transform" : @{@"desktop" : rect(desktop), @"width" : @(width), @"height" : @(height)},
+            @"elements" : @[], @"accessibility_status" : @"preview only", @"ocr_status" : @"preview only"
+        };
+    }
     NSMutableArray *elements = [NSMutableArray array];
     NSString *axStatus = @"AX selected-window labels/roles/bounds; at most 256 nodes, depth 12, "
                          @"750 ms; protected values omitted";
@@ -683,9 +690,9 @@ static id dispatch(NSDictionary *r) {
         target = describe(w);
         return target;
     }
-    if ([command isEqual:@"capture"]) {
+    if ([command isEqual:@"capture"] || [command isEqual:@"preview"]) {
         if (@available(macOS 14.0, *))
-            return capture(r[@"window"]);
+            return capture(r[@"window"], [command isEqual:@"capture"]);
         throw std::runtime_error("Capture requires macOS 14+");
     }
     if ([command isEqual:@"input"]) {

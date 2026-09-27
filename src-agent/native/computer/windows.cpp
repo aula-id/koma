@@ -525,7 +525,7 @@ static JsonArray accessibility(HWND window, RECT desktop, int width, int height)
     }
     return elements;
 }
-static JsonObject capture(HWND window) {
+static JsonObject capture(HWND window, bool enrich) {
     check();
     require(GraphicsCaptureSession::IsSupported(), L"Windows Graphics Capture unavailable");
     RECT desktop = geometry(window);
@@ -555,7 +555,7 @@ static JsonObject capture(HWND window) {
     }};
     if (winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(
             L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsCursorCaptureEnabled"))
-        session.IsCursorCaptureEnabled(false);
+        session.IsCursorCaptureEnabled(!enrich);
     session.StartCapture();
     Direct3D11CaptureFrame frame{nullptr};
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -582,7 +582,7 @@ static JsonObject capture(HWND window) {
     hstring status = L"UI Automation selected-window labels/roles/bounds; 256 nodes, depth 12, 750 "
                      L"ms; password values omitted";
     try {
-        elements = accessibility(window, desktop, size.Width, size.Height);
+        if (enrich) elements = accessibility(window, desktop, size.Width, size.Height);
     } catch (const hresult_error &e) {
         status = L"unavailable: " + e.message();
     }
@@ -681,8 +681,8 @@ static IJsonValue dispatch(JsonObject r) {
         targetId = identity(w);
         return describe(w);
     }
-    if (command == L"capture")
-        return capture(lookup(r.GetNamedString(L"window")));
+    if (command == L"capture" || command == L"preview")
+        return capture(lookup(r.GetNamedString(L"window")), command == L"capture");
     if (command == L"input") {
         try {
             input(r.GetNamedObject(L"action"), r.GetNamedObject(L"transform"));

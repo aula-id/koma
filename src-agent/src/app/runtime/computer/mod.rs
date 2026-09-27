@@ -1,5 +1,6 @@
 //! On-demand desktop control. The daemon owns policy and correlation; only the
-//! GUI worker owns native handles. No timer ever captures a desktop frame.
+//! GUI worker owns native handles. Model observations are on demand; open GUI
+//! previews may request separate ephemeral frames without mutating model state.
 pub(crate) mod bridge;
 pub(crate) mod contract;
 pub(crate) mod controller;

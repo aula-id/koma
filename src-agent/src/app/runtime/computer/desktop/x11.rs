@@ -248,7 +248,7 @@ impl X11 {
                         && r.x + r.width > bounds.x
                         && r.y < bounds.y + bounds.height
                         && r.y + r.height > bounds.y),
-                    "target obstructed by another window; move the viewer or select again"
+                    "target obstructed by another window; ask the user to clear it before reactivating control"
                 );
             }
         }

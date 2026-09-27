@@ -8,6 +8,7 @@ use std::sync::{
 };
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod native;
+mod preview;
 #[cfg(target_os = "linux")]
 mod wayland;
 #[cfg(target_os = "linux")]
@@ -63,6 +64,11 @@ pub struct Worker {
     cancelled: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
     seen: std::collections::HashSet<String>,
+    native_gate: Arc<std::sync::Mutex<()>>,
+    preview_busy: Arc<AtomicBool>,
+    preview_window: Option<Window>,
+    preview_allowed: bool,
+    last_preview: Option<std::time::Instant>,
     #[cfg(target_os = "linux")]
     portal: Arc<std::sync::Mutex<Option<Arc<wayland::Portal>>>>,
 }
@@ -82,6 +88,8 @@ impl Worker {
         self.generation = status.generation.clone();
         self.session = status.session.clone();
         self.active = status.enabled && !status.paused && status.desktop == identity();
+        self.preview_window = status.observation.as_ref().map(|o| o.window.clone());
+        self.preview_allowed = status.capabilities.capture && !status.busy;
     }
     pub fn cancel(&mut self) {
         self.active = false;
@@ -113,12 +121,19 @@ impl Worker {
         }
         let cancelled = self.cancelled.clone();
         let busy = self.busy.clone();
+        let native_gate = self.native_gate.clone();
         #[cfg(target_os = "linux")]
         let portal = self.portal.clone();
         std::thread::spawn(move || {
             let _guard = scopeguard::guard((), |_| {
                 busy.store(false, Ordering::SeqCst);
             });
+            // Preview capture and input share native state. Input queues behind at most
+            // one bounded preview capture, then prevents further previews until complete.
+            let _native = native_gate.lock().unwrap_or_else(|p| p.into_inner());
+            if cancelled.load(Ordering::SeqCst) {
+                return;
+            }
             let reply = run(
                 &request,
                 &cancelled,
@@ -136,6 +151,21 @@ impl Drop for Worker {
         self.cancel();
     }
 }
+// Also held by live previews: a replaced GUI must not reset native cancellation
+// or release keys while the previous GUI's capture worker is still unwinding.
+fn acquire_native_lock() -> anyhow::Result<std::fs::File> {
+    let dir = crate::model::store::base_dir()?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(dir.join("computer-input.lock"))?;
+    file.try_lock()
+        .map_err(|_| anyhow::anyhow!("previous native controller is still stopping"))?;
+    Ok(file)
+}
+
 fn run(
     request: &Request,
     cancelled: &Arc<AtomicBool>,
@@ -143,18 +173,7 @@ fn run(
 ) -> Reply {
     // A separate native lock survives daemon revocation until the worker has
     // released every injected key/button. A replacement GUI cannot overlap it.
-    let lock = (|| -> anyhow::Result<std::fs::File> {
-        let dir = crate::model::store::base_dir()?;
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(dir.join("computer-input.lock"))?;
-        file.try_lock()
-            .map_err(|_| anyhow::anyhow!("previous native controller is still stopping"))?;
-        Ok(file)
-    })();
+    let lock = acquire_native_lock();
     let lock = match lock {
         Ok(lock) => lock,
         Err(e) => {

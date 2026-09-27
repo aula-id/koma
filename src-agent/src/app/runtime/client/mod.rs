@@ -289,7 +289,15 @@ pub(in crate::app::runtime) struct StreamView {
 /// session-lifecycle intents the client-thread owns.
 #[derive(Clone)]
 pub(crate) enum HostCtl {
-    Computer { action: String, window: Option<String> },
+    Computer {
+        action: String,
+        window: Option<String>,
+    },
+    ComputerPreview(crate::app::runtime::computer::PreviewRequest),
+    #[cfg(feature = "gui")]
+    ComputerPrepared {
+        id: String,
+    },
     /// The webview page booted / reloaded: re-push the full authoritative state.
     Ready,
     /// Attach to this existing session UUID (a hub `SelectSession` pick).

@@ -113,6 +113,7 @@ export type ChatMessage = {
   toolCalls?: ToolCallView[]
   // Image attachments on a user message (mirrors the TUI warn attachment card).
   attachments?: AttachmentEntry[]
+  computer?: import('../types/computer').ComputerObservationView
 }
 
 // The full palette roles the host pushes (render.rs `PushPalette`,
@@ -926,6 +927,7 @@ export type Tab =
 
 export type PushEnvelope =
   | { k: 'Computer'; status: import('../types/computer').ComputerStatus }
+  | { k: 'ComputerPreview'; frame: import('../types/computer').ComputerPreviewFrame }
   | { k: 'ComputerError'; message: string }
   | import('../lib/coding-service').CodingReply
   | { k: 'CodingEvent'; clientId?: string; workspace: import('../lib/coding-service').WorkspaceRef; event: { k: string; [key: string]: unknown } }
@@ -3174,6 +3176,9 @@ export const useKoma = create<KomaState>((set, get) => ({
     switch (env.k) {
       case 'Computer':
         if (env.status.session === get().session.id) set({ computer: env.status, computerError: null })
+        break
+      case 'ComputerPreview':
+        if (env.frame.request.session === get().session.id) window.dispatchEvent(new CustomEvent('koma-computer-preview', { detail: env.frame }))
         break
       case 'ComputerError': set({ computerError: env.message }); break
       case 'CodingReply': resolveCodingReply(env); break

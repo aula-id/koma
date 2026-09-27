@@ -87,7 +87,14 @@ pub(super) struct TutorialChatMsg {
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "r")]
 pub(super) enum GuiReq {
-    Computer { action: String, window: Option<String> },
+    Computer {
+        action: String,
+        window: Option<String>,
+    },
+    ComputerPreview {
+        #[serde(flatten)]
+        request: crate::app::runtime::computer::PreviewRequest,
+    },
     Ready,
     Submit {
         text: String,

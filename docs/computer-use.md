@@ -8,8 +8,10 @@ This is an experimental implementation, not a cross-platform validation claim.
 
 ## What is implemented
 
-Computer use starts disabled. In a local GUI session, open **Computer**, enable
-control, refresh windows, and choose a visible window. GUI selection observes
+Computer use starts disabled. In a local GUI session, open **Settings → Computer use**
+and enable control. In the preview, hover over the image (or focus the window picker
+with the keyboard) and choose a visible window. Pause, Resume, Stop, Take over,
+preview opening/detaching, and capability/extraction details live in Settings. GUI selection observes
 without changing focus, including in Plan mode. The model can list windows,
 focus/select a window after normal approval, observe, and execute bounded input
 sequences. The existing Main model remains in charge; an explicitly known
@@ -25,8 +27,10 @@ Mode changes, disconnects, session switches, errors, Stop and Take over revoke
 control. Reconnection requires explicit activation. Pause cancels queued work;
 Resume requires another observation. Cancellation cannot undo completed input.
 
-Screenshots occur only on selection, explicit observation, or a requested final
-action observation. `computer_act` defaults to `observe=true`. `observe=false`
+Model observation screenshots occur only on selection, explicit observation, or a
+requested final action observation. An open live preview separately requests bounded
+frames, without adding messages, performing OCR/accessibility extraction, changing
+actionable observations, or consuming model tokens. `computer_act` defaults to `observe=true`. `observe=false`
 invalidates the preceding observation. The next action needs a new observation.
 Crops reuse a saved image and retain its desktop-coordinate transform. Scroll and
 key chords terminate a sequence. A click followed by further input requires an
@@ -42,16 +46,41 @@ The GUI worker rechecks geometry/focus before input, rejects duplicate requests,
 and releases injected keys/buttons on return or cancellation. It reports completed
 action counts and uncertain failures without replay. Native errors revoke control.
 
-The preview position and size are saved as GUI preferences. The optional native
-viewer receives the same status/image and palette, with pause/stop/take-over
-controls. It closes on session transition.
+The preview position and size are saved as GUI preferences. Both in-app and detached
+previews show a resizable image with a window picker on hover or keyboard focus; the
+floating Computer launcher and extraction overlays have been removed. The optional
+native viewer uses the same live frame path and palette. It closes on session transition.
+Before input or observation, the GUI hides the detached viewer and acknowledges that
+step before the native worker can start. It restores the viewer after the operation.
+Window listing leaves the picker visible. This does not bypass target obstruction checks.
 
-The same saved PNG is attached to the model and displayed by the preview. JSON
+Live preview uses a separate GUI-only request/result channel, with one capture in flight
+and a 500 ms interval after each successful response (at most about two frames/second,
+slower on expensive captures). Native capture and input are serialized and share the
+existing OS lock. Frames are resized to at most 1280 × 960, encoded as JPEG, delivered
+only to matching session/generation/window/request IDs, and never persisted. No new
+frames are requested by closed, hidden, paused, disabled, or busy viewers. An in-flight
+frame may finish after a viewer closes, but cannot become a model observation. A stopped
+or switched controller discards its late frames. macOS/Windows skip enrichment for live
+frames; X11 still requires unobstructed source windows; Wayland reuses its approved
+portal source. Capture failures show a labelled last-model-frame fallback. This is a
+low-rate live preview, not a video encoder or independent background desktop.
+
+Control still uses the real OS cursor and keyboard focus. The model can switch existing
+windows with `computer_windows` and `computer_select_window`, observing after each
+switch before acting. Simultaneous user typing can change focus and interrupt control.
+Independent background mouse/keyboard control remains outside this implementation.
+
+The exact saved PNG attached to the model is shown in an expandable **Model observation**
+chat card, including its capture time, dimensions and extraction details. Live preview
+frames are labelled separately and never replace that saved model image. The full
+observation payload remains in model history; the GUI projection omits raw JSON by
+default and computer tool rows show readable summaries with expandable details. JSON
 metadata under the session's `computer/` directory associates observations with
 tool-call IDs; PNGs live under that session's `images/`. Image bytes travel only in
 one-shot operation results, never recurring session snapshots. Context shaping
 retains the latest actionable attachment. Desktop content is labelled as external
-task data. Accessibility/OCR overlays do not change the PNG.
+task data. GUI presentation does not change the PNG or model payload.
 
 Accessibility extraction is limited to the selected window. macOS matches AX
 windows by process, title and geometry; Windows starts UI Automation at the
@@ -135,13 +164,15 @@ can prevent typing. Mapping delivery uses short bounded delays and still needs
 validation against actual applications. Release physical keys/buttons before
 letting the agent act.
 
-**Wayland:** enable Computer and choose **Choose window in system dialog**. The
+**Wayland:** enable Computer use in Settings and choose **Choose source in system dialog**
+from the preview window picker. The
 compositor must expose window capture via the [ScreenCast portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html).
 Monitor-only portals are rejected. The user owns source selection; listing and
 programmatic switching are unavailable. The source-picker request allows up to
-120 seconds for consent. GStreamer consumes one frame only when an observation is
-requested, using the portal's restricted PipeWire file descriptor. The portal
-session stays open between observations but Koma has no idle frame consumer.
+120 seconds for consent. GStreamer consumes one frame for each model observation
+or live preview request, using the portal's restricted PipeWire file descriptor.
+The portal session stays open; frames are consumed only for requested observations
+or while the user has an active live preview open.
 Pause, Stop, disconnect and session changes close it; resuming requires choosing
 the source again. There is no XWayland fallback or automatically restored grant.
 The portal's opaque source identity is insufficient for selected-window AT-SPI
@@ -247,14 +278,39 @@ plus Pause IPC. WebKit emitted a DRI3 warning but the tests passed. Those result
 do not validate the new Unicode path, portal adapter, native macOS/Windows bridges,
 OCR/AX coverage, mixed-DPI hardware or release packages.
 
+## Live preview and GUI follow-up validation
+
+This follow-up adds the Computer use settings section, image-first observation
+cards, hover window selection, separate live GUI frames, and acknowledged hiding
+of the detached viewer before native operations. The model still receives only
+explicit observations and controls the native cursor/keyboard.
+
+Validation on the Linux build host:
+
+- `cargo check --workspace --offline` passed.
+- Workspace and headless all-target Clippy with `-D warnings` passed.
+- GUI TypeScript checking and Vite production build passed (existing large-chunk
+  warnings remain).
+- `cargo test -p agent --bin koma --offline computer -- --skip native` passed:
+  15 tests, including preview session/generation/source invalidation and compact
+  chat projection without model-message mutation.
+- `git diff --check` passed. Full-workspace `cargo fmt --all -- --check` still
+  reports formatting differences, including unrelated untouched files; no
+  repository-wide formatting rewrite was applied.
+
+No native desktop, input, focus, or portal tests were run for this follow-up.
+The modified macOS/Windows capture branches still need builds with their platform
+SDKs, and the live feed/viewer visibility behavior needs device verification.
+
 ## Device walkthrough
 
 Open `docs/testing/computer-fixture.html` locally in a browser. Start a local Koma
-GUI session, enable Computer and choose that window (system picker on Wayland).
+GUI session, enable Computer use in Settings and choose that window in the preview
+(system picker on Wayland).
 Use the existing Main model with image input and follow normal action approvals.
 
-1. Observe and compare the preview against the exact saved model attachment.
-   Enable AX/OCR overlays and inspect their component statuses. Confirm that the
+1. Observe and expand the Model observation chat card; compare its image against
+   the exact saved model attachment. Inspect AX/OCR statuses in Settings. Confirm that the
    password value is absent from extracted metadata. Crop an observation and
    confirm that the original capture count does not increase.
 2. On input-capable platforms, select/focus through the model, click the Message
@@ -265,7 +321,9 @@ Use the existing Main model with image input and follow normal action approvals.
 3. Scroll the fixture in its own sequence. Resize/move the target, including
    between differently scaled monitors and a monitor with a negative origin;
    an old observation must be rejected and a new observation must map correctly.
-4. Obstruct the target with the preview/another window and verify input refusal.
+4. Place the detached preview over the target: verify it hides before an operation
+   and returns afterward without taking focus. Obstruct with a different window
+   and verify input refusal.
    Switch focus or close the target during an approval and verify no subsequent
    input. Pause/Stop/Take over during a sequence; verify no replay and no stuck keys.
 5. Switch sessions, disconnect/reconnect and compete from a second GUI. Explicit
@@ -273,7 +331,10 @@ Use the existing Main model with image input and follow normal action approvals.
    focus/input. TUI, headless, remote and subagent paths must not gain control.
 6. Verify no new PNG artifacts while idle or during intermediate `observe=false`
    input. A selection/final requested observation should add exactly one capture.
-   Missing OCR/AX must leave the screenshot available with a component limitation.
+   With the preview open, change content in the shared window and verify live
+   updates without new conversation messages or PNG artifacts. Close the preview
+   and verify capture requests stop. Missing OCR/AX must leave model screenshots
+   available with a component limitation.
 7. On macOS revoke Screen Recording/Accessibility and reactivate; on Windows try
    an elevated/protected target. On Wayland cancel the source dialog, revoke its
    sharing grant, pause/resume and choose a replacement source. Input must remain

@@ -87,14 +87,23 @@ impl Viewer {
                 let Ok(value) = serde_json::from_str::<serde_json::Value>(request.body()) else {
                     return;
                 };
+                if let Some(preview) = value.get("preview") {
+                    if let Ok(request) = serde_json::from_value(preview.clone()) {
+                        let _ = ctl.send(HostCtl::ComputerPreview(request));
+                    }
+                    return;
+                }
                 if let Some(action) = value
                     .get("action")
                     .and_then(|v| v.as_str())
-                    .filter(|v| matches!(*v, "pause" | "resume" | "stop" | "take_over"))
+                    .filter(|v| matches!(*v, "windows" | "select"))
                 {
                     let _ = ctl.send(HostCtl::Computer {
                         action: action.into(),
-                        window: None,
+                        window: value
+                            .get("window")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned),
                     });
                 }
             });
@@ -123,6 +132,11 @@ impl Viewer {
                 "window.__komaComputerInitial={json};window.dispatchEvent(new CustomEvent('koma-computer',{{detail:window.__komaComputerInitial}}));"
             ));
         }
+    }
+    pub fn frame(&self, frame: &serde_json::Value) {
+        let _ = self.webview.evaluate_script(&format!(
+            "window.dispatchEvent(new CustomEvent('koma-computer-preview',{{detail:{frame}}}));"
+        ));
     }
     pub fn palette(&self, palette: &serde_json::Value) {
         let _ = self.webview.evaluate_script(&format!(
@@ -194,12 +208,12 @@ mod native_tests {
                 if !injected {
                     viewer
                         .webview
-                        .evaluate_script("window.ipc.postMessage(JSON.stringify({action:'pause'}))")
+                        .evaluate_script("window.ipc.postMessage(JSON.stringify({action:'windows'}))")
                         .unwrap();
                     injected = true;
                 }
                 while let Ok(message) = rx.try_recv() {
-                    if matches!(message, HostCtl::Computer {action, ..} if action == "pause") {
+                    if matches!(message, HostCtl::Computer {action, ..} if action == "windows") {
                         routed = true;
                     }
                 }
@@ -210,7 +224,7 @@ mod native_tests {
                 ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(20))
             };
         });
-        assert!(routed, "viewer IPC did not route the pause control");
+        assert!(routed, "viewer IPC did not route the window refresh");
         assert!(!focus_stolen, "floating viewer stole focus from the target");
     }
 }

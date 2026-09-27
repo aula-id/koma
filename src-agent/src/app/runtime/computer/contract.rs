@@ -224,6 +224,23 @@ pub struct Status {
     pub observation: Option<Observation>,
     pub message: String,
 }
+
+/// GUI-only, ephemeral preview traffic. Never persisted or added to model history.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PreviewRequest {
+    pub id: String,
+    pub session: String,
+    pub generation: String,
+    pub window: String,
+}
+#[cfg(feature = "gui")]
+#[derive(Debug, Clone, Serialize)]
+pub struct PreviewFrame {
+    pub request: PreviewRequest,
+    pub image: Option<String>,
+    pub error: Option<String>,
+    pub captured_ms: u64,
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Control {
     Register { desktop: String },

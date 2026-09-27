@@ -594,12 +594,25 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         }
                     }
                     let kind = value.get("k").and_then(|v| v.as_str());
+                    if kind == Some("ComputerPrepare") {
+                        if let Some(id) = value.get("id").and_then(|v| v.as_str()) {
+                            if value.get("hide").and_then(|v| v.as_bool()) == Some(true) {
+                                if let Some(viewer) = &computer_viewer { viewer.window.set_visible(false); }
+                            }
+                            let _ = computer_ctl.send(crate::app::runtime::client::HostCtl::ComputerPrepared { id: id.into() });
+                        }
+                        return;
+                    }
+                    if kind == Some("ComputerPreview") {
+                        if let Some(viewer) = &computer_viewer { viewer.frame(&value["frame"]); }
+                    }
                     if kind == Some("Computer") {
                         if let Some(status) = value.get("status").and_then(|v| {
                             serde_json::from_value::<crate::app::runtime::computer::Status>(v.clone()).ok()
                         }) {
                             if let Some(viewer) = &computer_viewer {
                                 viewer.update(&status);
+                                if !status.busy { viewer.window.set_visible(true); }
                             }
                             computer_status = Some(status);
                         }
@@ -703,7 +716,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
             Event::UserEvent(UserEvent::Win(cmd)) => match cmd {
                 WinCmd::ComputerViewer => {
                     if computer_viewer.is_none()
-                        && computer_status.as_ref().is_some_and(|s| s.enabled && s.capabilities.floating)
+                        && computer_status.as_ref().is_some_and(|s| s.enabled && !s.busy && s.capabilities.floating)
                     {
                         match computer_viewer::Viewer::new(
                             target, computer_status.as_ref(), &computer_palette, computer_ctl.clone(),

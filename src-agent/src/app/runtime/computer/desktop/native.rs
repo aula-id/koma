@@ -48,6 +48,15 @@ pub struct Native {
     capture: Option<Capture>,
 }
 impl Native {
+    pub fn preview(&mut self, window: &str) -> Result<Vec<u8>> {
+        let capture: Capture = call(json!({"command":"preview","window":window}))?;
+        let png = base64::engine::general_purpose::STANDARD.decode(capture.png)?;
+        ensure!(
+            png.len() <= 20 * 1024 * 1024,
+            "native preview exceeds size limit"
+        );
+        Ok(png)
+    }
     pub fn open(cancelled: Arc<AtomicBool>) -> Result<Self> {
         call::<serde_json::Value>(json!({"command":"reset"}))?;
         let done = Arc::new(AtomicBool::new(false));

@@ -200,6 +200,11 @@ pub(super) fn push_loop(
     let mut computer_worker = crate::app::runtime::computer::desktop::Worker::default();
     #[cfg(feature = "gui")]
     let mut computer_requested = false;
+    #[cfg(feature = "gui")]
+    let (preview_tx, preview_rx) =
+        std::sync::mpsc::channel::<crate::app::runtime::computer::PreviewFrame>();
+    #[cfg(feature = "gui")]
+    let mut computer_preparing: Option<crate::app::runtime::computer::Request> = None;
 
     // The shadow is a real AppState reconstructed purely from frames (identical to
     // `render_loop`); the first Snapshot replaces the neutral placeholder.
@@ -405,6 +410,12 @@ pub(super) fn push_loop(
     let mut force_push = true;
 
     loop {
+        #[cfg(feature = "gui")]
+        while let Ok(frame) = preview_rx.try_recv() {
+            if remote_ctx.is_none() && computer_worker.accepts_preview(&frame.request) {
+                push(serde_json::json!({"k":"ComputerPreview","frame":frame}).to_string());
+            }
+        }
         let frame_start = Instant::now();
         let mut dirty = force_push;
         let mut need_snapshot = force_push;
@@ -419,7 +430,9 @@ pub(super) fn push_loop(
                     {
                         computer_worker.cancel();
                         if computer_requested {
-                            let _ = req_tx.send(ClientRequest::Computer(crate::app::runtime::computer::Control::Stop));
+                            let _ = req_tx.send(ClientRequest::Computer(
+                                crate::app::runtime::computer::Control::Stop,
+                            ));
                             computer_requested = false;
                         }
                     }
@@ -616,24 +629,54 @@ pub(super) fn push_loop(
                 // attached; this only lands here if the attach state flipped between the
                 // check and the send). Forward the carried request to the daemon — it owns
                 // the authoritative config and re-pushes a fresh `Config` on the change.
+                #[cfg(feature = "gui")]
+                Ok(super::HostCtl::ComputerPrepared { id }) => {
+                    if remote_ctx.is_none()
+                        && computer_preparing.as_ref().is_some_and(|r| r.id == id)
+                    {
+                        if let Some(request) = computer_preparing.take() {
+                            computer_worker.request(request, req_tx.clone());
+                        }
+                    }
+                }
+                Ok(super::HostCtl::ComputerPreview(request)) => {
+                    #[cfg(feature = "gui")]
+                    if remote_ctx.is_none() {
+                        computer_worker.preview(request, preview_tx.clone());
+                    }
+                    #[cfg(not(feature = "gui"))]
+                    let _ = request;
+                }
                 Ok(super::HostCtl::Computer { action, window }) => {
                     #[cfg(feature = "gui")]
                     if remote_ctx.is_none() {
-                        use crate::app::runtime::computer::{Control, desktop};
+                        use crate::app::runtime::computer::{desktop, Control};
                         let control = match action.as_str() {
                             "enable" => {
                                 computer_requested = true;
-                                let _ = req_tx.send(ClientRequest::Computer(Control::Register { desktop: desktop::identity() }));
-                                Some(Control::Enable { capabilities: desktop::capabilities() })
-                            },
+                                let _ = req_tx.send(ClientRequest::Computer(Control::Register {
+                                    desktop: desktop::identity(),
+                                }));
+                                Some(Control::Enable {
+                                    capabilities: desktop::capabilities(),
+                                })
+                            }
                             "windows" => Some(Control::ListWindows),
-                            "select" => window.map(|window|Control::InspectWindow {window}),
-                            "pause" => { computer_worker.cancel(); Some(Control::Pause) },
+                            "select" => window.map(|window| Control::InspectWindow { window }),
+                            "pause" => {
+                                computer_worker.cancel();
+                                Some(Control::Pause)
+                            }
                             "resume" => Some(Control::Resume),
-                            "stop" | "take_over" => { computer_worker.cancel(); Some(Control::Stop) },
+                            "stop" | "take_over" => {
+                                computer_worker.cancel();
+                                Some(Control::Stop)
+                            }
                             _ => None,
                         };
-                        if let Some(control) = control { let _ = req_tx.send(ClientRequest::Computer(control)); }
+                        if let Some(control) = control {
+                            let _ = req_tx.send(ClientRequest::Computer(control));
+                        }
                     } else {
                         push(serde_json::json!({"k":"ComputerError","message":"Computer control is limited to local GUI sessions"}).to_string());
                     }
@@ -744,7 +787,12 @@ pub(super) fn push_loop(
                             super::HostCtl::GitWorkbench { request } => {
                                 let tx = workbench_tx.clone();
                                 let session = current_owned.clone();
-                                std::thread::spawn(move || { let _ = tx.send(super::git_workbench::handle(request, session.as_deref())); });
+                                std::thread::spawn(move || {
+                                    let _ = tx.send(super::git_workbench::handle(
+                                        request,
+                                        session.as_deref(),
+                                    ));
+                                });
                             }
                             super::HostCtl::GitStatus => {
                                 git_host::spawn_git_status_attached(
@@ -1560,7 +1608,9 @@ pub(super) fn push_loop(
                             push(serde_json::json!({"k":"Computer","status":status}).to_string());
                         }
                         DaemonEvent::ComputerOperation(request) if remote_ctx.is_none() => {
-                            computer_worker.request(request.clone(), req_tx.clone());
+                            // Native GUI visibility must be applied before dispatching input/capture.
+                            computer_preparing = Some(request.clone());
+                            push(serde_json::json!({"k":"ComputerPrepare","id":request.id,"hide": !matches!(request.operation, crate::app::runtime::computer::Operation::Windows)}).to_string());
                         }
                         _ => {}
                     }
@@ -1701,7 +1751,9 @@ pub(super) fn push_loop(
         // key-reveal/key-op fetches, in the SAME order as before — split out into
         // `git_drain::drain_git_replies` for file size (pure code motion, no
         // behaviour change).
-        while let Ok(reply) = workbench_rx.try_recv() { super::git_workbench::emit(push, reply); }
+        while let Ok(reply) = workbench_rx.try_recv() {
+            super::git_workbench::emit(push, reply);
+        }
         drain_git_replies(
             push,
             &git_status_rx,
@@ -1859,7 +1911,13 @@ fn push_remote_git_unavailable(ctl: &super::HostCtl, push: &dyn Fn(String)) {
     };
     const ERR: &str = "remote-git unavailable";
     match ctl {
-        super::HostCtl::GitWorkbench { request } => super::git_workbench::emit(push, super::git_workbench::Reply::error(request, "Remote Git unavailable; reconnect or update the remote Koma installation")),
+        super::HostCtl::GitWorkbench { request } => super::git_workbench::emit(
+            push,
+            super::git_workbench::Reply::error(
+                request,
+                "Remote Git unavailable; reconnect or update the remote Koma installation",
+            ),
+        ),
         super::HostCtl::GitDiff { path, staged } => {
             push_git_diff(
                 push,

@@ -412,6 +412,16 @@ fn picker() -> Window {
         focused: false,
     }
 }
+pub(super) fn preview(window: &Window, cancelled: &AtomicBool, cache: &Cache) -> Result<Vec<u8>> {
+    let portal = cache
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+        .context("No shared portal source")?;
+    ensure!(portal.window.id == window.id, "Portal source changed");
+    Ok(portal.capture(cancelled)?.1)
+}
+
 pub fn execute(request: &Request, cancelled: &AtomicBool, cache: &Cache) -> Reply {
     let mut reply = Reply {
         id: request.id.clone(),
