@@ -53,6 +53,7 @@ pub(super) fn run_loop(
             .get(state.rest.foreground)
             .map(|s| std::iter::once(s.id.clone()).collect())
             .unwrap_or_default();
+        state.rest.approval_sessions = state.rest.viewed_sessions.clone();
 
         // Perform a pending /select hand-off: drop to the normal terminal and
         // dump the conversation, then suppress TUI painting until a key returns.

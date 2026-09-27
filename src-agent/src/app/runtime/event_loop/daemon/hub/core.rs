@@ -131,6 +131,7 @@ pub(super) struct HubClient {
     /// are fanned out ONLY to attached clients, so an enrolled-but-not-yet-attached
     /// client can never receive a delta before its snapshot (critique #2).
     pub(super) attached: bool,
+    pub(super) approval_channel: bool,
     /// PER-CLIENT monotonic frame seq (blocker #1): the seq of the last frame this
     /// client was sent; its next frame is `last_seq + 1`. Owned per connection — the
     /// `DaemonFrame.seq` contract is "monotonic PER CONNECTION", so each client's
@@ -408,6 +409,18 @@ impl DaemonHub {
             .filter_map(|c| {
                 let idx = state.rest.resolve_foreground(c.foreground.as_deref());
                 state.rest.sessions.get(idx).map(|s| s.id.clone())
+            })
+            .collect();
+        state.rest.approval_sessions = self
+            .clients
+            .iter()
+            .filter(|c| c.attached && c.approval_channel && c.is_controller)
+            .filter_map(|c| {
+                state
+                    .rest
+                    .sessions
+                    .get(state.rest.resolve_foreground(c.foreground.as_deref()))
+                    .map(|s| s.id.clone())
             })
             .collect();
         state.rest.viewed_sessions = viewed;

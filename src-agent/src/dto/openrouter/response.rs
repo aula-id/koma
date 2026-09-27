@@ -18,7 +18,6 @@ pub struct ChatResponse {
     pub choices: Vec<Choice>,
     /// Token/cost accounting (present when the request asked for it). Unused by
     /// the compaction caller today, kept for completeness with the streaming path.
-    #[allow(dead_code)]
     #[serde(default)]
     pub usage: Option<Usage>,
 }
@@ -26,6 +25,8 @@ pub struct ChatResponse {
 /// One completion alternative inside a non-streaming response.
 #[derive(Debug, Deserialize)]
 pub struct Choice {
+    #[serde(default)]
+    pub finish_reason: Option<String>,
     pub message: ResponseMessage,
 }
 
@@ -37,13 +38,11 @@ pub struct Choice {
 /// `content` is `Option<String>` because some models (e.g. deepseek-v4-flash)
 /// return `"content": null` on a non-streaming response instead of an empty
 /// string. `#[serde(default)]` additionally handles an absent field. Callers
-/// use `.unwrap_or_default()` (or the reasoning fallback) to treat null/absent
-/// as an empty string.
+/// use `.unwrap_or_default()` to treat null/absent as an empty final answer.
 ///
 /// `reasoning` carries a reasoning model's thinking text: some models (e.g. the
-/// safeguard classifier) leave `content` empty and return their answer in this
-/// field instead, so the classifier path falls back to it. Defaults to `None`
-/// for models that don't emit it.
+/// safeguard classifier) can leave `content` empty while this field is populated.
+/// It is never used as a classifier decision. Defaults to `None` when absent.
 #[derive(Debug, Deserialize)]
 pub struct ResponseMessage {
     #[allow(dead_code)]

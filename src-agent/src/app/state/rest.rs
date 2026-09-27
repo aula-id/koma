@@ -67,6 +67,7 @@ pub struct AppStateRest {
     /// harness-verdict toast / stream-start status), which must reflect "viewed by ANY
     /// client", not the transient `foreground` cursor. A session viewed by NOBODY
     /// behaves as a pure background session.
+    pub approval_sessions: std::collections::HashSet<String>,
     pub viewed_sessions: std::collections::HashSet<String>,
     /// Saved (session) before a /new or reconfigure prompt; restored on cancel.
     pub prev_session: Option<crate::model::session::Session>,
@@ -537,10 +538,12 @@ impl AppStateRest {
         // it as foreground from tick zero (the local loop re-derives this each tick; the
         // daemon refreshes from its attached clients — but a freshly-built state always
         // has its one session "viewed" until a loop overwrites it).
-        let viewed_sessions = std::iter::once(first.id.clone()).collect();
+        let viewed_sessions: std::collections::HashSet<String> =
+            std::iter::once(first.id.clone()).collect();
         Self {
             sessions: vec![first],
             foreground: 0,
+            approval_sessions: viewed_sessions.clone(),
             viewed_sessions,
             prev_session: None,
             spawn_pending: false,

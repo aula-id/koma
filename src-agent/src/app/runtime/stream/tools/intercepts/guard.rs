@@ -211,24 +211,12 @@ pub(in crate::app::runtime::stream::tools) fn intercept_git_worktree(
                         format!("approve {}? [y/n]", call.function.name);
                     return InterceptFlow::Return;
                 } else {
-                    // Classifier unavailable. Normal → human y/n; Auto →
-                    // fail-CLOSED (never delete a worktree unverified).
-                    if mode == AgentMode::Normal {
-                        state.rest.sessions[sess_idx].approval_reason =
-                            Some(verdict.reason.clone());
-                        state.rest.sessions[sess_idx].awaiting_approval = true;
-                        state.rest.sessions[sess_idx].status =
-                            format!("approve {}? [y/n]", call.function.name);
+                    if super::super::approval::park_classifier_unavailable(state, sess_idx, call, &verdict.reason) {
                         return InterceptFlow::Return;
                     }
                     state.rest.sessions[sess_idx].tool_results.push((
                         call.id.clone(),
-                        format!(
-                            "not executed: classifier unavailable — {}. The \
-                             safety classifier could not verify this \
-                             git_worktree remove, so it was NOT run.",
-                            verdict.reason
-                        ),
+                        serde_json::json!({"error": "classifier_unavailable", "executed": false, "reason": verdict.reason}).to_string(),
                     ));
                     state.rest.sessions[sess_idx].tool_idx += 1;
                     return InterceptFlow::Continue;

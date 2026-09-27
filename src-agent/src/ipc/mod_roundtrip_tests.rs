@@ -210,7 +210,10 @@ fn client_request_variants_roundtrip() {
         ClientRequest::Paste {
             text: "/home/u/shot.png".to_string(),
         },
-        ClientRequest::ApproveTool { approve: true },
+        ClientRequest::ApproveTool {
+            approve: true,
+            call_id: Some("call-1".into()),
+        },
         ClientRequest::PlanDecision {
             decision: "compact".to_string(),
         },

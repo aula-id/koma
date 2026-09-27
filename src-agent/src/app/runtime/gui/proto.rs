@@ -265,7 +265,9 @@ pub(super) enum GuiReq {
     /// session's repo. Same reasoning as `FileDiff` — the host process has direct git
     /// access, so no daemon round-trip is needed or wanted: routed UNCONDITIONALLY to
     /// the host-relay thread via `HostCtl::GitStatus`, regardless of attach state.
-    GitWorkbench { request: crate::app::runtime::client::git_workbench::Request },
+    GitWorkbench {
+        request: crate::app::runtime::client::git_workbench::Request,
+    },
     GitStatus,
     /// The GIT panel's file row clicked: fetch a host-computed git diff for `path` —
     /// `staged` selects index-vs-HEAD (`true`, the STAGED changes) or worktree-vs-index
@@ -631,6 +633,8 @@ pub(super) enum GuiReq {
     /// `false` bounces it back to the model (koma's y/n equivalent).
     ApproveTool {
         approve: bool,
+        #[serde(default, rename = "callId")]
+        call_id: Option<String>,
     },
     /// The status-footer Compact action: summarise + trim the foreground session's
     /// history. Forwarded as [`ClientRequest::Compact`] (koma's `/compact` equivalent).

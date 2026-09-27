@@ -117,6 +117,8 @@ impl SessionRuntime {
         // closed session's drain.
         self.awaiting_classify = false;
         self.pending_classify_verdict = None;
+        self.classify_tx = None;
+        self.classify_rx = None;
         // A `!` shell may be draining off-thread; clear the park flag so a late
         // delivery to this tombstone is discarded by the gated drain (the OS child
         // finishes on its own — we never block close() on it).
@@ -219,6 +221,8 @@ impl SessionRuntime {
         // lane); a stale staged verdict is cleared so it can't be mis-consumed.
         self.awaiting_classify = false;
         self.pending_classify_verdict = None;
+        self.classify_tx = None;
+        self.classify_rx = None;
         // Take any captured usage unconditionally so a partial turn's usage can't
         // leak into the next response.
         let usage = self.pending_usage.take();

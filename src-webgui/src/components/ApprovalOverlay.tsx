@@ -100,7 +100,7 @@ export function ApprovalOverlay() {
   if (!awaiting || !pending || pending.name === 'plan_ready' || pending.name === 'mission_ready')
     return null
 
-  const answer = (approve: boolean) => req({ r: 'ApproveTool', approve })
+  const answer = (approve: boolean) => req({ r: 'ApproveTool', approve, callId: pending.id })
   const signature = pending.signature || fallbackSignature(pending.name, pending.args)
   const human = humanizeArgs(pending.args)
   const hasReason = !!(reason && reason.trim() !== '')

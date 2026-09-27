@@ -14,6 +14,49 @@ use crate::dto::chat::ChatMessage;
 use crate::dto::openrouter::{to_wire, ChatRequest, ChatResponse, ReasoningConfig, UsageRequest};
 use crate::model::app_config::ApiType;
 
+/// Non-streaming final answer and provider diagnostics. Reasoning is never a verdict.
+#[derive(Debug, Default)]
+pub struct ClassifierReply {
+    pub content: String,
+    pub finish_reason: Option<String>,
+    pub prompt_tokens: Option<u64>,
+    pub completion_tokens: Option<u64>,
+    pub category: Option<&'static str>,
+}
+
+impl ClassifierReply {
+    fn text(content: String) -> Self {
+        Self {
+            category: content.trim().is_empty().then_some("empty"),
+            content,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn from_response(response: ChatResponse) -> Self {
+        let mut reply = Self {
+            prompt_tokens: response.usage.as_ref().map(|u| u.prompt_tokens),
+            completion_tokens: response.usage.as_ref().map(|u| u.completion_tokens),
+            ..Self::default()
+        };
+        if let Some(choice) = response.choices.into_iter().next() {
+            reply.content = choice.message.content.unwrap_or_default();
+            reply.finish_reason = choice.finish_reason;
+            reply.category = reply.content.trim().is_empty().then_some("empty");
+        } else {
+            reply.category = Some("missing_choice");
+        }
+        reply
+    }
+
+    pub(crate) fn truncated(&self) -> bool {
+        self.finish_reason.as_deref() == Some("length")
+            && (self.content.trim().is_empty()
+                || serde_json::from_str::<serde_json::Value>(&self.content)
+                    .is_err_and(|e| e.is_eof()))
+    }
+}
+
 /// Shared Command Code API-first fallback for oneshot paths: if `provider/v1`
 /// rejects the key as Go-plan, remember NDJSON and collect via `/alpha/generate`.
 /// Returns `Some(text)` when the fallback ran (Ok or Err from collect is
@@ -328,18 +371,16 @@ impl OpenRouterClient {
     ///   verdict object as JSON. The safeguard model advertises both
     ///   `response_format` and `structured_outputs`, so this is honoured.
     ///
-    /// Returns the raw reply for the caller to parse: `message.content` (the JSON
-    /// string) when non-empty, else `message.reasoning` (defensive — should be
-    /// empty with thinking off), else an error. The HTTP-error path returns
-    /// `Err(clean_error(..))` carrying the upstream text — that reason now matters
-    /// because the caller surfaces it. Clean errors, no panics.
+    /// Returns final content plus available finish/usage metadata. Never reads reasoning.
+    /// The harness validates the verdict and owns retry, fallback and deadline policy.
     pub async fn classify_with(
         &self,
         conn: Conn<'_>,
         model: &str,
         provider: &str,
         messages: Vec<ChatMessage>,
-    ) -> Result<String> {
+        max_tokens: u32,
+    ) -> Result<ClassifierReply> {
         let (bearer, acct) =
             crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
         let effective_account = if !acct.is_empty() {
@@ -373,11 +414,7 @@ impl OpenRouterClient {
                     Some(to_text_format("verdict", schema.clone())),
                 )
                 .await?;
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                return Err(anyhow!("empty classifier reply"));
-            }
-            return Ok(trimmed.to_string());
+            return Ok(ClassifierReply::text(raw));
         }
         if conn.api_type == ApiType::AnthropicCompatible {
             // Forced-tool structured output: pass the RAW verdict schema (the
@@ -393,22 +430,14 @@ impl OpenRouterClient {
                     Some(schema.clone()),
                 )
                 .await?;
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                return Err(anyhow!("empty classifier reply"));
-            }
-            return Ok(trimmed.to_string());
+            return Ok(ClassifierReply::text(raw));
         }
         if conn.api_type == ApiType::CommandCode {
             // Command Code: plain text collect, no structured output.
             let raw = self
                 .commandcode_collect(conn, &bearer, model, messages)
                 .await?;
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                return Err(anyhow!("empty classifier reply"));
-            }
-            return Ok(trimmed.to_string());
+            return Ok(ClassifierReply::text(raw));
         }
         let url = format!("{}/chat/completions", conn.endpoint);
         // `strict: true` + `additionalProperties: false` force the model to emit
@@ -453,73 +482,27 @@ impl OpenRouterClient {
             // before writing the verdict JSON — a much smaller cap (e.g. 60) starves
             // it, yielding `content: null` / `finish_reason: "length"`. 2000 leaves
             // ample headroom for both.
-            max_tokens: Some(2_000),
+            max_tokens: Some(max_tokens),
         };
 
-        let response: reqwest::Response = 'retry: {
-            for attempt in 1u32..=MAX_ATTEMPTS {
-                let send = auth_headers(
-                    self.http.post(&url),
-                    &conn,
-                    &bearer,
-                    self.codex_session_id(),
-                )
-                .json(&body)
-                .send()
-                .await;
-                match send {
-                    Ok(r) => {
-                        let status = r.status();
-                        if status.is_success() {
-                            break 'retry r;
-                        }
-                        let text = r.text().await.unwrap_or_default();
-                        if is_retryable_status(status) && attempt < MAX_ATTEMPTS {
-                            let d = backoff_delay(attempt);
-                            tokio::time::sleep(d).await;
-                            continue;
-                        }
-                        // Final attempt or non-retryable: check commandcode 403 fallback
-                        if let Some(out) = commandcode_oneshot_fallback(
-                            self, conn, &bearer, model, messages, status, &text,
-                        )
-                        .await?
-                        {
-                            let trimmed = out.trim();
-                            if trimmed.is_empty() {
-                                return Err(anyhow!("empty classifier reply"));
-                            }
-                            return Ok(trimmed.to_string());
-                        }
-                        return Err(anyhow!("{}", clean_error(status, &text)));
-                    }
-                    Err(e) if is_retryable_send_err(&e) && attempt < MAX_ATTEMPTS => {
-                        let d = backoff_delay(attempt);
-                        tokio::time::sleep(d).await;
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(e.into());
-                    }
-                }
-            }
-            return Err(anyhow!("all retry attempts exhausted"));
-        };
+        // One transport attempt per budget. Retry/fallback limits belong to the harness.
+        let response = auth_headers(
+            self.http.post(&url),
+            &conn,
+            &bearer,
+            self.codex_session_id(),
+        )
+        .json(&body)
+        .send()
+        .await?;
+        let status = response.status();
+        if !status.is_success() {
+            // Do not include provider bodies, prompts or credentials in classifier diagnostics.
+            return Err(anyhow!("classifier HTTP {}", status.as_u16()));
+        }
         remember_commandcode_provider_v1(&conn);
 
         let chat_response: ChatResponse = response.json().await?;
-        let message = chat_response
-            .choices
-            .into_iter()
-            .next()
-            .map(|c| c.message)
-            .ok_or_else(|| anyhow!("no choices returned"))?;
-        // `exclude: true` means no `reasoning` field is returned; content-only.
-        // `content` may be null on some models — treat null/absent as empty.
-        let content = message.content.as_deref().unwrap_or("").trim();
-        if !content.is_empty() {
-            return Ok(content.to_string());
-        }
-        Err(anyhow!("empty classifier reply"))
+        Ok(ClassifierReply::from_response(chat_response))
     }
 }

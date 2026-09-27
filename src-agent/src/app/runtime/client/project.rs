@@ -655,6 +655,7 @@ fn push_snapshot_if_changed(
         fg.pending_tool_calls
             .get(fg.tool_idx)
             .map(|c| PushPendingCall {
+                id: c.id.clone(),
                 name: c.function.name.clone(),
                 args: c.function.arguments.clone(),
             })

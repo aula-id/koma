@@ -174,7 +174,7 @@ declare global {
     // = the TUI's y/Y (true) vs n/N/Esc (false). No id: the daemon resolves the
     // foreground session and applies Action::ApproveTool/DenyTool to the paused
     // `pending_tool_calls[tool_idx]`. Mirrors the daemon's ClientRequest::ApproveTool.
-    | { r: 'ApproveTool'; approve: boolean }
+    | { r: 'ApproveTool'; approve: boolean; callId?: string }
     // Answer a parked PLAN decision (the `plan_ready` pause). `decision` is one
     // of "approve" (ApprovePlan) / "compact" (ApprovePlanCompact) / "deny"
     // (DenyPlan, "chat more"). No id: foreground session. Mirrors the daemon's

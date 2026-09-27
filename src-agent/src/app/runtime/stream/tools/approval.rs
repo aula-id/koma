@@ -154,6 +154,15 @@ pub(super) fn spawn_classify_park(
         crate::model::store::append_global_error_log("approval", "BUG: classify_tx missing");
         return;
     };
+    let primary = crate::app::resolve::role_resolution(
+        &config,
+        &settings,
+        crate::model::app_config::ModelRole::Safeguard,
+    );
+    let primary_label = primary
+        .effective_model
+        .or(primary.configured_model)
+        .unwrap_or_else(|| "unavailable".into());
     let convo = convo_context.to_string();
     let name = call.function.name.clone();
     let args = call.function.arguments.clone();
@@ -168,7 +177,8 @@ pub(super) fn spawn_classify_park(
         let _ = tx.send((call_id, verdict));
     });
     state.rest.sessions[sess_idx].awaiting_classify = true;
-    state.rest.sessions[sess_idx].status = format!("classifying {}…", call.function.name);
+    state.rest.sessions[sess_idx].status =
+        format!("classifying {} with {primary_label}…", call.function.name);
 }
 
 /// True if `target_abs` was read/written/edited earlier in the conversation
@@ -201,6 +211,28 @@ pub(super) fn file_known_in_history(
     false
 }
 
+/// Park only the current call when a controller can answer the outage approval.
+pub(super) fn park_classifier_unavailable(
+    state: &mut AppState,
+    idx: usize,
+    call: &ToolCall,
+    reason: &str,
+) -> bool {
+    let rt = &mut state.rest.sessions[idx];
+    if !state.rest.approval_sessions.contains(&rt.id)
+        || rt
+            .pending_tool_calls
+            .get(rt.tool_idx)
+            .is_none_or(|pending| pending.id != call.id)
+    {
+        return false;
+    }
+    rt.approval_reason = Some(format!("classifier unavailable: {reason}"));
+    rt.awaiting_approval = true;
+    rt.status = format!("approve {}? [y/n]", call.function.name);
+    true
+}
+
 /// Drive the tool-approval state machine for the current round.
 ///
 /// Walks `pending_tool_calls` from `tool_idx`, running each call and collecting
@@ -230,6 +262,11 @@ pub(crate) fn process_tools(
     client: &Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) {
+    if state.rest.sessions[sess_idx].awaiting_approval
+        || state.rest.sessions[sess_idx].awaiting_classify
+    {
+        return;
+    }
     // Recent conversation tail, used to make TAC intent-aware — see
     // `intercepts::build_convo_context` for the plan-aware preamble.
     let convo_context = intercepts::build_convo_context(state, sess_idx);
@@ -547,6 +584,9 @@ pub(crate) fn process_tools(
                             return;
                         }
                     };
+                    if verdict.available && verdict.reason.contains("; fallback ") {
+                        state.rest.sessions[sess_idx].set_toast_info(verdict.reason.clone());
+                    }
                     if verdict.available && verdict.allow {
                         if mode == AgentMode::Auto
                             || mode == AgentMode::Plan
@@ -579,25 +619,12 @@ pub(crate) fn process_tools(
                             format!("approve {}? [y/n]", call.function.name);
                         return;
                     } else {
-                        if mode == AgentMode::Normal {
-                            state.rest.sessions[sess_idx].approval_reason =
-                                Some(verdict.reason.clone());
-                            state.rest.sessions[sess_idx].awaiting_approval = true;
-                            state.rest.sessions[sess_idx].status =
-                                format!("approve {}? [y/n]", call.function.name);
+                        if park_classifier_unavailable(state, sess_idx, &call, &verdict.reason) {
                             return;
                         }
                         state.rest.sessions[sess_idx].tool_results.push((
                             call.id.clone(),
-                            format!(
-                                "not executed: classifier unavailable — {}. \
-                                The safety classifier could not verify this call, \
-                                so it was NOT run. If the user explicitly requested \
-                                this change, tell them to configure or fix the \
-                                safeguard classifier in /settings or switch agent \
-                                mode; otherwise do not retry.",
-                                verdict.reason
-                            ),
+                            serde_json::json!({"error": "classifier_unavailable", "executed": false, "reason": verdict.reason}).to_string(),
                         ));
                         state.rest.sessions[sess_idx].tool_idx += 1;
                         state.rest.sessions[sess_idx].set_toast(
@@ -655,4 +682,58 @@ pub(crate) fn process_tools(
         return;
     }
     super::dispatch::finish_tool_round(state, sess_idx, client, handle);
+}
+
+#[cfg(test)]
+mod outage_tests {
+    use super::*;
+    use crate::dto::chat::FunctionCall;
+
+    #[test]
+    fn outage_parks_only_current_interactive_call_without_advancing_or_execution() {
+        let mut state = AppState::new(crate::app::mode::Mode::Chat);
+        let call = ToolCall {
+            id: "pending".into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: "write".into(),
+                arguments: "{}".into(),
+            },
+        };
+        state.rest.fg_mut().pending_tool_calls.push(call.clone());
+        assert!(park_classifier_unavailable(&mut state, 0, &call, "timeout"));
+        assert!(state.rest.fg().awaiting_approval);
+        assert!(state.rest.fg().tool_results.is_empty());
+        assert_eq!(state.rest.fg().tool_idx, 0);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        process_tools(&mut state, 0, &None, runtime.handle());
+        assert_eq!(state.rest.fg().tool_idx, 0);
+        assert!(!state.rest.fg().awaiting_classify);
+        state.rest.fg_mut().awaiting_approval = false;
+        state.rest.approval_sessions.clear();
+        assert!(!park_classifier_unavailable(
+            &mut state, 0, &call, "timeout"
+        ));
+        assert!(!state.rest.fg().awaiting_approval);
+    }
+
+    #[test]
+    fn stale_call_cannot_raise_outage_approval() {
+        let mut state = AppState::new(crate::app::mode::Mode::Chat);
+        let call = ToolCall {
+            id: "cancelled".into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: "write".into(),
+                arguments: "{}".into(),
+            },
+        };
+        assert!(!park_classifier_unavailable(
+            &mut state, 0, &call, "timeout"
+        ));
+        assert!(!state.rest.fg().awaiting_approval);
+    }
 }

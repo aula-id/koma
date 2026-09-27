@@ -403,6 +403,7 @@ export type BootstrapState = {
 // the plan digest + approve/compact/deny controls), otherwise it's a risky/
 // classifier-flagged TOOL approval (rendered as the modal approval card).
 export type PendingCall = {
+  id?: string
   name: string
   args: string
   signature?: string
