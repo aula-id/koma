@@ -75,6 +75,14 @@ pub(crate) struct Request {
 pub(crate) enum Operation {
     Hello,
     Watch,
+    ResourceJournals,
+    ResourceRecoveryPreview {
+        transaction_id: String,
+    },
+    ResourceRecover {
+        transaction_id: String,
+        expected: Value,
+    },
     ResourceUndo {
         transaction_id: String,
     },

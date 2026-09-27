@@ -16,6 +16,7 @@ import { OmniSearchPalette } from '../components/OmniSearchPalette'
 import { CodingPalette } from '../components/CodingPalette'
 import { CodingPacks } from '../components/CodingPacks'
 import { CodingTasks } from '../components/CodingTasks'
+import { CodingTransactions } from '../components/CodingTransactions'
 import { CodingHistory } from '../components/CodingHistory'
 import { CodingRefactor } from '../components/CodingRefactor'
 import { startCodingDiskMonitor } from '../lib/coding-disk'
@@ -455,6 +456,7 @@ function RootLayout() {
       <CodingDebug />
       <CodingTests />
       <CodingHistory />
+      <CodingTransactions />
       <CodingRefactor />
       <SwitchingOverlay
         onCancel={() => {

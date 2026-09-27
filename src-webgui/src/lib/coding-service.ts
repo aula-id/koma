@@ -11,6 +11,9 @@ export type CodingReply = {
 export type CodingOperation =
   | { op: 'resourceInspect'; paths: string[] }
   | { op: 'resourceApply'; changes: { path: string; fingerprint: string; after: string | null; formatFrom?: string }[] }
+  | { op: 'resourceJournals' }
+  | { op: 'resourceRecoveryPreview'; transactionId: string }
+  | { op: 'resourceRecover'; transactionId: string; expected: Record<string, string> }
   | { op: 'resourceUndo'; transactionId: string }
   | { op: 'testDefinitions' | 'testRuns' }
   | { op: 'testStart'; profileId: string; fingerprint: string; mode: 'discover' | 'run' | 'failed'; previous?: string; selection: string[] }

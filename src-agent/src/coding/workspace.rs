@@ -73,6 +73,14 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
         ))?),
         Operation::File { body } => file_operation(request, body, &workdirs),
         Operation::Watch => super::watch::watch(&request.workspace, &canonical),
+        Operation::ResourceJournals => super::resources::journals(&canonical),
+        Operation::ResourceRecoveryPreview { transaction_id } => {
+            super::resources::recovery_preview(&canonical, transaction_id)
+        }
+        Operation::ResourceRecover {
+            transaction_id,
+            expected,
+        } => super::resources::recover(&canonical, transaction_id, expected),
         Operation::ResourceUndo { transaction_id } => {
             super::resources::undo(&canonical, transaction_id)
         }

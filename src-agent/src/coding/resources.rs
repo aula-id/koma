@@ -264,6 +264,12 @@ fn prune(base: &Path) {
     }
 }
 pub(super) fn undo(root: &Path, id: &str) -> Result<Value> {
+    restore(root, id, None)
+}
+pub(super) fn recover(root: &Path, id: &str, expected: &Value) -> Result<Value> {
+    restore(root, id, Some(expected))
+}
+fn restore(root: &Path, id: &str, expected: Option<&Value>) -> Result<Value> {
     uuid::Uuid::parse_str(id).context("Invalid resource transaction")?;
     let _guard = file_ops::FILE_MUTATION_LOCK
         .lock()
@@ -276,9 +282,13 @@ pub(super) fn undo(root: &Path, id: &str) -> Result<Value> {
             .context("Resource undo is no longer retained")?,
     )?;
     anyhow::ensure!(
-        manifest["root"] == json!(root) && manifest["state"] == "applied",
+        manifest["root"] == json!(root)
+            && (manifest["state"] == "applied"
+                || expected.is_some()
+                    && matches!(manifest["state"].as_str(), Some("prepared" | "undoing"))),
         "Resource transaction does not belong to this workspace or is incomplete"
     );
+    let previous_state = manifest["state"].clone();
     let records = manifest["files"]
         .as_array()
         .context("Invalid resource journal")?
@@ -290,13 +300,21 @@ pub(super) fn undo(root: &Path, id: &str) -> Result<Value> {
         let relative = record["path"].as_str().context("Invalid resource path")?;
         let target = path(root, relative)?;
         let data = bytes(&target)?;
+        let hash = data
+            .as_ref()
+            .map(|b| file_ops::fingerprint_bytes(b))
+            .unwrap_or_default();
         anyhow::ensure!(
-            data.as_ref()
-                .map(|b| file_ops::fingerprint_bytes(b))
-                .unwrap_or_default()
-                == record["afterFingerprint"].as_str().unwrap_or(""),
-            "{relative} changed since apply; undo canceled"
+            hash == record["afterFingerprint"]
+                || expected.is_some() && hash == record["beforeFingerprint"],
+            "{relative} has independent edits; recovery will not overwrite them"
         );
+        if let Some(expected) = expected {
+            anyhow::ensure!(
+                expected[relative].as_str() == Some(&hash),
+                "{relative} changed after recovery preview"
+            );
+        }
         let original = record["backup"]
             .as_u64()
             .map(|index| bytes(&journal.join(index.to_string())))
@@ -377,7 +395,7 @@ pub(super) fn undo(root: &Path, id: &str) -> Result<Value> {
             }
         }
         if failures.is_empty() {
-            manifest["state"] = json!("applied");
+            manifest["state"] = previous_state;
             let _ = super::persistence::atomic_write(
                 &journal.join("manifest.json"),
                 &serde_json::to_vec_pretty(&manifest)?,
@@ -393,4 +411,76 @@ pub(super) fn undo(root: &Path, id: &str) -> Result<Value> {
     let files:Vec<Value>=records.iter().map(|r|{let relative=r["path"].as_str().unwrap();json!({"path":relative,"exists":originals[relative].is_some(),"fingerprint":r["beforeFingerprint"]})}).collect();
     let _ = std::fs::remove_dir_all(&journal);
     Ok(json!({"files":files}))
+}
+
+fn manifest(root: &Path, id: &str) -> Result<(PathBuf, Value)> {
+    uuid::Uuid::parse_str(id).context("Invalid resource transaction")?;
+    let journal = crate::model::store::base_dir()?
+        .join("coding/transactions")
+        .join(id);
+    let raw = bytes(&journal.join("manifest.json"))?.context("Journal is missing")?;
+    let data: Value = serde_json::from_slice(&raw)?;
+    anyhow::ensure!(
+        data["root"] == json!(root),
+        "Journal belongs to another workspace"
+    );
+    anyhow::ensure!(
+        data["files"].as_array().is_some_and(|f| f.len() <= 100),
+        "Invalid journal"
+    );
+    Ok((journal, data))
+}
+pub(super) fn journals(root: &Path) -> Result<Value> {
+    let base = crate::model::store::base_dir()?.join("coding/transactions");
+    let mut rows = Vec::new();
+    if base.exists() {
+        for entry in std::fs::read_dir(base)?.take(1000).flatten() {
+            let id = entry.file_name().to_string_lossy().into_owned();
+            if let Ok((_, m)) = manifest(root, &id) {
+                rows.push(json!({"id":id,"state":m["state"],"files":m["files"].as_array().unwrap().len()}));
+            }
+        }
+    }
+    Ok(json!(rows))
+}
+pub(super) fn recovery_preview(root: &Path, id: &str) -> Result<Value> {
+    let _guard = file_ops::FILE_MUTATION_LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("File mutation lock failed"))?;
+    let (journal, m) = manifest(root, id)?;
+    let mut files = Vec::new();
+    let mut expected = json!({});
+    let mut total = 0;
+    for record in m["files"].as_array().unwrap() {
+        let relative = record["path"].as_str().context("Invalid resource path")?;
+        let current = bytes(&path(root, relative)?)?;
+        let original = record["backup"]
+            .as_u64()
+            .map(|i| bytes(&journal.join(i.to_string())))
+            .transpose()?
+            .flatten();
+        let hash = current
+            .as_ref()
+            .map(|b| file_ops::fingerprint_bytes(b))
+            .unwrap_or_default();
+        anyhow::ensure!(
+            original
+                .as_ref()
+                .map(|b| file_ops::fingerprint_bytes(b))
+                .unwrap_or_default()
+                == record["beforeFingerprint"],
+            "Recovery backup is incomplete"
+        );
+        let decode = |b: &Option<Vec<u8>>| {
+            b.as_ref()
+                .map(|b| file_ops::decode_resource_text(b))
+                .transpose()
+                .map_err(anyhow::Error::msg)
+        };
+        total += current.as_ref().map_or(0, Vec::len) + original.as_ref().map_or(0, Vec::len);
+        anyhow::ensure!(total <= 20 * 1024 * 1024, "Recovery preview exceeds 20 MiB");
+        expected[relative] = json!(hash);
+        files.push(json!({"path":relative,"current":decode(&current)?,"original":decode(&original)?,"conflict":hash!=record["beforeFingerprint"]&&hash!=record["afterFingerprint"]}));
+    }
+    Ok(json!({"id":id,"state":m["state"],"files":files,"expected":expected}))
 }

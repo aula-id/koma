@@ -43,18 +43,25 @@ function sync(edit: StagedEdit, outcome: Outcome, reverse: boolean) {
   // A context switch or typing during the disk operation must never discard a buffer.
   const current = useKoma.getState()
   if ((current.remoteState.hostId ?? 'local') !== edit.workspace.hostId || current.coding._sessionGen !== edit.generation) return
+  const transfers = edit.files.filter(f => f.existsAfter && !f.existed && f.formatFrom && f.formatFrom !== f.path && edit.files.some(source => source.path === f.formatFrom && source.existed && !source.existsAfter)).map(f => ({ from: reverse ? f.path : f.formatFrom!, to: reverse ? f.formatFrom! : f.path }))
+    .filter(({ from, to }) => { const source = current.coding.files[fileKey(edit.workspace.root, from)], target = current.coding.files[fileKey(edit.workspace.root, to)]; return source && !source.dirty && !source.saving && !source.loading && (!target || !target.dirty && !target.saving && !target.loading) })
   useKoma.setState(s => {
     const files = { ...s.coding.files }
+    for (const { from, to } of transfers) { files[fileKey(edit.workspace.root, to)] = files[fileKey(edit.workspace.root, from)]; delete files[fileKey(edit.workspace.root, from)] }
     for (const file of edit.files) {
+      if (transfers.some(t => t.from === file.path)) continue
       const result = outcome.files.find(v => v.path === file.path)!
       const key = fileKey(edit.workspace.root, file.path), present = files[key]
-      const expected = reverse && file.existsAfter ? file.after : file.before
+      const transfer = transfers.find(t => t.to === file.path)
+      const origin = transfer ? edit.files.find(f => f.path === transfer.from)! : file
+      const expected = reverse && origin.existsAfter ? origin.after : origin.before
       if (present?.content != null && present.content !== expected) { files[key] = { ...present, conflict: true, manualSaveRequired: true, error: 'The file changed during a resource edit. Your buffer was preserved.' }; continue }
       const content = reverse ? file.before : file.after
       files[key] = result.exists ? { ...(present ?? emptyFileState()), content, savedContent: content, fingerprint: result.fingerprint, dirty: false, conflict: false, loading: false, error: null, manualSaveRequired: false } : { ...(present ?? emptyFileState()), conflict: true, error: 'File removed by workspace edit. Undo the workspace edit to restore it.', manualSaveRequired: true }
     }
     return { coding: { ...s.coding, files } }
   })
+  for (const { from, to } of transfers) useKoma.getState().push({ k: 'FileRename', root: edit.workspace.root, oldPath: from, newPath: to, requestId: '', error: null })
   window.dispatchEvent(new CustomEvent('koma-coding-disk', { detail: edit.workspace }))
 }
 export async function applyResourceEdit(edit: StagedEdit, verify: () => void) {

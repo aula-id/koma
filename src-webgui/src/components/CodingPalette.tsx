@@ -1,3 +1,4 @@
+import { showCodingTransactions } from './CodingTransactions'
 import { showCodingTests } from './CodingTests'
 import { showCodingDebug } from './CodingDebug'
 import { useEffect, useRef, useState } from 'react'
@@ -41,6 +42,7 @@ const commands: Command[] = [
   { id: 'taskBuild', title: 'Tasks: Build…' },
   { id: 'taskTest', title: 'Tasks: Test…' },
   { id: 'saveAll', title: 'Save All Open Files' },
+  { id: 'transactions', title: 'Recover Workspace Edit Transactions' },
   { id: 'recovery', title: 'Recover Unsaved Files' },
   { id: 'history', title: 'Show Local History', editor: true },
   { id: 'terminal', title: 'Open Terminal' },
@@ -153,6 +155,7 @@ export function CodingPalette() {
       if (root) void codingRequest({ hostId, root }, { op: 'lspRestartWorkspace' }).catch(error => useKoma.setState(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, kind: 'error', text: String(error.message ?? error) } } } }))
     }
     else if (command.id === 'saveAll') { for (const tab of store.ui.tabs) if (tab.kind === 'codingFile' && !tab.preview) store.saveCodingFile(tab.root, tab.path) }
+    else if (command.id === 'transactions') showCodingTransactions()
     else if (command.id === 'recovery') showCodingHistory()
     else if (command.id === 'tests') showCodingTests()
     else if (command.id === 'debug') showCodingDebug()
