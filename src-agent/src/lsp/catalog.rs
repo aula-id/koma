@@ -18,6 +18,8 @@ pub enum InstallKind {
     PipVenv,
     /// `GOBIN=... go install <module>@latest` (needs Go).
     GoInstall,
+    /// Composer standalone project (Phpactor).
+    Composer,
 }
 
 /// One catalogue language server entry.
@@ -124,6 +126,15 @@ pub const CATALOG: &[ServerSpec] = &[
         kind: InstallKind::Npm,
         package: "intelephense",
         args: &["--stdio"],
+    },
+    ServerSpec {
+        id: "phpactor",
+        name: "Phpactor (PHP)",
+        binary: "phpactor",
+        extensions: &["php", "phtml", "php3", "php4", "php5", "phps"],
+        kind: InstallKind::Composer,
+        package: "phpactor/phpactor",
+        args: &["language-server"],
     },
     ServerSpec {
         id: "taplo",

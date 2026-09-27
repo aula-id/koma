@@ -308,7 +308,7 @@ fn recipe(root: &Path, p: &Profile, discover: bool, items: &[Value]) -> Result<V
                 args.extend(selected);
             }
             commands.push(command(
-                program.unwrap_or(if cfg!(windows) { "python" } else { "python3" }),
+                program.unwrap_or(&super::environment::test_python(root)?.to_string_lossy()),
                 args,
             ));
         }
@@ -588,7 +588,7 @@ pub(super) fn debug(
             args.push(item_id.into());
             (
                 "debugpy",
-                json!({"module":"pytest","args":args,"console":"internalConsole"}),
+                json!({"module":"pytest","python":super::environment::test_python(root)?,"args":args,"console":"internalConsole"}),
             )
         }
         "node" => {

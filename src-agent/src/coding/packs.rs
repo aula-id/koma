@@ -120,14 +120,15 @@ fn available(id: &str) -> Option<std::path::PathBuf> {
 pub(super) fn status(root: &Path) -> Result<Value> {
     let config = super::workspace::read_config(root)?;
     let packs: Vec<Value> = PACKS.iter().map(|p| {
-        let spec = crate::lsp::catalog::find(p.lsp).unwrap();
+        let server = config["toolchains"][p.id]["languageServer"].as_str().unwrap_or(p.lsp);
+        let spec = crate::lsp::catalog::find(server).unwrap_or_else(||crate::lsp::catalog::find(p.lsp).unwrap());
         let lsp = crate::lsp::manifest::managed_binary_path(spec.id,spec.binary).or_else(||crate::lsp::resolve::find_on_path(spec.binary));
         let selected = config["toolchains"][p.id]["executable"].as_str().unwrap_or("");
         let runtime = super::environment::executable(root,p.runtime).ok().and_then(|v| if v.is_file() {Some(v)} else {crate::lsp::resolve::find_on_path(v.to_str()?) });
         let mut candidates = Vec::new();
         if let Some(path) = &runtime { candidates.push(path.to_string_lossy().into_owned()); }
         if p.id == "python" { for name in [".venv", "venv"] { let path = root.join(name).join(if cfg!(windows) {"Scripts/python.exe"} else {"bin/python"}); if path.is_file() { candidates.push(path.to_string_lossy().into_owned()); } } }
-        json!({"id":p.id,"label":p.label,"runtime":runtime,"runtimeName":p.runtime,"selected":selected,"candidates":candidates,"lsp":lsp,"server":p.lsp,"adapter":if p.adapter.is_empty(){None}else{available(p.adapter)},"adapterName":p.adapter,"test":p.test})
+        json!({"id":p.id,"label":p.label,"runtime":runtime,"runtimeName":p.runtime,"selected":selected,"candidates":candidates,"lsp":lsp,"server":spec.id,"serverOptions":if p.id=="php"&&!cfg!(windows){vec!["intelephense","phpactor"]}else{vec![p.lsp]},"adapter":if p.adapter.is_empty(){None}else{available(p.adapter)},"adapterName":p.adapter,"test":p.test})
     }).collect();
     Ok(
         json!({"packs":packs,"fingerprint":super::environment::fingerprint(&config)?,"platform":std::env::consts::OS}),
@@ -147,33 +148,78 @@ fn plans() -> &'static Mutex<VecDeque<Plan>> {
 fn command(command: &str, args: Vec<String>) -> Value {
     json!({"command":command,"args":args,"timeoutMs":3_600_000})
 }
-fn runtime_command(p: &Pack) -> Result<Value> {
-    // Installation is explicit. Elevation is delegated to the platform's own UI.
-    let packages: &[&str] = match p.id {
-        "rust" => &["cargo","rustc","lldb"], "javascript"|"web" => &["nodejs","npm"],
-        "python" => &["python3","python3-venv","python3-pip"], "go"=> &["golang-go"],
-        "cpp"=> &["clang","lldb","cmake"], "php"=> &["php-cli","composer","nodejs","npm","php-xdebug"],
-        "lua"=> &["lua5.4","nodejs","npm"], "bash"=> &["bash","nodejs","npm"],
-        _=> anyhow::bail!("Runtime installation for {} is not available through this host's package manager. Select an existing executable.",p.label),
-    };
+fn runtime_commands(p: &Pack) -> Result<Vec<Value>> {
     #[cfg(target_os = "linux")]
-    if crate::lsp::resolve::find_on_path("apt-get").is_some() {
-        let apt = crate::lsp::resolve::find_on_path("apt-get").unwrap();
-        let mut args = vec![
-            apt.to_string_lossy().into_owned(),
-            "install".into(),
-            "-y".into(),
-        ];
-        args.extend(packages.iter().map(|s| s.to_string()));
-        if unsafe { libc::geteuid() } == 0 {
-            return Ok(command(&args.remove(0), args));
+    {
+        let manager = ["apt-get", "dnf", "pacman", "zypper"]
+            .into_iter()
+            .find(|name| crate::lsp::resolve::find_on_path(name).is_some());
+        if let Some(manager) = manager {
+            let packages: &[&str] = match (manager, p.id) {
+                ("apt-get", "rust") => &["cargo", "rustc", "lldb"],
+                ("apt-get", "python") => &["python3", "python3-venv", "python3-pip"],
+                ("apt-get", "go") => &["golang-go"],
+                ("apt-get", "php") => &[
+                    "php-cli",
+                    "php-mbstring",
+                    "php-xml",
+                    "composer",
+                    "nodejs",
+                    "npm",
+                    "php-xdebug",
+                ],
+                ("apt-get", "lua") => &["lua5.4", "nodejs", "npm"],
+                ("apt-get", "zig" | "nix") => anyhow::bail!(
+                    "Select an existing {} runtime; no portable apt recipe is available",
+                    p.label
+                ),
+                ("pacman", "rust") => &["rust", "lldb"],
+                ("pacman", "python") => &["python", "python-pip"],
+                ("pacman", "go") => &["go"],
+                ("pacman", "php") => &["php", "composer", "nodejs", "npm", "xdebug"],
+                ("zypper", "go") => &["go"],
+                (_, "rust") => &["cargo", "rust", "lldb"],
+                (_, "python") => &["python3", "python3-pip"],
+                (_, "go") => &["golang"],
+                (_, "php") => &["php", "composer", "nodejs", "npm"],
+                (_, "lua") => &["lua", "nodejs", "npm"],
+                (_, "javascript" | "web") => &["nodejs", "npm"],
+                (_, "cpp") => &["clang", "lldb", "cmake"],
+                (_, "bash") => &["bash", "nodejs", "npm"],
+                (_, "zig") => &["zig"],
+                _ => anyhow::bail!("Select an existing {} runtime on this host", p.label),
+            };
+            let binary = crate::lsp::resolve::find_on_path(manager)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            let mut args: Vec<String> = match manager {
+                "pacman" => vec!["-S".into(), "--needed".into(), "--noconfirm".into()],
+                "zypper" => vec!["--non-interactive".into(), "install".into()],
+                _ => vec!["install".into(), "-y".into()],
+            };
+            args.extend(packages.iter().map(|s| s.to_string()));
+            if unsafe { libc::geteuid() } == 0 {
+                return Ok(vec![command(&binary, args)]);
+            }
+            let desktop = std::env::var_os("DISPLAY").is_some()
+                || std::env::var_os("WAYLAND_DISPLAY").is_some();
+            args.insert(0, binary);
+            if desktop && crate::lsp::resolve::find_on_path("pkexec").is_some() {
+                return Ok(vec![command("pkexec", args)]);
+            }
+            anyhow::ensure!(
+                crate::lsp::resolve::find_on_path("sudo").is_some(),
+                "Install sudo or select an existing runtime"
+            );
+            let mut step = command("sudo", args);
+            step["interactive"] = json!(true);
+            return Ok(vec![step]);
         }
-        anyhow::ensure!(crate::lsp::resolve::find_on_path("pkexec").is_some(),"Install pkexec or select a preinstalled runtime; the installer requires a desktop elevation prompt");
-        return Ok(command("pkexec", args));
     }
     #[cfg(target_os = "macos")]
     if crate::lsp::resolve::find_on_path("brew").is_some() {
-        let names: &[&str] = match p.id {
+        let packages: &[&str] = match p.id {
             "rust" => &["rust", "llvm"],
             "javascript" | "web" => &["node"],
             "python" => &["python"],
@@ -182,14 +228,44 @@ fn runtime_command(p: &Pack) -> Result<Value> {
             "php" => &["php", "composer", "node"],
             "lua" => &["lua", "node"],
             "bash" => &["bash", "node"],
-            _ => &[],
+            "zig" => &["zig", "llvm"],
+            _ => anyhow::bail!("Select an existing {} runtime on this host", p.label),
         };
         let mut args = vec!["install".into()];
-        args.extend(names.iter().map(|s| s.to_string()));
-        return Ok(command("brew", args));
+        args.extend(packages.iter().map(|s| s.to_string()));
+        return Ok(vec![command("brew", args)]);
+    }
+    #[cfg(windows)]
+    if crate::lsp::resolve::find_on_path("winget").is_some() {
+        let packages: &[&str] = match p.id {
+            "rust" => &["Rustlang.Rustup", "LLVM.LLVM"],
+            "javascript" | "web" => &["OpenJS.NodeJS.LTS"],
+            "python" => &["Python.Python.3.13"],
+            "go" => &["GoLang.Go"],
+            "cpp" => &["LLVM.LLVM", "Kitware.CMake"],
+            "php" => &["PHP.PHP.8.4", "OpenJS.NodeJS.LTS"],
+            "zig" => &["zig.zig", "LLVM.LLVM"],
+            _ => anyhow::bail!("Select an existing {} runtime on Windows", p.label),
+        };
+        return Ok(packages
+            .iter()
+            .map(|id| {
+                command(
+                    "winget",
+                    vec![
+                        "install".into(),
+                        "--id".into(),
+                        id.to_string(),
+                        "--exact".into(),
+                        "--accept-package-agreements".into(),
+                        "--accept-source-agreements".into(),
+                    ],
+                )
+            })
+            .collect());
     }
     anyhow::bail!(
-        "No supported runtime package manager on this host. Select an existing runtime executable."
+        "No supported runtime package manager on this host. Select an existing executable."
     )
 }
 pub(super) fn plan(
@@ -197,26 +273,32 @@ pub(super) fn plan(
     _root: &Path,
     pack_id: &str,
     runtime: bool,
+    server: Option<&str>,
 ) -> Result<Value> {
     let p = PACKS
         .iter()
         .find(|p| p.id == pack_id)
         .context("Unknown language pack")?;
+    let server = server.unwrap_or(p.lsp);
+    anyhow::ensure!(
+        server == p.lsp || (p.id == "php" && server == "phpactor" && !cfg!(windows)),
+        "Unsupported language server for this pack and host"
+    );
     let exe = std::env::current_exe()?.to_string_lossy().into_owned();
     let mut commands = Vec::new();
     if runtime {
-        commands.push(runtime_command(p)?);
+        commands.extend(runtime_commands(p)?);
     }
-    let provision_lsp = matches!(p.lsp, "lua-language-server" | "zls" | "nil");
+    let provision_lsp = matches!(server, "lua-language-server" | "zls" | "nil");
     commands.push(command(
         &exe,
         if provision_lsp {
-            vec!["coding-provision".into(), p.lsp.into()]
+            vec!["coding-provision".into(), server.into()]
         } else {
             vec![
                 "lsp".into(),
                 "install".into(),
-                p.lsp.into(),
+                server.into(),
                 "--force".into(),
             ]
         },

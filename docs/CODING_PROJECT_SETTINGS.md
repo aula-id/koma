@@ -57,3 +57,8 @@ The editor now supports `"formatOnSave": true` (default false) and
 overrides. Formatting errors leave the file unsaved; disable format-on-save or
 repair the language server before retrying. The project configuration document
 is exempt so an invalid setting cannot prevent its own repair.
+
+`toolchains.php.languageServer` can select `intelephense` (default) or `phpactor`
+on Unix. Language Packs saves this selection with the executable. Selecting an
+environment restarts workspace language servers; existing tasks keep their original
+environment, and new tasks/debug sessions use the new selection.

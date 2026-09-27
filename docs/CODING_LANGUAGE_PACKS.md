@@ -14,10 +14,14 @@ JS (js-debug), PHP (Xdebug adapter), Bash and Lua. LLVM's `lldb-dap` is detected
 from PATH. Installing an adapter does not install project dependencies or enable
 Xdebug in PHP. Bash requires bashdb. Nix and data formats have no DAP adapter.
 
-Runtime installation currently supports Debian-family apt with a desktop pkexec
-prompt and macOS Homebrew already installed. Other hosts, headless SSH sessions,
-and Zig/Nix runtimes use a selected existing executable. The UI reports unsupported
-recipes explicitly. Version compatibility (especially Zig/ZLS) remains a native
+Runtime recipes support apt, dnf, pacman and zypper on Linux, existing Homebrew
+on macOS, and selected winget packages on Windows. Linux uses a desktop pkexec
+prompt when available, otherwise sudo in the task's interactive terminal. The
+review lists exact packages and agreement flags before installation. Distribution
+repositories may need enabling; compiler SDKs, Xdebug and bashdb can require
+additional setup. Nix and unavailable native Windows runtimes use an existing
+executable. Unsupported recipes fail explicitly without starting installation.
+Version compatibility (especially Zig/ZLS) remains a native
 acceptance check. Downloads use HTTPS, bounded archive extraction, and release
 SHA-256 verification when supplied by the publisher. Unsupported archive links are
 rejected. Failed standalone updates preserve the previous component pointer;
@@ -25,11 +29,16 @@ unused version directories are retained. Existing legacy LSP installers keep the
 previous update behavior.
 
 Workspace executable selection writes `toolchains.<language>.executable` in
-`.koma/coding.json`, guarded by the configuration fingerprint. Blank restores PATH
-selection. Python candidates include `.venv` and `venv`. Global `environment` and
+`.koma/coding.json`, guarded by the configuration fingerprint. Blank restores automatic
+selection (project Python virtualenv, then host PATH). Python candidates include `.venv` and `venv`. Global `environment` and
 per-toolchain `environment` maps are passed to new tasks and LSP processes; the
 selected executable directory is prepended to PATH without mutating global state.
-Reopen all documents for a language to restart its server after interpreter changes.
+Environment selection restarts workspace language servers and reopens mounted
+documents. The command palette also exposes Restart Workspace Language Servers.
+PHP offers Intelephense or Phpactor on Unix; save the choice with Use for workspace.
+Test Explorer uses the selected Python interpreter, a project virtualenv, or the
+managed debugpy/pytest environment in that order. Project virtualenvs must provide
+their own pytest dependency.
 Selecting an environment refuses to overwrite unsaved coding settings.
 
 No native installations or functional tests were performed by the implementation

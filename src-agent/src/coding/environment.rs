@@ -31,37 +31,41 @@ pub(crate) fn variables(root: &Path, program: &str) -> Result<BTreeMap<String, S
     let mut env: BTreeMap<String, String> =
         serde_json::from_value(config.get("environment").cloned().unwrap_or(json!({})))?;
     let key = language(program);
-    if let Some(tool) = config.get("toolchains").and_then(|v| v.get(key)) {
-        if let Some(extra) = tool.get("environment") {
-            env.extend(serde_json::from_value::<BTreeMap<String, String>>(
-                extra.clone(),
-            )?);
-        }
-        if let Some(executable) = tool.get("executable").and_then(Value::as_str) {
-            let path = resolve_selected(root, executable);
-            if let Some(parent) = path.parent() {
-                let base = env
-                    .get("PATH")
-                    .cloned()
-                    .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
-                let joined = std::env::join_paths(
-                    std::iter::once(parent.to_path_buf()).chain(std::env::split_paths(&base)),
-                )?;
-                env.insert("PATH".into(), joined.to_string_lossy().into_owned());
-                if key == "python"
-                    && parent
-                        .parent()
-                        .is_some_and(|p| p.join("pyvenv.cfg").is_file())
-                {
-                    env.insert(
-                        "VIRTUAL_ENV".into(),
-                        parent
-                            .parent()
-                            .unwrap_or(parent)
-                            .to_string_lossy()
-                            .into_owned(),
-                    );
-                }
+    let tool = config.get("toolchains").and_then(|v| v.get(key));
+    if let Some(extra) = tool.and_then(|v| v.get("environment")) {
+        env.extend(serde_json::from_value::<BTreeMap<String, String>>(
+            extra.clone(),
+        )?);
+    }
+    env.entry("PATH".into())
+        .or_insert_with(|| host_path().to_string_lossy().into_owned());
+    let selected = tool
+        .and_then(|v| v.get("executable"))
+        .and_then(Value::as_str)
+        .map(|v| resolve_selected(root, v))
+        .or_else(|| {
+            if key == "python" {
+                project_python(root)
+            } else {
+                None
+            }
+        });
+    if let Some(path) = selected {
+        if let Some(parent) = path.parent() {
+            let joined = std::env::join_paths(
+                std::iter::once(parent.to_path_buf())
+                    .chain(std::env::split_paths(env.get("PATH").unwrap())),
+            )?;
+            env.insert("PATH".into(), joined.to_string_lossy().into_owned());
+            if key == "python"
+                && parent
+                    .parent()
+                    .is_some_and(|p| p.join("pyvenv.cfg").is_file())
+            {
+                env.insert(
+                    "VIRTUAL_ENV".into(),
+                    parent.parent().unwrap().to_string_lossy().into_owned(),
+                );
             }
         }
     }
@@ -112,6 +116,11 @@ pub(crate) fn executable(root: &Path, program: &str) -> Result<PathBuf> {
             return Ok(resolve_selected(root, value));
         }
     }
+    if matches!(program, "python" | "python3") {
+        if let Some(path) = project_python(root) {
+            return Ok(path);
+        }
+    }
     Ok(PathBuf::from(program))
 }
 pub(super) fn fingerprint(config: &Value) -> Result<String> {
@@ -122,6 +131,7 @@ pub(super) fn select(
     language: &str,
     executable: &str,
     expected: &str,
+    server: Option<&str>,
 ) -> Result<Value> {
     anyhow::ensure!(
         matches!(
@@ -149,6 +159,20 @@ pub(super) fn select(
             "Executable does not exist on this host"
         );
     }
+    let _guard = crate::app::runtime::client::file_ops::FILE_MUTATION_LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("File mutation lock failed"))?;
+    if let Some(server) = server {
+        let spec = crate::lsp::catalog::find(server).context("Unknown language server")?;
+        anyhow::ensure!(
+            self::language(spec.binary) == language,
+            "Language server does not match the selected toolchain"
+        );
+        anyhow::ensure!(
+            !(cfg!(windows) && server == "phpactor"),
+            "Managed Phpactor is supported on Unix hosts"
+        );
+    }
     let mut config = super::workspace::read_config(root)?;
     anyhow::ensure!(
         fingerprint(&config)? == expected,
@@ -172,6 +196,9 @@ pub(super) fn select(
     } else {
         config["toolchains"][language]["executable"] = json!(executable);
     }
+    if let Some(server) = server {
+        config["toolchains"][language]["languageServer"] = json!(server);
+    }
     let dir = root.join(".koma");
     std::fs::create_dir_all(&dir)?;
     anyhow::ensure!(
@@ -188,4 +215,94 @@ pub(super) fn select(
     super::persistence::atomic_write(&target, &serde_json::to_vec_pretty(&config)?)
         .context("Save environment selection")?;
     Ok(config)
+}
+
+fn project_python(root: &Path) -> Option<PathBuf> {
+    [".venv", "venv"]
+        .iter()
+        .map(|name| {
+            root.join(name).join(if cfg!(windows) {
+                "Scripts/python.exe"
+            } else {
+                "bin/python"
+            })
+        })
+        .find(|path| path.is_file())
+}
+pub(super) fn test_python(root: &Path) -> Result<PathBuf> {
+    let program = if cfg!(windows) { "python" } else { "python3" };
+    let selected = executable(root, program)?;
+    let config = super::workspace::read_config(root)?;
+    if selected != PathBuf::from(program)
+        || config["toolchains"]["python"]["executable"].is_string()
+    {
+        return Ok(selected);
+    }
+    Ok(super::provision::component_binary("debugpy").unwrap_or(selected))
+}
+pub(crate) fn language_server(
+    root: &Path,
+    extension: &str,
+) -> Option<&'static crate::lsp::catalog::ServerSpec> {
+    let default = crate::lsp::catalog::find_by_extension(extension)?;
+    let key = language(default.binary);
+    let config = super::workspace::read_config(root).ok()?;
+    let id = config["toolchains"][key]["languageServer"]
+        .as_str()
+        .unwrap_or(default.id);
+    crate::lsp::catalog::find(id).filter(|spec| {
+        spec.extensions
+            .iter()
+            .any(|ext| ext.eq_ignore_ascii_case(extension))
+    })
+}
+pub(crate) fn host_path() -> std::ffi::OsString {
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    #[cfg(not(windows))]
+    {
+        current
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Registry::{
+            RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_EXPAND_SZ,
+            RRF_RT_REG_SZ,
+        };
+        let mut paths: Vec<PathBuf> = std::env::split_paths(&current).collect();
+        for (key, name) in [
+            (HKEY_CURRENT_USER, "Environment"),
+            (
+                HKEY_LOCAL_MACHINE,
+                "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+            ),
+        ] {
+            let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+            let value: Vec<u16> = "Path".encode_utf16().chain(Some(0)).collect();
+            let mut bytes = 65536u32;
+            let mut buffer = vec![0u16; 32768];
+            let result = unsafe {
+                RegGetValueW(
+                    key,
+                    name.as_ptr(),
+                    value.as_ptr(),
+                    RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ,
+                    std::ptr::null_mut(),
+                    buffer.as_mut_ptr().cast(),
+                    &mut bytes,
+                )
+            };
+            if result == 0 {
+                let count = (bytes as usize / 2).min(buffer.len());
+                let path = String::from_utf16_lossy(&buffer[..count])
+                    .trim_end_matches('\0')
+                    .to_string();
+                for part in std::env::split_paths(&path) {
+                    if !paths.contains(&part) {
+                        paths.push(part);
+                    }
+                }
+            }
+        }
+        std::env::join_paths(paths).unwrap_or(current)
+    }
 }

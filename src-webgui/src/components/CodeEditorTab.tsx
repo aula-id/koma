@@ -512,6 +512,20 @@ function WorkspaceCodeEditor({ tab }: { tab: CodingTab }) {
   ])
 
   // Attach LSP when content is ready AND the matching server is installed.
+  useEffect(() => {
+    const restart = (event: Event) => {
+      const workspace = (event as CustomEvent<{ hostId: string; root: string }>).detail
+      const store = useKoma.getState()
+      if (workspace.hostId !== (store.remoteState.hostId ?? 'local') || workspace.root !== tab.root) return
+      const model = modelRef.current
+      if (!model || model.isDisposed()) return
+      lspOpenedRef.current = true
+      store.req({ r: 'LspDidOpen', root: tab.root, path: tab.path, languageId: languageIdForPath(tab.path), text: model.getValue() })
+    }
+    window.addEventListener('koma-lsp-restart', restart)
+    return () => window.removeEventListener('koma-lsp-restart', restart)
+  }, [tab.root, tab.path])
+
   // Do not mark opened while source === 'missing' — install updates lspServers
   // without remounting the tab, so this effect must re-run and send LspDidOpen.
   useEffect(() => {
@@ -563,8 +577,8 @@ function WorkspaceCodeEditor({ tab }: { tab: CodingTab }) {
       }, 2500)
       return () => window.clearTimeout(t)
     }
-    const match = lspServers.find((s) => s.extensions.includes(ext))
-    if (!match || match.source === 'missing') return
+    const matches = lspServers.filter((s) => s.extensions.includes(ext))
+    if (!matches.some(s => s.source !== 'missing')) return
 
     lspOpenedRef.current = true
     req({

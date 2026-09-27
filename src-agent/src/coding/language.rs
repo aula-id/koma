@@ -298,3 +298,21 @@ pub(super) fn command(
     }
     result
 }
+
+pub(super) fn restart(workspace: &WorkspaceRef) -> Result<Value, String> {
+    let manager = MANAGERS
+        .get_or_init(Default::default)
+        .lock()
+        .map_err(|_| "Coding language registry failed")?
+        .remove(workspace);
+    if let Some(manager) = manager {
+        manager
+            .lock()
+            .map_err(|_| "Coding LSP manager lock failed")?
+            .cleanup_all();
+    }
+    super::event(
+        json!({"k":"CodingEvent","workspace":workspace,"event":{"k":"LspWorkspaceRestart"}}),
+    );
+    Ok(Value::Null)
+}

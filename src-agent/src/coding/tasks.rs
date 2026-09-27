@@ -1044,23 +1044,14 @@ fn discover(root: &Path, tasks: &mut Vec<Task>) -> Result<()> {
         }
     }
     if root.join("pytest.ini").is_file() || root.join("pyproject.toml").is_file() {
-        let local = if cfg!(windows) {
-            ".venv/Scripts/python.exe"
-        } else {
-            ".venv/bin/python"
-        };
-        let python = if root.join(local).is_file() {
-            local
-        } else if cfg!(windows) {
-            "python"
-        } else {
-            "python3"
-        };
+        let python = super::environment::test_python(root)?
+            .to_string_lossy()
+            .into_owned();
         add(
             "python:test",
             "Python: pytest",
             "test",
-            python,
+            &python,
             vec!["-m".into(), "pytest".into()],
         )?;
     }

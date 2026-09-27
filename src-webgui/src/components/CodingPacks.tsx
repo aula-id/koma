@@ -5,7 +5,7 @@ import { codingRequest, workspaceKey, type WorkspaceRef, type CodingTaskRun } fr
 import { invalidateCodingConfig } from '../lib/coding-config'
 import { showCodingTasks } from './CodingTasks'
 
-type Pack = { id: string; label: string; runtime: string | null; runtimeName: string; selected: string; candidates: string[]; lsp: string | null; server: string; adapter: string | null; adapterName: string; test: string }
+type Pack = { id: string; label: string; runtime: string | null; runtimeName: string; selected: string; candidates: string[]; lsp: string | null; server: string; serverOptions: string[]; adapter: string | null; adapterName: string; test: string }
 type Status = { packs: Pack[]; fingerprint: string; platform: string }
 type Plan = { id: string; label: string; commands: { command: string; args: string[] }[]; notes: string }
 const button = 'rounded px-2 py-1 text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:opacity-40'
@@ -17,6 +17,7 @@ export function CodingPacks() {
   const [data, setData] = useState<Status | null>(null)
   const [packId, setPackId] = useState('python')
   const [executable, setExecutable] = useState('')
+  const [server, setServer] = useState('')
   const [runtime, setRuntime] = useState(false)
   const [plan, setPlan] = useState<Plan | null>(null)
   const [busy, setBusy] = useState(false)
@@ -47,14 +48,14 @@ export function CodingPacks() {
     return () => abort.abort()
   }, [open, scope, refresh])
   const pack = data?.packs.find(p => p.id === packId)
-  useEffect(() => { setExecutable(pack?.selected ?? ''); setPlan(null) }, [packId, data])
+  useEffect(() => { setExecutable(pack?.selected ?? ''); setServer(pack?.server ?? ''); setPlan(null) }, [packId, data])
   const close = () => { generation.current++; setOpen(false); focus.current?.focus() }
   const act = async (action: 'plan' | 'apply' | 'select') => {
     if (!workspace || !data || mutation.current) return
     mutation.current = true; setBusy(true); setError(''); const gen = generation.current
     try {
       if (action === 'plan') {
-        const result = await codingRequest<Plan>(workspace, { op: 'packPlan', packId, runtime })
+        const result = await codingRequest<Plan>(workspace, { op: 'packPlan', packId, runtime, server })
         if (gen === generation.current) setPlan(result)
       } else if (action === 'apply' && plan) {
         const run = await codingRequest<CodingTaskRun>(workspace, { op: 'packApply', planId: plan.id })
@@ -63,7 +64,7 @@ export function CodingPacks() {
         const s = useKoma.getState()
         const config = s.coding.files[fileKey(workspace.root, '.koma/coding.json')]
         if ((s.remoteState.hostId ?? 'local') === workspace.hostId && config && config.content !== config.savedContent) throw new Error('Save or discard your open coding settings before changing the environment.')
-        await codingRequest(workspace, { op: 'environmentSelect', language: packId, executable, fingerprint: data.fingerprint })
+        await codingRequest(workspace, { op: 'environmentSelect', language: packId, executable, fingerprint: data.fingerprint, server: packId === 'php' ? server : undefined })
         invalidateCodingConfig(workspace)
         if (gen === generation.current) setRefresh(n => n + 1)
       }
@@ -83,6 +84,7 @@ export function CodingPacks() {
       {data && <>
         <select aria-label="Language" className="bg-koma-panel border border-koma-border rounded px-2 py-1" value={packId} disabled={busy} onChange={e => setPackId(e.target.value)}>{data.packs.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select>
         {pack && <>
+          {pack.serverOptions.length > 1 && <label className="flex items-center gap-2 text-koma-dim">Language server<select aria-label="PHP language server" className="rounded border border-koma-border bg-koma-panel px-2 py-1 text-koma-fg" value={server} disabled={busy} onChange={e => { setServer(e.target.value); setPlan(null) }}>{pack.serverOptions.map(id => <option key={id} value={id}>{id}</option>)}</select></label>}
           <dl className="grid grid-cols-[90px_1fr] gap-1 break-all">
             <dt className="text-koma-dim">Runtime</dt><dd>{pack.runtime ?? (pack.runtimeName ? `${pack.runtimeName} · missing` : 'Not required')}</dd>
             <dt className="text-koma-dim">Language server</dt><dd>{pack.lsp ?? `${pack.server} · missing`}</dd>
@@ -90,11 +92,11 @@ export function CodingPacks() {
             <dt className="text-koma-dim">Tests</dt><dd>{pack.test || 'Not applicable'}</dd>
           </dl>
           {pack.runtimeName && !['web', 'toml'].includes(packId) && <div className="flex items-center gap-2">
-            <label htmlFor="coding-executable" className="text-koma-dim">Executable</label><input id="coding-executable" list="coding-environments" value={executable} onChange={e => setExecutable(e.target.value)} placeholder="Automatic (host PATH)" className="min-w-0 flex-1 rounded border border-koma-border bg-koma-panel px-2 py-1" />
+            <label htmlFor="coding-executable" className="text-koma-dim">Executable</label><input id="coding-executable" list="coding-environments" value={executable} onChange={e => setExecutable(e.target.value)} placeholder="Automatic (project environment / host PATH)" className="min-w-0 flex-1 rounded border border-koma-border bg-koma-panel px-2 py-1" />
             <datalist id="coding-environments">{pack.candidates.map(v => <option key={v} value={v} />)}</datalist>
             <button className={button} disabled={busy} onClick={() => void act('select')}>Use for workspace</button>
           </div>}
-          <p className="text-koma-dim">Environment changes apply to new tasks. Reopen language-server documents after changing an interpreter.</p>
+          <p className="text-koma-dim">Environment changes apply to new tasks and debug sessions. Workspace language servers restart automatically.</p>
           <div className="flex items-center gap-3"><label className="flex items-center gap-1"><input type="checkbox" checked={runtime} disabled={busy} onChange={e => { setRuntime(e.target.checked); setPlan(null) }} />Include runtime / compiler</label><button className={button} disabled={busy} onClick={() => void act('plan')}>Review install / update</button></div>
         </>}
       </>}

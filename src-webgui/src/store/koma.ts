@@ -3163,6 +3163,10 @@ export const useKoma = create<KomaState>((set, get) => ({
           break
         }
         if (env.workspace.hostId !== (get().remoteState.hostId ?? 'local')) break
+        if (env.event.k === 'LspWorkspaceRestart') {
+          window.dispatchEvent(new CustomEvent('koma-lsp-restart', { detail: env.workspace }))
+          break
+        }
         if (env.event.k === 'FileSystemChanged') {
           window.dispatchEvent(new CustomEvent('koma-coding-disk', { detail: env.workspace }))
           break

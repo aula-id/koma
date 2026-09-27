@@ -429,7 +429,7 @@ impl LspManager {
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        let spec = catalog::find_by_extension(&ext)
+        let spec = crate::coding::environment::language_server(Path::new(root), &ext)
             .ok_or_else(|| format!("no language server for .{ext}"))?;
         let (server_kind, binary, args) = resolve_spawn(spec, &ext)?;
         let root_path = PathBuf::from(root);
@@ -941,7 +941,7 @@ impl LspManager {
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        let spec = catalog::find_by_extension(&ext)
+        let spec = crate::coding::environment::language_server(Path::new(root), &ext)
             .ok_or_else(|| format!("no language server for .{ext}"))?;
         let (server_kind, binary, args) = resolve_spawn(spec, &ext)?;
         let root_path = PathBuf::from(root);
@@ -1426,7 +1426,15 @@ fn spawn_server_process(
     root: &Path,
     push: Arc<dyn Fn(String) + Send + Sync>,
 ) -> Result<ServerSession, String> {
-    let mut cmd = Command::new(binary);
+    let mut cmd = if id.starts_with("phpactor") {
+        let runtime = crate::coding::environment::executable(root, "php")
+            .map_err(|e| e.to_string())?;
+        let mut cmd = Command::new(runtime);
+        cmd.arg(binary);
+        cmd
+    } else {
+        Command::new(binary)
+    };
     for a in args {
         cmd.arg(a);
     }

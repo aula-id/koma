@@ -41,8 +41,12 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
         Operation::DebugStop { session_id } => {
             return super::debug::stop(&request.workspace, session_id)
         }
-        Operation::TaskInput { run_id, data } => return super::tasks::input(&request.workspace, run_id, data),
-        Operation::TaskResize { run_id, rows, cols } => return super::tasks::resize(&request.workspace, run_id, *rows, *cols),
+        Operation::TaskInput { run_id, data } => {
+            return super::tasks::input(&request.workspace, run_id, data)
+        }
+        Operation::TaskResize { run_id, rows, cols } => {
+            return super::tasks::resize(&request.workspace, run_id, *rows, *cols)
+        }
         Operation::TaskRuns => return super::tasks::runs(&request.workspace),
         Operation::TaskStop { run_id } => return super::tasks::stop(&request.workspace, run_id),
         Operation::TaskOutput { run_id, after } => {
@@ -120,17 +124,39 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
         | Operation::DebugRequest { .. }
         | Operation::DebugStop { .. } => unreachable!(),
         Operation::Packs => super::packs::status(&canonical),
-        Operation::PackPlan { pack_id, runtime } => {
-            super::packs::plan(&request.workspace, &canonical, pack_id, *runtime)
-        }
+        Operation::PackPlan {
+            pack_id,
+            runtime,
+            server,
+        } => super::packs::plan(
+            &request.workspace,
+            &canonical,
+            pack_id,
+            *runtime,
+            server.as_deref(),
+        ),
         Operation::PackApply { plan_id } => {
             super::packs::apply(&request.workspace, &canonical, plan_id)
+        }
+        Operation::LspRestartWorkspace => {
+            super::language::restart(&request.workspace).map_err(anyhow::Error::msg)
         }
         Operation::EnvironmentSelect {
             language,
             executable,
             fingerprint,
-        } => super::environment::select(&canonical, language, executable, fingerprint),
+            server,
+        } => {
+            let config = super::environment::select(
+                &canonical,
+                language,
+                executable,
+                fingerprint,
+                server.as_deref(),
+            )?;
+            super::language::restart(&request.workspace).map_err(anyhow::Error::msg)?;
+            Ok(config)
+        }
         Operation::Save {
             path,
             content,

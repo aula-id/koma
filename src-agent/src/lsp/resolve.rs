@@ -88,6 +88,7 @@ fn resolve_one(spec: &ServerSpec, manifest: &Manifest) -> ServerStatus {
         catalog::InstallKind::Npm => "npm",
         catalog::InstallKind::PipVenv => "pip",
         catalog::InstallKind::GoInstall => "go",
+        catalog::InstallKind::Composer => "composer",
     }
     .to_string();
 
@@ -161,7 +162,7 @@ pub fn find_on_path(name: &str) -> Option<PathBuf> {
 fn which(name: &str) -> Option<PathBuf> {
     // Prefer a real `which`/`where` only as fallback — walk PATH ourselves so
     // tests and restricted envs don't depend on an external binary.
-    let path_var = std::env::var_os("PATH")?;
+    let path_var = crate::coding::environment::host_path();
     for dir in std::env::split_paths(&path_var) {
         #[cfg(windows)]
         {

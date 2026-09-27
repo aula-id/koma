@@ -30,6 +30,7 @@ const commands: Command[] = [
   { id: 'editor.action.triggerSuggest', title: 'Trigger Suggestions', editor: true },
   { id: 'editor.action.commentLine', title: 'Toggle Line Comment', editor: true },
   { id: 'editor.action.toggleWordWrap', title: 'Toggle Word Wrap', editor: true },
+  { id: 'restartLsp', title: 'Restart Workspace Language Servers' },
   { id: 'projectSettings', title: 'Open Project Coding Settings' },
   { id: 'tests', title: 'Tests: Discover, Run and Debug' },
   { id: 'debug', title: 'Debug: Launch, Attach and Inspect' },
@@ -146,6 +147,10 @@ export function CodingPalette() {
           if ((useKoma.getState().remoteState.hostId ?? 'local') === hostId) useKoma.getState().openCodingFile(root, '.koma/coding.json')
         }).catch(error => useKoma.setState(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, kind: 'error', text: String(error.message ?? error) } } } }))
       }
+    }
+    else if (command.id === 'restartLsp') {
+      const root = scope && scope !== '*' ? scope : activeRoot
+      if (root) void codingRequest({ hostId, root }, { op: 'lspRestartWorkspace' }).catch(error => useKoma.setState(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, kind: 'error', text: String(error.message ?? error) } } } }))
     }
     else if (command.id === 'saveAll') { for (const tab of store.ui.tabs) if (tab.kind === 'codingFile' && !tab.preview) store.saveCodingFile(tab.root, tab.path) }
     else if (command.id === 'recovery') showCodingHistory()

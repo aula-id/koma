@@ -7,9 +7,9 @@ mod debug;
 pub(crate) mod environment;
 mod language;
 mod packs;
-mod pty;
 pub(crate) mod persistence;
 pub(crate) mod provision;
+mod pty;
 mod resources;
 mod tasks;
 mod tests;
@@ -125,11 +125,16 @@ pub(crate) enum Operation {
     PackPlan {
         pack_id: String,
         runtime: bool,
+        #[serde(default)]
+        server: Option<String>,
     },
     PackApply {
         plan_id: String,
     },
+    LspRestartWorkspace,
     EnvironmentSelect {
+        #[serde(default)]
+        server: Option<String>,
         language: String,
         executable: String,
         fingerprint: String,
@@ -164,8 +169,15 @@ pub(crate) enum Operation {
     TaskStop {
         run_id: String,
     },
-    TaskInput { run_id: String, data: String },
-    TaskResize { run_id: String, rows: u16, cols: u16 },
+    TaskInput {
+        run_id: String,
+        data: String,
+    },
+    TaskResize {
+        run_id: String,
+        rows: u16,
+        cols: u16,
+    },
     TaskOutput {
         run_id: String,
         after: u64,
@@ -430,4 +442,7 @@ pub(crate) fn provision_main() -> anyhow::Result<()> {
     )
 }
 
-#[cfg(windows)] pub(crate) fn pty_gate_main() -> anyhow::Result<()> {pty::gated_main()}
+#[cfg(windows)]
+pub(crate) fn pty_gate_main() -> anyhow::Result<()> {
+    pty::gated_main()
+}
