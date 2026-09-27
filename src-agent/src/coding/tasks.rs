@@ -337,16 +337,7 @@ impl ChildWrapper for ProcessTreeChild {
             return Ok(());
         }
         // The unreaped child reserves the group ID; never signal a recycled PID.
-        let result = unsafe { libc::kill(-(self.child.id() as i32), libc::SIGKILL) };
-        if result == 0 {
-            return Ok(());
-        }
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ESRCH) {
-            Ok(())
-        } else {
-            Err(error)
-        }
+        super::process_group::kill(self.child.id() as libc::pid_t)
     }
     fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
         if !self.reaped {
@@ -1089,6 +1080,47 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn zombie_only_process_group_preserves_exit_status() {
+        for exit_code in [0, 7] {
+            let mut command = Command::new("/bin/sh");
+            command
+                .args(["-c", &format!("exit {exit_code}")])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            let mut child = spawn_command(command).expect("spawn isolated process group");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            // Force the zombie-only state instead of relying on scheduling.
+            // WNOWAIT leaves the child's exit code for the wrapper to collect.
+            loop {
+                let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+                let result = unsafe {
+                    libc::waitid(
+                        libc::P_PID,
+                        child.id(),
+                        &mut info,
+                        libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                    )
+                };
+                assert_eq!(result, 0, "waitid: {}", std::io::Error::last_os_error());
+                if unsafe { info.si_pid() } != 0 {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "Child did not exit");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let status = child
+                .try_wait()
+                .expect("clean up zombie-only group")
+                .expect("exited child");
+            assert_eq!(status.code(), Some(exit_code));
+            assert_eq!(child.try_wait().expect("cached exit status"), Some(status));
+            child.start_kill().expect("stop after reaping is harmless");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn task_identity_cancellation_and_literal_arguments() {
         let project = Project::new(json!([
             {"id":"watch","label":"Watch","command":"/bin/sh","args":["-c","sleep 30 & wait"]},
@@ -1114,7 +1146,9 @@ mod tests {
         let started = start(&workspace, &project.0, "echo", &fingerprint).unwrap();
         let run = find(&workspace, started["id"].as_str().unwrap()).unwrap();
         await_done(&run);
-        assert_eq!(run.summary().unwrap()["exitCode"], 7);
+        let summary = run.summary().unwrap();
+        assert_eq!(summary["exitCode"], 7, "{summary}");
+        assert!(summary["error"].is_null(), "{summary}");
         let state = run.state.lock().unwrap();
         assert_eq!(
             state

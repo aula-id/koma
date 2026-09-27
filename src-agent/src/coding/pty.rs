@@ -195,13 +195,7 @@ impl Process {
                         }
                     }
                 }
-                let result = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
-                if result != 0 {
-                    let error = std::io::Error::last_os_error();
-                    if error.raw_os_error() != Some(libc::ESRCH) {
-                        return Err(error);
-                    }
-                }
+                super::process_group::kill(pid as libc::pid_t)?;
                 return Ok(());
             }
         }

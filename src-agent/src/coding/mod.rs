@@ -16,6 +16,8 @@ mod language;
 mod packs;
 pub(crate) mod persistence;
 mod problems;
+#[cfg(unix)]
+mod process_group;
 pub(crate) mod provision;
 mod pty;
 mod resources;
