@@ -137,10 +137,7 @@ pub enum WarmEvent {
     /// The drain routes it to THAT session's `awareness_summary` by id (C4) — the warm
     /// channel is shared/replaced across sessions, so an untagged result could land on
     /// the wrong session if two warm concurrently. Tagging it makes the routing exact.
-    WarmAwareness {
-        session_id: String,
-        summary: Option<String>,
-    },
+    WarmAwareness(crate::app::awareness::AwarenessResult),
     /// The linker daemon graph summary resolved for the session identified by
     /// `session_id`. The drain routes it to THAT session's `graph_summary` by id.
     #[cfg(feature = "linker")]

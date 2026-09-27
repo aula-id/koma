@@ -421,10 +421,12 @@ pub struct AppStateRest {
     /// delivered, never re-created. This receiver is created lazily on first use
     /// and lives for the app's lifetime. Drained in `service_global` alongside
     /// `sec_health_rx`/`warm_rx`.
-    pub awareness_rx: Option<tokio::sync::mpsc::UnboundedReceiver<(String, Option<String>)>>,
+    pub awareness_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::awareness::AwarenessResult>>,
     /// SENDER half of `awareness_rx`, cloned into each spawned recompute task.
     /// `None` until the first recompute is spawned (see `session_mgmt::spawn_awareness_recompute`).
-    pub awareness_tx: Option<tokio::sync::mpsc::UnboundedSender<(String, Option<String>)>>,
+    pub awareness_tx:
+        Option<tokio::sync::mpsc::UnboundedSender<crate::app::awareness::AwarenessResult>>,
     /// SENDER half of the extension grant-broker lane. A clone is handed to
     /// [`crate::app::ext::ExtHostManager`] at startup (`set_ext_call_tx`); each
     /// extension's socket reader task uses it to forward an `agents.*` `Call` — which

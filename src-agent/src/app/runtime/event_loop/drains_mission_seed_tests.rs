@@ -107,6 +107,7 @@ fn plan_seed_compact_does_not_append_session_image_inventory() {
         rt.pending_plan_seed = true;
         rt.pending_plan_seed_body = Some("Reviewed body captured at approval".into());
     }
+    state.rest.fg_mut().compact_anim_start = Some(std::time::Instant::now());
     apply_compaction_result(
         &mut state,
         0,
@@ -173,6 +174,7 @@ fn plan_seed_rejects_missing_snapshot_and_read_only_modes() {
             rt.pending_plan_seed = armed;
             rt.pending_plan_seed_body = body.map(str::to_string);
         }
+        state.rest.fg_mut().compact_anim_start = Some(std::time::Instant::now());
         apply_compaction_result(
             &mut state,
             0,
@@ -219,6 +221,7 @@ fn execute_seed_injects_when_bound_and_stale_loaded_phase_is_cleared() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
 
     let mut valid = armed_state(&path, &mission);
+    valid.rest.fg_mut().compact_anim_start = Some(std::time::Instant::now());
     apply_compaction_result(
         &mut valid,
         0,
@@ -243,6 +246,7 @@ fn execute_seed_injects_when_bound_and_stale_loaded_phase_is_cleared() {
     mission.phase = "prepare".into();
     mission.save(&path).unwrap();
     let mut stale = armed_state(&path, &mission);
+    stale.rest.fg_mut().compact_anim_start = Some(std::time::Instant::now());
     apply_compaction_result(
         &mut stale,
         0,
@@ -262,4 +266,99 @@ fn execute_seed_injects_when_bound_and_stale_loaded_phase_is_cleared() {
         .iter()
         .any(|message| message.content.contains("Approved mission (execute now)")));
     assert!(stale.rest.fg().pending_mission_seed.is_none());
+}
+
+#[test]
+fn invalid_compaction_preserves_context_and_clears_continuations() {
+    let path = std::env::temp_dir().join(format!("koma-compact-fail-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&path).unwrap();
+    let _scratch = Scratch(path.clone());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    for summary in [
+        "",
+        " \n\t",
+        "<tool_call></tool_call>",
+        "```json\n```",
+        "<summary></summary>",
+    ] {
+        let mut state = armed_state(&path, &bound_execute_mission());
+        let rt = state.rest.fg_mut();
+        rt.session
+            .as_mut()
+            .unwrap()
+            .conversation
+            .push_user("keep this exact context");
+        rt.session.as_mut().unwrap().save().unwrap();
+        let before = rt
+            .session
+            .as_ref()
+            .unwrap()
+            .conversation
+            .messages()
+            .to_vec();
+        let disk = std::fs::read(path.join("messages.json")).unwrap();
+        rt.waiting = true;
+        rt.compact_anim_start = Some(std::time::Instant::now());
+        rt.pending_plan_seed = true;
+        rt.pending_plan_seed_body = Some("must not continue".into());
+        apply_compaction_result(
+            &mut state,
+            0,
+            &None,
+            runtime.handle(),
+            summary.into(),
+            vec![],
+        );
+        let rt = state.rest.fg();
+        assert_eq!(rt.session.as_ref().unwrap().conversation.messages(), before);
+        assert_eq!(std::fs::read(path.join("messages.json")).unwrap(), disk);
+        assert!(!rt.waiting && rt.compact_anim_start.is_none());
+        assert!(!rt.pending_plan_seed && rt.pending_mission_seed.is_none());
+    }
+}
+
+#[test]
+fn compaction_error_and_cancelled_result_leave_conversation_unchanged() {
+    let path = std::env::temp_dir().join(format!("koma-compact-cancel-{}", uuid::Uuid::new_v4()));
+    let mut state = armed_state(&path, &bound_execute_mission());
+    state
+        .rest
+        .fg_mut()
+        .session
+        .as_mut()
+        .unwrap()
+        .conversation
+        .push_user("original");
+    let before = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .unwrap()
+        .conversation
+        .messages()
+        .to_vec();
+    state.rest.fg_mut().compact_anim_start = Some(std::time::Instant::now());
+    fail_compaction(&mut state, 0, "timeout".into());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    apply_compaction_result(
+        &mut state,
+        0,
+        &None,
+        runtime.handle(),
+        "late summary".into(),
+        vec![],
+    );
+    assert_eq!(
+        state
+            .rest
+            .fg()
+            .session
+            .as_ref()
+            .unwrap()
+            .conversation
+            .messages(),
+        before
+    );
+    assert!(!path.exists());
 }

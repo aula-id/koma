@@ -22,6 +22,31 @@
 
 use crate::dto::chat::{Attachment, ChatMessage, Role, ToolCall};
 
+/// Validate summary text after removing transport markup, before any context mutation.
+pub(crate) fn clean_compaction_summary(summary: &str) -> Option<String> {
+    let clean = crate::dto::chat::strip_tool_call_tags(summary);
+    let clean = clean.trim();
+    // Fences and empty HTML/XML wrappers are not a summary.
+    let visible = clean
+        .lines()
+        .filter(|line| !line.trim().starts_with("```"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut in_tag = false;
+    let substantive = visible.chars().any(|c| {
+        if c == '<' {
+            in_tag = true;
+            false
+        } else if c == '>' {
+            in_tag = false;
+            false
+        } else {
+            !in_tag && c.is_alphanumeric()
+        }
+    });
+    substantive.then(|| clean.to_string())
+}
+
 /// In-memory chat history for one session.
 ///
 /// The first element of the internal vec is always a `System` message after
@@ -359,6 +384,9 @@ impl Conversation {
     /// is taken from `self.messages[0]`; if no system message exists yet a
     /// blank one is inserted first via `set_system`.
     pub fn apply_compaction(&mut self, summary: String, kept_tail: Vec<ChatMessage>) {
+        let Some(summary) = clean_compaction_summary(&summary) else {
+            return;
+        };
         // Guard: ensure a System message exists at [0] before we clone it.
         if !self
             .messages

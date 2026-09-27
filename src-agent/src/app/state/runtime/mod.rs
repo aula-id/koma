@@ -599,6 +599,8 @@ pub struct SessionRuntime {
     /// `None` when awareness is disabled, no docs exist, or the call failed —
     /// it is recomputed per session, never persisted.
     pub awareness_summary: Option<String>,
+    pub awareness_generation: u64,
+    pub awareness_status: Option<String>,
     /// Cached graph summary text for L1 injection into the system prompt.
     /// Populated by the linker daemon on scan complete / generation change.
     #[cfg(feature = "linker")]
@@ -800,6 +802,8 @@ impl SessionRuntime {
             dir_cache: Arc::new(RwLock::new(DirCache::default())),
             call_track: crate::tool::CallTrack::new(),
             awareness_summary: None,
+            awareness_generation: 0,
+            awareness_status: None,
             #[cfg(feature = "linker")]
             graph_summary: None,
             #[cfg(feature = "linker")]

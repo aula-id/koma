@@ -782,13 +782,15 @@ pub(super) fn drain_awareness(state: &mut AppState) -> bool {
         let mut keep = true;
         loop {
             match arx.try_recv() {
-                Ok((session_id, summary)) => {
-                    if let Some(s) = state.rest.sessions.iter_mut().find(|s| s.id == session_id) {
-                        s.awareness_summary = summary;
+                Ok(result) => {
+                    if let Some(rt) = state
+                        .rest
+                        .sessions
+                        .iter_mut()
+                        .find(|s| s.id == result.session_id)
+                    {
+                        dirty |= result.apply(rt);
                     }
-                    // Session gone (closed since the recompute was spawned) → the
-                    // result is simply dropped, same contract as `WarmAwareness`.
-                    dirty = true;
                 }
                 // Channel drained for now: keep listening on later ticks.
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
@@ -859,37 +861,28 @@ pub(super) fn drain_warm(state: &mut AppState) -> bool {
                     }
                     dirty = true;
                 }
-                Ok(WarmEvent::WarmAwareness {
-                    session_id,
-                    summary,
-                }) => {
-                    let had = summary.is_some();
-                    // Route by SESSION ID (C4): the warm result belongs to exactly the
-                    // session that was warming, identified by its stable UUID tagged into
-                    // the event. The shared `warm_rx` is REPLACED per warm, so without the
-                    // tag a result could land on whatever OTHER session happens to still be
-                    // in `Mode::Loading` (two near-simultaneous `/new`s) — that was the
-                    // cross-session corruption C3 exposed. `service_global` runs OUTSIDE a
-                    // client bracket, so the foreground cursor is stale scratch here. Find
-                    // the tagged session by id and set its summary (appended to the system
-                    // message on every request); advance ITS splash step if it is still
-                    // Loading (it may have been Esc'd to Chat — the summary must land
-                    // regardless, preserving "summary populates even after skip").
-                    if let Some(s) = state.rest.sessions.iter_mut().find(|s| s.id == session_id) {
-                        if let Mode::Loading(ls) = &mut s.mode {
-                            // Some → ready; None → "no docs" (a benign terminal Done detail,
-                            // not a hard failure).
-                            ls.awareness = if had {
-                                WarmStatus::Done("ready".into())
-                            } else {
-                                WarmStatus::Done("no docs".into())
-                            };
+                Ok(WarmEvent::WarmAwareness(result)) => {
+                    if let Some(rt) = state
+                        .rest
+                        .sessions
+                        .iter_mut()
+                        .find(|s| s.id == result.session_id)
+                    {
+                        let had = result.result.summary.is_some();
+                        if result.apply(rt) {
+                            if let Mode::Loading(ls) = &mut rt.mode {
+                                ls.awareness = WarmStatus::Done(
+                                    if had {
+                                        "ready"
+                                    } else {
+                                        "unavailable / no docs"
+                                    }
+                                    .into(),
+                                );
+                            }
+                            dirty = true;
                         }
-                        s.awareness_summary = summary;
                     }
-                    // If the tagged session is gone (closed/never found) the result is
-                    // simply dropped — there is no live session to carry it.
-                    dirty = true;
                 }
                 #[cfg(feature = "linker")]
                 Ok(WarmEvent::WarmGraph {

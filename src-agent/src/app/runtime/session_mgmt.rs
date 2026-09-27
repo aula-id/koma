@@ -167,6 +167,8 @@ fn warm_session_impl(
     // drain routes on) so the WarmAwareness result lands on THIS session by id (C4),
     // even if another session replaces the shared `warm_rx` and is also Loading.
     let warming_id = state.rest.fg().id.clone();
+    state.rest.fg_mut().awareness_generation = state.rest.fg().awareness_generation.wrapping_add(1);
+    let generation = state.rest.fg().awareness_generation;
     let config = state.rest.config.clone();
     // Workspace reindex is already async (background thread); fire it always,
     // independent of whether we show the loading splash.
@@ -187,7 +189,10 @@ fn warm_session_impl(
 
     // No awareness task to spawn → no splash; leave the mode as-is (Chat) so the
     // no-work case behaves exactly as before (no splash flash).
-    if aware_route.is_none() {
+    if !want_awareness
+        || (aware_route.is_none()
+            && resolve_role_dispatch(&config, &settings, ModelRole::Main).is_none())
+    {
         return;
     }
 
@@ -230,60 +235,32 @@ fn warm_session_impl(
     // appropriate terminal step. Also resolve the Main route as a fallback: when
     // the Awareness model call itself fails (e.g. bad/typo'd model name) we retry
     // once on the trusted Main route before giving up.
-    if let (Some(c), Some(route)) = (client.as_ref(), aware_route) {
+    if let Some(c) = client.as_ref() {
         let c = Arc::clone(c);
-        // `main_route` (resolved ONCE above, and reused here as the awareness fallback)
-        // is moved into the task. `None` is safe — `summarize_with_fallback` skips the
-        // retry when the routes are equal or Main is unavailable.
         handle.spawn(async move {
-            // Bound the awareness call (WARM_AWARENESS_TIMEOUT_SECS): a hung/slow
-            // upstream must NOT strand the session — with a splash it would sit in
-            // Mode::Loading forever (swallowing double-Esc), and in the background it
-            // would leak the task. Timeout OR any inner failure collapses to `None`
-            // via `.ok().flatten()`, mirroring `spawn_awareness_recompute`; either way
-            // the terminal WarmAwareness below still fires (so a splash flips
-            // Loading→Chat, and the summary store is a harmless `None`).
-            let summary = tokio::time::timeout(
+            let result = tokio::time::timeout(
                 std::time::Duration::from_secs(WARM_AWARENESS_TIMEOUT_SECS),
-                async {
-                    match main_route {
-                        Some(ref m) => {
-                            crate::app::awareness::summarize_with_fallback(
-                                &c,
-                                &settings,
-                                route.conn(),
-                                &route.model_id,
-                                route.provider(),
-                                &workdir,
-                                m.conn(),
-                                &m.model_id,
-                                m.provider(),
-                            )
-                            .await
-                        }
-                        None => {
-                            crate::app::awareness::summarize(
-                                &c,
-                                &settings,
-                                route.conn(),
-                                &route.model_id,
-                                route.provider(),
-                                &workdir,
-                            )
-                            .await
-                        }
-                    }
-                },
+                crate::app::awareness::summarize_with_fallback(
+                    &c,
+                    &settings,
+                    &workdir,
+                    aware_route.as_ref(),
+                    main_route.as_ref(),
+                ),
             )
             .await
-            .ok()
-            .flatten();
-            // Tag the result with the warming session's id so the drain routes it to
-            // exactly that session (C4), never to a different Loading session.
-            let _ = tx.send(WarmEvent::WarmAwareness {
-                session_id: warming_id,
-                summary,
+            .unwrap_or_else(|_| crate::app::awareness::SummaryResult {
+                summary: None,
+                status: Some("Awareness timeout".into()),
             });
+            let _ = tx.send(WarmEvent::WarmAwareness(
+                crate::app::awareness::AwarenessResult {
+                    session_id: warming_id,
+                    workspace: workdir,
+                    generation,
+                    result,
+                },
+            ));
         });
     }
 }
@@ -315,7 +292,7 @@ pub(crate) fn spawn_awareness_recompute(
     client: Arc<OpenRouterClient>,
     settings: crate::model::settings::Settings,
     workdir: std::path::PathBuf,
-    route: crate::app::resolve::Resolved,
+    route: Option<crate::app::resolve::Resolved>,
     main_route: Option<crate::app::resolve::Resolved>,
 ) {
     let tx = match state.rest.awareness_tx.clone() {
@@ -327,43 +304,31 @@ pub(crate) fn spawn_awareness_recompute(
             tx
         }
     };
+    let Some(rt) = state
+        .rest
+        .sessions
+        .iter_mut()
+        .find(|rt| rt.id == session_id)
+    else {
+        return;
+    };
+    rt.awareness_generation = rt.awareness_generation.wrapping_add(1);
+    let generation = rt.awareness_generation;
     handle.spawn(async move {
-        let summary = tokio::time::timeout(std::time::Duration::from_secs(60), async {
-            match main_route {
-                Some(ref m) => {
-                    crate::app::awareness::summarize_with_fallback(
-                        &client,
-                        &settings,
-                        route.conn(),
-                        &route.model_id,
-                        route.provider(),
-                        &workdir,
-                        m.conn(),
-                        &m.model_id,
-                        m.provider(),
-                    )
-                    .await
-                }
-                None => {
-                    crate::app::awareness::summarize(
-                        &client,
-                        &settings,
-                        route.conn(),
-                        &route.model_id,
-                        route.provider(),
-                        &workdir,
-                    )
-                    .await
-                }
-            }
-        })
-        .await
-        .ok()
-        .flatten();
-        // Best-effort delivery: if the app has since dropped the receiver (closed
-        // channel — shouldn't happen, the receiver is held for the app's lifetime
-        // once created), the send is simply a no-op.
-        let _ = tx.send((session_id, summary));
+        let result = crate::app::awareness::summarize_with_fallback(
+            &client,
+            &settings,
+            &workdir,
+            route.as_ref(),
+            main_route.as_ref(),
+        )
+        .await;
+        let _ = tx.send(crate::app::awareness::AwarenessResult {
+            session_id,
+            workspace: workdir,
+            generation,
+            result,
+        });
     });
 }
 
