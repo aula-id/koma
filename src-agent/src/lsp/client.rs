@@ -2559,3 +2559,17 @@ pub(crate) fn reply_workspace_edit(
         &serde_json::json!({"jsonrpc":"2.0","id":edit.request,"result":{"applied":applied,"failureReason":reason}}),
     )
 }
+
+impl LspManager {
+    pub(crate) fn did_change_watched_files(&self, changes: &[(PathBuf, u32)]) {
+        for server in self.servers.values() {
+            let changes: Vec<_> = changes.iter()
+                .filter(|(path, _)| path.starts_with(&server.root))
+                .map(|(path, kind)| serde_json::json!({"uri":path_to_uri(path),"type":kind}))
+                .collect();
+            if !changes.is_empty() {
+                let _ = server.notify("workspace/didChangeWatchedFiles", serde_json::json!({"changes":changes}));
+            }
+        }
+    }
+}

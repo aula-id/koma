@@ -181,6 +181,10 @@ pub(super) fn select(
     if config.get("toolchains").is_none() {
         config["toolchains"] = json!({});
     }
+    anyhow::ensure!(
+        config["toolchains"].is_object(),
+        "Toolchains settings must be an object"
+    );
     if config["toolchains"].get(language).is_none() {
         config["toolchains"][language] = json!({});
     }

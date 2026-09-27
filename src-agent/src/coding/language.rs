@@ -316,3 +316,18 @@ pub(super) fn restart(workspace: &WorkspaceRef) -> Result<Value, String> {
     );
     Ok(Value::Null)
 }
+
+/// Forward filesystem hints only to an existing workspace manager.
+pub(super) fn files_changed(workspace: &WorkspaceRef, changes: Vec<(std::path::PathBuf, u32)>) {
+    if changes.is_empty() {
+        return;
+    }
+    let manager = MANAGERS
+        .get()
+        .and_then(|all| all.lock().ok()?.get(workspace).cloned());
+    if let Some(manager) = manager {
+        if let Ok(manager) = manager.lock() {
+            manager.did_change_watched_files(&changes);
+        }
+    }
+}

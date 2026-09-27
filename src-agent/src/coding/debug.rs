@@ -453,7 +453,13 @@ fn adapter(profile: &Profile, root: &Path) -> Result<(Command, bool)> {
     };
     let (mut cmd, tcp) = match profile.adapter.as_str() {
         "debugpy" => {
-            let mut cmd = Command::new(binary("debugpy")?);
+            let python = super::provision::component_binary("debugpy").unwrap_or(
+                super::environment::executable(
+                    root,
+                    if cfg!(windows) { "python" } else { "python3" },
+                )?,
+            );
+            let mut cmd = Command::new(python);
             cmd.args(["-m", "debugpy.adapter"]);
             (cmd, false)
         }
@@ -709,6 +715,10 @@ fn setup(
                 "debugpy" => "python3",
                 "delve" => "go",
                 "js-debug" => "node",
+                "lldb-dap" => "clang",
+                "php-debug" => "php",
+                "bash-debug" => "bash",
+                "lua-debug" => "lua",
                 _ => "",
             },
         )?)

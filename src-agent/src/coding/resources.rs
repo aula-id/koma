@@ -237,7 +237,7 @@ pub(super) fn apply(root: &Path, changes: &[Change]) -> Result<Value> {
     super::persistence::atomic_write(
         &journal.join("manifest.json"),
         &serde_json::to_vec_pretty(&json!({"root":root,"state":"applied","files":records}))?,
-    )?;
+    ).with_context(||format!("Files were changed, but the transaction journal could not be finalized. Inspect disk before retrying. Recovery journal: {}",journal.display()))?;
     prune(journal.parent().unwrap());
     Ok(json!({"id":id,"files":files}))
 }

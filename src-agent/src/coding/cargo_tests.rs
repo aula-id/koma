@@ -7,7 +7,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
 };
 
 #[derive(Deserialize)]
@@ -48,6 +48,14 @@ fn record(a: &Artifact, name: &str, status: &str) {
         json!({"id":format!("{}::{name}",a.key),"label":name,"selector":name,"suite":a.label,"file":a.file,"executable":a.executable,"status":status})
     );
 }
+fn spawn(command: &mut Command) -> std::io::Result<Child> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    command.spawn()
+}
 pub(super) fn main() -> Result<()> {
     let raw = std::env::args()
         .nth(2)
@@ -62,7 +70,7 @@ pub(super) fn main() -> Result<()> {
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .stdin(Stdio::null());
-    let mut child = build.spawn().context("Build Cargo test binaries")?;
+    let mut child = spawn(&mut build).context("Build Cargo test binaries")?;
     let mut artifacts = BTreeMap::new();
     let collected = lines(child.stdout.take().unwrap(), |line| {
         if let Ok(value) = serde_json::from_str::<Value>(line) {
@@ -116,12 +124,13 @@ pub(super) fn main() -> Result<()> {
     let mut found = BTreeSet::new();
     let mut failed = false;
     for artifact in artifacts.values() {
-        let mut child = Command::new(&artifact.executable)
-            .args(["--list", "--format", "terse"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .stdin(Stdio::null())
-            .spawn()?;
+        let mut child = spawn(
+            Command::new(&artifact.executable)
+                .args(["--list", "--format", "terse"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .stdin(Stdio::null()),
+        )?;
         let mut names = BTreeSet::new();
         let collected = lines(child.stdout.take().unwrap(), |line| {
             if let Some(name) = line.strip_suffix(": test") {
@@ -173,11 +182,11 @@ pub(super) fn main() -> Result<()> {
             for name in &names {
                 record(artifact, name, "running");
             }
-            let mut child = run
-                .stdout(Stdio::piped())
-                .stderr(Stdio::inherit())
-                .stdin(Stdio::null())
-                .spawn()?;
+            let mut child = spawn(
+                run.stdout(Stdio::piped())
+                    .stderr(Stdio::inherit())
+                    .stdin(Stdio::null()),
+            )?;
             let mut completed = BTreeSet::new();
             let collected = lines(child.stdout.take().unwrap(), |line| {
                 println!("{line}");

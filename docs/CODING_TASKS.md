@@ -64,8 +64,8 @@ Commands use a program and an argument array. Koma does not interpolate shell
 expressions, environment variables, or `${workspaceFolder}`. A relative program
 path containing a path separator resolves against the task's working directory;
 a bare program name uses the host's executable lookup. Tasks inherit Koma's
-process environment plus the task's `env` overrides. Shared project environment
-selection remains a future increment. Examples assume their tools and working
+process environment plus project/toolchain environment and the task's `env`
+overrides. `envRemove` lists inherited keys to remove. Examples assume their tools and working
 directories already exist.
 
 For a shell expression, explicitly select a shell and pass its arguments, e.g.
@@ -89,29 +89,25 @@ Use Save or Save All first when needed. Task configuration values, including
   that deliberately detach themselves from the process group are unsupported.
 - Optional `timeoutMs` is between 100 milliseconds and 24 hours, measured with a
   monotonic clock. A timeout stops the task and records a failed result.
-- Standard input is closed. These are noninteractive tasks with plain text output,
-  not terminal sessions. Use Koma's Terminal for interactive commands. Terminal
-  escape sequences, progress-line rewriting, and clickable diagnostics are not
-  interpreted. Stdout and stderr are captured independently, so ordering between
-  the two streams is approximate. Some programs buffer output when using pipes.
+- Standard input is closed by default. `interactive: true` uses an owned PTY
+  with input and resize (see below). Pipes capture stdout/stderr independently,
+  so ordering between streams is approximate. Some programs buffer piped output.
 - Up to eight tasks/captures are active per coding service. Up to 64 run records
   are retained across its workspaces; completed records are evicted first. Each
   run retains up to 1 MiB/2048 output chunks, fetched in pages of at most 64 chunks.
   The UI also bounds retained output and reports discarded earlier output.
 - There are at most 100 configured tasks, each at most 64 KiB. The whole project
   configuration still has the existing 1 MiB limit.
-- Run history/output is in memory. Closing Koma stops its tasks. Remote worker
-  EOF also stops tasks. Switching UI hosts preserves the independent SSH channel,
-  but a physical SSH disconnect/reconnect or application restart does **not**
-  support durable task adoption in this increment. Check the outcome after a
-  transport error; commands are never automatically retried.
+- Run history/output is in memory. Closing Koma stops local tasks. Unix SSH
+  tasks belong to a persistent remote service and can be adopted after reconnect;
+  Windows SSH workers stop on EOF. No host-reboot or daemon-crash durability is
+  claimed. Check the outcome after a transport error; commands are not retried.
 - Task Runs, Output, and Stop do not require the workspace directory or config to
   remain readable. A deleted root or malformed config must not block Stop.
 
-This delivers general run/build/test commands. Task dependency graphs, automatic
-manifest discovery, interactive task terminals, problem matchers, durable SSH
-adoption, managed tool installation, DAP, and structured Test Explorer results
-remain separate work.
+Language packs and Test Explorer share the same supervisor. Debugger integrated
+terminals and pre-launch tasks appear here too. Custom problem-matcher definitions
+are not supported; common compiler/source locations are recognized automatically.
 
 ## Native review
 
@@ -127,13 +123,13 @@ Functional execution is left to the user. Suggested acceptance cases:
    IDs, unknown fields, and a cwd outside the root must report errors.
 4. Run a command that spawns a child. Stop it and verify descendants stop too.
    Also verify cleanup when its parent exits first, Koma closes, and a remote
-   worker reaches EOF. Repeat on Linux, macOS, and Windows.
+   Windows worker reaches EOF; Unix remote jobs should remain adoptable. Repeat on Linux, macOS, and Windows.
 5. Exercise Unicode split across writes, mixed stdout/stderr, very noisy output,
    Follow on/off, selection/copy, and reopening an old run after truncation.
    The panel must remain responsive and clearly report discarded output.
 6. Delete/rename a running workspace or corrupt its config. Output/Stop must
    remain usable. Disconnect SSH and verify errors are shown without rerunning
-   the command. Reconnect persistence is outside this increment.
+   the command. On Unix reconnect, verify adoption without duplicate execution.
 7. Keep an unsaved editor change, run a task, and confirm it uses saved disk
    content. Check the panel's appearance and keyboard focus in the native app.
 

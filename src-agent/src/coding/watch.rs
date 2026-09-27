@@ -4,7 +4,7 @@ use anyhow::Result;
 use notify::{RecursiveMode, Watcher};
 use serde_json::{json, Value};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     path::Path,
     sync::{mpsc, Mutex, OnceLock},
     time::Duration,
@@ -20,7 +20,7 @@ pub(super) fn watch(workspace: &WorkspaceRef, root: &Path) -> Result<Value> {
         !super::SHUTTING_DOWN.load(std::sync::atomic::Ordering::Acquire),
         "Coding service is shutting down"
     );
-    let (tx, rx) = mpsc::sync_channel(1);
+    let (tx, rx) = mpsc::sync_channel(1024);
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         // Access events caused by our own reads must not trigger a feedback loop.
         if event
@@ -29,16 +29,51 @@ pub(super) fn watch(workspace: &WorkspaceRef, root: &Path) -> Result<Value> {
         {
             return;
         }
-        let _ = tx.try_send(());
+        let _ = tx.try_send(event.ok());
     })?;
     watcher.watch(root, RecursiveMode::Recursive)?;
     let owner = workspace.clone();
+    let root = root.to_path_buf();
     std::thread::Builder::new()
         .name("coding-watch".into())
         .spawn(move || {
-            while rx.recv().is_ok() {
+            while let Ok(first) = rx.recv() {
                 std::thread::sleep(Duration::from_millis(250));
-                while rx.try_recv().is_ok() {}
+                let mut changes = BTreeMap::new();
+                for event in std::iter::once(first)
+                    .chain(rx.try_iter().take(1023))
+                    .flatten()
+                {
+                    let renamed = matches!(
+                        event.kind,
+                        notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
+                    );
+                    for path in event.paths {
+                        if !path.starts_with(&root)
+                            || path
+                                .strip_prefix(&root)
+                                .is_ok_and(|p| p.components().any(|c| c.as_os_str() == ".git"))
+                        {
+                            continue;
+                        }
+                        let kind = match event.kind {
+                            notify::EventKind::Create(_) => 1,
+                            notify::EventKind::Remove(_) => 3,
+                            _ if renamed => {
+                                if path.exists() {
+                                    1
+                                } else {
+                                    3
+                                }
+                            }
+                            _ => 2,
+                        };
+                        if changes.len() < 4096 || changes.contains_key(&path) {
+                            changes.insert(path, kind);
+                        }
+                    }
+                }
+                super::language::files_changed(&owner, changes.into_iter().collect());
                 super::event(
                     json!({"k":"CodingEvent","workspace":owner,"event":{"k":"FileSystemChanged"}}),
                 );

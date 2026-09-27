@@ -250,17 +250,18 @@ fn runtime_commands(p: &Pack) -> Result<Vec<Value>> {
         return Ok(packages
             .iter()
             .map(|id| {
-                command(
-                    "winget",
-                    vec![
-                        "install".into(),
-                        "--id".into(),
-                        id.to_string(),
-                        "--exact".into(),
-                        "--accept-package-agreements".into(),
-                        "--accept-source-agreements".into(),
-                    ],
-                )
+                let mut args = vec![
+                    "install".into(),
+                    "--id".into(),
+                    id.to_string(),
+                    "--exact".into(),
+                    "--accept-package-agreements".into(),
+                    "--accept-source-agreements".into(),
+                ];
+                if *id == "Python.Python.3.13" {
+                    args.extend(["--custom".into(), "PrependPath=1".into()]);
+                }
+                command("winget", args)
             })
             .collect());
     }

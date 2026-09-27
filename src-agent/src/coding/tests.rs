@@ -363,10 +363,12 @@ fn recipe(root: &Path, p: &Profile, discover: bool, items: &[Value]) -> Result<V
             let exe = std::env::current_exe()?;
             let spec =
                 json!({"command":cargo,"args":p.args,"discover":discover,"selected":selected});
-            commands.push(command(
+            let mut step = command(
                 &exe.to_string_lossy(),
                 vec!["coding-test-cargo".into(), spec.to_string()],
-            ));
+            );
+            step["env"] = json!(super::environment::variables(root, "cargo")?);
+            commands.push(step);
         }
         "node" => {
             let dir = crate::model::store::base_dir()?.join("coding/runners");
