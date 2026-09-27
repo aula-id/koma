@@ -2,6 +2,8 @@
 //! All operations carry their host and root; UI selection is never a routing key.
 
 mod debug;
+#[cfg(unix)]
+mod daemon;
 pub(crate) mod environment;
 mod language;
 mod packs;
@@ -15,10 +17,14 @@ mod watch;
 mod workspace;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
+#[cfg(any(feature = "gui", not(unix)))]
+use serde_json::json;
 #[cfg(feature = "gui")]
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+#[cfg(any(feature = "gui", not(unix)))]
+use std::sync::Mutex;
 
 #[cfg(feature = "gui")]
 pub(crate) use transport::remember_remote;
@@ -321,6 +327,17 @@ fn execute(request: &Request) -> Result<Value, String> {
 /// Private SSH service. The protocol is versioned JSON lines with bounded frames;
 /// the service never mixes diagnostic logs into stdout.
 pub(crate) fn worker_main() -> anyhow::Result<()> {
+    #[cfg(unix)]
+    { return daemon::proxy(); }
+    #[cfg(not(unix))]
+    { worker_stdio() }
+}
+pub(crate) fn daemon_main() -> anyhow::Result<()> {
+    #[cfg(unix)] { daemon::run() }
+    #[cfg(not(unix))] { anyhow::bail!("Persistent coding service requires a Unix host") }
+}
+#[cfg(not(unix))]
+fn worker_stdio() -> anyhow::Result<()> {
     use std::io::{BufRead, Read, Write};
     struct Cleanup;
     impl Drop for Cleanup {

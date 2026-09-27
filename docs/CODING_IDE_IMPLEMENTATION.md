@@ -253,3 +253,11 @@ structured results now use the shared task supervisor. Python/Go/Node tests can
 launch a DAP session; other runners can select a project debug profile. See
 [Test Explorer](CODING_TEST_EXPLORER.md) for the supported runner contracts,
 current Node/Cargo identity limits and native acceptance.
+
+### SSH adoption
+
+Unix SSH workers now proxy to a persistent per-user coding service; reconnecting
+adopts its existing tasks, debuggers, test results and language processes. See
+[remote service lifecycle](CODING_REMOTE_SERVICE.md). Windows remote persistence,
+crash durability and daemon-version migration are still separate acceptance/scope
+items; they must not be implied by the Unix implementation.

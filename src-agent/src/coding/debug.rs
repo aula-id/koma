@@ -840,3 +840,6 @@ mod tests {
         assert_eq!(config["cwd"], "/project");
     }
 }
+
+#[cfg(unix)]
+pub(super) fn has_active() -> bool { registry().lock().unwrap().iter().any(|session|!session.closed.load(Ordering::Acquire)) }

@@ -1004,3 +1004,6 @@ fn discover(root: &Path, tasks: &mut Vec<Task>) -> Result<()> {
 pub(super) fn summary(workspace: &WorkspaceRef, id: &str) -> Result<Value> {
     Ok(find(workspace, id)?.summary())
 }
+
+#[cfg(unix)]
+pub(super) fn has_active() -> bool { registry().lock().unwrap().iter().any(|run|active(&run.state.lock().unwrap())) }

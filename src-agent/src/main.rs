@@ -62,6 +62,7 @@ mod tool;
 mod view;
 
 fn main() -> anyhow::Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("coding-daemon") { return coding::daemon_main(); }
     if std::env::args().nth(1).as_deref() == Some("coding-provision") {
         return coding::provision_main();
     }
