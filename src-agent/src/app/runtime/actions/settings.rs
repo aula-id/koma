@@ -353,9 +353,8 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         state.rest.config.palette = palette;
         state.rest.config.providers = provider_conns;
         state.rest.config.models = model_entries;
-        if let Err(e) = super::config_reload::save_config_and_broadcast(&state.rest.config) {
-            state.rest.fg_mut().status = format!("config save failed: {e}");
-        } else if !dead_models.is_empty() || !removed_providers.is_empty() {
+        super::config_reload::save_config_and_broadcast(&state.rest.config)?;
+        if !dead_models.is_empty() || !removed_providers.is_empty() {
             let cfg = state.rest.config.clone();
             let report = crate::app::cascade::rebind_consumers_after_model_removal(
                 Some(state),
@@ -375,16 +374,8 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             }
         }
         // c) Persist the session's settings.json.
-        #[cfg(feature = "linker")]
-        let mut session_save_ok = true;
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-            if let Err(e) = sess.save() {
-                state.rest.fg_mut().status = format!("error: {e}");
-                #[cfg(feature = "linker")]
-                {
-                    session_save_ok = false;
-                }
-            }
+            sess.save()?;
         }
         // c1) BUG FIX: both Main-affecting writes (a + b above) have landed and
         // persisted — now check whether the resolved Main model actually
@@ -413,7 +404,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         //     save) so the background worker carries a deterministic revision
         //     that the daemon uses to reject stale out-of-order registrations.
         #[cfg(feature = "linker")]
-        if session_save_ok {
+        {
             let new_workdirs = state
                 .rest
                 .fg()

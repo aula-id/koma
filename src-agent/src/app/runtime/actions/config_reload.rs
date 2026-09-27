@@ -13,7 +13,60 @@ use crate::model::app_config::AppConfig;
 /// just saved global config.
 pub(crate) fn apply_global_catalogue_reload(state: &mut AppState) {
     // 1. Reload config from disk (AppConfig::load() has no cache — fresh every time).
-    state.rest.config = AppConfig::load();
+    let previous = state.rest.config.clone();
+    match AppConfig::try_load() {
+        Ok(config) => state.rest.config = config,
+        Err(error) => {
+            state.rest.fg_mut().status = format!("catalogue reload failed: {error}");
+            return;
+        }
+    }
+    let dead_models: std::collections::HashSet<String> = previous
+        .models
+        .iter()
+        .filter(|m| {
+            !state
+                .rest
+                .config
+                .models
+                .iter()
+                .any(|live| live.uuid == m.uuid)
+        })
+        .map(|m| m.uuid.clone())
+        .collect();
+    let live_connections: std::collections::HashSet<&str> = state
+        .rest
+        .config
+        .providers
+        .iter()
+        .map(|p| p.uuid.as_str())
+        .chain(
+            state
+                .rest
+                .config
+                .oauth_conns
+                .iter()
+                .map(|p| p.uuid.as_str()),
+        )
+        .collect();
+    let dead_providers: std::collections::HashSet<String> = previous
+        .providers
+        .iter()
+        .map(|p| &p.uuid)
+        .chain(previous.oauth_conns.iter().map(|p| &p.uuid))
+        .filter(|uuid| !live_connections.contains(uuid.as_str()))
+        .cloned()
+        .collect();
+    if !dead_models.is_empty() || !dead_providers.is_empty() {
+        let config = state.rest.config.clone();
+        crate::app::cascade::rebind_consumers_after_model_removal(
+            Some(state),
+            &config,
+            &dead_models,
+            &dead_providers,
+            false,
+        );
+    }
 
     // 2. Rebuild system prompt sub-agent roster (disk-backed agents may have changed).
     if let Some(sess) = state.rest.fg_mut().session.as_mut() {

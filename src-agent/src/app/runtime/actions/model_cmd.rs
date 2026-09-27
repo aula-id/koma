@@ -26,43 +26,20 @@ pub(crate) fn handle_model_role_swap(
             .cloned()
     });
 
+    if model_uuid.is_some() && chosen.is_none() {
+        anyhow::bail!("unknown model reference");
+    }
     if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-        if model_uuid.is_none() {
-            // Inherit: drop any local override for this role.
-            sess.settings
-                .session_models
-                .retain(|e| !e.effective_roles().contains(&role));
-            sess.save()?;
-        } else if let Some(chosen) = chosen {
-            // Check if already a local override with the same source_uuid.
-            let already = sess.settings.session_models.iter().any(|e| {
-                e.effective_roles().contains(&role)
-                    && e.source_uuid.as_deref() == Some(chosen.uuid.as_str())
-            });
-
-            if !already {
-                use crate::model::app_config::{new_uuid, ModelEntry};
-
-                // Strip this role from all other entries.
-                sess.settings
-                    .session_models
-                    .retain(|e| !e.effective_roles().contains(&role));
-
-                // Push cloned global entry as the new local override.
-                sess.settings.session_models.push(ModelEntry {
-                    uuid: new_uuid(),
-                    name: chosen.name.clone(),
-                    model_id: chosen.model_id.clone(),
-                    provider_uuid: chosen.provider_uuid.clone(),
-                    route: chosen.route.clone(),
-                    roles: vec![role],
-                    role: None,
-                    source_uuid: Some(chosen.uuid.clone()),
-                });
-            }
-            sess.save()?;
+        let previous = sess.settings.session_models.clone();
+        crate::model::app_config::assign_role(
+            &mut sess.settings.session_models,
+            role,
+            chosen.as_ref(),
+        );
+        if let Err(error) = sess.save() {
+            sess.settings.session_models = previous;
+            return Err(error);
         }
-        // Unknown uuid → no-op (leave overrides as-is).
     }
 
     // Reset effort if Main was the role that changed.

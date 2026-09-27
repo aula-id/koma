@@ -38,10 +38,11 @@ pub(super) fn handle_setup_koma_free(
     // Mint/reuse the koma-free provider + Main-role model in the global config. Shared
     // with the GUI `SetupKomaFree` path (see `crate::service::koma_free`) so both mint
     // byte-identical entries; idempotent + ensures a non-empty `install_id`.
+    let previous = state.rest.config.clone();
     crate::service::koma_free::ensure_koma_free_config(&mut state.rest.config);
-
-    if let Err(e) = super::config_reload::save_config_and_broadcast(&state.rest.config) {
-        state.rest.fg_mut().status = format!("config save failed: {e}");
+    if let Err(error) = super::config_reload::save_config_and_broadcast(&state.rest.config) {
+        state.rest.config = previous;
+        return Err(error);
     }
 
     // Lazy session creation: the first-run chooser has no session yet.

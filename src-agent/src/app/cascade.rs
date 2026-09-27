@@ -78,10 +78,7 @@ pub fn rebind_consumers_after_model_removal(
                 continue;
             };
             let before = sess.settings.session_models.len();
-            sess.settings.session_models.retain(|m| {
-                !dead_model_uuids.contains(&m.uuid)
-                    && !dead_provider_uuids.contains(&m.provider_uuid)
-            });
+            sess.settings.session_models.retain(|m| !model_reference_removed(m, config, dead_model_uuids, dead_provider_uuids));
             let models_changed = sess.settings.session_models.len() != before;
             if models_changed {
                 if let Err(e) = sess.save() {
@@ -135,7 +132,7 @@ pub fn rebind_consumers_after_model_removal(
 
     // B. Offline sessions (settings.json only)
     report.sessions_touched +=
-        rebind_offline_sessions(dead_model_uuids, dead_provider_uuids, &skip_session_paths);
+        rebind_offline_sessions(config, dead_model_uuids, dead_provider_uuids, &skip_session_paths);
 
     // C. Agent files on disk → inherit main when model no longer exists
     report.agents_cleared +=
@@ -238,8 +235,17 @@ fn alive_model_set(
     s
 }
 
+fn model_reference_removed(entry: &crate::model::app_config::ModelEntry, config: &AppConfig, dead_models: &HashSet<String>, dead_providers: &HashSet<String>) -> bool {
+    if dead_models.contains(&entry.uuid) || entry.source_uuid.as_ref().is_some_and(|id| dead_models.contains(id)) {
+        return true;
+    }
+    let source = entry.source_uuid.as_ref().and_then(|id| config.models.iter().find(|model| &model.uuid == id)).unwrap_or(entry);
+    dead_providers.contains(&source.provider_uuid)
+}
+
 /// Walk every offline session's `settings.json` and drop dead session_models rows.
 fn rebind_offline_sessions(
+    config: &AppConfig,
     dead_models: &HashSet<String>,
     dead_providers: &HashSet<String>,
     skip: &HashSet<PathBuf>,
@@ -247,8 +253,18 @@ fn rebind_offline_sessions(
     let Ok(sessions_root) = store::sessions_dir() else {
         return 0;
     };
+    rebind_offline_sessions_at(&sessions_root, config, dead_models, dead_providers, skip)
+}
+
+fn rebind_offline_sessions_at(
+    sessions_root: &Path,
+    config: &AppConfig,
+    dead_models: &HashSet<String>,
+    dead_providers: &HashSet<String>,
+    skip: &HashSet<PathBuf>,
+) -> usize {
     let mut touched = 0;
-    for bucket in read_subdirs(&sessions_root) {
+    for bucket in read_subdirs(sessions_root) {
         for session_dir in read_subdirs(&bucket) {
             if skip.contains(&session_dir) {
                 continue;
@@ -268,9 +284,7 @@ fn rebind_offline_sessions(
                 }
             };
             let before = settings.session_models.len();
-            settings.session_models.retain(|m| {
-                !dead_models.contains(&m.uuid) && !dead_providers.contains(&m.provider_uuid)
-            });
+            settings.session_models.retain(|m| !model_reference_removed(m, config, dead_models, dead_providers));
             if settings.session_models.len() == before {
                 continue;
             }
@@ -396,7 +410,7 @@ fn rebind_agents_in_dir(
         }
         // Model no longer exists → inherit main.
         clear_agent_model_to_inherit(&mut agent);
-        match std::fs::write(&path, agent.to_markdown()) {
+        match crate::model::memory::atomic_write(&path, agent.to_markdown().as_bytes()) {
             Ok(()) => cleared += 1,
             Err(e) => store::append_global_error_log(
                 "cascade",

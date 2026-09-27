@@ -274,7 +274,7 @@ impl Session {
         self.settings.save(&self.settings_path())?;
 
         let json = serde_json::to_vec_pretty(self.conversation.messages())?;
-        std::fs::write(self.messages_path(), json)?;
+        crate::model::memory::atomic_write(&self.messages_path(), &json)?;
 
         // Best-effort: bump the registry's updated_at so /resume sorts this
         // session to the top. A missing row (e.g. an unregistered session) just

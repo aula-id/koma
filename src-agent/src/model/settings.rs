@@ -405,6 +405,10 @@ pub struct Settings {
     /// `session_models` key) are seeded ONCE from the legacy shared bucket by the
     /// one-time migration in `Session::load`.
     #[serde(default)]
+    #[serde(
+        serialize_with = "crate::model::app_config::serialize_models",
+        deserialize_with = "crate::model::app_config::deserialize_models"
+    )]
     pub session_models: Vec<crate::model::app_config::ModelEntry>,
     /// The bare filename of the SSH identity key this session uses for
     /// git-over-SSH (e.g. `"id_ed25519"`). Stored as a filename only — never a
@@ -613,7 +617,7 @@ impl Settings {
     /// Serialise (pretty-printed) to `path`, creating or overwriting the file.
     pub fn save(&self, path: &Path) -> Result<()> {
         let json = serde_json::to_vec_pretty(self)?;
-        std::fs::write(path, json)?;
+        crate::model::memory::atomic_write(path, &json)?;
         Ok(())
     }
 }
@@ -636,6 +640,10 @@ pub struct LocalConfig {
     /// the global [`crate::model::app_config::ModelEntry`] shape; each entry still
     /// references a provider by uuid.
     #[serde(default)]
+    #[serde(
+        serialize_with = "crate::model::app_config::serialize_models",
+        deserialize_with = "crate::model::app_config::deserialize_models"
+    )]
     pub session_models: Vec<crate::model::app_config::ModelEntry>,
 }
 
@@ -664,7 +672,7 @@ impl LocalConfig {
     #[allow(dead_code)]
     pub fn save(&self, path: &Path) -> Result<()> {
         let json = serde_json::to_vec_pretty(self)?;
-        std::fs::write(path, json)?;
+        crate::model::memory::atomic_write(path, &json)?;
         Ok(())
     }
 }
