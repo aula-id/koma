@@ -172,6 +172,7 @@ impl DaemonHub {
         handle: &tokio::runtime::Handle,
     ) {
         match req {
+            ClientRequest::Computer(control) => self.computer(idx, state, control),
             // --- read-only / control (honoured for everyone) ---
             ClientRequest::Attach { .. } => {
                 self.attach(idx, state);
@@ -785,7 +786,7 @@ impl DaemonHub {
             // through to a mutation, so it must NOT reach this Ack path in practice.
             // (`ExtPanelMsg` is NOT here: it is handled above by the `ext` group arm — the
             // whole extension family, incl. panel.msg, is routed to `self.ext(..)`.)
-            ClientRequest::Attach { .. }
+            ClientRequest::Computer(_) | ClientRequest::Attach { .. }
             | ClientRequest::Detach
             | ClientRequest::Resync
             | ClientRequest::ListSessions

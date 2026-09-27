@@ -1,0 +1,223 @@
+use anyhow::{bail, Result};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Capabilities {
+    pub capture: bool,
+    pub windows: bool,
+    pub focus: bool,
+    pub pointer: bool,
+    pub keyboard: bool,
+    pub accessibility: bool,
+    pub ocr: bool,
+    pub floating: bool,
+    pub limitations: Vec<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Rect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+impl Rect {
+    pub fn valid(&self) -> bool {
+        [self.x, self.y, self.width, self.height]
+            .iter()
+            .all(|v| v.is_finite())
+            && self.width > 0.0
+            && self.height > 0.0
+    }
+    pub fn contains(&self, x: f64, y: f64) -> bool {
+        self.valid()
+            && x.is_finite()
+            && y.is_finite()
+            && x >= self.x
+            && y >= self.y
+            && x < self.x + self.width
+            && y < self.y + self.height
+    }
+}
+/// Maps screenshot pixels to desktop coordinates, including negative origins
+/// and independently scaled axes. Crops preserve the original desktop origin.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Transform {
+    pub desktop: Rect,
+    pub width: u32,
+    pub height: u32,
+}
+impl Transform {
+    pub fn map(&self, x: f64, y: f64) -> Result<(f64, f64)> {
+        if !self.desktop.valid()
+            || self.width == 0
+            || self.height == 0
+            || !(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: self.width as f64,
+                height: self.height as f64,
+            })
+            .contains(x, y)
+        {
+            bail!("invalid screenshot coordinates or geometry");
+        }
+        Ok((
+            self.desktop.x + x * self.desktop.width / self.width as f64,
+            self.desktop.y + y * self.desktop.height / self.height as f64,
+        ))
+    }
+    pub fn crop(&self, bounds: Rect) -> Result<Self> {
+        if !bounds.valid()
+            || bounds.x.fract() != 0.0
+            || bounds.y.fract() != 0.0
+            || bounds.width.fract() != 0.0
+            || bounds.height.fract() != 0.0
+            || bounds.x + bounds.width > self.width as f64
+            || bounds.y + bounds.height > self.height as f64
+        {
+            bail!("invalid crop");
+        }
+        let (x, y) = self.map(bounds.x, bounds.y)?;
+        Ok(Self {
+            desktop: Rect {
+                x,
+                y,
+                width: bounds.width * self.desktop.width / self.width as f64,
+                height: bounds.height * self.desktop.height / self.height as f64,
+            },
+            width: bounds.width as u32,
+            height: bounds.height as u32,
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Window {
+    pub id: String,
+    pub application: String,
+    pub title: String,
+    pub geometry: Rect,
+    pub focused: bool,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Element {
+    pub id: String,
+    pub source: String,
+    pub label: String,
+    pub role: String,
+    pub bounds: Rect,
+    pub enabled: bool,
+    pub selected: bool,
+    pub focused: bool,
+    pub confidence: Option<f64>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Observation {
+    pub id: String,
+    pub session: String,
+    pub generation: String,
+    pub window: Window,
+    pub transform: Transform,
+    pub captured_ms: u64,
+    pub elements: Vec<Element>,
+    pub accessibility_status: String,
+    pub ocr_status: String,
+    /// Session artifact path, never image bytes in session snapshots.
+    pub image_path: String,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Action {
+    Move {
+        x: f64,
+        y: f64,
+    },
+    Click {
+        x: Option<f64>,
+        y: Option<f64>,
+        element: Option<String>,
+        button: Button,
+    },
+    Type {
+        text: String,
+    },
+    Key {
+        keys: Vec<String>,
+    },
+    Scroll {
+        x: f64,
+        y: f64,
+        delta: i32,
+    },
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Button {
+    Left,
+    Right,
+    Double,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Operation {
+    Windows,
+    Select {
+        window: String,
+    },
+    Observe {
+        crop: Option<Rect>,
+    },
+    Act {
+        observation: String,
+        actions: Vec<Action>,
+        #[serde(default = "yes")]
+        observe: bool,
+    },
+}
+fn yes() -> bool {
+    true
+}
+impl Operation {
+    pub fn mutates(&self) -> bool {
+        matches!(self, Self::Select { .. } | Self::Act { .. })
+    }
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Request {
+    pub id: String,
+    pub session: String,
+    pub generation: String,
+    pub operation: Operation,
+    pub observation: Option<Observation>,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Reply {
+    pub id: String,
+    pub session: String,
+    pub generation: String,
+    pub completed: usize,
+    pub uncertain: bool,
+    pub error: Option<String>,
+    pub windows: Vec<Window>,
+    pub observation: Option<Observation>,
+    /// One-shot IPC only. Ingest removes bytes before projecting the status.
+    pub png: Vec<u8>,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Status {
+    pub session: String,
+    pub generation: String,
+    pub enabled: bool,
+    pub paused: bool,
+    pub busy: bool,
+    pub capabilities: Capabilities,
+    pub observation: Option<Observation>,
+    pub message: String,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Control {
+    Enable { capabilities: Capabilities },
+    Pause,
+    Resume,
+    Stop,
+    Result(Reply),
+}

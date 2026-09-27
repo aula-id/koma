@@ -17,6 +17,7 @@
 //! bookkeeping.
 
 mod actions;
+pub(crate) mod computer;
 pub(crate) mod client;
 mod client_shadow;
 mod event_loop;

@@ -188,7 +188,7 @@ pub(super) fn apply_frame(
         // `sessions.switch`-to-a-non-local-session hand-off: the TUI MAY ignore it (GUI wiring
         // lands later), so it too folds as a non-visual no-op here rather than latching a
         // client-side attach like `OpenSwapper`/`NewSession` do.
-        DaemonEvent::Ack
+        DaemonEvent::ComputerStatus(_) | DaemonEvent::ComputerOperation(_) | DaemonEvent::Ack
         | DaemonEvent::Error(_)
         | DaemonEvent::Status(_)
         | DaemonEvent::RunState { .. }

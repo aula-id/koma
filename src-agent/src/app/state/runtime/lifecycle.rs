@@ -154,6 +154,7 @@ impl SessionRuntime {
     /// and only THIS session's counters are touched. The rest-GLOBAL compaction
     /// cleanup + status line stay with the caller (`actions::chat::handle_interrupt`).
     pub fn interrupt(&mut self) {
+        self.computer.stop("Turn interrupted; reactivate explicitly");
         // Abort the in-flight stream task + stop listening to it (the per-session
         // part of `abort_current`): abort the handle, drop the active receiver so
         // any late events from the aborted task vanish, and clear `waiting`.
