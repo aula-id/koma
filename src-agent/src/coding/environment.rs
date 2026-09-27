@@ -52,20 +52,15 @@ pub(crate) fn variables(root: &Path, program: &str) -> Result<BTreeMap<String, S
         });
     if let Some(path) = selected {
         if let Some(parent) = path.parent() {
-            let joined = std::env::join_paths(
-                std::iter::once(parent.to_path_buf())
-                    .chain(std::env::split_paths(env.get("PATH").unwrap())),
-            )?;
+            let joined = std::env::join_paths(std::iter::once(parent.to_path_buf()).chain(
+                std::env::split_paths(env.get("PATH").context("Missing project PATH")?),
+            ))?;
             env.insert("PATH".into(), joined.to_string_lossy().into_owned());
-            if key == "python"
-                && parent
-                    .parent()
-                    .is_some_and(|p| p.join("pyvenv.cfg").is_file())
+            if let Some(venv) = parent
+                .parent()
+                .filter(|p| key == "python" && p.join("pyvenv.cfg").is_file())
             {
-                env.insert(
-                    "VIRTUAL_ENV".into(),
-                    parent.parent().unwrap().to_string_lossy().into_owned(),
-                );
+                env.insert("VIRTUAL_ENV".into(), venv.to_string_lossy().into_owned());
             }
         }
     }
@@ -195,7 +190,7 @@ pub(super) fn select(
     if executable.is_empty() {
         config["toolchains"][language]
             .as_object_mut()
-            .unwrap()
+            .context("Toolchain settings must be an object")?
             .remove("executable");
     } else {
         config["toolchains"][language]["executable"] = json!(executable);
@@ -237,9 +232,7 @@ pub(super) fn test_python(root: &Path) -> Result<PathBuf> {
     let program = if cfg!(windows) { "python" } else { "python3" };
     let selected = executable(root, program)?;
     let config = super::workspace::read_config(root)?;
-    if selected != PathBuf::from(program)
-        || config["toolchains"]["python"]["executable"].is_string()
-    {
+    if selected != Path::new(program) || config["toolchains"]["python"]["executable"].is_string() {
         return Ok(selected);
     }
     Ok(super::provision::component_binary("debugpy").unwrap_or(selected))

@@ -1,4 +1,5 @@
 //! Bounded DAP sessions owned by a workspace, independent of panels and chats.
+use super::sync::CheckedMutex;
 use super::WorkspaceRef;
 use anyhow::{Context, Result};
 use process_wrap::std::ChildWrapper;
@@ -136,35 +137,37 @@ fn registry() -> &'static Mutex<VecDeque<Arc<Session>>> {
 }
 fn get(workspace: &WorkspaceRef, id: &str) -> Result<Arc<Session>> {
     registry()
-        .lock()
-        .unwrap()
+        .checked_lock()?
         .iter()
         .find(|s| s.id == id && &s.workspace == workspace)
         .cloned()
         .context("Debug session not found in this workspace")
 }
-fn snapshot(s: &Session) -> Value {
-    let state = s.state.lock().unwrap();
-    json!({"id":s.id,"workspace":s.workspace,"label":s.profile.label,"request":s.profile.request,"status":state.status,"error":state.error,"capabilities":state.capabilities,"sequence":state.sequence,"generation":state.generation,"breakpoints":state.breakpoints,"exceptionFilters":state.exception_filters,"terminalTaskIds":*s.terminals.lock().unwrap(),"preLaunchTaskId":*s.preparation.lock().unwrap()})
+fn snapshot(s: &Session) -> Result<Value> {
+    let state = s.state.checked_lock()?;
+    Ok(
+        json!({"id":s.id,"workspace":s.workspace,"label":s.profile.label,"request":s.profile.request,"status":state.status,"error":state.error,"capabilities":state.capabilities,"sequence":state.sequence,"generation":state.generation,"breakpoints":state.breakpoints,"exceptionFilters":state.exception_filters,"terminalTaskIds":*s.terminals.checked_lock()?,"preLaunchTaskId":*s.preparation.checked_lock()?}),
+    )
 }
 pub(super) fn sessions(workspace: &WorkspaceRef) -> Result<Value> {
     Ok(json!(registry()
-        .lock()
-        .unwrap()
+        .checked_lock()?
         .iter()
         .filter(|s| &s.workspace == workspace)
         .map(|s| snapshot(s))
-        .collect::<Vec<_>>()))
+        .collect::<Result<Vec<_>>>()?))
 }
 pub(super) fn events(workspace: &WorkspaceRef, id: &str, after: u64) -> Result<Value> {
     let s = get(workspace, id)?;
-    let state = s.state.lock().unwrap();
+    let state = s.state.checked_lock()?;
     Ok(
-        json!({"session":snapshot_unlocked(&s,&state),"events":state.events.iter().filter(|e|e["seq"].as_u64().unwrap_or(0)>after).collect::<Vec<_>>(),"next":state.sequence,"truncated":state.events.front().is_some_and(|e|e["seq"].as_u64().unwrap_or(0)>after+1)}),
+        json!({"session":snapshot_unlocked(&s,&state)?,"events":state.events.iter().filter(|e|e["seq"].as_u64().unwrap_or(0)>after).collect::<Vec<_>>(),"next":state.sequence,"truncated":state.events.front().is_some_and(|e|e["seq"].as_u64().unwrap_or(0)>after+1)}),
     )
 }
-fn snapshot_unlocked(s: &Session, state: &State) -> Value {
-    json!({"id":s.id,"status":state.status,"error":state.error,"generation":state.generation,"capabilities":state.capabilities,"breakpoints":state.breakpoints,"exceptionFilters":state.exception_filters,"terminalTaskIds":*s.terminals.lock().unwrap(),"preLaunchTaskId":*s.preparation.lock().unwrap()})
+fn snapshot_unlocked(s: &Session, state: &State) -> Result<Value> {
+    Ok(
+        json!({"id":s.id,"status":state.status,"error":state.error,"generation":state.generation,"capabilities":state.capabilities,"breakpoints":state.breakpoints,"exceptionFilters":state.exception_filters,"terminalTaskIds":*s.terminals.checked_lock()?,"preLaunchTaskId":*s.preparation.checked_lock()?}),
+    )
 }
 fn emit(s: &Session, event: &str, mut body: Value) {
     if let Some(output) = body
@@ -182,7 +185,14 @@ fn emit(s: &Session, event: &str, mut body: Value) {
         body = json!({"message":"Event body exceeded retention limit"});
     }
 
-    let mut state = s.state.lock().unwrap();
+    let mut state = match s.state.checked_lock() {
+        Ok(state) => state,
+        Err(error) => {
+            end(s, Some(error.to_string()));
+            kill(s);
+            return;
+        }
+    };
     state.sequence += 1;
     let seq = state.sequence;
     state
@@ -198,8 +208,7 @@ fn send(s: &Session, value: &Value) -> Result<()> {
     let mut frame = format!("Content-Length: {}\r\n\r\n", data.len()).into_bytes();
     frame.extend(data);
     s.writer
-        .lock()
-        .unwrap()
+        .checked_lock()?
         .as_ref()
         .context("Debug adapter is not connected")?
         .try_send(frame)
@@ -208,7 +217,7 @@ fn send(s: &Session, value: &Value) -> Result<()> {
 }
 fn connect_writer(s: &Arc<Session>, mut writer: Box<dyn Write + Send>) -> Result<()> {
     let (sender, receiver) = mpsc::sync_channel::<Vec<u8>>(8);
-    *s.writer.lock().unwrap() = Some(sender);
+    *s.writer.checked_lock()? = Some(sender);
     let owner = s.clone();
     std::thread::Builder::new()
         .name("coding-debug-writer".into())
@@ -235,7 +244,7 @@ fn begin(
     let seq = s.seq.fetch_add(1, Ordering::Relaxed) + 1;
     let (tx, rx) = mpsc::sync_channel(1);
     {
-        let mut pending = s.pending.lock().unwrap();
+        let mut pending = s.pending.checked_lock()?;
         anyhow::ensure!(pending.len() < 64, "Too many pending debugger requests");
         pending.insert(seq, tx);
     }
@@ -243,7 +252,7 @@ fn begin(
         s,
         &json!({"seq":seq,"type":"request","command":command,"arguments":args}),
     ) {
-        s.pending.lock().unwrap().remove(&seq);
+        s.pending.checked_lock()?.remove(&seq);
         return Err(e);
     }
     Ok((seq, rx))
@@ -254,7 +263,7 @@ fn finish(
     timeout: Duration,
 ) -> Result<Value> {
     let result = pending.1.recv_timeout(timeout);
-    s.pending.lock().unwrap().remove(&pending.0);
+    s.pending.checked_lock()?.remove(&pending.0);
     result
         .context("Debug adapter request timed out")?
         .map_err(anyhow::Error::msg)
@@ -264,8 +273,8 @@ fn call(s: &Session, command: &str, args: Value) -> Result<Value> {
 }
 fn end(s: &Session, error: Option<String>) {
     s.closed.store(true, Ordering::Release);
-    s.writer.lock().unwrap().take();
-    let mut state = s.state.lock().unwrap();
+    s.writer.cleanup_lock().take();
+    let mut state = s.state.cleanup_lock();
     if let Some(error) = error {
         state.error = Some(error);
         state.status = "failed".into();
@@ -273,20 +282,20 @@ fn end(s: &Session, error: Option<String>) {
         state.status = "terminated".into();
     }
     drop(state);
-    for (_, tx) in std::mem::take(&mut *s.pending.lock().unwrap()) {
+    for (_, tx) in std::mem::take(&mut *s.pending.cleanup_lock()) {
         let _ = tx.send(Err("Debug adapter disconnected".into()));
     }
-    if let Some(task) = s.preparation.lock().unwrap().as_ref() {
+    if let Some(task) = s.preparation.cleanup_lock().as_ref() {
         let _ = super::tasks::stop(&s.workspace, task);
     }
     if s.profile.request == "launch" {
-        for task in s.terminals.lock().unwrap().iter() {
+        for task in s.terminals.cleanup_lock().iter() {
             let _ = super::tasks::stop(&s.workspace, task);
         }
     }
 }
 fn kill(s: &Session) {
-    if let Some(child) = s.child.lock().unwrap().as_mut() {
+    if let Some(child) = s.child.cleanup_lock().as_mut() {
         let _ = child.kill();
     }
 }
@@ -316,14 +325,20 @@ fn read_message(reader: &mut impl BufRead) -> Result<Value> {
     Ok(serde_json::from_slice(&bytes)?)
 }
 fn read_loop(s: Arc<Session>, reader: Box<dyn Read + Send>) {
+    if let Err(error) = read_messages(&s, reader) {
+        end(&s, Some(error.to_string()));
+        kill(&s);
+    }
+}
+fn read_messages(s: &Arc<Session>, reader: Box<dyn Read + Send>) -> Result<()> {
     let mut reader = BufReader::new(reader);
     loop {
         let msg = match read_message(&mut reader) {
             Ok(v) => v,
             Err(e) => {
                 if !s.closed.load(Ordering::Acquire) {
-                    end(&s, Some(e.to_string()));
-                    kill(&s);
+                    end(s, Some(e.to_string()));
+                    kill(s);
                 }
                 break;
             }
@@ -331,7 +346,7 @@ fn read_loop(s: Arc<Session>, reader: Box<dyn Read + Send>) {
         match msg["type"].as_str() {
             Some("response") => {
                 if let Some(id) = msg["request_seq"].as_u64() {
-                    if let Some(tx) = s.pending.lock().unwrap().remove(&id) {
+                    if let Some(tx) = s.pending.checked_lock()?.remove(&id) {
                         let value = if msg["success"] == true {
                             Ok(msg["body"].clone())
                         } else {
@@ -348,7 +363,7 @@ fn read_loop(s: Arc<Session>, reader: Box<dyn Read + Send>) {
                 let event = msg["event"].as_str().unwrap_or("");
                 let body = msg["body"].clone();
                 {
-                    let mut state = s.state.lock().unwrap();
+                    let mut state = s.state.checked_lock()?;
                     match event {
                         "initialized" => state.initialized = true,
                         "stopped" => {
@@ -370,10 +385,10 @@ fn read_loop(s: Arc<Session>, reader: Box<dyn Read + Send>) {
                         _ => {}
                     }
                 }
-                emit(&s, event, body);
+                emit(s, event, body);
                 if event == "terminated" {
                     s.closed.store(true, Ordering::Release);
-                    kill(&s);
+                    kill(s);
                 }
             }
             Some("request") => {
@@ -390,7 +405,7 @@ fn read_loop(s: Arc<Session>, reader: Box<dyn Read + Send>) {
                 {
                     let seq = s.seq.fetch_add(1, Ordering::Relaxed) + 1;
                     let _ = send(
-                        &s,
+                        s,
                         &json!({"seq":seq,"type":"response","request_seq":msg["seq"],"command":msg["command"],"success":false,"message":"Unsupported or busy adapter reverse request"}),
                     );
                     continue;
@@ -418,6 +433,7 @@ fn read_loop(s: Arc<Session>, reader: Box<dyn Read + Send>) {
             _ => {}
         }
     }
+    Ok(())
 }
 fn expand(value: &mut Value, root: &str, file: Option<&str>) -> Result<()> {
     match value {
@@ -592,12 +608,15 @@ fn start_profile(
         );
         Some((
             task.clone(),
-            definitions["fingerprint"].as_str().unwrap().to_string(),
+            definitions["fingerprint"]
+                .as_str()
+                .context("Missing task fingerprint")?
+                .to_string(),
         ))
     } else {
         None
     };
-    let mut registry = registry().lock().unwrap();
+    let mut registry = registry().checked_lock()?;
     anyhow::ensure!(
         !super::SHUTTING_DOWN.load(Ordering::Acquire),
         "Coding service is shutting down"
@@ -641,6 +660,7 @@ fn start_profile(
             exception_filters: Vec::new(),
         }),
     });
+    let result = snapshot(&s)?;
     let worker = s.clone();
     let root = root.to_path_buf();
     std::thread::Builder::new()
@@ -653,7 +673,6 @@ fn start_profile(
                 }
             }
         })?;
-    let result = snapshot(&s);
     registry.push_back(s);
     Ok(result)
 }
@@ -688,13 +707,16 @@ fn setup(
     preparation: Option<(String, String)>,
 ) -> Result<()> {
     if let Some((task, fingerprint)) = preparation {
-        let mut slot = s.preparation.lock().unwrap();
+        let mut slot = s.preparation.checked_lock()?;
         anyhow::ensure!(
             !s.closed.load(Ordering::Acquire),
             "Debug session was canceled"
         );
         let run = super::tasks::start(&s.workspace, root, &task, &fingerprint)?;
-        let id = run["id"].as_str().unwrap().to_string();
+        let id = run["id"]
+            .as_str()
+            .context("Task start returned no run ID")?
+            .to_string();
         *slot = Some(id.clone());
         drop(slot);
         loop {
@@ -714,7 +736,7 @@ fn setup(
     }
     let mut configuration = s.profile.configuration.clone();
     if !s.profile.prepare_commands.is_empty() {
-        let mut slot = s.preparation.lock().unwrap();
+        let mut slot = s.preparation.checked_lock()?;
         anyhow::ensure!(!s.closed.load(Ordering::Acquire), "Debug session canceled");
         let run = super::tasks::run_commands(
             &s.workspace,
@@ -723,7 +745,10 @@ fn setup(
             "Build debug test",
             s.profile.prepare_commands.clone(),
         )?;
-        let id = run["id"].as_str().unwrap().to_string();
+        let id = run["id"]
+            .as_str()
+            .context("Task start returned no run ID")?
+            .to_string();
         *slot = Some(id.clone());
         drop(slot);
         loop {
@@ -790,7 +815,7 @@ fn setup(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut guard = s.child.lock().unwrap();
+    let mut guard = s.child.checked_lock()?;
     anyhow::ensure!(
         !s.closed.load(Ordering::Acquire),
         "Debug session was canceled"
@@ -802,27 +827,36 @@ fn setup(
     *guard = Some(child);
     drop(guard);
     let owner = s.clone();
-    std::thread::spawn(move || loop {
-        let status = {
-            let mut child = owner.child.lock().unwrap();
-            child.as_mut().map(|c| c.try_wait())
-        };
-        match status {
-            Some(Ok(Some(_))) => {
-                end(&owner, None);
-                owner.child.lock().unwrap().take();
-                break;
-            }
-            Some(Err(e)) => {
-                end(&owner, Some(e.to_string()));
-                kill(&owner);
-                if let Some(mut child) = owner.child.lock().unwrap().take() {
-                    let _ = child.wait();
+    std::thread::spawn(move || {
+        let result = (|| -> Result<()> {
+            loop {
+                let status = {
+                    let mut child = owner.child.checked_lock()?;
+                    child.as_mut().map(|c| c.try_wait())
+                };
+                match status {
+                    Some(Ok(Some(_))) => {
+                        end(&owner, None);
+                        owner.child.cleanup_lock().take();
+                        break;
+                    }
+                    Some(Err(e)) => {
+                        end(&owner, Some(e.to_string()));
+                        kill(&owner);
+                        if let Some(mut child) = owner.child.cleanup_lock().take() {
+                            let _ = child.wait();
+                        }
+                        break;
+                    }
+                    None => break,
+                    _ => std::thread::sleep(Duration::from_millis(100)),
                 }
-                break;
             }
-            None => break,
-            _ => std::thread::sleep(Duration::from_millis(100)),
+            Ok(())
+        })();
+        if let Err(error) = result {
+            end(&owner, Some(error.to_string()));
+            kill(&owner);
         }
     });
     capture(s.clone(), Box::new(stderr), "stderr");
@@ -862,11 +896,11 @@ fn setup(
         "initialize",
         json!({"clientID":"koma","clientName":"Koma","adapterID":s.profile.adapter,"pathFormat":"path","linesStartAt1":true,"columnsStartAt1":true,"supportsVariableType":true,"supportsRunInTerminalRequest":true,"supportsStartDebuggingRequest":false,"supportsProgressReporting":false}),
     )?;
-    s.state.lock().unwrap().capabilities = capabilities.clone();
+    s.state.checked_lock()?.capabilities = capabilities.clone();
     let launching = begin(s, &s.profile.request, configuration)?;
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        if s.state.lock().unwrap().initialized {
+        if s.state.checked_lock()?.initialized {
             break;
         }
         anyhow::ensure!(
@@ -893,13 +927,13 @@ fn setup(
             "Unsupported exception filter in debug profile"
         );
         call(s, "setExceptionBreakpoints", json!({"filters":selected}))?;
-        s.state.lock().unwrap().exception_filters = selected;
+        s.state.checked_lock()?.exception_filters = selected;
     }
     if capabilities["supportsConfigurationDoneRequest"] == true {
         call(s, "configurationDone", json!({}))?;
     }
     finish(s, launching, Duration::from_secs(120))?;
-    let mut state = s.state.lock().unwrap();
+    let mut state = s.state.checked_lock()?;
     if state.status == "starting" {
         state.status = "running".into();
     }
@@ -927,8 +961,7 @@ fn set_points(s: &Session, path: &str, points: Value) -> Result<Value> {
         json!({"source":{"path":path},"breakpoints":points}),
     )?;
     s.state
-        .lock()
-        .unwrap()
+        .checked_lock()?
         .breakpoints
         .insert(path.into(), value.clone());
     Ok(value)
@@ -973,7 +1006,7 @@ pub(super) fn request(
             | "continue"
     );
     if stopped {
-        let state = s.state.lock().unwrap();
+        let state = s.state.checked_lock()?;
         anyhow::ensure!(
             state.status == "stopped" && generation == Some(state.generation),
             "The paused state changed; refresh debugger data"
@@ -985,12 +1018,15 @@ pub(super) fn request(
             &PathBuf::from(&workspace.root).canonicalize()?,
             &json!({path:args["breakpoints"]}),
         )?;
-        let (path, points) = points.into_iter().next().unwrap();
+        let (path, points) = points
+            .into_iter()
+            .next()
+            .context("Missing validated breakpoint source")?;
         return set_points(&s, &path, points);
     }
     let exception_filters = if command == "setExceptionBreakpoints" {
         let filters: Vec<String> = serde_json::from_value(args["filters"].clone())?;
-        let state = s.state.lock().unwrap();
+        let state = s.state.checked_lock()?;
         anyhow::ensure!(
             filters.len() <= 100
                 && filters
@@ -1006,10 +1042,10 @@ pub(super) fn request(
     };
     let value = call(&s, command, args.clone())?;
     if let Some(filters) = exception_filters {
-        s.state.lock().unwrap().exception_filters = filters;
+        s.state.checked_lock()?.exception_filters = filters;
     }
     if stopped {
-        let mut state = s.state.lock().unwrap();
+        let mut state = s.state.checked_lock()?;
         if matches!(command, "continue" | "next" | "stepIn" | "stepOut") {
             if generation == Some(state.generation) {
                 state.status = "running".into();
@@ -1037,10 +1073,10 @@ pub(super) fn stop(workspace: &WorkspaceRef, id: &str) -> Result<Value> {
         end(&s, None);
         kill(&s);
     }
-    Ok(snapshot(&s))
+    snapshot(&s)
 }
 pub(super) fn shutdown() {
-    for s in registry().lock().unwrap().iter() {
+    for s in registry().cleanup_lock().iter() {
         end(s, None);
         kill(s);
     }
@@ -1079,12 +1115,13 @@ mod tests {
     }
 }
 
+// On poison, keep the service alive rather than incorrectly declaring it idle.
 pub(super) fn has_active() -> bool {
-    registry()
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|session| !session.closed.load(Ordering::Acquire))
+    registry().lock().map_or(true, |sessions| {
+        sessions
+            .iter()
+            .any(|session| !session.closed.load(Ordering::Acquire))
+    })
 }
 
 fn run_terminal(s: &Session, args: &Value) -> Result<Value> {
@@ -1131,7 +1168,7 @@ fn run_terminal(s: &Session, args: &Value) -> Result<Value> {
             }
         }
     }
-    let mut terminals = s.terminals.lock().unwrap();
+    let mut terminals = s.terminals.checked_lock()?;
     anyhow::ensure!(
         !s.closed.load(Ordering::Acquire) && terminals.len() < 4,
         "Debug session is closed or has too many terminals"
@@ -1145,7 +1182,10 @@ fn run_terminal(s: &Session, args: &Value) -> Result<Value> {
             json!({"command":values[0],"args":&values[1..],"cwd":cwd.strip_prefix(&root)?.to_string_lossy(),"env":env,"envRemove":remove,"interactive":true}),
         ],
     )?;
-    let id = run["id"].as_str().unwrap().to_string();
+    let id = run["id"]
+        .as_str()
+        .context("Task start returned no run ID")?
+        .to_string();
     terminals.push(id.clone());
     drop(terminals);
     let deadline = Instant::now() + Duration::from_secs(10);

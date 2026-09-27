@@ -1,4 +1,5 @@
 //! Interactive task processes with an owned PTY and process-tree cancellation.
+use super::sync::CheckedMutex;
 #[cfg(windows)]
 use anyhow::Context;
 use anyhow::Result;
@@ -119,7 +120,7 @@ impl Process {
                         .write_all(data.as_bytes())
                         .and_then(|_| writer.flush())
                     {
-                        *failure.lock().unwrap() = Some(error.to_string());
+                        *failure.cleanup_lock() = Some(error.to_string());
                         break;
                     }
                 }
@@ -155,7 +156,12 @@ impl Process {
     }
     pub(super) fn input(&mut self, data: &str) -> Result<()> {
         anyhow::ensure!(!self.reaped, "Task has exited");
-        if let Some(error) = self.input_error.lock().unwrap().as_ref() {
+        if let Some(error) = self
+            .input_error
+            .lock()
+            .map_err(|_| std::io::Error::other("Terminal input state is poisoned"))?
+            .as_ref()
+        {
             anyhow::bail!("Terminal input failed: {error}");
         }
         self.input

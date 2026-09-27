@@ -46,13 +46,17 @@ pub(super) fn compile(items: &[Matcher]) -> Result<Vec<(regex::Regex, Matcher)>>
 #[derive(Default)]
 pub(super) struct Collector {
     active: Vec<(regex::Regex, Matcher)>,
+    ansi: Option<regex::Regex>,
     cwd: PathBuf,
     pending: BTreeMap<String, String>,
     pub values: Vec<Value>,
 }
 impl Collector {
     pub fn start(&mut self, cwd: &Path, matchers: &[Matcher]) -> Result<()> {
+        let ansi =
+            regex::Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]").context("Compile ANSI escape matcher")?;
         self.active = compile(matchers)?;
+        self.ansi = Some(ansi);
         self.cwd = cwd.to_path_buf();
         self.pending.clear();
         Ok(())
@@ -86,10 +90,10 @@ impl Collector {
         if self.values.len() >= 200 || line.len() > 65536 {
             return;
         }
-        static ANSI: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-        let clean = ANSI
-            .get_or_init(|| regex::Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]").unwrap())
-            .replace_all(line, "");
+        let Some(ansi) = &self.ansi else {
+            return;
+        }; // Collector has not been started.
+        let clean = ansi.replace_all(line, "");
         for (regex, matcher) in &self.active {
             let Some(found) = regex.captures(&clean) else {
                 continue;

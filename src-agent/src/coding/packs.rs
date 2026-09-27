@@ -119,17 +119,17 @@ fn available(id: &str) -> Option<std::path::PathBuf> {
 }
 pub(super) fn status(root: &Path) -> Result<Value> {
     let config = super::workspace::read_config(root)?;
-    let packs: Vec<Value> = PACKS.iter().map(|p| {
+    let packs: Vec<Value> = PACKS.iter().map(|p| -> Result<Value> {
         let server = config["toolchains"][p.id]["languageServer"].as_str().unwrap_or(p.lsp);
-        let spec = crate::lsp::catalog::find(server).unwrap_or_else(||crate::lsp::catalog::find(p.lsp).unwrap());
+        let spec = crate::lsp::catalog::find(server).or_else(|| crate::lsp::catalog::find(p.lsp)).with_context(|| format!("Language server missing from catalog: {}", p.lsp))?;
         let lsp = crate::lsp::manifest::managed_binary_path(spec.id,spec.binary).or_else(||crate::lsp::resolve::find_on_path(spec.binary));
         let selected = config["toolchains"][p.id]["executable"].as_str().unwrap_or("");
         let runtime = super::environment::executable(root,p.runtime).ok().and_then(|v| if v.is_file() {Some(v)} else {crate::lsp::resolve::find_on_path(v.to_str()?) });
         let mut candidates = Vec::new();
         if let Some(path) = &runtime { candidates.push(path.to_string_lossy().into_owned()); }
         if p.id == "python" { for name in [".venv", "venv"] { let path = root.join(name).join(if cfg!(windows) {"Scripts/python.exe"} else {"bin/python"}); if path.is_file() { candidates.push(path.to_string_lossy().into_owned()); } } }
-        json!({"id":p.id,"label":p.label,"runtime":runtime,"runtimeName":p.runtime,"selected":selected,"candidates":candidates,"lsp":lsp,"server":spec.id,"serverOptions":if p.id=="php"&&!cfg!(windows){vec!["intelephense","phpactor"]}else{vec![p.lsp]},"adapter":if p.adapter.is_empty(){None}else{available(p.adapter)},"adapterName":p.adapter,"test":p.test})
-    }).collect();
+        Ok(json!({"id":p.id,"label":p.label,"runtime":runtime,"runtimeName":p.runtime,"selected":selected,"candidates":candidates,"lsp":lsp,"server":spec.id,"serverOptions":if p.id=="php"&&!cfg!(windows){vec!["intelephense","phpactor"]}else{vec![p.lsp]},"adapter":if p.adapter.is_empty(){None}else{available(p.adapter)},"adapterName":p.adapter,"test":p.test}))
+    }).collect::<Result<_>>()?;
     Ok(
         json!({"packs":packs,"fingerprint":super::environment::fingerprint(&config)?,"platform":std::env::consts::OS}),
     )
@@ -153,8 +153,8 @@ fn runtime_commands(p: &Pack) -> Result<Vec<Value>> {
     {
         let manager = ["apt-get", "dnf", "pacman", "zypper"]
             .into_iter()
-            .find(|name| crate::lsp::resolve::find_on_path(name).is_some());
-        if let Some(manager) = manager {
+            .find_map(|name| crate::lsp::resolve::find_on_path(name).map(|path| (name, path)));
+        if let Some((manager, binary)) = manager {
             let packages: &[&str] = match (manager, p.id) {
                 ("apt-get", "rust") => &["cargo", "rustc", "lldb", "build-essential", "pkg-config"],
                 ("apt-get", "python") => &["python3", "python3-venv", "python3-pip"],
@@ -189,10 +189,7 @@ fn runtime_commands(p: &Pack) -> Result<Vec<Value>> {
                 (_, "zig") => &["zig"],
                 _ => anyhow::bail!("Select an existing {} runtime on this host", p.label),
             };
-            let binary = crate::lsp::resolve::find_on_path(manager)
-                .unwrap()
-                .to_string_lossy()
-                .into_owned();
+            let binary = binary.to_string_lossy().into_owned();
             let mut args: Vec<String> = match manager {
                 "pacman" => vec!["-S".into(), "--needed".into(), "--noconfirm".into()],
                 "zypper" => vec!["--non-interactive".into(), "install".into()],
@@ -346,7 +343,9 @@ pub(super) fn plan(
     }
     let id = uuid::Uuid::new_v4().to_string();
     let result = json!({"id":id,"label":p.label,"commands":commands,"notes": if p.adapter=="lldb-dap" {"LLVM's lldb-dap must be on PATH. Some distributions package it separately. Project test dependencies remain project-owned."} else {"Project test dependencies remain project-owned. PHP debugging requires Xdebug; Bash debugging requires bashdb."}});
-    let mut registry = plans().lock().unwrap();
+    let mut registry = plans().lock().map_err(|_| {
+        anyhow::anyhow!("Installation plan registry is poisoned; restart the coding service")
+    })?;
     registry.retain(|p| p.at.elapsed() < Duration::from_secs(600));
     while registry.len() >= 32 {
         registry.pop_front();
@@ -361,12 +360,16 @@ pub(super) fn plan(
     Ok(result)
 }
 pub(super) fn apply(workspace: &WorkspaceRef, root: &Path, plan_id: &str) -> Result<Value> {
-    let mut registry = plans().lock().unwrap();
+    let mut registry = plans().lock().map_err(|_| {
+        anyhow::anyhow!("Installation plan registry is poisoned; restart the coding service")
+    })?;
     let index = registry
         .iter()
         .position(|p| p.id == plan_id && &p.workspace == workspace)
         .context("Installation plan expired; review again")?;
-    let plan = registry.remove(index).unwrap();
+    let plan = registry
+        .remove(index)
+        .context("Installation plan is no longer available")?;
     drop(registry);
     anyhow::ensure!(
         plan.at.elapsed() < Duration::from_secs(600),

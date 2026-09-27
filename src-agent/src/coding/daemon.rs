@@ -1,5 +1,6 @@
 //! Unix SSH workers proxy to a per-user process, so a lost SSH transport does
 //! not own the lifetime of tasks, debuggers, tests, language servers or watches.
+use super::sync::CheckedMutex;
 use anyhow::{Context, Result};
 use serde_json::json;
 use std::{
@@ -183,7 +184,7 @@ fn serve(stream: UnixStream, clients: Clients, count: Arc<AtomicUsize>) -> Resul
     let (sender, receiver) = mpsc::sync_channel::<Arc<Vec<u8>>>(64);
     let mut writer = stream.try_clone()?;
     writer.set_write_timeout(Some(Duration::from_secs(5)))?;
-    clients.lock().unwrap().push(Client {
+    clients.checked_lock()?.push(Client {
         id: id.clone(),
         sender: sender.clone(),
         connection: stream.try_clone()?,
@@ -202,8 +203,7 @@ fn serve(stream: UnixStream, clients: Clients, count: Arc<AtomicUsize>) -> Resul
         }
         let _ = writer.shutdown(std::net::Shutdown::Both);
         cleanup
-            .lock()
-            .unwrap()
+            .cleanup_lock()
             .retain(|client| client.id != cleanup_id);
     });
     let result = (|| -> Result<()> {
@@ -223,7 +223,7 @@ fn serve(stream: UnixStream, clients: Clients, count: Arc<AtomicUsize>) -> Resul
         }
         Ok(())
     })();
-    clients.lock().unwrap().retain(|client| client.id != id);
+    clients.cleanup_lock().retain(|client| client.id != id);
     result
 }
 pub(super) fn run() -> Result<()> {
@@ -262,13 +262,21 @@ pub(super) fn run() -> Result<()> {
         let mut bytes = line.into_bytes();
         bytes.push(b'\n');
         let bytes = Arc::new(bytes);
-        event_clients.lock().unwrap().retain(|client| {
-            match client.sender.try_send(bytes.clone()) {
-                Ok(()) => true,
-                Err(_) => {
+        let mut clients = match event_clients.checked_lock() {
+            Ok(clients) => clients,
+            Err(error) => {
+                eprintln!("Cannot publish coding events: {error}");
+                for client in event_clients.cleanup_lock().drain(..) {
                     let _ = client.connection.shutdown(std::net::Shutdown::Both);
-                    false
                 }
+                return;
+            }
+        };
+        clients.retain(|client| match client.sender.try_send(bytes.clone()) {
+            Ok(()) => true,
+            Err(_) => {
+                let _ = client.connection.shutdown(std::net::Shutdown::Both);
+                false
             }
         });
     }));

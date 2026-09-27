@@ -1,4 +1,5 @@
 //! Test discovery and structured results layered on the supervised task process.
+use super::sync::CheckedMutex;
 use super::WorkspaceRef;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -245,8 +246,7 @@ fn registry() -> &'static Mutex<VecDeque<Arc<Run>>> {
 }
 fn find(workspace: &WorkspaceRef, id: &str) -> Result<Arc<Run>> {
     registry()
-        .lock()
-        .unwrap()
+        .checked_lock()?
         .iter()
         .find(|r| r.id == id && &r.workspace == workspace)
         .cloned()
@@ -260,8 +260,7 @@ fn summary(run: &Run) -> Value {
 }
 pub(super) fn runs(workspace: &WorkspaceRef) -> Result<Value> {
     let runs = registry()
-        .lock()
-        .unwrap()
+        .checked_lock()?
         .iter()
         .filter(|r| &r.workspace == workspace)
         .cloned()
@@ -271,7 +270,7 @@ pub(super) fn runs(workspace: &WorkspaceRef) -> Result<Value> {
 pub(super) fn results(workspace: &WorkspaceRef, id: &str) -> Result<Value> {
     let run = find(workspace, id)?;
     let summary = summary(&run);
-    let mut result = run.results.lock().unwrap();
+    let mut result = run.results.checked_lock()?;
     if summary["task"]["outputComplete"] == true && !result.pending.is_empty() {
         let line = std::mem::take(&mut result.pending);
         result.line(&run.profile.kind, run.mode == "discover", &line);
@@ -560,7 +559,7 @@ pub(super) fn start(
             previous.profile.id == profile.id,
             "Selected tests belong to a different profile"
         );
-        let result = previous.results.lock().unwrap();
+        let result = previous.results.checked_lock()?;
         if mode == "failed" {
             items.extend(
                 result
@@ -588,8 +587,7 @@ pub(super) fn start(
     let task = if discover && profile.kind == "node" {
         for file in node_files(root) {
             results
-                .lock()
-                .unwrap()
+                .checked_lock()?
                 .record(json!({"id":file,"label":file,"file":file,"status":"discovered"}));
         }
         None
@@ -599,8 +597,9 @@ pub(super) fn start(
         let kind = profile.kind.clone();
         let observer = Arc::new(move |stream: &str, text: &str| {
             if stream == "stdout" {
-                collector.lock().unwrap().ingest(&kind, discover, text);
+                collector.checked_lock()?.ingest(&kind, discover, text);
             }
+            Ok(())
         });
         let task = super::tasks::run_observed(
             workspace,
@@ -610,7 +609,12 @@ pub(super) fn start(
             commands,
             Some(observer),
         )?;
-        Some(task["id"].as_str().unwrap().to_string())
+        Some(
+            task["id"]
+                .as_str()
+                .context("Task start returned no run ID")?
+                .to_string(),
+        )
     };
     let run = Arc::new(Run {
         id,
@@ -621,7 +625,7 @@ pub(super) fn start(
         results,
     });
     let value = summary(&run);
-    let mut registry = registry().lock().unwrap();
+    let mut registry = registry().checked_lock()?;
     while registry.len() >= 64 {
         let index = registry
             .iter()
@@ -661,8 +665,7 @@ pub(super) fn debug(
         .context("Test profile was removed")?;
     let item = run
         .results
-        .lock()
-        .unwrap()
+        .checked_lock()?
         .items
         .get(item_id)
         .cloned()
@@ -673,7 +676,9 @@ pub(super) fn debug(
             workspace,
             root,
             &profile_id,
-            definitions["fingerprint"].as_str().unwrap(),
+            definitions["fingerprint"]
+                .as_str()
+                .context("Missing task fingerprint")?,
             item["file"].as_str(),
             breakpoints,
         );

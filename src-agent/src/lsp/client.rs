@@ -2498,7 +2498,16 @@ fn register_workspace_edit(
     params: serde_json::Value,
 ) {
     let ticket = uuid::Uuid::new_v4().to_string();
-    let mut pending = workspace_edits().lock().unwrap();
+    let mut pending = match workspace_edits().lock() {
+        Ok(pending) => pending,
+        Err(_) => {
+            let _ = write_message(
+                stdin,
+                &serde_json::json!({"jsonrpc":"2.0","id":request,"result":{"applied":false,"failureReason":"Workspace edit registry is poisoned; restart the language service"}}),
+            );
+            return;
+        }
+    };
     if pending.len() >= 32 {
         let _ = write_message(
             stdin,
@@ -2533,7 +2542,9 @@ pub(crate) fn pending_workspace_edit(
     root: &str,
     ticket: &str,
 ) -> Result<serde_json::Value, String> {
-    let pending = workspace_edits().lock().unwrap();
+    let pending = workspace_edits().lock().map_err(|_| {
+        "Workspace edit registry is poisoned; restart the language service".to_string()
+    })?;
     let edit = pending
         .get(ticket)
         .ok_or("Workspace edit is no longer pending")?;
@@ -2548,11 +2559,15 @@ pub(crate) fn reply_workspace_edit(
     applied: bool,
     reason: Option<&str>,
 ) -> Result<(), String> {
-    let mut pending = workspace_edits().lock().unwrap();
+    let mut pending = workspace_edits().lock().map_err(|_| {
+        "Workspace edit registry is poisoned; restart the language service".to_string()
+    })?;
     if pending.get(ticket).is_none_or(|edit| edit.root != root) {
         return Err("Workspace edit is no longer pending in this root".into());
     }
-    let edit = pending.remove(ticket).unwrap();
+    let edit = pending
+        .remove(ticket)
+        .ok_or("Workspace edit is no longer pending")?;
     drop(pending);
     write_message(
         &edit.stdin,

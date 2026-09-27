@@ -80,6 +80,7 @@ dependencies = [
  "rfd",
  "rmcp",
  "rusqlite",
+ "scopeguard",
  "scraper",
  "serde",
  "serde_json",

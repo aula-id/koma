@@ -1,4 +1,5 @@
 //! Explicit project tasks, retained independently of chat and UI selection.
+use super::sync::CheckedMutex;
 use super::WorkspaceRef;
 use anyhow::{Context, Result};
 use process_wrap::std::{ChildWrapper, CommandWrap, CommandWrapper};
@@ -168,7 +169,7 @@ impl TaskChild {
         }
     }
 }
-pub(super) type OutputObserver = Arc<dyn Fn(&str, &str) + Send + Sync>;
+pub(super) type OutputObserver = Arc<dyn Fn(&str, &str) -> Result<()> + Send + Sync>;
 struct Run {
     observer: Option<OutputObserver>,
     problems: Mutex<super::problems::Collector>,
@@ -197,19 +198,21 @@ fn active(state: &State) -> bool {
 }
 
 impl Run {
-    fn summary(&self) -> Value {
-        let s = self.state.lock().unwrap();
-        json!({"id":self.id,"workspace":self.workspace,"taskId":self.task.id,"label":self.task.label,
+    fn summary(&self) -> Result<Value> {
+        let s = self.state.checked_lock()?;
+        Ok(
+            json!({"id":self.id,"workspace":self.workspace,"taskId":self.task.id,"label":self.task.label,
             "group":self.task.group,"interactive":self.task.interactive,"command":self.task.command,"args":self.task.args,"cwd":self.task.cwd,
             "started":self.started,"ended":s.ended,"status":s.status,"exitCode":s.exit_code,
-            "error":s.error,"outputComplete":s.readers == 0,"sequence":s.sequence})
+            "error":s.error,"outputComplete":s.readers == 0,"sequence":s.sequence}),
+        )
     }
-    fn append(&self, stream: &'static str, text: String) {
+    fn append(&self, stream: &'static str, text: String) -> Result<()> {
         if let Some(observer) = &self.observer {
-            observer(stream, &text);
+            observer(stream, &text)?;
         }
-        self.problems.lock().unwrap().ingest(stream, &text);
-        let mut s = self.state.lock().unwrap();
+        self.problems.checked_lock()?.ingest(stream, &text);
+        let mut s = self.state.checked_lock()?;
         s.sequence += 1;
         let seq = s.sequence;
         s.bytes += text.len();
@@ -219,13 +222,13 @@ impl Run {
                 s.bytes -= chunk.text.len();
             }
         }
+        Ok(())
     }
 }
 
 fn find(workspace: &WorkspaceRef, id: &str) -> Result<Arc<Run>> {
     registry()
-        .lock()
-        .unwrap()
+        .checked_lock()?
         .iter()
         .find(|r| r.id == id && &r.workspace == workspace)
         .cloned()
@@ -233,18 +236,17 @@ fn find(workspace: &WorkspaceRef, id: &str) -> Result<Arc<Run>> {
 }
 pub(super) fn runs(workspace: &WorkspaceRef) -> Result<Value> {
     Ok(json!(registry()
-        .lock()
-        .unwrap()
+        .checked_lock()?
         .iter()
         .filter(|r| &r.workspace == workspace)
         .map(|r| r.summary())
-        .collect::<Vec<_>>()))
+        .collect::<Result<Vec<_>>>()?))
 }
 pub(super) fn output(workspace: &WorkspaceRef, id: &str, after: u64) -> Result<Value> {
     let run = find(workspace, id)?;
-    let s = run.state.lock().unwrap();
+    let s = run.state.checked_lock()?;
     if s.readers == 0 && !active(&s) {
-        run.problems.lock().unwrap().finish();
+        run.problems.checked_lock()?.finish();
     }
     let first = s.chunks.front().map_or(s.sequence + 1, |c| c.seq);
     // Limit each RPC so a noisy task cannot monopolize the SSH service.
@@ -252,33 +254,30 @@ pub(super) fn output(workspace: &WorkspaceRef, id: &str, after: u64) -> Result<V
     let next = chunks.last().map_or(after.min(s.sequence), |c| c.seq);
     Ok(
         json!({"chunks":chunks,"next":next,"truncated":after.saturating_add(1) < first,
-        "more":next < s.sequence,"problems":run.problems.lock().unwrap().values}),
+        "more":next < s.sequence,"problems":run.problems.checked_lock()?.values}),
     )
 }
 
 // Protect the raw child even if a later process-wrap hook fails (notably Windows
 // job assignment). std::process::Child alone would leak the suspended process.
+type GuardedChild = scopeguard::ScopeGuard<Box<dyn ChildWrapper>, fn(Box<dyn ChildWrapper>)>;
 #[derive(Debug)]
-struct ReapChild(Option<Box<dyn ChildWrapper>>);
-impl Drop for ReapChild {
-    fn drop(&mut self) {
-        if let Some(c) = self.0.as_mut() {
-            if matches!(c.try_wait(), Ok(None)) {
-                let _ = c.start_kill();
-                let _ = c.wait();
-            }
-        }
+struct ReapChild(GuardedChild);
+fn reap_child(mut child: Box<dyn ChildWrapper>) {
+    if !matches!(child.try_wait(), Ok(Some(_))) {
+        let _ = child.start_kill();
+        let _ = child.wait();
     }
 }
 impl ChildWrapper for ReapChild {
     fn inner(&self) -> &dyn ChildWrapper {
-        self.0.as_ref().unwrap().as_ref()
+        self.0.as_ref()
     }
     fn inner_mut(&mut self) -> &mut dyn ChildWrapper {
-        self.0.as_mut().unwrap().as_mut()
+        self.0.as_mut()
     }
-    fn into_inner(mut self: Box<Self>) -> Box<dyn ChildWrapper> {
-        self.0.take().unwrap()
+    fn into_inner(self: Box<Self>) -> Box<dyn ChildWrapper> {
+        scopeguard::ScopeGuard::into_inner(self.0)
     }
 }
 #[derive(Debug)]
@@ -289,7 +288,10 @@ impl CommandWrapper for Reap {
         child: Box<dyn ChildWrapper>,
         _: &CommandWrap,
     ) -> std::io::Result<Box<dyn ChildWrapper>> {
-        Ok(Box::new(ReapChild(Some(child))))
+        Ok(Box::new(ReapChild(scopeguard::guard(
+            child,
+            reap_child as fn(Box<dyn ChildWrapper>),
+        ))))
     }
 }
 #[cfg(unix)]
@@ -498,36 +500,38 @@ fn start_recipe(
             "Task working directory must be inside the workspace"
         );
     }
-    let mut registry = registry().lock().unwrap();
+    let mut registry = registry().checked_lock()?;
     anyhow::ensure!(
         !super::SHUTTING_DOWN.load(std::sync::atomic::Ordering::Acquire),
         "Coding service is shutting down"
     );
+    let mut active_ids = std::collections::HashSet::new();
+    for run in registry.iter() {
+        if active(&*run.state.checked_lock()?) {
+            active_ids.insert(run.id.clone());
+        }
+    }
     anyhow::ensure!(
-        registry
-            .iter()
-            .filter(|r| active(&r.state.lock().unwrap()))
-            .count()
-            < MAX_ACTIVE,
+        active_ids.len() < MAX_ACTIVE,
         "At most eight tasks can run at once on this host"
     );
     anyhow::ensure!(
         !registry.iter().any(|r| &r.workspace == workspace
             && (r.task.id == task.id || steps.iter().any(|step| r.reserved.contains(&step.id)))
-            && active(&r.state.lock().unwrap())),
+            && active_ids.contains(&r.id)),
         "This task is already running in this workspace"
     );
     anyhow::ensure!(
         !task.id.starts_with("pack:")
             || !registry
                 .iter()
-                .any(|r| r.task.id.starts_with("pack:") && active(&r.state.lock().unwrap())),
+                .any(|r| r.task.id.starts_with("pack:") && active_ids.contains(&r.id)),
         "Another language pack installation is running on this host"
     );
     while registry.len() >= MAX_RUNS {
         let i = registry
             .iter()
-            .position(|r| !active(&r.state.lock().unwrap()))
+            .position(|r| !active_ids.contains(&r.id))
             .context("Task history is full")?;
         registry.remove(i);
     }
@@ -552,13 +556,14 @@ fn start_recipe(
             readers: 0,
         }),
     });
+    let summary = run.summary()?;
     let watched = Arc::clone(&run);
     let root = root.to_path_buf();
     std::thread::Builder::new()
         .name("coding-task".into())
         .spawn(move || supervise(watched, root, steps))?;
     registry.push_back(Arc::clone(&run));
-    Ok(run.summary())
+    Ok(summary)
 }
 
 pub(super) fn spawn_command(command: Command) -> std::io::Result<Box<dyn ChildWrapper>> {
@@ -580,8 +585,7 @@ fn launch_step(run: &Arc<Run>, root: &Path, task: &Task) -> Result<()> {
         "Task working directory moved outside the workspace"
     );
     run.problems
-        .lock()
-        .unwrap()
+        .checked_lock()?
         .start(&cwd, &task.problem_matchers)?;
     let executable =
         if task.command.contains(['/', '\\']) && !Path::new(&task.command).is_absolute() {
@@ -592,7 +596,7 @@ fn launch_step(run: &Arc<Run>, root: &Path, task: &Task) -> Result<()> {
     if task.interactive {
         let mut env = super::environment::variables(root, &task.command)?;
         env.extend(task.env.clone());
-        let mut slot = run.child.lock().unwrap();
+        let mut slot = run.child.checked_lock()?;
         anyhow::ensure!(
             !run.canceled.load(std::sync::atomic::Ordering::Acquire),
             "Task stopped"
@@ -606,7 +610,7 @@ fn launch_step(run: &Arc<Run>, root: &Path, task: &Task) -> Result<()> {
         )?;
         *slot = Some(TaskChild::Pty(child));
         {
-            let mut state = run.state.lock().unwrap();
+            let mut state = run.state.checked_lock()?;
             state.status = "running";
             state.readers += 1;
         }
@@ -616,7 +620,7 @@ fn launch_step(run: &Arc<Run>, root: &Path, task: &Task) -> Result<()> {
             .name("coding-task-pty".into())
             .spawn(move || read_output(reader_run, "terminal", reader))
         {
-            run.state.lock().unwrap().readers -= 1;
+            run.state.checked_lock()?.readers -= 1;
             let _ = stop_run(run, Some(error.to_string()));
             return Err(error.into());
         }
@@ -634,7 +638,7 @@ fn launch_step(run: &Arc<Run>, root: &Path, task: &Task) -> Result<()> {
     for key in &task.env_remove {
         command.env_remove(key);
     }
-    let mut slot = run.child.lock().unwrap();
+    let mut slot = run.child.checked_lock()?;
     anyhow::ensure!(
         !run.canceled.load(std::sync::atomic::Ordering::Acquire),
         "Task stopped"
@@ -651,7 +655,7 @@ fn launch_step(run: &Arc<Run>, root: &Path, task: &Task) -> Result<()> {
         .context("Task stderr is unavailable")?;
     *slot = Some(TaskChild::Pipe(child));
     {
-        let mut s = run.state.lock().unwrap();
+        let mut s = run.state.checked_lock()?;
         s.status = "running";
         s.readers += 2;
     }
@@ -665,7 +669,7 @@ fn launch_step(run: &Arc<Run>, root: &Path, task: &Task) -> Result<()> {
             .name(format!("task-{stream}"))
             .spawn(move || read_output(capture, stream, pipe))
         {
-            run.state.lock().unwrap().readers -= 1;
+            run.state.checked_lock()?.readers -= 1;
             stop_run(run, Some(format!("Cannot capture task output: {error}")))?;
         }
     }
@@ -673,31 +677,38 @@ fn launch_step(run: &Arc<Run>, root: &Path, task: &Task) -> Result<()> {
 }
 
 fn read_output(run: Arc<Run>, stream: &'static str, mut pipe: Box<dyn Read + Send>) {
-    let mut bytes = [0; 8192];
-    let mut pending = Vec::new();
-    loop {
-        match pipe.read(&mut bytes) {
-            Ok(0) => break,
-            Ok(n) => {
-                pending.extend_from_slice(&bytes[..n]);
-                let text = decode_output(&mut pending);
-                if !text.is_empty() {
-                    run.append(stream, text);
+    let result = (|| -> Result<()> {
+        let mut bytes = [0; 8192];
+        let mut pending = Vec::new();
+        loop {
+            match pipe.read(&mut bytes) {
+                Ok(0) => break,
+                Ok(n) => {
+                    pending.extend_from_slice(&bytes[..n]);
+                    let text = decode_output(&mut pending);
+                    if !text.is_empty() {
+                        run.append(stream, text)?;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                #[cfg(unix)]
+                Err(e) if stream == "terminal" && e.raw_os_error() == Some(libc::EIO) => break,
+                Err(e) => {
+                    run.append("system", format!("\nOutput read failed: {e}\n"))?;
+                    break;
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            #[cfg(unix)]
-            Err(e) if stream == "terminal" && e.raw_os_error() == Some(libc::EIO) => break,
-            Err(e) => {
-                run.append("system", format!("\nOutput read failed: {e}\n"));
-                break;
-            }
         }
+        if !pending.is_empty() {
+            run.append(stream, String::from_utf8_lossy(&pending).into_owned())?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        fail_run(&run, &error);
     }
-    if !pending.is_empty() {
-        run.append(stream, String::from_utf8_lossy(&pending).into_owned());
-    }
-    run.state.lock().unwrap().readers -= 1;
+    let mut state = run.state.cleanup_lock();
+    state.readers = state.readers.saturating_sub(1);
 }
 
 /// Lossy for invalid bytes, but never split valid UTF-8 across pipe reads.
@@ -713,7 +724,7 @@ fn decode_output(pending: &mut Vec<u8>) -> String {
             }
             Err(error) => {
                 let end = consumed + error.valid_up_to();
-                text.push_str(std::str::from_utf8(&pending[consumed..end]).unwrap());
+                text.push_str(&String::from_utf8_lossy(&pending[consumed..end]));
                 consumed = end;
                 match error.error_len() {
                     Some(n) => {
@@ -730,8 +741,8 @@ fn decode_output(pending: &mut Vec<u8>) -> String {
 }
 
 fn stop_run(run: &Run, reason: Option<String>) -> Result<()> {
-    let mut child = run.child.lock().unwrap();
-    let mut s = run.state.lock().unwrap();
+    let mut child = run.child.checked_lock()?;
+    let mut s = run.state.checked_lock()?;
     if !matches!(s.status, "queued" | "running" | "stopping") {
         return Ok(());
     }
@@ -750,21 +761,46 @@ fn stop_run(run: &Run, reason: Option<String>) -> Result<()> {
 }
 pub(super) fn stop(workspace: &WorkspaceRef, id: &str) -> Result<Value> {
     let run = find(workspace, id)?;
-    stop_run(&run, None)?;
-    Ok(run.summary())
+    if let Err(error) = stop_run(&run, None) {
+        fail_run(&run, &error);
+        return Err(error);
+    }
+    run.summary()
 }
 fn supervise(run: Arc<Run>, root: std::path::PathBuf, steps: Vec<Task>) {
+    if let Err(error) = supervise_steps(&run, &root, &steps) {
+        fail_run(&run, &error);
+    }
+}
+
+// Recovery is restricted to stopping the failed run; poisoned state is never
+// used to launch another command or to report a successful result.
+fn fail_run(run: &Run, error: &anyhow::Error) {
+    run.canceled
+        .store(true, std::sync::atomic::Ordering::Release);
+    if let Some(mut child) = run.child.cleanup_lock().take() {
+        if let Err(error) = child.start_kill() {
+            eprintln!("Cannot terminate failed task: {error}");
+        }
+    }
+    let mut state = run.state.cleanup_lock();
+    state.status = "failed";
+    state.error = Some(format!("{error:#}"));
+    state.ended = Some(now());
+}
+
+fn supervise_steps(run: &Arc<Run>, root: &Path, steps: &[Task]) -> Result<()> {
     let mut outcome = Ok(0);
     let mut previous_failure = None;
-    for step in &steps {
-        run.problems.lock().unwrap().finish();
+    for step in steps {
+        run.problems.checked_lock()?.finish();
         if run.canceled.load(std::sync::atomic::Ordering::Acquire) {
             break;
         }
         if steps.len() > 1 {
-            run.append("system", format!("\n▶ {}\n", step.label));
+            run.append("system", format!("\n▶ {}\n", step.label))?;
         }
-        if let Err(error) = launch_step(&run, &root, step) {
+        if let Err(error) = launch_step(run, root, step) {
             if !run.canceled.load(std::sync::atomic::Ordering::Acquire) {
                 outcome = Err(format!("{error:#}"));
             }
@@ -777,15 +813,24 @@ fn supervise(run: Arc<Run>, root: std::path::PathBuf, steps: Vec<Task>) {
                 .is_some_and(|ms| clock.elapsed() >= Duration::from_millis(ms))
                 && !run.canceled.load(std::sync::atomic::Ordering::Acquire)
             {
-                let _ = stop_run(&run, Some("Task exceeded timeoutMs".into()));
+                let _ = stop_run(run, Some("Task exceeded timeoutMs".into()));
             }
             let exited = {
-                let mut slot = run.child.lock().unwrap();
-                match slot.as_mut().unwrap().try_wait() {
+                let mut slot = run.child.checked_lock()?;
+                let child = slot
+                    .as_mut()
+                    .context("Task process disappeared while running")?;
+                match child.try_wait() {
                     Ok(None) => false,
-                    result => {
-                        let _ = slot.as_mut().unwrap().start_kill();
-                        outcome = result.map(|exit| exit.unwrap()).map_err(|e| e.to_string());
+                    Ok(Some(exit)) => {
+                        let _ = child.start_kill();
+                        outcome = Ok(exit);
+                        slot.take();
+                        true
+                    }
+                    Err(error) => {
+                        let _ = child.start_kill();
+                        outcome = Err(error.to_string());
                         slot.take();
                         true
                     }
@@ -798,7 +843,7 @@ fn supervise(run: Arc<Run>, root: std::path::PathBuf, steps: Vec<Task>) {
         }
         // Drain each step before launching the next so streaming observers see
         // one complete command at a time, including its trailing output.
-        while run.state.lock().unwrap().readers > 0 {
+        while run.state.checked_lock()?.readers > 0 {
             std::thread::sleep(Duration::from_millis(10));
         }
         if !matches!(outcome, Ok(0)) {
@@ -813,7 +858,7 @@ fn supervise(run: Arc<Run>, root: std::path::PathBuf, steps: Vec<Task>) {
             outcome = failure;
         }
     }
-    let mut s = run.state.lock().unwrap();
+    let mut s = run.state.checked_lock()?;
     s.exit_code = outcome.as_ref().ok().copied();
     if s.error.is_none() {
         s.error = outcome.as_ref().err().cloned();
@@ -828,11 +873,14 @@ fn supervise(run: Arc<Run>, root: std::path::PathBuf, steps: Vec<Task>) {
         "failed"
     };
     s.ended = Some(now());
+    Ok(())
 }
 pub(super) fn shutdown() {
-    let runs: Vec<_> = registry().lock().unwrap().iter().cloned().collect();
+    let runs: Vec<_> = registry().cleanup_lock().iter().cloned().collect();
     for run in runs {
-        let _ = stop_run(&run, None);
+        if let Err(error) = stop_run(&run, None) {
+            fail_run(&run, &error);
+        }
     }
 }
 
@@ -938,13 +986,13 @@ mod tests {
         stop(&workspace, id).unwrap();
         let run = find(&workspace, id).unwrap();
         await_done(&run);
-        assert_eq!(run.summary()["status"], "stopped");
+        assert_eq!(run.summary().unwrap()["status"], "stopped");
         // Repeated Stop is harmless and preserves terminal status.
         assert_eq!(stop(&workspace, id).unwrap()["status"], "stopped");
         let started = start(&workspace, &project.0, "echo", &fingerprint).unwrap();
         let run = find(&workspace, started["id"].as_str().unwrap()).unwrap();
         await_done(&run);
-        assert_eq!(run.summary()["exitCode"], 7);
+        assert_eq!(run.summary().unwrap()["exitCode"], 7);
         let state = run.state.lock().unwrap();
         assert_eq!(
             state
@@ -980,13 +1028,13 @@ mod tests {
             let run = find(&workspace, started["id"].as_str().unwrap()).unwrap();
             await_done(&run);
             if id == "timeout" {
-                assert_eq!(run.summary()["status"], "failed");
-                assert_eq!(run.summary()["error"], "Task exceeded timeoutMs");
+                assert_eq!(run.summary().unwrap()["status"], "failed");
+                assert_eq!(run.summary().unwrap()["error"], "Task exceeded timeoutMs");
             } else {
-                assert_eq!(run.summary()["status"], "succeeded");
+                assert_eq!(run.summary().unwrap()["status"], "succeeded");
             }
             for _ in 0..OUTPUT_CHUNKS + 10 {
-                run.append("stdout", "a".into());
+                run.append("stdout", "a".into()).expect("append task output");
             }
             let page = output(&workspace, &run.id, 0).unwrap();
             assert_eq!(page["truncated"], true);
@@ -1076,21 +1124,21 @@ fn discover(root: &Path, tasks: &mut Vec<Task>) -> Result<()> {
 }
 
 pub(super) fn summary(workspace: &WorkspaceRef, id: &str) -> Result<Value> {
-    Ok(find(workspace, id)?.summary())
+    find(workspace, id)?.summary()
 }
 
+// On poison, keep the service alive rather than incorrectly declaring it idle.
 pub(super) fn has_active() -> bool {
-    registry()
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|run| active(&run.state.lock().unwrap()))
+    registry().lock().map_or(true, |runs| {
+        runs.iter()
+            .any(|run| run.state.lock().map_or(true, |state| active(&state)))
+    })
 }
 
 pub(super) fn input(workspace: &WorkspaceRef, id: &str, data: &str) -> Result<Value> {
     anyhow::ensure!(data.len() <= 65536, "Terminal input exceeds 64 KiB");
     let run = find(workspace, id)?;
-    let mut slot = run.child.lock().unwrap();
+    let mut slot = run.child.checked_lock()?;
     match slot.as_mut() {
         Some(TaskChild::Pty(child)) => child.input(data)?,
         _ => anyhow::bail!("This task has no active terminal"),
@@ -1099,7 +1147,7 @@ pub(super) fn input(workspace: &WorkspaceRef, id: &str, data: &str) -> Result<Va
 }
 pub(super) fn resize(workspace: &WorkspaceRef, id: &str, rows: u16, cols: u16) -> Result<Value> {
     let run = find(workspace, id)?;
-    let slot = run.child.lock().unwrap();
+    let slot = run.child.checked_lock()?;
     match slot.as_ref() {
         Some(TaskChild::Pty(child)) => child.resize(rows, cols)?,
         _ => anyhow::bail!("This task has no active terminal"),
@@ -1109,7 +1157,7 @@ pub(super) fn resize(workspace: &WorkspaceRef, id: &str, rows: u16, cols: u16) -
 
 pub(super) fn process_id(workspace: &WorkspaceRef, id: &str) -> Result<Option<u32>> {
     let run = find(workspace, id)?;
-    let slot = run.child.lock().unwrap();
+    let slot = run.child.checked_lock()?;
     Ok(match slot.as_ref() {
         Some(TaskChild::Pipe(child)) => Some(child.id()),
         Some(TaskChild::Pty(child)) => child.process_id(),

@@ -44,6 +44,14 @@ fn lines(reader: impl Read, mut visit: impl FnMut(&str) -> Result<()>) -> Result
     }
     Ok(())
 }
+// Keep missing-pipe errors in the same result as read/parse failures so callers
+// still kill and reap the child before returning the error.
+fn child_lines(child: &mut Child, visit: impl FnMut(&str) -> Result<()>) -> Result<()> {
+    lines(
+        child.stdout.take().context("Missing Cargo test stdout")?,
+        visit,
+    )
+}
 fn record(a: &Artifact, name: &str, status: &str) {
     println!(
         "KOMA_TEST {}",
@@ -74,7 +82,7 @@ pub(super) fn main() -> Result<()> {
         .stdin(Stdio::null());
     let mut child = spawn(&mut build).context("Build Cargo test binaries")?;
     let mut artifacts = BTreeMap::new();
-    let collected = lines(child.stdout.take().unwrap(), |line| {
+    let collected = child_lines(&mut child, |line| {
         if let Ok(value) = serde_json::from_str::<Value>(line) {
             if value["reason"] == "compiler-message" {
                 if let Some(message) = value["message"]["rendered"].as_str() {
@@ -134,7 +142,7 @@ pub(super) fn main() -> Result<()> {
                 .stdin(Stdio::null()),
         )?;
         let mut names = BTreeSet::new();
-        let collected = lines(child.stdout.take().unwrap(), |line| {
+        let collected = child_lines(&mut child, |line| {
             if let Some(name) = line.strip_suffix(": test") {
                 anyhow::ensure!(names.len() < 5000, "Too many tests in one binary");
                 names.insert(name.to_string());
@@ -202,7 +210,7 @@ pub(super) fn main() -> Result<()> {
                     .stdin(Stdio::null()),
             )?;
             let mut completed = BTreeSet::new();
-            let collected = lines(child.stdout.take().unwrap(), |line| {
+            let collected = child_lines(&mut child, |line| {
                 println!("{line}");
                 if let Some((name, status)) = line
                     .strip_prefix("test ")

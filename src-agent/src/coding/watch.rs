@@ -1,4 +1,5 @@
 //! Watch notifications are hints; fingerprint checks remain authoritative.
+use super::sync::CheckedMutex;
 use super::WorkspaceRef;
 use anyhow::Result;
 use notify::{RecursiveMode, Watcher};
@@ -12,7 +13,7 @@ use std::{
 static WATCHERS: OnceLock<Mutex<VecDeque<(WorkspaceRef, notify::RecommendedWatcher)>>> =
     OnceLock::new();
 pub(super) fn watch(workspace: &WorkspaceRef, root: &Path) -> Result<Value> {
-    let mut watchers = WATCHERS.get_or_init(Default::default).lock().unwrap();
+    let mut watchers = WATCHERS.get_or_init(Default::default).checked_lock()?;
     if watchers.iter().any(|(key, _)| key == workspace) {
         return Ok(Value::Null);
     }

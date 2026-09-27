@@ -86,7 +86,11 @@ fn extract(bytes: &[u8], name: &str, dest: &Path) -> Result<()> {
                 std::fs::create_dir_all(&target)?;
                 continue;
             }
-            std::fs::create_dir_all(target.parent().unwrap())?;
+            std::fs::create_dir_all(
+                target
+                    .parent()
+                    .context("Installation target has no parent directory")?,
+            )?;
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -240,7 +244,9 @@ fn github_asset(id: &str, dest: &Path) -> Result<(PathBuf, String, String)> {
         "No unambiguous {id} release for {os}/{arch}; select a compatible external executable"
     );
     let asset = assets[0];
-    let name = asset["name"].as_str().unwrap();
+    let name = asset["name"]
+        .as_str()
+        .context("Release asset has no name")?;
     let url = asset["browser_download_url"]
         .as_str()
         .context("Missing release URL")?;

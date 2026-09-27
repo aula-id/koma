@@ -1,4 +1,5 @@
 //! Persistent Windows coding service, using Koma's owner-restricted named pipes.
+use super::sync::CheckedMutex;
 use crate::ipc::{split_stream, IpcListener, IpcStream};
 use anyhow::{Context, Result};
 use serde_json::json;
@@ -167,7 +168,7 @@ async fn serve(stream: IpcStream, clients: Clients) -> Result<()> {
     let id = uuid::Uuid::new_v4().to_string();
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<Arc<Vec<u8>>>(64);
     let (cancel, mut canceled) = tokio::sync::watch::channel(false);
-    clients.lock().unwrap().push(Client {
+    clients.checked_lock()?.push(Client {
         id: id.clone(),
         sender: sender.clone(),
         cancel,
@@ -202,7 +203,7 @@ async fn serve(stream: IpcStream, clients: Clients) -> Result<()> {
     };
     let result =
         tokio::select! {result=receive=>result,result=send=>result,_=canceled.changed()=>Ok(())};
-    clients.lock().unwrap().retain(|c| c.id != id);
+    clients.cleanup_lock().retain(|c| c.id != id);
     result
 }
 pub(super) fn run() -> Result<()> {
@@ -221,7 +222,17 @@ async fn run_async() -> Result<()> {
         let mut bytes = line.into_bytes();
         bytes.push(b'\n');
         let bytes = Arc::new(bytes);
-        push.lock().unwrap().retain(|c| {
+        let mut clients = match push.checked_lock() {
+            Ok(clients) => clients,
+            Err(error) => {
+                eprintln!("Cannot publish coding events: {error}");
+                for client in push.cleanup_lock().drain(..) {
+                    let _ = client.cancel.send(true);
+                }
+                return;
+            }
+        };
+        clients.retain(|c| {
             if c.sender.try_send(bytes.clone()).is_ok() {
                 true
             } else {

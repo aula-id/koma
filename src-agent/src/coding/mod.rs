@@ -19,6 +19,7 @@ mod problems;
 pub(crate) mod provision;
 mod pty;
 mod resources;
+mod sync;
 mod tasks;
 mod tests;
 pub(crate) fn framework_tests_main() -> anyhow::Result<()> {
@@ -429,11 +430,11 @@ fn execute(request: &Request) -> Result<Value, String> {
 pub(crate) fn worker_main() -> anyhow::Result<()> {
     #[cfg(unix)]
     {
-        return daemon::proxy();
+        daemon::proxy()
     }
     #[cfg(windows)]
     {
-        return daemon_windows::proxy();
+        daemon_windows::proxy()
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -447,7 +448,7 @@ pub(crate) fn daemon_main() -> anyhow::Result<()> {
     }
     #[cfg(windows)]
     {
-        return daemon_windows::run();
+        daemon_windows::run()
     }
     #[cfg(not(any(unix, windows)))]
     {

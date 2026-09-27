@@ -238,7 +238,9 @@ pub(super) fn apply(root: &Path, changes: &[Change]) -> Result<Value> {
         &journal.join("manifest.json"),
         &serde_json::to_vec_pretty(&json!({"root":root,"state":"applied","files":records}))?,
     ).with_context(||format!("Files were changed, but the transaction journal could not be finalized. Inspect disk before retrying. Recovery journal: {}",journal.display()))?;
-    prune(journal.parent().unwrap());
+    if let Some(base) = journal.parent() {
+        prune(base);
+    }
     Ok(json!({"id":id,"files":files}))
 }
 
@@ -346,7 +348,7 @@ fn restore(root: &Path, id: &str, expected: Option<&Value>) -> Result<Value> {
     let mut completed = Vec::new();
     let outcome = (|| -> Result<()> {
         for record in &records {
-            let relative = record["path"].as_str().unwrap();
+            let relative = record["path"].as_str().context("Invalid resource path")?;
             let target = path(root, relative)?;
             anyhow::ensure!(
                 target == targets[relative] && bytes(&target)? == current[relative],
@@ -354,7 +356,7 @@ fn restore(root: &Path, id: &str, expected: Option<&Value>) -> Result<Value> {
             );
             completed.push(relative.to_string());
             if let Some(bytes) = &originals[relative] {
-                std::fs::create_dir_all(target.parent().unwrap())?;
+                std::fs::create_dir_all(target.parent().context("Resource target has no parent")?)?;
                 super::persistence::atomic_write(&target, bytes)?;
                 #[cfg(unix)]
                 {
@@ -408,7 +410,7 @@ fn restore(root: &Path, id: &str, expected: Option<&Value>) -> Result<Value> {
             journal.display()
         );
     }
-    let files:Vec<Value>=records.iter().map(|r|{let relative=r["path"].as_str().unwrap();json!({"path":relative,"exists":originals[relative].is_some(),"fingerprint":r["beforeFingerprint"]})}).collect();
+    let files: Vec<Value> = records.iter().map(|r| -> Result<Value> { let relative = r["path"].as_str().context("Invalid resource path")?; Ok(json!({"path":relative,"exists":originals[relative].is_some(),"fingerprint":r["beforeFingerprint"]})) }).collect::<Result<_>>()?;
     let _ = std::fs::remove_dir_all(&journal);
     Ok(json!({"files":files}))
 }
@@ -437,7 +439,7 @@ pub(super) fn journals(root: &Path) -> Result<Value> {
         for entry in std::fs::read_dir(base)?.take(1000).flatten() {
             let id = entry.file_name().to_string_lossy().into_owned();
             if let Ok((_, m)) = manifest(root, &id) {
-                rows.push(json!({"id":id,"state":m["state"],"files":m["files"].as_array().unwrap().len()}));
+                rows.push(json!({"id":id,"state":m["state"],"files":m["files"].as_array().context("Invalid journal files")?.len()}));
             }
         }
     }
@@ -451,7 +453,7 @@ pub(super) fn recovery_preview(root: &Path, id: &str) -> Result<Value> {
     let mut files = Vec::new();
     let mut expected = json!({});
     let mut total = 0;
-    for record in m["files"].as_array().unwrap() {
+    for record in m["files"].as_array().context("Invalid journal files")? {
         let relative = record["path"].as_str().context("Invalid resource path")?;
         let current = bytes(&path(root, relative)?)?;
         let original = record["backup"]
