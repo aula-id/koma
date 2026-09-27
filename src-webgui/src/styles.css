@@ -789,3 +789,10 @@ svg.animate-spin {
   border-radius: 50%;
   background: var(--koma-error, #ff3c3c);
 }
+
+.monaco-editor .koma-debug-execution {
+  background: color-mix(in srgb, var(--koma-accent) 15%, transparent);
+}
+.monaco-editor .koma-debug-location {
+  border-left: 2px solid var(--koma-accent);
+}

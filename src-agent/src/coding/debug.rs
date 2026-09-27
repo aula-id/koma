@@ -33,6 +33,10 @@ struct Profile {
     request: String,
     #[serde(default)]
     configuration: Value,
+    #[serde(default)]
+    pre_launch_task: Option<String>,
+    #[serde(default)]
+    exception_filters: Option<Vec<String>>,
 }
 fn launch() -> String {
     "launch".into()
@@ -52,6 +56,8 @@ fn profiles(root: &Path) -> Result<(Vec<Profile>, String)> {
                 tcp: false,
                 request: launch(),
                 configuration,
+                pre_launch_task: None,
+                exception_filters: None,
             });
         }
     };
@@ -102,6 +108,7 @@ struct State {
     sequence: u64,
     generation: u64,
     breakpoints: BTreeMap<String, Value>,
+    exception_filters: Vec<String>,
 }
 struct Session {
     id: String,
@@ -115,6 +122,7 @@ struct Session {
     closed: AtomicBool,
     state: Mutex<State>,
     terminals: Mutex<Vec<String>>,
+    preparation: Mutex<Option<String>>,
 }
 static SESSIONS: OnceLock<Mutex<VecDeque<Arc<Session>>>> = OnceLock::new();
 fn registry() -> &'static Mutex<VecDeque<Arc<Session>>> {
@@ -131,7 +139,7 @@ fn get(workspace: &WorkspaceRef, id: &str) -> Result<Arc<Session>> {
 }
 fn snapshot(s: &Session) -> Value {
     let state = s.state.lock().unwrap();
-    json!({"id":s.id,"workspace":s.workspace,"label":s.profile.label,"request":s.profile.request,"status":state.status,"error":state.error,"capabilities":state.capabilities,"sequence":state.sequence,"generation":state.generation,"breakpoints":state.breakpoints,"terminalTaskIds":*s.terminals.lock().unwrap()})
+    json!({"id":s.id,"workspace":s.workspace,"label":s.profile.label,"request":s.profile.request,"status":state.status,"error":state.error,"capabilities":state.capabilities,"sequence":state.sequence,"generation":state.generation,"breakpoints":state.breakpoints,"exceptionFilters":state.exception_filters,"terminalTaskIds":*s.terminals.lock().unwrap(),"preLaunchTaskId":*s.preparation.lock().unwrap()})
 }
 pub(super) fn sessions(workspace: &WorkspaceRef) -> Result<Value> {
     Ok(json!(registry()
@@ -150,7 +158,7 @@ pub(super) fn events(workspace: &WorkspaceRef, id: &str, after: u64) -> Result<V
     )
 }
 fn snapshot_unlocked(s: &Session, state: &State) -> Value {
-    json!({"id":s.id,"status":state.status,"error":state.error,"generation":state.generation,"capabilities":state.capabilities,"breakpoints":state.breakpoints,"terminalTaskIds":*s.terminals.lock().unwrap()})
+    json!({"id":s.id,"status":state.status,"error":state.error,"generation":state.generation,"capabilities":state.capabilities,"breakpoints":state.breakpoints,"exceptionFilters":state.exception_filters,"terminalTaskIds":*s.terminals.lock().unwrap(),"preLaunchTaskId":*s.preparation.lock().unwrap()})
 }
 fn emit(s: &Session, event: &str, mut body: Value) {
     if let Some(output) = body
@@ -261,6 +269,9 @@ fn end(s: &Session, error: Option<String>) {
     drop(state);
     for (_, tx) in std::mem::take(&mut *s.pending.lock().unwrap()) {
         let _ = tx.send(Err("Debug adapter disconnected".into()));
+    }
+    if let Some(task) = s.preparation.lock().unwrap().as_ref() {
+        let _ = super::tasks::stop(&s.workspace, task);
     }
     if s.profile.request == "launch" {
         for task in s.terminals.lock().unwrap().iter() {
@@ -546,6 +557,21 @@ fn start_profile(
             json!(super::environment::executable(root, "node")?);
     }
     let points = validate_breakpoints(root, breakpoints)?;
+    let preparation = if let Some(task) = &profile.pre_launch_task {
+        let definitions = super::tasks::definitions(root)?;
+        anyhow::ensure!(
+            definitions["tasks"]
+                .as_array()
+                .is_some_and(|tasks| tasks.iter().any(|v| v["id"] == *task)),
+            "Unknown preLaunchTask"
+        );
+        Some((
+            task.clone(),
+            definitions["fingerprint"].as_str().unwrap().to_string(),
+        ))
+    } else {
+        None
+    };
     let mut registry = registry().lock().unwrap();
     anyhow::ensure!(
         !super::SHUTTING_DOWN.load(Ordering::Acquire),
@@ -577,6 +603,7 @@ fn start_profile(
         reverse_requests: AtomicU64::new(0),
         closed: AtomicBool::new(false),
         terminals: Mutex::new(Vec::new()),
+        preparation: Mutex::new(None),
         state: Mutex::new(State {
             status: "starting".into(),
             error: None,
@@ -586,6 +613,7 @@ fn start_profile(
             sequence: 0,
             generation: 0,
             breakpoints: BTreeMap::new(),
+            exception_filters: Vec::new(),
         }),
     });
     let worker = s.clone();
@@ -593,7 +621,7 @@ fn start_profile(
     std::thread::Builder::new()
         .name("coding-debug-start".into())
         .spawn(move || {
-            if let Err(e) = setup(&worker, &root, points) {
+            if let Err(e) = setup(&worker, &root, points, preparation) {
                 if !worker.closed.load(Ordering::Acquire) {
                     end(&worker, Some(format!("{e:#}")));
                     kill(&worker);
@@ -628,7 +656,37 @@ fn validate_breakpoints(root: &Path, value: &Value) -> Result<BTreeMap<String, V
     }
     Ok(result)
 }
-fn setup(s: &Arc<Session>, root: &Path, points: BTreeMap<String, Value>) -> Result<()> {
+fn setup(
+    s: &Arc<Session>,
+    root: &Path,
+    points: BTreeMap<String, Value>,
+    preparation: Option<(String, String)>,
+) -> Result<()> {
+    if let Some((task, fingerprint)) = preparation {
+        let mut slot = s.preparation.lock().unwrap();
+        anyhow::ensure!(
+            !s.closed.load(Ordering::Acquire),
+            "Debug session was canceled"
+        );
+        let run = super::tasks::start(&s.workspace, root, &task, &fingerprint)?;
+        let id = run["id"].as_str().unwrap().to_string();
+        *slot = Some(id.clone());
+        drop(slot);
+        loop {
+            anyhow::ensure!(
+                !s.closed.load(Ordering::Acquire),
+                "Debug session was canceled"
+            );
+            let run = super::tasks::summary(&s.workspace, &id)?;
+            match run["status"].as_str() {
+                Some("succeeded") => break,
+                Some("queued" | "running" | "stopping") => {
+                    std::thread::sleep(Duration::from_millis(100))
+                }
+                _ => anyhow::bail!("preLaunchTask did not succeed; inspect its Tasks output"),
+            }
+        }
+    }
     let (mut command, tcp) = adapter(&s.profile, root)?;
     let mut port = 0;
     if tcp {
@@ -745,6 +803,23 @@ fn setup(s: &Arc<Session>, root: &Path, points: BTreeMap<String, Value>) -> Resu
     for (path, points) in points {
         set_points(s, &path, points)?;
     }
+    if let Some(filters) = capabilities["exceptionBreakpointFilters"].as_array() {
+        let selected = s.profile.exception_filters.clone().unwrap_or_else(|| {
+            filters
+                .iter()
+                .filter(|f| f["default"] == true)
+                .filter_map(|f| f["filter"].as_str().map(str::to_owned))
+                .collect()
+        });
+        anyhow::ensure!(
+            selected
+                .iter()
+                .all(|id| filters.iter().any(|f| f["filter"] == *id)),
+            "Unsupported exception filter in debug profile"
+        );
+        call(s, "setExceptionBreakpoints", json!({"filters":selected}))?;
+        s.state.lock().unwrap().exception_filters = selected;
+    }
     if capabilities["supportsConfigurationDoneRequest"] == true {
         call(s, "configurationDone", json!({}))?;
     }
@@ -836,7 +911,26 @@ pub(super) fn request(
         let (path, points) = points.into_iter().next().unwrap();
         return set_points(&s, &path, points);
     }
+    let exception_filters = if command == "setExceptionBreakpoints" {
+        let filters: Vec<String> = serde_json::from_value(args["filters"].clone())?;
+        let state = s.state.lock().unwrap();
+        anyhow::ensure!(
+            filters.len() <= 100
+                && filters
+                    .iter()
+                    .all(|id| state.capabilities["exceptionBreakpointFilters"]
+                        .as_array()
+                        .is_some_and(|all| all.iter().any(|f| f["filter"] == *id))),
+            "Unsupported exception breakpoint filter"
+        );
+        Some(filters)
+    } else {
+        None
+    };
     let value = call(&s, command, args.clone())?;
+    if let Some(filters) = exception_filters {
+        s.state.lock().unwrap().exception_filters = filters;
+    }
     if stopped {
         let mut state = s.state.lock().unwrap();
         if matches!(command, "continue" | "next" | "stepIn" | "stepOut") {
@@ -856,11 +950,13 @@ pub(super) fn request(
 pub(super) fn stop(workspace: &WorkspaceRef, id: &str) -> Result<Value> {
     let s = get(workspace, id)?;
     if !s.closed.load(Ordering::Acquire) {
-        let _ = call(
+        if let Ok(request) = begin(
             &s,
             "disconnect",
             json!({"terminateDebuggee":s.profile.request=="launch","suspendDebuggee":false}),
-        );
+        ) {
+            let _ = finish(&s, request, Duration::from_secs(2));
+        }
         end(&s, None);
         kill(&s);
     }

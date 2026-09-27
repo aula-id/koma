@@ -2,8 +2,11 @@
 
 Open **Debug: Launch, Attach and Inspect** in the command palette. F9 or a click in
 the editor glyph gutter toggles a persistent host/workspace breakpoint. The panel
-provides conditional breakpoints, launch profiles, multiple sessions, pause,
+provides conditional breakpoints, exception filters, launch profiles, multiple sessions, pause,
 continue, stepping, threads, stack, variable trees, watch expressions and output.
+Breakpoint lines follow editor changes, and updates are serialized per source.
+Watch expressions persist per host/workspace. The selected paused frame has an
+editor line marker; the console accepts expressions while paused.
 Click a stack frame to open its source on the currently selected host. Stop for
 an attach profile requests detachment without terminating the attached program.
 Closing the panel or switching chats does not stop a session.
@@ -21,6 +24,7 @@ profile. Save your source before starting. More profiles live in `debug` in
       "label": "Debug application",
       "adapter": "lldb-dap",
       "request": "launch",
+      "preLaunchTask": "cargo:build",
       "configuration": {"program": "${workspaceFolder}/target/debug/app"}
     },
     {
@@ -37,6 +41,10 @@ profile. Save your source before starting. More profiles live in `debug` in
 Managed adapter names: `debugpy`, `js-debug`, `delve`, `lldb-dap`, `php-debug`,
 `bash-debug`, `lua-debug`. Adapter-specific launch fields belong in
 `configuration`. `${workspaceFolder}` and `${file}` expand on the selected host.
+`preLaunchTask` names a configured or discovered task. Launch waits for it to
+succeed; Stop cancels preparation, and its output is available from the terminal
+button. Optional `exceptionFilters` lists the adapter filter IDs to enable at
+startup; absent configuration uses the advertised defaults.
 An external adapter uses `command`, `args`, and optional `tcp: true`; `{port}` in
 its arguments is replaced with a loopback port. No adapter is started by reading
 settings. Installation is provided by Language Packs where supported.
