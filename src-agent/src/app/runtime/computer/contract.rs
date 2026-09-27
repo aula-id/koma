@@ -27,6 +27,8 @@ impl Rect {
             .all(|v| v.is_finite())
             && self.width > 0.0
             && self.height > 0.0
+            && (self.x + self.width).is_finite()
+            && (self.y + self.height).is_finite()
     }
     pub fn contains(&self, x: f64, y: f64) -> bool {
         self.valid()
@@ -66,6 +68,7 @@ impl Transform {
             self.desktop.y + y * self.desktop.height / self.height as f64,
         ))
     }
+    #[cfg(any(feature = "gui", test))]
     pub fn crop(&self, bounds: Rect) -> Result<Self> {
         if !bounds.valid()
             || bounds.x.fract() != 0.0
@@ -160,8 +163,12 @@ pub enum Button {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
     Windows,
+    InspectWindow {
+        window: String,
+    },
     Select {
         window: String,
+        generation: String,
     },
     Observe {
         crop: Option<Rect>,
@@ -198,6 +205,7 @@ pub struct Reply {
     pub uncertain: bool,
     pub error: Option<String>,
     pub windows: Vec<Window>,
+    pub capabilities: Option<Capabilities>,
     pub observation: Option<Observation>,
     /// One-shot IPC only. Ingest removes bytes before projecting the status.
     pub png: Vec<u8>,
@@ -210,14 +218,17 @@ pub struct Status {
     pub paused: bool,
     pub busy: bool,
     pub capabilities: Capabilities,
+    pub windows: Vec<Window>,
     pub observation: Option<Observation>,
     pub message: String,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Control {
     Enable { capabilities: Capabilities },
+    ListWindows,
+    InspectWindow { window: String },
     Pause,
     Resume,
     Stop,
-    Result(Reply),
+    Result(Box<Reply>),
 }

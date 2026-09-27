@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 pub mod cd;
+mod computer;
 pub mod dircache;
 pub mod fs;
 pub mod git_cred;
@@ -57,7 +58,7 @@ pub(crate) use plan_policy::{delegated_tool_allowed_in_plan, plan_tool_call_allo
 pub(crate) fn tool_is_risky(name: &str) -> bool {
     matches!(
         name,
-        "write"
+        "computer_act" | "computer_select_window" | "write"
             | "delete"
             | "edit"
             | "bash"
@@ -74,7 +75,7 @@ pub(crate) fn tool_is_risky(name: &str) -> bool {
 pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
     matches!(
         name,
-        "read"
+        "computer_windows" | "computer_observe" | "read"
             | "grep"
             | "glob"
             | "dir_list"
@@ -588,6 +589,10 @@ pub trait Tool: Send + Sync {
 /// The built-in tool set.
 pub fn all_tools() -> Vec<Box<dyn Tool>> {
     vec![
+        Box::new(computer::Computer("computer_windows")),
+        Box::new(computer::Computer("computer_select_window")),
+        Box::new(computer::Computer("computer_observe")),
+        Box::new(computer::Computer("computer_act")),
         Box::new(fs::Read),
         Box::new(search::Grep),
         Box::new(search::Glob),
@@ -645,6 +650,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
 
 /// Tool names the /agents editor's tool picker EXCLUDES from the selectable list.
 const AGENT_PICKER_EXCLUDED: &[&str] = &[
+    "computer_windows", "computer_select_window", "computer_observe", "computer_act",
     "task",
     "task_send",
     "pong",
@@ -680,6 +686,7 @@ const INTERNAL_ONLY: &[&str] = &[
 
 /// Tools that MUST run off the UI/event-loop thread because they do blocking I/O.
 pub const DEFERRED_TOOLS: &[&str] = &[
+    "computer_windows", "computer_select_window", "computer_observe", "computer_act",
     "read",
     "write",
     "edit",

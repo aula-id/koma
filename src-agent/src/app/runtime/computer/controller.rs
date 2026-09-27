@@ -14,10 +14,22 @@ pub struct Controller {
     pub pending: Option<(Request, Instant)>,
     pub changed: bool,
     pub actionable: bool,
+    pub latest_message: Option<crate::dto::chat::ChatMessage>,
     used: HashSet<String>,
     lock: Option<File>,
 }
 impl Controller {
+    pub fn preserve_observation(&self, history: &mut Vec<crate::dto::chat::ChatMessage>) {
+        if !self.status.enabled || !self.actionable {
+            return;
+        }
+        if let Some(message) = &self.latest_message {
+            let present = history.iter().any(|m| m.attachments == message.attachments);
+            if !present {
+                history.push(message.clone());
+            }
+        }
+    }
     pub fn enable(
         &mut self,
         owner: u64,
@@ -92,11 +104,19 @@ impl Controller {
         }
         let caps = &self.status.capabilities;
         match &operation {
+            Operation::Select { generation, .. } if generation != &self.status.generation => {
+                bail!("controller changed since window listing/approval")
+            }
             Operation::Windows if !caps.windows => bail!("window listing unsupported"),
             Operation::Select { .. } if !caps.focus || !caps.capture => {
                 bail!("window selection unsupported; use the OS source picker")
             }
-            Operation::Observe { .. } if !caps.capture => bail!("capture unsupported"),
+            Operation::Observe { .. } | Operation::InspectWindow { .. } if !caps.capture => {
+                bail!("capture unsupported")
+            }
+            Operation::Observe { crop: Some(_) } if !self.actionable => {
+                bail!("cannot crop a stale observation; capture first")
+            }
             Operation::Act {
                 observation,
                 actions,
@@ -136,6 +156,7 @@ impl Controller {
     }
     pub fn accepts(&self, owner: u64, reply: &Reply) -> bool {
         self.owner == Some(owner)
+            && !self.expired()
             && self.status.enabled
             && !self.status.paused
             && self.pending.as_ref().is_some_and(|(r, _)| {

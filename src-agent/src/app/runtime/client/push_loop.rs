@@ -413,6 +413,8 @@ pub(super) fn push_loop(
             match ctl_rx.try_recv() {
                 // The page (re)booted: re-push the full authoritative state this frame.
                 Ok(super::HostCtl::Ready) => {
+                    #[cfg(feature = "gui")]
+                    { computer_worker.cancel(); let _=req_tx.send(ClientRequest::Computer(crate::app::runtime::computer::Control::Stop)); }
                     last.reset();
                     dirty = true;
                     need_snapshot = true;
@@ -606,12 +608,14 @@ pub(super) fn push_loop(
                 // attached; this only lands here if the attach state flipped between the
                 // check and the send). Forward the carried request to the daemon — it owns
                 // the authoritative config and re-pushes a fresh `Config` on the change.
-                Ok(super::HostCtl::Computer { action }) => {
+                Ok(super::HostCtl::Computer { action, window }) => {
                     #[cfg(feature = "gui")]
                     if remote_ctx.is_none() {
                         use crate::app::runtime::computer::{Control, desktop};
                         let control = match action.as_str() {
                             "enable" => Some(Control::Enable { capabilities: desktop::capabilities() }),
+                            "windows" => Some(Control::ListWindows),
+                            "select" => window.map(|window|Control::InspectWindow {window}),
                             "pause" => { computer_worker.cancel(); Some(Control::Pause) },
                             "resume" => Some(Control::Resume),
                             "stop" | "take_over" => { computer_worker.cancel(); Some(Control::Stop) },
@@ -622,7 +626,7 @@ pub(super) fn push_loop(
                         push(serde_json::json!({"k":"ComputerError","message":"Computer control is limited to local GUI sessions"}).to_string());
                     }
                     #[cfg(not(feature = "gui"))]
-                    let _ = action;
+                    let _ = (action, window);
                 }
                 Ok(super::HostCtl::ConfigMutate(req)) => {
                     let _ = req_tx.send(req);

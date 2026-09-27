@@ -46,9 +46,10 @@ pub struct X11 {
 }
 impl X11 {
     pub fn open(cancelled: Arc<AtomicBool>) -> Result<Self> {
+        let display_name = std::env::var("DISPLAY").unwrap_or_default();
         ensure!(
-            std::env::var_os("DISPLAY").is_some(),
-            "No local X11 DISPLAY"
+            display_name.starts_with(':') || display_name.starts_with("unix:"),
+            "Computer control requires a local X11 Unix-socket display"
         );
         let x = xlib::Xlib::open()?;
         // GTK/tao initialize Xlib threading before this GUI worker is created.
@@ -123,6 +124,15 @@ impl X11 {
             .split_once(':')
             .ok_or_else(|| anyhow::anyhow!("invalid window identity"))?;
         let xid = xid.parse()?;
+        let process: u32 = pid.parse()?;
+        ensure!(
+            process != 0 && process != std::process::id(),
+            "cannot target Koma or a window without process identity"
+        );
+        ensure!(
+            self.property(self.root, "_NET_CLIENT_LIST")?.contains(&xid),
+            "window no longer listed by the window manager"
+        );
         ensure!(
             self.property(xid, "_NET_WM_PID")?
                 .first()

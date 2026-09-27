@@ -136,7 +136,7 @@ pub fn spawn_subagent(
     let mut tools = agent.effective_tools();
     // `load_image` requires the main runtime's synthetic attachment interceptor;
     // sub-agent continuations are text-only, so strip even hand-authored agent defs.
-    tools.retain(|name| name != "load_image");
+    tools.retain(|name| name != "load_image" && !name.starts_with("computer_"));
     // Inherit connected MCP tools automatically, exactly like the main agent does
     // (no per-agent MCP picker): snapshot the shared manager's discovered tools —
     // the wire `ToolDef`s to advertise, plus their namespaced names appended to

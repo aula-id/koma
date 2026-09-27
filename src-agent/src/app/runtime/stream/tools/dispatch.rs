@@ -37,6 +37,10 @@ pub(crate) fn run_tool(state: &mut AppState, sess_idx: usize, call: &ToolCall) -
 /// is Send so it can fire from this off-runtime thread. The result channel is
 /// created lazily once per session, then reused.
 pub(crate) fn dispatch_deferred(state: &mut AppState, sess_idx: usize, call: &ToolCall) {
+    if call.function.name.starts_with("computer_") {
+        crate::app::runtime::computer::bridge::dispatch(state,sess_idx,call);
+        return;
+    }
     // Lazily create THIS session's result channel once, then reuse it. The
     // spawned thread fires back over session `sess_idx`'s own `tool_task_tx`, so
     // the result is routed structurally to that session's drain (no id tag

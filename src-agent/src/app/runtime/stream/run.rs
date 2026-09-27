@@ -375,6 +375,7 @@ over sec_remote (stateful socket).\n",
         rt.set_toast(error.to_string());
         return;
     }
+    state.rest.sessions[sess_idx].computer.preserve_observation(&mut history);
     let expected_system = history[0].clone();
 
     // Snapshot only the archive path, settings, raw user intent and objective.
@@ -588,6 +589,9 @@ over sec_remote (stateful socket).\n",
             }
             None => (Vec::new(), crate::tool::main_tool_names()),
         };
+    if !state.rest.sessions[sess_idx].computer.status.enabled || state.rest.sessions[sess_idx].computer.owner.is_none() {
+        advertise.retain(|name|!name.starts_with("computer_"));
+    }
     // Security daemon tools for the MAIN agent. Gated on BOTH the runtime enable
     // flag (`security_enabled`) AND having a manager, AND NOT being in Plan mode
     // (Plan is read-only; the sec_ toolkit is offensive/mutating by nature, so it

@@ -189,3 +189,10 @@ fn live_plan_policy_rechecks_pending_dispatch() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn computer_generic_and_delegated_dispatch_cannot_reach_desktop() {
+    let ctx=test_ctx(vec![std::env::temp_dir()]);
+    let call=crate::dto::chat::ToolCall{id:"headless".into(),kind:"function".into(),function:crate::dto::chat::FunctionCall{name:"computer_windows".into(),arguments:"{}".into()}};
+    assert!(crate::tool::execute_tool(&ctx,&call).contains("local GUI controller"));
+}

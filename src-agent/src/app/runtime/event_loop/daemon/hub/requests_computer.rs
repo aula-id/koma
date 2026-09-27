@@ -12,18 +12,48 @@ impl DaemonHub {
         let rt = state.rest.fg_mut();
         match control {
             Control::Enable { capabilities } => {
+                if !cfg!(feature = "gui") {
+                    self.send_to(
+                        idx,
+                        DaemonEvent::Error("Computer control requires a GUI build".into()),
+                    );
+                    return;
+                }
                 let result = crate::model::store::base_dir().and_then(|dir| {
                     std::fs::create_dir_all(&dir)?;
                     rt.computer
                         .enable(owner, &rt.id, capabilities, &dir.join("computer.lock"))
                 });
                 if let Err(e) = result {
-                    self.send_to(idx, DaemonEvent::Error(e.to_string()));
+                    self.send_to(
+                        idx,
+                        DaemonEvent::ComputerStatus(computer::Status {
+                            session: rt.id.clone(),
+                            message: e.to_string(),
+                            ..Default::default()
+                        }),
+                    );
                 }
             }
-            Control::Result(reply) => computer::bridge::receive(rt, owner, reply),
+            Control::Result(reply) => computer::bridge::receive(rt, owner, *reply),
             other if rt.computer.owner == Some(owner) => match other {
+                Control::ListWindows | Control::InspectWindow { .. } => {
+                    let operation = match other {
+                        Control::InspectWindow { window } => {
+                            computer::Operation::InspectWindow { window }
+                        }
+                        _ => computer::Operation::Windows,
+                    };
+                    if let Err(e) =
+                        rt.computer
+                            .begin(format!("gui:{}", uuid::Uuid::new_v4()), operation, false)
+                    {
+                        rt.computer.status.message = e.to_string();
+                        rt.computer.changed = true;
+                    }
+                }
                 Control::Pause | Control::Resume => {
+                    computer::bridge::cancel_approval(rt, "computer paused or resumed");
                     if let Some(id) = rt.computer.pause(matches!(other, Control::Pause)) {
                         computer::bridge::settle(rt, id, "cancelled; partial outcome may be uncertain; observe before continuing".into());
                     }

@@ -1,8 +1,10 @@
 //! Shared execution safety boundary, exercised with a deterministic desktop.
 use super::*;
 use anyhow::{bail, Result};
+#[cfg(any(feature = "gui", test))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(any(feature = "gui", test))]
 pub trait Desktop {
     fn windows(&mut self) -> Result<Vec<Window>>;
     fn select(&mut self, id: &str) -> Result<Window>;
@@ -54,11 +56,40 @@ pub fn validate_actions(obs: &Observation, actions: &[Action], caps: &Capabiliti
             obs.transform.map(x, y)?;
         }
         match action {
+            Action::Click { element, .. } if i + 1 != actions.len() => {
+                let editable = element
+                    .as_ref()
+                    .and_then(|id| obs.elements.iter().find(|e| e.id == *id))
+                    .is_some_and(|e| {
+                        e.source == "accessibility"
+                            && e.enabled
+                            && matches!(
+                                e.role.as_str(),
+                                "entry" | "text box" | "editable text" | "combo box"
+                            )
+                    });
+                if !editable {
+                    bail!("a click that may navigate must end the sequence; click/type sequences require an accessibility editable-field target");
+                }
+            }
             Action::Type { text } if !caps.keyboard || text.len() > 8192 => {
                 bail!("keyboard unsupported or text too long")
             }
-            Action::Key { keys } if !caps.keyboard || keys.is_empty() || keys.len() > 5 => {
+            Action::Key { keys }
+                if !caps.keyboard
+                    || keys.is_empty()
+                    || keys.len() > 5
+                    || keys.iter().any(|k| {
+                        k.is_empty() || k.len() > 64 || k.chars().any(char::is_control)
+                    }) =>
+            {
                 bail!("invalid key chord or keyboard unsupported")
+            }
+            Action::Type { text }
+                if (text.contains('\n') || text.contains('\r') || text.contains('\t'))
+                    && i + 1 != actions.len() =>
+            {
+                bail!("text containing navigation keys must end the sequence")
             }
             // Key events can navigate; conservatively end every chord sequence.
             Action::Key { .. } | Action::Scroll { .. } if i + 1 != actions.len() => {
@@ -72,6 +103,7 @@ pub fn validate_actions(obs: &Observation, actions: &[Action], caps: &Capabiliti
     }
     Ok(())
 }
+#[cfg(any(feature = "gui", test))]
 pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicBool) -> Reply {
     let mut reply = Reply {
         id: request.id.clone(),
@@ -88,7 +120,8 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                 reply.windows = desktop.windows()?;
                 return Ok(());
             }
-            Operation::Select { window } => desktop.select(window)?,
+            Operation::Select { window, .. } => desktop.select(window)?,
+            Operation::InspectWindow { window } => desktop.inspect(window)?,
             Operation::Observe { crop: Some(_) } => {
                 bail!("crop must be served from the persisted observation")
             }
@@ -107,9 +140,30 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
             }
         };
         if let Operation::Act {
-            actions, observe, ..
+            actions,
+            observe,
+            observation,
         } = &request.operation
         {
+            let source = request
+                .observation
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("missing observation"))?;
+            anyhow::ensure!(
+                source.id == *observation
+                    && source.generation == request.generation
+                    && source.session == request.session,
+                "stale native observation"
+            );
+            validate_actions(
+                source,
+                actions,
+                &Capabilities {
+                    pointer: true,
+                    keyboard: true,
+                    ..Default::default()
+                },
+            )?;
             let obs = request
                 .observation
                 .as_ref()
@@ -119,7 +173,10 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                     bail!("cancelled; completed inputs were not undone");
                 }
                 let current = desktop.inspect(&window.id)?;
-                if current.geometry != window.geometry || !current.focused {
+                if current.geometry != window.geometry
+                    || current.title != window.title
+                    || !current.focused
+                {
                     bail!("focus or geometry changed");
                 }
                 let resolved = if let Action::Click { button, .. } = action {
@@ -215,6 +272,7 @@ mod fixture_tests {
         fail_at: usize,
         released: bool,
         focus: bool,
+        closed: bool,
     }
     impl Fixture {
         fn window(&self) -> Window {
@@ -241,6 +299,7 @@ mod fixture_tests {
             Ok(self.window())
         }
         fn inspect(&mut self, _: &str) -> Result<Window> {
+            anyhow::ensure!(!self.closed, "window closed");
             Ok(self.window())
         }
         fn capture(&mut self, w: &Window) -> Result<(Transform, Vec<u8>)> {
@@ -273,6 +332,7 @@ mod fixture_tests {
             fail_at: usize::MAX,
             released: false,
             focus: true,
+            closed: false,
         };
         let cancel = AtomicBool::new(false);
         let mut r = Request {
@@ -281,18 +341,35 @@ mod fixture_tests {
             generation: "g".into(),
             operation: Operation::Select {
                 window: "fixture".into(),
+                generation: "g".into(),
             },
             observation: None,
         };
         let selected = execute(&mut d, &r, &cancel);
         assert_eq!(d.captures, 1);
         r.observation = selected.observation;
+        r.observation.as_mut().unwrap().elements.push(Element {
+            id: "input".into(),
+            source: "accessibility".into(),
+            label: "Message".into(),
+            role: "entry".into(),
+            bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            enabled: true,
+            selected: false,
+            focused: false,
+            confidence: None,
+        });
         let actions = vec![
             Action::Move { x: 5.0, y: 5.0 },
             Action::Click {
-                x: Some(5.0),
-                y: Some(5.0),
-                element: None,
+                x: None,
+                y: None,
+                element: Some("input".into()),
                 button: Button::Left,
             },
             Action::Type {
@@ -322,5 +399,14 @@ mod fixture_tests {
         let result = execute(&mut d, &r, &cancel);
         assert_eq!(result.completed, 0);
         assert_eq!(d.inputs, 4);
+        d.focus = true;
+        r.observation.as_mut().unwrap().window.geometry.width = 90.0;
+        let result = execute(&mut d, &r, &cancel);
+        assert_eq!(result.completed, 0);
+        assert!(result.error.unwrap().contains("resized"));
+        d.closed = true;
+        let result = execute(&mut d, &r, &cancel);
+        assert_eq!(result.completed, 0);
+        assert!(result.error.unwrap().contains("closed"));
     }
 }
