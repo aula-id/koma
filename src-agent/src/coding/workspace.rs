@@ -15,6 +15,9 @@ fn root(request: &Request) -> Result<PathBuf> {
 pub(super) fn execute(request: &Request) -> Result<Value> {
     // Existing processes remain inspectable/stoppable even after root deletion.
     match &request.operation {
+        Operation::LspReleaseClient => {
+            return super::language::release(&request.workspace).map_err(anyhow::Error::msg)
+        }
         Operation::TestRuns => return super::tests::runs(&request.workspace),
         Operation::TestResults { run_id } => {
             return super::tests::results(&request.workspace, run_id)
@@ -58,6 +61,7 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
     let workdirs = vec![PathBuf::from(&request.workspace.root)];
     let r = &request.workspace.root;
     match &request.operation {
+        Operation::LspReleaseClient => unreachable!(),
         Operation::Hello => Ok(json!({"protocol":1,"root":canonical.to_string_lossy(),
             "capabilities":["paths","read","save","config","tasks","packs","debug"], "version":env!("CARGO_PKG_VERSION")})),
         Operation::TaskDefinitions => super::tasks::definitions(&canonical),

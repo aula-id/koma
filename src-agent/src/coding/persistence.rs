@@ -235,6 +235,7 @@ mod tests {
 
     fn request(host: &str, operation: Operation) -> Request {
         Request {
+            client_id: "regression".into(),
             id: "test".into(),
             workspace: WorkspaceRef {
                 host_id: host.into(),

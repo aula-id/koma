@@ -1,6 +1,6 @@
 import { receiveGitReply, cancelGitRequests, type GitReply, type GitToolTab } from '../lib/gitWorkbench'
 import { create } from 'zustand'
-import { codingRequest, resolveCodingReply } from '../lib/coding-service'
+import { codingWindowId, codingRequest, resolveCodingReply } from '../lib/coding-service'
 import { invalidateCodingConfig } from '../lib/coding-config'
 import { formatBeforeSave } from '../lib/coding-save'
 import { sendCodingLanguage } from '../lib/coding-language'
@@ -914,7 +914,7 @@ export type Tab =
 
 export type PushEnvelope =
   | import('../lib/coding-service').CodingReply
-  | { k: 'CodingEvent'; workspace: import('../lib/coding-service').WorkspaceRef; event: { k: string; [key: string]: unknown } }
+  | { k: 'CodingEvent'; clientId?: string; workspace: import('../lib/coding-service').WorkspaceRef; event: { k: string; [key: string]: unknown } }
   | ({ k: 'GitWorkbench' } & GitReply)
   | {
       k: 'Snapshot'
@@ -3153,6 +3153,7 @@ export const useKoma = create<KomaState>((set, get) => ({
     switch (env.k) {
       case 'CodingReply': resolveCodingReply(env); break
       case 'CodingEvent': {
+        if (env.clientId && env.clientId !== codingWindowId) break
         if (env.event.k === 'LspApplyEdit') {
           if (env.workspace.hostId === (get().remoteState.hostId ?? 'local')) window.dispatchEvent(new CustomEvent('koma-lsp-edit', { detail: { workspace: env.workspace, ticket: env.event.ticket } }))
           else void codingRequest(env.workspace, { op: 'lspEditReply', ticket: String(env.event.ticket), applied: false, reason: 'The originating host is not active in this window' }).catch(() => {})

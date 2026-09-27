@@ -28,7 +28,7 @@ export type CodingOperation =
   | { op: 'packPlan'; packId: string; runtime: boolean; server?: string }
   | { op: 'packApply'; planId: string }
   | { op: 'environmentSelect'; language: string; executable: string; fingerprint: string; server?: string }
-  | { op: 'lspRestartWorkspace' }
+  | { op: 'lspRestartWorkspace' | 'lspReleaseClient' }
   | { op: 'file'; body: Record<string, unknown> }
   | { op: 'hello' | 'watch' | 'configRead' | 'configEnsure' | 'backups' }
   | { op: 'paths'; query: string }
@@ -80,6 +80,7 @@ export type CodingTask = {
   dependsOn?: string[]
   continueOnError?: boolean
   interactive?: boolean
+  problemMatchers?: { pattern: string; file: number; line: number; column?: number; message?: number }[]
 }
 export type CodingTaskRun = {
   id: string
@@ -116,6 +117,7 @@ type Pending = {
   cleanup: () => void
 }
 const pending = new Map<string, Pending>()
+const languageWorkspaces = new Map<string, WorkspaceRef>()
 let sequence = 0
 const windowId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 export const codingWindowId = windowId
@@ -128,6 +130,7 @@ export function documentKey(workspace: WorkspaceRef, path: string): string {
 }
 
 export function codingRequest<T>(workspace: WorkspaceRef, operation: CodingOperation, signal?: AbortSignal): Promise<T> {
+  if (operation.op.startsWith('lsp')) languageWorkspaces.set(workspaceKey(workspace), workspace)
   return new Promise<T>((resolve, reject) => {
     if (signal?.aborted) { reject(new Error('Canceled')); return }
     const id = `coding-${windowId}-${++sequence}`
@@ -148,7 +151,7 @@ export function codingRequest<T>(workspace: WorkspaceRef, operation: CodingOpera
     signal?.addEventListener('abort', abort, { once: true })
     try {
       if (!window.ipc?.postMessage) throw new Error('Native coding service is unavailable')
-      window.ipc.postMessage(JSON.stringify({ t: 'coding', request: { id, workspace, ...operation } }))
+      window.ipc.postMessage(JSON.stringify({ t: 'coding', request: { id, clientId: codingWindowId, workspace, ...operation } }))
     } catch (error) {
       finishError(error instanceof Error ? error : new Error(String(error)))
     }
@@ -163,3 +166,7 @@ export function resolveCodingReply(reply: CodingReply): void {
   if (reply.error) entry.reject(new Error(reply.error))
   else entry.resolve(reply.result)
 }
+
+window.addEventListener('beforeunload', () => {
+  for (const workspace of languageWorkspaces.values()) window.ipc?.postMessage(JSON.stringify({ t: 'coding', request: { id: `coding-close-${codingWindowId}-${++sequence}`, clientId: codingWindowId, workspace, op: 'lspReleaseClient' } }))
+})

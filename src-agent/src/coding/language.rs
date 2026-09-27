@@ -7,8 +7,23 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-static MANAGERS: OnceLock<Mutex<HashMap<WorkspaceRef, Arc<Mutex<LspManager>>>>> = OnceLock::new();
+static MANAGERS: OnceLock<Mutex<HashMap<(WorkspaceRef, String), Arc<Mutex<LspManager>>>>> =
+    OnceLock::new();
 
+thread_local! { static CLIENT: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) }; }
+fn client_id() -> String {
+    CLIENT.with(|v| v.borrow().clone())
+}
+pub(super) fn with_client<T>(client: &str, operation: impl FnOnce() -> T) -> T {
+    struct Restore(String);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CLIENT.with(|v| *v.borrow_mut() = std::mem::take(&mut self.0));
+        }
+    }
+    let _restore = Restore(CLIENT.with(|v| v.replace(client.to_string())));
+    operation()
+}
 #[derive(Deserialize)]
 #[serde(tag = "r", rename_all_fields = "camelCase")]
 enum Message {
@@ -189,11 +204,16 @@ fn manager(workspace: &WorkspaceRef) -> Result<Arc<Mutex<LspManager>>, String> {
             .get_or_init(Default::default)
             .lock()
             .map_err(|_| "Coding LSP manager lock failed")?;
-        Arc::clone(managers.entry(workspace.clone()).or_insert_with(|| {
+        let client_id = client_id();
+        if managers.len() >= 128 && !managers.contains_key(&(workspace.clone(), client_id.clone()))
+        {
+            return Err("Too many window/workspace language sessions; close unused windows".into());
+        }
+        Arc::clone(managers.entry((workspace.clone(),client_id.clone())).or_insert_with(|| {
             let workspace = workspace.clone();
             Arc::new(Mutex::new(LspManager::new(move |json| {
                 if let Ok(event) = serde_json::from_str::<Value>(&json) {
-                    super::event(json!({"k":"CodingEvent","workspace":workspace,"event":event}));
+                    super::event(json!({"k":"CodingEvent","workspace":workspace,"clientId":client_id,"event":event}));
                 }
             })))
         }))
@@ -290,7 +310,8 @@ pub(super) fn command(
         let id = uuid::Uuid::new_v4().to_string();
         let id_copy = id.clone();
         let workspace = workspace.clone();
-        std::thread::Builder::new().name("coding-lsp-command".into()).spawn(move||{let result=pending.wait_raw();ACTIVE.fetch_sub(1,std::sync::atomic::Ordering::AcqRel);super::event(json!({"k":"CodingEvent","workspace":workspace,"event":{"k":"LspCommandResult","id":id_copy,"error":result.err()}}));}).map_err(|e|e.to_string())?;
+        let client_id = client_id();
+        std::thread::Builder::new().name("coding-lsp-command".into()).spawn(move||{let result=pending.wait_raw();ACTIVE.fetch_sub(1,std::sync::atomic::Ordering::AcqRel);super::event(json!({"k":"CodingEvent","workspace":workspace,"clientId":client_id,"event":{"k":"LspCommandResult","id":id_copy,"error":result.err()}}));}).map_err(|e|e.to_string())?;
         Ok(json!({"id":id}))
     })();
     if result.is_err() {
@@ -300,12 +321,21 @@ pub(super) fn command(
 }
 
 pub(super) fn restart(workspace: &WorkspaceRef) -> Result<Value, String> {
-    let manager = MANAGERS
-        .get_or_init(Default::default)
-        .lock()
-        .map_err(|_| "Coding language registry failed")?
-        .remove(workspace);
-    if let Some(manager) = manager {
+    let managers = {
+        let mut all = MANAGERS
+            .get_or_init(Default::default)
+            .lock()
+            .map_err(|_| "Coding language registry failed")?;
+        let keys: Vec<_> = all
+            .keys()
+            .filter(|(w, _)| w == workspace)
+            .cloned()
+            .collect();
+        keys.into_iter()
+            .filter_map(|k| all.remove(&k))
+            .collect::<Vec<_>>()
+    };
+    for manager in managers {
         manager
             .lock()
             .map_err(|_| "Coding LSP manager lock failed")?
@@ -322,12 +352,35 @@ pub(super) fn files_changed(workspace: &WorkspaceRef, changes: Vec<(std::path::P
     if changes.is_empty() {
         return;
     }
-    let manager = MANAGERS
+    let managers = MANAGERS
         .get()
-        .and_then(|all| all.lock().ok()?.get(workspace).cloned());
-    if let Some(manager) = manager {
+        .and_then(|all| {
+            all.lock().ok().map(|all| {
+                all.iter()
+                    .filter(|((w, _), _)| w == workspace)
+                    .map(|(_, m)| m.clone())
+                    .collect::<Vec<_>>()
+            })
+        })
+        .unwrap_or_default();
+    for manager in managers {
         if let Ok(manager) = manager.lock() {
             manager.did_change_watched_files(&changes);
         }
     }
+}
+
+pub(super) fn release(workspace: &WorkspaceRef) -> Result<Value, String> {
+    let manager = MANAGERS
+        .get_or_init(Default::default)
+        .lock()
+        .map_err(|_| "Language registry lock failed")?
+        .remove(&(workspace.clone(), client_id()));
+    if let Some(manager) = manager {
+        manager
+            .lock()
+            .map_err(|_| "Language manager lock failed")?
+            .cleanup_all();
+    }
+    Ok(Value::Null)
 }

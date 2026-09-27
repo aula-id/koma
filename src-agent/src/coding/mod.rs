@@ -12,6 +12,7 @@ pub(crate) mod environment;
 mod language;
 mod packs;
 pub(crate) mod persistence;
+mod problems;
 pub(crate) mod provision;
 mod pty;
 mod resources;
@@ -64,6 +65,8 @@ pub(crate) struct WorkspaceRef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Request {
+    #[serde(default)]
+    pub client_id: String,
     pub id: String,
     pub workspace: WorkspaceRef,
     #[serde(flatten)]
@@ -144,6 +147,7 @@ pub(crate) enum Operation {
         plan_id: String,
     },
     LspRestartWorkspace,
+    LspReleaseClient,
     EnvironmentSelect {
         #[serde(default)]
         server: Option<String>,
@@ -361,7 +365,8 @@ fn execute(request: &Request) -> Result<Value, String> {
     if SHUTTING_DOWN.load(std::sync::atomic::Ordering::Acquire) {
         return Err("Coding service is shutting down".into());
     }
-    if request.id.len() > 200
+    if request.client_id.len() > 200
+        || request.id.len() > 200
         || request.workspace.host_id.len() > 200
         || request.workspace.root.len() > 32768
     {
@@ -370,7 +375,9 @@ fn execute(request: &Request) -> Result<Value, String> {
     if request.operation.local_metadata() {
         return persistence::execute(request).map_err(|e| format!("{e:#}"));
     }
-    workspace::execute(request).map_err(|e| format!("{e:#}"))
+    language::with_client(&request.client_id, || {
+        workspace::execute(request).map_err(|e| format!("{e:#}"))
+    })
 }
 
 /// Private SSH service. The protocol is versioned JSON lines with bounded frames;

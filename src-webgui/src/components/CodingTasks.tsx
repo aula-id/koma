@@ -1,4 +1,4 @@
-import { taskProblems } from '../lib/coding-task-problems'
+import { taskProblems, type TaskProblem } from '../lib/coding-task-problems'
 import { pathToUri } from '../lib/lsp-bridge'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { FileCog, Play, RefreshCw, Square, Terminal, X } from 'lucide-react'
@@ -11,7 +11,7 @@ const CodingTaskTerminal = lazy(() => import('./CodingTaskTerminal'))
 type Group = 'run' | 'build' | 'test'
 type Definitions = { tasks: CodingTask[]; fingerprint: string }
 type Chunk = { seq: number; stream: string; text: string }
-type Output = { chunks: Chunk[]; next: number; truncated: boolean; more: boolean }
+type Output = { problems?: TaskProblem[]; chunks: Chunk[]; next: number; truncated: boolean; more: boolean }
 const button = 'flex h-6 items-center justify-center gap-1 rounded px-1.5 text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:opacity-40 disabled:pointer-events-none'
 const live = (run?: CodingTaskRun) => run?.status === 'queued' || run?.status === 'running' || run?.status === 'stopping'
 const message = (e: unknown) => String(e instanceof Error ? e.message : e)
@@ -22,6 +22,7 @@ export function showCodingTasks(group?: Group, workspace?: WorkspaceRef, runId?:
 
 /** Native owns the processes. This view may close or change scope at any time. */
 export function CodingTasks() {
+  const [customProblems, setCustomProblems] = useState<TaskProblem[]>([])
   const [open, setOpen] = useState(false)
   const [workspaces, setWorkspaces] = useState<WorkspaceRef[]>([])
   const [workspace, setWorkspace] = useState<WorkspaceRef | null>(null)
@@ -117,7 +118,7 @@ export function CodingTasks() {
   }, [open, scope, refresh])
 
   useEffect(() => {
-    setOutputFor(`${scope}:${runId}`); setChunks([]); setTruncated(false); setOutputError(''); setFollow(true)
+    setOutputFor(`${scope}:${runId}`); setChunks([]); setCustomProblems([]); setTruncated(false); setOutputError(''); setFollow(true)
     if (!open || !workspace || !runId) return
     const controller = new AbortController()
     let after = 0
@@ -128,6 +129,7 @@ export function CodingTasks() {
       try {
         const value = await codingRequest<Output>(workspace, { op: 'taskOutput', runId, after }, controller.signal)
         if (controller.signal.aborted) return
+        setCustomProblems(value.problems ?? [])
         after = value.next; more = value.more
         setOutputError('')
         if (value.truncated) setTruncated(true)
@@ -151,7 +153,7 @@ export function CodingTasks() {
   }, [chunks, follow])
 
   const visibleChunks = outputFor === `${scope}:${runId}` ? chunks : []
-  const problems = useMemo(() => taskProblems(visibleChunks.map(c => c.text).join('')), [visibleChunks])
+  const problems = useMemo(() => [...new Map([...(outputFor === `${scope}:${runId}` ? customProblems : []), ...taskProblems(visibleChunks.map(c => c.text).join(''))].map(p => [`${p.path}:${p.line}:${p.column}`, p])).values()].slice(0, 200), [visibleChunks, customProblems, outputFor, scope, runId])
   if (!open) return null
   const choices = definitions?.tasks.filter(t => (t.group ?? 'run') === group) ?? []
   const task = choices.find(t => t.id === taskId)

@@ -43,6 +43,8 @@ struct Task {
     continue_on_error: bool,
     #[serde(default)]
     interactive: bool,
+    #[serde(default)]
+    problem_matchers: Vec<super::problems::Matcher>,
 }
 fn default_group() -> String {
     "run".into()
@@ -169,6 +171,7 @@ impl TaskChild {
 pub(super) type OutputObserver = Arc<dyn Fn(&str, &str) + Send + Sync>;
 struct Run {
     observer: Option<OutputObserver>,
+    problems: Mutex<super::problems::Collector>,
     id: String,
     workspace: WorkspaceRef,
     task: Task,
@@ -205,6 +208,7 @@ impl Run {
         if let Some(observer) = &self.observer {
             observer(stream, &text);
         }
+        self.problems.lock().unwrap().ingest(stream, &text);
         let mut s = self.state.lock().unwrap();
         s.sequence += 1;
         let seq = s.sequence;
@@ -239,13 +243,16 @@ pub(super) fn runs(workspace: &WorkspaceRef) -> Result<Value> {
 pub(super) fn output(workspace: &WorkspaceRef, id: &str, after: u64) -> Result<Value> {
     let run = find(workspace, id)?;
     let s = run.state.lock().unwrap();
+    if s.readers == 0 && !active(&s) {
+        run.problems.lock().unwrap().finish();
+    }
     let first = s.chunks.front().map_or(s.sequence + 1, |c| c.seq);
     // Limit each RPC so a noisy task cannot monopolize the SSH service.
     let chunks: Vec<_> = s.chunks.iter().filter(|c| c.seq > after).take(64).collect();
     let next = chunks.last().map_or(after.min(s.sequence), |c| c.seq);
     Ok(
         json!({"chunks":chunks,"next":next,"truncated":after.saturating_add(1) < first,
-        "more":next < s.sequence}),
+        "more":next < s.sequence,"problems":run.problems.lock().unwrap().values}),
     )
 }
 
@@ -481,6 +488,7 @@ fn start_recipe(
 ) -> Result<Value> {
     task.interactive = steps.iter().any(|step| step.interactive);
     for step in &steps {
+        super::problems::compile(&step.problem_matchers)?;
         let cwd = root
             .join(&step.cwd)
             .canonicalize()
@@ -525,6 +533,7 @@ fn start_recipe(
     }
     let run = Arc::new(Run {
         observer,
+        problems: Mutex::new(Default::default()),
         id: uuid::Uuid::new_v4().to_string(),
         workspace: workspace.clone(),
         task,
@@ -570,6 +579,10 @@ fn launch_step(run: &Arc<Run>, root: &Path, task: &Task) -> Result<()> {
         cwd.starts_with(root),
         "Task working directory moved outside the workspace"
     );
+    run.problems
+        .lock()
+        .unwrap()
+        .start(&cwd, &task.problem_matchers)?;
     let executable =
         if task.command.contains(['/', '\\']) && !Path::new(&task.command).is_absolute() {
             cwd.join(&task.command).into_os_string()
@@ -744,6 +757,7 @@ fn supervise(run: Arc<Run>, root: std::path::PathBuf, steps: Vec<Task>) {
     let mut outcome = Ok(0);
     let mut previous_failure = None;
     for step in &steps {
+        run.problems.lock().unwrap().finish();
         if run.canceled.load(std::sync::atomic::Ordering::Acquire) {
             break;
         }
