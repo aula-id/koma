@@ -37,6 +37,10 @@ struct Profile {
     pre_launch_task: Option<String>,
     #[serde(default)]
     exception_filters: Option<Vec<String>>,
+    #[serde(skip)]
+    prepare_commands: Vec<Value>,
+    #[serde(skip)]
+    prepared_program: Option<PathBuf>,
 }
 fn launch() -> String {
     "launch".into()
@@ -58,6 +62,8 @@ fn profiles(root: &Path) -> Result<(Vec<Profile>, String)> {
                 configuration,
                 pre_launch_task: None,
                 exception_filters: None,
+                prepare_commands: Vec::new(),
+                prepared_program: None,
             });
         }
     };
@@ -524,6 +530,19 @@ pub(super) fn start_custom(
         breakpoints,
     )
 }
+pub(super) fn start_prepared_test(
+    workspace: &WorkspaceRef,
+    root: &Path,
+    profile: Value,
+    commands: Vec<Value>,
+    program: PathBuf,
+    breakpoints: &Value,
+) -> Result<Value> {
+    let mut profile: Profile = serde_json::from_value(profile)?;
+    profile.prepare_commands = commands;
+    profile.prepared_program = Some(program);
+    start_profile(workspace, root, profile, None, breakpoints)
+}
 fn start_profile(
     workspace: &WorkspaceRef,
     root: &Path,
@@ -693,6 +712,52 @@ fn setup(
             }
         }
     }
+    let mut configuration = s.profile.configuration.clone();
+    if !s.profile.prepare_commands.is_empty() {
+        let mut slot = s.preparation.lock().unwrap();
+        anyhow::ensure!(!s.closed.load(Ordering::Acquire), "Debug session canceled");
+        let run = super::tasks::run_commands(
+            &s.workspace,
+            root,
+            &format!("debug-build:{}", s.id),
+            "Build debug test",
+            s.profile.prepare_commands.clone(),
+        )?;
+        let id = run["id"].as_str().unwrap().to_string();
+        *slot = Some(id.clone());
+        drop(slot);
+        loop {
+            anyhow::ensure!(!s.closed.load(Ordering::Acquire), "Debug session canceled");
+            let run = super::tasks::summary(&s.workspace, &id)?;
+            match run["status"].as_str() {
+                Some("succeeded") => break,
+                Some("queued" | "running" | "stopping") => {
+                    std::thread::sleep(Duration::from_millis(100))
+                }
+                _ => anyhow::bail!("Test build failed; inspect Tasks output"),
+            }
+        }
+        let path = s
+            .profile
+            .prepared_program
+            .as_ref()
+            .context("Missing test artifact record")?;
+        let file = std::fs::File::open(path)?;
+        let mut bytes = Vec::new();
+        file.take(65537).read_to_end(&mut bytes)?;
+        anyhow::ensure!(bytes.len() <= 65536, "Test artifact record too large");
+        let record: Value = serde_json::from_slice(&bytes)?;
+        let program = Path::new(
+            record["program"]
+                .as_str()
+                .context("Missing test executable")?,
+        )
+        .canonicalize()?;
+        anyhow::ensure!(program.is_file(), "Test executable is unavailable");
+        configuration["program"] = json!(program);
+        configuration["args"] = record["args"].clone();
+        let _ = std::fs::remove_file(path);
+    }
     let (mut command, tcp) = adapter(&s.profile, root)?;
     let mut port = 0;
     if tcp {
@@ -798,7 +863,7 @@ fn setup(
         json!({"clientID":"koma","clientName":"Koma","adapterID":s.profile.adapter,"pathFormat":"path","linesStartAt1":true,"columnsStartAt1":true,"supportsVariableType":true,"supportsRunInTerminalRequest":true,"supportsStartDebuggingRequest":false,"supportsProgressReporting":false}),
     )?;
     s.state.lock().unwrap().capabilities = capabilities.clone();
-    let launching = begin(s, &s.profile.request, s.profile.configuration.clone())?;
+    let launching = begin(s, &s.profile.request, configuration)?;
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         if s.state.lock().unwrap().initialized {
@@ -891,12 +956,14 @@ pub(super) fn request(
                 | "stepOut"
                 | "setBreakpoints"
                 | "setExceptionBreakpoints"
+                | "source"
         ),
         "Unsupported debugger request"
     );
     let stopped = matches!(
         command,
         "stackTrace"
+            | "source"
             | "scopes"
             | "variables"
             | "evaluate"

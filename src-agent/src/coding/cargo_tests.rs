@@ -16,6 +16,8 @@ struct Recipe {
     args: Vec<String>,
     discover: bool,
     selected: Vec<String>,
+    #[serde(default)]
+    debug_output: Option<PathBuf>,
 }
 struct Artifact {
     key: String,
@@ -157,6 +159,18 @@ pub(super) fn main() -> Result<()> {
                 }
             })
             .collect();
+        if let Some(output) = &recipe.debug_output {
+            anyhow::ensure!(selected.len() == 1, "Debug exactly one Cargo test");
+            if let Some(name) = names.first() {
+                super::persistence::atomic_write(
+                    output,
+                    &serde_json::to_vec(
+                        &json!({"program":artifact.executable,"args":["--exact",name,"--nocapture"]}),
+                    )?,
+                )?;
+            }
+            continue;
+        }
         if recipe.discover {
             for name in names {
                 record(artifact, &name, "discovered");

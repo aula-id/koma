@@ -618,23 +618,23 @@ pub(super) fn debug(
             )
         }
         "cargo" => {
-            let binary = Path::new(
-                item["executable"]
-                    .as_str()
-                    .context("Discover Cargo test binaries again before debugging")?,
-            )
-            .canonicalize()?;
-            anyhow::ensure!(
-                binary.is_file(),
-                "Cargo test executable is missing; discover again to rebuild"
+            let dir = crate::model::store::base_dir()?.join("coding/prepared");
+            std::fs::create_dir_all(&dir)?;
+            let output = dir.join(format!("{}.json", uuid::Uuid::new_v4()));
+            let spec = json!({"command":super::environment::executable(root,profile.command.as_deref().unwrap_or("cargo"))?,"args":profile.args,"discover":false,"selected":[item_id],"debug_output":output});
+            let mut step = command(
+                &std::env::current_exe()?.to_string_lossy(),
+                vec!["coding-test-cargo".into(), spec.to_string()],
             );
-            let name = item["selector"]
-                .as_str()
-                .context("Cargo test has no selector")?;
-            (
-                "lldb-dap",
-                json!({"program":binary,"args":["--exact",name,"--nocapture"],"cwd":root}),
-            )
+            step["env"] = json!(super::environment::variables(root, "cargo")?);
+            return super::debug::start_prepared_test(
+                workspace,
+                root,
+                json!({"id":format!("test:{}",profile.id),"label":format!("Test: {}",item["label"].as_str().unwrap_or(item_id)),"adapter":"lldb-dap","configuration":{"cwd":root}}),
+                vec![step],
+                output,
+                breakpoints,
+            );
         }
         "go" => {
             let package = item["suite"].as_str().context("Go test has no package")?;
