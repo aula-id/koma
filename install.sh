@@ -32,10 +32,16 @@ _os=$(uname -s)
 case "$_os" in
     Linux)  os="linux"  ;;
     Darwin) os="darwin" ;;
-    MINGW*|MSYS*|CYGWIN*) os="windows" ;;
+    MINGW*|MSYS*|CYGWIN*)
+        echo "Windows releases use the WiX MSI installer." >&2
+        echo "Run this command in PowerShell:" >&2
+        echo "  irm https://koma.run/install.ps1 | iex" >&2
+        echo "Or download and install: ${KOMA_RELEASE_BASE}/koma-x64.msi" >&2
+        exit 1
+        ;;
     *)
         echo "ERROR: unsupported operating system: $_os" >&2
-        echo "koma currently supports Linux, macOS, and Windows (via Git Bash)." >&2
+        echo "This shell installer supports Linux and macOS. Windows uses install.ps1 or the MSI installer." >&2
         exit 1
         ;;
 esac
@@ -58,38 +64,26 @@ esac
 # Build asset URL
 # ---------------------------------------------------------------------------
 # Release artifacts (see .github/workflows/release.yml) are published per
-# platform with these names; install them as "koma" (or "koma.exe" on
-# Windows) at $INSTALL_DIR:
+# platform with these names; install them as "koma" at $INSTALL_DIR:
 #   linux   x86_64 -> koma-linux-x64
 #   linux   arm64  -> koma-linux-arm64
 #   darwin  arm64  -> koma-darwin-arm64   (Apple Silicon)
 #   darwin  x86_64 -> koma-darwin-x64     (Intel Mac)
-#   windows x86_64 -> koma-windows-x64.exe
 case "${os}/${arch}" in
     linux/x86_64)   asset="koma-linux-x64"       ;;
     linux/arm64)    asset="koma-linux-arm64"     ;;
     darwin/arm64)   asset="koma-darwin-arm64"    ;;
     darwin/x86_64)  asset="koma-darwin-x64"      ;;
-    windows/x86_64) asset="koma-windows-x64.exe" ;;
-    windows/arm64)
-        echo "ERROR: no prebuilt koma binary for windows/arm64." >&2
-        echo "koma on Windows currently supports x86_64 only." >&2
-        exit 1
-        ;;
     *)
         echo "ERROR: no prebuilt koma binary for ${os}/${arch}." >&2
-        echo "Supported: linux x86_64, linux arm64, macOS arm64, macOS x86_64, windows x86_64." >&2
+        echo "Supported: linux x86_64, linux arm64, macOS arm64, macOS x86_64." >&2
         exit 1
         ;;
 esac
 url="${KOMA_RELEASE_BASE}/${asset}"
 
-# Install filename: Windows needs the .exe extension for the shell/PATHEXT
-# lookup to resolve it; every other platform installs as extensionless "koma".
+# Linux and macOS install as extensionless "koma".
 bin_name="koma"
-if [ "$os" = "windows" ]; then
-    bin_name="koma.exe"
-fi
 
 echo "koma installer — detected ${os}/${arch}"
 echo "  url:      $url"
@@ -131,8 +125,7 @@ chmod +x "$tmp"
 #
 # On Linux: install the real ELF as koma.bin and a shell launcher as koma.
 # The launcher preflights shared-library availability (missing webkit/gtk,
-# too-old glibc) before the dynamic linker crashes.  macOS / Windows:
-# single binary named koma / koma.exe.
+# too-old glibc) before the dynamic linker crashes. macOS: single binary named koma.
 # ---------------------------------------------------------------------------
 mkdir -p "$INSTALL_DIR" 2>/dev/null || true
 
@@ -382,7 +375,7 @@ KOMA_LAUNCHER
         fi
     fi
 else
-    # macOS / Windows: single binary, no launcher needed.
+    # macOS: single binary, no launcher needed.
     if [ -w "$INSTALL_DIR" ]; then
         mv "$tmp" "$INSTALL_DIR/$bin_name"
     else
@@ -434,14 +427,9 @@ fi
 # Optional: provision Python research environment
 # ---------------------------------------------------------------------------
 if [ "$WITH_RESEARCH" = "1" ]; then
-    if [ "$os" = "windows" ]; then
-        echo ""
-        echo "WARNING: research/full internet mode is not supported on Windows — installing base koma only." >&2
-    else
-        echo ""
-        echo "Provisioning full internet mode environment (downloads ~80MB Firefox)..."
-        "$INSTALL_DIR/$bin_name" --internet-fullmode-install
-    fi
+    echo ""
+    echo "Provisioning full internet mode environment (downloads ~80MB Firefox)..."
+    "$INSTALL_DIR/$bin_name" --internet-fullmode-install
 fi
 
 # ---------------------------------------------------------------------------
@@ -561,10 +549,8 @@ if [ -n "${KOMA_DESKTOP_ENTRY:-}" ]; then
     echo "  Desktop entry: $KOMA_DESKTOP_ENTRY"
     echo "  Open your app grid and search for Koma (log out/in if it is missing)."
 fi
-if [ "$os" != "windows" ]; then
-    echo "  Re-run this installer with --with-research (or run"
-    echo "  'koma --internet-fullmode-install') to enable full internet mode."
-fi
+echo "  Re-run this installer with --with-research (or run"
+echo "  'koma --internet-fullmode-install') to enable full internet mode."
 echo ""
 
 # Ensure INSTALL_DIR is on PATH. If missing, append the export to the user's
@@ -574,20 +560,15 @@ echo ""
 case ":${PATH}:" in
     *":${INSTALL_DIR}:"*) ;;
     *)
-        # Pick the rc file for the user's login shell. Git Bash on Windows
-        # always uses ~/.bashrc regardless of $SHELL quirks.
+        # Pick the rc file for the user's login shell.
         rc=""
-        if [ "$os" = "windows" ]; then
-            rc="$HOME/.bashrc"
-        else
-            case "$(basename "${SHELL:-}")" in
-                zsh)  rc="$HOME/.zshrc"  ;;
-                bash) rc="$HOME/.bashrc" ;;
-                *)
-                    if [ -f "$HOME/.zshrc" ]; then rc="$HOME/.zshrc"; else rc="$HOME/.bashrc"; fi
-                    ;;
-            esac
-        fi
+        case "$(basename "${SHELL:-}")" in
+            zsh)  rc="$HOME/.zshrc"  ;;
+            bash) rc="$HOME/.bashrc" ;;
+            *)
+                if [ -f "$HOME/.zshrc" ]; then rc="$HOME/.zshrc"; else rc="$HOME/.bashrc"; fi
+                ;;
+        esac
         export_line="export PATH=\"$INSTALL_DIR:\$PATH\""
         if [ -n "$rc" ] && ! grep -qsF "$INSTALL_DIR" "$rc" 2>/dev/null; then
             printf '\n# Added by koma installer\n%s\n' "$export_line" >> "$rc"
