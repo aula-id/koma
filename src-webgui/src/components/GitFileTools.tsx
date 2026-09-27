@@ -1,5 +1,5 @@
 import { CodePane } from './GitCodePane'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown,
   ArrowUp,
@@ -10,6 +10,7 @@ import {
   Save,
 } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import { isTabVisible, normalizeGroups } from '../store/editorGroups'
 import type { GitToolTab } from '../lib/gitWorkbench'
 import {
   Actions,
@@ -90,8 +91,13 @@ export function GitDiffView({ tab, work }: { tab: GitToolTab; work: GitWork }) {
   const [selection, setSelection] = useState<number[]>([])
   const [split, setSplit] = useState(false)
   const [fit, setFit] = useState(true)
+  const request = useRef(0)
+  const token = useRef<string | undefined>(undefined)
+  const visible = useKoma(s => isTabVisible(normalizeGroups(s.ui), tab.id))
+  const status = useKoma(s => !tab.commit && s.git.root === tab.root ? s.git : null)
   const { run, busy, active } = work
   const reload = useCallback(async () => {
+    const ticket = ++request.current
     const result = await run<DiffData>({
       kind: 'diff',
       path: tab.path!,
@@ -99,14 +105,29 @@ export function GitDiffView({ tab, work }: { tab: GitToolTab; work: GitWork }) {
       commit: tab.commit,
       oldPath: tab.oldPath,
     })
+    if (ticket !== request.current) return
     if (result) {
       setData(result)
+      if (token.current !== result.token) setSelection([])
+      token.current = result.token
+    } else {
+      setData(undefined)
       setSelection([])
+      token.current = undefined
     }
   }, [run, tab.path, tab.staged, tab.commit, tab.oldPath])
-  useEffect(() => {
-    void reload()
+  useLayoutEffect(() => {
+    setData(undefined)
+    setSelection([])
+    token.current = undefined
+    return () => { request.current++ }
   }, [reload])
+  useEffect(() => {
+    if (!active || !visible) return
+    void reload()
+    // A status refresh or tab switch can overlap a slow remote response.
+    return () => { request.current++ }
+  }, [reload, active, visible, status])
   const change = async (lines: number[]) => {
     if (!data) return
     if (
@@ -175,7 +196,7 @@ export function GitDiffView({ tab, work }: { tab: GitToolTab; work: GitWork }) {
         )}
       </Actions>
       {!data ? (
-        <Note>{busy ? 'Loading diff…' : 'Refresh to load this diff.'}</Note>
+        active && !work.error ? <Note>Loading diff…</Note> : null
       ) : data.image ? (
         <div className="flex min-h-0 flex-1 divide-x divide-koma-border">
           <ImageSide

@@ -1,6 +1,6 @@
 import {
   useCallback,
-  useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -88,7 +88,9 @@ export function useGitWork(root: string) {
   const activeRoot = useKoma((s) => s.activeRepoRoot ?? s.git.root)
   const active = activeRoot === root
   const generation = useRef(0)
-  useEffect(() => {
+  // Child views start their initial reads in passive effects. Establish the
+  // scope first, or that first reply is mistaken for a stale request.
+  useLayoutEffect(() => {
     generation.current++
     return () => {
       generation.current++
@@ -124,7 +126,8 @@ export function useGitWork(root: string) {
         const data = await gitRequest<T>(root, action, s.req)
         if (
           epoch !== generation.current ||
-          useKoma.getState().session.id !== sessionId
+          useKoma.getState().session.id !== sessionId ||
+          (useKoma.getState().activeRepoRoot ?? useKoma.getState().git.root) !== root
         )
           return
         return data
