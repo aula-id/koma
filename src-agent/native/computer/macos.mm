@@ -57,8 +57,8 @@ static CGRect axBounds(AXUIElementRef e) {
     CGSize size = {};
     if (p && s && CFGetTypeID((__bridge CFTypeRef)p) == AXValueGetTypeID() &&
         CFGetTypeID((__bridge CFTypeRef)s) == AXValueGetTypeID()) {
-        AXValueGetValue((__bridge AXValueRef)p, kAXValueCGPointType, &point);
-        AXValueGetValue((__bridge AXValueRef)s, kAXValueCGSizeType, &size);
+        AXValueGetValue((__bridge AXValueRef)p, kAXValueTypeCGPoint, &point);
+        AXValueGetValue((__bridge AXValueRef)s, kAXValueTypeCGSize, &size);
     }
     return CGRectMake(point.x, point.y, size.width, size.height);
 }
@@ -68,7 +68,7 @@ static bool sameRect(CGRect a, CGRect b) {
 }
 static NSArray *windowInfo() {
     return CFBridgingRelease(CGWindowListCopyWindowInfo(
-        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindow));
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
 }
 static NSDictionary *lookup(NSString *identity) {
     NSArray *parts = [identity componentsSeparatedByString:@":"];
@@ -671,7 +671,8 @@ static id dispatch(NSDictionary *r) {
             NSRunningApplication *app = [NSRunningApplication
                 runningApplicationWithProcessIdentifier:[w[(id)kCGWindowOwnerPID] intValue]];
             dispatch_sync(dispatch_get_main_queue(), ^{
-              [app activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+              // Default activation options; ignoringOtherApps has no effect on macOS 14+.
+              [app activateWithOptions:0];
             });
             for (int i = 0; i < 50 && !focused(w); ++i) {
                 check();
