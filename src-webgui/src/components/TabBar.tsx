@@ -56,7 +56,7 @@ export function draggedTabId(e: Pick<DragEvent, 'dataTransfer'>): string | null 
 }
 
 function parentDir(path: string): string {
-  const parts = path.split('/').filter(Boolean)
+  const parts = path.split(/[\\/]/).filter(Boolean)
   return parts.length > 1 ? parts[parts.length - 2] : ''
 }
 

@@ -27,9 +27,10 @@ const FILE_STATUS: Record<string, { letter: string; tone: string }> = {
   deleted: { letter: 'D', tone: 'text-koma-error' },
 }
 
-// Show just the basename in the main label; the full path rides the tooltip.
+// Accept native Windows paths too; keep the original full path for the tooltip
+// and diff request.
 function baseName(path: string): string {
-  const parts = path.split('/')
+  const parts = path.split(/[\\/]/)
   return parts[parts.length - 1] || path
 }
 

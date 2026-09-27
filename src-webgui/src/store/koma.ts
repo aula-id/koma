@@ -3056,7 +3056,7 @@ function applyPaletteVars(palette: PaletteColors) {
 // Basename of a path — a diff tab's title (TabBar disambiguates colliding
 // basenames with a dim parent-dir suffix at render time).
 function tabBaseName(path: string): string {
-  const parts = path.split('/')
+  const parts = path.split(/[\\/]/)
   return parts[parts.length - 1] || path
 }
 
