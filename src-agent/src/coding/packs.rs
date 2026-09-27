@@ -156,7 +156,7 @@ fn runtime_commands(p: &Pack) -> Result<Vec<Value>> {
             .find(|name| crate::lsp::resolve::find_on_path(name).is_some());
         if let Some(manager) = manager {
             let packages: &[&str] = match (manager, p.id) {
-                ("apt-get", "rust") => &["cargo", "rustc", "lldb"],
+                ("apt-get", "rust") => &["cargo", "rustc", "lldb", "build-essential", "pkg-config"],
                 ("apt-get", "python") => &["python3", "python3-venv", "python3-pip"],
                 ("apt-get", "go") => &["golang-go"],
                 ("apt-get", "php") => &[
@@ -185,7 +185,7 @@ fn runtime_commands(p: &Pack) -> Result<Vec<Value>> {
                 (_, "lua") => &["lua", "nodejs", "npm"],
                 (_, "javascript" | "web") => &["nodejs", "npm"],
                 (_, "cpp") => &["clang", "lldb", "cmake"],
-                (_, "bash") => &["bash", "nodejs", "npm"],
+                (_, "bash") => &["bash", "bashdb", "nodejs", "npm"],
                 (_, "zig") => &["zig"],
                 _ => anyhow::bail!("Select an existing {} runtime on this host", p.label),
             };
@@ -227,7 +227,7 @@ fn runtime_commands(p: &Pack) -> Result<Vec<Value>> {
             "cpp" => &["llvm", "cmake"],
             "php" => &["php", "composer", "node"],
             "lua" => &["lua", "node"],
-            "bash" => &["bash", "node"],
+            "bash" => &["bash", "bashdb", "node"],
             "zig" => &["zig", "llvm"],
             _ => anyhow::bail!("Select an existing {} runtime on this host", p.label),
         };
@@ -238,11 +238,19 @@ fn runtime_commands(p: &Pack) -> Result<Vec<Value>> {
     #[cfg(windows)]
     if crate::lsp::resolve::find_on_path("winget").is_some() {
         let packages: &[&str] = match p.id {
-            "rust" => &["Rustlang.Rustup", "LLVM.LLVM"],
+            "rust" => &[
+                "Microsoft.VisualStudio.2022.BuildTools",
+                "Rustlang.Rustup",
+                "LLVM.LLVM",
+            ],
             "javascript" | "web" => &["OpenJS.NodeJS.LTS"],
             "python" => &["Python.Python.3.13"],
             "go" => &["GoLang.Go"],
-            "cpp" => &["LLVM.LLVM", "Kitware.CMake"],
+            "cpp" => &[
+                "Microsoft.VisualStudio.2022.BuildTools",
+                "LLVM.LLVM",
+                "Kitware.CMake",
+            ],
             "php" => &["PHP.PHP.8.4", "OpenJS.NodeJS.LTS"],
             "zig" => &["zig.zig", "LLVM.LLVM"],
             _ => anyhow::bail!("Select an existing {} runtime on Windows", p.label),
@@ -261,6 +269,7 @@ fn runtime_commands(p: &Pack) -> Result<Vec<Value>> {
                 if *id == "Python.Python.3.13" {
                     args.extend(["--custom".into(), "PrependPath=1".into()]);
                 }
+                if *id=="Microsoft.VisualStudio.2022.BuildTools" {args.extend(["--override".into(),"--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended".into()]);}
                 command("winget", args)
             })
             .collect());
@@ -271,7 +280,7 @@ fn runtime_commands(p: &Pack) -> Result<Vec<Value>> {
 }
 pub(super) fn plan(
     workspace: &WorkspaceRef,
-    _root: &Path,
+    root: &Path,
     pack_id: &str,
     runtime: bool,
     server: Option<&str>,
@@ -309,6 +318,31 @@ pub(super) fn plan(
             &exe,
             vec!["coding-provision".into(), p.adapter.into()],
         ));
+    }
+    for step in &mut commands {
+        if step["command"] == exe {
+            let mut env = super::environment::variables(root, p.runtime)?;
+            if p.id == "zig" {
+                env.insert(
+                    "KOMA_ZIG_EXECUTABLE".into(),
+                    super::environment::executable(root, "zig")?
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+            if p.id == "python" {
+                env.insert(
+                    "KOMA_PYTHON_EXECUTABLE".into(),
+                    super::environment::executable(
+                        root,
+                        if cfg!(windows) { "python" } else { "python3" },
+                    )?
+                    .to_string_lossy()
+                    .into_owned(),
+                );
+            }
+            step["env"] = json!(env);
+        }
     }
     let id = uuid::Uuid::new_v4().to_string();
     let result = json!({"id":id,"label":p.label,"commands":commands,"notes": if p.adapter=="lldb-dap" {"LLVM's lldb-dap must be on PATH. Some distributions package it separately. Project test dependencies remain project-owned."} else {"Project test dependencies remain project-owned. PHP debugging requires Xdebug; Bash debugging requires bashdb."}});

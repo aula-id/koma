@@ -164,9 +164,42 @@ fn github_asset(id: &str, dest: &Path) -> Result<(PathBuf, String, String)> {
         "js-debug" => "microsoft/vscode-js-debug",
         _ => anyhow::bail!("Unknown release component"),
     };
-    let release = json_url(&format!(
-        "https://api.github.com/repos/{repo}/releases/latest"
-    ))?;
+    let release = if id == "zls" {
+        let zig = std::env::var("KOMA_ZIG_EXECUTABLE").unwrap_or_else(|_| "zig".into());
+        let output = Command::new(zig)
+            .arg("version")
+            .output()
+            .context("Zig must be installed before selecting ZLS")?;
+        anyhow::ensure!(output.status.success(), "Could not read Zig version");
+        let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        anyhow::ensure!(version.len()<100&&!version.contains("dev"),"Select a stable Zig runtime for managed ZLS; development runtimes require a matching external ZLS");
+        let parts: Vec<_> = version.split('.').collect();
+        anyhow::ensure!(
+            parts.len() >= 3 && parts.iter().all(|v| v.chars().all(|c| c.is_ascii_digit())),
+            "Invalid Zig version"
+        );
+        let prefix = format!("{}.{}.", parts[0], parts[1]);
+        let releases = json_url(&format!(
+            "https://api.github.com/repos/{repo}/releases?per_page=100"
+        ))?;
+        releases
+            .as_array()
+            .context("Invalid ZLS release list")?
+            .iter()
+            .find(|r| {
+                r["draft"] != true
+                    && r["prerelease"] != true
+                    && r["tag_name"]
+                        .as_str()
+                        .is_some_and(|v| v.trim_start_matches('v').starts_with(&prefix))
+            })
+            .cloned()
+            .context("No compatible stable ZLS release for the selected Zig runtime")?
+    } else {
+        json_url(&format!(
+            "https://api.github.com/repos/{repo}/releases/latest"
+        ))?
+    };
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
     let matches = |name: &str| {
@@ -285,9 +318,15 @@ pub(crate) fn install(id: &str) -> Result<()> {
         "lua-language-server" | "zls" | "js-debug" => github_asset(id, &version_dir)?,
         "php-debug" | "bash-debug" | "lua-debug" => vsix(id, &version_dir)?,
         "debugpy" => {
-            let python = if cfg!(windows) { "python" } else { "python3" };
+            let python = std::env::var("KOMA_PYTHON_EXECUTABLE").unwrap_or_else(|_| {
+                if cfg!(windows) {
+                    "python".into()
+                } else {
+                    "python3".into()
+                }
+            });
             run(
-                python,
+                &python,
                 &[
                     "-m".into(),
                     "venv".into(),
