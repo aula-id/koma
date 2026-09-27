@@ -83,14 +83,7 @@ impl RemoteGitClient {
     /// Round-trip one request. Always returns a `RemoteGitRep` (Error on timeout/IO).
     pub fn request(&self, req: RemoteGitReq) -> RemoteGitRep {
         let (resp_tx, resp_rx) = mpsc::channel();
-        if self
-            .tx
-            .send(ClientMsg::Req {
-                req,
-                resp: resp_tx,
-            })
-            .is_err()
-        {
+        if self.tx.send(ClientMsg::Req { req, resp: resp_tx }).is_err() {
             return RemoteGitRep::Error {
                 error: "remote-git client stopped".to_string(),
             };
@@ -112,6 +105,10 @@ impl RemoteGitClient {
             None => return,
         };
         let rep = self.request(req);
+        if let (super::HostCtl::GitWorkbench { request }, RemoteGitRep::Error { error }) = (ctl, &rep) {
+            super::git_workbench::emit(push, super::git_workbench::Reply::error(request, format!("{error}. Reconnect or update remote Koma if this operation is unsupported.")));
+            return;
+        }
         push_rep(push, rep);
     }
 
@@ -132,6 +129,7 @@ impl Drop for RemoteGitClient {
 
 fn hostctl_to_req(ctl: &super::HostCtl) -> Option<RemoteGitReq> {
     match ctl {
+        super::HostCtl::GitWorkbench { request } => Some(RemoteGitReq::Workbench(request.clone())),
         super::HostCtl::GitStatus => Some(RemoteGitReq::Status),
         super::HostCtl::GitDiff { path, staged } => Some(RemoteGitReq::Diff {
             path: path.clone(),
@@ -149,9 +147,7 @@ fn hostctl_to_req(ctl: &super::HostCtl) -> Option<RemoteGitReq> {
         super::HostCtl::GitCommit { message } => Some(RemoteGitReq::Commit {
             message: message.clone(),
         }),
-        super::HostCtl::SetGitKey { name } => Some(RemoteGitReq::SetGitKey {
-            name: name.clone(),
-        }),
+        super::HostCtl::SetGitKey { name } => Some(RemoteGitReq::SetGitKey { name: name.clone() }),
         super::HostCtl::GitFetch => Some(RemoteGitReq::Fetch),
         super::HostCtl::GitPull => Some(RemoteGitReq::Pull),
         super::HostCtl::GitPush { mode, root } => Some(RemoteGitReq::Push {
@@ -165,9 +161,9 @@ fn hostctl_to_req(ctl: &super::HostCtl) -> Option<RemoteGitReq> {
             request_id: *request_id,
         }),
         super::HostCtl::GitRepos => Some(RemoteGitReq::Repos),
-        super::HostCtl::SetActiveRepo { root } => Some(RemoteGitReq::SetActiveRepo {
-            root: root.clone(),
-        }),
+        super::HostCtl::SetActiveRepo { root } => {
+            Some(RemoteGitReq::SetActiveRepo { root: root.clone() })
+        }
         super::HostCtl::GitCheckout { ref_name, root } => Some(RemoteGitReq::Checkout {
             ref_name: ref_name.clone(),
             root: root.clone(),
@@ -183,9 +179,9 @@ fn hostctl_to_req(ctl: &super::HostCtl) -> Option<RemoteGitReq> {
             checkout: *checkout,
             root: root.clone(),
         }),
-        super::HostCtl::GitCherryPick { sha } => Some(RemoteGitReq::CherryPick {
-            sha: sha.clone(),
-        }),
+        super::HostCtl::GitCherryPick { sha } => {
+            Some(RemoteGitReq::CherryPick { sha: sha.clone() })
+        }
         super::HostCtl::GitRevert { sha } => Some(RemoteGitReq::Revert { sha: sha.clone() }),
         super::HostCtl::GitReset { sha, mode } => Some(RemoteGitReq::Reset {
             sha: sha.clone(),
@@ -198,19 +194,17 @@ fn hostctl_to_req(ctl: &super::HostCtl) -> Option<RemoteGitReq> {
             upstream: upstream.clone(),
             branch: branch.clone(),
         }),
-        super::HostCtl::GitOpAbort { kind } => Some(RemoteGitReq::OpAbort {
-            kind: kind.clone(),
-        }),
-        super::HostCtl::GitOpContinue { kind } => Some(RemoteGitReq::OpContinue {
-            kind: kind.clone(),
-        }),
+        super::HostCtl::GitOpAbort { kind } => Some(RemoteGitReq::OpAbort { kind: kind.clone() }),
+        super::HostCtl::GitOpContinue { kind } => {
+            Some(RemoteGitReq::OpContinue { kind: kind.clone() })
+        }
         super::HostCtl::GitGraph { limit, skip } => Some(RemoteGitReq::Graph {
             limit: *limit,
             skip: *skip,
         }),
-        super::HostCtl::GitCommitDetail { sha } => Some(RemoteGitReq::CommitDetail {
-            sha: sha.clone(),
-        }),
+        super::HostCtl::GitCommitDetail { sha } => {
+            Some(RemoteGitReq::CommitDetail { sha: sha.clone() })
+        }
         super::HostCtl::GitCommitDiff { sha, path } => Some(RemoteGitReq::CommitDiff {
             sha: sha.clone(),
             path: path.clone(),
@@ -225,6 +219,7 @@ fn hostctl_to_req(ctl: &super::HostCtl) -> Option<RemoteGitReq> {
 
 fn push_rep(push: &dyn Fn(String), rep: RemoteGitRep) {
     match rep {
+        RemoteGitRep::Workbench(r) => super::git_workbench::emit(push, r),
         RemoteGitRep::Status(r) => push_git_status(push, r),
         RemoteGitRep::Diff(r) => push_git_diff(push, r),
         RemoteGitRep::Op { result, status } => {

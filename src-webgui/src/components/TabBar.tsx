@@ -7,6 +7,7 @@ import {
   CircleHelp,
   Code2,
   Columns2,
+  Eye,
   FileDiff,
   GitGraph,
   GraduationCap,
@@ -37,6 +38,7 @@ import { createPortal } from 'react-dom'
 import { useShallow } from 'zustand/react/shallow'
 import { hasCodingPathDrag, readCodingPathDragData } from '../lib/codingRef'
 import { fileKey } from '../store/coding'
+import { isMarkdownPath } from '../lib/markdownPreview'
 import {
   MAX_GROUPS,
   groupOf,
@@ -54,7 +56,7 @@ export function draggedTabId(e: Pick<DragEvent, 'dataTransfer'>): string | null 
 }
 
 function parentDir(path: string): string {
-  const parts = path.split('/').filter(Boolean)
+  const parts = path.split(/[\\/]/).filter(Boolean)
   return parts.length > 1 ? parts[parts.length - 2] : ''
 }
 
@@ -106,6 +108,7 @@ function tabVisual(
     case 'extension':
       return { Icon: Puzzle, label: tab.title, title: tab.title }
     case 'codingFile': {
+      if (tab.preview) return { Icon: Eye, label: `Preview: ${tab.title}`, title: `Preview: ${tab.path}` }
       const isNew = !!dirty?.dirty && !!dirty.savedContentNull
       return {
         Icon: Code2,
@@ -134,6 +137,8 @@ function tabVisual(
       return { Icon: Terminal, label: tab.title, title: tab.title }
     case 'terminal':
       return { Icon: SquareTerminal, label: tab.title, title: tab.title }
+    case 'gitTool':
+      return { Icon: GitGraph, label: `${tab.dirty ? '● ' : ''}${tab.title}`, title: `${tab.root} · ${tab.path ?? tab.title}` }
     case 'diff':
       return {
         Icon: FileDiff,
@@ -164,6 +169,8 @@ function TabContextMenu({
   const splitTab = useKoma((s) => s.splitTab)
   const toggleSplitDir = useKoma((s) => s.toggleSplitDir)
   const splitDir = useKoma((s) => s.ui.splitDir)
+  const tab = useKoma((s) => s.ui.tabs.find((t) => t.id === state.tabId))
+  const openCodingFile = useKoma((s) => s.openCodingFile)
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ left: state.x, top: state.y })
 
@@ -199,6 +206,22 @@ function TabContextMenu({
       className="overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm"
       onContextMenu={(e) => e.preventDefault()}
     >
+      {tab?.kind === 'codingFile' && (tab.preview || isMarkdownPath(tab.path)) && (
+        <>
+          <button
+            type="button"
+            className={item}
+            onClick={() => {
+              openCodingFile(tab.root, tab.path, { preview: !tab.preview })
+              onClose()
+            }}
+          >
+            {tab.preview ? <Code2 size={13} /> : <Eye size={13} />}
+            {tab.preview ? 'Open Source' : 'Open Markdown Preview'}
+          </button>
+          <div className="my-1 border-t border-koma-border" />
+        </>
+      )}
       {canSplit ? (
         <>
           <button
@@ -268,9 +291,17 @@ type Props = {
 // create adjacent panes. All tab kinds share this renderer so the interaction
 // grammar cannot drift between file, diff, terminal, settings, and extension tabs.
 const CHEVRON_ON =
-  'flex w-6 flex-none items-center justify-center text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100'
+  'flex w-6 flex-none items-center justify-center text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100 @max-[11rem]/tabstrip:w-5'
 const CHEVRON_OFF =
-  'flex w-6 flex-none items-center justify-center text-koma-fg pointer-events-none opacity-0'
+  'flex w-6 flex-none items-center justify-center text-koma-fg pointer-events-none opacity-0 @max-[11rem]/tabstrip:w-5'
+
+function paintChevron(button: HTMLButtonElement | null, enabled: boolean) {
+  if (!button) return
+  button.disabled = !enabled
+  button.tabIndex = enabled ? 0 : -1
+  button.setAttribute('aria-hidden', enabled ? 'false' : 'true')
+  button.className = enabled ? CHEVRON_ON : CHEVRON_OFF
+}
 
 export function TabBar({ groupId, focused }: Props) {
   // Subscribe to strip-relevant ui fields only. groupSizes is deliberately
@@ -316,26 +347,22 @@ export function TabBar({ groupId, focused }: Props) {
   // Compact dirty signature string — avoids allocating nested objects every
   // coding.files tick (useShallow would still see new child refs each time).
   const codingDirtySig = useKoma((s) => {
-    const parts: string[] = []
+    const parts: [string, string][] = []
     for (const [k, f] of Object.entries(s.coding.files)) {
       if (!f || !(f.dirty || f.conflict || f.saving)) continue
       parts.push(
-        `${k}:${f.dirty ? 1 : 0}${f.conflict ? 1 : 0}${f.error ? 1 : 0}${f.binary ? 1 : 0}${
+        [k, `${f.dirty ? 1 : 0}${f.conflict ? 1 : 0}${f.error ? 1 : 0}${f.binary ? 1 : 0}${
           f.tooLarge ? 1 : 0
-        }${f.saving ? 1 : 0}${f.savedContent === null ? 1 : 0}`,
+        }${f.saving ? 1 : 0}${f.savedContent === null ? 1 : 0}`],
       )
     }
-    parts.sort()
-    return parts.join('|')
+    parts.sort((a, b) => a[0].localeCompare(b[0]))
+    return JSON.stringify(parts)
   })
   const codingDirty = useMemo(() => {
     const out: Record<string, CodingDirtyFlags> = {}
     if (!codingDirtySig) return out
-    for (const part of codingDirtySig.split('|')) {
-      const colon = part.indexOf(':')
-      if (colon < 0) continue
-      const k = part.slice(0, colon)
-      const f = part.slice(colon + 1)
+    for (const [k, f] of JSON.parse(codingDirtySig) as [string, string][]) {
       out[k] = {
         dirty: f[0] === '1',
         conflict: f[1] === '1',
@@ -363,11 +390,31 @@ export function TabBar({ groupId, focused }: Props) {
   // Last overflow flags applied via DOM — NEVER React state. ResizeObserver →
   // setCanScroll* was still the #185 site (componentStack → TabBar) on split.
   const overflowRef = useRef({ left: false, right: false })
+  // Keep disabled DOM-owned, including initial mount. A disabled JSX prop
+  // makes React suppress onClick even after button.disabled is cleared here.
+  const setLeftButton = useCallback((button: HTMLButtonElement | null) => {
+    leftBtnRef.current = button
+    paintChevron(button, overflowRef.current.left)
+  }, [])
+  const setRightButton = useCallback((button: HTMLButtonElement | null) => {
+    rightBtnRef.current = button
+    paintChevron(button, overflowRef.current.right)
+  }, [])
 
   const requestClose = useCallback(
     (tab: Tab, e?: ReactMouseEvent) => {
-      if (tab.kind === 'codingFile') {
+      if (tab.kind === 'gitTool' && tab.dirty) {
+        e?.stopPropagation()
+        setDirtyClose({ id: tab.id, title: tab.title })
+        return
+      }
+      if (tab.kind === 'codingFile' && !tab.preview) {
         const fs = codingDirty[fileKey(tab.root, tab.path)]
+        if (fs?.saving) {
+          e?.stopPropagation()
+          setAwaitingAutosaveClose({ id: tab.id, title: tab.title })
+          return
+        }
         if (fs?.dirty) {
           e?.stopPropagation()
           if (codingAutosave && !fs.conflict && !fs.error && !fs.binary && !fs.tooLarge) {
@@ -399,30 +446,25 @@ export function TabBar({ groupId, focused }: Props) {
     } else if (fs.error || fs.conflict) {
       setAwaitingAutosaveClose(null)
       setDirtyClose({ id: tab.id, title: tab.title })
-    } else if (!fs.dirty && !fs.saving) {
-      setAwaitingAutosaveClose(null)
-      closeTab(tab.id, { force: true })
+    } else if (!fs.saving) {
+      if (!fs.dirty) {
+        setAwaitingAutosaveClose(null)
+        closeTab(tab.id, { force: true })
+      } else if (codingAutosave) {
+        saveCodingFile(tab.root, tab.path)
+      } else {
+        setAwaitingAutosaveClose(null)
+        setDirtyClose({ id: tab.id, title: tab.title })
+      }
     }
-  }, [awaitingAutosaveClose, closeTab, codingDirty, ui.tabs])
+  }, [awaitingAutosaveClose, closeTab, codingAutosave, codingDirty, saveCodingFile, ui.tabs])
 
   const applyOverflowDom = useCallback((left: boolean, right: boolean) => {
     const prev = overflowRef.current
     if (prev.left === left && prev.right === right) return
     overflowRef.current = { left, right }
-    const lb = leftBtnRef.current
-    const rb = rightBtnRef.current
-    if (lb) {
-      lb.disabled = !left
-      lb.tabIndex = left ? 0 : -1
-      lb.setAttribute('aria-hidden', left ? 'false' : 'true')
-      lb.className = left ? CHEVRON_ON : CHEVRON_OFF
-    }
-    if (rb) {
-      rb.disabled = !right
-      rb.tabIndex = right ? 0 : -1
-      rb.setAttribute('aria-hidden', right ? 'false' : 'true')
-      rb.className = right ? CHEVRON_ON : CHEVRON_OFF
-    }
+    paintChevron(leftBtnRef.current, left)
+    paintChevron(rightBtnRef.current, right)
   }, [])
 
   const checkOverflow = useCallback(() => {
@@ -448,6 +490,8 @@ export function TabBar({ groupId, focused }: Props) {
     }
     const observer = new ResizeObserver(schedule)
     observer.observe(el)
+    // Labels can grow without changing the strip width or tab count.
+    for (const tab of el.children) observer.observe(tab)
     el.addEventListener('scroll', schedule, { passive: true })
     schedule()
     return () => {
@@ -455,7 +499,7 @@ export function TabBar({ groupId, focused }: Props) {
       el.removeEventListener('scroll', schedule)
       if (raf) cancelAnimationFrame(raf)
     }
-  }, [checkOverflow, tabs.length, ui.groups.length])
+  }, [checkOverflow, tabs, ui.groups.length])
 
   // Reveal the active tab once when selection or strip membership changes.
   useEffect(() => {
@@ -560,14 +604,14 @@ export function TabBar({ groupId, focused }: Props) {
     >
       {/* Always reserve chevron width; enable/disable via DOM only (no setState). */}
       <button
-        ref={leftBtnRef}
+        ref={setLeftButton}
         type="button"
         onClick={() => scroll(-1)}
-        disabled
         aria-label="Scroll tabs left"
+        title="Scroll tabs left"
         aria-hidden="true"
         tabIndex={-1}
-        className={`${CHEVRON_OFF} @max-[11rem]/tabstrip:w-5`}
+        className={CHEVRON_OFF}
       >
         <ChevronLeft size={14} />
       </button>
@@ -647,14 +691,14 @@ export function TabBar({ groupId, focused }: Props) {
         })}
       </div>
       <button
-        ref={rightBtnRef}
+        ref={setRightButton}
         type="button"
         onClick={() => scroll(1)}
-        disabled
         aria-label="Scroll tabs right"
+        title="Scroll tabs right"
         aria-hidden="true"
         tabIndex={-1}
-        className={`${CHEVRON_OFF} @max-[11rem]/tabstrip:w-5`}
+        className={CHEVRON_OFF}
       >
         <ChevronRight size={14} />
       </button>

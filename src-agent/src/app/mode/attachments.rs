@@ -35,10 +35,7 @@ impl AttachmentsState {
         if self.editor.is_some() {
             return;
         }
-        let prev_key = self
-            .items
-            .get(self.selected)
-            .map(|a| (a.kind, a.marker_n));
+        let prev_key = self.items.get(self.selected).map(|a| (a.kind, a.marker_n));
         self.items = pending.to_vec();
         self.selected = prev_key
             .and_then(|(k, n)| {

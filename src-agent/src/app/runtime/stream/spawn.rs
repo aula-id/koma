@@ -160,6 +160,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         sdlc_assess,
         sdlc_active_node_id: rt.sdlc_pending_node_id.clone(),
         search_engine,
+        call_track: rt.call_track.clone(),
     }
 }
 

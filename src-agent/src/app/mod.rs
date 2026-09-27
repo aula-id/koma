@@ -62,3 +62,5 @@ pub use runtime::{
     run_daemon_subcommand, run_doctor,
 };
 pub use update::run_update;
+
+pub(crate) use runtime::client::git_workbench::editor_helper as git_editor_helper;

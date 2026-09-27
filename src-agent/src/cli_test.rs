@@ -220,18 +220,66 @@ fn run_model_effort_mode_security_flags() {
 }
 
 #[test]
-fn run_max_tokens_flag() {
+fn run_system_and_system_file_flags() {
+    let inline = parse(
+        [
+            "koma",
+            "run",
+            "--prompt",
+            "go",
+            "--system",
+            "task_dir is the desk",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
+    let run = inline.run.expect("run cli");
+    assert_eq!(run.system.as_deref(), Some("task_dir is the desk"));
+    assert!(run.system_file.is_none());
+
+    let file = parse(
+        [
+            "koma",
+            "run",
+            "--prompt-file",
+            "/tmp/p.txt",
+            "--system-file",
+            "/tmp/sys.txt",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
+    let run = file.run.expect("run cli");
+    assert_eq!(run.system_file.as_deref(), Some("/tmp/sys.txt"));
+    assert!(run.system.is_none());
+}
+
+#[test]
+fn run_system_and_system_file_are_exclusive() {
     let opts = parse(
         [
             "koma",
             "run",
             "--prompt",
             "go",
-            "--max-tokens",
-            "8192",
+            "--system",
+            "a",
+            "--system-file",
+            "/tmp/s.txt",
         ]
         .into_iter()
         .map(String::from),
+    );
+    let run = opts.run.expect("run cli");
+    assert!(run.error.as_deref().unwrap().contains("--system"));
+}
+
+#[test]
+fn run_max_tokens_flag() {
+    let opts = parse(
+        ["koma", "run", "--prompt", "go", "--max-tokens", "8192"]
+            .into_iter()
+            .map(String::from),
     );
     let run = opts.run.expect("run cli");
     assert_eq!(run.max_tokens, Some(8192));

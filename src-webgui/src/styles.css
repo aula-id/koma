@@ -779,3 +779,20 @@ svg.animate-spin {
   /* Fully opaque — transparent wry window + 92% mix read as a frozen white wash. */
   background-color: var(--color-koma-bg, var(--koma-bg, #0b0e14));
 }
+
+.monaco-editor .koma-breakpoint::before {
+  content: '';
+  display: block;
+  width: 8px;
+  height: 8px;
+  margin: auto;
+  border-radius: 50%;
+  background: var(--koma-error, #ff3c3c);
+}
+
+.monaco-editor .koma-debug-execution {
+  background: color-mix(in srgb, var(--koma-accent) 15%, transparent);
+}
+.monaco-editor .koma-debug-location {
+  border-left: 2px solid var(--koma-accent);
+}

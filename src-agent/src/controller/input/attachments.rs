@@ -9,7 +9,11 @@ use crate::controller::input::is_ctrl;
 use super::Action;
 
 /// Handle a key inside the attachments list / nested paste editor.
-pub fn handle_attachments(s: &mut AttachmentsState, rest: &mut AppStateRest, key: KeyEvent) -> Action {
+pub fn handle_attachments(
+    s: &mut AttachmentsState,
+    rest: &mut AppStateRest,
+    key: KeyEvent,
+) -> Action {
     // Nested editor takes priority (Agents-style).
     if let Some((_, ref mut ed)) = s.editor.as_mut() {
         return match key.code {
@@ -59,7 +63,11 @@ pub fn handle_attachments(s: &mut AttachmentsState, rest: &mut AppStateRest, key
                 ed.end();
                 Action::None
             }
-            KeyCode::Char(c) if !key.modifiers.contains(ratatui::crossterm::event::KeyModifiers::CONTROL) => {
+            KeyCode::Char(c)
+                if !key
+                    .modifiers
+                    .contains(ratatui::crossterm::event::KeyModifiers::CONTROL) =>
+            {
                 ed.insert_char(c);
                 Action::None
             }

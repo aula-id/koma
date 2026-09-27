@@ -113,7 +113,8 @@ fn take_head_chunk(older: &mut Vec<PushMsg>) -> Vec<PushMsg> {
     for m in older.iter().rev() {
         let w = push_msg_weight(m);
         if n > 0
-            && (n >= SNAPSHOT_HEAD_CHUNK || chunk_bytes.saturating_add(w) > SNAPSHOT_HEAD_CHUNK_BYTES)
+            && (n >= SNAPSHOT_HEAD_CHUNK
+                || chunk_bytes.saturating_add(w) > SNAPSHOT_HEAD_CHUNK_BYTES)
         {
             break;
         }
@@ -228,16 +229,15 @@ pub(super) fn serialize_and_push(
     // --- Reasoning: same delta-when-prefix pattern ---
     if !fg.stream_reasoning.is_empty() {
         if last.reasoning != fg.stream_reasoning {
-            let (reset, append) = if fg.stream_reasoning.starts_with(&last.reasoning)
-                && !last.reasoning.is_empty()
-            {
-                (
-                    false,
-                    fg.stream_reasoning[last.reasoning.len()..].to_string(),
-                )
-            } else {
-                (true, fg.stream_reasoning.clone())
-            };
+            let (reset, append) =
+                if fg.stream_reasoning.starts_with(&last.reasoning) && !last.reasoning.is_empty() {
+                    (
+                        false,
+                        fg.stream_reasoning[last.reasoning.len()..].to_string(),
+                    )
+                } else {
+                    (true, fg.stream_reasoning.clone())
+                };
             last.reasoning = fg.stream_reasoning.clone();
             super::render::emit(
                 push,

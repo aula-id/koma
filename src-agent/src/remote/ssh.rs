@@ -19,6 +19,7 @@
 //! Call [`exit_multiplex`] only when leaving the **host** entirely (disconnect),
 //! not when detaching a session back to the remote hub.
 
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::process::{Command as StdCommand, Stdio};
 
@@ -81,9 +82,8 @@ pub(crate) fn remote_command(program: &str, args: &[&str]) -> Result<String> {
     }
     // Inner script runs inside bash -ilc. Source cargo env explicitly too:
     // some setups only append it to a non-sourced file, and it's cheap/idempotent.
-    let mut inner = String::from(
-        r#"[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env" 2>/dev/null; exec "#,
-    );
+    let mut inner =
+        String::from(r#"[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env" 2>/dev/null; exec "#);
     inner.push_str(&shell_quote(program));
     for arg in args {
         if arg.contains('\0') || arg.contains('\n') {
@@ -321,6 +321,17 @@ pub(crate) fn connect_command(
         stdin,
         stdout: BufReader::new(stdout),
     })
+}
+
+/// Independent coding channel, retained across chat/root selection changes.
+#[cfg(feature = "gui")]
+pub(crate) fn coding_worker_command(target: &RemoteTarget, auth: Option<&SshAuth>, koma_path: &str) -> Result<StdCommand> {
+    let mut cmd = StdCommand::new("ssh");
+    apply_std_ssh_base(&mut cmd, target, auth);
+    cmd.args(["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2"]);
+    cmd.arg(format!("{}@{}", target.user, target.host));
+    cmd.arg(remote_command(koma_path, &["coding-worker"])?);
+    Ok(cmd)
 }
 
 pub(crate) fn validate_remote_path(path: &str) -> Result<&str> {

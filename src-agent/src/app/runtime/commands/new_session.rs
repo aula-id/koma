@@ -162,8 +162,8 @@ pub(crate) fn apply_new_session_local(
         *state.mode_mut() = Mode::KeyInput(KeyInputForm::prefilled(
             String::new(),
             String::new(), // catalogue pick — not free-tier id in custom-key wizard
-            false, // Esc -> CancelKeyInput (which pops the spawned session)
-            false, // not from picker
+            false,         // Esc -> CancelKeyInput (which pops the spawned session)
+            false,         // not from picker
         ));
     } else {
         // Kill mode: tombstone the previous foreground only on the creds-present

@@ -402,9 +402,7 @@ fn regression_model_cmd_mod_use_dedup() {
     // model_cmd.rs -> model_cmd_test.rs via #[path]
     let test_file_edges: Vec<_> = model_cmd_edges
         .iter()
-        .filter(
-            |e| matches!(&e.target, EdgeTarget::File(p) if p.ends_with("model_cmd_test.rs")),
-        )
+        .filter(|e| matches!(&e.target, EdgeTarget::File(p) if p.ends_with("model_cmd_test.rs")))
         .collect();
     assert_eq!(
         test_file_edges.len(),
@@ -662,7 +660,7 @@ fn p2_full_vs_incremental_parity() {
     std::fs::write(src.join("child.rs"), "pub fn foo() {}\n").unwrap();
     git_init(tmp.path());
 
-    let (full_graph, pi) = scan_roots(&[proj.clone()]);
+    let (full_graph, pi) = scan_roots(std::slice::from_ref(&proj));
     let lib_path = src.join("lib.rs").to_string_lossy().replace('\\', "/");
     let full_edges = full_graph.edges.get(&lib_path).cloned().unwrap_or_default();
     let full_refs = full_graph
@@ -671,8 +669,7 @@ fn p2_full_vs_incremental_parity() {
         .cloned()
         .unwrap_or_default();
 
-    let (inc_path, _inc_lang, inc_edges, inc_refs) =
-        scan_file(&src.join("lib.rs"), &pi).unwrap();
+    let (inc_path, _inc_lang, inc_edges, inc_refs) = scan_file(&src.join("lib.rs"), &pi).unwrap();
     assert_eq!(inc_path, lib_path);
     assert_eq!(inc_edges.len(), full_edges.len());
     assert!(inc_edges
@@ -695,7 +692,7 @@ fn p2_create_target_after_importer() {
     std::fs::write(src.join("lib.rs"), "mod later;\n").unwrap();
     git_init(tmp.path());
 
-    let (graph, _) = scan_roots(&[proj.clone()]);
+    let (graph, _) = scan_roots(std::slice::from_ref(&proj));
     let lib_path = src.join("lib.rs").to_string_lossy().replace('\\', "/");
     let edges = graph.edges.get(&lib_path);
     assert!(
@@ -707,7 +704,7 @@ fn p2_create_target_after_importer() {
     graph.check_invariants().unwrap();
 
     std::fs::write(src.join("later.rs"), "// created later\n").unwrap();
-    let (graph2, _pi2) = scan_roots(&[proj.clone()]);
+    let (graph2, _pi2) = scan_roots(std::slice::from_ref(&proj));
     let edges2 = graph2.edges.get(&lib_path).unwrap();
     assert!(edges2
         .iter()
@@ -728,7 +725,7 @@ fn p2_delete_recreate_target() {
     std::fs::write(src.join("helper.rs"), "pub fn h() {}\n").unwrap();
     git_init(tmp.path());
 
-    let (graph, _) = scan_roots(&[proj.clone()]);
+    let (graph, _) = scan_roots(std::slice::from_ref(&proj));
     let lib_path = src.join("lib.rs").to_string_lossy().replace('\\', "/");
     assert!(graph
         .edges
@@ -739,7 +736,7 @@ fn p2_delete_recreate_target() {
     graph.check_invariants().unwrap();
 
     std::fs::remove_file(src.join("helper.rs")).unwrap();
-    let (graph2, _pi2) = scan_roots(&[proj.clone()]);
+    let (graph2, _pi2) = scan_roots(std::slice::from_ref(&proj));
     let edges2 = graph2.edges.get(&lib_path);
     assert!(
         edges2.is_none() || edges2.unwrap().is_empty(),
@@ -748,7 +745,7 @@ fn p2_delete_recreate_target() {
     graph2.check_invariants().unwrap();
 
     std::fs::write(src.join("helper.rs"), "pub fn h() {}\n").unwrap();
-    let (graph3, _) = scan_roots(&[proj.clone()]);
+    let (graph3, _) = scan_roots(std::slice::from_ref(&proj));
     assert!(graph3
         .edges
         .get(&lib_path)
@@ -833,7 +830,7 @@ fn p2_batch_generation_exactly_once() {
     std::fs::write(src.join("b.rs"), "// b\n").unwrap();
     git_init(tmp.path());
 
-    let (mut graph, mut pi) = scan_roots(&[root.clone()]);
+    let (mut graph, mut pi) = scan_roots(std::slice::from_ref(&root));
     // scan_roots no longer sets generation (daemon owns it); default is 0.
     assert_eq!(graph.generation, 0);
 
@@ -856,7 +853,7 @@ fn p2_source_refs_installed_atomically() {
     std::fs::write(src.join("child.rs"), "pub fn c() {}\n").unwrap();
     git_init(tmp.path());
 
-    let (graph, _) = scan_roots(&[proj.clone()]);
+    let (graph, _) = scan_roots(std::slice::from_ref(&proj));
     let lib_path = src.join("lib.rs").to_string_lossy().replace('\\', "/");
 
     let edges = graph.edges.get(&lib_path).unwrap();
@@ -886,13 +883,15 @@ fn collect_watchable_dirs_excludes_target_and_node_modules() {
     std::fs::write(root.join("src/a.rs"), "fn a(){}\n").unwrap();
     std::fs::write(root.join("target/x.rs"), "fn x(){}\n").unwrap();
 
-    let dirs = collect_watchable_dirs(&[root.clone()]);
+    let dirs = collect_watchable_dirs(std::slice::from_ref(&root));
     let joined: Vec<String> = dirs
         .iter()
         .map(|d| d.to_string_lossy().replace('\\', "/"))
         .collect();
     assert!(
-        joined.iter().any(|d| d.ends_with("/src") || d.ends_with("/src/nested")),
+        joined
+            .iter()
+            .any(|d| d.ends_with("/src") || d.ends_with("/src/nested")),
         "expected src dirs in {joined:?}"
     );
     assert!(

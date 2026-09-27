@@ -222,8 +222,13 @@ pub(super) fn read(session_dir: &Path, args: &Value) -> Result<String> {
     });
     header
         .as_object_mut()
-        .unwrap()
-        .extend(reference.as_object().unwrap().clone());
+        .context("History page header must be an object")?
+        .extend(
+            reference
+                .as_object()
+                .context("History reference must be an object")?
+                .clone(),
+        );
     // Plain content avoids JSON escaping expanding a 3000-character page past
     // the stub threshold (for example a page containing many newlines).
     Ok(format!("{header}\n{content}"))

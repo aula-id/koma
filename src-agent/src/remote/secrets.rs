@@ -102,13 +102,16 @@ fn load_machine_key_for_get() -> Option<[u8; KEY_LEN]> {
 
 fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     // Unique tmp next to the target.
-    let tmp = path.parent().unwrap_or_else(|| Path::new(".")).join(format!(
-        ".{}.tmp-{}",
-        path.file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("secret"),
-        std::process::id()
-    ));
+    let tmp = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!(
+            ".{}.tmp-{}",
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("secret"),
+            std::process::id()
+        ));
     std::fs::write(&tmp, bytes).with_context(|| format!("write {}", tmp.display()))?;
     set_mode(&tmp, mode)?;
     std::fs::rename(&tmp, path).with_context(|| format!("rename {}", path.display()))?;

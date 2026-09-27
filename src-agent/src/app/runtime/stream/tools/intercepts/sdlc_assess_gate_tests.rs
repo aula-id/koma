@@ -717,9 +717,7 @@ fn frozen_checklist_fixture(
     use crate::model::sdlc::graph::{
         ensure_tables, list_all, replace_nodes_from_checklist, ChecklistNode,
     };
-    use crate::model::sdlc::mission::{
-        ContractHashInput, Mission, CURRENT_CONTRACT_VERSION,
-    };
+    use crate::model::sdlc::mission::{ContractHashInput, Mission, CURRENT_CONTRACT_VERSION};
     use crate::model::session::Session;
     use crate::model::settings::Settings;
 
@@ -829,13 +827,7 @@ fn frozen_checklist_fixture(
         Conversation::new(""),
     ));
 
-    (
-        sess_path,
-        state,
-        id_a,
-        id_b,
-        original_todo.to_string(),
-    )
+    (sess_path, state, id_a, id_b, original_todo.to_string())
 }
 
 fn graph_fingerprint(sess_path: &std::path::Path) -> Vec<(String, String, String)> {
@@ -851,8 +843,7 @@ fn graph_fingerprint(sess_path: &std::path::Path) -> Vec<(String, String, String
 fn frozen_checklist_happy_handover_is_atomic_and_sets_pending() {
     use super::intercept_checklist_sdlc;
 
-    let (sess_path, mut state, id_a, id_b, original_todo) =
-        frozen_checklist_fixture("handover");
+    let (sess_path, mut state, id_a, id_b, original_todo) = frozen_checklist_fixture("handover");
     struct RmGuard(std::path::PathBuf);
     impl Drop for RmGuard {
         fn drop(&mut self) {
@@ -933,8 +924,7 @@ fn frozen_checklist_omitted_member_fails_closed_and_preserves_state() {
     );
     assert_eq!(graph_fingerprint(&sess_path), before);
     assert_eq!(
-        state.rest.sessions[0].sdlc_pending_node_id,
-        pending_before,
+        state.rest.sessions[0].sdlc_pending_node_id, pending_before,
         "pending must be untouched on error"
     );
 }
@@ -977,13 +967,11 @@ fn frozen_checklist_unknown_id_fails_without_title_fallback() {
 #[test]
 fn frozen_checklist_qualified_content_echo_resolves() {
     use super::intercept_checklist_sdlc;
+    use crate::model::conversation::Conversation;
     use crate::model::sdlc::graph::{
         ensure_tables, list_all, replace_nodes_from_checklist, ChecklistNode,
     };
-    use crate::model::sdlc::mission::{
-        ContractHashInput, Mission, CURRENT_CONTRACT_VERSION,
-    };
-    use crate::model::conversation::Conversation;
+    use crate::model::sdlc::mission::{ContractHashInput, Mission, CURRENT_CONTRACT_VERSION};
     use crate::model::session::Session;
     use crate::model::settings::Settings;
 
@@ -1129,14 +1117,12 @@ fn frozen_checklist_qualified_content_echo_resolves() {
 #[test]
 fn frozen_checklist_all_sealed_clears_pending() {
     use super::intercept_checklist_sdlc;
+    use crate::model::conversation::Conversation;
     use crate::model::sdlc::graph::{
         ensure_tables, list_all, replace_nodes_from_checklist, set_verify_bit_with_evidence,
         ChecklistNode,
     };
-    use crate::model::sdlc::mission::{
-        ContractHashInput, Mission, CURRENT_CONTRACT_VERSION,
-    };
-    use crate::model::conversation::Conversation;
+    use crate::model::sdlc::mission::{ContractHashInput, Mission, CURRENT_CONTRACT_VERSION};
     use crate::model::session::Session;
     use crate::model::settings::Settings;
 
@@ -1161,15 +1147,13 @@ fn frozen_checklist_all_sealed_clears_pending() {
     ensure_tables(&conn).unwrap();
     replace_nodes_from_checklist(
         &conn,
-        &[
-            ChecklistNode {
-                title: "only".into(),
-                status: "pending".into(),
-                parent_title: None,
-                id: None,
-                owned_paths: vec![],
-            },
-        ],
+        &[ChecklistNode {
+            title: "only".into(),
+            status: "pending".into(),
+            parent_title: None,
+            id: None,
+            owned_paths: vec![],
+        }],
     )
     .unwrap();
     let id = list_all(&conn).unwrap()[0].id.clone();

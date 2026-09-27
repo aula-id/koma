@@ -315,7 +315,14 @@ fn search_still_works_after_reasoning_column() {
 #[test]
 fn search_messages_repairs_empty_fts_after_false_backfill_flag() {
     let dir = TempDir::new("fts-repair");
-    append(dir.path(), Role::User, "unique_repair_token_xyz", None, None).unwrap();
+    append(
+        dir.path(),
+        Role::User,
+        "unique_repair_token_xyz",
+        None,
+        None,
+    )
+    .unwrap();
 
     // Simulate a failed prior backfill: flag set, FTS wiped.
     {

@@ -40,6 +40,8 @@ pub(super) enum WinCmd {
 #[derive(serde::Deserialize)]
 #[serde(tag = "t")]
 pub(super) enum ClientMsg {
+    #[serde(rename = "coding")]
+    Coding { request: crate::coding::Request },
     /// Custom-titlebar window command: drag / minimize / toggle-maximize / close.
     #[serde(rename = "win")]
     Win { a: String },
@@ -263,6 +265,7 @@ pub(super) enum GuiReq {
     /// session's repo. Same reasoning as `FileDiff` — the host process has direct git
     /// access, so no daemon round-trip is needed or wanted: routed UNCONDITIONALLY to
     /// the host-relay thread via `HostCtl::GitStatus`, regardless of attach state.
+    GitWorkbench { request: crate::app::runtime::client::git_workbench::Request },
     GitStatus,
     /// The GIT panel's file row clicked: fetch a host-computed git diff for `path` —
     /// `staged` selects index-vs-HEAD (`true`, the STAGED changes) or worktree-vs-index

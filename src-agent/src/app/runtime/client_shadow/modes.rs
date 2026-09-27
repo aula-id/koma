@@ -725,9 +725,7 @@ pub(crate) fn shadow_attachments(
             })
             .collect(),
         selected: s.selected,
-        editor: s
-            .editor
-            .map(|(n, ed)| (n, shadow_text_editor(ed))),
+        editor: s.editor.map(|(n, ed)| (n, shadow_text_editor(ed))),
     }
 }
 

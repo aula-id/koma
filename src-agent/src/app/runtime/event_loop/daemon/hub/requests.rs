@@ -561,6 +561,9 @@ impl DaemonHub {
             ClientRequest::SetYoloArmed { armed } => {
                 self.set_yolo_armed(idx, state, armed);
             }
+            ClientRequest::SetSessionSystem { text } => {
+                self.set_session_system(idx, state, text);
+            }
 
             // GUI onboarding "koma free": mint/reuse the keyless Koma Free provider + a
             // Main-role koma-free model in the GLOBAL config (the non-key equivalent of the

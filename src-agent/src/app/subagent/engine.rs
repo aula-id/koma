@@ -327,8 +327,10 @@ pub async fn run_agent_loop(
             delegated_history(&convo, plan_only),
             &advertised_tools,
             &advertised_mcp,
-            settings.max_output_tokens,
-            context_window,
+            StreamLimits {
+                settings_cap: settings.max_output_tokens,
+                context_window,
+            },
             &tx,
         )
         .await;
@@ -601,6 +603,11 @@ pub async fn run_agent_loop(
     }
 }
 
+struct StreamLimits {
+    settings_cap: u32,
+    context_window: Option<u64>,
+}
+
 /// Stream a single model reply and drain its events into a [`StreamOutcome`].
 ///
 /// Opens a fresh inner [`StreamEvent`] channel, dispatches
@@ -615,8 +622,7 @@ async fn stream_step(
     history: Vec<crate::dto::chat::ChatMessage>,
     tools: &[String],
     mcp_tools: &[crate::dto::openrouter::ToolDef],
-    settings_cap: u32,
-    context_window: Option<u64>,
+    limits: StreamLimits,
     tx: &UnboundedSender<AgentEvent>,
 ) -> StreamOutcome {
     let (inner_tx, mut inner_rx) = mpsc::unbounded_channel();
@@ -647,11 +653,10 @@ async fn stream_step(
     // Owned clone of the inherited MCP tool defs, moved into the task alongside
     // `advertise` (same pattern — see doc comment above `stream_step`).
     let mcp_tools = mcp_tools.to_vec();
-    let prompt_est =
-        crate::app::runtime::shortsend::estimate_prompt_tokens_for_max_clamp(&history);
+    let prompt_est = crate::app::runtime::shortsend::estimate_prompt_tokens_for_max_clamp(&history);
     let max_tokens = crate::service::openrouter::effective_max_output_tokens(
-        settings_cap,
-        context_window,
+        limits.settings_cap,
+        limits.context_window,
         prompt_est,
     );
     let send = tokio::spawn(async move {
@@ -668,16 +673,8 @@ async fn stream_step(
         // exactly like the main agent's advertise fold (run.rs:447-456).
         let _ = c
             .stream_complete(
-                conn,
-                &model_id,
-                &provider,
-                &effort,
-                history,
-                &advertise,
-                &mcp_tools,
-                None,
-                max_tokens,
-                inner_tx,
+                conn, &model_id, &provider, &effort, history, &advertise, &mcp_tools, None,
+                max_tokens, inner_tx,
             )
             .await;
     });

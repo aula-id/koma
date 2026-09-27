@@ -308,6 +308,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // reasoning as `FileDiff`. Bodies live in the sibling `dispatch_git` module.
         GuiReq::GitStatus => dispatch_git::git_status(&ctx.ctl),
         GuiReq::GitDiff { path, staged } => dispatch_git::git_diff(&ctx.ctl, path, staged),
+        GuiReq::GitWorkbench { request } => { let _ = ctx.ctl.send(HostCtl::GitWorkbench { request }); },
         GuiReq::GitStage { paths } => dispatch_git::git_stage(&ctx.ctl, paths),
         GuiReq::GitUnstage { paths } => dispatch_git::git_unstage(&ctx.ctl, paths),
         GuiReq::GitDiscard { paths } => dispatch_git::git_discard(&ctx.ctl, paths),
@@ -761,10 +762,12 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::TutorialChat { id, messages } => {
             let messages = messages
                 .into_iter()
-                .map(|m| crate::app::runtime::client::tutorial_host::TutorialMsg {
-                    role: m.role,
-                    content: m.content,
-                })
+                .map(
+                    |m| crate::app::runtime::client::tutorial_host::TutorialMsg {
+                        role: m.role,
+                        content: m.content,
+                    },
+                )
                 .collect();
             let _ = ctx.ctl.send(HostCtl::TutorialChat { id, messages });
         }

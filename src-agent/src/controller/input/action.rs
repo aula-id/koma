@@ -191,7 +191,9 @@ pub enum Action {
     /// Esc in AgentPick → back to AgentList.
     ModelBackToAgentList,
     /// Enter on a row in AgentList → open AgentPick for that agent.
-    ModelOpenAgentPick { agent_name: String },
+    ModelOpenAgentPick {
+        agent_name: String,
+    },
     // --- Agents dashboard actions ---
     /// Confirm CREATE: write a new agent from the drafts, reload, back to Browse.
     CreateAgent,
@@ -383,7 +385,10 @@ pub enum Action {
     /// Select a prepared host. Runtime behavior depends on `RemoteIntent`.
     RemoteConnect(String),
     /// Resume the exact selected remote session UUID on the prepared host.
-    RemoteConnectSession { host_id: String, session_id: String },
+    RemoteConnectSession {
+        host_id: String,
+        session_id: String,
+    },
     /// Delete the selected host (y in delete confirm). Inner is host ID.
     RemoteDeleteHost(String),
     /// `i` in the remote compact overlay — import hosts from `~/.ssh/config`.

@@ -48,11 +48,7 @@ where
 /// Bidirectional raw frame proxy: stdin→sock and sock→stdout.
 ///
 /// Stops when either direction EOF/errors. Does not interpret or inject frames.
-pub async fn proxy_frames<R, W>(
-    stream: IpcStream,
-    stdin: &mut R,
-    stdout: &mut W,
-) -> Result<()>
+pub async fn proxy_frames<R, W>(stream: IpcStream, stdin: &mut R, stdout: &mut W) -> Result<()>
 where
     R: AsyncRead + Unpin + Send,
     W: AsyncWrite + Unpin + Send,

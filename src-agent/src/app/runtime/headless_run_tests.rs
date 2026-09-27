@@ -1,7 +1,7 @@
 use super::*;
-use std::sync::{Arc, Mutex, mpsc};
 use crate::app::runtime::client::connect::TransportKind;
 use crate::ipc::proto::{DaemonFrame, RunExtension};
+use std::sync::{mpsc, Arc, Mutex};
 
 fn initial_state() -> RunState {
     RunState {
@@ -117,7 +117,7 @@ fn drss_and_extension_setup_is_confirmed_before_submit() {
         ..Default::default()
     };
     assert_eq!(
-        run_attached(&conn, &cli, Some("go".into())).unwrap(),
+        run_attached(&conn, &cli, Some("go".into()), None).unwrap(),
         EXIT_OK
     );
     drop(conn);
@@ -137,6 +137,42 @@ fn drss_and_extension_setup_is_confirmed_before_submit() {
 }
 
 #[test]
+fn system_extra_is_applied_before_submit() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (conn, requests, worker) = connection(&rt, initial_state(), |request, state| {
+        if let ClientRequest::SetSessionSystem { text } = request {
+            assert_eq!(text, "task_dir is the desk");
+            state.system_extra = true;
+        }
+        Some(DaemonEvent::Ack)
+    });
+    let cli = RunCli {
+        system: Some("task_dir is the desk".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        run_attached(
+            &conn,
+            &cli,
+            Some("go".into()),
+            Some("task_dir is the desk".into())
+        )
+        .unwrap(),
+        EXIT_OK
+    );
+    drop(conn);
+    worker.join().unwrap();
+    let calls = requests.lock().unwrap();
+    let submit = calls
+        .iter()
+        .position(|c| matches!(c, ClientRequest::SubmitInput { .. }))
+        .unwrap();
+    assert!(calls[..submit]
+        .iter()
+        .any(|c| matches!(c, ClientRequest::SetSessionSystem { .. })));
+}
+
+#[test]
 fn rejected_or_unapplied_setup_never_submits_prompt() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     for explicit_error in [true, false] {
@@ -151,7 +187,7 @@ fn rejected_or_unapplied_setup_never_submits_prompt() {
             extensions: vec!["run.koma.one".into()],
             ..Default::default()
         };
-        assert!(run_attached(&conn, &cli, Some("go".into())).is_err());
+        assert!(run_attached(&conn, &cli, Some("go".into()), None).is_err());
         drop(conn);
         worker.join().unwrap();
         assert!(!requests
@@ -176,7 +212,7 @@ fn status_is_inspection_only_and_approval_keeps_exit_three() {
         );
         let prompt = if status_only { None } else { Some("go".into()) };
         assert_eq!(
-            run_attached(&conn, &RunCli::default(), prompt).unwrap(),
+            run_attached(&conn, &RunCli::default(), prompt, None).unwrap(),
             if status_only { EXIT_OK } else { EXIT_APPROVAL }
         );
         drop(conn);

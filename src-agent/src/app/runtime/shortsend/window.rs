@@ -154,6 +154,11 @@ fn memory_key(
     Ok(drss::fingerprint("drss-memory-v1", &inputs))
 }
 
+struct RecoveryContext<'a> {
+    omitted: &'a [(usize, &'a ArchiveRef)],
+    original_body: &'a [ChatMessage],
+}
+
 fn memory(
     index: &Index,
     through: i64,
@@ -161,9 +166,12 @@ fn memory(
     user: &str,
     goal: &GoalWire,
     budget: u64,
-    omitted: &[(usize, &ArchiveRef)],
-    original_body: &[ChatMessage],
+    recovery: RecoveryContext<'_>,
 ) -> Result<ChatMessage> {
+    let RecoveryContext {
+        omitted,
+        original_body,
+    } = recovery;
     let total_budget = budget;
     // A long charter or the existing index must not crowd every exact recovery
     // reference out of B. Reserve half of the expanded budget for the handoff.
@@ -389,8 +397,10 @@ pub fn shape(
             user,
             goal,
             b_budget,
-            recovery_omitted,
-            body,
+            RecoveryContext {
+                omitted: recovery_omitted,
+                original_body: body,
+            },
         )?,
     };
     // Recovery borrows only real free room: A, B, schemas, framing, a useful D,

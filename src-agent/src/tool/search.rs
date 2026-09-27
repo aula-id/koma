@@ -16,6 +16,7 @@ impl Tool for Grep {
     }
     fn description(&self) -> &'static str {
         "Search file contents by regular expression. Returns matching lines as path:line: text. \
+         Capped at 2000 matches / 90k chars. Grep one path or pattern at a time — a fatter dump spills to session tmp. \
          For structural/import dependency queries, prefer graph_query instead."
     }
     fn parameters(&self) -> Value {
@@ -69,7 +70,7 @@ impl Tool for Grep {
                 None => None,
             };
 
-        const MAX_MATCHES: usize = 200;
+        const MAX_MATCHES: usize = crate::config::MAX_READ_LINES;
         const MAX_LINE_CHARS: usize = 300;
 
         let mut matches: Vec<String> = Vec::new();
@@ -139,9 +140,9 @@ impl Tool for Grep {
         }
         let mut out = matches.join("\n");
         if truncated {
-            out.push_str(
-                "\n... (truncated at 200 matches; narrow your pattern or path to see more)",
-            );
+            out.push_str(&format!(
+                "\n... (truncated at {MAX_MATCHES} matches; narrow your pattern or path, or grep one file)"
+            ));
         }
         Ok(out)
     }
@@ -154,7 +155,7 @@ impl Tool for Glob {
         "glob"
     }
     fn description(&self) -> &'static str {
-        "Find files by glob pattern (e.g. **/*.rs). Returns matching paths. \
+        "Find files by glob pattern (e.g. **/*.rs). Returns matching paths, capped at 2000 / 90k chars. \
          For file dependency relationships, prefer graph_query."
     }
     fn parameters(&self) -> Value {
@@ -191,7 +192,7 @@ impl Tool for Glob {
             .map_err(|e| anyhow::anyhow!("invalid glob '{pattern}': {e}"))?
             .compile_matcher();
 
-        const MAX_RESULTS: usize = 200;
+        const MAX_RESULTS: usize = crate::config::MAX_READ_LINES;
 
         // Check if base is inside a workspace root — if not (e.g. under an
         // active skill dir), we must walk from base_abs directly instead of
@@ -251,7 +252,9 @@ impl Tool for Glob {
         }
         let mut out = results.join("\n");
         if truncated {
-            out.push_str("\n... (truncated at 200 results; narrow the glob to see more)");
+            out.push_str(&format!(
+                "\n... (truncated at {MAX_RESULTS} results; narrow the glob to see more)"
+            ));
         }
         Ok(out)
     }

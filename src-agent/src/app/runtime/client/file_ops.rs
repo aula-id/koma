@@ -13,13 +13,16 @@
 //! The `exec_*` functions are the pure compute surface reused by both the local
 //! host path (`handle_file_ctl`) and the remote thin client (`koma remote-fs`).
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use sha2::{Digest, Sha256};
 use std::path::{Component, Path, PathBuf};
 
 use super::push_proto::PushEnvelope;
 use super::push_rows::PushFileTreeEntry;
 use super::HostCtl;
+
+#[path = "file_ops_text.rs"]
+mod text_format;
+pub(crate) static FILE_MUTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Cap on a Coding-panel file read (~5 MiB). Past this we reply with
 /// `tooLarge: true` rather than shipping multi-megabyte content into Monaco.
@@ -199,7 +202,14 @@ pub(super) fn handle_file_ctl(
             expected_fingerprint,
             request_id,
         } => {
-            let r = exec_file_save(root, path, content, expected_fingerprint, request_id, workdirs);
+            let r = exec_file_save(
+                root,
+                path,
+                content,
+                expected_fingerprint,
+                request_id,
+                workdirs,
+            );
             emit(
                 push,
                 &PushEnvelope::FileSave {
@@ -420,11 +430,20 @@ pub(crate) fn exec_file_read(
         Ok(b) => b,
         Err(e) => return fail(Some(format!("failed to read file: {e}")), false, false),
     };
-    if looks_binary(&bytes) {
-        return fail(None, true, false);
+    if bytes.len() as u64 > FILE_READ_SIZE_CAP {
+        return fail(None, false, true);
     }
-    let content = String::from_utf8_lossy(&bytes).into_owned();
-    let fingerprint = compute_fingerprint(&abs);
+    let decoded = match text_format::decode(&bytes) {
+        Ok(file) => file,
+        Err(text_format::DecodeError::Binary) => return fail(None, true, false),
+        Err(e @ text_format::DecodeError::UnsupportedEncoding) => {
+            return fail(Some(e.message().into()), true, false)
+        }
+        Err(e) => return fail(Some(e.message().into()), false, false),
+    };
+    // Hash the bytes that produced this buffer, not a separate later read.
+    let fingerprint = fingerprint_bytes(&bytes);
+    let content = decoded.content;
     FileReadResult {
         root: root.to_string(),
         path: path.to_string(),
@@ -460,18 +479,47 @@ pub(crate) fn exec_file_save(
         Err(e) => return fail(String::new(), e),
     };
 
-    if abs.exists() {
-        let current = compute_fingerprint(&abs);
-        if current != expected_fingerprint {
+    // Serialize editor writes inside this process, including legacy and native
+    // coding RPC callers. An atomic rename prevents partial/truncated files.
+    let _save_guard = match FILE_MUTATION_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(_) => return fail(String::new(), "file save lock failed".into()),
+    };
+
+    let original = match std::fs::read(&abs) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
             return fail(
-                current,
-                "conflict: file changed on disk since last read".to_string(),
-            );
+                String::new(),
+                format!("failed to read file before saving: {e}"),
+            )
         }
-    } else if !expected_fingerprint.is_empty() {
+    };
+    let current = original
+        .as_deref()
+        .map(fingerprint_bytes)
+        .unwrap_or_default();
+    if current != expected_fingerprint {
         return fail(
-            String::new(),
-            "conflict: file changed on disk since last read".to_string(),
+            current,
+            "conflict: file changed on disk since last read".into(),
+        );
+    }
+    // Derive format from the verified disk version. This keeps local and SSH
+    // writes identical and never guesses an encoding from the edited buffer.
+    let format = match original.as_deref() {
+        Some(bytes) => match text_format::decode(bytes) {
+            Ok(file) => file.format,
+            Err(e) => return fail(current, e.message().into()),
+        },
+        None => text_format::TextFormat::default(),
+    };
+    let bytes = format.encode(content);
+    if bytes.len() as u64 > FILE_READ_SIZE_CAP {
+        return fail(
+            current,
+            "file too large to save in the editor (max 5 MiB)".into(),
         );
     }
 
@@ -480,14 +528,14 @@ pub(crate) fn exec_file_save(
             return fail(String::new(), format!("failed to create parent dirs: {e}"));
         }
     }
-    if let Err(e) = std::fs::write(&abs, content.as_bytes()) {
+    if let Err(e) = crate::coding::persistence::atomic_write(&abs, &bytes) {
         return fail(String::new(), format!("failed to write file: {e}"));
     }
     FileSaveResult {
         root: root.to_string(),
         path: path.to_string(),
         request_id: request_id.to_string(),
-        fingerprint: compute_fingerprint(&abs),
+        fingerprint: fingerprint_bytes(&bytes),
         error: None,
         mutated: true,
     }
@@ -508,6 +556,8 @@ pub(crate) fn exec_file_create(
         error: Some(error),
         mutated: false,
     };
+
+    let _mutation = match FILE_MUTATION_LOCK.lock() { Ok(guard) => guard, Err(_) => return fail("File mutation lock failed".into()) };
 
     let abs = match resolve_contained(root, path, workdirs) {
         Ok(p) => p,
@@ -558,6 +608,8 @@ pub(crate) fn exec_file_rename(
         mutated: false,
     };
 
+    let _mutation = match FILE_MUTATION_LOCK.lock() { Ok(guard) => guard, Err(_) => return fail("File mutation lock failed".into()) };
+
     let old_abs = match resolve_contained(root, old_path, workdirs) {
         Ok(p) => p,
         Err(e) => return fail(e),
@@ -605,6 +657,8 @@ pub(crate) fn exec_file_delete(
         error: Some(error),
         mutated: false,
     };
+
+    let _mutation = match FILE_MUTATION_LOCK.lock() { Ok(guard) => guard, Err(_) => return fail("File mutation lock failed".into()) };
 
     let abs = match resolve_contained(root, path, workdirs) {
         Ok(p) => p,
@@ -657,6 +711,8 @@ pub(crate) fn exec_file_write_bytes(
     if path.is_empty() || path == "." {
         return fail("refusing to write workspace root".to_string());
     }
+
+    let _mutation = match FILE_MUTATION_LOCK.lock() { Ok(guard) => guard, Err(_) => return fail("File mutation lock failed".into()) };
 
     let bytes = match decode_b64(bytes_b64) {
         Ok(b) => b,
@@ -976,25 +1032,16 @@ fn partial_canonicalize(path: &Path) -> PathBuf {
     }
 }
 
-/// Fingerprint for stale-save detection: mtime + size + first 4KB content hash.
+/// The fingerprint covers every on-disk byte, including encoding and line endings.
+pub(crate) fn fingerprint_bytes(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+#[cfg(test)]
 fn compute_fingerprint(path: &Path) -> String {
-    let meta = std::fs::metadata(path).ok();
-    let mtime = meta.as_ref().and_then(|m| m.modified().ok());
-    let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-    let head = std::fs::read(path)
-        .ok()
-        .map(|b| {
-            let slice = &b[..std::cmp::min(b.len(), 4096)];
-            let mut h = DefaultHasher::new();
-            slice.hash(&mut h);
-            h.finish()
-        })
-        .unwrap_or(0);
-    let mut h = DefaultHasher::new();
-    mtime.hash(&mut h);
-    size.hash(&mut h);
-    head.hash(&mut h);
-    format!("{:016x}", h.finish())
+    std::fs::read(path)
+        .map(|bytes| fingerprint_bytes(&bytes))
+        .unwrap_or_default()
 }
 
 /// NUL byte in the first 8KiB ⇒ binary (matches the harness/diff sniff).
@@ -1019,3 +1066,9 @@ fn sort_entries(entries: &mut [PushFileTreeEntry]) {
 #[cfg(test)]
 #[path = "file_ops_test.rs"]
 mod tests;
+
+pub(crate) fn decode_resource_text(bytes: &[u8]) -> Result<String, String> { text_format::decode(bytes).map(|v| v.content).map_err(|e|e.message().into()) }
+pub(crate) fn encode_resource_text(original: Option<&[u8]>, text: &str) -> Result<Vec<u8>, String> {
+    let format = match original { Some(bytes) => text_format::decode(bytes).map_err(|e|e.message())?.format, None => text_format::TextFormat::default() };
+    Ok(format.encode(text))
+}

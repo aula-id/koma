@@ -25,18 +25,18 @@ use crate::app::state::{AppState, AppStateRest};
 use crate::model::store::SessionMeta;
 
 use crate::ipc::proto::{
-    AgentModelPickerSnapshot, AgentsSnapshot, BashJobView, BashSnapshot, CatalogueModelSnapshot,
-    CatalogueProviderSnapshot, CookingEntrySnapshot, EffortSnapshot, ExtRowWire, ExtScreenSnapshot,
-    ExtStoreDetailWire, ExtStoreRowWire, ExtStoreSnapshot, ExtTuiScreenWire, ExtensionsSnapshot,
-    HelpEntrySnapshot, HelpSnapshot, HistoryEntrySnapshot, KeyInputSnapshot, LoadingSnapshot,
-    McpSnapshot, ModeSnapshot, ModelCmdSnapshot, ModelDraftSnapshot, ModelEndpointWire,
-    ModelModalSnapshot, OAuthDraftSnapshot, OnboardProviderSnapshot, OnboardSnapshot,
-    PathPickerSnapshot, PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot,
-    RemoteEditorSnapshot, RemoteHostSnapshot, RemoteSessionSnapshot, RemoteSnapshot,
-    RewindEntrySnapshot, RewindSnapshot, RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot,
-    SessionMetaSnapshot, SettingsSnapshot, SkillCmdSnapshot, SkillEntrySnapshot,
-    TextEditorSnapshot, TodoItemSnapshot, TodoSnapshot, ToolPickerSnapshot, UsageSnapshot,
-    WarmStatusWire, AttachmentRowSnapshot, AttachmentsSnapshot,
+    AgentModelPickerSnapshot, AgentsSnapshot, AttachmentRowSnapshot, AttachmentsSnapshot,
+    BashJobView, BashSnapshot, CatalogueModelSnapshot, CatalogueProviderSnapshot,
+    CookingEntrySnapshot, EffortSnapshot, ExtRowWire, ExtScreenSnapshot, ExtStoreDetailWire,
+    ExtStoreRowWire, ExtStoreSnapshot, ExtTuiScreenWire, ExtensionsSnapshot, HelpEntrySnapshot,
+    HelpSnapshot, HistoryEntrySnapshot, KeyInputSnapshot, LoadingSnapshot, McpSnapshot,
+    ModeSnapshot, ModelCmdSnapshot, ModelDraftSnapshot, ModelEndpointWire, ModelModalSnapshot,
+    OAuthDraftSnapshot, OnboardProviderSnapshot, OnboardSnapshot, PathPickerSnapshot,
+    PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot, RemoteEditorSnapshot,
+    RemoteHostSnapshot, RemoteSessionSnapshot, RemoteSnapshot, RewindEntrySnapshot, RewindSnapshot,
+    RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot, SessionMetaSnapshot,
+    SettingsSnapshot, SkillCmdSnapshot, SkillEntrySnapshot, TextEditorSnapshot, TodoItemSnapshot,
+    TodoSnapshot, ToolPickerSnapshot, UsageSnapshot, WarmStatusWire,
 };
 
 pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
@@ -720,7 +720,10 @@ pub fn attachments_snapshot(a: &crate::app::mode::AttachmentsState) -> Attachmen
             })
             .collect(),
         selected: a.selected,
-        editor: a.editor.as_ref().map(|(n, ed)| (*n, text_editor_snapshot(ed))),
+        editor: a
+            .editor
+            .as_ref()
+            .map(|(n, ed)| (*n, text_editor_snapshot(ed))),
     }
 }
 

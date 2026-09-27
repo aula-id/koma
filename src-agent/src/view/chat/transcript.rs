@@ -5,7 +5,8 @@ use super::blocks::{
     render_attachment_card, render_bash_nudge_block, render_shell_block, render_user_message,
 };
 use super::helpers::{
-    push_thinking_viewport, render_block, render_tool_box, split_thinking, truncate_chars, THINK_BAR,
+    push_thinking_viewport, render_block, render_tool_box, split_thinking, truncate_chars,
+    THINK_BAR,
 };
 use crate::app::state::AppStateRest;
 use crate::dto::chat::Role;

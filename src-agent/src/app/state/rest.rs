@@ -938,7 +938,8 @@ impl AppStateRest {
         let rt = &mut self.sessions[sess_idx];
         let stale_plan_park = leaving_plan
             && rt.awaiting_approval
-            && rt.pending_tool_calls
+            && rt
+                .pending_tool_calls
                 .get(rt.tool_idx)
                 .is_some_and(|call| call.function.name == "plan_ready");
         if (rt.active_rx.is_some() && rt.compact_anim_start.is_none()) || stale_plan_park {

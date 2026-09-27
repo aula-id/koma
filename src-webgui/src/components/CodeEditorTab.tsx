@@ -1,6 +1,7 @@
+import { bindDebugEditor } from '../lib/coding-debug'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
-import { Code2, Download, RotateCcw, Save, X } from 'lucide-react'
+import { Download, X } from 'lucide-react'
 import { initMonaco, applyKomaTheme, readMonoFont, langFromPath } from '../lib/monaco-setup'
 import {
   ensureLspProviders,
@@ -13,6 +14,7 @@ import {
   setGoToDefinitionHandler,
   warmCodeLensCache,
   registerLspDidChangeFlusher,
+  flushPendingLspDidChange,
 } from '../lib/monaco-lsp'
 import { codingAskInChatPayload } from '../lib/codingRef'
 import { viewerKindForPath, type ViewerKind } from '../lib/viewerKind'
@@ -21,6 +23,14 @@ import { fileKey } from '../store/coding'
 import { isTabVisible, normalizeGroups } from '../store/editorGroups'
 import { BrailleSpinner } from './BrailleSpinner'
 import { CodingFileViewer } from './CodingFileViewer'
+import { EditorChrome } from './EditorChrome'
+import { configureCodingEditor } from '../lib/coding-editor-config'
+import { recordCodingLocation, navigateCodingHistory } from '../lib/coding-navigation'
+import { CodingOutline } from './CodingOutline'
+import { showCodingRefactor } from './CodingRefactor'
+import { undoWorkspaceEdit } from '../lib/coding-edits'
+import { showCodingHistory } from './CodingHistory'
+import { isMarkdownPath } from '../lib/markdownPreview'
 
 type CodingTab = Extract<Tab, { kind: 'codingFile' }>
 
@@ -31,8 +41,16 @@ const LSP_CHANGE_MS = 120
 // CodeLens ref-counts are expensive (documentSymbol + N references RPCs) and
 // share the host LSP mutex with hover/completion. Only warm on open / save idle.
 const CODELENS_IDLE_MS = 2500
+const viewStates = new Map<string, monaco.editor.ICodeEditorViewState>()
 
 export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
+  const host = useKoma(s => s.remoteState.hostId ?? 'local')
+  return <WorkspaceCodeEditor key={JSON.stringify([host, tab.id])} tab={tab} />
+}
+function WorkspaceCodeEditor({ tab }: { tab: CodingTab }) {
+  const hostId = useKoma(s => s.remoteState.hostId ?? 'local')
+  const viewKey = JSON.stringify([hostId, tab.root, tab.path])
+  const [outlineOpen, setOutlineOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelRef = useRef<monaco.editor.ITextModel | null>(null)
@@ -93,10 +111,12 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     fileState.content != null &&
     !fileState.binary &&
     !fileState.tooLarge &&
-    !fileState.error &&
-    !fileState.conflict
+    !fileState.loading
   )
-  const canSave = !!(canEdit && fileState?.dirty && !fileState.saving)
+  const openPreview = isMarkdownPath(tab.path)
+    ? () => useKoma.getState().openCodingFile(tab.root, tab.path, { preview: true })
+    : undefined
+  const canSave = !!(canEdit && fileState?.dirty && !fileState.saving && !fileState.conflict)
   const canRevert = !!(fileState && (fileState.dirty || fileState.conflict) && !fileState.saving)
 
   const status = useMemo(() => {
@@ -107,7 +127,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     if (fileState.error) return fileState.error
     if (fileState.binary) return 'Binary'
     if (fileState.tooLarge) return 'Too large'
-    if (fileState.dirty) return codingAutosave ? 'Modified · autosave on' : 'Modified'
+    if (fileState.dirty) return fileState.manualSaveRequired ? 'Modified · save to apply' : codingAutosave ? 'Modified · autosave on' : 'Modified'
     return 'Saved'
   }, [fileState, codingAutosave])
 
@@ -116,7 +136,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       clearTimeout(autosaveTimerRef.current)
       autosaveTimerRef.current = null
     }
-    if (!codingAutosave) return
+    if (!codingAutosave || fileState?.manualSaveRequired) return
     if (!fileState?.dirty) return
     if (fileState.content == null) return
     if (fileState.saving || fileState.conflict || fileState.binary || fileState.tooLarge || fileState.error) {
@@ -127,7 +147,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     autosaveTimerRef.current = setTimeout(() => {
       autosaveTimerRef.current = null
       const cur = useKoma.getState().coding.files[fileKey(tab.root, tab.path)]
-      if (!cur?.dirty || cur.content == null || cur.saving || cur.conflict) return
+      if (!cur?.dirty || cur.content == null || cur.saving || cur.conflict || cur.manualSaveRequired) return
       if (cur.binary || cur.tooLarge || cur.error) return
       if (cur.content === (cur.savedContent ?? '')) return
       if (!useKoma.getState().settingsValues?.codingAutosave) return
@@ -142,6 +162,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     }
   }, [
     codingAutosave,
+    fileState?.manualSaveRequired,
     fileState?.dirty,
     fileState?.content,
     fileState?.savedContent,
@@ -196,12 +217,23 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       bracketPairColorization: { enabled: true },
       guides: { indentation: true, bracketPairs: false },
       stickyScroll: { enabled: true },
-      inlayHints: { enabled: 'off' },
+      inlayHints: { enabled: 'on' },
       // Dim CodeLens to match VS Code secondary chrome.
       // (color comes from editorCodeLens.foreground theme token)
     })
     monaco.editor.setTheme(theme)
     editorRef.current = editor
+    const stopDebug = bindDebugEditor(monaco, editor, { hostId, root: tab.root }, tab.path)
+    const rememberLocation = () => {
+      const position = editor.getPosition()
+      if (position && editor.hasTextFocus()) recordCodingLocation(hostId, { root: tab.root, path: tab.path, line: position.lineNumber, column: position.column })
+    }
+    const cursor = editor.onDidChangeCursorPosition(rememberLocation)
+    const focus = editor.onDidFocusEditorText(rememberLocation)
+    editor.addAction({ id: 'koma.outline', label: 'Toggle Document Outline', run: () => setOutlineOpen(value => !value) })
+    editor.addAction({ id: 'koma.navigateBack', label: 'Go Back', keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.LeftArrow], run: () => navigateCodingHistory(-1) })
+    editor.addAction({ id: 'koma.navigateForward', label: 'Go Forward', keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.RightArrow], run: () => navigateCodingHistory(1) })
+    const stopConfiguration = configureCodingEditor(editor, { hostId: useKoma.getState().remoteState.hostId ?? 'local', root: tab.root }, tab.path)
 
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       useKoma.getState().saveCodingFile(tab.root, tab.path)
@@ -216,6 +248,20 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       void editor.getAction('editor.action.referenceSearch.trigger')?.run()
     })
 
+    editor.addAction({ id: 'koma.rename', label: 'Rename Symbol…', keybindings: [monaco.KeyCode.F2], contextMenuGroupId: 'navigation', contextMenuOrder: 1.5, run: async () => {
+      const model = editor.getModel(), position = editor.getPosition()
+      if (!model || !position) return
+      const version = model.getVersionId()
+      await flushPendingLspDidChange(tab.root, tab.path)
+      if (model.isDisposed() || model.getVersionId() !== version) return
+      const state = useKoma.getState()
+      showCodingRefactor({ workspace: { hostId: state.remoteState.hostId ?? 'local', root: tab.root }, path: tab.path,
+        position: { line: position.lineNumber - 1, character: position.column - 1 }, word: model.getWordAtPosition(position)?.word,
+        mode: 'rename', snapshot: state.coding.files, generation: state.coding._sessionGen })
+    } })
+    editor.addAction({ id: 'koma.undoWorkspaceEdit', label: 'Undo Workspace Edit', run: async () => {
+      try { await undoWorkspaceEdit() } catch (error) { const message = error instanceof Error ? error.message : String(error); useKoma.setState(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, text: message, kind: 'error' } } } }) }
+    } })
     // Selection → composer: `@path:start-end` + fenced buffer text, then focus chat.
     editor.addAction({
       id: 'koma.askInChat',
@@ -336,8 +382,24 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     }
     window.addEventListener('koma-reveal-line', onReveal)
 
+    const onCodingCommand = (event: Event) => {
+      const command = (event as CustomEvent<{ id: string; tabId: string }>).detail
+      if (command?.tabId !== tab.id) return
+      editor.focus()
+      if (command.id === 'save') useKoma.getState().saveCodingFile(tab.root, tab.path)
+      else void editor.getAction(command.id)?.run()
+    }
+    window.addEventListener('koma-coding-command', onCodingCommand)
+
     return () => {
       window.removeEventListener('koma-reveal-line', onReveal)
+      window.removeEventListener('koma-coding-command', onCodingCommand)
+      stopConfiguration()
+      stopDebug()
+      cursor.dispose(); focus.dispose()
+      const view = editor.saveViewState()
+      if (view) viewStates.set(viewKey, view)
+      if (viewStates.size > 100) viewStates.delete(viewStates.keys().next().value!)
       sub.dispose()
       registerLspDidChangeFlusher(tab.root, tab.path, null)
       if (lspChangeTimerRef.current) clearTimeout(lspChangeTimerRef.current)
@@ -349,7 +411,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       modelRef.current = null
       lspOpenedRef.current = false
     }
-  }, [tab.root, tab.path])
+  }, [tab.root, tab.path, hostId])
 
   // Parent uses display:none for inactive panes; force layout on reveal so the
   // editor isn't stuck at 0×0 after WebKit skips ResizeObserver.
@@ -377,6 +439,11 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     try {
       const uri = monacoUriFromPath(tab.root, tab.path)
       let model = monaco.editor.getModel(uri)
+      const hostId = useKoma.getState().remoteState.hostId ?? 'local'
+      if (model && (model as unknown as { __komaHost?: string }).__komaHost !== hostId) {
+        model.dispose()
+        model = null
+      }
       if (!model) {
         model = monaco.editor.createModel(next, lang, uri)
         model.setEOL(monaco.editor.EndOfLineSequence.LF)
@@ -386,7 +453,10 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
         // save/fingerprint tick was still emitting didChange on some WebKit builds.
         if (cur !== next) {
           const pos = editor.getPosition()
-          model.setValue(next)
+          model.pushStackElement()
+          model.pushEditOperations([], [{ range: model.getFullModelRange(), text: next }], () => null)
+          model.pushStackElement()
+          if (lspOpenedRef.current) useKoma.getState().req({ r: 'LspDidChange', root: tab.root, path: tab.path, text: next })
           model.setEOL(monaco.editor.EndOfLineSequence.LF)
           if (pos) editor.setPosition(pos)
         } else if (model.getEndOfLineSequence() !== monaco.editor.EndOfLineSequence.LF) {
@@ -394,7 +464,11 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
         }
       }
       stampModelPath(model, tab.root, tab.path)
-      if (editor.getModel() !== model) editor.setModel(model)
+      if (editor.getModel() !== model) {
+        editor.setModel(model)
+        const view = viewStates.get(viewKey)
+        if (view) editor.restoreViewState(view)
+      }
       modelRef.current = model
     } finally {
       // Clear only this generation after Monaco has flushed model events.
@@ -406,7 +480,7 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     }
 
     editor.updateOptions({
-      readOnly: fileState.binary || fileState.tooLarge || !!fileState.error || fileState.conflict,
+      readOnly: fileState.binary || fileState.tooLarge || fileState.loading,
     })
 
     // Go-to-def / Problems may open this tab before content is ready — apply
@@ -424,19 +498,34 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       // Second pass after layout / late model attach.
       setTimeout(apply, 50)
     }
-    // Intentionally omit `loading` and `fingerprint` — both flip without content
-    // changes and used to re-enter setValue/setEOL for free (React #185 on split).
+    // Fingerprint changes do not require touching the model. Loading only
+    // updates readOnly; unchanged content never triggers setValue/setEOL.
   }, [
     fileState?.content,
     fileState?.binary,
     fileState?.tooLarge,
-    fileState?.error,
+    fileState?.loading,
     fileState?.conflict,
     tab.path,
     tab.root,
+    hostId,
   ])
 
   // Attach LSP when content is ready AND the matching server is installed.
+  useEffect(() => {
+    const restart = (event: Event) => {
+      const workspace = (event as CustomEvent<{ hostId: string; root?: string }>).detail
+      const store = useKoma.getState()
+      if (workspace.hostId !== (store.remoteState.hostId ?? 'local') || workspace.root && workspace.root !== tab.root) return
+      const model = modelRef.current
+      if (!model || model.isDisposed()) return
+      lspOpenedRef.current = true
+      store.req({ r: 'LspDidOpen', root: tab.root, path: tab.path, languageId: languageIdForPath(tab.path), text: model.getValue() })
+    }
+    window.addEventListener('koma-lsp-restart', restart)
+    return () => window.removeEventListener('koma-lsp-restart', restart)
+  }, [tab.root, tab.path])
+
   // Do not mark opened while source === 'missing' — install updates lspServers
   // without remounting the tab, so this effect must re-run and send LspDidOpen.
   useEffect(() => {
@@ -488,8 +577,8 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
       }, 2500)
       return () => window.clearTimeout(t)
     }
-    const match = lspServers.find((s) => s.extensions.includes(ext))
-    if (!match || match.source === 'missing') return
+    const matches = lspServers.filter((s) => s.extensions.includes(ext))
+    if (!matches.some(s => s.source !== 'missing')) return
 
     lspOpenedRef.current = true
     req({
@@ -520,43 +609,21 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     tab.path,
     tab.root,
     lspServers,
+    hostId,
     req,
   ])
 
-  if (fileState?.conflict) {
-    return (
-      <div className="flex h-full w-full flex-col">
-        <EditorChrome
-          path={tab.path}
-          status={status}
-          canSave={false}
-          canRevert={canRevert}
-          saving={!!fileState.saving}
-          onSave={() => saveCodingFile(tab.root, tab.path)}
-          onRevert={() => revertCodingFile(tab.root, tab.path)}
-        />
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-[12px] text-koma-dim">
-          <div>File changed on disk — save was rejected.</div>
-          <button
-            type="button"
-            onClick={() => revertCodingFile(tab.root, tab.path)}
-            className="text-koma-fg underline hover:opacity-80"
-          >
-            Reload from disk
-          </button>
-        </div>
-      </div>
-    )
-  }
   // Known media / office types always use the binary viewer (even if FileRead
   // returned text, e.g. SVG without NULs). Don't wait for FileRead — the viewer
   // fetches bytes itself via FileDownloadBytes.
   const viewKind = viewerKindForPath(tab.path)
-  if (viewKind !== 'text' && !fileState?.error && !fileState?.tooLarge) {
+  if (viewKind !== 'text' && (!fileState?.error || fileState.binary) && !fileState?.tooLarge) {
     return (
       <div className="flex h-full w-full flex-col">
         <EditorChrome
           path={tab.path}
+          onTogglePreview={openPreview}
+          onHistory={() => showCodingHistory(tab.root, tab.path)}
           status={fileState?.binary ? status : kindStatus(viewKind)}
           canSave={false}
           canRevert={false}
@@ -576,9 +643,10 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   if (fileState?.binary) {
     return (
       <div className="flex h-full w-full flex-col">
-        <EditorChrome path={tab.path} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
+        <EditorChrome path={tab.path} onTogglePreview={openPreview}
+          onHistory={() => showCodingHistory(tab.root, tab.path)} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-[12px] text-koma-dim">
-          <div>Binary file — no preview</div>
+          <div>{fileState.error ?? 'Binary file — no preview'}</div>
           <button
             type="button"
             onClick={() => useKoma.getState().downloadCodingFile(tab.root, tab.path)}
@@ -594,7 +662,8 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   if (fileState?.tooLarge) {
     return (
       <div className="flex h-full w-full flex-col">
-        <EditorChrome path={tab.path} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
+        <EditorChrome path={tab.path} onTogglePreview={openPreview}
+          onHistory={() => showCodingHistory(tab.root, tab.path)} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-[12px] text-koma-dim">
           File too large to edit
         </div>
@@ -604,7 +673,8 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
   if (fileState?.error && fileState.content === null) {
     return (
       <div className="flex h-full w-full flex-col">
-        <EditorChrome path={tab.path} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
+        <EditorChrome path={tab.path} onTogglePreview={openPreview}
+          onHistory={() => showCodingHistory(tab.root, tab.path)} status={status} canSave={false} canRevert={false} saving={false} onSave={() => {}} onRevert={() => {}} />
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-[12px] text-koma-dim">
           {fileState.error}
         </div>
@@ -616,6 +686,8 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
     <div className="flex h-full w-full flex-col">
       <EditorChrome
         path={tab.path}
+        onTogglePreview={openPreview}
+          onHistory={() => showCodingHistory(tab.root, tab.path)}
         status={status}
         canSave={canSave}
         canRevert={canRevert}
@@ -623,6 +695,10 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
         onSave={() => saveCodingFile(tab.root, tab.path)}
         onRevert={() => revertCodingFile(tab.root, tab.path)}
       />
+      {fileState?.conflict && <div className="flex flex-none items-center gap-2 border-b border-koma-border bg-koma-accent/10 px-3 py-1.5 text-[12px] text-koma-fg">
+        <span className="min-w-0 flex-1">File changed on disk. Your edits are kept.</span>
+        <button onClick={() => showCodingHistory(tab.root, tab.path, true)} className="flex-none rounded border border-koma-border px-2 py-0.5 text-[11px] hover:bg-koma-hover">Compare and resolve</button>
+      </div>}
       {missingServer && (
         <div className="flex flex-none items-center gap-2 border-b border-koma-border bg-koma-accent/10 px-3 py-1.5 text-[12px] text-koma-fg">
           <span className="min-w-0 flex-1 truncate opacity-85">
@@ -652,8 +728,9 @@ export default function CodeEditorTab({ tab }: { tab: CodingTab }) {
           </button>
         </div>
       )}
-      <div className="relative min-h-0 flex-1">
-        <div ref={containerRef} className="absolute inset-0" />
+      <div className="relative flex min-h-0 flex-1">
+        <div className="relative min-w-0 flex-1"><div ref={containerRef} className="absolute inset-0" /></div>
+        {outlineOpen && <CodingOutline root={tab.root} path={tab.path} onClose={() => setOutlineOpen(false)} />}
         {fileState?.loading && (
           <div className="pointer-events-none absolute right-2 top-2 text-koma-dim">
             <BrailleSpinner size={14} className="opacity-70" />
@@ -681,57 +758,4 @@ function kindStatus(kind: ViewerKind): string {
     default:
       return 'Preview'
   }
-}
-
-function EditorChrome({
-  path,
-  status,
-  canSave,
-  canRevert,
-  saving,
-  onSave,
-  onRevert,
-}: {
-  path: string
-  status: string
-  canSave: boolean
-  canRevert: boolean
-  saving: boolean
-  onSave: () => void
-  onRevert: () => void
-}) {
-  // Density via container query — no RO/setState. Narrow split panes hide the
-  // full path (title still has it) and drop the status text so Save/Revert stay.
-  return (
-    <div className="@container/pathbar flex h-8 min-w-0 flex-none items-center gap-2 border-b border-koma-border bg-koma-panel px-3 text-[12px] @max-xs/pathbar:gap-1.5 @max-xs/pathbar:px-2 @max-[12rem]/pathbar:px-1.5">
-      <Code2 size={13} className="flex-none text-koma-dim" />
-      <span
-        className="min-w-0 flex-1 truncate font-mono text-koma-fg @max-[12rem]/pathbar:hidden"
-        title={path}
-      >
-        {path}
-      </span>
-      <span className="min-w-0 flex-none truncate text-[11px] text-koma-dim @max-xs/pathbar:max-w-[5rem] @max-[12rem]/pathbar:hidden">
-        {status}
-      </span>
-      <button
-        type="button"
-        onClick={onRevert}
-        disabled={!canRevert || saving}
-        title="Revert"
-        className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:opacity-30"
-      >
-        <RotateCcw size={13} />
-      </button>
-      <button
-        type="button"
-        onClick={onSave}
-        disabled={!canSave}
-        title="Save"
-        className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:opacity-30"
-      >
-        <Save size={13} />
-      </button>
-    </div>
-  )
 }

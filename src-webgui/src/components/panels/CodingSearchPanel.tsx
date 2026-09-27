@@ -270,7 +270,7 @@ export function CodingSearchPanel({ root }: { root: string | null }) {
                 trailing={
                   <ToggleChip
                     on={false}
-                    title="Replace All (Ctrl+Enter)"
+                    title="Preview Replace All (Ctrl+Enter)"
                     onClick={() => {
                       if (!canReplace) return
                       replaceAll(root)

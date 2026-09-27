@@ -142,7 +142,7 @@ fn handle_events_one_generation_per_batch() {
     std::fs::write(src.join("a.rs"), "// a\n").unwrap();
     std::fs::write(src.join("b.rs"), "// b\n").unwrap();
 
-    let (graph, mut pi) = crate::linker::scan::scan_roots(&[root.clone()]);
+    let (graph, mut pi) = crate::linker::scan::scan_roots(std::slice::from_ref(&root));
     let mut graph = graph;
     // scan_roots no longer sets generation (daemon owns it); default is 0.
     assert_eq!(graph.generation, 0);
@@ -182,13 +182,16 @@ fn collect_watchable_dirs_skips_pruned() {
     std::fs::write(root.join("target/x.rs"), "// x\n").unwrap();
     std::fs::write(root.join("node_modules/pkg/y.js"), "// y\n").unwrap();
 
-    let dirs = crate::linker::scan::collect_watchable_dirs(&[root.clone()]);
+    let dirs = crate::linker::scan::collect_watchable_dirs(std::slice::from_ref(&root));
     let as_str: Vec<String> = dirs
         .iter()
         .map(|d| d.to_string_lossy().replace('\\', "/"))
         .collect();
     assert!(
-        as_str.iter().any(|d| d.ends_with("/src") || d == &root.join("src").to_string_lossy().replace('\\', "/")),
+        as_str
+            .iter()
+            .any(|d| d.ends_with("/src")
+                || d == &root.join("src").to_string_lossy().replace('\\', "/")),
         "src must be watched: {as_str:?}"
     );
     assert!(
@@ -300,7 +303,7 @@ int main() { return 0; }
     std::fs::write(src.join("foo.h"), "int foo;\n").unwrap();
 
     // Initially no compile DB.
-    let (mut graph, mut pi) = crate::linker::scan::scan_roots(&[root.clone()]);
+    let (mut graph, mut pi) = crate::linker::scan::scan_roots(std::slice::from_ref(&root));
 
     // Verify initial resolution.
     let main_c = normalize_lexical(&src.join("main.c").to_string_lossy());
@@ -338,7 +341,7 @@ fn source_only_change_uses_existing_caches() {
     std::fs::write(root.join("Cargo.toml"), "[package]\nname=\"test\"\n").unwrap();
     std::fs::write(src.join("a.rs"), "// v1\n").unwrap();
 
-    let (mut graph, mut pi) = crate::linker::scan::scan_roots(&[root.clone()]);
+    let (mut graph, mut pi) = crate::linker::scan::scan_roots(std::slice::from_ref(&root));
     let gen_before = pi.generation();
 
     // Modify a source file (not config).

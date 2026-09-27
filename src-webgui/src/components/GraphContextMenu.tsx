@@ -1,3 +1,4 @@
+import { openGitTool } from './gitWorkbenchShared'
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -18,8 +19,7 @@ import { remoteShortName } from '../lib/gitRefs'
 
 // What was right-clicked: a commit ROW (identified by sha) or a REF CHIP on a
 // row (identified by the branch name it decorates, plus its `refKind` — tags
-// aren't switchable, so a tag chip never opens this menu, see GraphRow's
-// `onRefContextMenu` gating — a REMOTE ref's `name` is the full
+// expose management actions without branch checkout. A REMOTE ref's `name` is the full
 // `<remote>/<branch>` form, e.g. "origin/feature", which must be short-named
 // via `remoteShortName` before CHECKOUT so it DWIMs into a tracking branch
 // instead of detaching HEAD. Merge/rebase must NOT do this strip: a remote-
@@ -423,6 +423,9 @@ export function GraphContextMenu({ x, y, target, onClose }: Props) {
         />
       ) : target.kind === 'commit' ? (
         <>
+          <MenuItem icon={<GitPullRequestArrow size={13} />} disabled={!currentBranch} onClick={() => { openGitTool('rebase', { target: target.sha }); onClose() }}>Interactive rebase after here…</MenuItem>
+          <MenuItem icon={<GitBranchPlus size={13} />} onClick={() => { openGitTool('tags', { commit: target.sha }); onClose() }}>Create tag here…</MenuItem>
+          <Separator />
           <MenuItem icon={<GitCommitHorizontal size={13} />} onClick={() => setMode('confirmCheckout')}>
             Checkout commit
           </MenuItem>
@@ -455,6 +458,7 @@ export function GraphContextMenu({ x, y, target, onClose }: Props) {
         </>
       ) : (
         <>
+          <MenuItem icon={<GitBranchPlus size={13} />} onClick={() => { openGitTool(target.refKind === 'tag' ? 'tags' : 'branches', { target: target.refKind === 'tag' ? target.name : `${target.refKind === 'head' ? 'local' : target.refKind}:${target.name}` }); onClose() }}>Manage {target.refKind === 'tag' ? 'tag' : 'branch'}…</MenuItem>
           {target.refKind !== 'tag' && (
             <MenuItem
               icon={<GitCommitHorizontal size={13} />}
@@ -472,7 +476,7 @@ export function GraphContextMenu({ x, y, target, onClose }: Props) {
             </MenuItem>
           )}
           <MenuItem icon={<Copy size={13} />} onClick={() => copy(target.name)}>
-            Copy branch name
+            Copy {target.refKind === 'tag' ? 'tag' : 'branch'} name
           </MenuItem>
           {target.refKind !== 'tag' && (
             <>

@@ -278,10 +278,7 @@ pub(super) fn push_thinking_viewport(
     }
     let mut tail: Vec<Vec<Span<'static>>> = full.split_off(full.len() - max);
     // Marker occupies the top slot of the viewport (still counts toward max).
-    tail[0] = vec![
-        Span::styled(THINK_BAR, bar_style),
-        Span::styled("…", style),
-    ];
+    tail[0] = vec![Span::styled(THINK_BAR, bar_style), Span::styled("…", style)];
     out.extend(tail);
 }
 

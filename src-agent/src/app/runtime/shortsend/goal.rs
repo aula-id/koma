@@ -185,17 +185,13 @@ pub fn seed_charter_if_empty(settings: &mut Settings, last_user: &str) -> bool {
 }
 
 /// Ranked resolve: user > mission active leaf > charter > none.
-pub fn resolve_effective_goal(
-    settings: &Settings,
-    mission: Option<&MissionSnap>,
-) -> EffectiveGoal {
+pub fn resolve_effective_goal(settings: &Settings, mission: Option<&MissionSnap>) -> EffectiveGoal {
     let charter = settings.session_charter.trim().to_string();
     let user_goal = settings.session_goal.trim();
     let stored = GoalSource::parse(&settings.session_goal_source);
 
     // 1. User-owned text. Legacy: non-empty goal with source none still counts as user.
-    let user_owned = !user_goal.is_empty()
-        && matches!(stored, GoalSource::User | GoalSource::None);
+    let user_owned = !user_goal.is_empty() && matches!(stored, GoalSource::User | GoalSource::None);
     if user_owned {
         return EffectiveGoal {
             source: GoalSource::User,
@@ -256,10 +252,7 @@ pub fn load_mission_snap(session_dir: &std::path::Path) -> Option<MissionSnap> {
     }
     let conn = crate::model::msglog::open(session_dir).ok()?;
     let open = crate::model::sdlc::graph::list_open_leaves(&conn).ok()?;
-    let actives: Vec<_> = open
-        .into_iter()
-        .filter(|n| n.status == "active")
-        .collect();
+    let actives: Vec<_> = open.into_iter().filter(|n| n.status == "active").collect();
     // Multiple actives = invalid; don't pick randomly.
     if actives.len() == 1 {
         let a = &actives[0];
@@ -395,10 +388,12 @@ mod tests {
 
     #[test]
     fn resolve_user_over_mission_and_charter() {
-        let mut s = Settings::default();
-        s.session_goal = "user steer".into();
-        s.session_goal_source = "user".into();
-        s.session_charter = "kickoff charter".into();
+        let s = Settings {
+            session_goal: "user steer".into(),
+            session_goal_source: "user".into(),
+            session_charter: "kickoff charter".into(),
+            ..Settings::default()
+        };
         let mission = MissionSnap {
             approved: true,
             mission_goal: "mission goal".into(),
@@ -413,8 +408,10 @@ mod tests {
 
     #[test]
     fn resolve_mission_when_no_user() {
-        let mut s = Settings::default();
-        s.session_charter = "kickoff".into();
+        let s = Settings {
+            session_charter: "kickoff".into(),
+            ..Settings::default()
+        };
         let mission = MissionSnap {
             approved: true,
             mission_goal: "big goal".into(),
@@ -428,8 +425,10 @@ mod tests {
 
     #[test]
     fn resolve_charter_fallback() {
-        let mut s = Settings::default();
-        s.session_charter = "build headless run".into();
+        let s = Settings {
+            session_charter: "build headless run".into(),
+            ..Settings::default()
+        };
         let eg = resolve_effective_goal(&s, None);
         assert_eq!(eg.source, GoalSource::Charter);
         assert_eq!(eg.objective, "build headless run");
@@ -438,8 +437,10 @@ mod tests {
 
     #[test]
     fn resolve_legacy_goal_without_source() {
-        let mut s = Settings::default();
-        s.session_goal = "legacy goal".into();
+        let s = Settings {
+            session_goal: "legacy goal".into(),
+            ..Settings::default()
+        };
         // source empty → None parse, still user-owned when goal non-empty
         let eg = resolve_effective_goal(&s, None);
         assert_eq!(eg.source, GoalSource::User);
@@ -448,8 +449,10 @@ mod tests {
 
     #[test]
     fn resolve_multi_active_skips_mission() {
-        let mut s = Settings::default();
-        s.session_charter = "charter only".into();
+        let s = Settings {
+            session_charter: "charter only".into(),
+            ..Settings::default()
+        };
         // load_mission_snap would set active_leaf None; simulate here
         let mission = MissionSnap {
             approved: true,
@@ -465,7 +468,10 @@ mod tests {
         let mut s = Settings::default();
         assert!(seed_charter_if_empty(&mut s, "Implement no-HITL goals"));
         assert_eq!(s.session_charter, "Implement no-HITL goals");
-        assert!(!seed_charter_if_empty(&mut s, "second message does not overwrite"));
+        assert!(!seed_charter_if_empty(
+            &mut s,
+            "second message does not overwrite"
+        ));
         assert_eq!(s.session_charter, "Implement no-HITL goals");
     }
 
@@ -478,8 +484,10 @@ mod tests {
 
     #[test]
     fn clear_does_not_imply_wipe_charter_in_resolve() {
-        let mut s = Settings::default();
-        s.session_charter = "still here".into();
+        let mut s = Settings {
+            session_charter: "still here".into(),
+            ..Settings::default()
+        };
         s.session_goal.clear();
         s.session_goal_source = "none".into();
         let eg = resolve_effective_goal(&s, None);
@@ -500,7 +508,8 @@ mod refresh_tests {
         settings.session_goal_msg_id = 42;
         let charter = settings.session_charter.clone();
         for _ in 0..10 {
-            let repeated = refresh_goal_state(&mut settings, Some("goal: fix context recall"), None);
+            let repeated =
+                refresh_goal_state(&mut settings, Some("goal: fix context recall"), None);
             assert!(!repeated.settings_changed && !repeated.objective_changed);
             assert_eq!(settings.session_goal_msg_id, 42);
         }
@@ -543,11 +552,20 @@ mod refresh_tests {
         let first = refresh_goal_state(&mut settings, Some("initial task"), Some(&mission));
         assert!(first.objective_changed);
         assert_eq!(first.wire.source, "mission");
-        assert!(!refresh_goal_state(&mut settings, Some("continue"), Some(&mission)).objective_changed);
+        assert!(
+            !refresh_goal_state(&mut settings, Some("continue"), Some(&mission)).objective_changed
+        );
         mission.active_leaf = Some(("second".into(), "Validate context".into()));
-        assert!(refresh_goal_state(&mut settings, Some("continue"), Some(&mission)).objective_changed);
-        assert!(!refresh_goal_state(&mut settings, Some("continue"), Some(&mission)).objective_changed);
-        assert!(refresh_goal_state(&mut settings, Some("goal: fix recall"), Some(&mission)).objective_changed);
+        assert!(
+            refresh_goal_state(&mut settings, Some("continue"), Some(&mission)).objective_changed
+        );
+        assert!(
+            !refresh_goal_state(&mut settings, Some("continue"), Some(&mission)).objective_changed
+        );
+        assert!(
+            refresh_goal_state(&mut settings, Some("goal: fix recall"), Some(&mission))
+                .objective_changed
+        );
         mission.active_leaf = Some(("third".into(), "Review context".into()));
         let masked = refresh_goal_state(&mut settings, Some("goal: fix recall"), Some(&mission));
         assert!(!masked.objective_changed);

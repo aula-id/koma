@@ -257,11 +257,8 @@ fn mission_ready_schema_has_target_branch() {
 
 #[test]
 fn mission_verify_pass_footer_claims_next_or_nudges_integrate() {
-    let with_next = mission_verify_pass_footer(
-        "leaf-a",
-        Some(&("leaf-b".into(), "Second".into())),
-        None,
-    );
+    let with_next =
+        mission_verify_pass_footer("leaf-a", Some(&("leaf-b".into(), "Second".into())), None);
     assert!(with_next.contains("leaf-a"));
     assert!(with_next.contains("HARNESS claimed next OPEN leaf \"Second\" (leaf-b)"));
     assert!(with_next.contains("do not re-claim"));

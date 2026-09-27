@@ -251,9 +251,7 @@ pub fn diagnose_and_repair_message_find(session_dir: &Path) -> String {
             let fts_after: i64 = conn
                 .query_row("SELECT COUNT(*) FROM messages_fts", [], |r| r.get(0))
                 .unwrap_or(-1);
-            report.push(format!(
-                "repair: FTS rebuild done (fts_rows={fts_after})"
-            ));
+            report.push(format!("repair: FTS rebuild done (fts_rows={fts_after})"));
         }
         Err(e) => report.push(format!("repair: FTS rebuild failed: {e}")),
     }
@@ -452,18 +450,13 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             )
             .unwrap_or(true);
         let has_messages: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM messages LIMIT 1)",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT EXISTS(SELECT 1 FROM messages LIMIT 1)", [], |r| {
+                r.get(0)
+            })
             .unwrap_or(false);
         if fts_empty && has_messages {
             // Permanent empty-search state from a prior failed backfill — retry.
-            let _ = conn.execute(
-                "DELETE FROM schema_meta WHERE key = 'fts_backfilled'",
-                [],
-            );
+            let _ = conn.execute("DELETE FROM schema_meta WHERE key = 'fts_backfilled'", []);
             backfilled = 0;
         }
     }

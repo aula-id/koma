@@ -128,14 +128,14 @@ jobs:
         working-directory: src-extension
         run: cargo fmt --all --check || true
 
-      # Production-only clippy: --lib --bins excludes test/bench/example
-      # targets so test-style unwraps and WIP dead_code don't gate CI.
+      # Check production separately so cfg(not(test)) enforces the ban on
+      # unwrap/expect in application code.
       - name: Clippy (production)
         run: cargo clippy --workspace --no-default-features --lib --bins -- -D warnings
 
-      # Full clippy including tests: non-gating informational output.
-      - name: Clippy (tests, non-gating)
-        run: cargo clippy --workspace --no-default-features --all-targets || true
+      # Test, bench, and example sources must also remain warning-free.
+      - name: Clippy (all targets)
+        run: cargo clippy --workspace --no-default-features --all-targets -- -D warnings
 
       - name: Clippy (src-extension, production)
         working-directory: src-extension

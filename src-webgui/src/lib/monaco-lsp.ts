@@ -1,3 +1,8 @@
+import { codingSnippets, getCodingConfig } from './coding-config'
+import { showCodingRefactor, type RefactorContext } from '../components/CodingRefactor'
+import { type WorkspaceEdit } from './coding-edits'
+import { useKoma } from '../store/koma'
+import { queryCodingLanguage } from './coding-language'
 // Monaco ↔ host LSP bridge: pending request map + provider registration +
 // diagnostic markers. Providers talk JSON-RPC through GuiReq; replies land as
 // PushEnvelope variants handled in the koma store, which resolves the matching
@@ -91,18 +96,14 @@ export function registerLspDidChangeFlusher(
 }
 
 /**
- * Run the registered flusher (if any) and yield one macrotask so the host
- * notify worker can coalesce/send didChange before completion/resolve RPC.
+ * Queue the latest buffer before a language query. The coding transport awaits
+ * notification acknowledgement; ordering does not depend on a timing delay.
  */
 export async function flushPendingLspDidChange(root: string, path: string): Promise<void> {
   const flush = pendingDidChangeFlush.get(didChangeFlushKey(root, path))
   if (!flush) return
   flush()
-  // Host notify worker coalesces didChange on a short quiet window (~16ms) and
-  // always flushes pending changes before other notify jobs. One frame is not
-  // enough when the request pool races the notify thread; wait a tick past the
-  // coalesce window so the server buffer is current.
-  await new Promise<void>((r) => setTimeout(r, 20))
+
 }
 
 // ─── CodeLens reference-count cache ──────────────────────────────────────────
@@ -289,12 +290,12 @@ const MARKER_OWNER = 'koma-lsp'
 
 export function applyDiagnosticsToMonaco(uri: string, diagnostics: LspDiagnostic[]): void {
   const models = monaco.editor.getModels()
-  // Match by path suffix — Monaco models may use inmemory: or file:// URIs.
+  // Match exact decoded file paths; a suffix match could target another file.
   const abs = uriToPath(uri)
   const model = models.find((m) => {
     const mu = m.uri.toString()
     if (mu === uri) return true
-    if (abs && (mu.endsWith(abs) || mu.includes(abs))) return true
+    if (abs && uriToPath(mu) === abs) return true
     return false
   })
   if (!model) {
@@ -337,18 +338,12 @@ export async function ensureModelForUri(
   getRoots: RootsFn,
   preferText?: string | null,
 ): Promise<monaco.editor.ITextModel | null> {
+  const hostId = useKoma.getState().remoteState.hostId ?? 'local'
+  const generation = useKoma.getState().coding._sessionGen
   const existing = monaco.editor.getModel(monaco.Uri.parse(uriStr))
   if (existing) {
-    if (preferText != null) {
-      const next = preferText.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-      existing.setEOL(monaco.editor.EndOfLineSequence.LF)
-      if (existing.getValue(monaco.editor.EndOfLinePreference.LF) !== next) {
-        // Tab content is authoritative when provided.
-        existing.setValue(next)
-        existing.setEOL(monaco.editor.EndOfLineSequence.LF)
-      }
-    }
-    return existing
+    if ((existing as unknown as { __komaHost?: string }).__komaHost === hostId) return existing
+    existing.dispose()
   }
 
   const abs = uriToPath(uriStr)
@@ -372,17 +367,11 @@ export async function ensureModelForUri(
   const uri = monaco.Uri.parse(uriStr)
   const normalized = (text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
 
-  // Another concurrent ensure may have created it.
+  if ((useKoma.getState().remoteState.hostId ?? 'local') !== hostId || useKoma.getState().coding._sessionGen !== generation) return null
+  // A concurrent open/edit is authoritative. Never replace it with this read's
+  // older disk snapshot, even when the text differs.
   const raced = monaco.editor.getModel(uri)
-  if (raced) {
-    raced.setEOL(monaco.editor.EndOfLineSequence.LF)
-    if (raced.getValue(monaco.editor.EndOfLinePreference.LF) !== normalized) {
-      raced.setValue(normalized)
-      raced.setEOL(monaco.editor.EndOfLineSequence.LF)
-    }
-    stampModelPath(raced, split.root, split.path)
-    return raced
-  }
+  if (raced) return raced
 
   const model = monaco.editor.createModel(normalized, langFromPath(split.path), uri)
   model.setEOL(monaco.editor.EndOfLineSequence.LF)
@@ -407,6 +396,8 @@ async function materializeLocations(
   req: ReqFn,
   getRoots: RootsFn,
 ): Promise<monaco.languages.Location[]> {
+  const hostId = useKoma.getState().remoteState.hostId ?? 'local'
+  const generation = useKoma.getState().coding._sessionGen
   const out: monaco.languages.Location[] = []
   // Dedupe URI loads. Cap unique files so a popular symbol cannot stampede FileRead.
   const seen = new Set<string>()
@@ -416,6 +407,7 @@ async function materializeLocations(
       seen.add(l.uri)
       await ensureModelForUri(l.uri, req, getRoots)
     }
+    if ((useKoma.getState().remoteState.hostId ?? 'local') !== hostId || useKoma.getState().coding._sessionGen !== generation) return []
     if (monaco.editor.getModel(monaco.Uri.parse(l.uri))) {
       out.push(locationToMonaco(l))
     }
@@ -681,6 +673,156 @@ export function ensureLspProviders(
   })
 
   // VS Code-style "N references" CodeLens above symbols — off by default.
+  monaco.languages.registerDocumentSymbolProvider(selector, {
+    provideDocumentSymbols: async (model, token) => {
+      const loc = modelToRootPath(model, getRoots())
+      if (!loc) return []
+      const version = model.getVersionId()
+      const requestId = mintId('symbols')
+      const pending = trackDocumentSymbol(requestId)
+      req({ r: 'LspDocumentSymbol', ...loc, requestId })
+      try {
+        const symbols = await pending
+        if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return []
+        const range = (r: LspDocumentSymbol['range']): monaco.IRange => ({
+          startLineNumber: r.startLine + 1, startColumn: r.startCharacter + 1,
+          endLineNumber: r.endLine + 1, endColumn: r.endCharacter + 1,
+        })
+        const roots: monaco.languages.DocumentSymbol[] = []
+        const stack: monaco.languages.DocumentSymbol[] = []
+        for (const symbol of symbols) {
+          const node: monaco.languages.DocumentSymbol = {
+            name: symbol.name, detail: '', kind: Math.max(0, symbol.kind - 1), tags: [],
+            range: range(symbol.range), selectionRange: range(symbol.selectionRange), children: [],
+          }
+          while (stack.length && (!monaco.Range.containsRange(stack[stack.length - 1].range, node.range) || monaco.Range.equalsRange(stack[stack.length - 1].range, node.range))) stack.pop()
+          if (stack.length) stack[stack.length - 1].children!.push(node)
+          else roots.push(node)
+          stack.push(node)
+        }
+        return roots
+      } catch { return [] }
+    },
+  })
+
+  const extended = async <T,>(model: monaco.editor.ITextModel, method: string, params: Record<string, unknown>, token: monaco.CancellationToken): Promise<T | null> => {
+    const rp = modelToRootPath(model, getRoots())
+    if (!rp || token.isCancellationRequested) return null
+    const version = model.getVersionId()
+    const hostId = useKoma.getState().remoteState.hostId ?? 'local'
+    await flushPendingLspDidChange(rp.root, rp.path)
+    try {
+      const result = await queryCodingLanguage<T>({ hostId, root: rp.root }, rp.path, method, params)
+      if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version || (useKoma.getState().remoteState.hostId ?? 'local') !== hostId) return null
+      return result
+    } catch { return null }
+  }
+  type ProtocolRange = { start: { line: number; character: number }; end: { line: number; character: number } }
+  type ProtocolEdit = { range: ProtocolRange; newText: string }
+  const range = (r: ProtocolRange): monaco.IRange => ({ startLineNumber: r.start.line + 1, startColumn: r.start.character + 1, endLineNumber: r.end.line + 1, endColumn: r.end.character + 1 })
+  const edit = (e: ProtocolEdit): monaco.languages.TextEdit => ({ range: range(e.range), text: e.newText })
+  const position = (p: monaco.Position) => ({ line: p.lineNumber - 1, character: p.column - 1 })
+  const protocolRange = (r: monaco.IRange) => ({ start: { line: r.startLineNumber - 1, character: r.startColumn - 1 }, end: { line: r.endLineNumber - 1, character: r.endColumn - 1 } })
+  monaco.languages.registerDocumentFormattingEditProvider('*', {
+    provideDocumentFormattingEdits: async (model, options, token) => {
+      const result = await extended<ProtocolEdit[]>(model, 'textDocument/formatting', { options }, token)
+      return result?.map(edit) ?? []
+    },
+  })
+  const semanticLegend = {
+    tokenTypes: ['namespace','type','class','enum','interface','struct','typeParameter','parameter','variable','property','enumMember','event','function','method','macro','keyword','modifier','comment','string','number','regexp','operator','decorator'],
+    tokenModifiers: ['declaration','definition','readonly','static','deprecated','abstract','async','modification','documentation','defaultLibrary'],
+  }
+  monaco.languages.registerDocumentSemanticTokensProvider('*', {
+    getLegend: () => semanticLegend,
+    releaseDocumentSemanticTokens() {},
+    provideDocumentSemanticTokens: async (model, _last, token) => {
+      const value = await extended<{ legend: typeof semanticLegend; data: number[] | null }>(model, 'textDocument/semanticTokens/full', {}, token)
+      if (!value?.data || !value.legend?.tokenTypes || !value.legend.tokenModifiers || value.data.length % 5 || value.data.length > 2_000_000) return null
+      const data = [...value.data]
+      for (let i = 0; i < data.length; i += 5) {
+        if (!data.slice(i, i + 5).every(n => Number.isInteger(n) && n >= 0 && n <= 0xffffffff)) return null
+        data[i + 3] = Math.max(0, semanticLegend.tokenTypes.indexOf(value.legend.tokenTypes[data[i + 3]]))
+        let bits = 0
+        for (let bit = 0; bit < Math.min(32, value.legend.tokenModifiers.length); bit++) {
+          const target = semanticLegend.tokenModifiers.indexOf(value.legend.tokenModifiers[bit])
+          if (target >= 0 && (data[i + 4] & (1 << bit))) bits |= 1 << target
+        }
+        data[i + 4] = bits >>> 0
+      }
+      return { data: new Uint32Array(data) }
+    },
+  })
+  monaco.languages.registerDocumentRangeFormattingEditProvider('*', {
+    provideDocumentRangeFormattingEdits: async (model, selection, options, token) => {
+      const result = await extended<ProtocolEdit[]>(model, 'textDocument/rangeFormatting', { range: protocolRange(selection), options }, token)
+      return result?.map(edit) ?? []
+    },
+  })
+  monaco.languages.registerSignatureHelpProvider('*', {
+    signatureHelpTriggerCharacters: ['(', ','], signatureHelpRetriggerCharacters: [')'],
+    provideSignatureHelp: async (model, pos, token, context) => {
+      const result = await extended<{ signatures: Array<{ label: string; documentation?: string | { value: string }; parameters?: Array<{ label: string | [number, number]; documentation?: string | { value: string } }> }>; activeSignature?: number; activeParameter?: number }>(model, 'textDocument/signatureHelp', { position: position(pos), context: { triggerKind: context.triggerKind, triggerCharacter: context.triggerCharacter, isRetrigger: context.isRetrigger } }, token)
+      if (!result) return null
+      const documentation = (d?: string | { value: string }) => typeof d === 'string' ? d : d ? { value: d.value, isTrusted: false } : undefined
+      return { value: { signatures: result.signatures.map(s => ({ ...s, documentation: documentation(s.documentation), parameters: (s.parameters ?? []).map(p => ({ ...p, documentation: documentation(p.documentation) })) })), activeSignature: result.activeSignature ?? 0, activeParameter: result.activeParameter ?? 0 }, dispose() {} }
+    },
+  })
+  monaco.languages.registerInlayHintsProvider('*', {
+    provideInlayHints: async (model, selection, token) => {
+      type Hint = { position: { line: number; character: number }; label: string | Array<{ value: string }>; kind?: number; paddingLeft?: boolean; paddingRight?: boolean }
+      const result = await extended<Hint[]>(model, 'textDocument/inlayHint', { range: protocolRange(selection) }, token)
+      return { hints: (result ?? []).map(h => ({ position: { lineNumber: h.position.line + 1, column: h.position.character + 1 }, label: typeof h.label === 'string' ? h.label : h.label.map(p => p.value).join(''), kind: h.kind === 2 ? monaco.languages.InlayHintKind.Parameter : monaco.languages.InlayHintKind.Type, paddingLeft: h.paddingLeft, paddingRight: h.paddingRight })), dispose() {} }
+    },
+  })
+  type Location = { uri?: string; range?: ProtocolRange; targetUri?: string; targetSelectionRange?: ProtocolRange; targetRange?: ProtocolRange }
+  const locations = async (model: monaco.editor.ITextModel, pos: monaco.Position, token: monaco.CancellationToken, method: string) => {
+    const result = await extended<Location | Location[]>(model, method, { position: position(pos) }, token)
+    const found = result == null ? [] : Array.isArray(result) ? result : [result]
+    const converted: LspLocation[] = found.flatMap(l => {
+      const uri = l.uri ?? l.targetUri
+      const r = l.range ?? l.targetSelectionRange ?? l.targetRange
+      return uri && r ? [{ uri, range: { startLine: r.start.line, startCharacter: r.start.character, endLine: r.end.line, endCharacter: r.end.character } }] : []
+    })
+    return materializeLocations(converted, req, getRoots)
+  }
+  monaco.languages.registerCompletionItemProvider('*', {
+    provideCompletionItems: async (model, pos, _context, token) => {
+      const rp = modelToRootPath(model, getRoots())
+      if (!rp) return { suggestions: [] }
+      const version = model.getVersionId(), hostId = useKoma.getState().remoteState.hostId ?? 'local'
+      try {
+        const config = await getCodingConfig({ hostId, root: rp.root })
+        if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version || (useKoma.getState().remoteState.hostId ?? 'local') !== hostId) return { suggestions: [] }
+        const word = model.getWordUntilPosition(pos)
+        return { suggestions: codingSnippets(config, languageIdForPath(rp.path)).map(snippet => ({
+          label: snippet.prefix, kind: monaco.languages.CompletionItemKind.Snippet, documentation: snippet.description,
+          insertText: snippet.body, insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          range: { startLineNumber: pos.lineNumber, endLineNumber: pos.lineNumber, startColumn: word.startColumn, endColumn: word.endColumn },
+        })) }
+      } catch { return { suggestions: [] } }
+    },
+  })
+  monaco.editor.registerCommand('koma.previewWorkspaceEdit', (_accessor, context: unknown) => showCodingRefactor(context as RefactorContext))
+  monaco.languages.registerCodeActionProvider('*', {
+    provideCodeActions: async (model, selection, context, token) => {
+      const rp = modelToRootPath(model, getRoots())
+      if (!rp) return { actions: [], dispose() {} }
+      const state = useKoma.getState()
+      type Action = { title: string; kind?: string; edit?: WorkspaceEdit; command?: unknown; data?: unknown; disabled?: { reason: string }; isPreferred?: boolean }
+      const diagnostics = context.markers.map(m => ({ range: protocolRange(m), message: m.message, severity: m.severity === monaco.MarkerSeverity.Error ? 1 : m.severity === monaco.MarkerSeverity.Warning ? 2 : 3, code: typeof m.code === 'object' ? m.code.value : m.code, source: m.source }))
+      const result = await extended<Action[]>(model, 'textDocument/codeAction', { range: protocolRange(selection), context: { diagnostics, only: context.only ? [context.only] : undefined, triggerKind: context.trigger === monaco.languages.CodeActionTriggerType.Invoke ? 1 : 2 } }, token)
+      const actions: monaco.languages.CodeAction[] = (result ?? []).map(action => ({
+        title: action.title, kind: action.kind, isPreferred: action.isPreferred,
+        disabled: action.disabled?.reason,
+        command: { id: 'koma.previewWorkspaceEdit', title: action.title, arguments: [{ workspace: { hostId: state.remoteState.hostId ?? 'local', root: rp.root }, path: rp.path, position: { line: selection.startLineNumber - 1, character: selection.startColumn - 1 }, mode: 'action', label: action.title, action, snapshot: state.coding.files, generation: state.coding._sessionGen } satisfies RefactorContext] },
+      }))
+      return { actions, dispose() {} }
+    },
+  })
+  monaco.languages.registerImplementationProvider('*', { provideImplementation: (m, p, t) => locations(m, p, t, 'textDocument/implementation') })
+  monaco.languages.registerTypeDefinitionProvider('*', { provideTypeDefinition: (m, p, t) => locations(m, p, t, 'textDocument/typeDefinition') })
+
   if (!CODELENS_ENABLED) return
   const CODELENS_PEEK_REFS = 'koma.codelens.peekReferences'
   monaco.editor.registerCommand(
@@ -932,7 +1074,8 @@ export function stampModelPath(
   root: string,
   path: string,
 ): void {
-  const m = model as unknown as { __komaRoot?: string; __komaPath?: string }
+  const m = model as unknown as { __komaRoot?: string; __komaPath?: string; __komaHost?: string }
+  m.__komaHost = useKoma.getState().remoteState.hostId ?? 'local'
   m.__komaRoot = root
   m.__komaPath = path
 }

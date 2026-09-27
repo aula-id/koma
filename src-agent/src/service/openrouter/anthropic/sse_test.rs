@@ -20,8 +20,8 @@ fn message_start_captures_input_and_cache_usage() {
 #[test]
 fn message_start_usage_defaults_when_partial() {
     // Missing cache field defaults to 0; missing usage object → None.
-    let e = parse_event(r#"{"type":"message_start","message":{"usage":{"input_tokens":5}}}"#)
-        .unwrap();
+    let e =
+        parse_event(r#"{"type":"message_start","message":{"usage":{"input_tokens":5}}}"#).unwrap();
     match e {
         AnthropicEvent::MessageStart { message } => {
             let u = message.usage.unwrap();

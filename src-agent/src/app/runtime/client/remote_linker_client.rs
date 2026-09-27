@@ -105,10 +105,7 @@ impl RemoteLinkerClient {
     /// Cached roots (may be empty until SettingsValues arrives).
     #[allow(dead_code)]
     pub fn roots(&self) -> Vec<String> {
-        self.roots
-            .lock()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+        self.roots.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
     /// Cached roots as `PathBuf`s (for API parity with local `workdirs`).

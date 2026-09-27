@@ -1,6 +1,6 @@
 [package]
 name = "agent"
-version = "0.4.4"
+version = "0.4.5"
 edition = "2021"
 license = "Apache-2.0"
 
@@ -8,6 +8,7 @@ license = "Apache-2.0"
 winresource = "0.1"
 
 [dependencies]
+scopeguard = "1.2"
 ratatui = "0.30.2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "io-std", "signal", "process"] }
 reqwest = { version = "0.12", features = ["json", "stream", "blocking", "native-tls-vendored"] }
@@ -29,6 +30,7 @@ syntect = { version = "5", default-features = false, features = ["default-fancy"
 rusqlite = { version = "0.32", features = ["bundled"] }
 ignore = "0.4"
 regex = "1"
+quick-xml = "0.39"
 globset = "0.4"
 infer = "0.16"
 base64 = "0.22"
@@ -36,9 +38,12 @@ aes-gcm = "0.10"
 rand = "0.8"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = "1"
+tar = "0.4"
+xz2 = "0.1"
 ed25519-dalek = "2"
 koma-extension = { path = "../src-extension" }
 portable-pty = "0.8"
+process-wrap = { version = "9.1", default-features = false, features = ["std", "job-object"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 sha2 = "0.10"
 rmcp = { version = "1.8", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "macros"] }
@@ -56,7 +61,7 @@ tree-sitter-c = { version = "0.23", optional = true }
 tree-sitter-cpp = { version = "0.23", optional = true }
 tree-sitter-dart = { version = "0.0.4", optional = true }
 tree-sitter-swift = { version = "0.6", optional = true }
-notify = { version = "8", optional = true }
+notify = "8"
 notify-debouncer-mini = { version = "0.7", optional = true }
 
 # --- feature = "gui": xterm.js + wry desktop client. All optional; the default
@@ -78,6 +83,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Console",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
+    "Win32_System_Registry",
     "Win32_System_Time",
 ] }
 arboard = { version = "3", default-features = false, features = ["image-data"] }
@@ -106,7 +112,6 @@ linker = [
     "dep:tree-sitter-cpp",
     "dep:tree-sitter-dart",
     "dep:tree-sitter-swift",
-    "dep:notify",
     "dep:notify-debouncer-mini",
 ]
 

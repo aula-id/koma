@@ -34,10 +34,6 @@ mod lifecycle;
 mod linker_daemon;
 mod mcp_daemon;
 mod oauth_daemon;
-mod server;
-mod session_mgmt;
-mod signals;
-pub(crate) mod stdio_bridge;
 /// Private wire types for `koma remote-fs` (Coding panel thin client).
 pub(crate) mod remote_fs_proto;
 /// `koma remote-fs` stdio service entry.
@@ -52,6 +48,10 @@ pub(crate) mod remote_linker_proto;
 /// `koma remote-linker` stdio service entry.
 #[cfg(feature = "linker")]
 mod remote_linker_svc;
+mod server;
+mod session_mgmt;
+mod signals;
+pub(crate) mod stdio_bridge;
 // Wave-5: persist + restore the per-session bg-bash / sub-agent records (#25).
 pub(crate) mod bg_persist;
 #[cfg(feature = "gui")]

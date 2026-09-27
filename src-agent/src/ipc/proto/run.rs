@@ -19,6 +19,9 @@ pub struct RunState {
     pub max_output_tokens: u32,
     pub context_window_limit: u64,
     pub context_model_alias: String,
+    /// True when `--system` / `--system-file` text is stored on this session.
+    #[serde(default)]
+    pub system_extra: bool,
     pub extensions: Vec<RunExtension>,
 }
 

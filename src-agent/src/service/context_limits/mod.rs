@@ -225,7 +225,7 @@ pub async fn discover(
                 endpoint,
                 &model.id,
                 configured_limit,
-                &[model.clone()],
+                std::slice::from_ref(&model),
                 native,
             );
             result.match_method = "openrouter_alias".into();

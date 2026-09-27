@@ -15,12 +15,22 @@ use super::types::{FunctionCall, ToolCall};
 /// ```
 /// and the standalone (unwrapped) variant without a `<tool_call>` outer tag.
 ///
+/// Also handles the Qwen-Agent / Hermes-XML pair form (wrapped only):
+/// ```text
+/// <tool_call>
+/// NAME
+/// <arg_key>KEY</arg_key>
+/// <arg_value>VALUE</arg_value>
+/// </tool_call>
+/// ```
+///
 /// Scans `content` for `<tool_call>` … `</tool_call>` spans. Each `</tool_call>`
 /// close tag is paired with the NEAREST `<tool_call>` open that precedes it
 /// (within the not-yet-consumed region), so a stray/unclosed open tag before a
 /// valid block never swallows the valid block's call. Trims inner text and
-/// parses it as JSON or as the harmony XML form. A span counts as a tool call
-/// only when the inner text resolves to a non-empty name and arguments.
+/// parses it as JSON, the harmony XML form, or the Qwen-Agent pair form. A span
+/// counts as a tool call only when the inner text resolves to a non-empty name
+/// and arguments.
 ///
 /// Returns `(cleaned_content, calls)`. Successfully-parsed spans are removed
 /// from the content (leading/trailing whitespace trimmed, 3+ newline runs
@@ -138,9 +148,11 @@ pub fn extract_text_tool_calls(content: &str) -> (String, Vec<ToolCall>) {
     (cleaned, calls)
 }
 
-/// Dispatch: try JSON form first, then harmony XML form.
+/// Dispatch: JSON, then harmony XML, then Qwen-Agent `<arg_key>`/`<arg_value>`.
 pub(super) fn parse_tool_call_inner(inner: &str) -> Option<(String, String)> {
-    parse_tool_call_json(inner).or_else(|| parse_function_param_call(inner))
+    parse_tool_call_json(inner)
+        .or_else(|| parse_function_param_call(inner))
+        .or_else(|| parse_arg_key_value_call(inner))
 }
 
 /// Parse one `<tool_call>` inner JSON blob into `(name, arguments_string)`.
@@ -245,12 +257,101 @@ pub(super) fn parse_function_param_call(inner: &str) -> Option<(String, String)>
     Some((name, arguments))
 }
 
+/// Parse the Qwen-Agent / Hermes-XML pair form into `(name, arguments_json)`.
+///
+/// Recognises (inside an already-unwrapped `<tool_call>` span):
+/// ```text
+/// NAME
+/// <arg_key>KEY</arg_key>
+/// <arg_value>VALUE</arg_value>
+/// <arg_key>KEY2</arg_key>
+/// <arg_value>VALUE2</arg_value>
+/// ```
+/// NAME is the first non-empty line before the first `<arg_key>` (or the whole
+/// inner when there are no pairs). It must be a single identifier — ASCII
+/// letter/`_` first, then letters, digits, `_`, `-`, `.` — so a sentence in
+/// that slot is left as prose. A valid name with no pairs yields `"{}"`.
+///
+/// A key whose following `<arg_value>` is missing or sits after the next
+/// `<arg_key>` is skipped. Values are JSON-coerced the same way as Harmony:
+/// `serde_json::from_str` on success, otherwise a string.
+pub(super) fn parse_arg_key_value_call(inner: &str) -> Option<(String, String)> {
+    const KEY_OPEN: &str = "<arg_key>";
+    const KEY_CLOSE: &str = "</arg_key>";
+    const VAL_OPEN: &str = "<arg_value>";
+    const VAL_CLOSE: &str = "</arg_value>";
+
+    let name_region = match inner.find(KEY_OPEN) {
+        Some(p) => &inner[..p],
+        None => inner,
+    };
+    let name = name_region
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    if !is_tool_ident(name) {
+        return None;
+    }
+
+    let mut map = serde_json::Map::new();
+    let mut search = 0usize;
+    while let Some(rel) = inner[search..].find(KEY_OPEN) {
+        let key_start = search + rel + KEY_OPEN.len();
+        let Some(rel_close) = inner[key_start..].find(KEY_CLOSE) else {
+            break;
+        };
+        let key = inner[key_start..key_start + rel_close].trim().to_string();
+        let after_key = key_start + rel_close + KEY_CLOSE.len();
+
+        let next_key = inner[after_key..].find(KEY_OPEN).map(|r| after_key + r);
+        let next_val = inner[after_key..].find(VAL_OPEN).map(|r| after_key + r);
+        let val_open_at = match (next_val, next_key) {
+            (Some(v), Some(k)) if v < k => Some(v),
+            (Some(v), None) => Some(v),
+            _ => None,
+        };
+
+        if let Some(vo) = val_open_at {
+            let value_start = vo + VAL_OPEN.len();
+            if let Some(rel_vc) = inner[value_start..].find(VAL_CLOSE) {
+                let value_raw = inner[value_start..value_start + rel_vc].trim();
+                let coerced: serde_json::Value = serde_json::from_str(value_raw)
+                    .unwrap_or_else(|_| serde_json::Value::String(value_raw.to_string()));
+                if !key.is_empty() {
+                    map.insert(key, coerced);
+                }
+                search = value_start + rel_vc + VAL_CLOSE.len();
+                continue;
+            }
+        }
+
+        // Key with no usable value: skip it and keep scanning.
+        search = after_key;
+    }
+
+    let arguments = serde_json::to_string(&map).unwrap_or_else(|_| "{}".to_string());
+    Some((name.to_string(), arguments))
+}
+
+/// Single-token tool name: `glob`, `read`, `mcp__cybergym__cg_ping`.
+fn is_tool_ident(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() && first != '_' {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
 /// Strip any residual inline tool-call markup from assistant CONTENT that the
 /// structured-call path + `extract_text_tool_calls` didn't already remove:
 /// leftover well-formed `<tool_call> ... </tool_call>` spans, and ORPHAN/stray
 /// `<tool_call>` or `</tool_call>` tags a (often weak) model emitted without a
 /// valid JSON body. Also removes orphan harmony tags (`<function=...>`,
-/// `<parameter=...>`, `</function>`, `</parameter>`). Keeps surrounding prose;
+/// `<parameter=...>`, `</function>`, `</parameter>`) and Qwen-Agent pair tags
+/// (`<arg_key>`, `</arg_key>`, `<arg_value>`, `</arg_value>`). Keeps surrounding prose;
 /// collapses the blank lines a removed block leaves behind. This is
 /// display/commit hygiene — actual call execution is handled by
 /// `extract_text_tool_calls`.
@@ -265,7 +366,9 @@ pub(super) fn parse_function_param_call(inner: &str) -> Option<(String, String)>
 /// 4. Remove orphan harmony tags: `<function=...>` opening tags (up to `>`),
 ///    `<parameter=...>` opening tags (up to `>`), and `</function>` /
 ///    `</parameter>` close tags.
-/// 5. Collapse 3+ consecutive newlines to 2, and trim trailing whitespace.
+/// 5. Remove orphan Qwen-Agent pair tags: `<arg_key>`, `</arg_key>`,
+///    `<arg_value>`, `</arg_value>`.
+/// 6. Collapse 3+ consecutive newlines to 2, and trim trailing whitespace.
 pub fn strip_tool_call_tags(content: &str) -> String {
     // Some summarizer models emit the bare plural <tool_calls>/</tool_calls> tags
     // (no inner payload) — distinct from the singular <tool_call> wrapper
@@ -345,7 +448,14 @@ pub fn strip_tool_call_tags(content: &str) -> String {
         s.replace_range(pos..pos + "</parameter>".len(), "");
     }
 
-    // Step 5: Collapse blank-line runs and trim trailing whitespace.
+    // Step 5: Remove orphan Qwen-Agent pair tags.
+    for tag in ["<arg_key>", "</arg_key>", "<arg_value>", "</arg_value>"] {
+        while let Some(pos) = s.find(tag) {
+            s.replace_range(pos..pos + tag.len(), "");
+        }
+    }
+
+    // Step 6: Collapse blank-line runs and trim trailing whitespace.
     collapse_blank_runs(s.trim_end())
 }
 

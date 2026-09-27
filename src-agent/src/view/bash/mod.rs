@@ -184,8 +184,7 @@ pub fn render_bash_overlay(
     let sel = selected.min(jobs.len().saturating_sub(1));
     let list_w = list_inner.width as usize;
     let list_h = list_inner.height as usize;
-    let (start, end) =
-        crate::view::scroll::scroll_window(list_offset, sel, jobs.len(), list_h);
+    let (start, end) = crate::view::scroll::scroll_window(list_offset, sel, jobs.len(), list_h);
     let list_lines: Vec<Line> = jobs[start..end]
         .iter()
         .enumerate()

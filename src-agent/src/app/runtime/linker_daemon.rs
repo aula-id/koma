@@ -401,9 +401,7 @@ fn handle_request(
                     .scan_coordinator
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                coord.applied_revision == 0
-                    && coord.in_flight.is_none()
-                    && coord.pending.is_none()
+                coord.applied_revision == 0 && coord.in_flight.is_none() && coord.pending.is_none()
             } && !all_roots.is_empty();
 
             if needs_scan || first_scan_needed {
@@ -920,11 +918,7 @@ fn watcher_loop(state: Arc<DaemonState>) {
                 .into_iter()
                 .filter(|r| all_roots.iter().any(|a| a == r))
                 .collect();
-            let roots = if scoped.is_empty() {
-                all_roots
-            } else {
-                scoped
-            };
+            let roots = if scoped.is_empty() { all_roots } else { scoped };
             request_scan(&state, roots);
         }
     }

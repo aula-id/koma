@@ -44,7 +44,7 @@ fn headless_extension_batches_are_validated_before_mutating_selection() {
         0,
         rt.handle(),
         &[],
-        &[fixture.ext.id.clone()],
+        std::slice::from_ref(&fixture.ext.id),
     );
     assert!(result.unwrap_err().to_string().contains("global"));
 }

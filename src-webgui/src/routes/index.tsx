@@ -1,3 +1,5 @@
+import { CodingTests } from '../components/CodingTests'
+import { CodingDebug } from '../components/CodingDebug'
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ChatView } from '../components/ChatView'
@@ -11,6 +13,13 @@ import { Sidebar, type SidebarView } from '../components/Sidebar'
 import { ResumePalette } from '../components/ResumePalette'
 import { RenameOverlay } from '../components/RenameOverlay'
 import { OmniSearchPalette } from '../components/OmniSearchPalette'
+import { CodingPalette } from '../components/CodingPalette'
+import { CodingPacks } from '../components/CodingPacks'
+import { CodingTasks } from '../components/CodingTasks'
+import { CodingTransactions } from '../components/CodingTransactions'
+import { CodingHistory } from '../components/CodingHistory'
+import { CodingRefactor } from '../components/CodingRefactor'
+import { startCodingDiskMonitor } from '../lib/coding-disk'
 import { SwitchingOverlay } from '../components/SwitchingOverlay'
 import { RemotePasswordPrompt } from '../components/RemotePasswordPrompt'
 import { RemotePathPicker } from '../components/RemotePathPicker'
@@ -73,6 +82,7 @@ function useNeedsOnboarding() {
 }
 
 function RootLayout() {
+  useEffect(startCodingDiskMonitor, [])
   // Resolved once — window.__komaOS is injected by the Rust host before the app
   // boots and never changes for the lifetime of the window.
   const [platform] = useState(getPlatform)
@@ -440,6 +450,14 @@ function RootLayout() {
       )}
       {overlay === 'rename' && <RenameOverlay onClose={() => setOverlay('none')} />}
       {omnisearchOpen && <OmniSearchPalette onClose={closeOmniSearch} />}
+      <CodingPalette />
+      <CodingTasks />
+      <CodingPacks />
+      <CodingDebug />
+      <CodingTests />
+      <CodingHistory />
+      <CodingTransactions />
+      <CodingRefactor />
       <SwitchingOverlay
         onCancel={() => {
           // Best-effort bail of a pre-attach swap. If Snapshot already landed
@@ -483,6 +501,7 @@ function RootLayout() {
 
 // Monaco DiffEditor is HEAVY — lazy so its chunk never loads until the first
 // diff tab is opened (a tiny spinner covers the one-time chunk fetch).
+const GitWorkbenchTab = lazy(() => import('../components/GitWorkbenchTab'))
 const DiffTab = lazy(() => import('../components/DiffTab'))
 
 // Settings page — lazy so its chunk only loads when the gear is first clicked.
@@ -520,6 +539,7 @@ const InstalledExtensionTab = lazy(() => import('../components/InstalledExtensio
 
 // Coding panel Monaco editor — lazy so its chunk only loads when a file is opened.
 const CodeEditorTab = lazy(() => import('../components/CodeEditorTab'))
+const MarkdownPreviewTab = lazy(() => import('../components/MarkdownPreviewTab'))
 
 // Interactive terminal tab — lazy so its chunk (xterm.js) only loads when the
 // first terminal is opened from the Titlebar.
@@ -536,7 +556,9 @@ function DiffFallback() {
 function TabBody({ tab }: { tab: Exclude<Tab, { kind: 'chat' }> }) {
   return (
     <Suspense fallback={<DiffFallback />}>
-      {tab.kind === 'diff' ? (
+      {tab.kind === 'gitTool' ? (
+        <GitWorkbenchTab tab={tab} />
+      ) : tab.kind === 'diff' ? (
         <DiffTab tab={tab} />
       ) : tab.kind === 'settings' ? (
         <SettingsTab />
@@ -561,7 +583,7 @@ function TabBody({ tab }: { tab: Exclude<Tab, { kind: 'chat' }> }) {
       ) : tab.kind === 'extension' ? (
         <ExtensionPanelFrame extId={tab.extId} panelId={tab.panelId} title={tab.title} />
       ) : tab.kind === 'codingFile' ? (
-        <CodeEditorTab tab={tab} />
+        tab.preview ? <MarkdownPreviewTab tab={tab} /> : <CodeEditorTab tab={tab} />
       ) : tab.kind === 'terminal' ? (
         <TerminalTab tab={tab} />
       ) : null}

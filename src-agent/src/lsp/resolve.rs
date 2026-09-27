@@ -88,6 +88,7 @@ fn resolve_one(spec: &ServerSpec, manifest: &Manifest) -> ServerStatus {
         catalog::InstallKind::Npm => "npm",
         catalog::InstallKind::PipVenv => "pip",
         catalog::InstallKind::GoInstall => "go",
+        catalog::InstallKind::Composer => "composer",
     }
     .to_string();
 
@@ -161,14 +162,12 @@ pub fn find_on_path(name: &str) -> Option<PathBuf> {
 fn which(name: &str) -> Option<PathBuf> {
     // Prefer a real `which`/`where` only as fallback — walk PATH ourselves so
     // tests and restricted envs don't depend on an external binary.
-    let path_var = std::env::var_os("PATH")?;
+    let path_var = crate::coding::environment::host_path();
     for dir in std::env::split_paths(&path_var) {
         #[cfg(windows)]
         {
             for ext in ["", ".exe", ".cmd", ".bat"] {
-                let candidate = if ext.is_empty() {
-                    dir.join(name)
-                } else if name.ends_with(ext) {
+                let candidate = if ext.is_empty() || name.ends_with(ext) {
                     dir.join(name)
                 } else {
                     dir.join(format!("{name}{ext}"))
@@ -293,7 +292,11 @@ fn looks_like_broken_toolchain_proxy(text: &str) -> bool {
 /// Best-effort `--version` / `version` probe. Returns the first useful line of
 /// **successful** stdout/stderr. Never treats error text as a version.
 fn probe_version(bin: &Path) -> Option<String> {
-    for args in [["--version"].as_slice(), ["version"].as_slice(), ["-V"].as_slice()] {
+    for args in [
+        ["--version"].as_slice(),
+        ["version"].as_slice(),
+        ["-V"].as_slice(),
+    ] {
         let output = Command::new(bin).args(args.iter().copied()).output().ok()?;
         if !output.status.success() {
             continue;
@@ -375,6 +378,7 @@ mod tests {
             let mut f = std::fs::OpenOptions::new()
                 .write(true)
                 .create(true)
+                .truncate(true)
                 .mode(0o755)
                 .open(&bin)
                 .unwrap();
@@ -420,6 +424,7 @@ mod tests {
             let mut f = std::fs::OpenOptions::new()
                 .write(true)
                 .create(true)
+                .truncate(true)
                 .mode(0o755)
                 .open(&bin)
                 .unwrap();

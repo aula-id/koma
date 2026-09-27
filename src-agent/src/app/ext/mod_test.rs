@@ -139,9 +139,8 @@ fn install_verify_and_echo_roundtrip() {
 
     // Install through the REAL verify + unpack pipeline into a temp dir.
     let tmp = std::env::temp_dir().join(format!("koma-ext-test-{}", uuid::Uuid::new_v4()));
-    let installed =
-        install::install_from_zip_to(&zip_bytes, &sha_hex, &sig_b64, &pubkey_b64, &tmp)
-            .expect("signed install should succeed");
+    let installed = install::install_from_zip_to(&zip_bytes, &sha_hex, &sig_b64, &pubkey_b64, &tmp)
+        .expect("signed install should succeed");
     assert_eq!(installed.id, ext_id);
     assert_eq!(installed.kind, "daemon");
     assert_eq!(installed.exec, "bin/echo-tool-daemon");
@@ -214,11 +213,9 @@ fn notify_reaches_extension_on_event() {
     let sha_hex = install::hex_encode(&digest);
     let sig_b64 = b64(&signing.sign(digest.as_slice()).to_bytes());
 
-    let tmp =
-        std::env::temp_dir().join(format!("koma-ext-notify-test-{}", uuid::Uuid::new_v4()));
-    let installed =
-        install::install_from_zip_to(&zip_bytes, &sha_hex, &sig_b64, &pubkey_b64, &tmp)
-            .expect("signed install should succeed");
+    let tmp = std::env::temp_dir().join(format!("koma-ext-notify-test-{}", uuid::Uuid::new_v4()));
+    let installed = install::install_from_zip_to(&zip_bytes, &sha_hex, &sig_b64, &pubkey_b64, &tmp)
+        .expect("signed install should succeed");
 
     let _ = store::ensure_dirs();
     let rt = tokio::runtime::Runtime::new().expect("build runtime");
@@ -295,9 +292,8 @@ fn ext_notify_routes_to_channel() {
         "koma-ext-notify-route-test-{}",
         uuid::Uuid::new_v4()
     ));
-    let installed =
-        install::install_from_zip_to(&zip_bytes, &sha_hex, &sig_b64, &pubkey_b64, &tmp)
-            .expect("signed install should succeed");
+    let installed = install::install_from_zip_to(&zip_bytes, &sha_hex, &sig_b64, &pubkey_b64, &tmp)
+        .expect("signed install should succeed");
 
     let _ = store::ensure_dirs();
     let rt = tokio::runtime::Runtime::new().expect("build runtime");
@@ -362,9 +358,8 @@ fn extension_tool_registers_and_routes_through_mcp_manager() {
     let sig_b64 = b64(&signing.sign(digest.as_slice()).to_bytes());
 
     let tmp = std::env::temp_dir().join(format!("koma-ext-mcp-test-{}", uuid::Uuid::new_v4()));
-    let installed =
-        install::install_from_zip_to(&zip_bytes, &sha_hex, &sig_b64, &pubkey_b64, &tmp)
-            .expect("signed install should succeed");
+    let installed = install::install_from_zip_to(&zip_bytes, &sha_hex, &sig_b64, &pubkey_b64, &tmp)
+        .expect("signed install should succeed");
 
     let _ = store::ensure_dirs();
     let rt = tokio::runtime::Runtime::new().expect("build runtime");
@@ -376,8 +371,7 @@ fn extension_tool_registers_and_routes_through_mcp_manager() {
 
     // Read the manifest back exactly as `register::register_contributions`
     // does, to get `contributes.tools`.
-    let manifest_bytes =
-        std::fs::read(install_dir.join("manifest.json")).expect("read manifest");
+    let manifest_bytes = std::fs::read(install_dir.join("manifest.json")).expect("read manifest");
     let manifest: koma_extension::protocol::ExtensionManifest =
         serde_json::from_slice(&manifest_bytes).expect("parse manifest");
     assert_eq!(
@@ -439,8 +433,7 @@ fn extension_tool_registers_and_routes_through_mcp_manager() {
 /// `dest_root` must survive the failed install untouched.
 #[test]
 fn install_rejects_dot_id_without_deleting_siblings() {
-    let tmp =
-        std::env::temp_dir().join(format!("koma-ext-test-dotid-{}", uuid::Uuid::new_v4()));
+    let tmp = std::env::temp_dir().join(format!("koma-ext-test-dotid-{}", uuid::Uuid::new_v4()));
     let decoy = tmp.join("some.other.extension");
     std::fs::create_dir_all(decoy.join("bin")).expect("create decoy dir");
     let marker = decoy.join("bin").join("marker");
@@ -450,8 +443,7 @@ fn install_rejects_dot_id_without_deleting_siblings() {
     let zip_bytes = pack_manifest_only_zip(&manifest_json);
     let (pubkey_b64, sha_hex, sig_b64) = sign(&zip_bytes, 45);
 
-    let result =
-        install::install_from_zip_to(&zip_bytes, &sha_hex, &sig_b64, &pubkey_b64, &tmp);
+    let result = install::install_from_zip_to(&zip_bytes, &sha_hex, &sig_b64, &pubkey_b64, &tmp);
     assert!(result.is_err(), "id = \".\" must be rejected");
     assert!(
         marker.exists(),

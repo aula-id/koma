@@ -105,9 +105,8 @@ fn session_settings_drops_dead_provider_and_model_rows() {
     dead_providers.insert("p-dead".into());
 
     let mut s = Settings::load(&path).unwrap();
-    s.session_models.retain(|m| {
-        !dead_models.contains(&m.uuid) && !dead_providers.contains(&m.provider_uuid)
-    });
+    s.session_models
+        .retain(|m| !dead_models.contains(&m.uuid) && !dead_providers.contains(&m.provider_uuid));
     s.save(&path).unwrap();
 
     let loaded = Settings::load(&path).unwrap();

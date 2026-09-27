@@ -179,8 +179,7 @@ fn ssh_config_key_path_resets_between_blocks() {
 
 #[test]
 fn ssh_config_first_identityfile_wins() {
-    let text =
-        "Host srv\n  User u\n  HostName h\n  IdentityFile /first\n  IdentityFile /second\n";
+    let text = "Host srv\n  User u\n  HostName h\n  IdentityFile /first\n  IdentityFile /second\n";
     let imported = import_ssh_config_text(text);
     assert_eq!(imported.len(), 1);
     assert_eq!(imported[0].key_path, Some("/first".to_string()));

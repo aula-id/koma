@@ -638,10 +638,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_ready(
     let composed = if preflight_warns.is_empty() {
         composed
     } else {
-        format!(
-            "{composed}\n\n---\n{}",
-            preflight_warns.join("\n")
-        )
+        format!("{composed}\n\n---\n{}", preflight_warns.join("\n"))
     };
     let mut new_args = args.clone();
     if let Some(obj) = new_args.as_object_mut() {
@@ -926,7 +923,11 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_verify(
                 match crate::model::sdlc::graph::auto_claim_first_open_leaf(&conn) {
                     Ok(Some(next)) => {
                         state.rest.sessions[sess_idx].sdlc_pending_node_id = Some(next.0.clone());
-                        crate::tool::sdlc::mission_verify_pass_footer(&target_node, Some(&next), None)
+                        crate::tool::sdlc::mission_verify_pass_footer(
+                            &target_node,
+                            Some(&next),
+                            None,
+                        )
                     }
                     Ok(None) => {
                         match crate::model::sdlc::graph::all_required_leaves_verified(&conn) {
@@ -1090,11 +1091,10 @@ pub(in crate::app::runtime::stream::tools) fn intercept_mission_integrate(
     // Destination is exclusively frozen target_* on the mission — never workdir_saved.
     // Lane ceremony: express defaults to branch-ready finish (no merge pressure);
     // standard/full merge when clean unless the model passes force_branch_only.
-    let lane_prefers_branch =
-        crate::model::sdlc::lane::prefer_branch_only(&mission.lane);
+    let lane_prefers_branch = crate::model::sdlc::lane::prefer_branch_only(&mission.lane);
     let effective_force = force_branch_only || lane_prefers_branch;
-    let branch_only_completes = effective_force
-        && crate::model::sdlc::lane::branch_ready_completes_mission(&mission.lane);
+    let branch_only_completes =
+        effective_force && crate::model::sdlc::lane::branch_ready_completes_mission(&mission.lane);
     let result = crate::model::sdlc::integrate::try_integrate_ex(
         &mission,
         effective_force,
@@ -1623,9 +1623,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
     call: &ToolCall,
 ) -> InterceptFlow {
     use crate::app::mode::todo::TodoItem;
-    use crate::model::sdlc::graph::{
-        apply_frozen_checklist, ChecklistNode, FrozenChecklistUpdate,
-    };
+    use crate::model::sdlc::graph::{apply_frozen_checklist, ChecklistNode, FrozenChecklistUpdate};
 
     let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
     let args: serde_json::Value =
@@ -1750,11 +1748,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_sdlc(
                             || lower.contains("unknown or cancelled frozen checklist id")
                             || lower.contains("duplicate frozen checklist alias");
                         if structural {
-                            Err(
-                                "error: checklist cannot change frozen graph structure — \
+                            Err("error: checklist cannot change frozen graph structure — \
                                  call mission_ready to amend and re-approve"
-                                    .to_string(),
-                            )
+                                .to_string())
                         } else {
                             Err(format!("error: frozen checklist rejected: {e}"))
                         }

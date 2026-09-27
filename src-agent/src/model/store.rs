@@ -17,6 +17,7 @@
 //!                 settings.json                    ← per-session behavioural settings
 //!                 messages.json
 //!                 messages.sqlite
+//!                 tmp/                             ← clipped tool-output spills
 //!                 memory/
 //!                     MEMORY.md
 //! ```
@@ -453,6 +454,18 @@ pub fn session_images_dir(pwd_hash: &str, uuid: &str) -> Result<PathBuf> {
 /// removes its pastes — no separate cleanup is needed.
 pub fn session_pastes_dir(pwd_hash: &str, uuid: &str) -> Result<PathBuf> {
     Ok(session_dir(pwd_hash, uuid)?.join("pastes"))
+}
+
+/// Directory name for clipped tool-output spills (`<session_dir>/tmp/`).
+/// Lives INSIDE the session dir, so [`delete_session`] already removes it.
+pub const SESSION_TOOL_TMP: &str = "tmp";
+
+/// A session's clipped-tool-output directory: `<session_dir>/tmp/`.
+/// Full bash/grep/MCP dumps that were truncated before they reached the model.
+/// The model pages these with `read` + offset/limit. No extra cleanup on
+/// session delete — the whole session tree goes away together.
+pub fn session_tool_tmp_dir(session_dir: &Path) -> PathBuf {
+    session_dir.join(SESSION_TOOL_TMP)
 }
 
 /// A session's media directory: `<pwd_bucket_dir>/media/`. Holds downloaded

@@ -684,7 +684,43 @@ After the user approves (y/a), the harness binds a mission worktree and enters *
             }
         }
 
+        append_session_system(&mut sys, &self.settings.session_system_extra);
+
         self.conversation.set_system(sys);
+    }
+}
+
+/// Cap for `--system` / `--system-file` so a dump cannot blow the system prompt.
+pub const MAX_SESSION_SYSTEM_CHARS: usize = 64_000;
+
+/// Append extra policy at the bottom of the assembled system prompt.
+pub fn append_session_system(sys: &mut String, extra: &str) {
+    let extra = extra.trim();
+    if extra.is_empty() {
+        return;
+    }
+    sys.push_str("\n\n# Session system\n");
+    sys.push_str(extra);
+}
+
+#[cfg(test)]
+mod session_system_tests {
+    use super::append_session_system;
+
+    #[test]
+    fn blank_extra_is_a_no_op() {
+        let mut sys = String::from("base");
+        append_session_system(&mut sys, "  \n");
+        assert_eq!(sys, "base");
+    }
+
+    #[test]
+    fn extra_is_last() {
+        let mut sys = String::from("coding\n# Yolo");
+        append_session_system(&mut sys, "task_dir is the desk");
+        assert!(sys.ends_with("task_dir is the desk"));
+        assert!(sys.contains("# Session system\n"));
+        assert!(sys.find("coding").unwrap() < sys.find("# Session system").unwrap());
     }
 }
 

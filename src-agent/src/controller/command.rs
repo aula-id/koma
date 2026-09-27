@@ -81,7 +81,10 @@ pub const KEYBINDINGS: &[(&str, &str)] = &[
     ("Ctrl+V", "paste an image from the clipboard"),
     ("Ctrl+P", "open staged attachments (pastes + images)"),
     ("Alt+E", "edit nearest composer attachment chip"),
-    ("Ctrl+B", "background blocking sub-agent(s) / FG bash job(s)"),
+    (
+        "Ctrl+B",
+        "background blocking sub-agent(s) / FG bash job(s)",
+    ),
     ("Ctrl+X", "kill the selected bash job / sub-agent"),
     ("Esc", "interrupt while busy (kills still-blocking FG bash)"),
     ("Esc Esc", "edit a previous message (rewind)"),

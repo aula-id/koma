@@ -46,7 +46,7 @@ pub enum BashJobStatus {
 /// killing) never contend on one lock.
 pub struct BashJobShared {
     /// Captured stdout+stderr, ANSI-stripped and capped to the last
-    /// [`crate::config::MAX_TOOL_OUTPUT_CHARS`] chars (so a chatty long-running
+    /// [`crate::config::MAX_READ_CHARS`] chars (so a chatty long-running
     /// job can't grow this unbounded). Appended incrementally by the reader
     /// thread as the child emits output, so a `bash_output` poll sees progress.
     pub output: Mutex<String>,
@@ -140,11 +140,7 @@ impl BashJob {
     /// Format a finished job's output the way synchronous `Bash::run` would via
     /// [`crate::tool::shell::finalize_output`] — used when FG completion delivers
     /// a tool result (not a `bash_output` poll).
-    pub fn format_tool_result(
-        &self,
-        saving: bool,
-        log_dir: Option<&std::path::Path>,
-    ) -> String {
+    pub fn format_tool_result(&self, saving: bool, log_dir: Option<&std::path::Path>) -> String {
         use crate::tool::shell::{finalize_output, OutputOpts, ShellExit};
 
         let raw = self.output_snapshot();
@@ -297,7 +293,7 @@ pub(crate) fn render_finished_output(
 /// `tail_output` (~40 lines / ~4000 chars) — a stream tab is a scrollable dedicated
 /// view, not a compact panel preview — but still bounded so a chatty long-running job's
 /// per-client snapshot stays a sane size (the whole buffer is already ≤
-/// [`crate::config::MAX_TOOL_OUTPUT_CHARS`] anyway). Used ONLY by the hub's per-client
+/// [`crate::config::MAX_READ_CHARS`] anyway). Used ONLY by the hub's per-client
 /// stream-view projection (`stream_deltas`), never the shared snapshot path.
 pub fn stream_output_tail(full: &str) -> String {
     const MAX_LINES: usize = 200;
@@ -317,12 +313,12 @@ pub fn stream_output_tail(full: &str) -> String {
 }
 
 /// Append `chunk` to the shared output buffer, ANSI-stripping it first and then
-/// capping the WHOLE buffer to the last [`crate::config::MAX_TOOL_OUTPUT_CHARS`]
+/// capping the WHOLE buffer to the last [`crate::config::MAX_READ_CHARS`]
 /// chars (so the buffer mirrors the inline tool's last-N-chars cap and can never
 /// grow unbounded for a long-lived job). Per-chunk stripping is the pragmatic v1
 /// — an ANSI escape split across two reads only leaks cosmetically.
 fn append_capped(shared: &BashJobShared, chunk: &str) {
-    const MAX_CHARS: usize = crate::config::MAX_TOOL_OUTPUT_CHARS;
+    const MAX_CHARS: usize = crate::config::MAX_READ_CHARS;
     let stripped = crate::dto::chat::strip_ansi(chunk);
     if let Ok(mut buf) = shared.output.lock() {
         buf.push_str(&stripped);
@@ -450,10 +446,7 @@ pub fn spawn_bash_job(
                         // Drain the wait so we don't zombie.
                         let _ = child.wait();
                         timed_out_ms = Some(timeout_ms.unwrap_or(0));
-                        break Err(std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            "timeout",
-                        ));
+                        break Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"));
                     }
                     thread::sleep(Duration::from_millis(50));
                 }

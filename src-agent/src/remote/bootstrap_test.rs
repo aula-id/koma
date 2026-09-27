@@ -8,8 +8,7 @@ fn run_bootstrap(
     installs: &Cell<usize>,
     confirm: impl FnMut(&str) -> Result<bool>,
 ) -> Result<bool> {
-    let mut outputs: VecDeque<String> =
-        outputs.iter().map(|value| (*value).to_string()).collect();
+    let mut outputs: VecDeque<String> = outputs.iter().map(|value| (*value).to_string()).collect();
     ensure_compatible_with(
         "0.3.16",
         || {
@@ -50,12 +49,14 @@ fn missing_koma_installs_without_confirm() {
 fn mismatched_version_installs_when_confirmed() {
     let installs = Cell::new(0);
     let confirmed = Cell::new(0);
-    assert!(run_bootstrap(&["koma 0.3.15", "koma 0.3.16"], &installs, |obs| {
-        assert_eq!(obs, "0.3.15");
-        confirmed.set(confirmed.get() + 1);
-        Ok(true)
-    })
-    .unwrap());
+    assert!(
+        run_bootstrap(&["koma 0.3.15", "koma 0.3.16"], &installs, |obs| {
+            assert_eq!(obs, "0.3.15");
+            confirmed.set(confirmed.get() + 1);
+            Ok(true)
+        })
+        .unwrap()
+    );
     assert_eq!(installs.get(), 1);
     assert_eq!(confirmed.get(), 1);
 }

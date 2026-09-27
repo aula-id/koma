@@ -46,6 +46,17 @@ function GuiCodeEditorPage() {
         </div>
 
         <div>
+          <h3 className="mb-1 text-base font-semibold text-koma-fg">Markdown Preview</h3>
+          <p>
+            For .md and .markdown files, use the eye button in the editor bar or
+            right-click the file or tab and choose Open Markdown Preview. A
+            read-only preview tab follows the editor content, including unsaved
+            changes. Use Open Source in the preview bar to return to editing.
+            Relative images and file links resolve within the workspace.
+          </p>
+        </div>
+
+        <div>
           <h3 className="mb-1 text-base font-semibold text-koma-fg">Language servers (LSP)</h3>
           <p>
             Host-spawned language servers (not Monaco workers) attach when a matching
@@ -67,21 +78,42 @@ function GuiCodeEditorPage() {
         </div>
 
         <div>
-          <h3 className="mb-1 text-base font-semibold text-koma-fg">Saving &amp; Autosave</h3>
+          <h3 className="mb-1 text-base font-semibold text-koma-fg">
+            Saving &amp; Autosave
+          </h3>
           <p>
-            Files show a dirty indicator (dot on the tab) when modified.
-            Save with Ctrl+S. Autosave can be toggled in settings — when
-            enabled, changes persist automatically after a short delay.
+            Files show a dirty indicator (dot on the tab) when modified. Save
+            with Ctrl+S. Autosave can be toggled in settings — when enabled,
+            changes persist automatically after a short delay. Edits made while
+            a save is running stay marked as modified until they are saved.
+            Pressing Save again during a write queues the latest buffer; closing
+            the editor waits for the pending save.
           </p>
         </div>
 
         <div>
-          <h3 className="mb-1 text-base font-semibold text-koma-fg">Conflict / Binary / Large-File States</h3>
+          <h3 className="mb-1 text-base font-semibold text-koma-fg">
+            File Format Preservation
+          </h3>
           <p>
-            If the agent modifies a file you have open, a conflict banner
-            offers Reload or Diff options. Binary files open in a read-only
-            info panel. Files exceeding the size threshold show a warning
-            with an option to open anyway.
+            Saving preserves the file’s LF, CRLF, or CR line endings, UTF-8 BOM,
+            and BOM-marked UTF-16 encoding and byte order. New files use UTF-8
+            and LF. Files with mixed line endings or unsupported encodings are
+            not converted automatically; normalize or convert them explicitly
+            before editing. For SSH projects, update remote Koma too.
+          </p>
+        </div>
+
+        <div>
+          <h3 className="mb-1 text-base font-semibold text-koma-fg">
+            Conflict / Binary / Large-File States
+          </h3>
+          <p>
+            If the file changes on disk before you save, Koma rejects the stale
+            save and keeps your local edits. Reload from disk discards those
+            edits. Binary files and unsupported encodings are not editable;
+            download retains the original bytes. Files larger than 5 MiB cannot
+            be edited in this panel.
           </p>
         </div>
       </div>

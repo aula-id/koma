@@ -7,6 +7,7 @@ import {
   reduceFileDelete,
   reduceFileRename,
   reduceFileSave,
+  reduceFileRead,
   reduceFileTree,
   type CodingSlice,
 } from './coding'
@@ -83,6 +84,7 @@ const withCaches = (partial: Partial<CodingSlice> = {}): CodingSlice => ({
         fingerprint: 'fp1',
         dirty: true,
         saving: true,
+        pendingSave: { requestId: 'save-1', content: 'edited' },
       }),
     },
   })
@@ -95,12 +97,50 @@ const withCaches = (partial: Partial<CodingSlice> = {}): CodingSlice => ({
   assert.equal(saved.files[key]?.fingerprint, 'fp2')
 
   const conflicted = reduceFileSave(dirty, {
-    k: 'FileSave', root, path: 'src/a.ts', requestId: 'save-2', fingerprint: '', error: 'conflict',
+    k: 'FileSave', root, path: 'src/a.ts', requestId: 'save-1', fingerprint: '', error: 'conflict',
   })
   assert.equal(conflicted.files[key]?.dirty, true)
   assert.equal(conflicted.files[key]?.saving, false)
   assert.equal(conflicted.files[key]?.conflict, true)
   assert.equal(conflicted.files[key]?.content, 'edited')
+}
+
+// A save acknowledges the sent snapshot, even when typing or undo continues.
+{
+  const key = fileKey(root, 'src/a.ts')
+  for (const content of ['newer edits', 'old']) {
+    const duringSave = withCaches({ files: { [key]: emptyFileState({
+      content, savedContent: 'old', fingerprint: 'fp1', dirty: content !== 'old',
+      saving: true, pendingSave: { requestId: 'save-current', content: 'sent snapshot' },
+    }) } })
+    const reply = { k: 'FileSave' as const, root, path: 'src/a.ts', requestId: 'save-current', fingerprint: 'fp2', error: null }
+    assert.equal(reduceFileSave(duringSave, { ...reply, requestId: 'stale' }), duringSave)
+    const saved = reduceFileSave(duringSave, reply)
+    assert.equal(saved.files[key].content, content)
+    assert.equal(saved.files[key].savedContent, 'sent snapshot')
+    assert.equal(saved.files[key].dirty, true)
+    assert.equal(saved.files[key].pendingSave, null)
+    assert.equal(reduceFileSave(saved, reply), saved) // Duplicate reply is inert.
+  }
+}
+
+// A reread must not authorize an edited buffer to overwrite newer disk content.
+{
+  const key = fileKey(root, 'src/a.ts')
+  const dirty = withCaches({
+    _readReq: { [key]: 'read-current' },
+    files: { [key]: emptyFileState({ content: 'local edits', savedContent: 'old', fingerprint: 'old-fp', dirty: true }) },
+  })
+  const reply = { k: 'FileRead' as const, root, path: 'src/a.ts', requestId: 'read-current', content: 'external edits', fingerprint: 'new-fp', binary: false, tooLarge: false, error: null }
+  const next = reduceFileRead(dirty, reply)
+  assert.equal(next.files[key].content, 'local edits')
+  assert.equal(next.files[key].fingerprint, 'old-fp')
+  assert.equal(next.files[key].conflict, true)
+  const failed = reduceFileRead(dirty, { ...reply, content: null, error: 'Permission denied' })
+  assert.equal(failed.files[key].content, 'local edits')
+  assert.equal(failed.files[key].dirty, true)
+  const closed = withCaches()
+  assert.equal(reduceFileRead(closed, reply), closed)
 }
 
 // Safe autosave preconditions (mirrors CodeEditorTab's 750ms guard).
@@ -234,6 +274,32 @@ assert.equal(useKoma.getState().ui.activeTabId, 'chat')
     maxOutputTokens: 0,
   })
   assert.equal(useKoma.getState().settingsValues?.codingAutosave, false)
+}
+
+// Repeated Save queues the latest buffer; didSave reports only acknowledged text.
+{
+  const sent: { r: string; content?: string; text?: string; requestId?: string }[] = []
+  browser.window = { ipc: { postMessage: (json) => { sent.push(JSON.parse(json)) } } }
+  const key = fileKey(root, 'queued.ts')
+  useKoma.setState({ coding: withCaches({ files: { [key]: emptyFileState({
+    content: 'first', savedContent: 'old', fingerprint: 'fp1', dirty: true,
+  }) } }) })
+  useKoma.getState().saveCodingFile(root, 'queued.ts')
+  const first = sent.find(r => r.r === 'FileSave')!
+  useKoma.getState().updateCodingContent(root, 'queued.ts', 'second')
+  useKoma.getState().saveCodingFile(root, 'queued.ts')
+  useKoma.getState().updateCodingContent(root, 'queued.ts', 'latest')
+  assert.equal(sent.filter(r => r.r === 'FileSave').length, 1)
+  useKoma.getState().push({ k: 'FileSave', root, path: 'queued.ts', requestId: first.requestId!, fingerprint: 'fp2', error: null })
+  const saves = sent.filter(r => r.r === 'FileSave')
+  assert.equal(saves.length, 2)
+  assert.equal(saves[1].content, 'latest')
+  assert.equal(sent.find(r => r.r === 'LspDidSave')?.text, 'first')
+  assert.equal(sent.find(r => r.r === 'LspDidChange')?.text, 'latest')
+  assert.equal(useKoma.getState().coding.files[key].dirty, true)
+  useKoma.getState().push({ k: 'FileSave', root, path: 'queued.ts', requestId: saves[1].requestId!, fingerprint: 'fp3', error: null })
+  assert.equal(useKoma.getState().coding.files[key].dirty, false)
+  assert.equal(useKoma.getState().coding.files[key].savedContent, 'latest')
 }
 
 // Missing IPC is a production req behavior, not an inlined helper implementation.

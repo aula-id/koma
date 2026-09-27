@@ -699,11 +699,11 @@ fn check_extensions() -> CheckResult {
 fn check_internet_fullmode() -> CheckResult {
     #[cfg(windows)]
     {
-        return CheckResult {
+        CheckResult {
             status: Status::Warn,
             headline: "Internet full-mode (not supported on Windows)".to_string(),
             details: Vec::new(),
-        };
+        }
     }
 
     #[cfg(not(windows))]
@@ -805,11 +805,11 @@ fn check_internet_fullmode() -> CheckResult {
 fn check_security_daemon() -> CheckResult {
     #[cfg(windows)]
     {
-        return CheckResult {
+        CheckResult {
             status: Status::Warn,
             headline: "Security daemon (not supported on Windows)".to_string(),
             details: Vec::new(),
-        };
+        }
     }
 
     #[cfg(not(windows))]
@@ -855,8 +855,7 @@ fn check_language_servers() -> CheckResult {
         ));
     }
     details.push(
-        "optional — install with: koma lsp install --all  (or install.sh --with-lsp)"
-            .to_string(),
+        "optional — install with: koma lsp install --all  (or install.sh --with-lsp)".to_string(),
     );
     let headline = format!(
         "Language servers ({managed} managed, {on_path} on PATH, {missing}/{total} missing)"

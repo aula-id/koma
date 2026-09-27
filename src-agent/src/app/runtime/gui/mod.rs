@@ -422,6 +422,11 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     // attachment markers, and the current Explore stream-tab view) — bundled into
     // one `GuiReqCtx` so `dispatch::handle_gui_req` gets it as a single reference.
     let win_proxy = proxy.clone();
+    let coding_proxy = proxy.clone();
+    let coding_service = crate::coding::Service::new(move |json| {
+        let _ = coding_proxy.send_event(UserEvent::Push(json));
+    });
+    let coding_error_proxy = proxy.clone();
     let gui_ctx = dispatch::GuiReqCtx {
         ctl: ctl_tx,
         req: Arc::clone(&live_req),
@@ -472,6 +477,15 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 Err(_) => return, // malformed / unknown -> ignore, never panic
             };
             match msg {
+                ClientMsg::Coding { request } => {
+                    let id = request.id.clone();
+                    let workspace = request.workspace.clone();
+                    if let Err(error) = coding_service.submit(request) {
+                        let _ = coding_error_proxy.send_event(UserEvent::Push(serde_json::json!({
+                            "k":"CodingReply", "id":id, "workspace":workspace, "error":error
+                        }).to_string()));
+                    }
+                }
                 // Custom-titlebar window commands (the window is undecorated).
                 ClientMsg::Win { a } => {
                     let cmd = match a.as_str() {
@@ -664,6 +678,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         "gui",
                         "titlebar close -> closing",
                     );
+                    crate::coding::shutdown();
                     *control_flow = ControlFlow::Exit;
                 }
                 WinCmd::Resize(dir) => {
@@ -680,6 +695,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 ..
             } => {
                 crate::model::store::append_global_error_log("gui", "window close requested");
+                crate::coding::shutdown();
                 *control_flow = ControlFlow::Exit;
             }
             _ => {}

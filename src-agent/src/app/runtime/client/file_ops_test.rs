@@ -58,7 +58,8 @@ fn fingerprint_is_stable_for_unchanged_file() {
     let a = compute_fingerprint(&path);
     let b = compute_fingerprint(&path);
     assert_eq!(a, b);
-    assert_eq!(a.len(), 16);
+    // SHA-256 of the exact on-disk bytes, not the former 64-bit fingerprint.
+    assert_eq!(a, "401d4c7580941a9506c1a2f462bdb463113136933d6ec6b8cf07a3f992eb31bb");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -383,4 +384,154 @@ fn handle_file_ctl_routes_create_tree_rename_delete() {
     assert_eq!(got, payload);
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Exercise the file-operation boundary, including the LF buffer sent by Monaco.
+#[test]
+fn coding_save_preserves_utf8_line_endings_and_bom() {
+    let (dir, root, workdirs) = temp_workspace("text-formats");
+    let cases: &[(&[u8], &str, &[u8])] = &[
+        (b"one\r\ntwo\r\n", "one\nchanged\n", b"one\r\nchanged\r\n"),
+        (b"one\ntwo", "one\nchanged", b"one\nchanged"),
+        (b"one\rtwo\r", "one\nchanged\n", b"one\rchanged\r"),
+        (
+            b"\xef\xbb\xbfone\r\ntwo",
+            "one\nchanged",
+            b"\xef\xbb\xbfone\r\nchanged",
+        ),
+        (b"\xef\xbb\xbf", "new", b"\xef\xbb\xbfnew"),
+    ];
+    for (original, edited, expected) in cases {
+        let path = dir.join("source.txt");
+        std::fs::write(&path, original).unwrap();
+        let read = exec_file_read(&root, "source.txt", "read", &workdirs);
+        assert!(read.error.is_none());
+        assert!(!read.content.as_ref().unwrap().contains('\r'));
+        assert!(!read.content.as_ref().unwrap().starts_with('\u{feff}'));
+        let saved = exec_file_save(
+            &root,
+            "source.txt",
+            edited,
+            &read.fingerprint,
+            "save",
+            &workdirs,
+        );
+        assert!(saved.error.is_none(), "{:?}", saved.error);
+        assert_eq!(std::fs::read(&path).unwrap(), *expected);
+        assert_eq!(
+            saved.fingerprint,
+            exec_file_read(&root, "source.txt", "reread", &workdirs).fingerprint
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn coding_save_preserves_utf16_byte_order_and_unicode() {
+    let (dir, root, workdirs) = temp_workspace("utf16");
+    for little in [true, false] {
+        let encode = |text: &str| {
+            let mut bytes = if little {
+                vec![0xff, 0xfe]
+            } else {
+                vec![0xfe, 0xff]
+            };
+            for unit in text.encode_utf16() {
+                bytes.extend_from_slice(&if little {
+                    unit.to_le_bytes()
+                } else {
+                    unit.to_be_bytes()
+                });
+            }
+            bytes
+        };
+        let path = dir.join("source.txt");
+        std::fs::write(&path, encode("α🚀\r\nbefore")).unwrap();
+        let read = exec_file_read(&root, "source.txt", "read", &workdirs);
+        assert_eq!(read.content.as_deref(), Some("α🚀\nbefore"));
+        assert!(!read.binary);
+        let saved = exec_file_save(
+            &root,
+            "source.txt",
+            "α🚀\nafter",
+            &read.fingerprint,
+            "save",
+            &workdirs,
+        );
+        assert!(saved.error.is_none(), "{:?}", saved.error);
+        assert_eq!(std::fs::read(&path).unwrap(), encode("α🚀\r\nafter"));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn coding_refuses_lossy_text_conversion() {
+    let (dir, root, workdirs) = temp_workspace("unsupported-text");
+    for bytes in [
+        b"caf\xe9".as_slice(),
+        &[0xff, 0xfe, 0x00, 0xd8],
+        b"one\r\ntwo\nthree",
+    ] {
+        let path = dir.join("source.txt");
+        std::fs::write(&path, bytes).unwrap();
+        let read = exec_file_read(&root, "source.txt", "read", &workdirs);
+        assert!(read.content.is_none());
+        assert!(read.error.is_some());
+        // Even a caller with a current fingerprint cannot force a lossy write.
+        let saved = exec_file_save(
+            &root,
+            "source.txt",
+            "replacement",
+            &compute_fingerprint(&path),
+            "save",
+            &workdirs,
+        );
+        assert!(saved.error.is_some());
+        assert!(!saved.mutated);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn coding_stale_save_keeps_externally_changed_bytes() {
+    let (dir, root, workdirs) = temp_workspace("stale-save");
+    let path = dir.join("source.txt");
+    std::fs::write(&path, b"before\r\n").unwrap();
+    let read = exec_file_read(&root, "source.txt", "read", &workdirs);
+    std::fs::write(&path, b"external\r\n").unwrap();
+    let saved = exec_file_save(
+        &root,
+        "source.txt",
+        "local\n",
+        &read.fingerprint,
+        "save",
+        &workdirs,
+    );
+    assert!(saved.error.as_deref().unwrap().starts_with("conflict:"));
+    assert_eq!(std::fs::read(&path).unwrap(), b"external\r\n");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn atomic_save_preserves_symlink_and_mode_and_rejects_hardlinks() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let (dir, root, workdirs) = temp_workspace("atomic-save");
+    let target = dir.join("target.txt");
+    std::fs::write(&target, b"old\n").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+    symlink("target.txt", dir.join("link.txt")).unwrap();
+    let read = exec_file_read(&root, "link.txt", "read", &workdirs);
+    let saved = exec_file_save(&root, "link.txt", "new\n", &read.fingerprint, "save", &workdirs);
+    assert!(saved.error.is_none(), "{:?}", saved.error);
+    assert!(dir.join("link.txt").symlink_metadata().unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "new\n");
+    assert_eq!(target.metadata().unwrap().permissions().mode() & 0o777, 0o640);
+    std::fs::hard_link(&target, dir.join("hard.txt")).unwrap();
+    let rejected = exec_file_save(&root, "target.txt", "replacement\n", &saved.fingerprint, "hard", &workdirs);
+    assert!(rejected.error.as_deref().unwrap_or("").contains("hard links"));
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "new\n");
+    assert!(!std::fs::read_dir(&dir).unwrap().flatten().any(|entry| entry.file_name().to_string_lossy().starts_with(".koma-write-")));
+    std::fs::remove_dir_all(dir).unwrap();
 }

@@ -62,9 +62,26 @@ pub const APP_TITLE: &str = "koma";
 /// session files and configuration.
 pub const APP_DIR_NAME: &str = ".koma";
 
-/// Hard cap on a single tool result's size, in characters. ~100k tokens at
-/// ~4 chars/token. Tool outputs are not truncated below this.
-pub const MAX_TOOL_OUTPUT_CHARS: usize = 400_000;
+/// Hard cap on a single tool result's size, in characters, for tools that are
+/// not on the read/bash/grep/glob window. Applied first (before the line cap).
+/// ~50k tokens at ~4 chars/token. Sub-agent reports use
+/// [`MAX_SUBAGENT_REPORT_CHARS`] instead.
+pub const MAX_TOOL_OUTPUT_CHARS: usize = 200_000;
+
+/// Secondary cap on a single tool result, in lines, for tools that are not on
+/// the read/bash/grep/glob window. Applied after the char cap.
+pub const MAX_TOOL_OUTPUT_LINES: usize = 5_000;
+
+/// Wide window for `read`, `bash`, `grep`, and `glob`, in characters.
+/// These are the calls the model repeats, so the window stays smaller than
+/// the general tool cap. ~22k tokens at ~4 chars/token. The line cap below
+/// still binds first on a long file of short lines.
+pub const MAX_READ_CHARS: usize = 90_000;
+
+/// Wide window shared by `read`, `bash`, `grep`, and `glob`, in lines.
+/// Applied after the char cap. A typical source file fits; a dump past this
+/// still spills to session tmp.
+pub const MAX_READ_LINES: usize = 2_000;
 
 /// Hard ceiling on a sub-agent's final report before it is delivered to the
 /// main agent as a `task` tool result. Reports above this are truncated (with a

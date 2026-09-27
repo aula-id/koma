@@ -700,7 +700,7 @@ fn spawn_functions_compile_attached() {
 
 #[test]
 fn spawn_functions_compile_reindex_attached() {
-    let _: fn(
+    type ReindexWorker = fn(
         Sender<ImportGraphResult>,
         String,
         Vec<String>,
@@ -708,19 +708,21 @@ fn spawn_functions_compile_reindex_attached() {
         Option<Vec<String>>,
         Option<Vec<String>>,
         Option<String>,
-    ) = spawn_import_graph_reindex_attached;
+    );
+    let _: ReindexWorker = spawn_import_graph_reindex_attached;
 }
 
 #[test]
 fn spawn_functions_compile_impact_attached() {
-    let _: fn(
+    type ImpactWorker = fn(
         Sender<super::super::push_proto::ImportGraphImpactResult>,
         String,
         u32,
         String,
         Vec<String>,
         Option<String>,
-    ) = spawn_import_graph_impact_attached;
+    );
+    let _: ImpactWorker = spawn_import_graph_impact_attached;
 }
 
 // ── Component-safe impact scoping (Path::starts_with) ──────────────

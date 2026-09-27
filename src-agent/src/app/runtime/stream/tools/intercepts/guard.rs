@@ -42,25 +42,38 @@ pub(in crate::app::runtime::stream::tools) fn intercept_cd(
     InterceptFlow::Continue
 }
 
+/// First line of a git sentinel payload. A trailing notice is not part of
+/// the key or path the runtime persists.
+fn git_sentinel_payload<'a>(result: &'a str, prefix: &str) -> Option<&'a str> {
+    let rest = result.strip_prefix(prefix)?;
+    let line = rest.lines().next()?.trim();
+    if line.is_empty() {
+        None
+    } else {
+        Some(line)
+    }
+}
+
 pub(in crate::app::runtime::stream::tools) fn intercept_git_cred(
     state: &mut AppState,
     sess_idx: usize,
     call: &ToolCall,
 ) -> InterceptFlow {
     let result = crate::app::runtime::stream::tools::dispatch::run_tool(state, sess_idx, call);
-    let final_result =
-        if let Some(key) = result.strip_prefix(crate::tool::git_cred::GIT_CRED_SELECT_PREFIX) {
-            // Apply the selection: write into settings and persist.
-            let key = key.to_string();
-            if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-                sess.settings.git_ssh_key = Some(key.clone());
-                let _ = sess.save();
-            }
-            format!("selected ssh key: {key}")
-        } else {
-            // list output or error: — pass through unchanged.
-            result
-        };
+    let final_result = if let Some(key) =
+        git_sentinel_payload(&result, crate::tool::git_cred::GIT_CRED_SELECT_PREFIX)
+    {
+        // Apply the selection: write into settings and persist.
+        let key = key.to_string();
+        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+            sess.settings.git_ssh_key = Some(key.clone());
+            let _ = sess.save();
+        }
+        format!("selected ssh key: {key}")
+    } else {
+        // list output or error: — pass through unchanged.
+        result
+    };
     state.rest.sessions[sess_idx]
         .tool_results
         .push((call.id.clone(), final_result));
@@ -235,7 +248,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_git_worktree(
     }
     let result = crate::app::runtime::stream::tools::dispatch::run_tool(state, sess_idx, call);
     let final_result = if let Some(target) =
-        result.strip_prefix(crate::tool::git_worktree::GIT_WT_CREATE_PREFIX)
+        git_sentinel_payload(&result, crate::tool::git_worktree::GIT_WT_CREATE_PREFIX)
     {
         // `create` succeeded: target is the shadow path string.
         // Same state work as enter: register the path + persist + switch cwd.
@@ -266,7 +279,8 @@ pub(in crate::app::runtime::stream::tools) fn intercept_git_worktree(
                  — you are now working inside the new worktree. \
                  Use git_worktree({{\"action\":\"exit\"}}) to return to the repo root."
         )
-    } else if let Some(target) = result.strip_prefix(crate::tool::git_worktree::GIT_WT_ENTER_PREFIX)
+    } else if let Some(target) =
+        git_sentinel_payload(&result, crate::tool::git_worktree::GIT_WT_ENTER_PREFIX)
     {
         // `enter` succeeded: target is the canonical path string.
         let new_cwd = std::path::PathBuf::from(target);
@@ -326,7 +340,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_git_worktree(
                 )
         }
     } else if let Some(removed) =
-        result.strip_prefix(crate::tool::git_worktree::GIT_WT_REMOVE_PREFIX)
+        git_sentinel_payload(&result, crate::tool::git_worktree::GIT_WT_REMOVE_PREFIX)
     {
         // `remove` succeeded: the worktree is already deleted (git ran
         // from the repo root). Two cleanups:

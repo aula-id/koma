@@ -98,10 +98,7 @@ pub fn kill_session_over_ssh(
         anyhow::bail!("invalid remote session id");
     }
     let path = super::ssh::find_koma(target, auth)?;
-    let command = super::ssh::remote_command(
-        &path,
-        &["daemon", "kill", "--session", session_id],
-    )?;
+    let command = super::ssh::remote_command(&path, &["daemon", "kill", "--session", session_id])?;
     // exec_remote fails on non-zero exit. Remote kill is best-effort: treat a
     // successful SSH that printed "not running" as ok; surface real SSH errors.
     match super::ssh::exec_remote(target, &command, auth) {
@@ -128,10 +125,8 @@ pub fn delete_session_over_ssh(
         anyhow::bail!("invalid remote session id");
     }
     let path = super::ssh::find_koma(target, auth)?;
-    let command = super::ssh::remote_command(
-        &path,
-        &["daemon", "delete", "--session", session_id],
-    )?;
+    let command =
+        super::ssh::remote_command(&path, &["daemon", "delete", "--session", session_id])?;
     match super::ssh::exec_remote(target, &command, auth) {
         Ok(_) => Ok(()),
         Err(e) => Err(e),

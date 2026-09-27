@@ -318,8 +318,7 @@ pub fn handle_events(
     if !created.is_empty() {
         let mut candidates: HashSet<String> = HashSet::new();
         for created_path in &created {
-            let created_str =
-                normalize_lexical(&created_path.to_string_lossy().replace('\\', "/"));
+            let created_str = normalize_lexical(&created_path.to_string_lossy().replace('\\', "/"));
             let parent = Path::new(&created_str)
                 .parent()
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -375,11 +374,7 @@ pub fn handle_events(
     // Bounded re-scan of dependents / unresolved importers.
     if rescan_files.len() > INCREMENTAL_RESCAN_CAP {
         // Too large — request owner roots of the deleted/created files.
-        for path in batch
-            .source_deleted
-            .iter()
-            .chain(created.iter())
-        {
+        for path in batch.source_deleted.iter().chain(created.iter()) {
             let path_str = normalize_lexical(&path.to_string_lossy().replace('\\', "/"));
             if let Some(owner) = project_index.file_owner(&path_str) {
                 let pb = PathBuf::from(owner);
@@ -391,9 +386,10 @@ pub fn handle_events(
     } else {
         for path_str in &rescan_files {
             // Skip files we already scanned in this batch.
-            let already = batch.source_exists.iter().any(|p| {
-                normalize_lexical(&p.to_string_lossy().replace('\\', "/")) == *path_str
-            });
+            let already = batch
+                .source_exists
+                .iter()
+                .any(|p| normalize_lexical(&p.to_string_lossy().replace('\\', "/")) == *path_str);
             if already {
                 continue;
             }

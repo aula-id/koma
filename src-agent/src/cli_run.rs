@@ -30,6 +30,8 @@ fn parse_into(args: &[String], run: &mut RunCli) -> Result<(), String> {
             "--name"
             | "--prompt"
             | "--prompt-file"
+            | "--system"
+            | "--system-file"
             | "--timeout"
             | "--session"
             | "--workdir"
@@ -49,7 +51,7 @@ fn parse_into(args: &[String], run: &mut RunCli) -> Result<(), String> {
         let value = args
             .next()
             .ok_or_else(|| format!("{flag} requires a value"))?;
-        if value.starts_with("--") && flag != "--prompt" {
+        if value.starts_with("--") && flag != "--prompt" && flag != "--system" {
             return Err(format!("{flag} requires a value (got {value})"));
         }
         let number = || {
@@ -63,6 +65,8 @@ fn parse_into(args: &[String], run: &mut RunCli) -> Result<(), String> {
             "--name" => run.name = Some(value.clone()),
             "--prompt" => run.prompt = Some(value.clone()),
             "--prompt-file" => run.prompt_file = Some(value.clone()),
+            "--system" => run.system = Some(value.clone()),
+            "--system-file" => run.system_file = Some(value.clone()),
             "--timeout" => run.timeout_sec = number()?.max(1),
             "--session" => run.session = Some(value.clone()),
             "--workdir" | "--cwd" => run.workdir = Some(value.clone()),
@@ -101,6 +105,9 @@ fn parse_into(args: &[String], run: &mut RunCli) -> Result<(), String> {
             }
             _ => unreachable!(),
         }
+    }
+    if run.system.is_some() && run.system_file.is_some() {
+        return Err("pass only one of --system or --system-file".into());
     }
     if run.mode.as_deref() == Some("yolo") && run.security == Some(false) {
         return Err("--mode yolo requires security on".into());

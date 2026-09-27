@@ -30,11 +30,7 @@ pub(super) fn handle_edit_nearest_attachment(state: &mut AppState) -> Result<()>
 
     let (input, cursor, pending) = {
         let fg = state.rest.fg();
-        (
-            fg.input.clone(),
-            fg.cursor,
-            fg.pending_attachments.clone(),
-        )
+        (fg.input.clone(), fg.cursor, fg.pending_attachments.clone())
     };
     let Some(span) = nearest_marker_span(&input, cursor) else {
         return handle_open_attachments(state);

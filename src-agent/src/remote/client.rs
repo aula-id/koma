@@ -258,7 +258,8 @@ pub(crate) fn prompt_remote_cwd(
         Select,
     }
     let mut focus = Focus::Path;
-    const HINT: &str = "Tab switches · Enter opens dir · Enter on [Select folder] confirms · Esc cancels";
+    const HINT: &str =
+        "Tab switches · Enter opens dir · Enter on [Select folder] confirms · Esc cancels";
     let mut status = String::from(HINT);
     let mut dirs = match wait_dirs(
         &mut terminal,
@@ -375,11 +376,7 @@ pub(crate) fn prompt_remote_cwd(
                 Style::default().fg(palette.dim).bg(palette.bg)
             };
             frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    format!(" {status}"),
-                    status_style,
-                )))
-                .block(
+                Paragraph::new(Line::from(Span::styled(format!(" {status}"), status_style))).block(
                     Block::default()
                         .borders(Borders::TOP | Borders::LEFT | Borders::BOTTOM)
                         .border_style(border_style),

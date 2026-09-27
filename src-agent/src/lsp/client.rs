@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::catalog::{self, ServerSpec};
@@ -231,6 +231,7 @@ pub struct ServerSession {
     io: SessionIo,
     /// Live phase + `$/progress` (reader + control loop).
     runtime: Arc<Mutex<RuntimeState>>,
+    capabilities: Mutex<serde_json::Value>,
 }
 
 /// Cheap clone of the pieces needed to talk to a live server without holding
@@ -252,7 +253,7 @@ pub struct LspPendingRequest {
 }
 
 impl LspPendingRequest {
-    fn wait_raw(self) -> Result<serde_json::Value, String> {
+    pub(crate) fn wait_raw(self) -> Result<serde_json::Value, String> {
         self.io.request(self.method, self.params)
     }
 
@@ -380,11 +381,7 @@ impl LspManager {
     fn runtime_rows(&self) -> Vec<LspRuntimeServer> {
         let mut out = Vec::with_capacity(self.servers.len());
         for (id, session) in &self.servers {
-            let open_docs = self
-                .docs
-                .values()
-                .filter(|d| d.server_id == *id)
-                .count() as u32;
+            let open_docs = self.docs.values().filter(|d| d.server_id == *id).count() as u32;
             out.push(session.to_runtime_row(open_docs));
         }
         out.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
@@ -432,13 +429,14 @@ impl LspManager {
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        let spec = catalog::find_by_extension(&ext)
+        let spec = crate::coding::environment::language_server(Path::new(root), &ext)
             .ok_or_else(|| format!("no language server for .{ext}"))?;
-        let (spawn_id, binary, args) = resolve_spawn(spec, &ext)?;
+        let (server_kind, binary, args) = resolve_spawn(spec, &ext)?;
         let root_path = PathBuf::from(root);
         if !root_path.is_absolute() {
             return Err("workspace root must be absolute".into());
         }
+        let spawn_id = workspace_server_id(&server_kind, &root_path);
 
         // Dead/zombie session: revive (re-opens sibling docs) or just free the slot.
         if self.servers.get(&spawn_id).is_some_and(|s| s.is_dead()) {
@@ -756,6 +754,64 @@ impl LspManager {
         })
     }
 
+    /// Feature-gated JSON LSP requests. The caller cannot select arbitrary
+    /// protocol methods or supply another document URI.
+    pub(crate) fn extended_request(&mut self, root: &str, path: &str, method: &str, mut params: serde_json::Value) -> Result<LspPendingRequest, String> {
+        let (method, capability) = match method {
+            "textDocument/formatting" => ("textDocument/formatting", "documentFormattingProvider"),
+            "textDocument/rangeFormatting" => ("textDocument/rangeFormatting", "documentRangeFormattingProvider"),
+            "textDocument/prepareRename" => ("textDocument/prepareRename", "renameProvider"),
+            "textDocument/rename" => ("textDocument/rename", "renameProvider"),
+            "textDocument/codeAction" => ("textDocument/codeAction", "codeActionProvider"),
+            "codeAction/resolve" => ("codeAction/resolve", "codeActionProvider"),
+            "workspace/executeCommand" => ("workspace/executeCommand", "executeCommandProvider"),
+            "textDocument/signatureHelp" => ("textDocument/signatureHelp", "signatureHelpProvider"),
+            "textDocument/inlayHint" => ("textDocument/inlayHint", "inlayHintProvider"),
+            "textDocument/implementation" => ("textDocument/implementation", "implementationProvider"),
+            "textDocument/typeDefinition" => ("textDocument/typeDefinition", "typeDefinitionProvider"),
+            "textDocument/semanticTokens/full" => ("textDocument/semanticTokens/full", "semanticTokensProvider"),
+            _ => return Err("Unsupported language operation".into()),
+        };
+        if !params.is_object() { return Err("Language parameters must be an object".into()); }
+        let (uri, server_id) = self.uri_server(root, path)?;
+        self.ensure_server_alive(&server_id)?;
+        let session = self.servers.get(&server_id).ok_or("Language server is unavailable")?;
+        let capabilities = session.capabilities.lock().map_err(|_| "LSP capability lock failed")?;
+        let supported = capabilities.get(capability).is_some_and(|v| v.as_bool() == Some(true) || v.is_object());
+        if !supported { return Err(format!("Language server does not support {method}")); }
+        if method == "textDocument/prepareRename" && capabilities.pointer("/renameProvider/prepareSupport").and_then(serde_json::Value::as_bool) != Some(true) {
+            return Err("Language server does not support prepareRename".into());
+        }
+        if method == "codeAction/resolve" && capabilities.pointer("/codeActionProvider/resolveProvider").and_then(serde_json::Value::as_bool) != Some(true) { return Err("Language server does not resolve code actions".into()); }
+        if method == "workspace/executeCommand" {
+            let command = params.get("command").and_then(serde_json::Value::as_str).ok_or("Missing server command")?;
+            if !capabilities.pointer("/executeCommandProvider/commands").and_then(serde_json::Value::as_array).is_some_and(|commands|commands.iter().any(|v|v.as_str()==Some(command))) {return Err("The language server did not advertise this command".into());}
+        }
+        if method.starts_with("textDocument/") { params["textDocument"] = serde_json::json!({"uri":uri}); }
+        Ok(LspPendingRequest { io: session.io.clone(), method, params })
+    }
+
+    pub(crate) fn semantic_legend(&self, root: &str, path: &str) -> Result<serde_json::Value, String> {
+        let (_, server_id) = self.uri_server(root, path)?;
+        let session = self.servers.get(&server_id).ok_or("Language server is unavailable")?;
+        let caps = session.capabilities.lock().map_err(|_| "LSP capability lock failed")?;
+        Ok(caps.pointer("/semanticTokensProvider/legend").cloned().unwrap_or_default())
+    }
+
+    pub(crate) fn validate_edit_versions(&self, edit: &serde_json::Value) -> Result<(), String> {
+        if let Some(changes) = edit.get("documentChanges").and_then(serde_json::Value::as_array) {
+            for change in changes {
+                let Some(document) = change.get("textDocument") else { continue };
+                let Some(version) = document.get("version").and_then(serde_json::Value::as_i64) else { continue };
+                let uri = document.get("uri").and_then(serde_json::Value::as_str).ok_or("Language edit has no URI")?;
+                if self.docs.get(uri).is_none_or(|doc| i64::from(doc.version) != version) {
+                    return Err("Language edit targets an obsolete document version".into());
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Resolve URI + clone SessionIo so the caller can drop `LspManager` before
     /// the blocking request wait. Also revives a dead server if needed.
     fn uri_io(&mut self, root: &str, path: &str) -> Result<(String, SessionIo), String> {
@@ -885,13 +941,14 @@ impl LspManager {
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        let spec = catalog::find_by_extension(&ext)
+        let spec = crate::coding::environment::language_server(Path::new(root), &ext)
             .ok_or_else(|| format!("no language server for .{ext}"))?;
-        let (spawn_id, binary, args) = resolve_spawn(spec, &ext)?;
+        let (server_kind, binary, args) = resolve_spawn(spec, &ext)?;
         let root_path = PathBuf::from(root);
         if !root_path.is_absolute() {
             return Err("workspace root must be absolute".into());
         }
+        let spawn_id = workspace_server_id(&server_kind, &root_path);
 
         if self.servers.get(&spawn_id).is_some_and(|s| s.is_dead()) {
             let has_siblings = self.docs.values().any(|d| d.server_id == spawn_id);
@@ -913,13 +970,7 @@ impl LspManager {
                 ));
             }
             // Server ready — notify under lock (no long RPC).
-            self.finish_did_open_notify(
-                &spawn_id,
-                uri,
-                language_id,
-                text,
-                root_path,
-            )?;
+            self.finish_did_open_notify(&spawn_id, uri, language_id, text, root_path)?;
             return Ok(DidOpenPrep::Done);
         }
 
@@ -991,13 +1042,8 @@ impl LspManager {
                     continue;
                 }
             }
-            let _ = self.finish_did_open_notify(
-                &spawn_id,
-                q.uri,
-                &q.language_id,
-                &q.text,
-                q.root_path,
-            );
+            let _ =
+                self.finish_did_open_notify(&spawn_id, q.uri, &q.language_id, &q.text, q.root_path);
         }
         Ok(())
     }
@@ -1148,7 +1194,6 @@ impl LspManager {
     }
 }
 
-
 impl ServerSession {
     /// True when the reader marked the session dead or the OS process has exited.
     fn is_dead(&self) -> bool {
@@ -1204,6 +1249,20 @@ impl ServerSession {
                         "contextSupport": true,
                         "completionItemKind": { "valueSet": null }
                     },
+                    "formatting": { "dynamicRegistration": false },
+                    "rangeFormatting": { "dynamicRegistration": false },
+                    "rename": { "prepareSupport": true },
+                    "codeAction": { "dataSupport":true,"resolveSupport":{"properties":["edit","command"]}, "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["quickfix", "refactor", "source.organizeImports"] } } },
+                    "signatureHelp": { "signatureInformation": { "documentationFormat": ["plaintext", "markdown"], "parameterInformation": { "labelOffsetSupport": true } } },
+                    "inlayHint": { "dynamicRegistration": false },
+                    "semanticTokens": {
+                        "dynamicRegistration": false, "requests": { "full": true },
+                        "tokenTypes": ["namespace","type","class","enum","interface","struct","typeParameter","parameter","variable","property","enumMember","event","function","method","macro","keyword","modifier","comment","string","number","regexp","operator","decorator"],
+                        "tokenModifiers": ["declaration","definition","readonly","static","deprecated","abstract","async","modification","documentation","defaultLibrary"],
+                        "formats": ["relative"], "overlappingTokenSupport": false, "multilineTokenSupport": false
+                    },
+                    "implementation": { "linkSupport": true },
+                    "typeDefinition": { "linkSupport": true },
                     "hover": {
                         "contentFormat": ["plaintext", "markdown"]
                     },
@@ -1224,7 +1283,7 @@ impl ServerSession {
                 "window": {
                     "workDoneProgress": true
                 },
-                "workspace": {
+                "workspace": { "applyEdit":true,"workspaceEdit":{"documentChanges":true,"resourceOperations":["create","rename","delete"],"failureHandling":"undo"},
                     "workspaceFolders": true,
                     "configuration": true,
                     "didChangeWatchedFiles": {
@@ -1238,7 +1297,8 @@ impl ServerSession {
             }],
             "initializationOptions": initialization_options_for(&self.id)
         });
-        let _caps = self.request("initialize", init_params)?;
+        let initialized = self.request("initialize", init_params)?;
+        *self.capabilities.lock().map_err(|_| "LSP capability lock failed")? = initialized.get("capabilities").cloned().unwrap_or_default();
         self.notify("initialized", serde_json::json!({}))?;
         {
             let mut st = self.runtime.lock().unwrap_or_else(|p| p.into_inner());
@@ -1261,11 +1321,7 @@ impl ServerSession {
                 state.progress.percentage,
             )
         } else if state.phase == "error" {
-            (
-                Some("Stopped".into()),
-                state.error.clone(),
-                None,
-            )
+            (Some("Stopped".into()), state.error.clone(), None)
         } else if state.phase == "starting" {
             (Some("Starting".into()), None, None)
         } else {
@@ -1292,7 +1348,11 @@ impl ServerSession {
         self.io.notify(method, params)
     }
 
-    fn request(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+    fn request(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
         self.io.request(method, params)
     }
 }
@@ -1307,7 +1367,11 @@ impl SessionIo {
         write_message(&self.stdin, &msg)
     }
 
-    fn request(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+    fn request(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx): (Sender<PendingReply>, Receiver<PendingReply>) = mpsc::channel();
         {
@@ -1328,7 +1392,7 @@ impl SessionIo {
             map.remove(&id);
             return Err(e);
         }
-        match rx.recv_timeout(REQ_TIMEOUT) {
+        match rx.recv_timeout(if method == "workspace/executeCommand" {Duration::from_secs(190)} else {REQ_TIMEOUT}) {
             Ok(PendingReply::Ok(v)) => Ok(v),
             Ok(PendingReply::Err(e)) => Err(e),
             Err(RecvTimeoutError::Timeout) => {
@@ -1362,10 +1426,19 @@ fn spawn_server_process(
     root: &Path,
     push: Arc<dyn Fn(String) + Send + Sync>,
 ) -> Result<ServerSession, String> {
-    let mut cmd = Command::new(binary);
+    let mut cmd = if id.starts_with("phpactor") {
+        let runtime = crate::coding::environment::executable(root, "php")
+            .map_err(|e| e.to_string())?;
+        let mut cmd = Command::new(runtime);
+        cmd.arg(binary);
+        cmd
+    } else {
+        Command::new(binary)
+    };
     for a in args {
         cmd.arg(a);
     }
+    cmd.envs(crate::coding::environment::variables(root, binary.file_stem().and_then(|s| s.to_str()).unwrap_or("")).map_err(|e| e.to_string())?);
     cmd.current_dir(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1448,6 +1521,7 @@ fn spawn_server_process(
             pending,
         },
         runtime,
+        capabilities: Mutex::new(serde_json::Value::Null),
     })
 }
 
@@ -1486,12 +1560,16 @@ fn reader_loop<R: Read>(stdout: R, ctx: ReaderCtx) {
         // Response to a request we sent — OR a server→client request (method + id).
         if let Some(id_val) = msg.get("id").cloned() {
             if let Some(method) = msg.get("method").and_then(|m| m.as_str()) {
+                if method == "workspace/applyEdit" {
+                    register_workspace_edit(&server_root, &stdin, &push, id_val, msg.get("params").cloned().unwrap_or_default());
+                    continue;
+                }
                 // Server→client request. Acknowledge workDoneProgress/create;
                 // workspace/configuration gets exclude-heavy defaults.
                 let result = if method == "window/workDoneProgress/create" {
                     serde_json::Value::Null
                 } else if method == "workspace/configuration" {
-                    configuration_reply(&msg, &server_id)
+                    configuration_reply(&msg, &server_id, &server_root)
                 } else {
                     // Unsupported server request — null result is the least-bad ack.
                     serde_json::Value::Null
@@ -1505,9 +1583,7 @@ fn reader_loop<R: Read>(stdout: R, ctx: ReaderCtx) {
                 continue;
             }
             let id = match id_val {
-                serde_json::Value::Number(n) => n
-                    .as_u64()
-                    .or_else(|| n.as_i64().map(|i| i as u64)),
+                serde_json::Value::Number(n) => n.as_u64().or_else(|| n.as_i64().map(|i| i as u64)),
                 serde_json::Value::String(s) => s.parse().ok(),
                 _ => None,
             };
@@ -1525,7 +1601,10 @@ fn reader_loop<R: Read>(stdout: R, ctx: ReaderCtx) {
                         .to_string();
                     let _ = tx.send(PendingReply::Err(msg));
                 } else {
-                    let result = msg.get("result").cloned().unwrap_or(serde_json::Value::Null);
+                    let result = msg
+                        .get("result")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
                     let _ = tx.send(PendingReply::Ok(result));
                 }
             }
@@ -1758,10 +1837,7 @@ fn handle_publish_diagnostics(params: &serde_json::Value, push: &dyn Fn(String))
             .and_then(|s| s.get("character"))
             .and_then(|v| v.as_u64())
             .unwrap_or(character as u64) as u32;
-        let severity = d
-            .get("severity")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(1) as u8;
+        let severity = d.get("severity").and_then(|v| v.as_u64()).unwrap_or(1) as u8;
         let message = d
             .get("message")
             .and_then(|m| m.as_str())
@@ -1827,6 +1903,7 @@ fn push_runtime_snapshot(
 }
 
 fn display_name_for(spawn_id: &str, spec: &ServerSpec) -> String {
+    let spawn_id = spawn_id.split('@').next().unwrap_or(spawn_id);
     if let Some(rest) = spawn_id.strip_prefix("vscode-langservers:") {
         return match rest {
             "vscode-html-language-server" => "HTML Language Server".into(),
@@ -1836,6 +1913,13 @@ fn display_name_for(spawn_id: &str, spec: &ServerSpec) -> String {
         };
     }
     spec.name.to_string()
+}
+
+/// Runtime identity includes the root; two projects using the same language
+/// must never compete for a process configured for only one project.
+fn workspace_server_id(kind: &str, root: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{kind}@{:x}", Sha256::digest(root.to_string_lossy().as_bytes()))
 }
 
 // ─── Spawn resolution ────────────────────────────────────────────────────────
@@ -1927,7 +2011,10 @@ fn abs_path(root: &str, path: &str) -> Result<PathBuf, String> {
         return Ok(rel.to_path_buf());
     }
     for c in rel.components() {
-        if matches!(c, std::path::Component::ParentDir | std::path::Component::RootDir) {
+        if matches!(
+            c,
+            std::path::Component::ParentDir | std::path::Component::RootDir
+        ) {
             return Err("path escapes workspace".into());
         }
     }
@@ -1935,20 +2022,8 @@ fn abs_path(root: &str, path: &str) -> Result<PathBuf, String> {
 }
 
 fn path_to_uri(path: &Path) -> String {
-    // Manual file:// URI — avoids depending on url crate feature flags.
-    let s = path.to_string_lossy();
-    #[cfg(windows)]
-    {
-        let norm = s.replace('\\', "/");
-        if norm.starts_with('/') {
-            return format!("file://{norm}");
-        }
-        return format!("file:///{norm}");
-    }
-    #[cfg(not(windows))]
-    {
-        format!("file://{s}")
-    }
+    url::Url::from_file_path(path).map(|uri| uri.to_string())
+        .unwrap_or_else(|_| format!("file://{}", path.to_string_lossy()))
 }
 
 /// Map a file path to the Monaco / LSP language id (best-effort).
@@ -2069,11 +2144,7 @@ fn parse_one_completion(it: &serde_json::Value) -> Option<LspCompletionItem> {
     let additional_text_edits = it
         .get("additionalTextEdits")
         .and_then(|a| a.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(parse_text_edit)
-                .collect::<Vec<_>>()
-        })
+        .map(|arr| arr.iter().filter_map(parse_text_edit).collect::<Vec<_>>())
         .filter(|v| !v.is_empty());
     let data = it.get("data").cloned();
     let commit_characters = it
@@ -2163,10 +2234,7 @@ fn markup_to_string(v: &serde_json::Value) -> String {
             return s.to_string();
         }
         if let Some(s) = obj.get("language").and_then(|x| x.as_str()) {
-            let val = obj
-                .get("value")
-                .and_then(|x| x.as_str())
-                .unwrap_or("");
+            let val = obj.get("value").and_then(|x| x.as_str()).unwrap_or("");
             return format!("```{s}\n{val}\n```");
         }
     }
@@ -2178,7 +2246,11 @@ fn parse_locations(result: &serde_json::Value) -> Vec<LspLocation> {
         return Vec::new();
     }
     if let Some(arr) = result.as_array() {
-        return arr.iter().filter_map(parse_one_location).take(200).collect();
+        return arr
+            .iter()
+            .filter_map(parse_one_location)
+            .take(200)
+            .collect();
     }
     parse_one_location(result).into_iter().collect()
 }
@@ -2214,8 +2286,14 @@ fn initialization_options_for(server_id: &str) -> serde_json::Value {
     })
 }
 
-fn configuration_reply(msg: &serde_json::Value, server_id: &str) -> serde_json::Value {
-    let defaults = initialization_options_for(server_id);
+fn configuration_reply(msg: &serde_json::Value, server_id: &str, root: &str) -> serde_json::Value {
+    let mut defaults = initialization_options_for(server_id);
+    if let Ok(python) = crate::coding::environment::executable(Path::new(root), "python3") {
+        if python.is_absolute() {
+            defaults["python"] = serde_json::json!({"pythonPath":python});
+            defaults["python.pythonPath"] = serde_json::json!(python);
+        }
+    }
     let items = msg
         .get("params")
         .and_then(|p| p.get("items"))
@@ -2234,7 +2312,11 @@ fn configuration_reply(msg: &serde_json::Value, server_id: &str) -> serde_json::
                 defaults
                     .get(section)
                     .cloned()
-                    .or_else(|| defaults.get(section.strip_prefix("rust-analyzer.").unwrap_or(section)).cloned())
+                    .or_else(|| {
+                        defaults
+                            .get(section.strip_prefix("rust-analyzer.").unwrap_or(section))
+                            .cloned()
+                    })
                     .unwrap_or_else(|| serde_json::json!({}))
             })
             .collect(),
@@ -2332,9 +2414,133 @@ fn collect_document_symbol(v: &serde_json::Value, out: &mut Vec<LspDocumentSymbo
     }
 }
 
+struct PendingWorkspaceEdit {
+    root: String,
+    stdin: Arc<Mutex<ChildStdin>>,
+    request: serde_json::Value,
+    params: serde_json::Value,
+    created: Instant,
+}
+static WORKSPACE_EDITS: OnceLock<Mutex<HashMap<String, PendingWorkspaceEdit>>> = OnceLock::new();
+fn workspace_edits() -> &'static Mutex<HashMap<String, PendingWorkspaceEdit>> {
+    WORKSPACE_EDITS.get_or_init(Default::default)
+}
+fn register_workspace_edit(
+    root: &str,
+    stdin: &Arc<Mutex<ChildStdin>>,
+    push: &Arc<dyn Fn(String) + Send + Sync>,
+    request: serde_json::Value,
+    params: serde_json::Value,
+) {
+    let ticket = uuid::Uuid::new_v4().to_string();
+    let mut pending = match workspace_edits().lock() {
+        Ok(pending) => pending,
+        Err(_) => {
+            let _ = write_message(
+                stdin,
+                &serde_json::json!({"jsonrpc":"2.0","id":request,"result":{"applied":false,"failureReason":"Workspace edit registry is poisoned; restart the language service"}}),
+            );
+            return;
+        }
+    };
+    if pending.len() >= 32 {
+        let _ = write_message(
+            stdin,
+            &serde_json::json!({"jsonrpc":"2.0","id":request,"result":{"applied":false,"failureReason":"Too many pending workspace edits"}}),
+        );
+        return;
+    }
+    pending.insert(
+        ticket.clone(),
+        PendingWorkspaceEdit {
+            root: root.into(),
+            stdin: stdin.clone(),
+            request,
+            params,
+            created: Instant::now(),
+        },
+    );
+    drop(pending);
+    push(serde_json::json!({"k":"LspApplyEdit","root":root,"ticket":ticket}).to_string());
+    let root = root.to_string();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(180));
+        let _ = reply_workspace_edit(
+            &root,
+            &ticket,
+            false,
+            Some("Workspace edit preview expired"),
+        );
+    });
+}
+pub(crate) fn pending_workspace_edit(
+    root: &str,
+    ticket: &str,
+) -> Result<serde_json::Value, String> {
+    let pending = workspace_edits().lock().map_err(|_| {
+        "Workspace edit registry is poisoned; restart the language service".to_string()
+    })?;
+    let edit = pending
+        .get(ticket)
+        .ok_or("Workspace edit is no longer pending")?;
+    if edit.root != root || edit.created.elapsed() > Duration::from_secs(180) {
+        return Err("Workspace edit expired or belongs to a different root".into());
+    }
+    Ok(edit.params.clone())
+}
+pub(crate) fn reply_workspace_edit(
+    root: &str,
+    ticket: &str,
+    applied: bool,
+    reason: Option<&str>,
+) -> Result<(), String> {
+    let mut pending = workspace_edits().lock().map_err(|_| {
+        "Workspace edit registry is poisoned; restart the language service".to_string()
+    })?;
+    if pending.get(ticket).is_none_or(|edit| edit.root != root) {
+        return Err("Workspace edit is no longer pending in this root".into());
+    }
+    let edit = pending
+        .remove(ticket)
+        .ok_or("Workspace edit is no longer pending")?;
+    drop(pending);
+    write_message(
+        &edit.stdin,
+        &serde_json::json!({"jsonrpc":"2.0","id":edit.request,"result":{"applied":applied,"failureReason":reason}}),
+    )
+}
+
+impl LspManager {
+    pub(crate) fn did_change_watched_files(&self, changes: &[(PathBuf, u32)]) {
+        for server in self.servers.values() {
+            let changes: Vec<_> = changes.iter()
+                .filter(|(path, _)| path.starts_with(&server.root))
+                .map(|(path, kind)| serde_json::json!({"uri":path_to_uri(path),"type":kind}))
+                .collect();
+            if !changes.is_empty() {
+                let _ = server.notify("workspace/didChangeWatchedFiles", serde_json::json!({"changes":changes}));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn language_servers_are_isolated_by_workspace() {
+        let a = workspace_server_id("vtsls", Path::new("/projects/a"));
+        let b = workspace_server_id("vtsls", Path::new("/projects/b"));
+        assert_ne!(a, b);
+        assert_eq!(a, workspace_server_id("vtsls", Path::new("/projects/a")));
+        assert_ne!(a, workspace_server_id("gopls", Path::new("/projects/a")));
+        let spec = catalog::find("vscode-langservers").unwrap();
+        assert_eq!(
+            display_name_for(&workspace_server_id("vscode-langservers:vscode-html-language-server", Path::new("/projects/a")), spec),
+            "HTML Language Server"
+        );
+    }
 
     #[test]
     fn language_id_rust() {
@@ -2343,7 +2549,10 @@ mod tests {
 
     #[test]
     fn language_id_php() {
-        assert_eq!(language_id_for_path("app/Http/Controllers/UserController.php"), "php");
+        assert_eq!(
+            language_id_for_path("app/Http/Controllers/UserController.php"),
+            "php"
+        );
         assert_eq!(language_id_for_path("resources/views/welcome.phtml"), "php");
     }
 

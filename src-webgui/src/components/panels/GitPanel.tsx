@@ -1,3 +1,6 @@
+import { GitCommitForm } from '../GitCommitForm'
+import { openGitTool } from '../gitWorkbenchShared'
+import { Tags, Archive, History, Network, GitBranchPlus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
@@ -273,15 +276,12 @@ export function GitPanel() {
   const setActiveRepo = useKoma((s) => s.setActiveRepo)
   const refreshRepos = useKoma((s) => s.refreshRepos)
   const remoteBusy = useKoma((s) => s.remoteBusy)
-  const commitDraft = useKoma((s) => s.commitDraft)
-  const setCommitDraft = useKoma((s) => s.setCommitDraft)
   const refreshGitStatus = useKoma((s) => s.refreshGitStatus)
   const refreshKeys = useKoma((s) => s.refreshKeys)
   const openGitDiffTab = useKoma((s) => s.openGitDiffTab)
   const gitStage = useKoma((s) => s.gitStage)
   const gitUnstage = useKoma((s) => s.gitUnstage)
   const gitDiscard = useKoma((s) => s.gitDiscard)
-  const gitCommit = useKoma((s) => s.gitCommit)
   const setGitKey = useKoma((s) => s.setGitKey)
   const gitFetch = useKoma((s) => s.gitFetch)
   const gitPull = useKoma((s) => s.gitPull)
@@ -331,7 +331,6 @@ export function GitPanel() {
   // section below.
   const clean = git.staged.length === 0 && git.unstaged.length === 0 && git.conflicted.length === 0
   const branchLabel = git.detached ? 'detached HEAD' : (git.branch ?? '(unknown)')
-  const canCommit = commitDraft.trim().length > 0 && git.staged.length > 0
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -408,24 +407,10 @@ export function GitPanel() {
           />
         </div>
       </div>
-      <div className="flex flex-none flex-col gap-1.5 border-b border-koma-border px-3 py-2">
-        <textarea
-          value={commitDraft}
-          onChange={(e) => setCommitDraft(e.target.value)}
-          placeholder={`Message (${branchLabel})`}
-          rows={2}
-          className="w-full resize-none rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[12px] text-koma-fg placeholder:text-koma-dim placeholder:opacity-50 focus:outline-none focus:ring-1 focus:ring-koma-accent"
-        />
-        <button
-          type="button"
-          disabled={!canCommit}
-          onClick={() => gitCommit(commitDraft)}
-          className="flex items-center justify-center gap-1.5 rounded bg-koma-accent px-3 py-1.5 text-[12px] font-semibold text-koma-bg transition-opacity disabled:cursor-not-allowed disabled:opacity-35"
-        >
-          <Check size={13} className="flex-none" />
-          Commit
-        </button>
+      <div className="flex flex-none items-center gap-1 border-b border-koma-border px-3 py-1">
+        {([{ view: 'branches', label: 'Manage branches', Icon: GitBranchPlus }, { view: 'tags', label: 'Manage tags', Icon: Tags }, { view: 'stashes', label: 'Manage stashes', Icon: Archive }, { view: 'reflog', label: 'Reflog and recovery', Icon: History }, { view: 'remotes', label: 'Manage remotes', Icon: Network }] as const).map(({ view, label, Icon }) => <button key={view} type="button" title={label} aria-label={label} onClick={() => openGitTool(view)} className="flex h-6 w-6 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"><Icon size={13} /></button>)}
       </div>
+      <GitCommitForm key={`${sessionId}:${git.root}`} root={git.root!} branchLabel={branchLabel} />
       <div className="flex flex-none items-center gap-1.5 border-b border-koma-border px-3 py-1.5">
         <Search size={12} className="flex-none text-koma-dim opacity-60" />
         <input
@@ -449,7 +434,7 @@ export function GitPanel() {
                 <Empty>No matching conflicts</Empty>
               ) : (
                 conflicted.map((e) => (
-                  <FileRow key={`c:${e.path}`} entry={e} onClick={() => openGitDiffTab(e.path, false)} />
+                  <FileRow key={`c:${e.path}`} entry={e} onClick={() => openGitTool('resolve', { path: e.path })} />
                 ))
               )}
             </AccordionSection>

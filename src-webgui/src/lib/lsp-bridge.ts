@@ -242,21 +242,22 @@ export function pathToUri(root: string, path: string): string {
     ? path
     : `${root.replace(/\/$/, '')}/${path.replace(/^\//, '')}`
   const norm = abs.replace(/\\/g, '/')
-  if (norm.startsWith('/')) return `file://${norm}`
-  return `file:///${norm}`
+  const encoded = norm.split('/').map((segment, index) => index === 0 && /^[A-Za-z]:$/.test(segment) ? segment : encodeURIComponent(segment)).join('/')
+  if (norm.startsWith('//')) return `file:${encoded}`
+  if (norm.startsWith('/')) return `file://${encoded}`
+  return `file:///${encoded}`
 }
 
 /** Best-effort parse of file:// URI → absolute filesystem path. */
 export function uriToPath(uri: string): string | null {
-  if (!uri.startsWith('file://')) return null
-  let rest = uri.slice('file://'.length)
-  // Windows file:///C:/...
-  if (/^\/[A-Za-z]:\//.test(rest)) rest = rest.slice(1)
   try {
-    return decodeURIComponent(rest)
-  } catch {
-    return rest
-  }
+    const parsed = new URL(uri)
+    if (parsed.protocol !== 'file:') return null
+    let path = decodeURIComponent(parsed.pathname)
+    if (parsed.hostname && parsed.hostname !== 'localhost') path = `//${parsed.hostname}${path}`
+    if (/^\/[A-Za-z]:\//.test(path)) path = path.slice(1)
+    return path
+  } catch { return null }
 }
 
 /** Split absolute path into workspace root + relative path using open roots. */

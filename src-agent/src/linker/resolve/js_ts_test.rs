@@ -24,8 +24,7 @@ fn relative_import_exact() {
     std::fs::write(src.join("utils.ts"), "").unwrap();
 
     let mut known = HashSet::new();
-    let utils_path =
-        normalize_lexical(&src.join("utils.ts").to_string_lossy().replace('\\', "/"));
+    let utils_path = normalize_lexical(&src.join("utils.ts").to_string_lossy().replace('\\', "/"));
     known.insert(utils_path.clone());
 
     let import_ref = ImportRef {
@@ -77,9 +76,7 @@ fn relative_import_ts_substitution() {
         condition: None,
     };
     let ctx = JsTsResolveContext {
-        importer_path: &normalize_lexical(
-            &src.join("app.ts").to_string_lossy().replace('\\', "/"),
-        ),
+        importer_path: &normalize_lexical(&src.join("app.ts").to_string_lossy().replace('\\', "/")),
         ts_config: None,
         package_json: None,
         known_files: &known,

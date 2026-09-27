@@ -109,7 +109,7 @@ fn complete_file_ref(rest: &mut AppStateRest, matches: &[String]) {
 /// rewind) and each entry carries its attachment records so chips re-stage.
 fn user_messages(rest: &AppStateRest) -> Vec<crate::app::state::HistoryRecallEntry> {
     use crate::app::state::{collapse_paste_fences_to_markers, HistoryRecallEntry};
-    use crate::dto::chat::{BASH_NUDGE_MARK, EXT_PROMPT_MARK, Role, SHELL_MARK};
+    use crate::dto::chat::{Role, BASH_NUDGE_MARK, EXT_PROMPT_MARK, SHELL_MARK};
 
     rest.fg()
         .session

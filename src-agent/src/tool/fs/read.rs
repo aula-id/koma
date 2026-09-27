@@ -13,8 +13,9 @@ impl Tool for Read {
         "read"
     }
     fn description(&self) -> &'static str {
-        "Read a workspace-relative file. Returns line-numbered content. Use offset/limit to paginate large files. \
-         For a file's imports and dependents, use graph_query."
+        "Read a workspace-relative file (also session tmp/ tool logs). Returns line-numbered content. \
+         Default is 2000 lines / 90k chars — set offset/limit only to page past that, or use grep for one pattern. \
+         A dump past that cap spills to session tmp. For a file's imports and dependents, use graph_query."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -27,7 +28,7 @@ impl Tool for Read {
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Max lines to read (default 20000, capped at 20000)."
+                    "description": "Max lines to read (default 2000, capped at 2000). Use offset to page past the cap."
                 }
             },
             "required": ["path"]
@@ -50,8 +51,8 @@ impl Tool for Read {
         let content =
             std::fs::read_to_string(&path).with_context(|| format!("reading file '{rel}'"))?;
 
-        const MAX_LINES: usize = 20_000;
-        const MAX_BYTES: usize = crate::config::MAX_TOOL_OUTPUT_CHARS;
+        const MAX_LINES: usize = crate::config::MAX_READ_LINES;
+        const MAX_BYTES: usize = crate::config::MAX_READ_CHARS;
 
         // Parse optional offset/limit; clamp limit to the hard cap.
         let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
@@ -103,5 +104,26 @@ impl Tool for Read {
         // L3: auto-neighborhood footer (best-effort, daemon may not be running).
         super::append_neighborhood_footer(&mut out, &path);
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Read;
+    use crate::tool::Tool;
+
+    #[test]
+    fn schema_is_not_capped_at_20_lines() {
+        let desc = Read.description();
+        assert!(!desc.contains("capped at 20"));
+        assert!(desc.contains("2000"));
+        assert!(desc.contains("90k"));
+        let params = Read.parameters();
+        let limit = params["properties"]["limit"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(!limit.contains("capped at 20)"));
+        assert!(!limit.contains("capped at 20."));
+        assert!(limit.contains("capped at 2000"));
     }
 }

@@ -99,7 +99,11 @@ fn express_lane_branch_ready_completes_via_try_integrate_ex() {
     let m = sample("feat/x", "develop");
     assert_eq!(m.lane, "express");
     let r = try_integrate_ex(&m, true, true);
-    assert!(r.success, "express branch-ready should complete: {}", r.message);
+    assert!(
+        r.success,
+        "express branch-ready should complete: {}",
+        r.message
+    );
     assert!(
         r.message.contains("lane branch-ready") || r.message.contains("mission complete"),
         "unexpected: {}",

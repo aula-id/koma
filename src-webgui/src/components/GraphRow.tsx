@@ -332,7 +332,7 @@ export const GraphRow = memo(function GraphRow({
             r={r}
             // A tag isn't switchable — its chip falls through to the row's
             // own commit context menu instead of opening a ref-mode menu.
-            onContextMenu={r.kind === 'tag' ? undefined : onRefContextMenu}
+            onContextMenu={onRefContextMenu}
             draggedBranch={draggedBranch}
             dropHighlight={dropHoverId === `ref:${r.name}`}
             onBranchDragStart={onBranchDragStart}

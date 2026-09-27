@@ -105,7 +105,7 @@ fn expand_paste_markers_reads_disk_body() {
     let body = "line a\nline b\nline c";
     let (att, marker) = ingest_paste_text(&pastes, body).unwrap();
     let text = format!("before {marker} after");
-    let expanded = expand_paste_markers(&text, &[att.clone()], &session);
+    let expanded = expand_paste_markers(&text, std::slice::from_ref(&att), &session);
     assert!(expanded.contains("<<<pasted_text n=1 path=\"pastes/01-paste.txt\">>>"));
     assert!(expanded.contains(body));
     assert!(expanded.contains("<<<end_pasted_text n=1>>>"));

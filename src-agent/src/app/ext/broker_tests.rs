@@ -2111,20 +2111,23 @@ fn providers_register_rejects_bad_input() {
     )
     .get("error")
     .is_some());
-    assert!(bad(
-        json!({ "name": "G", "endpoint": "not a url", "api_type": "openai", "key": "k" })
-    )
-    .get("error")
-    .is_some());
     assert!(
-        bad(
-            json!({ "name": "G", "endpoint": "ftp://x.test", "api_type": "openai", "key": "k" })
-        )
-        .get("error")
-        .is_some(),
+        bad(json!({ "name": "G", "endpoint": "not a url", "api_type": "openai", "key": "k" }))
+            .get("error")
+            .is_some()
+    );
+    assert!(
+        bad(json!({ "name": "G", "endpoint": "ftp://x.test", "api_type": "openai", "key": "k" }))
+            .get("error")
+            .is_some(),
         "non-http scheme rejected"
     );
-    assert!(bad(json!({ "name": "G", "endpoint": "https://x.test", "api_type": "codex", "key": "k" })).get("error").is_some(), "koma-free/codex wire types not injectable");
+    assert!(
+        bad(json!({ "name": "G", "endpoint": "https://x.test", "api_type": "codex", "key": "k" }))
+            .get("error")
+            .is_some(),
+        "koma-free/codex wire types not injectable"
+    );
     assert!(bad(
         json!({ "name": "G", "endpoint": "https://x.test", "api_type": "openai", "key": "  " })
     )
@@ -2168,11 +2171,8 @@ fn providers_unregister_ownership_wall_and_orphan_sweep() {
     }
 
     // ext A can never remove B's or native providers (ownership wall).
-    let (blocked, _, _) = apply_providers_unregister(
-        &mut config,
-        "ext.a",
-        &json!({ "ids": ["p-b", "p-native"] }),
-    );
+    let (blocked, _, _) =
+        apply_providers_unregister(&mut config, "ext.a", &json!({ "ids": ["p-b", "p-native"] }));
     assert_eq!(blocked["removed"], json!(0));
     assert_eq!(config.providers.len(), 4);
 

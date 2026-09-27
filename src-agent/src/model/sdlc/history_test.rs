@@ -59,8 +59,7 @@ fn extract_skips_missing_path() {
 #[test]
 fn parse_historian_valid() {
     let reply = r#"{"purpose":"Added error handling to the authentication module"}"#;
-    let rec =
-        parse_historian_reply(reply, "b1", Some("t1"), vec!["src/auth.rs".into()]).unwrap();
+    let rec = parse_historian_reply(reply, "b1", Some("t1"), vec!["src/auth.rs".into()]).unwrap();
     assert_eq!(rec.batch_id, "b1");
     assert_eq!(
         rec.purpose,

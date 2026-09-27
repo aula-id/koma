@@ -51,9 +51,11 @@ impl RewindState {
                     .or_else(|| m.content.strip_prefix(crate::dto::chat::SHELL_MARK))
                     .or_else(|| m.content.strip_prefix(crate::dto::chat::EXT_PROMPT_MARK))
                     .unwrap_or(m.content.as_str());
-                let content =
-                    crate::app::state::collapse_paste_fences_to_markers(raw);
-                RewindEntry { vec_index: idx, content }
+                let content = crate::app::state::collapse_paste_fences_to_markers(raw);
+                RewindEntry {
+                    vec_index: idx,
+                    content,
+                }
             })
             .collect();
         if entries.is_empty() {

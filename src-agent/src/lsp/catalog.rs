@@ -18,6 +18,8 @@ pub enum InstallKind {
     PipVenv,
     /// `GOBIN=... go install <module>@latest` (needs Go).
     GoInstall,
+    /// Composer standalone project (Phpactor).
+    Composer,
 }
 
 /// One catalogue language server entry.
@@ -100,7 +102,9 @@ pub const CATALOG: &[ServerSpec] = &[
         // Multi-binary package; binary field is the primary (json). Installer
         // also exposes vscode-html-language-server and vscode-css-language-server.
         binary: "vscode-json-language-server",
-        extensions: &["json", "jsonc", "html", "htm", "xhtml", "css", "scss", "less"],
+        extensions: &[
+            "json", "jsonc", "html", "htm", "xhtml", "css", "scss", "less",
+        ],
         kind: InstallKind::Npm,
         package: "vscode-langservers-extracted",
         args: &["--stdio"],
@@ -122,6 +126,15 @@ pub const CATALOG: &[ServerSpec] = &[
         kind: InstallKind::Npm,
         package: "intelephense",
         args: &["--stdio"],
+    },
+    ServerSpec {
+        id: "phpactor",
+        name: "Phpactor (PHP)",
+        binary: "phpactor",
+        extensions: &["php", "phtml", "php3", "php4", "php5", "phps"],
+        kind: InstallKind::Composer,
+        package: "phpactor/phpactor",
+        args: &["language-server"],
     },
     ServerSpec {
         id: "taplo",
@@ -208,7 +221,10 @@ mod tests {
     fn find_by_extension_php() {
         let s = find_by_extension("php").expect("php");
         assert_eq!(s.id, "intelephense");
-        assert_eq!(find_by_extension("phtml").map(|s| s.id), Some("intelephense"));
+        assert_eq!(
+            find_by_extension("phtml").map(|s| s.id),
+            Some("intelephense")
+        );
     }
 
     #[test]

@@ -165,7 +165,10 @@ fn format_tool_result_done_includes_exit_code() {
         text.contains("exit code: 0"),
         "expected exit code line, got: {text}"
     );
-    assert!(text.contains("hello"), "expected command output, got: {text}");
+    assert!(
+        text.contains("hello"),
+        "expected command output, got: {text}"
+    );
 }
 
 #[test]

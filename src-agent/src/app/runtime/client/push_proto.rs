@@ -164,10 +164,7 @@ pub(super) enum PushEnvelope {
     },
     /// In-place update of the last committed message (tool result join, content tweak).
     /// React replaces `messages[messages.length-1]` when lengths still match.
-    SnapshotSetLast {
-        session: String,
-        message: PushMsg,
-    },
+    SnapshotSetLast { session: String, message: PushMsg },
     /// The FULL live streaming buffer (React REPLACES the live bubble). Emitted every
     /// frame the buffer changes; an empty `text` clears the bubble on commit.
     /// Prefer [`StreamDelta`] for steady growth; this full-replace path remains for
@@ -917,18 +914,12 @@ pub(super) enum PushEnvelope {
     /// session id from TerminalCreate; `data` is raw PTY output bytes
     /// (UTF-8 decoded) to be written to xterm.js.
     #[serde(rename_all = "camelCase")]
-    TerminalOutput {
-        id: String,
-        data: String,
-    },
+    TerminalOutput { id: String, data: String },
     /// A terminal session's PTY process has exited. `id` is the terminal
     /// session id; `code` is the process exit code (None if terminated
     /// by signal).
     #[serde(rename_all = "camelCase")]
-    TerminalExit {
-        id: String,
-        code: Option<i32>,
-    },
+    TerminalExit { id: String, code: Option<i32> },
 }
 
 /// Push a swap-START [`PushEnvelope::Switching`] for target session `to`. Called at every
@@ -1425,12 +1416,7 @@ pub(super) fn push_lsp_document_symbol(
 }
 
 /// Emit a one-shot `LspInstall` progress/result frame.
-pub(super) fn push_lsp_install(
-    push: &dyn Fn(String),
-    id: &str,
-    pct: u8,
-    error: Option<String>,
-) {
+pub(super) fn push_lsp_install(push: &dyn Fn(String), id: &str, pct: u8, error: Option<String>) {
     super::render::emit(
         push,
         &PushEnvelope::LspInstall {

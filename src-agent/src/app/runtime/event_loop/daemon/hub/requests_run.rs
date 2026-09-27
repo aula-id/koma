@@ -1,7 +1,7 @@
 //! Headless session inspection and activation use the live daemon state.
+use super::core::DaemonHub;
 use crate::app::{mode::ExtSubMode, state::AppState};
 use crate::ipc::proto::{DaemonEvent, RunExtension, RunState};
-use super::core::DaemonHub;
 
 pub(crate) fn run_state(state: &AppState) -> anyhow::Result<RunState> {
     let rt = state.rest.fg();
@@ -46,6 +46,7 @@ pub(crate) fn run_state(state: &AppState) -> anyhow::Result<RunState> {
         max_output_tokens: settings.max_output_tokens,
         context_window_limit: settings.context_window_limit,
         context_model_alias: settings.context_model_alias.clone(),
+        system_extra: !settings.session_system_extra.trim().is_empty(),
         extensions: rows
             .into_iter()
             .map(|r| RunExtension {
@@ -96,10 +97,10 @@ mod tests {
     use super::*;
     use crate::app::{mode::Mode, state::SessionRuntime};
     use crate::model::{
-        app_config::{InstalledExtension, ExtensionActivation},
-        settings::Settings,
-        session::Session,
+        app_config::{ExtensionActivation, InstalledExtension},
         conversation::Conversation,
+        session::Session,
+        settings::Settings,
     };
 
     #[test]

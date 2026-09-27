@@ -80,31 +80,42 @@ export function langFromPath(path: string): string {
 // Resolve a CSS custom property (incl. color-mix() expressions like koma-panel/
 // border) to a concrete hex. getComputedStyle on a raw custom property returns
 // the UNRESOLVED expression, so we set it on a probe element's `color` and read
-// the browser-computed rgb back, then convert to hex (Monaco wants hex).
-function rgbToHex(rgb: string): string | null {
-  const trimmed = rgb.trim()
-  const m = trimmed.match(/rgba?\(([^)]+)\)/i)
-  if (!m) return /^#[0-9a-f]{3,8}$/i.test(trimmed) ? trimmed : null
-  const parts = m[1].split(/[ ,/]+/).map((s) => s.trim()).filter(Boolean)
-  if (parts.length < 3) return null
-  const toHex = (v: string) => {
-    const n = Math.max(0, Math.min(255, Math.round(parseFloat(v))))
-    return n.toString(16).padStart(2, '0')
+// the computed color back, then convert to hex (Monaco wants hex). Browsers
+// serialize our srgb color-mix tokens as color(srgb ...), not necessarily rgb().
+function cssColorToHex(color: string): string | null {
+  const value = color.trim()
+  if (/^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value)) {
+    return value.length <= 5
+      ? `#${[...value.slice(1)].map(c => c + c).join('')}`
+      : value
   }
-  return `#${toHex(parts[0])}${toHex(parts[1])}${toHex(parts[2])}`
+  const srgb = value.match(/^color\(srgb\s+([^)]+)\)$/i)
+  const rgb = value.match(/^rgba?\(([^)]+)\)$/i)
+  const match = srgb ?? rgb
+  if (!match) return null
+  const parts = match[1].split(/[\s,/]+/).filter(Boolean)
+  if (parts.length < 3 || parts.length > 4) return null
+  const channels = parts.map((part, index) => {
+    const percent = part.endsWith('%')
+    const number = Number(percent ? part.slice(0, -1) : part)
+    const scale = percent ? 255 / 100 : srgb || index === 3 ? 255 : 1
+    return Math.max(0, Math.min(255, Math.round(number * scale)))
+  })
+  if (channels.some(n => !Number.isFinite(n))) return null
+  return `#${channels.map(n => n.toString(16).padStart(2, '0')).join('')}`
 }
 
 function resolveVarHex(varName: string, fallback: string): string {
   try {
     const probe = document.createElement('span')
-    probe.style.color = `var(${varName})`
+    probe.style.color = `var(${varName}, ${fallback})`
     probe.style.position = 'absolute'
     probe.style.visibility = 'hidden'
     probe.style.pointerEvents = 'none'
     document.body.appendChild(probe)
     const rgb = getComputedStyle(probe).color
     document.body.removeChild(probe)
-    return rgbToHex(rgb) ?? fallback
+    return cssColorToHex(rgb) ?? fallback
   } catch {
     return fallback
   }
@@ -114,12 +125,14 @@ function resolveVarHex(varName: string, fallback: string): string {
 // to the standalone code editor theme; DiffTab passes 'koma-diff'.
 export function applyKomaTheme(name = 'koma-editor'): string {
   const bg = resolveVarHex('--color-koma-bg', '#0b0e14')
-  const panel = resolveVarHex('--color-koma-panel', '#151922')
-  const panel2 = resolveVarHex('--color-koma-panel2', panel)
   const fg = resolveVarHex('--color-koma-fg', '#c8d3f5')
+  // Match styles.css even if a webview returns an unsupported color notation.
+  // Never pair a light palette's text with fixed dark widget fallbacks.
+  const panel = resolveVarHex('--color-koma-panel', mixHex(fg, bg, 0.06))
+  const panel2 = resolveVarHex('--color-koma-panel2', mixHex(fg, bg, 0.04))
   const dim = resolveVarHex('--color-koma-dim', '#adadad')
-  const border = resolveVarHex('--color-koma-border', '#20242e')
-  const hover = resolveVarHex('--color-koma-hover', '#1a1f2a')
+  const border = resolveVarHex('--color-koma-border', mixHex(fg, bg, 0.10))
+  const hover = resolveVarHex('--color-koma-hover', mixHex(fg, bg, 0.08))
   const accent = resolveVarHex('--color-koma-accent', '#39ff14')
   const warn = resolveVarHex('--color-koma-warn', '#ffb43c')
   const error = resolveVarHex('--color-koma-error', '#ff3c3c')
@@ -287,7 +300,8 @@ export function applyKomaTheme(name = 'koma-editor'): string {
       'progressBar.background': accent,
     },
   })
-  // Context menus mount on document.body (outside .monaco-editor). Monaco only
+  // Context menus may mount on document.body (outside .monaco-editor) or in an
+  // editor's Shadow DOM, which document-level menu CSS cannot reach. Monaco only
   // injects `--vscode-*` color vars under `.monaco-editor, .monaco-diff-editor,
   // .monaco-component`, so body menus keep the previous base theme (often dark
   // on a light koma palette). Mirror the menu tokens onto :root every apply.

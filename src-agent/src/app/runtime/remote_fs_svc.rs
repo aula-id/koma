@@ -173,12 +173,7 @@ fn handle_req(req: RemoteFsReq, roots: &mut Vec<PathBuf>) -> RemoteFsRep {
             root,
             path,
             request_id,
-        } => RemoteFsRep::Delete(file_ops::exec_file_delete(
-            &root,
-            &path,
-            &request_id,
-            roots,
-        )),
+        } => RemoteFsRep::Delete(file_ops::exec_file_delete(&root, &path, &request_id, roots)),
         RemoteFsReq::WriteBytes {
             root,
             path,

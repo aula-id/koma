@@ -101,10 +101,7 @@ impl RemoteFsClient {
 
     /// Cached roots (may be empty until SettingsValues arrives).
     pub fn roots(&self) -> Vec<String> {
-        self.roots
-            .lock()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+        self.roots.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
     /// Cached roots as `PathBuf`s (for API parity with local `workdirs`).
@@ -143,15 +140,35 @@ impl RemoteFsClient {
     /// Download save-as runs the native dialog on THIS host after the remote
     /// bytes arrive — the remote thin client only reads; the laptop writes.
     pub fn handle_file_ctl(&self, ctl: &super::HostCtl, push: &dyn Fn(String)) {
-        let save_as = matches!(
-            ctl,
-            super::HostCtl::FileDownloadBytes { save_as: true, .. }
-        );
+        let save_as = matches!(ctl, super::HostCtl::FileDownloadBytes { save_as: true, .. });
         let req = match hostctl_to_req(ctl) {
             Some(r) => r,
             None => return,
         };
         let rep = self.request(req);
+        // A transport error still needs the original file/request identity.
+        // A generic FileTree error leaves save/read state stuck in the editor.
+        if let RemoteFsRep::Error { error, .. } = &rep {
+            let env = match ctl {
+                super::HostCtl::FileSave { root, path, request_id, .. } => Some(PushEnvelope::FileSave {
+                    root: root.clone(), path: path.clone(), request_id: request_id.clone(),
+                    fingerprint: String::new(),
+                    error: Some(format!("conflict: could not confirm whether the remote save completed ({error}). Your local edits are retained; compare with the remote file before reloading.")),
+                }),
+                super::HostCtl::FileRead { root, path, request_id } => Some(PushEnvelope::FileRead {
+                    root: root.clone(), path: path.clone(), request_id: request_id.clone(),
+                    content: None, fingerprint: String::new(), binary: false, too_large: false,
+                    error: Some(error.clone()),
+                }),
+                _ => None,
+            };
+            if let Some(env) = env {
+                if let Ok(json) = serde_json::to_string(&env) {
+                    push(json);
+                }
+                return;
+            }
+        }
         let rep = match rep {
             RemoteFsRep::DownloadBytes(r) if save_as => {
                 RemoteFsRep::DownloadBytes(super::file_ops::finalize_download_bytes(r, true))

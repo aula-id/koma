@@ -1,7 +1,7 @@
 name: release
 
-# Build the koma binary for every supported platform on a version-tag push and
-# attach each one to the GitHub release. Asset names MUST match install.sh:
+# Build koma on a version-tag push and attach the packages to the GitHub release.
+# Linux/macOS binary asset names MUST match install.sh:
 #   koma-linux-x64, koma-linux-arm64, koma-darwin-arm64, koma-darwin-x64
 #
 # All builds ship the GUI feature by default (default = ["gui"] in Cargo.toml),
@@ -12,8 +12,8 @@ name: release
 # The linux-packages / windows-package jobs additionally publish desktop
 # installers under STABLE, VERSIONLESS names (hard-linked from the homepage via
 # /releases/latest/download/): koma-x64.deb, koma-arm64.deb, koma-x64.AppImage,
-# koma-arm64.AppImage, koma-x64.msi, plus the raw koma-windows-x64.exe.
-# These are NOT referenced by install.sh.
+# koma-arm64.AppImage, koma-x64.msi. Windows publishes only the WiX MSI installer,
+# which install.ps1 downloads.
 #
 # IMPORTANT: Linux runners are pinned to ubuntu-22.04 (glibc 2.35) so that
 # prebuilt binaries run on Ubuntu 22.04 LTS and all newer releases. Glibc is
@@ -248,14 +248,14 @@ jobs:
             koma-${{ matrix.arch }}.AppImage
 
   # ---------------------------------------------------------------------------
-  # Windows: raw koma-windows-x64.exe + the .msi installer (WiX). Both are
-  # gui-featured (default = ["gui"]). cargo-packager downloads the WiX toolset
+  # Windows: the .msi installer (WiX), including the GUI (default = ["gui"]).
+  # cargo-packager downloads the WiX toolset
   # itself, so no separate WiX install step is needed. Rename/glob steps use
   # `shell: bash` (Git Bash ships on the windows runner) to avoid mixing
   # PowerShell and bash dialects.
   # ---------------------------------------------------------------------------
   windows-package:
-    name: package windows x64 (msi + exe)
+    name: package windows x64 (msi)
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -281,14 +281,9 @@ jobs:
       - name: Install cargo-packager
         run: cargo install cargo-packager --version 0.11.8 --locked
 
-      # Default features include gui; stage the raw exe before packaging
-      # overwrites target/release/koma.exe with the packager output.
+      # Build the GUI-enabled executable that WiX embeds in the MSI.
       - name: Build release binary
         run: cargo build --release -p agent
-
-      - name: Stage raw exe
-        shell: bash
-        run: cp target/release/koma.exe koma-windows-x64.exe
 
       # cargo-packager reads [package.metadata.packager] from src-agent/Cargo.toml
       # via `cargo metadata`, auto-detects the single `koma` bin, locates it at
@@ -315,5 +310,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            koma-windows-x64.exe
             koma-x64.msi

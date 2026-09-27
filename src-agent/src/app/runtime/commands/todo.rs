@@ -44,18 +44,12 @@ fn load_todos_with_pwd(
             (items, pwd_hash, Some(session.path.clone()), true)
         }
         _ => {
-            let memory_dir =
-                crate::model::store::memory_dir(&session.pwd_hash).unwrap_or_default();
+            let memory_dir = crate::model::store::memory_dir(&session.pwd_hash).unwrap_or_default();
             let path = memory_dir.join("TODO.md");
             let Ok(content) = std::fs::read_to_string(&path) else {
                 return (Vec::new(), pwd_hash, None, false);
             };
-            (
-                parse_todo_file(&content),
-                pwd_hash,
-                None,
-                false,
-            )
+            (parse_todo_file(&content), pwd_hash, None, false)
         }
     }
 }

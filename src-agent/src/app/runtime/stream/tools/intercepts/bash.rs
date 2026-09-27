@@ -97,11 +97,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_bash_background(
 
     if background {
         let job = crate::app::bgbash::spawn_bash_job(
-            id,
-            command,
-            cwd,
-            done_tx,
-            None, // true BG — no park
+            id, command, cwd, done_tx, None, // true BG — no park
             None, // no FG timeout
         );
         state.rest.sessions[sess_idx].bash_jobs.push(job);

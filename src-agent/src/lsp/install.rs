@@ -41,12 +41,17 @@ pub fn install_one(id: &str, force: bool, mut progress: Option<ProgressFn>) -> R
         }
     }
 
-    let result = match spec.kind {
-        InstallKind::GithubGz => install_github_gz(spec, &mut progress),
-        InstallKind::GithubZip => install_github_zip(spec, &mut progress),
-        InstallKind::Npm => install_npm(spec, &mut progress),
-        InstallKind::PipVenv => install_pip_venv(spec, &mut progress),
-        InstallKind::GoInstall => install_go(spec, &mut progress),
+    let result = if matches!(id, "lua-language-server" | "zls" | "nil") {
+        crate::coding::provision::install(id)
+    } else {
+        match spec.kind {
+            InstallKind::GithubGz => install_github_gz(spec, &mut progress),
+            InstallKind::GithubZip => install_github_zip(spec, &mut progress),
+            InstallKind::Npm => install_npm(spec, &mut progress),
+            InstallKind::PipVenv => install_pip_venv(spec, &mut progress),
+            InstallKind::GoInstall => install_go(spec, &mut progress),
+            InstallKind::Composer => crate::coding::provision::install(spec.id),
+        }
     };
 
     match result {
@@ -99,10 +104,13 @@ pub fn install_all(force: bool, mut progress: Option<ProgressFn>) -> Result<()> 
 /// nothing is installed under the managed dir.
 pub fn uninstall_one(id: &str) -> Result<()> {
     let _spec = catalog::find(id).ok_or_else(|| anyhow!("unknown language server id: {id}"))?;
+    let tools = crate::coding::provision::tools_dir()?.join(id);
+    if tools.exists() {
+        std::fs::remove_dir_all(&tools)?;
+    }
     let dir = manifest::server_dir(id)?;
     if dir.exists() {
-        std::fs::remove_dir_all(&dir)
-            .with_context(|| format!("remove {}", dir.display()))?;
+        std::fs::remove_dir_all(&dir).with_context(|| format!("remove {}", dir.display()))?;
         println!("removed {}", dir.display());
     } else {
         println!("nothing to remove for {id} (not koma-managed)");
@@ -126,6 +134,10 @@ fn managed_install_supported(spec: &ServerSpec) -> bool {
             | "vscode-langservers"
             | "bash-language-server"
             | "intelephense"
+            | "phpactor"
+            | "lua-language-server"
+            | "zls"
+            | "nil"
     )
 }
 
@@ -211,8 +223,7 @@ fn host_triple_parts() -> Result<(&'static str, &'static str)> {
 fn prepare_server_dir(id: &str) -> Result<PathBuf> {
     let dir = manifest::server_dir(id)?;
     if dir.exists() {
-        std::fs::remove_dir_all(&dir)
-            .with_context(|| format!("clear {}", dir.display()))?;
+        std::fs::remove_dir_all(&dir).with_context(|| format!("clear {}", dir.display()))?;
     }
     let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).with_context(|| format!("create {}", bin.display()))?;
@@ -272,7 +283,12 @@ fn install_github_gz(spec: &ServerSpec, progress: &mut Option<ProgressFn>) -> Re
     }
     ensure_executable(&dest)?;
     report(progress, spec.id, 95, None);
-    write_manifest(spec, &tag, "github", &format!("bin/{}", exe_name(spec.binary)))?;
+    write_manifest(
+        spec,
+        &tag,
+        "github",
+        &format!("bin/{}", exe_name(spec.binary)),
+    )?;
     println!("installed {} {} → {}", spec.id, tag, dest.display());
     Ok(())
 }
@@ -380,8 +396,8 @@ fn extract_zip_bytes(bytes: &[u8], dest: &Path) -> Result<()> {
         if let Some(parent) = out_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut out = File::create(&out_path)
-            .with_context(|| format!("create {}", out_path.display()))?;
+        let mut out =
+            File::create(&out_path).with_context(|| format!("create {}", out_path.display()))?;
         std::io::copy(&mut file, &mut out)?;
     }
     Ok(())
@@ -407,7 +423,10 @@ fn find_named_file(root: &Path, name: &str) -> Option<PathBuf> {
 
 fn install_npm(spec: &ServerSpec, progress: &mut Option<ProgressFn>) -> Result<()> {
     let npm = resolve::find_on_path("npm").ok_or_else(|| {
-        anyhow!("npm not found on PATH — install Node.js to manage {}", spec.id)
+        anyhow!(
+            "npm not found on PATH — install Node.js to manage {}",
+            spec.id
+        )
     })?;
     let dir = prepare_server_dir(spec.id)?;
     report(progress, spec.id, 10, None);
@@ -539,7 +558,10 @@ fn install_pip_venv(spec: &ServerSpec, progress: &mut Option<ProgressFn>) -> Res
     let python = resolve::find_on_path("python3")
         .or_else(|| resolve::find_on_path("python"))
         .ok_or_else(|| {
-            anyhow!("python3 not found on PATH — install Python 3 to manage {}", spec.id)
+            anyhow!(
+                "python3 not found on PATH — install Python 3 to manage {}",
+                spec.id
+            )
         })?;
     let dir = prepare_server_dir(spec.id)?;
     let venv = dir.join("venv");
@@ -775,10 +797,10 @@ mod tests {
     }
 
     #[test]
-    fn lua_zls_nil_not_managed_yet() {
-        for id in ["lua-language-server", "zls", "nil"] {
+    fn additional_language_servers_have_managed_installers() {
+        for id in ["lua-language-server", "zls", "nil", "phpactor"] {
             let spec = catalog::find(id).expect(id);
-            assert!(!managed_install_supported(spec), "{id}");
+            assert!(managed_install_supported(spec), "{id}");
         }
     }
 }

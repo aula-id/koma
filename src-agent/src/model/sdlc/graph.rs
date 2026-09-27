@@ -169,7 +169,9 @@ pub fn validate_checklist_nodes(items: &[ChecklistNode]) -> Result<()> {
     let mut explicit_ids = HashSet::new();
     for it in items {
         if let Some(id) = it.id.as_deref().map(str::trim).filter(|id| !id.is_empty()) {
-            if !explicit_ids.insert(id) { bail!("duplicate checklist id '{id}'"); }
+            if !explicit_ids.insert(id) {
+                bail!("duplicate checklist id '{id}'");
+            }
         }
     }
     let mut titles: HashSet<&str> = HashSet::new();
@@ -283,7 +285,9 @@ pub fn replace_nodes_from_checklist(conn: &Connection, items: &[ChecklistNode]) 
         } else {
             stable_id_for_title(&it.title)
         };
-        if !kept_ids.insert(id.clone()) { bail!("resolved checklist id collision '{id}'"); }
+        if !kept_ids.insert(id.clone()) {
+            bail!("resolved checklist id collision '{id}'");
+        }
         assigned.push((it.clone(), id));
     }
 
@@ -295,13 +299,21 @@ pub fn replace_nodes_from_checklist(conn: &Connection, items: &[ChecklistNode]) 
             Some(p) if p.trim().is_empty() => None,
             Some(p) => {
                 let p = p.trim();
-                let mut candidates: Vec<String> = assigned.iter()
-                    .filter(|(n, _)| n.title.trim() == p).map(|(_, id)| id.clone()).collect();
+                let mut candidates: Vec<String> = assigned
+                    .iter()
+                    .filter(|(n, _)| n.title.trim() == p)
+                    .map(|(_, id)| id.clone())
+                    .collect();
                 if candidates.is_empty() {
-                    candidates = all.iter().filter(|n| n.title.trim() == p)
-                        .map(|n| n.id.clone()).collect();
+                    candidates = all
+                        .iter()
+                        .filter(|n| n.title.trim() == p)
+                        .map(|n| n.id.clone())
+                        .collect();
                 }
-                if candidates.len() != 1 { bail!("unknown or ambiguous parent_title '{p}'"); }
+                if candidates.len() != 1 {
+                    bail!("unknown or ambiguous parent_title '{p}'");
+                }
                 candidates.pop()
             }
         };
@@ -309,13 +321,23 @@ pub fn replace_nodes_from_checklist(conn: &Connection, items: &[ChecklistNode]) 
         if let Some(n) = effective.iter_mut().find(|n| n.id == *id) {
             n.parent_id = parent;
         } else {
-            effective.push(GraphTask { id: id.clone(), parent_id: parent, title: it.title.clone(),
-                status: it.status.clone(), phase: None, notes: String::new(), verify_bit: false,
-                updated_at: now, owned_paths: it.owned_paths.clone() });
+            effective.push(GraphTask {
+                id: id.clone(),
+                parent_id: parent,
+                title: it.title.clone(),
+                status: it.status.clone(),
+                phase: None,
+                notes: String::new(),
+                verify_bit: false,
+                updated_at: now,
+                owned_paths: it.owned_paths.clone(),
+            });
         }
     }
     for n in &effective {
-        if depth_of_node(&effective, &n.id)? > MAX_DEPTH { bail!("hierarchy deeper than {MAX_DEPTH} levels"); }
+        if depth_of_node(&effective, &n.id)? > MAX_DEPTH {
+            bail!("hierarchy deeper than {MAX_DEPTH} levels");
+        }
     }
 
     for (it, id) in &assigned {
@@ -420,26 +442,57 @@ pub fn apply_frozen_checklist(
     let mut seen = std::collections::HashSet::new();
     let mut updates = Vec::new();
     for item in items {
-        if !matches!(item.status.as_str(), "pending" | "active" | "blocked" | "done" | "cancelled") {
+        if !matches!(
+            item.status.as_str(),
+            "pending" | "active" | "blocked" | "done" | "cancelled"
+        ) {
             bail!("unknown graph status '{}'", item.status);
         }
-        let explicit_id = item.id.as_deref().map(str::trim).filter(|id| !id.is_empty());
+        let explicit_id = item
+            .id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty());
         let matches: Vec<&GraphTask> = if let Some(id) = explicit_id {
-            let node = members.iter().copied().find(|n| n.id == id)
-                .ok_or_else(|| anyhow::anyhow!("unknown or cancelled frozen checklist id '{id}'"))?;
+            let node = members
+                .iter()
+                .copied()
+                .find(|n| n.id == id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("unknown or cancelled frozen checklist id '{id}'")
+                })?;
             vec![node]
         } else {
-            let exact: Vec<&GraphTask> = members.iter().copied().filter(|n| n.title == item.content).collect();
-            if !exact.is_empty() { exact } else {
-                members.iter().copied().filter(|n| {
-                    n.parent_id.as_ref().and_then(|p| all.iter().find(|a| a.id == *p))
-                        .is_some_and(|p| format!("{} › {}", p.title, n.title) == item.content)
-                }).collect()
+            let exact: Vec<&GraphTask> = members
+                .iter()
+                .copied()
+                .filter(|n| n.title == item.content)
+                .collect();
+            if !exact.is_empty() {
+                exact
+            } else {
+                members
+                    .iter()
+                    .copied()
+                    .filter(|n| {
+                        n.parent_id
+                            .as_ref()
+                            .and_then(|p| all.iter().find(|a| a.id == *p))
+                            .is_some_and(|p| format!("{} › {}", p.title, n.title) == item.content)
+                    })
+                    .collect()
             }
         };
-        if matches.len() != 1 { bail!("unknown or ambiguous frozen checklist row '{}'", item.content); }
+        if matches.len() != 1 {
+            bail!(
+                "unknown or ambiguous frozen checklist row '{}'",
+                item.content
+            );
+        }
         let node = matches[0];
-        if !seen.insert(node.id.clone()) { bail!("duplicate frozen checklist alias for '{}'", node.id); }
+        if !seen.insert(node.id.clone()) {
+            bail!("duplicate frozen checklist alias for '{}'", node.id);
+        }
         if item.status == "done" && !(node.status == "done" && node.verify_bit) {
             bail!("cannot seal node '{}' without mission_verify", node.id);
         }
@@ -451,12 +504,29 @@ pub fn apply_frozen_checklist(
         }
         updates.push((node, item.status.as_str()));
     }
-    if seen.len() != members.len() { bail!("frozen checklist must include every non-cancelled node, including sealed nodes"); }
-    let final_status = |id: &str| updates.iter().find(|(n, _)| n.id == id).map(|(_, s)| *s).unwrap_or("cancelled");
-    let active_count = updates.iter().filter(|(n, status)| {
-        *status == "active" && !all.iter().any(|c| c.parent_id.as_deref() == Some(n.id.as_str()) && final_status(&c.id) != "cancelled")
-    }).count();
-    if active_count > 1 { bail!("frozen checklist would leave multiple active leaves"); }
+    if seen.len() != members.len() {
+        bail!("frozen checklist must include every non-cancelled node, including sealed nodes");
+    }
+    let final_status = |id: &str| {
+        updates
+            .iter()
+            .find(|(n, _)| n.id == id)
+            .map(|(_, s)| *s)
+            .unwrap_or("cancelled")
+    };
+    let active_count = updates
+        .iter()
+        .filter(|(n, status)| {
+            *status == "active"
+                && !all.iter().any(|c| {
+                    c.parent_id.as_deref() == Some(n.id.as_str())
+                        && final_status(&c.id) != "cancelled"
+                })
+        })
+        .count();
+    if active_count > 1 {
+        bail!("frozen checklist would leave multiple active leaves");
+    }
     // Deactivate before claiming; input order must not affect handover.
     for (node, status) in &updates {
         if *status != "active" && node.status != *status {
@@ -469,8 +539,13 @@ pub fn apply_frozen_checklist(
         }
     }
     rollup_parents_in_tx(&tx)?;
-    let active: Vec<GraphTask> = list_open_leaves(&tx)?.into_iter().filter(|n| n.status == "active").collect();
-    if active.len() > 1 { bail!("frozen checklist would leave multiple active leaves after rollup"); }
+    let active: Vec<GraphTask> = list_open_leaves(&tx)?
+        .into_iter()
+        .filter(|n| n.status == "active")
+        .collect();
+    if active.len() > 1 {
+        bail!("frozen checklist would leave multiple active leaves after rollup");
+    }
     let ownership = active.into_iter().next().map(|n| (n.id, n.title));
     tx.commit()?;
     Ok(ownership)
@@ -685,7 +760,9 @@ pub fn graph_as_todo_items(conn: &Connection) -> Result<Vec<crate::app::mode::to
 }
 
 /// Load SDLC graph as todo items from a session directory. Empty on missing DB/graph.
-pub fn load_sdlc_todo_items(session_dir: &std::path::Path) -> Vec<crate::app::mode::todo::TodoItem> {
+pub fn load_sdlc_todo_items(
+    session_dir: &std::path::Path,
+) -> Vec<crate::app::mode::todo::TodoItem> {
     let Ok(conn) = crate::model::msglog::open(session_dir) else {
         return Vec::new();
     };
@@ -948,7 +1025,10 @@ pub fn set_verify_bit_with_evidence(
     }
 
     let now = now_secs();
-    if list_open_leaves(&tx)?.iter().any(|n| n.status == "active" && n.id != node_id) {
+    if list_open_leaves(&tx)?
+        .iter()
+        .any(|n| n.status == "active" && n.id != node_id)
+    {
         bail!("another leaf is already active — cannot verify '{node_id}'");
     }
     depth_of_node(&list_all(&tx)?, node_id)?;
@@ -1039,9 +1119,12 @@ pub fn update_node_status(conn: &Connection, node_id: &str, status: &str) -> Res
     Ok(())
 }
 
-fn update_node_status_in_tx(tx: &rusqlite::Transaction<'_>, node_id: &str, status: &str) -> Result<()> {
-    let node =
-        get_node(tx, node_id)?.ok_or_else(|| anyhow::anyhow!("unknown node '{node_id}'"))?;
+fn update_node_status_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    node_id: &str,
+    status: &str,
+) -> Result<()> {
+    let node = get_node(tx, node_id)?.ok_or_else(|| anyhow::anyhow!("unknown node '{node_id}'"))?;
     if node.status == status {
         return Ok(());
     }

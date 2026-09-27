@@ -257,8 +257,8 @@ fn hub_from_remote_discovery(
             } else {
                 h.dir_label
             };
-            let last_active = std::time::SystemTime::UNIX_EPOCH
-                + std::time::Duration::from_secs(h.updated_at);
+            let last_active =
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(h.updated_at);
             HistoryEntry {
                 path: std::path::PathBuf::from(format!("remote:{remote_host}/{}", h.session_id)),
                 name: h.name,
@@ -322,7 +322,12 @@ pub(super) enum SwapperOutcome {
 /// the background probe thread, never on the input/render thread — the caller
 /// ([`run_swapper`]) hands over whatever the probe thread last produced. The SAME function
 /// backs both the live merge and the immediate post-kill refresh.
-fn apply_snapshot(hub: &mut SessionHub, fresh: ProbeSnap, current_id: Option<&str>, source: &DiscoverySource) {
+fn apply_snapshot(
+    hub: &mut SessionHub,
+    fresh: ProbeSnap,
+    current_id: Option<&str>,
+    source: &DiscoverySource,
+) {
     // Capture focus + selection identity before rebuild.
     let saved_focus = hub.focus;
     let saved_query = hub.history_query.clone();

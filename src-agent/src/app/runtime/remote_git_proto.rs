@@ -19,13 +19,27 @@ use super::client::git_stash::StashListResult;
 pub(crate) enum RemoteGitReq {
     /// Optional handshake: report version + bound session id.
     Hello,
+    Workbench(super::client::git_workbench::Request),
     Status,
-    Diff { path: String, staged: bool },
-    Stage { paths: Vec<String> },
-    Unstage { paths: Vec<String> },
-    Discard { paths: Vec<String> },
-    Commit { message: String },
-    SetGitKey { name: Option<String> },
+    Diff {
+        path: String,
+        staged: bool,
+    },
+    Stage {
+        paths: Vec<String>,
+    },
+    Unstage {
+        paths: Vec<String>,
+    },
+    Discard {
+        paths: Vec<String>,
+    },
+    Commit {
+        message: String,
+    },
+    SetGitKey {
+        name: Option<String>,
+    },
     Fetch,
     Pull,
     Push {
@@ -35,9 +49,13 @@ pub(crate) enum RemoteGitReq {
     Stash,
     StashPop,
     StashList,
-    BranchList { request_id: Option<u64> },
+    BranchList {
+        request_id: Option<u64>,
+    },
     Repos,
-    SetActiveRepo { root: String },
+    SetActiveRepo {
+        root: String,
+    },
     Checkout {
         ref_name: String,
         root: Option<String>,
@@ -48,19 +66,40 @@ pub(crate) enum RemoteGitReq {
         checkout: bool,
         root: Option<String>,
     },
-    CherryPick { sha: String },
-    Revert { sha: String },
-    Reset { sha: String, mode: String },
-    Merge { ref_name: String },
+    CherryPick {
+        sha: String,
+    },
+    Revert {
+        sha: String,
+    },
+    Reset {
+        sha: String,
+        mode: String,
+    },
+    Merge {
+        ref_name: String,
+    },
     Rebase {
         upstream: String,
         branch: Option<String>,
     },
-    OpAbort { kind: String },
-    OpContinue { kind: String },
-    Graph { limit: u32, skip: u32 },
-    CommitDetail { sha: String },
-    CommitDiff { sha: String, path: String },
+    OpAbort {
+        kind: String,
+    },
+    OpContinue {
+        kind: String,
+    },
+    Graph {
+        limit: u32,
+        skip: u32,
+    },
+    CommitDetail {
+        sha: String,
+    },
+    CommitDiff {
+        sha: String,
+        path: String,
+    },
     Activity {
         path: Option<String>,
         limit: u32,
@@ -75,6 +114,7 @@ pub(crate) enum RemoteGitRep {
         version: String,
         session: Option<String>,
     },
+    Workbench(super::client::git_workbench::Reply),
     Status(GitStatusResult),
     Diff(GitDiffResult),
     /// Mutation result, optionally followed by a fresh status (host pushes both).
@@ -91,5 +131,7 @@ pub(crate) enum RemoteGitRep {
     StashList(StashListResult),
     Activity(ActivityResult),
     /// Catch-all for protocol/parse errors.
-    Error { error: String },
+    Error {
+        error: String,
+    },
 }
