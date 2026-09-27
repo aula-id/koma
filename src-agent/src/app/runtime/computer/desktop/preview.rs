@@ -46,7 +46,7 @@ impl Worker {
         let portal = self.portal.clone();
         std::thread::spawn(move || {
             let _busy = scopeguard::guard((), |_| busy.store(false, Ordering::SeqCst));
-            let result = (|| -> Result<String> {
+            let result = (|| -> Result<(String, u32, u32)> {
                 let _native = gate
                     .try_lock()
                     .map_err(|_| anyhow::anyhow!("Desktop operation in progress"))?;
@@ -81,9 +81,13 @@ impl Worker {
                 image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 80)
                     .encode_image(&image)?;
                 ensure!(bytes.len() <= 2 * 1024 * 1024, "Preview exceeds size limit");
-                Ok(format!(
-                    "data:image/jpeg;base64,{}",
-                    base64::engine::general_purpose::STANDARD.encode(bytes)
+                Ok((
+                    format!(
+                        "data:image/jpeg;base64,{}",
+                        base64::engine::general_purpose::STANDARD.encode(bytes)
+                    ),
+                    image.width(),
+                    image.height(),
                 ))
             })();
             if !cancelled.load(Ordering::SeqCst) {
@@ -93,15 +97,17 @@ impl Worker {
     }
 }
 
-fn frame(request: PreviewRequest, result: Result<String>) -> PreviewFrame {
-    let (image, error) = match result {
-        Ok(image) => (Some(image), None),
-        Err(e) => (None, Some(e.to_string())),
+fn frame(request: PreviewRequest, result: Result<(String, u32, u32)>) -> PreviewFrame {
+    let (image, error, width, height) = match result {
+        Ok((image, width, height)) => (Some(image), None, width, height),
+        Err(e) => (None, Some(e.to_string()), 0, 0),
     };
     PreviewFrame {
         request,
         image,
         error,
+        width,
+        height,
         captured_ms: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()

@@ -11,6 +11,7 @@ export type ModelRoute = {
 
 import { receiveGitReply, cancelGitRequests, type GitReply, type GitToolTab } from '../lib/gitWorkbench'
 import { create } from 'zustand'
+import { useComputerPreview } from './computerPreview'
 import { codingWindowId, codingRequest, resolveCodingReply } from '../lib/coding-service'
 import { invalidateCodingConfig } from '../lib/coding-config'
 import { formatBeforeSave } from '../lib/coding-save'
@@ -3175,12 +3176,17 @@ export const useKoma = create<KomaState>((set, get) => ({
   push: (env) => {
     switch (env.k) {
       case 'Computer':
-        if (env.status.session === get().session.id) set({ computer: env.status, computerError: null })
+        if (env.status.session === get().session.id) {
+          useComputerPreview.getState().syncController(env.status)
+          set({ computer: env.status, computerError: null })
+        }
         break
       case 'ComputerPreview':
         if (env.frame.request.session === get().session.id) window.dispatchEvent(new CustomEvent('koma-computer-preview', { detail: env.frame }))
         break
-      case 'ComputerError': set({ computerError: env.message }); break
+      case 'ComputerError':
+        if (!get().computer?.enabled) useComputerPreview.getState().hide()
+        set({ computerError: env.message }); break
       case 'CodingReply': resolveCodingReply(env); break
       case 'CodingEvent': {
         if (env.clientId && env.clientId !== codingWindowId) break
@@ -3223,7 +3229,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         // reasoning (it belongs to the old session — don't let it bleed into the new
         // view until the next send clears it) + reset the editor tabs.
         const switched = env.session !== get().session.id
-        if (switched) { cancelGitRequests(); set({ computer: null, computerError: null }) }
+        if (switched) { cancelGitRequests(); useComputerPreview.getState().hide(); set({ computer: null, computerError: null }) }
         // Re-attaching the same session id is still a GUI bootstrap even though
         // it must not discard that session's existing tabs/slices.
         const bootstrapping = !!get().ui.bootstrap
@@ -3365,6 +3371,8 @@ export const useKoma = create<KomaState>((set, get) => ({
         break
       }
       case 'Switching':
+        useComputerPreview.getState().hide()
+        set({ computer: null, computerError: null })
         cancelGitRequests()
         set((s) => {
           // Prefer an optimistic label ResumePalette already raised (the
@@ -6434,7 +6442,10 @@ export const useKoma = create<KomaState>((set, get) => ({
         : { dyingSessions: [...s.dyingSessions, { id, kind }] },
     ),
   detachSession: () => {
+    useComputerPreview.getState().hide()
     set((s) => ({
+      computer: null,
+      computerError: null,
       // Fresh object (not spread from the old session) — nothing about the
       // just-killed session is worth preserving, mirrors initialSession's
       // shape exactly.

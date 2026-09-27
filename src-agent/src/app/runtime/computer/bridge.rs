@@ -5,6 +5,27 @@ use crate::{
     dto::chat::ToolCall,
 };
 
+// Runtime guidance is separate from untrusted window/OCR text. A stopped desktop
+// controller must not send the model looking for an alternate input mechanism.
+fn recovery_nudge() -> serde_json::Value {
+    serde_json::json!({
+        "kind": "computer_control_stopped",
+        "user_action": "Resolve the reported issue, then enable Computer use with the monitor button beside Terminal or in Settings → Computer use.",
+        "model_instruction": "Computer control is DISABLED. Stop this desktop task now and respond to the user with the reported failure and the user_action. Do not retry or switch to browser_*, bash, osascript, shell scripts, or other tools to dismiss windows, bypass the failure, or re-enable control. Browser tools do not control native applications. An obstruction error does not identify the blocking window: do not guess that a toast visible in the screenshot caused it. Wait for the user to resolve the issue and explicitly re-enable control. After reactivation, list/select the intended window and obtain a fresh observation before new input. Never automatically replay completed or uncertain actions."
+    })
+}
+
+fn stopped_result(reason: &str, uncertain: bool) -> String {
+    serde_json::json!({
+        "error": reason,
+        "uncertain": uncertain,
+        "controller_enabled": false,
+        "requires_user_action": true,
+        "recovery": recovery_nudge(),
+    })
+    .to_string()
+}
+
 pub fn settle(rt: &mut SessionRuntime, id: String, message: String) {
     if let Some(index) = rt.pending_tool_tasks.iter().position(|v| *v == id) {
         rt.pending_tool_tasks.remove(index);
@@ -20,10 +41,12 @@ pub fn cancel_approval(rt: &mut SessionRuntime, reason: &str) {
         .get(rt.tool_idx)
         .filter(|c| c.function.name.starts_with("computer_"))
     {
-        rt.tool_results.push((
-            call.id.clone(),
-            format!("cancelled before execution: {reason}"),
-        ));
+        let message = if rt.computer.status.enabled {
+            format!("cancelled before execution: {reason}")
+        } else {
+            stopped_result(&format!("cancelled before execution: {reason}"), false)
+        };
+        rt.tool_results.push((call.id.clone(), message));
         rt.tool_idx += 1;
         rt.awaiting_approval = false;
         rt.awaiting_classify = false;
@@ -33,13 +56,10 @@ pub fn cancel_approval(rt: &mut SessionRuntime, reason: &str) {
     }
 }
 pub fn stop(rt: &mut SessionRuntime, reason: &str) {
+    let pending = rt.computer.stop(reason);
     cancel_approval(rt, reason);
-    if let Some(id) = rt.computer.stop(reason) {
-        settle(
-            rt,
-            id,
-            format!("error: {reason}; input outcome may be uncertain; never replay automatically"),
-        );
+    if let Some(id) = pending {
+        settle(rt, id, stopped_result(reason, true));
     }
 }
 pub fn dispatch(state: &mut AppState, index: usize, call: &ToolCall) {
@@ -84,8 +104,12 @@ pub fn dispatch(state: &mut AppState, index: usize, call: &ToolCall) {
             rt.awaiting_tool_tasks = true;
         }
         Err(e) => {
-            rt.tool_results
-                .push((call.id.clone(), format!("error: {e}")));
+            let message = if rt.computer.status.enabled {
+                format!("error: {e}")
+            } else {
+                stopped_result(&e.to_string(), false)
+            };
+            rt.tool_results.push((call.id.clone(), message));
             rt.awaiting_tool_tasks = true;
         }
     }
@@ -127,7 +151,13 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
     rt.computer.changed = true;
     reply.capabilities = Some(rt.computer.status.capabilities.clone());
     reply.png.clear();
-    let text = serde_json::to_string(&reply).unwrap_or_else(|e| format!("error: {e}"));
+    let mut result = serde_json::json!(&reply);
+    if !rt.computer.status.enabled {
+        result["controller_enabled"] = false.into();
+        result["requires_user_action"] = true.into();
+        result["recovery"] = recovery_nudge();
+    }
+    let text = result.to_string();
     settle(rt, reply.id, text);
 }
 fn ingest(rt: &mut SessionRuntime, reply: &mut Reply) -> anyhow::Result<()> {
@@ -297,6 +327,68 @@ mod approval_tests {
         dto::chat::FunctionCall,
     };
     #[test]
+    fn failed_input_stops_control_and_returns_recovery_without_replay() {
+        let mut state = AppState::new(Mode::Chat);
+        let path = std::env::temp_dir().join(format!("koma-recovery-{}", uuid::Uuid::new_v4()));
+        let rt = &mut state.rest.sessions[0];
+        rt.computer
+            .enable(
+                1,
+                &rt.id,
+                "fixture",
+                Capabilities {
+                    capture: true,
+                    focus: true,
+                    ..Default::default()
+                },
+                &path,
+            )
+            .unwrap();
+        rt.computer
+            .begin(
+                "failed".into(),
+                Operation::Select {
+                    window: "fixture".into(),
+                    generation: rt.computer.status.generation.clone(),
+                },
+                false,
+            )
+            .unwrap();
+        rt.pending_tool_tasks.push("failed".into());
+        let reply = Reply {
+            id: "failed".into(),
+            session: rt.id.clone(),
+            generation: rt.computer.status.generation.clone(),
+            completed: 1,
+            uncertain: true,
+            error: Some("Target obstructed by another window".into()),
+            ..Default::default()
+        };
+        receive(rt, 1, reply.clone());
+        assert!(!rt.computer.status.enabled);
+        assert!(rt.computer.outbound.is_none());
+        assert!(rt.pending_tool_tasks.is_empty());
+        let result: serde_json::Value = serde_json::from_str(&rt.tool_results[0].1).unwrap();
+        assert_eq!(result["completed"], 1);
+        assert_eq!(result["uncertain"], true);
+        assert_eq!(result["controller_enabled"], false);
+        assert_eq!(result["requires_user_action"], true);
+        assert_eq!(result["error"], reply.error.as_deref().unwrap());
+        let recovery = result["recovery"]["model_instruction"].as_str().unwrap();
+        assert!(recovery.contains("Stop this desktop task now"));
+        assert!(recovery.contains("Browser tools do not control native applications"));
+        assert!(recovery.contains("do not guess that a toast"));
+        receive(rt, 1, reply);
+        assert_eq!(
+            rt.tool_results.len(),
+            1,
+            "late replies must not settle twice"
+        );
+        drop(state);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn approval_precedes_dispatch_and_cannot_revive_cancelled_selection() {
         let mut state = AppState::new(Mode::Chat);
         let path = std::env::temp_dir().join(format!("koma-approval-{}", uuid::Uuid::new_v4()));
@@ -325,6 +417,11 @@ mod approval_tests {
         assert!(state.rest.sessions[0].awaiting_approval);
         assert!(state.rest.sessions[0].computer.outbound.is_none());
         stop(&mut state.rest.sessions[0], "take over");
+        let cancelled: serde_json::Value =
+            serde_json::from_str(&state.rest.sessions[0].tool_results.last().unwrap().1).unwrap();
+        assert_eq!(cancelled["controller_enabled"], false);
+        assert_eq!(cancelled["requires_user_action"], true);
+        assert_eq!(cancelled["uncertain"], false);
         state.rest.sessions[0].awaiting_approval = false;
         crate::app::runtime::stream::dispatch_deferred(&mut state, 0, &call);
         assert!(state.rest.sessions[0].computer.outbound.is_none());

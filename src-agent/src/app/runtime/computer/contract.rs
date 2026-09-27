@@ -240,6 +240,8 @@ pub struct PreviewFrame {
     pub image: Option<String>,
     pub error: Option<String>,
     pub captured_ms: u64,
+    pub width: u32,
+    pub height: u32,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Control {

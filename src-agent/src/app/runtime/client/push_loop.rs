@@ -1658,6 +1658,16 @@ pub(super) fn push_loop(
                 // The reader task dropped its sender: the daemon's socket closed. Fall
                 // back to the hub so the user can pick another session.
                 Err(TryRecvError::Disconnected) => {
+                    #[cfg(feature = "gui")]
+                    if remote_ctx.is_none() {
+                        computer_worker.cancel();
+                        let status = crate::app::runtime::computer::Status {
+                            session: shadow.rest.fg().id.clone(),
+                            message: "Desktop connection closed. Enable Computer use again after reconnecting.".into(),
+                            ..Default::default()
+                        };
+                        push(serde_json::json!({"k":"Computer","status":status}).to_string());
+                    }
                     return if let Some(ctx) = remote_ctx {
                         HostTransition::ToRemoteHub {
                             ctx: Box::new(ctx.clone()),

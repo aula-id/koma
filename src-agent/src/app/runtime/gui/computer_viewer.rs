@@ -2,6 +2,7 @@
 use super::proto::UserEvent;
 use crate::app::runtime::{client::HostCtl, computer::Status};
 use anyhow::Result;
+use std::cell::{Cell, RefCell};
 use tao::{
     dpi::{PhysicalPosition, PhysicalSize},
     event_loop::EventLoopWindowTarget,
@@ -19,6 +20,9 @@ pub(super) struct Viewer {
     pub window: Window,
     webview: wry::WebView,
     preferences: Option<std::path::PathBuf>,
+    aspect: Cell<f64>,
+    last_size: Cell<PhysicalSize<u32>>,
+    source: RefCell<Option<(String, String, String)>>,
 }
 impl Viewer {
     pub fn new(
@@ -51,13 +55,13 @@ impl Viewer {
         let mut builder = WindowBuilder::new()
             .with_title("Koma · Computer")
             .with_inner_size(PhysicalSize::new(420, 360))
-            .with_min_inner_size(PhysicalSize::new(300, 220))
+            .with_min_inner_size(PhysicalSize::new(80, 80))
             .with_focused(false)
             .with_focusable(false)
             .with_always_on_top(true)
             .with_content_protection(true);
         if let Some(p) = saved {
-            if p.width >= 300 && p.width <= 2000 && p.height >= 220 && p.height <= 2000 {
+            if p.width >= 80 && p.width <= 4000 && p.height >= 80 && p.height <= 4000 {
                 builder = builder.with_inner_size(PhysicalSize::new(p.width, p.height));
                 // Only restore positions that intersect a current monitor.
                 let visible = target.available_monitors().any(|m| {
@@ -119,13 +123,30 @@ impl Viewer {
         };
         #[cfg(not(target_os = "linux"))]
         let webview = builder.build(&window)?;
-        Ok(Self {
+        let viewer = Self {
+            last_size: Cell::new(window.inner_size()),
+            aspect: Cell::new(16.0 / 9.0),
+            source: RefCell::new(None),
             window,
             webview,
             preferences,
-        })
+        };
+        if let Some(status) = status {
+            viewer.update(status);
+        }
+        Ok(viewer)
     }
     pub fn update(&self, status: &Status) {
+        *self.source.borrow_mut() = status.observation.as_ref().map(|o| {
+            (
+                status.session.clone(),
+                status.generation.clone(),
+                o.window.id.clone(),
+            )
+        });
+        if let Some(observation) = &status.observation {
+            self.set_aspect(observation.transform.width, observation.transform.height);
+        }
         if let Ok(json) = serde_json::to_string(status) {
             // Status serialization produces JSON data, never executable desktop text.
             let _ = self.webview.evaluate_script(&format!(
@@ -134,6 +155,23 @@ impl Viewer {
         }
     }
     pub fn frame(&self, frame: &serde_json::Value) {
+        if self
+            .source
+            .borrow()
+            .as_ref()
+            .is_some_and(|(session, generation, window)| {
+                frame["request"]["session"].as_str() == Some(session.as_str())
+                    && frame["request"]["generation"].as_str() == Some(generation.as_str())
+                    && frame["request"]["window"].as_str() == Some(window.as_str())
+            })
+        {
+            if let (Some(width), Some(height)) = (frame["width"].as_u64(), frame["height"].as_u64())
+            {
+                if width <= 1280 && height <= 960 {
+                    self.set_aspect(width as u32, height as u32);
+                }
+            }
+        }
         let _ = self.webview.evaluate_script(&format!(
             "window.dispatchEvent(new CustomEvent('koma-computer-preview',{{detail:{frame}}}));"
         ));
@@ -142,6 +180,40 @@ impl Viewer {
         let _ = self.webview.evaluate_script(&format!(
             "window.__komaComputerPalette={palette};window.dispatchEvent(new CustomEvent('koma-computer-palette',{{detail:window.__komaComputerPalette}}));"
         ));
+    }
+    fn set_aspect(&self, width: u32, height: u32) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        let aspect = f64::from(width) / f64::from(height);
+        if (aspect / self.aspect.get() - 1.0).abs() >= 0.005 {
+            self.aspect.set(aspect);
+        }
+        self.resized();
+    }
+    pub fn resized(&self) {
+        let size = self.window.inner_size();
+        let previous = self.last_size.get();
+        let aspect = self.aspect.get();
+        let width = if size.height.abs_diff(previous.height) as f64 * aspect
+            > size.width.abs_diff(previous.width) as f64
+        {
+            f64::from(size.height) * aspect
+        } else {
+            f64::from(size.width)
+        };
+        let limit = self
+            .window
+            .current_monitor()
+            .map(|m| m.size())
+            .unwrap_or(PhysicalSize::new(1920, 1080));
+        let fitted = fit_size(width, aspect, limit);
+        self.last_size.set(fitted);
+        // Some window managers impose their own minimum. Do not loop forever
+        // re-requesting a size the OS just refused.
+        if fitted != size && fitted != previous {
+            self.window.set_inner_size(fitted);
+        }
     }
     pub fn save(&self) {
         if let (Ok(position), Some(path)) = (self.window.outer_position(), &self.preferences) {
@@ -154,6 +226,36 @@ impl Viewer {
             };
             if let Ok(json) = serde_json::to_vec(&placement) {
                 let _ = std::fs::write(path, json);
+            }
+        }
+    }
+}
+
+fn fit_size(width: f64, aspect: f64, screen: PhysicalSize<u32>) -> PhysicalSize<u32> {
+    let max_width = f64::from(screen.width.saturating_sub(48).max(1));
+    let max_height = f64::from(screen.height.saturating_sub(100).max(1));
+    let limit = max_width.min(max_height * aspect);
+    let minimum = 240.0_f64.max(120.0 * aspect).min(limit);
+    let width = width.clamp(minimum, limit);
+    PhysicalSize::new(
+        width.round().max(1.0) as u32,
+        (width / aspect).round().max(1.0) as u32,
+    )
+}
+
+#[cfg(test)]
+mod sizing_tests {
+    use super::*;
+
+    #[test]
+    fn computer_preview_fits_complete_landscape_and_portrait_frames() {
+        let monitor = PhysicalSize::new(1440, 900);
+        for aspect in [16.0 / 9.0, 4.0 / 3.0, 9.0 / 16.0, 3.0] {
+            for width in [50.0, 560.0, 4000.0] {
+                let size = fit_size(width, aspect, monitor);
+                assert!(size.width <= monitor.width - 48);
+                assert!(size.height <= monitor.height - 100);
+                assert!((f64::from(size.width) / aspect - f64::from(size.height)).abs() <= 1.0);
             }
         }
     }
@@ -208,7 +310,9 @@ mod native_tests {
                 if !injected {
                     viewer
                         .webview
-                        .evaluate_script("window.ipc.postMessage(JSON.stringify({action:'windows'}))")
+                        .evaluate_script(
+                            "window.ipc.postMessage(JSON.stringify({action:'windows'}))",
+                        )
                         .unwrap();
                     injected = true;
                 }

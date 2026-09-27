@@ -8,8 +8,11 @@ This is an experimental implementation, not a cross-platform validation claim.
 
 ## What is implemented
 
-Computer use starts disabled. In a local GUI session, open **Settings → Computer use**
-and enable control. In the preview, hover over the image (or focus the window picker
+Computer use starts disabled. In a local GUI session, use the monitor shortcut
+immediately left of Terminal in the titlebar, or open **Settings → Computer use**
+and enable control. The shortcut shows activation progress and stops control when
+already enabled. The preview opens only after activation succeeds.
+In the preview, hover over the image (or focus the window picker
 with the keyboard) and choose a visible window. Pause, Resume, Stop, Take over,
 preview opening/detaching, and capability/extraction details live in Settings. GUI selection observes
 without changing focus, including in Plan mode. The model can list windows,
@@ -45,13 +48,25 @@ rechecks ownership, mode, generation, capabilities and coordinates after approva
 The GUI worker rechecks geometry/focus before input, rejects duplicate requests,
 and releases injected keys/buttons on return or cancellation. It reports completed
 action counts and uncertain failures without replay. Native errors revoke control.
+Stopped tool results include explicit recovery guidance: report the failure, stop
+the desktop task and wait for the user to resolve it and re-enable control. They
+tell the model not to substitute browser/shell input or infer an obstruction's
+identity from a visible toast. The chat tool card shows the user-facing recovery
+step outside its collapsed technical details. This is model guidance, not a new
+global restriction on unrelated browser or shell tasks.
 
 The preview position and size are saved as GUI preferences. Both in-app and detached
-previews show a resizable image with a window picker on hover or keyboard focus; the
+previews fit the complete image edge to edge, preserving its aspect ratio when
+resized. The window picker and status float over the image on hover or keyboard
+focus, without reserving header/footer space. The in-app resize handle supports
+pointer dragging and arrow keys (Shift for larger steps). The
 floating Computer launcher and extraction overlays have been removed. The optional
-native viewer uses the same live frame path and palette. It closes on session transition.
+native viewer uses the same live frame path and palette. Both previews close when
+control stops, fails, disconnects, or changes session; retained observations remain
+available in chat. Re-enabling requires an explicit user action.
 Before input or observation, the GUI hides the detached viewer and acknowledges that
-step before the native worker can start. It restores the viewer after the operation.
+step before the native worker can start. It restores the viewer after the operation
+only while control remains enabled.
 Window listing leaves the picker visible. This does not bypass target obstruction checks.
 
 Live preview uses a separate GUI-only request/result channel, with one capture in flight
@@ -292,8 +307,14 @@ Validation on the Linux build host:
 - GUI TypeScript checking and Vite production build passed (existing large-chunk
   warnings remain).
 - `cargo test -p agent --bin koma --offline computer -- --skip native` passed:
-  15 tests, including preview session/generation/source invalidation and compact
-  chat projection without model-message mutation.
+  18 tests, including preview session/generation/source invalidation, native
+  viewer sizing, stopped-control recovery with preserved partial outcomes, and
+  compact chat projection through the actual daemon-to-GUI shadow session. That
+  projection regression covers shadow sessions without filesystem paths, which
+  previously caused valid observations to fall back to raw JSON.
+- Additional Node assertions passed for 24 portrait/landscape viewport sizing
+  cases, activation/stop/session-switch preview visibility, and static React
+  rendering of observation cards, visible recovery guidance and image overlays.
 - `git diff --check` passed. Full-workspace `cargo fmt --all -- --check` still
   reports formatting differences, including unrelated untouched files; no
   repository-wide formatting rewrite was applied.
@@ -323,7 +344,9 @@ Use the existing Main model with image input and follow normal action approvals.
    an old observation must be rejected and a new observation must map correctly.
 4. Place the detached preview over the target: verify it hides before an operation
    and returns afterward without taking focus. Obstruct with a different window
-   and verify input refusal.
+   and verify input refusal, preview closure, and stopped-control recovery in chat.
+   Verify the model asks for help rather than guessing the blocker or switching
+   to browser/shell tools. After explicit reactivation, a new observation is required.
    Switch focus or close the target during an approval and verify no subsequent
    input. Pause/Stop/Take over during a sequence; verify no replay and no stuck keys.
 5. Switch sessions, disconnect/reconnect and compete from a second GUI. Explicit
@@ -334,7 +357,11 @@ Use the existing Main model with image input and follow normal action approvals.
    With the preview open, change content in the shared window and verify live
    updates without new conversation messages or PNG artifacts. Close the preview
    and verify capture requests stop. Missing OCR/AX must leave model screenshots
-   available with a component limitation.
+   available with a component limitation. Resize landscape and portrait previews:
+   the complete image should fill the viewer, with picker/status hovering above
+   it instead of blank header/footer bands. Stop, fail or disconnect control and
+   verify both preview types close. The titlebar monitor shortcut beside Terminal
+   must enable/stop control and open the preview only after successful activation.
 7. On macOS revoke Screen Recording/Accessibility and reactivate; on Windows try
    an elevated/protected target. On Wayland cancel the source dialog, revoke its
    sharing grant, pause/resume and choose a replacement source. Input must remain

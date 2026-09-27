@@ -610,7 +610,9 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         if let Some(status) = value.get("status").and_then(|v| {
                             serde_json::from_value::<crate::app::runtime::computer::Status>(v.clone()).ok()
                         }) {
-                            if let Some(viewer) = &computer_viewer {
+                            if !status.enabled {
+                                computer_viewer = None;
+                            } else if let Some(viewer) = &computer_viewer {
                                 viewer.update(&status);
                                 if !status.busy { viewer.window.set_visible(true); }
                             }
@@ -767,7 +769,11 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 if computer_viewer.as_ref().is_some_and(|v| v.window.id() == window_id) => {
                     computer_viewer = None;
                 }
-            Event::WindowEvent { window_id, event: WindowEvent::Moved(_) | WindowEvent::Resized(_), .. }
+            Event::WindowEvent { window_id, event: WindowEvent::Resized(_), .. }
+                if computer_viewer.as_ref().is_some_and(|v| v.window.id() == window_id) => {
+                    if let Some(viewer) = &computer_viewer { viewer.resized(); viewer.save(); }
+                }
+            Event::WindowEvent { window_id, event: WindowEvent::Moved(_), .. }
                 if computer_viewer.as_ref().is_some_and(|v| v.window.id() == window_id) => {
                     if let Some(viewer) = &computer_viewer { viewer.save(); }
                 }

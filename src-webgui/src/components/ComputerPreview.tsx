@@ -9,10 +9,11 @@ export function computerImageUrl(path: string) {
 }
 
 /** Live selected-window view, with a clearly labelled saved-observation fallback. */
-export function ComputerPreview({ status, control, chrome }: {
+export function ComputerPreview({ status, control, chrome, onImageSize }: {
   status: ComputerStatus | null
   control: (action: 'windows' | 'select', window?: string) => void
   chrome?: ReactNode
+  onImageSize?: (width: number, height: number) => void
 }) {
   const [menu, setMenu] = useState(false)
   const [failedImage, setFailedImage] = useState<string | null>(null)
@@ -34,9 +35,10 @@ export function ComputerPreview({ status, control, chrome }: {
     onKeyDown={e => { if (e.key === 'Escape' && menu) { e.stopPropagation(); setMenu(false); trigger.current?.focus() } }}>
     {image && failedImage !== image
       ? <img src={image} draggable={false}
+          onLoad={e => onImageSize?.(e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}
           onError={() => setFailedImage(image)}
           alt={`${live?.image ? 'Live preview' : 'Last model observation'}: ${observation?.window.title || observation?.window.application}`}
-          className="h-full w-full object-contain" />
+          className="absolute inset-0 block h-full w-full" />
       : <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center text-koma-dim">
           <Monitor size={30} strokeWidth={1.25} />
           <p className="text-sm">{observation ? 'Saved frame unavailable' : 'Choose a window to share'}</p>
@@ -70,7 +72,7 @@ export function ComputerPreview({ status, control, chrome }: {
         {!status?.windows.length && status?.capabilities.windows && <p className="px-2 py-3 text-xs text-koma-dim">{status.busy ? 'Finding windows…' : 'No windows available. Refresh to try again.'}</p>}
       </div>}
     </div>
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-2">
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-2 opacity-0 transition-opacity group-hover/preview:opacity-100 group-focus-within/preview:opacity-100 [@media(hover:none)]:opacity-100">
       <span title={live?.error ?? undefined} className="max-w-full truncate rounded-full border border-koma-border bg-koma-panel/95 px-3 py-1 text-[10px] text-koma-dim shadow-sm">
         {!status?.enabled ? 'Control stopped' : status.paused ? 'Paused' : status.busy ? 'Updating…' : live?.image ? 'Live' : live?.error ? 'Live unavailable · last model frame' : 'Last model frame'}
         {observation && ` · ${new Date(live?.image ? live.captured_ms : observation.captured_ms).toLocaleTimeString()}`}

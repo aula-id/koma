@@ -2,6 +2,7 @@ import type { MouseEvent } from 'react'
 import { motion } from 'framer-motion'
 import { Terminal, PenLine, FoldVertical, SquareTerminal } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import { ComputerShortcut } from './ComputerShortcut'
 
 export type Platform = 'macos' | 'linux' | 'windows'
 
@@ -83,6 +84,7 @@ export function Titlebar({ onSearch, onRename, onTerminal, overlayOpen }: Titleb
               Flex — not absolute offsets — so the group never drifts over
               #winctl when the window narrows. Side padding reserves chrome. */}
           <div className="pointer-events-none flex min-w-0 max-w-full items-center gap-1.5">
+            <ComputerShortcut />
             <button
               onClick={onTerminal}
               title="New Terminal"

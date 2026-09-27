@@ -1,6 +1,6 @@
 export type ComputerRect = { x: number; y: number; width: number; height: number }
 export type ComputerPreviewRequest = { id: string; session: string; generation: string; window: string }
-export type ComputerPreviewFrame = { request: ComputerPreviewRequest; image: string | null; error: string | null; captured_ms: number }
+export type ComputerPreviewFrame = { request: ComputerPreviewRequest; image: string | null; error: string | null; captured_ms: number; width?: number; height?: number }
 export type ComputerObservationView = {
   id: string; title: string; application: string; image_path: string
   captured_ms: number; width: number; height: number
