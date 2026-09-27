@@ -1,14 +1,15 @@
 //! Coding operations are owned by the GUI, independently of the chat session.
 //! All operations carry their host and root; UI selection is never a routing key.
 
-mod debug;
 #[cfg(unix)]
 mod daemon;
+mod debug;
 pub(crate) mod environment;
 mod language;
 mod packs;
 pub(crate) mod persistence;
 pub(crate) mod provision;
+mod resources;
 mod tasks;
 mod tests;
 #[cfg(feature = "gui")]
@@ -17,14 +18,14 @@ mod watch;
 mod workspace;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 #[cfg(any(feature = "gui", not(unix)))]
 use serde_json::json;
+use serde_json::Value;
 #[cfg(feature = "gui")]
 use std::sync::mpsc;
-use std::sync::{Arc, OnceLock};
 #[cfg(any(feature = "gui", not(unix)))]
 use std::sync::Mutex;
+use std::sync::{Arc, OnceLock};
 
 #[cfg(feature = "gui")]
 pub(crate) use transport::remember_remote;
@@ -69,6 +70,15 @@ pub(crate) struct Request {
 pub(crate) enum Operation {
     Hello,
     Watch,
+    ResourceUndo {
+        transaction_id: String,
+    },
+    ResourceInspect {
+        paths: Vec<String>,
+    },
+    ResourceApply {
+        changes: Value,
+    },
     TestDefinitions,
     TestRuns,
     TestStart {
@@ -163,6 +173,18 @@ pub(crate) enum Operation {
     },
     Lsp {
         body: Value,
+    },
+    LspEditPreview {
+        ticket: String,
+    },
+    LspEditReply {
+        ticket: String,
+        applied: bool,
+        reason: Option<String>,
+    },
+    LspCommand {
+        path: String,
+        params: Value,
     },
     LspQuery {
         path: String,
@@ -328,13 +350,23 @@ fn execute(request: &Request) -> Result<Value, String> {
 /// the service never mixes diagnostic logs into stdout.
 pub(crate) fn worker_main() -> anyhow::Result<()> {
     #[cfg(unix)]
-    { return daemon::proxy(); }
+    {
+        return daemon::proxy();
+    }
     #[cfg(not(unix))]
-    { worker_stdio() }
+    {
+        worker_stdio()
+    }
 }
 pub(crate) fn daemon_main() -> anyhow::Result<()> {
-    #[cfg(unix)] { daemon::run() }
-    #[cfg(not(unix))] { anyhow::bail!("Persistent coding service requires a Unix host") }
+    #[cfg(unix)]
+    {
+        daemon::run()
+    }
+    #[cfg(not(unix))]
+    {
+        anyhow::bail!("Persistent coding service requires a Unix host")
+    }
 }
 #[cfg(not(unix))]
 fn worker_stdio() -> anyhow::Result<()> {

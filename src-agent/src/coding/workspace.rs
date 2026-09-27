@@ -67,6 +67,14 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
         ))?),
         Operation::File { body } => file_operation(request, body, &workdirs),
         Operation::Watch => super::watch::watch(&request.workspace, &canonical),
+        Operation::ResourceUndo { transaction_id } => {
+            super::resources::undo(&canonical, transaction_id)
+        }
+        Operation::ResourceInspect { paths } => super::resources::inspect(&canonical, paths),
+        Operation::ResourceApply { changes } => super::resources::apply(
+            &canonical,
+            &serde_json::from_value::<Vec<super::resources::Change>>(changes.clone())?,
+        ),
         Operation::TestDefinitions => super::tests::definitions(&canonical),
         Operation::TestStart {
             profile_id,
@@ -228,6 +236,24 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
             );
             crate::coding::persistence::atomic_write(&dest, &bytes)?;
             Ok(config.clone())
+        }
+        Operation::LspEditPreview { ticket } => {
+            super::language::edit_preview(&request.workspace, ticket).map_err(anyhow::Error::msg)
+        }
+        Operation::LspEditReply {
+            ticket,
+            applied,
+            reason,
+        } => crate::lsp::client::reply_workspace_edit(
+            &request.workspace.root,
+            ticket,
+            *applied,
+            reason.as_deref(),
+        )
+        .map(|_| json!({}))
+        .map_err(anyhow::Error::msg),
+        Operation::LspCommand { path, params } => {
+            super::language::command(&request.workspace, path, params).map_err(anyhow::Error::msg)
         }
         Operation::LspQuery {
             path,

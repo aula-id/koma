@@ -206,6 +206,9 @@ pub(super) fn query(
     method: &str,
     params: &Value,
 ) -> Result<Value, String> {
+    if method == "workspace/executeCommand" {
+        return Err("Use the asynchronous language command operation".into());
+    }
     let manager = manager(workspace)?;
     let pending = manager
         .lock()
@@ -216,10 +219,17 @@ pub(super) fn query(
         .lock()
         .map_err(|_| "Coding LSP manager lock failed")?;
     if method == "textDocument/semanticTokens/full" {
-        return Ok(json!({"legend":manager.semantic_legend(&workspace.root, path)?,"data":response.get("data")}));
+        return Ok(
+            json!({"legend":manager.semantic_legend(&workspace.root, path)?,"data":response.get("data")}),
+        );
     }
     if method == "textDocument/rename" {
         manager.validate_edit_versions(&response)?;
+    }
+    if method == "codeAction/resolve" {
+        if let Some(edit) = response.get("edit") {
+            manager.validate_edit_versions(edit)?;
+        }
     }
     if method == "textDocument/codeAction" {
         if let Some(actions) = response.as_array() {
@@ -243,4 +253,48 @@ pub(super) fn shutdown() {
             }
         }
     }
+}
+
+pub(super) fn edit_preview(workspace: &WorkspaceRef, ticket: &str) -> Result<Value, String> {
+    let value = crate::lsp::client::pending_workspace_edit(&workspace.root, ticket)?;
+    manager(workspace)?
+        .lock()
+        .map_err(|_| "Coding LSP manager lock failed")?
+        .validate_edit_versions(&value["edit"])?;
+    Ok(value)
+}
+pub(super) fn command(
+    workspace: &WorkspaceRef,
+    path: &str,
+    params: &Value,
+) -> Result<Value, String> {
+    static ACTIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let guard = ACTIVE
+        .fetch_update(
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+            |n| if n < 8 { Some(n + 1) } else { None },
+        )
+        .map_err(|_| "Too many active language commands")?;
+    let _ = guard;
+    let result = (|| {
+        let pending = manager(workspace)?
+            .lock()
+            .map_err(|_| "Coding LSP manager lock failed")?
+            .extended_request(
+                &workspace.root,
+                path,
+                "workspace/executeCommand",
+                params.clone(),
+            )?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let id_copy = id.clone();
+        let workspace = workspace.clone();
+        std::thread::Builder::new().name("coding-lsp-command".into()).spawn(move||{let result=pending.wait_raw();ACTIVE.fetch_sub(1,std::sync::atomic::Ordering::AcqRel);super::event(json!({"k":"CodingEvent","workspace":workspace,"event":{"k":"LspCommandResult","id":id_copy,"error":result.err()}}));}).map_err(|e|e.to_string())?;
+        Ok(json!({"id":id}))
+    })();
+    if result.is_err() {
+        ACTIVE.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+    result
 }

@@ -9,6 +9,9 @@ export type CodingReply = {
   error?: string
 }
 export type CodingOperation =
+  | { op: 'resourceInspect'; paths: string[] }
+  | { op: 'resourceApply'; changes: { path: string; fingerprint: string; after: string | null; formatFrom?: string }[] }
+  | { op: 'resourceUndo'; transactionId: string }
   | { op: 'testDefinitions' | 'testRuns' }
   | { op: 'testStart'; profileId: string; fingerprint: string; mode: 'discover' | 'run' | 'failed'; previous?: string; selection: string[] }
   | { op: 'testResults' | 'testStop'; runId: string }
@@ -27,6 +30,9 @@ export type CodingOperation =
   | { op: 'paths'; query: string }
   | { op: 'replacePreview'; options: { query: string; replacement: string; caseSensitive: boolean; wholeWord: boolean; isRegex: boolean; includeGlob: string | null; excludeGlob: string | null } }
   | { op: 'lsp'; body: Record<string, unknown> }
+  | { op: 'lspEditPreview'; ticket: string }
+  | { op: 'lspEditReply'; ticket: string; applied: boolean; reason?: string }
+  | { op: 'lspCommand'; path: string; params: Record<string, unknown> }
   | { op: 'lspQuery'; path: string; method: string; params: Record<string, unknown> }
   | { op: 'read'; path: string }
   | { op: 'inspect'; paths: string[] }

@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::catalog::{self, ServerSpec};
@@ -763,6 +763,8 @@ impl LspManager {
             "textDocument/prepareRename" => ("textDocument/prepareRename", "renameProvider"),
             "textDocument/rename" => ("textDocument/rename", "renameProvider"),
             "textDocument/codeAction" => ("textDocument/codeAction", "codeActionProvider"),
+            "codeAction/resolve" => ("codeAction/resolve", "codeActionProvider"),
+            "workspace/executeCommand" => ("workspace/executeCommand", "executeCommandProvider"),
             "textDocument/signatureHelp" => ("textDocument/signatureHelp", "signatureHelpProvider"),
             "textDocument/inlayHint" => ("textDocument/inlayHint", "inlayHintProvider"),
             "textDocument/implementation" => ("textDocument/implementation", "implementationProvider"),
@@ -780,7 +782,12 @@ impl LspManager {
         if method == "textDocument/prepareRename" && capabilities.pointer("/renameProvider/prepareSupport").and_then(serde_json::Value::as_bool) != Some(true) {
             return Err("Language server does not support prepareRename".into());
         }
-        params["textDocument"] = serde_json::json!({"uri":uri});
+        if method == "codeAction/resolve" && capabilities.pointer("/codeActionProvider/resolveProvider").and_then(serde_json::Value::as_bool) != Some(true) { return Err("Language server does not resolve code actions".into()); }
+        if method == "workspace/executeCommand" {
+            let command = params.get("command").and_then(serde_json::Value::as_str).ok_or("Missing server command")?;
+            if !capabilities.pointer("/executeCommandProvider/commands").and_then(serde_json::Value::as_array).is_some_and(|commands|commands.iter().any(|v|v.as_str()==Some(command))) {return Err("The language server did not advertise this command".into());}
+        }
+        if method.starts_with("textDocument/") { params["textDocument"] = serde_json::json!({"uri":uri}); }
         Ok(LspPendingRequest { io: session.io.clone(), method, params })
     }
 
@@ -1245,7 +1252,7 @@ impl ServerSession {
                     "formatting": { "dynamicRegistration": false },
                     "rangeFormatting": { "dynamicRegistration": false },
                     "rename": { "prepareSupport": true },
-                    "codeAction": { "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["quickfix", "refactor", "source.organizeImports"] } } },
+                    "codeAction": { "dataSupport":true,"resolveSupport":{"properties":["edit","command"]}, "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["quickfix", "refactor", "source.organizeImports"] } } },
                     "signatureHelp": { "signatureInformation": { "documentationFormat": ["plaintext", "markdown"], "parameterInformation": { "labelOffsetSupport": true } } },
                     "inlayHint": { "dynamicRegistration": false },
                     "semanticTokens": {
@@ -1276,7 +1283,7 @@ impl ServerSession {
                 "window": {
                     "workDoneProgress": true
                 },
-                "workspace": {
+                "workspace": { "applyEdit":true,"workspaceEdit":{"documentChanges":true,"resourceOperations":["create","rename","delete"],"failureHandling":"undo"},
                     "workspaceFolders": true,
                     "configuration": true,
                     "didChangeWatchedFiles": {
@@ -1385,7 +1392,7 @@ impl SessionIo {
             map.remove(&id);
             return Err(e);
         }
-        match rx.recv_timeout(REQ_TIMEOUT) {
+        match rx.recv_timeout(if method == "workspace/executeCommand" {Duration::from_secs(190)} else {REQ_TIMEOUT}) {
             Ok(PendingReply::Ok(v)) => Ok(v),
             Ok(PendingReply::Err(e)) => Err(e),
             Err(RecvTimeoutError::Timeout) => {
@@ -1545,6 +1552,10 @@ fn reader_loop<R: Read>(stdout: R, ctx: ReaderCtx) {
         // Response to a request we sent — OR a server→client request (method + id).
         if let Some(id_val) = msg.get("id").cloned() {
             if let Some(method) = msg.get("method").and_then(|m| m.as_str()) {
+                if method == "workspace/applyEdit" {
+                    register_workspace_edit(&server_root, &stdin, &push, id_val, msg.get("params").cloned().unwrap_or_default());
+                    continue;
+                }
                 // Server→client request. Acknowledge workDoneProgress/create;
                 // workspace/configuration gets exclude-heavy defaults.
                 let result = if method == "window/workDoneProgress/create" {
@@ -2458,4 +2469,85 @@ mod tests {
         assert!(u.starts_with("file://"));
         assert!(u.contains("/tmp/foo.rs"));
     }
+}
+
+struct PendingWorkspaceEdit {
+    root: String,
+    stdin: Arc<Mutex<ChildStdin>>,
+    request: serde_json::Value,
+    params: serde_json::Value,
+    created: Instant,
+}
+static WORKSPACE_EDITS: OnceLock<Mutex<HashMap<String, PendingWorkspaceEdit>>> = OnceLock::new();
+fn workspace_edits() -> &'static Mutex<HashMap<String, PendingWorkspaceEdit>> {
+    WORKSPACE_EDITS.get_or_init(Default::default)
+}
+fn register_workspace_edit(
+    root: &str,
+    stdin: &Arc<Mutex<ChildStdin>>,
+    push: &Arc<dyn Fn(String) + Send + Sync>,
+    request: serde_json::Value,
+    params: serde_json::Value,
+) {
+    let ticket = uuid::Uuid::new_v4().to_string();
+    let mut pending = workspace_edits().lock().unwrap();
+    if pending.len() >= 32 {
+        let _ = write_message(
+            stdin,
+            &serde_json::json!({"jsonrpc":"2.0","id":request,"result":{"applied":false,"failureReason":"Too many pending workspace edits"}}),
+        );
+        return;
+    }
+    pending.insert(
+        ticket.clone(),
+        PendingWorkspaceEdit {
+            root: root.into(),
+            stdin: stdin.clone(),
+            request,
+            params,
+            created: Instant::now(),
+        },
+    );
+    drop(pending);
+    push(serde_json::json!({"k":"LspApplyEdit","root":root,"ticket":ticket}).to_string());
+    let root = root.to_string();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(180));
+        let _ = reply_workspace_edit(
+            &root,
+            &ticket,
+            false,
+            Some("Workspace edit preview expired"),
+        );
+    });
+}
+pub(crate) fn pending_workspace_edit(
+    root: &str,
+    ticket: &str,
+) -> Result<serde_json::Value, String> {
+    let pending = workspace_edits().lock().unwrap();
+    let edit = pending
+        .get(ticket)
+        .ok_or("Workspace edit is no longer pending")?;
+    if edit.root != root || edit.created.elapsed() > Duration::from_secs(180) {
+        return Err("Workspace edit expired or belongs to a different root".into());
+    }
+    Ok(edit.params.clone())
+}
+pub(crate) fn reply_workspace_edit(
+    root: &str,
+    ticket: &str,
+    applied: bool,
+    reason: Option<&str>,
+) -> Result<(), String> {
+    let mut pending = workspace_edits().lock().unwrap();
+    if pending.get(ticket).is_none_or(|edit| edit.root != root) {
+        return Err("Workspace edit is no longer pending in this root".into());
+    }
+    let edit = pending.remove(ticket).unwrap();
+    drop(pending);
+    write_message(
+        &edit.stdin,
+        &serde_json::json!({"jsonrpc":"2.0","id":edit.request,"result":{"applied":applied,"failureReason":reason}}),
+    )
 }

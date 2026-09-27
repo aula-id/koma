@@ -99,7 +99,7 @@ export function CodingPacks() {
         </>}
       </>}
       {plan && <div className="rounded border border-koma-border p-2 space-y-2"><p>{plan.label} · install / update on {workspace?.hostId}</p><pre className="whitespace-pre-wrap break-all text-koma-dim">{plan.commands.map(c => [c.command, ...c.args].map(v => JSON.stringify(v)).join(' ')).join('\n')}</pre><p className="text-koma-dim">{plan.notes}</p><button className={button} disabled={busy} onClick={() => void act('apply')}>Install / update</button></div>}
-      {error && <p role="alert" className="text-red-400">{error}</p>}
+      {error && <p role="alert" className="text-koma-error">{error}</p>}
     </div>
   </section>
 }

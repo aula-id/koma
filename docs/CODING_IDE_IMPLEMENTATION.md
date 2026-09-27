@@ -261,3 +261,10 @@ adopts its existing tasks, debuggers, test results and language processes. See
 [remote service lifecycle](CODING_REMOTE_SERVICE.md). Windows remote persistence,
 crash durability and daemon-version migration are still separate acceptance/scope
 items; they must not be implied by the Unix implementation.
+
+### Advanced language actions and resource edits
+
+Lazy code-action resolution, advertised server commands and preview-mediated
+`workspace/applyEdit` are connected. File create/rename/delete uses native
+preflight, inverse journals, rollback and disk-guarded Undo; see
+[resource edits](CODING_RESOURCE_EDITS.md) for limits and acceptance.

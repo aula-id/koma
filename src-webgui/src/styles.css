@@ -787,5 +787,5 @@ svg.animate-spin {
   height: 8px;
   margin: auto;
   border-radius: 50%;
-  background: #e16d76;
+  background: var(--koma-error, #ff3c3c);
 }

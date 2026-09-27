@@ -3153,6 +3153,15 @@ export const useKoma = create<KomaState>((set, get) => ({
     switch (env.k) {
       case 'CodingReply': resolveCodingReply(env); break
       case 'CodingEvent': {
+        if (env.event.k === 'LspApplyEdit') {
+          if (env.workspace.hostId === (get().remoteState.hostId ?? 'local')) window.dispatchEvent(new CustomEvent('koma-lsp-edit', { detail: { workspace: env.workspace, ticket: env.event.ticket } }))
+          else void codingRequest(env.workspace, { op: 'lspEditReply', ticket: String(env.event.ticket), applied: false, reason: 'The originating host is not active in this window' }).catch(() => {})
+          break
+        }
+        if (env.event.k === 'LspCommandResult') {
+          if (env.event.error) set(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, kind: 'error', text: `${env.workspace.hostId} · ${env.workspace.root}: ${String(env.event.error)}` } } } })
+          break
+        }
         if (env.workspace.hostId !== (get().remoteState.hostId ?? 'local')) break
         if (env.event.k === 'FileSystemChanged') {
           window.dispatchEvent(new CustomEvent('koma-coding-disk', { detail: env.workspace }))

@@ -1,3 +1,4 @@
+import { stageResourceEdit, applyResourceEdit, undoResourceEdit } from './coding-resource-edits'
 import { useKoma, type CodingFileState } from '../store/koma'
 import { emptyFileState, fileKey, type FileReadPush } from '../store/coding'
 import { codingRequest, type WorkspaceRef } from './coding-service'
@@ -5,12 +6,13 @@ import { backupCodingDocument, checkpointCodingDocument, forgetCodingDraft } fro
 import { uriToPath, splitRootPath } from './lsp-bridge'
 import { applyWorkspaceTextEdits, type TextEdit } from './workspace-edit-text'
 
-export type WorkspaceEdit = { changes?: Record<string, TextEdit[]>; documentChanges?: Array<{ textDocument?: { uri: string; version?: number | null }; edits?: TextEdit[]; kind?: string }> }
-export type StagedFile = { path: string; before: string; after: string; fingerprint: string; initial?: CodingFileState; savedContent: string | null }
-export type StagedEdit = { workspace: WorkspaceRef; files: StagedFile[]; label: string; generation: number }
+export type WorkspaceEdit = { changes?: Record<string, TextEdit[]>; documentChanges?: Array<{ textDocument?: { uri: string; version?: number | null }; edits?: TextEdit[]; kind?: string; uri?: string; oldUri?: string; newUri?: string; options?: { overwrite?: boolean; ignoreIfExists?: boolean; ignoreIfNotExists?: boolean; recursive?: boolean } }> }
+export type StagedFile = { path: string; before: string; after: string; fingerprint: string; initial?: CodingFileState; savedContent: string | null; existed?: boolean; existsAfter?: boolean; formatFrom?: string }
+export type StagedEdit = { workspace: WorkspaceRef; files: StagedFile[]; label: string; generation: number; resources?: boolean; transactionId?: string }
 const undo: StagedEdit[] = []
 
 export async function stageWorkspaceEdit(workspace: WorkspaceRef, edit: WorkspaceEdit, label: string, snapshot: Record<string, CodingFileState>, generation: number): Promise<StagedEdit> {
+  if (edit.documentChanges?.some(c => c.kind)) return stageResourceEdit(workspace, edit, label, snapshot, generation)
   const changes = new Map<string, TextEdit[]>()
   const add = (uri: string, edits: TextEdit[]) => {
     const absolute = uriToPath(uri)
@@ -40,7 +42,7 @@ export async function stageWorkspaceEdit(workspace: WorkspaceRef, edit: Workspac
 }
 function assertCurrent(edit: StagedEdit, reverse = false) {
   const state = useKoma.getState()
-  if ((state.remoteState.hostId ?? 'local') !== edit.workspace.hostId || state.coding._sessionGen !== edit.generation) throw new Error('The workspace changed. Generate a new preview.')
+  if ((state.remoteState.hostId ?? 'local') !== edit.workspace.hostId || (!reverse && state.coding._sessionGen !== edit.generation)) throw new Error('The workspace changed. Generate a new preview.')
   for (const file of edit.files) {
     const current = state.coding.files[fileKey(edit.workspace.root, file.path)]
     if (current?.saving || current?.loading || current?.conflict) throw new Error(`Resolve the pending operation in ${file.path} first`)
@@ -49,6 +51,7 @@ function assertCurrent(edit: StagedEdit, reverse = false) {
 }
 export async function applyStagedEdit(edit: StagedEdit) {
   assertCurrent(edit)
+  if (edit.resources) { await applyResourceEdit(edit, () => assertCurrent(edit)); undo.push(edit); while (undo.length > 10 || undo.reduce((n, e) => n + e.files.reduce((n, f) => n + f.before.length + f.after.length, 0), 0) > 50 * 1024 * 1024) undo.shift(); return }
   // Verify disk for closed documents, and retain a durable inverse before
   // changing any buffer. Fail the entire operation on any preflight error.
   for (const file of edit.files) {
@@ -73,9 +76,10 @@ export async function applyStagedEdit(edit: StagedEdit) {
     useKoma.getState().openCodingFile(edit.workspace.root, file.path)
   }
 }
-export function undoWorkspaceEdit() {
+export async function undoWorkspaceEdit() {
   const edit = undo[undo.length - 1]
   if (!edit) throw new Error('No workspace edit to undo')
+  if (edit.resources) { await undoResourceEdit(edit); if (undo[undo.length - 1] === edit) undo.pop(); return }
   assertCurrent(edit, true)
   useKoma.setState(s => {
     const files = { ...s.coding.files }

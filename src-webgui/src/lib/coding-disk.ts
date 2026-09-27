@@ -68,17 +68,22 @@ export function startCodingDiskMonitor() {
     } finally { running = false }
   }
   const focus = () => { void poll() }
+  const changedWorkspaces = new Map<string, WorkspaceRef>()
   let changedTimer: ReturnType<typeof setTimeout> | undefined
   const changed = (event: Event) => {
     const workspace = (event as CustomEvent<WorkspaceRef>).detail
     if ((useKoma.getState().remoteState.hostId ?? 'local') !== workspace.hostId) return
+    changedWorkspaces.set(JSON.stringify(workspace), workspace)
     clearTimeout(changedTimer)
     changedTimer = setTimeout(() => {
-      if ((useKoma.getState().remoteState.hostId ?? 'local') !== workspace.hostId) return
       focus()
+      const pending = [...changedWorkspaces.values()]; changedWorkspaces.clear()
       const state = useKoma.getState()
-      for (const key of Object.keys(state.coding.dirs).filter(key => key.startsWith(workspace.root + ':')).slice(-32)) {
-        if (!state.coding.dirs[key].loading) state.refreshCodingDir(workspace.root, key.slice(workspace.root.length + 1))
+      for (const workspace of pending) {
+        if ((state.remoteState.hostId ?? 'local') !== workspace.hostId) continue
+        for (const key of Object.keys(state.coding.dirs).filter(key => key.startsWith(workspace.root + ':')).slice(-32)) {
+          if (!state.coding.dirs[key].loading) state.refreshCodingDir(workspace.root, key.slice(workspace.root.length + 1))
+        }
       }
     }, 150)
   }

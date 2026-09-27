@@ -259,8 +259,8 @@ function WorkspaceCodeEditor({ tab }: { tab: CodingTab }) {
         position: { line: position.lineNumber - 1, character: position.column - 1 }, word: model.getWordAtPosition(position)?.word,
         mode: 'rename', snapshot: state.coding.files, generation: state.coding._sessionGen })
     } })
-    editor.addAction({ id: 'koma.undoWorkspaceEdit', label: 'Undo Workspace Edit', run: () => {
-      try { undoWorkspaceEdit() } catch (error) { const message = error instanceof Error ? error.message : String(error); useKoma.setState(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, text: message, kind: 'error' } } } }) }
+    editor.addAction({ id: 'koma.undoWorkspaceEdit', label: 'Undo Workspace Edit', run: async () => {
+      try { await undoWorkspaceEdit() } catch (error) { const message = error instanceof Error ? error.message : String(error); useKoma.setState(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, text: message, kind: 'error' } } } }) }
     } })
     // Selection → composer: `@path:start-end` + fenced buffer text, then focus chat.
     editor.addAction({
