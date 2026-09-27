@@ -88,6 +88,33 @@ observation; Accessibility is additionally needed for labels, focus and input.
 The implementation uses Apple's [SCScreenshotManager](https://developer.apple.com/documentation/screencapturekit/scscreenshotmanager)
 for explicit observations, without maintaining a capture stream.
 
+Darwin builds support `aarch64-apple-darwin` (Apple Silicon, primary) and
+`x86_64-apple-darwin` (Intel). From the repository root:
+
+```sh
+# Apple Silicon; also the native default on an ARM Mac.
+cargo build --release -p agent --bin koma --target aarch64-apple-darwin
+# Intel, including cross-compilation from an ARM Mac with Xcode installed.
+rustup target add x86_64-apple-darwin
+cargo build --release -p agent --bin koma --target x86_64-apple-darwin
+```
+
+The workspace `.cargo/config.toml` defaults `MACOSX_DEPLOYMENT_TARGET` to `11.0`
+for both architectures and every C/C++ dependency as well as Rust. An existing
+environment setting overrides the default; use the same value for the whole
+build. This is the build baseline, not a change to computer observation's macOS
+14 minimum. When invoking Cargo from outside this checkout, set the variable
+explicitly because Cargo discovers configuration from the working directory.
+If old objects still produce newer-deployment-target warnings, rebuild with a
+fresh `--target-dir target/darwin-rebuild` instead of reusing those objects.
+
+The bridge ABI is exported through `agent::computer_native` in the library target.
+Cargo applies [build-script native library directives](https://doc.rust-lang.org/cargo/reference/build-scripts.html#rustc-link-lib)
+to that target; the executable imports it so the archive, C++ runtime and SDK
+frameworks reach the final link. Separate GUI release-link CI builds now cover
+ARM and Intel. These compile and link the executable without opening a desktop;
+`cargo check` and headless CI alone cannot verify this path.
+
 **Windows:** build with the MSVC Rust target, Visual Studio C++ tools and a recent
 Windows 10/11 SDK containing C++/WinRT and Graphics Capture headers. GNU builds
 remain available with `--no-default-features`; the GUI SDK bridge requires MSVC.

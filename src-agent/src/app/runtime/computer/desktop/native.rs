@@ -2,17 +2,12 @@
 //! can call it; mode, ownership, approval and action ordering remain in Rust.
 use super::*;
 use crate::app::runtime::computer::executor::Desktop;
+use agent::computer_native::{koma_computer_call, koma_computer_cancel, koma_computer_free};
 use anyhow::{ensure, Result};
 use base64::Engine;
 use serde::de::DeserializeOwned;
 use serde_json::json;
-use std::ffi::{c_char, CStr, CString};
-
-unsafe extern "C" {
-    fn koma_computer_call(request: *const c_char) -> *mut c_char;
-    fn koma_computer_free(reply: *mut c_char);
-    fn koma_computer_cancel();
-}
+use std::ffi::{CStr, CString};
 fn call<T: DeserializeOwned>(request: serde_json::Value) -> Result<T> {
     let text = CString::new(serde_json::to_vec(&request)?)?;
     let ptr = unsafe { koma_computer_call(text.as_ptr()) };

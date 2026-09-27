@@ -41,6 +41,10 @@ fn main() {
 fn build_computer_bridge() {
     let target = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let mut build = cc::Build::new();
+    // cc-rs uses Cargo's TARGET for the archive architecture (Darwin arm64 or
+    // x86_64), and the shared MACOSX_DEPLOYMENT_TARGET for its OS baseline.
+    // Its rustc-link-lib output belongs to src/lib.rs; the executable imports
+    // that library's computer_native ABI so these dependencies reach the link.
     build.cpp(true);
     match target.as_str() {
         "macos" => {
