@@ -30,6 +30,7 @@ mod commandcode;
 mod debug_dump;
 mod helpers;
 mod oneshot;
+pub(crate) use oneshot::ClassifierReply;
 mod stream;
 mod think_split;
 mod types;

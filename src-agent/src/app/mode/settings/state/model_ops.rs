@@ -294,13 +294,33 @@ impl SettingsState {
                 None => self.models.len(), // new entry — push
             };
 
-            // Per-role steal, directional: session_models wins resolution over
-            // config.models, so a global-scope assignment must also demote
-            // session-local holders; a session-local assignment must not demote
-            // global holders (they remain the fallback for other sessions).
-            for (i, other) in self.models.iter_mut().enumerate() {
-                if i != target_idx && (!draft.session_only || other.session_only) {
-                    other.roles.retain(|r| !draft.roles.contains(r));
+            // Use the same scope-local ownership operation as GUI model saves.
+            use crate::model::app_config::{upsert_model_entry, ModelEntry};
+            let mut scope: Vec<ModelEntry> = self
+                .models
+                .iter()
+                .filter(|other| other.session_only == draft.session_only)
+                .map(|other| ModelEntry {
+                    uuid: other.uuid.clone(),
+                    roles: other.roles.clone(),
+                    ..Default::default()
+                })
+                .collect();
+            upsert_model_entry(
+                &mut scope,
+                ModelEntry {
+                    uuid: draft.uuid.clone(),
+                    roles: draft.roles.clone(),
+                    ..Default::default()
+                },
+            );
+            for other in self
+                .models
+                .iter_mut()
+                .filter(|other| other.session_only == draft.session_only)
+            {
+                if let Some(updated) = scope.iter().find(|entry| entry.uuid == other.uuid) {
+                    other.roles = updated.roles.clone();
                 }
             }
 
@@ -403,5 +423,55 @@ impl SettingsState {
         {
             p.toggle();
         }
+    }
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use crate::model::{
+        app_config::{AppConfig, ModelEntry, ModelRole},
+        conversation::Conversation,
+        session::Session,
+        settings::Settings,
+    };
+
+    #[test]
+    fn global_modal_assignment_preserves_session_override_and_other_roles() {
+        let mut config = AppConfig::default();
+        config.models.push(ModelEntry {
+            uuid: "global".into(),
+            roles: vec![ModelRole::Main, ModelRole::Compactor],
+            ..Default::default()
+        });
+        config.models.push(ModelEntry {
+            uuid: "new-global".into(),
+            ..Default::default()
+        });
+        let settings = Settings {
+            session_models: vec![ModelEntry {
+                uuid: "session".into(),
+                roles: vec![ModelRole::Main, ModelRole::Awareness],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let session = Session::new(
+            "test".into(),
+            std::env::temp_dir().join("koma-modal-ownership"),
+            "pwd".into(),
+            settings,
+            Conversation::from_messages(vec![]),
+        );
+        let mut ui = SettingsState::from(&session, &config);
+        ui.open_model_modal_edit(1);
+        ui.model_modal.as_mut().unwrap().roles = vec![ModelRole::Main];
+        ui.save_model_modal(false);
+        assert_eq!(ui.models[0].roles, vec![ModelRole::Compactor]);
+        assert_eq!(ui.models[1].roles, vec![ModelRole::Main]);
+        assert_eq!(
+            ui.models[2].roles,
+            vec![ModelRole::Main, ModelRole::Awareness]
+        );
     }
 }

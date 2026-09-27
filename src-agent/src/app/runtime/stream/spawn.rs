@@ -208,6 +208,10 @@ pub(crate) fn apply_workspace_change(
         state.rest.sessions[sess_idx].dir_cache.clone(),
     );
 
+    state.rest.sessions[sess_idx].awareness_generation = state.rest.sessions[sess_idx]
+        .awareness_generation
+        .wrapping_add(1);
+    state.rest.sessions[sess_idx].awareness_summary = None;
     // 3. Recompute awareness for the new cwd when enabled + routable. Snapshot the
     //    inputs (cloning the settings + config) so no session borrow is held
     //    across the spawn. The recompute runs OFF the event-loop thread (see
@@ -227,12 +231,12 @@ pub(crate) fn apply_workspace_change(
         _ => None,
     };
     if let Some((c, config, settings)) = aware_inputs {
-        if let Some(route) = crate::app::resolve::resolve_role_dispatch(
+        let route = crate::app::resolve::resolve_role_dispatch(
             &config,
             &settings,
             crate::model::app_config::ModelRole::Awareness,
         )
-        .filter(|r| r.is_routable())
+        .filter(|r| r.is_routable());
         {
             // Also resolve the Main route as a fallback for when the Awareness
             // model call itself errors (e.g. bad/typo'd model name). Cheap — no I/O.

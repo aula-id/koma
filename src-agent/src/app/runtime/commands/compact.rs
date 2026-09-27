@@ -101,9 +101,21 @@ pub(crate) fn handle_compact(
         // key) with its model id + upstream-route slug; no effort (the
         // summary is mechanical).
         let result = match route {
-            Some(r) => c.complete(r.conn(), &r.model_id, r.provider(), req).await,
+            Some(r) => match tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                c.complete(r.conn(), &r.model_id, r.provider(), req),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(anyhow::anyhow!("compactor timeout")),
+            },
             None => Err(anyhow::anyhow!("no active session")),
         };
+        let result = result.and_then(|summary| {
+            crate::model::conversation::clean_compaction_summary(&summary)
+                .ok_or_else(|| anyhow::anyhow!("compactor returned an empty summary"))
+        });
         let event = match result {
             Ok(s) => StreamEvent::Compacted {
                 summary: s,
@@ -115,4 +127,66 @@ pub(crate) fn handle_compact(
     });
     state.rest.fg_mut().current_task = Some(jh.abort_handle());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::harness::regression_test::{fixture, response};
+    use crate::model::{
+        app_config::ModelRole, conversation::Conversation, session::Session, settings::Settings,
+    };
+
+    #[tokio::test]
+    async fn null_compactor_response_emits_error_without_changing_history_or_trying_main() {
+        let (mut config, requests) =
+            fixture(vec![(response(serde_json::Value::Null, "stop"), 0)], true).await;
+        config.models[0].roles = vec![ModelRole::Compactor];
+        let mut state = AppState::new(crate::app::mode::Mode::Chat);
+        state.rest.config = config;
+        let conversation = Conversation::from_messages(vec![
+            ChatMessage::new(Role::System, "system"),
+            ChatMessage::new(Role::User, "preserve this conversation"),
+        ]);
+        let before = conversation.messages().to_vec();
+        let path = std::env::temp_dir().join(format!("koma-compact-null-{}", uuid::Uuid::new_v4()));
+        state.rest.fg_mut().session = Some(Session::new(
+            "compact-null".into(),
+            path.clone(),
+            "pwd".into(),
+            Settings::default(),
+            conversation,
+        ));
+        let mut client = Some(Arc::new(OpenRouterClient::new()));
+        handle_compact(
+            &mut state,
+            &mut client,
+            &tokio::runtime::Handle::current(),
+            Some(0),
+        )
+        .unwrap();
+        let event = state
+            .rest
+            .fg_mut()
+            .active_rx
+            .as_mut()
+            .unwrap()
+            .recv()
+            .await
+            .unwrap();
+        assert!(matches!(event, StreamEvent::Error(ref error) if error.contains("empty summary")));
+        assert_eq!(
+            state
+                .rest
+                .fg()
+                .session
+                .as_ref()
+                .unwrap()
+                .conversation
+                .messages(),
+            before
+        );
+        assert!(!path.exists());
+        assert_eq!(requests.await.unwrap().len(), 1);
+    }
 }

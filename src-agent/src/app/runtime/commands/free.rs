@@ -22,11 +22,16 @@ use crate::service::koma_free::{KOMA_FREE_ENDPOINT, KOMA_FREE_MODEL};
 /// This IS the `/free` on/off state — there is no separate stored flag.
 pub(super) fn koma_free_main_idx(config: &AppConfig, settings: &Settings) -> Option<usize> {
     settings.session_models.iter().position(|e| {
+        let source = e
+            .source_uuid
+            .as_ref()
+            .and_then(|u| config.models.iter().find(|m| &m.uuid == u))
+            .unwrap_or(e);
         e.effective_roles().contains(&ModelRole::Main)
             && config
                 .providers
                 .iter()
-                .any(|p| p.uuid == e.provider_uuid && p.api_type == ApiType::KomaFree)
+                .any(|p| p.uuid == source.provider_uuid && p.api_type == ApiType::KomaFree)
     })
 }
 
@@ -47,17 +52,22 @@ pub(super) fn handle_free(state: &mut AppState) -> Result<()> {
     };
     let idx = koma_free_main_idx(&state.rest.config, &sess.settings);
 
-    if let Some(idx) = idx {
+    if idx.is_some() {
         // Toggle OFF: drop the local override; global/config Main resurfaces —
         // which may be a DIFFERENT model than koma-free, so snapshot before/
         // after to catch a BUG FIX effort reset (stale effort from koma-free/
         // the old model must not carry onto whatever resurfaces).
         let before_main = state.rest.main_identity_now();
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-            sess.settings.session_models.remove(idx);
-            if let Err(e) = sess.save() {
-                state.rest.fg_mut().status = format!("error: {e}");
-                return Ok(());
+            let previous = sess.settings.session_models.clone();
+            crate::model::app_config::assign_role(
+                &mut sess.settings.session_models,
+                ModelRole::Main,
+                None,
+            );
+            if let Err(error) = sess.save() {
+                sess.settings.session_models = previous;
+                return Err(error);
             }
         }
         state.rest.reset_effort_if_main_changed(before_main);
@@ -97,6 +107,8 @@ pub(crate) fn set_session_koma_free(state: &mut AppState) -> Result<()> {
     if koma_free_main_idx(&state.rest.config, &sess.settings).is_some() {
         return Ok(());
     }
+    let previous_config = state.rest.config.clone();
+    let missing_install_id = state.rest.config.install_id.is_empty();
     // BUG FIX: snapshot the resolved Main route before the swap below so the
     // caller-agnostic effort reset fires whether this was reached via the TUI
     // `/free` toggle-ON or the GUI model quick-picker's synthetic "advertised
@@ -138,39 +150,100 @@ pub(crate) fn set_session_koma_free(state: &mut AppState) -> Result<()> {
             (uuid, true)
         }
     };
-    if provisioned {
-        state.rest.config.save()?;
+    if provisioned || missing_install_id {
+        if let Err(error) =
+            crate::app::runtime::actions::save_config_and_broadcast(&state.rest.config)
+        {
+            state.rest.config = previous_config;
+            return Err(error);
+        }
     }
 
     if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-        // Swap: drop any OTHER local Main override first so koma-free is the
-        // only local Main override afterward.
-        sess.settings
-            .session_models
-            .retain(|e| !e.effective_roles().contains(&ModelRole::Main));
+        let previous = sess.settings.session_models.clone();
+        crate::model::app_config::assign_role(
+            &mut sess.settings.session_models,
+            ModelRole::Main,
+            None,
+        );
         sess.settings.session_models.push(ModelEntry {
             uuid: new_uuid(),
             name: "koma free".to_string(),
             model_id: KOMA_FREE_MODEL.to_string(),
             provider_uuid,
             route: None,
-            // Permissive posture (owner override): koma-free powers EVERY runtime
-            // role, not just Main — Awareness/Safeguard/Compactor/Planner all
-            // resolve to it too via the session-first scan in `resolve_role`, so a
-            // keyless `/free` user gets the safety classifier and every other
-            // secondary role instead of silently going unconfigured for them.
-            roles: vec![
-                ModelRole::Main,
-                ModelRole::Awareness,
-                ModelRole::Safeguard,
-                ModelRole::Compactor,
-                ModelRole::Planner,
-            ],
+            roles: vec![ModelRole::Main],
             role: None,
             source_uuid: None,
         });
-        sess.save()?;
+        if let Err(error) = sess.save() {
+            sess.settings.session_models = previous;
+            return Err(error);
+        }
     }
     state.rest.reset_effort_if_main_changed(before_main);
     Ok(())
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+
+    #[test]
+    fn free_toggle_preserves_secondary_roles_including_legacy_apple_ownership() {
+        let path = std::env::temp_dir().join(format!("koma-free-test-{}", uuid::Uuid::new_v4()));
+        let mut state = AppState::new(crate::app::mode::Mode::Chat);
+        state.rest.config.providers.push(ProviderConn {
+            uuid: "free".into(),
+            api_type: ApiType::KomaFree,
+            endpoint: KOMA_FREE_ENDPOINT.into(),
+            ..Default::default()
+        });
+        state.rest.config.install_id = "test-install".into();
+        let settings = Settings {
+            session_models: vec![ModelEntry {
+                uuid: "legacy-free".into(),
+                provider_uuid: "free".into(),
+                model_id: KOMA_FREE_MODEL.into(),
+                roles: vec![ModelRole::Main, ModelRole::Safeguard, ModelRole::Compactor],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        state.rest.fg_mut().session = Some(crate::model::session::Session::new(
+            "free-test".into(),
+            path.clone(),
+            "pwd".into(),
+            settings,
+            crate::model::conversation::Conversation::from_messages(vec![]),
+        ));
+        handle_free(&mut state).unwrap();
+        assert_eq!(
+            state
+                .rest
+                .fg()
+                .session
+                .as_ref()
+                .unwrap()
+                .settings
+                .session_models[0]
+                .roles,
+            vec![ModelRole::Safeguard, ModelRole::Compactor]
+        );
+        set_session_koma_free(&mut state).unwrap();
+        let entries = &state
+            .rest
+            .fg()
+            .session
+            .as_ref()
+            .unwrap()
+            .settings
+            .session_models;
+        assert_eq!(
+            entries[0].roles,
+            vec![ModelRole::Safeguard, ModelRole::Compactor]
+        );
+        assert_eq!(entries.last().unwrap().roles, vec![ModelRole::Main]);
+        std::fs::remove_dir_all(path).unwrap();
+    }
 }

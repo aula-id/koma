@@ -75,6 +75,7 @@ impl DaemonHub {
                     frame_tx,
                     is_controller,
                     attached: false,
+                    approval_channel: true,
                     last_seq: 0,
                     // Not delta-eligible until its Attach seeds this baseline.
                     last_snapshot: None,
@@ -180,6 +181,11 @@ impl DaemonHub {
             }
             ClientRequest::Status => {
                 self.status(idx, state);
+            }
+            ClientRequest::SetApprovalChannel { enabled } => {
+                self.clients[idx].approval_channel = enabled;
+                self.refresh_viewed_sessions(state);
+                self.send_to(idx, DaemonEvent::Ack);
             }
             ClientRequest::GetRunState { req_seq } => self.get_run_state(idx, state, req_seq),
             ClientRequest::SetSessionExtensions { load, unload } => {
@@ -329,7 +335,11 @@ impl DaemonHub {
 
             // Answer the foreground session's pending tool-approval prompt via the
             // local approve/deny handlers.
-            ClientRequest::ApproveTool { approve } => {
+            ClientRequest::ApproveTool { approve, call_id } => {
+                if call_id.as_ref().is_some_and(|id| state.rest.fg().pending_tool_calls.get(state.rest.fg().tool_idx).is_none_or(|call| &call.id != id)) {
+                    self.send_to(idx, DaemonEvent::Error("approval refers to a cancelled or superseded call".into()));
+                    return;
+                }
                 self.approve_tool(idx, state, client, handle, approve);
             }
 
@@ -780,6 +790,7 @@ impl DaemonHub {
             | ClientRequest::Resync
             | ClientRequest::ListSessions
             | ClientRequest::Status
+            | ClientRequest::SetApprovalChannel { .. }
             | ClientRequest::GetRunState { .. }
             | ClientRequest::SetSessionExtensions { .. }
             | ClientRequest::RemoveAttachment { .. }

@@ -121,6 +121,11 @@ pub(super) fn drain_stream(
                     break;
                 }
                 StreamEvent::Error(e) => {
+                    if state.rest.sessions[idx].compact_anim_start.is_some() {
+                        super::super::drains::fail_compaction(state, idx, e);
+                        still_streaming = false;
+                        break;
+                    }
                     // Surface the error and halt the whole turn (drop any
                     // half-stashed tool calls / step count / approval machine).
                     finish_stream(&mut state.rest, idx, Some(e));

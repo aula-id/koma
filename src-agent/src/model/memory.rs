@@ -52,7 +52,7 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name")
     })?;
     let mut tmp_name = file_name.to_owned();
-    tmp_name.push(format!(".{}$", std::process::id()));
+    tmp_name.push(format!(".{}.tmp", uuid::Uuid::new_v4()));
     let tmp_path = parent.join(&tmp_name);
     std::fs::write(&tmp_path, bytes)?;
     std::fs::rename(&tmp_path, path)?;

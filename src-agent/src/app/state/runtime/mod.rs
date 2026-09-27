@@ -234,6 +234,7 @@ pub struct SessionRuntime {
     pub tokens_cached: u64,
     /// Stable footer sample: latest provider report, or a local estimate only
     /// before the first report. Its input/cache/window values stay together.
+    pub model_routes: Vec<crate::app::resolve::RoleResolution>,
     pub context_usage: Option<crate::service::context_limits::ContextUsage>,
     /// In-flight request metadata used to pair fresh usage with its own window.
     /// Kept separate so starting another tool round cannot replace the readout.
@@ -598,6 +599,8 @@ pub struct SessionRuntime {
     /// `None` when awareness is disabled, no docs exist, or the call failed —
     /// it is recomputed per session, never persisted.
     pub awareness_summary: Option<String>,
+    pub awareness_generation: u64,
+    pub awareness_status: Option<String>,
     /// Cached graph summary text for L1 injection into the system prompt.
     /// Populated by the linker daemon on scan complete / generation change.
     #[cfg(feature = "linker")]
@@ -729,6 +732,7 @@ impl SessionRuntime {
             tokens_out: 0,
             cost: 0.0,
             tokens_cached: 0,
+            model_routes: Vec::new(),
             context_usage: None,
             pending_context_usage: None,
             pending_tool_calls: Vec::new(),
@@ -798,6 +802,8 @@ impl SessionRuntime {
             dir_cache: Arc::new(RwLock::new(DirCache::default())),
             call_track: crate::tool::CallTrack::new(),
             awareness_summary: None,
+            awareness_generation: 0,
+            awareness_status: None,
             #[cfg(feature = "linker")]
             graph_summary: None,
             #[cfg(feature = "linker")]

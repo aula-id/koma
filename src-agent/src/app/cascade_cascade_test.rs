@@ -79,6 +79,12 @@ fn session_settings_drops_dead_provider_and_model_rows() {
     let settings = Settings {
         session_models: vec![
             ModelEntry {
+                uuid: "session-clone".into(),
+                source_uuid: Some("m-dead".into()),
+                provider_uuid: "p-alive".into(),
+                ..Default::default()
+            },
+            ModelEntry {
                 uuid: "m-dead".into(),
                 provider_uuid: "p-alive".into(),
                 ..Default::default()
@@ -104,10 +110,10 @@ fn session_settings_drops_dead_provider_and_model_rows() {
     let mut dead_providers: HashSet<String> = HashSet::new();
     dead_providers.insert("p-dead".into());
 
-    let mut s = Settings::load(&path).unwrap();
-    s.session_models
-        .retain(|m| !dead_models.contains(&m.uuid) && !dead_providers.contains(&m.provider_uuid));
-    s.save(&path).unwrap();
+    assert_eq!(
+        rebind_offline_sessions_at(&tmp, &AppConfig::default(), &dead_models, &dead_providers, &HashSet::new()),
+        1
+    );
 
     let loaded = Settings::load(&path).unwrap();
     assert_eq!(loaded.session_models.len(), 1);
@@ -136,4 +142,14 @@ fn scoped_session_agent_rebind_only_touches_that_session() {
     let b = load_agent_file(&sess_b.join("agents/explore.md"), AgentSource::Session).unwrap();
     assert_eq!(b.model_uuid.as_deref(), Some("local-m"), "sess_b untouched");
     let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn deleting_old_provider_keeps_reference_to_source_that_moved() {
+    let mut config = AppConfig::default();
+    config.models.push(ModelEntry { uuid: "source".into(), provider_uuid: "new-provider".into(), ..Default::default() });
+    let reference = ModelEntry { uuid: "session".into(), source_uuid: Some("source".into()), provider_uuid: "old-provider".into(), ..Default::default() };
+    let dead = HashSet::from(["old-provider".to_string()]);
+    assert!(!model_reference_removed(&reference, &config, &HashSet::new(), &dead));
+    assert!(model_reference_removed(&reference, &config, &HashSet::from(["source".to_string()]), &HashSet::new()));
 }

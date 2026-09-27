@@ -7,6 +7,8 @@ pub struct RunState {
     pub name: String,
     pub workdir: Vec<String>,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_routes: Vec<crate::app::resolve::RoleResolution>,
     pub effort: String,
     pub mode: String,
     pub working: bool,

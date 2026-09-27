@@ -92,3 +92,31 @@ fn deny_tool_rejects_parked_mission_ready() {
     );
     assert_park_intact(&state, "mission_ready");
 }
+
+#[test]
+fn approval_after_cancellation_cannot_execute_pending_call() {
+    let mut state = AppState::new(Mode::Chat);
+    park_ready(&mut state, "write");
+    state.rest.fg_mut().awaiting_approval = false;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    assert!(handle_approve_tool(&mut state, &mut None, runtime.handle()).is_err());
+    assert_eq!(state.rest.fg().tool_idx, 0);
+    assert!(state.rest.fg().tool_results.is_empty());
+}
+
+#[test]
+fn outage_approval_does_not_override_plan_mode() {
+    let mut state = AppState::new(Mode::Chat);
+    park_ready(&mut state, "write");
+    state.rest.fg_mut().agent_mode = crate::app::state::AgentMode::Plan;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = handle_approve_tool(&mut state, &mut None, runtime.handle()).unwrap_err();
+    assert!(error.to_string().contains("read-only"));
+    assert_park_intact(&state, "write");
+}

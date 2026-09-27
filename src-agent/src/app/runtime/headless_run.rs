@@ -80,6 +80,9 @@ fn run_inner(cli: RunCli) -> Result<i32> {
         .context("tokio runtime")?;
     let conn = attach_session_headless(&rt.handle().clone(), &session_id, workdir.as_deref())
         .with_context(|| format!("attach session {session_id}"))?;
+    conn.req_tx
+        .send(ClientRequest::SetApprovalChannel { enabled: false })
+        .context("declare headless approval capability")?;
     // Always detach, including a rejected setup. Never abandon a submitted daemon turn.
     let result = run_attached(&conn, &cli, prompt, system_extra);
     finish(&conn, &rt);

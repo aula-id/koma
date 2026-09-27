@@ -462,6 +462,10 @@ pub(super) fn handle_approve_tool(
     client: &mut Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
+    anyhow::ensure!(
+        state.rest.fg().awaiting_approval,
+        "no tool call awaiting approval"
+    );
     // Server-side UI guarantee: generic ApproveTool must never answer a parked
     // plan_ready / mission_ready — those require PlanDecision (y/a/n). Reject
     // without clearing the park so the correct handlers remain reachable.
@@ -469,6 +473,45 @@ pub(super) fn handle_approve_tool(
         anyhow::bail!(
             "plan_ready/mission_ready require PlanDecision (approve/compact/deny), not ApproveTool"
         );
+    }
+    // Approval authorizes this call, never a mode change or a read-only bypass.
+    if let Some(call) = state
+        .rest
+        .fg()
+        .pending_tool_calls
+        .get(state.rest.fg().tool_idx)
+    {
+        let args: serde_json::Value = serde_json::from_str(
+            &crate::dto::chat::sanitize_tool_arguments(&call.function.arguments),
+        )
+        .unwrap_or_else(|_| serde_json::json!({}));
+        if state.rest.fg().agent_mode == crate::app::state::AgentMode::Plan {
+            crate::tool::plan_tool_call_allowed(&call.function.name, &args)
+                .map_err(anyhow::Error::msg)?;
+        }
+        if state.rest.fg().agent_mode == crate::app::state::AgentMode::Sdlc
+            && state.rest.fg().sdlc_phase.as_deref() == Some("assess")
+        {
+            anyhow::ensure!(
+                crate::tool::tool_allowed_in_sdlc_assess(&call.function.name),
+                "SDLC assess is read-only"
+            );
+            if call.function.name == "git_operator" {
+                let arguments = args
+                    .get("args")
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| anyhow::anyhow!("missing git args"))?;
+                let arguments: Vec<&str> = arguments
+                    .iter()
+                    .map(|v| {
+                        v.as_str()
+                            .ok_or_else(|| anyhow::anyhow!("invalid git args"))
+                    })
+                    .collect::<Result<_>>()?;
+                crate::tool::sdlc_assess_git_args_allowed(&arguments)
+                    .map_err(anyhow::Error::msg)?;
+            }
+        }
     }
     // Run the paused risky call, record its result, advance past it, then
     // resume the machine (which may pause again on the next risky call or

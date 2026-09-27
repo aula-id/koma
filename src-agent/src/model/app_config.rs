@@ -416,7 +416,7 @@ pub struct ProviderConn {
 /// reconstruction of the `/agents` model catalogue (just `uuid`/`name`/`model_id`/
 /// `provider_uuid`). As with [`ProviderConn`], `Default::default()` yields an empty
 /// `uuid`; the reconstruction sets it explicitly.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct ModelEntry {
     #[serde(default = "new_uuid")]
     pub uuid: String,
@@ -445,6 +445,31 @@ pub struct ModelEntry {
     /// JSON when `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_uuid: Option<String>,
+}
+
+impl Serialize for ModelEntry {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut fields = serializer.serialize_struct(
+            "ModelEntry",
+            5 + usize::from(self.route.is_some()) + usize::from(self.source_uuid.is_some()),
+        )?;
+        fields.serialize_field("uuid", &self.uuid)?;
+        fields.serialize_field("name", &self.name)?;
+        fields.serialize_field("model_id", &self.model_id)?;
+        fields.serialize_field("provider_uuid", &self.provider_uuid)?;
+        fields.serialize_field("roles", &self.effective_roles())?;
+        if let Some(route) = &self.route {
+            fields.serialize_field("route", route)?;
+        }
+        if let Some(source) = &self.source_uuid {
+            fields.serialize_field("source_uuid", source)?;
+        }
+        fields.end()
+    }
 }
 
 impl ModelEntry {
@@ -685,6 +710,10 @@ pub struct AppConfig {
     pub providers: Vec<ProviderConn>,
     /// Global catalogue of named models; each references a provider by uuid.
     #[serde(default)]
+    #[serde(
+        serialize_with = "serialize_models",
+        deserialize_with = "deserialize_models"
+    )]
     pub models: Vec<ModelEntry>,
     /// Configured MCP servers. Empty by default; old config files (no such key)
     /// load with an empty vec, so behaviour is unchanged until a server is added.
@@ -751,26 +780,25 @@ impl AppConfig {
     /// Returns `AppConfig::default()` on ANY error (file absent, parse failure,
     /// etc.) so startup is never blocked by a missing or corrupt config file.
     pub fn load() -> Self {
-        let path = match base_dir() {
-            Ok(d) => d.join("config.json"),
-            Err(_) => return AppConfig::default(),
-        };
-        let bytes = match std::fs::read(&path) {
-            Ok(b) => b,
-            Err(_) => return AppConfig::default(),
-        };
-        // --- clinepass migration: strip before enum deserialization ---
-        let mut val: serde_json::Value =
-            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
-        let stripped = Self::strip_clinepass(&mut val);
-        let config: AppConfig = serde_json::from_value(val).unwrap_or_default();
+        Self::try_load().unwrap_or_default()
+    }
+
+    /// Reload without treating a corrupt/unreadable catalogue as deletion.
+    pub(crate) fn try_load() -> Result<Self> {
+        let path = base_dir()?.join("config.json");
+        let bytes = std::fs::read(path)?;
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let stripped = Self::strip_clinepass(&mut value);
+        let config: Self = serde_json::from_value(value)?;
         if stripped {
-            // Persist the cleaned config so we don't re-strip on every boot.
-            // Ignore save errors (best-effort migration; the stripped in-memory
-            // config is still valid for the session).
-            let _ = config.save();
+            if let Err(error) = config.save() {
+                crate::model::store::append_global_error_log(
+                    "config migration",
+                    &format!("save failed: {error}"),
+                );
+            }
         }
-        config
+        Ok(config)
     }
 
     /// Remove every OAuth conn whose `provider` field is `"clinepass"` and every
@@ -1184,9 +1212,11 @@ impl AppConfig {
     /// Called by the `/settings` dashboard when the user saves theme/accent
     /// changes.
     pub fn save(&self) -> Result<()> {
-        let path = base_dir()?.join("config.json");
+        let directory = base_dir()?;
+        std::fs::create_dir_all(&directory)?;
+        let path = directory.join("config.json");
         let json = serde_json::to_vec_pretty(self)?;
-        std::fs::write(path, json)?;
+        crate::model::memory::atomic_write(&path, &json)?;
         Ok(())
     }
 }
@@ -1203,9 +1233,69 @@ impl AppConfig {
 ///
 /// [`resolve_role`]: crate::app::resolve::resolve_role
 pub(crate) fn strip_role(entry: &mut ModelEntry, role: ModelRole) {
+    entry.roles = entry.effective_roles();
+    entry.role = None;
     entry.roles.retain(|r| *r != role);
-    if entry.role == Some(role) {
+}
+
+/// Normalize legacy roles and duplicate ownership without changing the first winner.
+pub(crate) fn normalize_models(models: &mut [ModelEntry]) {
+    let mut seen = Vec::new();
+    for entry in models {
+        entry.roles = entry.effective_roles();
         entry.role = None;
+        entry.roles.retain(|role| {
+            if seen.contains(role) {
+                false
+            } else {
+                seen.push(*role);
+                true
+            }
+        });
+    }
+}
+
+pub(crate) fn serialize_models<S: serde::Serializer>(
+    models: &[ModelEntry],
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    let mut models = models.to_vec();
+    normalize_models(&mut models);
+    models.serialize(serializer)
+}
+
+pub(crate) fn deserialize_models<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Vec<ModelEntry>, D::Error> {
+    let mut models = Vec::<ModelEntry>::deserialize(deserializer)?;
+    normalize_models(&mut models);
+    Ok(models)
+}
+
+/// Assign exactly one role within a scope. None releases only that role.
+/// Catalogue selections remain live references; directly authored entries use upsert.
+pub(crate) fn assign_role(
+    models: &mut Vec<ModelEntry>,
+    role: ModelRole,
+    source: Option<&ModelEntry>,
+) {
+    for entry in models.iter_mut() {
+        strip_role(entry, role);
+    }
+    if let Some(source) = source {
+        if let Some(entry) = models
+            .iter_mut()
+            .find(|e| e.source_uuid.as_deref() == Some(&source.uuid))
+        {
+            entry.roles.push(role);
+        } else {
+            let mut entry = source.clone();
+            entry.uuid = new_uuid();
+            entry.roles = vec![role];
+            entry.role = None;
+            entry.source_uuid = Some(source.uuid.clone());
+            models.push(entry);
+        }
     }
 }
 
@@ -1234,6 +1324,8 @@ pub(crate) fn upsert_model_entry(list: &mut Vec<ModelEntry>, mut entry: ModelEnt
     // The roles the incoming entry claims — folded through `effective_roles` so a
     // (hypothetical) legacy-field entry still steals the right role from others.
     let claimed = entry.effective_roles();
+    entry.roles = claimed.clone();
+    entry.role = None;
     for other in list.iter_mut() {
         if other.uuid != entry.uuid {
             for role in &claimed {
@@ -1272,3 +1364,7 @@ mod clinepass_migration_tests;
 #[cfg(test)]
 #[path = "app_config_test.rs"]
 mod app_config_test;
+
+#[cfg(test)]
+#[path = "model_ownership_test.rs"]
+mod model_ownership_test;

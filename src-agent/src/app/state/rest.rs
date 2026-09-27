@@ -67,6 +67,7 @@ pub struct AppStateRest {
     /// harness-verdict toast / stream-start status), which must reflect "viewed by ANY
     /// client", not the transient `foreground` cursor. A session viewed by NOBODY
     /// behaves as a pure background session.
+    pub approval_sessions: std::collections::HashSet<String>,
     pub viewed_sessions: std::collections::HashSet<String>,
     /// Saved (session) before a /new or reconfigure prompt; restored on cancel.
     pub prev_session: Option<crate::model::session::Session>,
@@ -420,10 +421,12 @@ pub struct AppStateRest {
     /// delivered, never re-created. This receiver is created lazily on first use
     /// and lives for the app's lifetime. Drained in `service_global` alongside
     /// `sec_health_rx`/`warm_rx`.
-    pub awareness_rx: Option<tokio::sync::mpsc::UnboundedReceiver<(String, Option<String>)>>,
+    pub awareness_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::awareness::AwarenessResult>>,
     /// SENDER half of `awareness_rx`, cloned into each spawned recompute task.
     /// `None` until the first recompute is spawned (see `session_mgmt::spawn_awareness_recompute`).
-    pub awareness_tx: Option<tokio::sync::mpsc::UnboundedSender<(String, Option<String>)>>,
+    pub awareness_tx:
+        Option<tokio::sync::mpsc::UnboundedSender<crate::app::awareness::AwarenessResult>>,
     /// SENDER half of the extension grant-broker lane. A clone is handed to
     /// [`crate::app::ext::ExtHostManager`] at startup (`set_ext_call_tx`); each
     /// extension's socket reader task uses it to forward an `agents.*` `Call` — which
@@ -537,10 +540,12 @@ impl AppStateRest {
         // it as foreground from tick zero (the local loop re-derives this each tick; the
         // daemon refreshes from its attached clients — but a freshly-built state always
         // has its one session "viewed" until a loop overwrites it).
-        let viewed_sessions = std::iter::once(first.id.clone()).collect();
+        let viewed_sessions: std::collections::HashSet<String> =
+            std::iter::once(first.id.clone()).collect();
         Self {
             sessions: vec![first],
             foreground: 0,
+            approval_sessions: viewed_sessions.clone(),
             viewed_sessions,
             prev_session: None,
             spawn_pending: false,

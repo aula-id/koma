@@ -308,7 +308,9 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // reasoning as `FileDiff`. Bodies live in the sibling `dispatch_git` module.
         GuiReq::GitStatus => dispatch_git::git_status(&ctx.ctl),
         GuiReq::GitDiff { path, staged } => dispatch_git::git_diff(&ctx.ctl, path, staged),
-        GuiReq::GitWorkbench { request } => { let _ = ctx.ctl.send(HostCtl::GitWorkbench { request }); },
+        GuiReq::GitWorkbench { request } => {
+            let _ = ctx.ctl.send(HostCtl::GitWorkbench { request });
+        }
         GuiReq::GitStage { paths } => dispatch_git::git_stage(&ctx.ctl, paths),
         GuiReq::GitUnstage { paths } => dispatch_git::git_unstage(&ctx.ctl, paths),
         GuiReq::GitDiscard { paths } => dispatch_git::git_discard(&ctx.ctl, paths),
@@ -555,10 +557,10 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             }
         }
         // Approval overlay: approve/deny a paused risky/classifier tool call.
-        GuiReq::ApproveTool { approve } => {
+        GuiReq::ApproveTool { approve, call_id } => {
             if let Ok(g) = ctx.req.lock() {
                 if let Some(tx) = g.as_ref() {
-                    let _ = tx.send(ClientRequest::ApproveTool { approve });
+                    let _ = tx.send(ClientRequest::ApproveTool { approve, call_id });
                 }
             }
         }

@@ -122,14 +122,13 @@ fn plan_mode_with_planner_same_route_as_main_keeps_main_resolved() {
 }
 
 #[test]
-fn planner_role_has_no_legacy_fallback() {
-    // An unassigned Planner must resolve to `None` from `resolve_role` directly
-    // (no legacy fallback), even though `resolve_turn_model` papers over that
-    // with Main.
+fn unassigned_planner_inherits_main() {
     let config = AppConfig::default();
     let settings = Settings::default();
-
-    assert!(resolve_role(&config, &settings, ModelRole::Planner).is_none());
+    assert!(same_route(
+        &resolve_role_dispatch(&config, &settings, ModelRole::Planner).unwrap(),
+        &resolve_role_dispatch(&config, &settings, ModelRole::Main).unwrap()
+    ));
 }
 
 use crate::model::app_config::{OAuthConn, OAuthProvider};
@@ -320,11 +319,13 @@ fn configured_dangling_main_does_not_force_koma_free() {
         ..Default::default()
     };
 
-    let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("Main must resolve");
-    // Falls to legacy_main (settings.model @ DEFAULT_BASE_URL) — NOT the koma-free tier.
-    assert_ne!(resolved.api_type, ApiType::KomaFree);
-    assert_eq!(resolved.api_type, ApiType::OpenAiCompatible);
-    assert_eq!(resolved.endpoint, crate::config::DEFAULT_BASE_URL);
+    assert!(resolve_role_dispatch(&config, &settings, ModelRole::Main).is_none());
+    assert_eq!(
+        role_resolution(&config, &settings, ModelRole::Main)
+            .reason
+            .as_deref(),
+        Some("provider_missing")
+    );
 }
 
 #[test]
@@ -818,14 +819,13 @@ fn ext_conn_without_meta_is_not_a_model_provider() {
         from_entry(&config, &settings, &entry, ModelRole::Main).is_none(),
         "a meta-less ext conn is not a model provider (W11 inert stance preserved)"
     );
-    // Via resolve_role: the dangling entry falls through to the legacy Main fallback (empty
-    // settings → DEFAULT_BASE_URL), never the ext conn's (empty) endpoint or its bearer.
-    let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("falls to legacy Main");
-    assert_ne!(
-        resolved.oauth_uuid, "ext-login-only",
-        "the meta-less ext conn must not route"
+    assert!(resolve_role_dispatch(&config, &settings, ModelRole::Main).is_none());
+    assert_eq!(
+        role_resolution(&config, &settings, ModelRole::Main)
+            .reason
+            .as_deref(),
+        Some("unsupported_route")
     );
-    assert_eq!(resolved.endpoint, crate::config::DEFAULT_BASE_URL);
 }
 
 #[test]
@@ -972,4 +972,90 @@ fn main_fallback_provider_removed_when_main_provider_dangling() {
         main_fallback_reason(&config, &settings),
         Some(MainFallback::ProviderRemoved)
     );
+}
+
+#[test]
+fn live_session_reference_follows_source_but_keeps_own_role() {
+    let mut config = config_with(
+        "old",
+        "https://main.example",
+        "planner",
+        "https://planner.example",
+    );
+    let mut settings = Settings::default();
+    crate::model::app_config::assign_role(
+        &mut settings.session_models,
+        ModelRole::Safeguard,
+        Some(&config.models[0]),
+    );
+    config.models[0].model_id = "edited".into();
+    config.models[0].provider_uuid = "prov-planner".into();
+    config.models[0].roles.clear();
+    let r = resolve_role_dispatch(&config, &settings, ModelRole::Safeguard).unwrap();
+    assert_eq!(r.model_id, "edited");
+    assert_eq!(r.endpoint, "https://planner.example");
+    assert_eq!(settings.session_models[0].roles, vec![ModelRole::Safeguard]);
+    config.models.remove(0);
+    let report = role_resolution(&config, &settings, ModelRole::Safeguard);
+    assert_eq!(report.reason.as_deref(), Some("reference_deleted"));
+    assert!(report.effective_model.is_none());
+}
+
+#[test]
+fn connection_identity_includes_account_api_provider_and_pin() {
+    let cfg = config_with(
+        "same",
+        "https://same.example",
+        "same",
+        "https://same.example",
+    );
+    let r = resolve_role(&cfg, &Settings::default(), ModelRole::Main).unwrap();
+    for variant in 0..4 {
+        let mut other = r.clone();
+        match variant {
+            0 => other.account_id = "other-account".into(),
+            1 => other.api_type = ApiType::AnthropicCompatible,
+            2 => other.provider_uuid = "other-connection".into(),
+            _ => other.route = Some("other-upstream".into()),
+        }
+        assert!(!same_route(&r, &other));
+    }
+    let mut rotated = r.clone();
+    rotated.api_key = "rotated-secret".into();
+    assert!(same_route(&r, &rotated));
+}
+
+#[test]
+fn broken_session_owner_never_silently_uses_global_or_default() {
+    let config = config_with(
+        "main",
+        "https://main.example",
+        "planner",
+        "https://planner.example",
+    );
+    let mut settings = Settings::default();
+    settings.session_models.push(ModelEntry {
+        roles: vec![ModelRole::Main],
+        provider_uuid: "missing".into(),
+        ..Default::default()
+    });
+    assert!(resolve_role_dispatch(&config, &settings, ModelRole::Main).is_none());
+    let report = role_resolution(&config, &settings, ModelRole::Main);
+    assert_eq!(report.origin, "session");
+    assert_eq!(report.reason.as_deref(), Some("provider_missing"));
+}
+
+#[test]
+fn dedicated_legacy_awareness_precedes_inherited_main() {
+    let config = AppConfig::default();
+    let settings = Settings {
+        api_key: "legacy-key".into(),
+        awareness_inherit: false,
+        awareness_model: "legacy-aware".into(),
+        awareness_provider: "upstream".into(),
+        ..Default::default()
+    };
+    let route = resolve_role_dispatch(&config, &settings, ModelRole::Awareness).unwrap();
+    assert_eq!(route.model_id, "legacy-aware");
+    assert_eq!(route.provider(), "upstream");
 }

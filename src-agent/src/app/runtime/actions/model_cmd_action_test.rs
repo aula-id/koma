@@ -61,3 +61,40 @@ fn entry_label_oauth_provider() {
     let label = entry_label(&config, &config.models[0]);
     assert_eq!(label, "test-model — test/model-v1 @ My OAuth");
 }
+
+#[test]
+fn role_swap_and_inherit_preserve_secondary_session_role() {
+    let path = std::env::temp_dir().join(format!("koma-model-contract-{}", uuid::Uuid::new_v4()));
+    let mut state = AppState::new(crate::app::mode::Mode::Chat);
+    state.rest.config = test_config();
+    let settings = crate::model::settings::Settings {
+        session_models: vec![ModelEntry {
+            uuid: "local".into(),
+            roles: vec![ModelRole::Main, ModelRole::Safeguard],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    state.rest.fg_mut().session = Some(crate::model::session::Session::new(
+        "test".into(),
+        path.clone(),
+        "pwd".into(),
+        settings,
+        crate::model::conversation::Conversation::from_messages(vec![]),
+    ));
+    handle_model_role_swap(ModelRole::Main, Some("model-1".into()), &mut state).unwrap();
+    handle_model_role_swap(ModelRole::Main, None, &mut state).unwrap();
+    let models = &state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .unwrap()
+        .settings
+        .session_models;
+    assert_eq!(models[0].roles, vec![ModelRole::Safeguard]);
+    assert!(!models
+        .iter()
+        .any(|m| m.effective_roles().contains(&ModelRole::Main)));
+    std::fs::remove_dir_all(path).unwrap();
+}

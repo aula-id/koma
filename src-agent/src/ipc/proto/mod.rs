@@ -63,6 +63,10 @@ pub enum ClientRequest {
         foreground_id: Option<String>,
         cwd: Option<String>,
     },
+    /// Declare whether this client can answer manual tool approvals.
+    SetApprovalChannel {
+        enabled: bool,
+    },
     Detach,
     ListSessions,
     /// Lightweight metadata probe used by live-session DISCOVERY: ask the daemon for a
@@ -150,6 +154,8 @@ pub enum ClientRequest {
     },
     ApproveTool {
         approve: bool,
+        #[serde(default)]
+        call_id: Option<String>,
     },
     /// Answer a paused `plan_ready` approval. `decision` is one of `"approve"`,
     /// `"compact"` (approve + compact history to the plan), or `"deny"` (keep

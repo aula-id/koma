@@ -212,36 +212,14 @@ impl DaemonHub {
                 Ok(()) // no foreground session to hold a local override
             }
         } else {
-            // BUG FIX (parity with the TUI settings modal's `save_model_modal`
-            // directional steal, PR#83 / commit f1c500f): `config.upsert_model`
-            // only steals the claimed roles from OTHER entries within
-            // `config.models` — it never touches `session_models`. But
-            // `resolve_role` checks a session's LOCAL overrides FIRST, so a
-            // session-local entry that already holds one of these roles would
-            // keep shadowing the new global assignment forever. Strip the
-            // claimed roles from every entry in the foreground session's local
-            // overrides too (both the `roles` vec and the legacy `role` field,
-            // via `strip_role`, so an old-format entry can't keep shadowing via
-            // its legacy field — mirrors `upsert_model_entry`'s own same-scope
-            // steal), then persist that session alongside the config. Entries
-            // left with zero roles are kept in place (not removed) — same as
-            // `strip_role`/`upsert_model_entry` and `save_model_modal` — so
-            // stripping can only ever narrow what an entry claims, never widen it.
-            let claimed = entry.effective_roles();
-            let session_result = if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-                for other in sess.settings.session_models.iter_mut() {
-                    for role in &claimed {
-                        crate::model::app_config::strip_role(other, *role);
-                    }
-                }
-                sess.save()
-            } else {
-                Ok(()) // no foreground session to hold a local override
-            };
+            let previous = state.rest.config.clone();
             state.rest.config.upsert_model(entry);
-            let config_result =
+            let result =
                 crate::app::runtime::actions::save_config_and_broadcast(&state.rest.config);
-            session_result.and(config_result)
+            if result.is_err() {
+                state.rest.config = previous;
+            }
+            result
         };
         state.rest.reset_effort_if_main_changed(before_main);
         self.ack_or_error(idx, result);
@@ -582,8 +560,12 @@ impl DaemonHub {
     // this attached path). Config-global; any client may drive it. The config change
     // forces a full snapshot, so the GUI host re-pushes `Config` (clearing `firstRun`).
     pub(super) fn setup_koma_free(&mut self, idx: usize, state: &mut AppState) {
+        let previous = state.rest.config.clone();
         crate::service::koma_free::ensure_koma_free_config(&mut state.rest.config);
         let result = crate::app::runtime::actions::save_config_and_broadcast(&state.rest.config);
+        if result.is_err() {
+            state.rest.config = previous;
+        }
         self.ack_or_error(idx, result);
     }
 
@@ -601,7 +583,7 @@ impl DaemonHub {
         state: &mut AppState,
         model_uuid: Option<String>,
     ) {
-        use crate::model::app_config::{new_uuid, ModelEntry, ModelRole};
+        use crate::model::app_config::{assign_role, ModelRole};
         // BUG FIX: this whole request exists to reassign the session's Main
         // role (every branch below either pins, clones, or drops a local Main
         // override). Snapshot the resolved Main route BEFORE any branch runs,
@@ -631,53 +613,22 @@ impl DaemonHub {
                 .find(|m| &m.uuid == u)
                 .cloned()
         });
-        let result = if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-            if model_uuid.is_none() {
-                // Inherit: drop any local Main override; the global Main resurfaces.
-                sess.settings
-                    .session_models
-                    .retain(|e| !e.effective_roles().contains(&ModelRole::Main));
-                sess.save()
-            } else if let Some(chosen) = chosen {
-                // Reuse: no-op ONLY when the current local Main override was cloned
-                // from THIS exact global (source_uuid identity). Two globals that
-                // share model_id+provider but differ by uuid/route (the user's XAI vs
-                // grpk grok-4.5 twins) are DISTINCT picks — matching on
-                // model_id+provider alone would wrongly no-op the switch, leaving the
-                // old source_uuid + route pinned. A `None` source (a pre-identity or
-                // koma-free override) never matches, so it's always replaced (and thus
-                // upgraded to carry the source identity).
-                let already = sess.settings.session_models.iter().any(|e| {
-                    e.effective_roles().contains(&ModelRole::Main)
-                        && e.source_uuid.as_deref() == Some(chosen.uuid.as_str())
-                });
-                if !already {
-                    // Drop any OTHER local Main override (one local Main per scope),
-                    // then push the cloned global entry as the new local Main.
-                    sess.settings
-                        .session_models
-                        .retain(|e| !e.effective_roles().contains(&ModelRole::Main));
-                    sess.settings.session_models.push(ModelEntry {
-                        uuid: new_uuid(),
-                        name: chosen.name.clone(),
-                        model_id: chosen.model_id.clone(),
-                        provider_uuid: chosen.provider_uuid.clone(),
-                        route: chosen.route.clone(),
-                        roles: vec![ModelRole::Main],
-                        role: None,
-                        // Remember EXACTLY which global this local Main override was
-                        // cloned from, so the GUI ModelPicker can light that global's
-                        // row by identity (source uuid) rather than a fuzzy name match.
-                        source_uuid: Some(chosen.uuid.clone()),
-                    });
-                }
-                sess.save()
-            } else {
-                // Unknown uuid (not in the global catalogue) — leave overrides as-is.
-                Ok(())
+        let result = if model_uuid.is_some() && chosen.is_none() {
+            Err(anyhow::anyhow!("unknown model reference"))
+        } else if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+            let previous = sess.settings.session_models.clone();
+            assign_role(
+                &mut sess.settings.session_models,
+                ModelRole::Main,
+                chosen.as_ref(),
+            );
+            let result = sess.save();
+            if result.is_err() {
+                sess.settings.session_models = previous;
             }
+            result
         } else {
-            Ok(()) // no foreground session to hold a local override
+            Err(anyhow::anyhow!("no active session"))
         };
         state.rest.reset_effort_if_main_changed(before_main);
         self.ack_or_error(idx, result);
@@ -697,5 +648,76 @@ fn parse_model_role(s: &str) -> Option<crate::model::app_config::ModelRole> {
         "compactor" => Some(ModelRole::Compactor),
         "planner" => Some(ModelRole::Planner),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use crate::model::app_config::{ModelEntry, ModelRole};
+
+    #[test]
+    fn gui_main_picker_and_inherit_preserve_secondary_owner() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (mut hub, _inbound) = DaemonHub::new();
+        let mut state = AppState::new(crate::app::mode::Mode::Chat);
+        let (frame_tx, _frame_rx) = std::sync::mpsc::channel();
+        hub.handle_inbound(
+            super::super::core::HubInbound::Register {
+                client_id: 1,
+                frame_tx,
+            },
+            &mut state,
+            &mut None,
+            runtime.handle(),
+        );
+        let path = std::env::temp_dir().join(format!("koma-gui-model-{}", uuid::Uuid::new_v4()));
+        let settings = crate::model::settings::Settings {
+            session_models: vec![ModelEntry {
+                uuid: "local".into(),
+                roles: vec![ModelRole::Main, ModelRole::Awareness],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        state.rest.config.models.push(ModelEntry {
+            uuid: "global".into(),
+            model_id: "chosen".into(),
+            ..Default::default()
+        });
+        state.rest.fg_mut().session = Some(crate::model::session::Session::new(
+            "gui-test".into(),
+            path.clone(),
+            "pwd".into(),
+            settings,
+            crate::model::conversation::Conversation::from_messages(vec![]),
+        ));
+        hub.set_session_main(0, &mut state, Some("global".into()));
+        assert_eq!(
+            state
+                .rest
+                .fg()
+                .session
+                .as_ref()
+                .unwrap()
+                .settings
+                .session_models[0]
+                .roles,
+            vec![ModelRole::Awareness]
+        );
+        hub.set_session_main(0, &mut state, None);
+        let entries = &state
+            .rest
+            .fg()
+            .session
+            .as_ref()
+            .unwrap()
+            .settings
+            .session_models;
+        assert_eq!(entries[0].roles, vec![ModelRole::Awareness]);
+        assert!(!entries
+            .iter()
+            .any(|m| m.effective_roles().contains(&ModelRole::Main)));
+        std::fs::remove_dir_all(path).unwrap();
     }
 }

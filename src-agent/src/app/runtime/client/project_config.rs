@@ -55,6 +55,7 @@ pub(super) struct ConfigProjection {
     providers: Vec<crate::model::app_config::ProviderConn>,
     models: Vec<crate::model::app_config::ModelEntry>,
     session_models: Vec<crate::model::app_config::ModelEntry>,
+    main_configured: Option<bool>,
     mcp_servers: Vec<crate::model::app_config::McpServerEntry>,
     oauth_conn_uuids: Vec<String>,
     palette: PushPalette,
@@ -78,6 +79,7 @@ impl ConfigProjection {
             providers: g.providers.clone(),
             models: g.config_models.clone(),
             session_models: g.session_models.clone(),
+            main_configured: g.main_configured,
             mcp_servers: g.mcp_servers.clone(),
             oauth_conn_uuids: g.oauth_conn_uuids.clone(),
             palette: palette_from_global(g),
@@ -101,6 +103,14 @@ impl ConfigProjection {
             providers: cfg.providers.clone(),
             models: cfg.models.clone(),
             session_models: Vec::new(),
+            main_configured: Some(
+                crate::app::resolve::resolve_role(
+                    cfg,
+                    &crate::model::settings::Settings::default(),
+                    crate::model::app_config::ModelRole::Main,
+                )
+                .is_some_and(|r| r.is_usable() && r.is_routable()),
+            ),
             mcp_servers: cfg.mcp_servers.clone(),
             oauth_conn_uuids: cfg.oauth_conns.iter().map(|c| c.uuid.clone()).collect(),
             palette: push_palette_from_config(cfg),
@@ -286,6 +296,16 @@ pub(super) fn push_config(
     }));
     models.extend(cfg.session_models.iter().map(|m| {
         let mut pm = push_model(m, "local");
+        if let Some(source) = m
+            .source_uuid
+            .as_ref()
+            .and_then(|id| cfg.models.iter().find(|entry| &entry.uuid == id))
+        {
+            pm.name = source.name.clone();
+            pm.model_id = source.model_id.clone();
+            pm.provider = source.provider_uuid.clone();
+            pm.route = source.route.clone().unwrap_or_default();
+        }
         if is_koma_free_backed(m) {
             pm.free = true;
         }
@@ -343,7 +363,7 @@ pub(super) fn push_config(
             && (cfg.providers.iter().any(|p| p.uuid == m.provider_uuid)
                 || cfg.oauth_conn_uuids.contains(&m.provider_uuid))
     });
-    let needs_onboarding = !has_usable_main;
+    let needs_onboarding = !cfg.main_configured.unwrap_or(has_usable_main);
 
     // Available theme registry keys for the onboarding theme step + Settings picker.
     let themes: Vec<&'static str> = crate::view::theme::PALETTES

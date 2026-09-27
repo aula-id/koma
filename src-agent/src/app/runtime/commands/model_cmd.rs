@@ -94,12 +94,14 @@ fn help_lines(state: &AppState) -> Vec<String> {
             (ModelRole::Safeguard, "safeguard"),
         ];
         for (role, label) in roles {
-            let resolved = crate::app::resolve::resolve_role(cfg, settings, role);
-            let model_label = resolved
-                .as_ref()
-                .map(|r| r.model_id.as_str())
-                .unwrap_or("(unset)");
-            lines.push(format!("  {label:<12} {model_label}"));
+            let report = crate::app::resolve::role_resolution(cfg, settings, role);
+            lines.push(format!(
+                "  {label:<12} {} → {} ({}){}",
+                report.configured_model.as_deref().unwrap_or("(unset)"),
+                report.effective_model.as_deref().unwrap_or("unavailable"),
+                report.origin,
+                report.reason.map(|r| format!(" · {r}")).unwrap_or_default()
+            ));
         }
     } else {
         lines.push("  no active session".to_string());

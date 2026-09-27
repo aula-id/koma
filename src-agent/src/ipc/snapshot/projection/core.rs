@@ -1,7 +1,7 @@
 use super::modes::mode_snapshot;
 use super::tokens::theme_token;
 
-use crate::app::resolve::resolve_role;
+use crate::app::resolve::resolve_role_dispatch;
 use crate::app::state::{AgentMode, AppState};
 use crate::app::subagent::SubAgentStatus;
 use crate::model::app_config::{AppConfig, ModelRole};
@@ -83,9 +83,8 @@ pub fn session_snapshot(
     let resolved_model_id = rt
         .session
         .as_ref()
-        .and_then(|s| resolve_role(config, &s.settings, ModelRole::Main))
+        .and_then(|s| resolve_role_dispatch(config, &s.settings, ModelRole::Main))
         .map(|r| r.model_id)
-        .or_else(|| rt.session.as_ref().map(|s| s.settings.model.clone()))
         .unwrap_or_default();
 
     SessionSnapshot {
@@ -119,6 +118,11 @@ pub fn session_snapshot(
             .map(pending_subagent_snapshot)
             .collect(),
         resolved_model_id,
+        model_routes: rt
+            .session
+            .as_ref()
+            .map(|s| crate::app::resolve::role_resolutions(config, &s.settings))
+            .unwrap_or_default(),
         // Full text (not truncated): clients need it for select/edit. TUI/GUI still
         // ellipsize at render time for the row width.
         pending_steer: rt.pending_steer.clone(),
@@ -290,6 +294,10 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
         // layer (the "local" scope); the rest mirror `AppConfig` directly.
         providers: state.rest.config.providers.clone(),
         config_models: state.rest.config.models.clone(),
+        main_configured: Some(state.rest.fg().session.as_ref().is_some_and(|s| {
+            crate::app::resolve::resolve_role(&state.rest.config, &s.settings, ModelRole::Main)
+                .is_some_and(|r| r.is_usable() && r.is_routable())
+        })),
         session_models: state
             .rest
             .fg()

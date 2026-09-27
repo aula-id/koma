@@ -1,3 +1,14 @@
+export type ModelRoute = {
+  role: string
+  origin: string
+  assignment_uuid: string | null
+  source_uuid: string | null
+  configured_model: string | null
+  provider_uuid: string | null
+  effective_model: string | null
+  reason: string | null
+}
+
 import { receiveGitReply, cancelGitRequests, type GitReply, type GitToolTab } from '../lib/gitWorkbench'
 import { create } from 'zustand'
 import { codingWindowId, codingRequest, resolveCodingReply } from '../lib/coding-service'
@@ -392,6 +403,7 @@ export type BootstrapState = {
 // the plan digest + approve/compact/deny controls), otherwise it's a risky/
 // classifier-flagged TOOL approval (rendered as the modal approval card).
 export type PendingCall = {
+  id?: string
   name: string
   args: string
   signature?: string
@@ -951,6 +963,7 @@ export type PushEnvelope =
       // pause or a non-classifier park). Optional-tolerant: a host build that
       // doesn't project these yet leaves the gate closed.
       awaitingApproval?: boolean
+      modelRoutes?: ModelRoute[]
       approvalReason?: string | null
       pendingCall?: PendingCall | null
       // SDLC projection fields (mode=sdlc only; absent/undefined otherwise).
@@ -1695,6 +1708,7 @@ type SessionSlice = {
   awaitingApproval: boolean
   // The classifier's reason for a risky pause (null for a plan_ready / non-
   // classifier park). Shown as the "why" in the approval card.
+  modelRoutes: ModelRoute[]
   approvalReason: string | null
   // The tool call the session is parked on (name/args of
   // pending_tool_calls[tool_idx]); null when not awaiting. Distinguishes a plan
@@ -2776,6 +2790,7 @@ const initialSession: SessionSlice = {
   mode: 'auto',
   pendingSteer: [],
   awaitingApproval: false,
+  modelRoutes: [],
   approvalReason: null,
   pendingCall: null,
   sdlcPhase: null,
@@ -3235,6 +3250,7 @@ export const useKoma = create<KomaState>((set, get) => ({
               // Adopt the projected approval gate; defensive fallbacks for a host
               // build that doesn't project it yet (gate closed, no pending call).
               awaitingApproval: env.awaitingApproval ?? false,
+              modelRoutes: env.modelRoutes ?? [],
               approvalReason: env.approvalReason ?? null,
               pendingCall: env.pendingCall ?? null,
               // Adopt SDLC fields from the snapshot, mode-gated defensively:

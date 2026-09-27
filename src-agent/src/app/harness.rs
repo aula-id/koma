@@ -1,41 +1,12 @@
-//! Safety harness ("Pass B"): wraps the agentic tool loop with an LLM safety
-//! classifier, plus a deterministic workspace check. All of it is gated behind
-//! the master `classifier_enabled` setting (default off); when disabled the loop
-//! behaves exactly as it did before this module existed.
+//! Safety classification for advisory prompts and gated tool calls.
 //!
-//! Three checks, per the locked design:
-//!
-//! - **WC (workspace check)** — [`workspace_allowed`]. Deterministic, no network:
-//!   is the session workdir the launch directory, or in the allow-list? Tools run
-//!   only against an allowed workspace.
-//! - **PC (prompt classifier)** — [`classify_prompt`]. Runs ONCE per turn,
-//!   ADVISORY only: classify the user's prompt and surface a toast if flagged.
-//!   It never blocks the turn (fail-open).
-//! - **TAC (tool-call classifier)** — [`classify_toolcall`]. Runs PER risky tool
-//!   call in BOTH agent modes, INTENT-AWARE (it sees the user's latest request
-//!   plus the proposed call). An "allow" verdict auto-runs the call; a "block"
-//!   verdict is acted on by the caller per mode (Auto records a "blocked by
-//!   harness" result and continues; Normal prompts the human). If the classifier
-//!   is unavailable (error/timeout) the verdict's `available` flag is false and
-//!   the caller degrades to a human prompt in both modes.
-//!
-//! Both classifier calls run against the resolved Safeguard route
-//! (`resolve_role_dispatch(config, settings, Safeguard)` → endpoint + key + model +
-//! upstream-route slug) via the dedicated [`OpenRouterClient::classify_with`],
-//! which turns thinking OFF and pins a strict JSON schema so the safeguard model
-//! returns a machine-parseable `{allow, reason}` object fast and deterministically.
-//! An unconfigured Safeguard route now falls back to the keyless koma-free tier
-//! (permissive posture — see [`crate::app::resolve::resolve_role_dispatch`]'s doc
-//! comment) instead of fail-closing outright; an unavailable classifier — koma-free
-//! included, when the call itself errors/times out/returns something unparseable —
-//! still becomes an unavailable verdict, degraded to a human prompt (TAC) /
-//! advisory toast (PC) by the caller, so a genuine outage still degrades safely.
-//! They build a two-message conversation (System = the embedded policy text, User
-//! = the prompt / the request + tool call) and parse the reply with
-//! [`parse_verdict`] (JSON-first, with a lenient text-scan fallback), all bounded
-//! by [`CLASSIFY_TIMEOUT`] so the sync loop can't freeze. Every failure becomes an
-//! unavailable verdict carrying the REAL cause (HTTP error / timeout / unparseable
-//! slice) so the UI shows what actually went wrong instead of a generic string.
+//! Decisions come only from complete final JSON. An empty/incomplete answer with
+//! finish_reason=length permits one 2,000 → 4,000 token retry. All other primary
+//! failures can try Main once when its full connection identity differs. Each
+//! route gets at most half the shared 120-second deadline. Diagnostics carry
+//! route names and response categories, never prompts, credentials or reasoning.
+//! Unavailable tool classification requires call-scoped interactive approval;
+//! headless and delegated callers fail closed without changing tool/mode gates.
 
 use std::path::{Path, PathBuf};
 
@@ -141,112 +112,32 @@ struct VerdictJson {
     reason: Option<String>,
 }
 
-/// Truncate a string to at most `max` characters (char-boundary safe), appending
-/// an ellipsis when it was cut. Keeps the diagnostic reasons that ride into the
-/// UI from blowing up the approval box / toast.
-fn truncate(s: &str, max: usize) -> String {
-    let s = s.trim();
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let cut: String = s.chars().take(max).collect();
-    format!("{cut}…")
-}
-
-/// Build a [`Verdict`] from a parsed `{allow|verdict, reason}` object. `allow`
-/// wins when present; otherwise `verdict` is read as `"allow"` (any other value,
-/// including `"block"`, is a block). An allow drops its reason (a clean allow
-/// carries none); a block keeps the reason, defaulting to "flagged" when blank.
-fn verdict_from_json(v: VerdictJson) -> Verdict {
-    let allow = match v.allow {
-        Some(a) => a,
-        None => v
-            .verdict
-            .as_deref()
-            .map(|s| s.trim().eq_ignore_ascii_case("allow"))
-            .unwrap_or(false),
-    };
-    if allow {
-        return Verdict::allow();
-    }
-    let reason = v
-        .reason
-        .map(|r| r.trim().to_string())
-        .filter(|r| !r.is_empty())
-        .unwrap_or_else(|| "flagged".to_string());
-    Verdict::block(reason)
-}
-
-/// Parse a classifier reply into a [`Verdict`], robustly.
-///
-/// Order of attempts:
-/// 1. **JSON-first.** Parse the whole reply as `{allow|verdict, reason}`. If that
-///    fails (the model wrapped the object in prose/code fences), locate the first
-///    `{` and last `}` and parse that substring. `allow` is authoritative; a
-///    `{"verdict":"allow"|"block"}` shape is also accepted.
-/// 2. **Lenient text scan (fallback).** Look (case-insensitive) for `VERDICT:`
-///    followed by ALLOW/BLOCK; failing that, scan whole-word for
-///    ALLOW/ALLOWED/SAFE (→ allow) or BLOCK/BLOCKED/DENY/UNSAFE (→ block), taking
-///    a short slice of the reply as the reason.
-///
-/// Returns `None` only when NOTHING parseable is found — the caller turns that
-/// into an unavailable verdict carrying the raw reply, never a trusted decision.
+/// Only a complete final JSON decision is authoritative. No prose/keyword scan.
 fn parse_verdict(reply: &str) -> Option<Verdict> {
-    let trimmed = reply.trim();
-
-    // 1. JSON-first: the strict-schema happy path.
-    if let Ok(v) = serde_json::from_str::<VerdictJson>(trimmed) {
-        return Some(verdict_from_json(v));
-    }
-    // 1b. Prose/fence-wrapped JSON: carve out the first {...} and retry.
-    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
-        if start < end {
-            if let Ok(v) = serde_json::from_str::<VerdictJson>(&trimmed[start..=end]) {
-                return Some(verdict_from_json(v));
-            }
-        }
-    }
-
-    // 2. Lenient text scan. First honour an explicit `VERDICT:` line.
-    for line in trimmed.lines() {
-        let Some((_, rest)) = line.split_once("VERDICT:") else {
-            continue;
-        };
-        let rest = rest.trim();
-        let upper = rest.to_ascii_uppercase();
-        if upper.starts_with("ALLOW") {
-            return Some(Verdict::allow());
-        }
-        if let Some(after) = upper.strip_prefix("BLOCK") {
-            // Re-slice the ORIGINAL (non-uppercased) text so the reason's casing
-            // is preserved; `after` only told us where it starts.
-            let reason = rest[rest.len() - after.len()..].trim();
-            let reason = if reason.is_empty() {
-                "flagged".to_string()
-            } else {
-                reason.to_string()
-            };
-            return Some(Verdict::block(reason));
-        }
-    }
-    // 2b. No VERDICT: line — scan for a standalone decision keyword. ALLOW is
-    //     checked first; any block keyword present forces a block with a short
-    //     slice of the reply as the reason.
-    let upper = trimmed.to_ascii_uppercase();
-    let has_word = |word: &str| {
-        upper
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .any(|tok| tok == word)
+    let reply = reply.trim();
+    let reply = reply
+        .strip_prefix("```json")
+        .or_else(|| reply.strip_prefix("```"))
+        .and_then(|s| s.strip_suffix("```"))
+        .unwrap_or(reply)
+        .trim();
+    let value: VerdictJson = serde_json::from_str(reply).ok()?;
+    let allow = match (value.allow, value.verdict.as_deref()) {
+        (Some(allow), None) => allow,
+        (None, Some("allow")) | (Some(true), Some("allow")) => true,
+        (None, Some("block")) | (Some(false), Some("block")) => false,
+        _ => return None,
     };
-    if has_word("ALLOW") || has_word("ALLOWED") || has_word("SAFE") {
-        return Some(Verdict::allow());
-    }
-    if has_word("BLOCK") || has_word("BLOCKED") || has_word("DENY") || has_word("UNSAFE") {
-        return Some(Verdict::block(truncate(trimmed, 100)));
-    }
-
-    // 3. Nothing parseable.
-    None
+    Some(if allow {
+        Verdict::allow()
+    } else {
+        Verdict::block(
+            value
+                .reason
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "flagged".into()),
+        )
+    })
 }
 
 /// How long to wait for a classifier verdict before giving up. With thinking
@@ -257,20 +148,8 @@ fn parse_verdict(reply: &str) -> Option<Verdict> {
 /// degrades (TAC → human prompt) rather than hanging.
 const CLASSIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
-/// Run the classifier model over `messages` and return a [`Verdict`].
-///
-/// Never propagates an error or panics — every failure becomes an unavailable
-/// verdict carrying the REAL cause so the UI can show it:
-/// - reply parsed → that verdict (`available = true`).
-/// - reply unparseable → `unavailable("unparseable verdict: <slice>")`.
-/// - HTTP / network error → `unavailable("classifier error: <detail>")`.
-/// - timeout → `unavailable("classifier timeout")`.
-///
-/// `unavailable_allow` selects the fail-open posture for the *unavailable* cases:
-/// PC passes `true` (advisory — the turn still proceeds) and TAC passes `false`
-/// (the caller decides per mode). The reason is preserved either way so the toast
-/// / approval box is accurate. Bounded by [`CLASSIFY_TIMEOUT`] so a parked round
-/// always resumes.
+/// Run bounded classification. The unavailable_allow posture only distinguishes
+/// advisory PC from gated TAC; unavailable results never authorize tool execution.
 pub(crate) async fn classify(
     client: &OpenRouterClient,
     config: &AppConfig,
@@ -278,100 +157,112 @@ pub(crate) async fn classify(
     messages: Vec<ChatMessage>,
     unavailable_allow: bool,
 ) -> Verdict {
-    // Build an unavailable verdict carrying `reason`, with the caller's fail-open
-    // `allow` posture (only meaningful while `available = false`).
-    let unavailable = |reason: String| Verdict {
-        allow: unavailable_allow,
-        reason,
-        available: false,
-    };
-    // Resolve the Safeguard route (session override > config > legacy classifier
-    // field) via the DISPATCH-time wrapper: PERMISSIVE POSTURE — an unassigned /
-    // dangling / empty-key Safeguard (nothing configured at all) no longer yields
-    // `None` here; it substitutes the keyless koma-free tier instead (see
-    // `resolve_role_dispatch`'s doc comment for the rationale). `None` is now only
-    // possible in practice if that substitution itself somehow fails to build,
-    // which it never does — this `let else` stays as the structural backstop.
-    let Some(route) = resolve_role_dispatch(config, settings, ModelRole::Safeguard) else {
-        return unavailable(
-            "classifier not configured (no safeguard model) — set one in /settings".to_string(),
-        );
-    };
-    // Call-boundary gate (fail-CLOSED): a non-routable safeguard route is
-    // UNAVAILABLE rather than POSTing a doomed body — the caller degrades that
-    // to a human prompt (TAC) / advisory toast (PC), never a silent allow.
-    if !route.is_routable() {
-        return unavailable(format!(
-            "safeguard provider not routable ({:?})",
-            route.api_type
-        ));
-    }
-    // Defense in depth: a route can be routable yet still carry no usable auth —
-    // e.g. an EXPLICITLY configured Safeguard connection with an empty key (not
-    // the "nothing configured" case, which `resolve_role_dispatch` already
-    // substitutes koma-free for above). `Resolved::is_usable` already treats
-    // `ApiType::KomaFree` as usable-when-keyless, so the koma-free substitution
-    // route always passes this check. Treat a genuine leftover unusable route the
-    // same as unresolved rather than POSTing a doomed empty-bearer request.
-    if !route.is_usable() {
-        return unavailable(
-            "classifier not configured (safeguard route has no usable credentials) — set one in /settings"
-                .to_string(),
-        );
-    }
-    // Resolve the Main route now so we can fall back to it when the Safeguard call
-    // fails. Dispatch-time resolve (same permissive posture) so a Main retry never
-    // hits an unusable route either. Done unconditionally (cheap — no I/O) before
-    // the first attempt so the owned route is available in both branches below.
-    let main_route = resolve_role_dispatch(config, settings, ModelRole::Main);
-    match tokio::time::timeout(
+    classify_bounded(
+        client,
+        config,
+        settings,
+        messages,
+        unavailable_allow,
         CLASSIFY_TIMEOUT,
-        client.classify_with(
-            route.conn(),
-            &route.model_id,
-            route.provider(),
-            messages.clone(),
-        ),
     )
     .await
-    {
-        Ok(Ok(reply)) => match parse_verdict(&reply) {
-            Some(v) => v,
-            None => unavailable(format!("unparseable verdict: {}", truncate(&reply, 100))),
-        },
-        Ok(Err(primary_err)) => {
-            // The Safeguard call failed. Retry ONCE with the Main route when it is
-            // meaningfully different (different model_id OR different endpoint). If
-            // Main resolves to the same route (same model + endpoint) the retry would
-            // fail the same way, so skip it. When Main is absent or equal, fall
-            // through to the unavailable verdict as before.
-            let should_retry = main_route
-                .as_ref()
-                .is_some_and(|m| m.model_id != route.model_id || m.endpoint != route.endpoint);
-            if let (true, Some(m)) = (should_retry, main_route.as_ref()) {
-                if let Ok(Ok(reply)) = tokio::time::timeout(
-                    CLASSIFY_TIMEOUT,
-                    client.classify_with(m.conn(), &m.model_id, m.provider(), messages),
-                )
-                .await
-                {
-                    match parse_verdict(&reply) {
-                        Some(v) => return v,
-                        None => {
-                            return unavailable(format!(
-                                "unparseable verdict (main fallback): {}",
-                                truncate(&reply, 100)
-                            ))
+}
+
+async fn classify_bounded(
+    client: &OpenRouterClient,
+    config: &AppConfig,
+    settings: &Settings,
+    messages: Vec<ChatMessage>,
+    unavailable_allow: bool,
+    timeout: std::time::Duration,
+) -> Verdict {
+    use crate::app::resolve::{role_resolution, same_route};
+    let primary = resolve_role_dispatch(config, settings, ModelRole::Safeguard);
+    let fallback = resolve_role_dispatch(config, settings, ModelRole::Main)
+        .filter(|main| primary.as_ref().is_none_or(|p| !same_route(p, main)));
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut failures = Vec::new();
+    let primary_label = role_resolution(config, settings, ModelRole::Safeguard)
+        .configured_model
+        .or_else(|| primary.as_ref().map(|r| r.model_id.clone()))
+        .unwrap_or_else(|| "unconfigured".into());
+    if primary.is_none() {
+        failures.push(format!(
+            "primary {primary_label}: {}",
+            role_resolution(config, settings, ModelRole::Safeguard)
+                .reason
+                .unwrap_or_else(|| "unavailable".into())
+        ));
+    }
+    for (is_fallback, route) in [(false, primary), (true, fallback)] {
+        let Some(route) = route else {
+            continue;
+        };
+        // Reserve time for Main even if the primary hangs. Both budgets on this route
+        // share this deadline; the complete chain never exceeds 120 seconds.
+        let route_deadline = deadline.min(tokio::time::Instant::now() + timeout / 2);
+        let mut failure = "unavailable".to_string();
+        for budget in [2_000, 4_000] {
+            let response = tokio::time::timeout_at(
+                route_deadline,
+                client.classify_with(
+                    route.conn(),
+                    &route.model_id,
+                    route.provider(),
+                    messages.clone(),
+                    budget,
+                ),
+            )
+            .await;
+            match response {
+                Ok(Ok(reply)) => {
+                    let reply: crate::service::openrouter::ClassifierReply = reply;
+                    if let Some(mut verdict) = parse_verdict(&reply.content) {
+                        if is_fallback {
+                            verdict.reason = format!(
+                                "primary {primary_label} failed ({}); fallback {}: {}",
+                                failures.join("; "),
+                                route.model_id,
+                                verdict.reason
+                            );
                         }
+                        return verdict;
+                    }
+                    failure = format!(
+                        "{} (finish={}, input={:?}, output={:?})",
+                        reply.category.unwrap_or("invalid_verdict"),
+                        reply.finish_reason.as_deref().unwrap_or("unknown"),
+                        reply.prompt_tokens,
+                        reply.completion_tokens
+                    );
+                    if budget == 2_000 && reply.truncated() {
+                        continue;
                     }
                 }
+                Ok(Err(error)) => {
+                    failure = if error
+                        .downcast_ref::<reqwest::Error>()
+                        .is_some_and(|e| e.is_timeout())
+                    {
+                        "timeout".into()
+                    } else {
+                        "transport_or_response_error".into()
+                    };
+                }
+                Err(_) => failure = "timeout".into(),
             }
-            unavailable(format!(
-                "classifier error: {}",
-                truncate(&primary_err.to_string(), 100)
-            ))
+            break;
         }
-        Err(_) => unavailable("classifier timeout".to_string()),
+        failures.push(format!(
+            "{} {}: {failure}",
+            if is_fallback { "fallback" } else { "primary" },
+            route.model_id
+        ));
+    }
+    Verdict {
+        allow: unavailable_allow,
+        available: false,
+        reason: failures.join("; "),
     }
 }
 
@@ -426,3 +317,7 @@ pub async fn classify_toolcall(
     // human decision per mode; the real reason rides along for the prompt/toast.
     classify(client, config, settings, messages, false).await
 }
+
+#[cfg(test)]
+#[path = "harness_regression_test.rs"]
+pub(crate) mod regression_test;

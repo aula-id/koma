@@ -62,6 +62,24 @@ pub(super) fn exit_select(
     Ok(())
 }
 
+/// Clear a failed request without writing or changing the active conversation.
+pub(super) fn fail_compaction(state: &mut AppState, idx: usize, reason: String) {
+    if let Some(rt) = state.rest.sessions.get_mut(idx) {
+        rt.waiting = false;
+        rt.compact_anim_start = None;
+        rt.compact_apply_at = None;
+        rt.compact_pending = None;
+        rt.active_rx = None;
+        if let Some(task) = rt.current_task.take() {
+            task.abort();
+        }
+        rt.pending_plan_seed = false;
+        rt.pending_plan_seed_body = None;
+        rt.pending_mission_seed = None;
+        rt.status = format!("compaction failed: {reason}; context preserved");
+    }
+}
+
 /// Apply a finished compaction to session `idx` and finalize its UI.
 ///
 /// This is the single apply path shared by both the immediate case (the model
@@ -88,12 +106,18 @@ pub(super) fn apply_compaction_result(
     summary: String,
     kept_tail: Vec<crate::dto::chat::ChatMessage>,
 ) {
-    // Some summariser models (gpt-oss / harmony) emit inline tool-call markup
-    // (`<tool_call>…</tool_call>`, `<function=…>`, `<parameter=…>`) inside their
-    // text. Strip it here so the raw XML never lands in the stored summary
-    // message, the wire history, or the toast — the same scrub the streaming /
-    // final-answer paths already apply to assistant content.
-    let summary = crate::dto::chat::strip_tool_call_tags(&summary);
+    let Some(summary) = crate::model::conversation::clean_compaction_summary(&summary) else {
+        fail_compaction(state, idx, "empty summary".into());
+        return;
+    };
+    if state
+        .rest
+        .sessions
+        .get(idx)
+        .is_none_or(|rt| rt.compact_anim_start.is_none())
+    {
+        return; // request cancelled or superseded; never apply a late result
+    }
 
     // Consume the exact body captured by approval, not mutable plan.md or a
     // historical approval. Re-entering Plan or SDLC invalidates execution;
@@ -230,6 +254,7 @@ pub(super) fn apply_compaction_result(
         // are orphans). Attachments stay message-bound; re-discover via
         // message_find → message_load → load_image / read when curious.
         // Clone: `summary` is still needed below for the compact toast.
+        let previous = sess.conversation.messages().to_vec();
         sess.conversation
             .apply_compaction(summary.clone(), kept_tail);
         // Append the approved plan/mission AFTER the summary.
@@ -240,7 +265,11 @@ pub(super) fn apply_compaction_result(
             sess.conversation.push_user(seed);
         }
         sess.rebuild_system();
-        let _ = sess.save();
+        if let Err(error) = sess.save() {
+            sess.conversation = crate::model::conversation::Conversation::from_messages(previous);
+            fail_compaction(state, idx, format!("save failed: {error}"));
+            return;
+        }
     }
     // Refresh the project-awareness summary post-compaction: the project is often
     // better understood after a compact, and this also satisfies the "applies on
@@ -261,7 +290,7 @@ pub(super) fn apply_compaction_result(
             Arc::clone(c),
             state.rest.config.clone(),
             sess.settings.clone(),
-            sess.workdir(),
+            state.rest.sessions[idx].effective_cwd(),
         )),
         _ => None,
     };
@@ -271,11 +300,12 @@ pub(super) fn apply_compaction_result(
         // Also resolve the Main route as a fallback: when the Awareness model call
         // itself fails (e.g. bad/typo'd model name) we retry once on the trusted
         // Main route before giving up.
-        if let Some(r) = crate::app::resolve::resolve_role_dispatch(
+        let r = crate::app::resolve::resolve_role_dispatch(
             &config,
             &settings,
             crate::model::app_config::ModelRole::Awareness,
-        ) {
+        );
+        {
             let main_route = crate::app::resolve::resolve_role_dispatch(
                 &config,
                 &settings,

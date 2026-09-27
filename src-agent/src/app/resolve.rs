@@ -1,60 +1,6 @@
-//! Per-role route resolution: the single chokepoint that turns a [`ModelRole`]
-//! into one concrete [`Resolved`] route (model id + endpoint + key + wire type +
-//! optional upstream pin + effort).
-//!
-//! The runtime has five model-driven roles — Main (interactive chat), Awareness
-//! (project-doc summary), Safeguard (the safety classifier), Compactor
-//! (`/compact`, which rides Main today), and Planner (drives the MAIN turn
-//! instead of Main while the session is in `AgentMode::Plan`; see
-//! [`resolve_turn_model`]). Each is assigned a model via the global catalogue
-//! (`config.models`) or a per-session override (`settings.session_models`); that
-//! model points at a provider connection (`config.providers`) by uuid, which
-//! carries the endpoint + key + wire type. [`resolve_role`] walks that chain and
-//! produces the route the call site hands to the client.
-//!
-//! ## Resolution order
-//!
-//! 1. Find the model assigned to `role`: session overrides first
-//!    (`settings.session_models`), then the global catalogue (`config.models`).
-//! 2. Resolve that model's provider by `provider_uuid` against `config.providers`.
-//!    A hit produces the [`Resolved`] route directly.
-//! 3. If no model is assigned, OR the assigned model's `provider_uuid` does not
-//!    resolve to a known provider, fall through to the per-role LEGACY fallback —
-//!    the old per-field `settings.*` behaviour, so an empty/old config never
-//!    bricks chat (Main/Compactor/Awareness) and the safeguard fails CLOSED.
-//!
-//! ## Fallback table (when step 2 finds no provider)
-//!
-//! | role      | fallback                                                            |
-//! |-----------|---------------------------------------------------------------------|
-//! | Main      | legacy `settings.model` / `api_key` @ `DEFAULT_BASE_URL`            |
-//! | Compactor | resolve Main (compactor rides Main; no config slot of its own)      |
-//! | Awareness | inherit Main (same route as the Main role)                          |
-//! | Safeguard | legacy `classifier_model` if set; else `None` (FAIL-CLOSED)        |
-//! | Planner   | `None` — no fallback at all; caller falls back to Main              |
-//!
-//! ## Foot-gun (do not regress)
-//!
-//! An Awareness model that is explicitly assigned (found in step 1 and whose provider
-//! resolves in step 2) ALWAYS wins — explicit assignment is the only way to give
-//! Awareness its own model. When nothing is assigned, Awareness inherits Main so the
-//! call works on any provider the user has actually configured, not just OpenRouter.
-//!
-//! ## Dispatch-time koma-free last resort ([`resolve_role_dispatch`])
-//!
-//! [`resolve_role`] alone never bricks Main/Compactor/Awareness structurally (the
-//! legacy fallback always returns `Some`), but that `Some` can still be UNUSABLE —
-//! an empty `api_key` — when "(inherit)" bottoms out with no user model actually
-//! holding the Main role anywhere (`config.models` / `session_models`) and the old
-//! per-field legacy settings were never populated either. Sending that route would
-//! silently 401/fail. [`resolve_role_dispatch`] is the dispatch-time wrapper around
-//! [`resolve_role`] that catches exactly this case for Main and its two cascading
-//! roles (Compactor, Awareness), PLUS Safeguard (a permissive-posture override —
-//! see that function's doc comment), and substitutes the keyless koma-free tier
-//! instead of failing / fail-closing. It is intentionally a SEPARATE function from
-//! `resolve_role` — every "is Main configured?" / "is Safeguard configured?" gate
-//! keeps calling `resolve_role` + [`Resolved::is_usable`] directly and is
-//! unaffected; see that function's doc comment for the full list.
+//! Shared ownership resolution. Session > global > valid legacy > default.
+//! Explicit broken assignments remain configuration errors; dispatch defaults only
+//! apply when the role has no owner. Onboarding uses the configured resolver.
 
 use std::collections::HashSet;
 
@@ -78,6 +24,7 @@ use crate::service::openrouter::Conn;
 #[derive(Debug, Clone)]
 pub struct Resolved {
     pub model_id: String,
+    pub provider_uuid: String,
     pub endpoint: String,
     pub api_key: String,
     // The provider's wire type. Consumed at the call boundary via
@@ -148,7 +95,7 @@ impl Resolved {
     /// flips koma-free from "no route" to "usable" so a keyless free-tier user
     /// reaches Chat instead of being re-onboarded.
     pub fn is_usable(&self) -> bool {
-        !self.api_key.is_empty() || matches!(self.api_type, ApiType::KomaFree)
+        !self.api_key.trim().is_empty() || matches!(self.api_type, ApiType::KomaFree)
     }
 }
 
@@ -271,6 +218,10 @@ fn from_entry(
     entry: &ModelEntry,
     role: ModelRole,
 ) -> Option<Resolved> {
+    let entry = match entry.source_uuid.as_deref() {
+        Some(uuid) => config.models.iter().find(|m| m.uuid == uuid)?,
+        None => entry,
+    };
     let effort = if matches!(role, ModelRole::Main | ModelRole::Planner) {
         settings.effort.clone()
     } else {
@@ -287,6 +238,7 @@ fn from_entry(
         if provider.api_type == ApiType::KomaFree {
             return Some(Resolved {
                 model_id: entry.model_id.clone(),
+                provider_uuid: entry.provider_uuid.clone(),
                 endpoint: provider.endpoint.clone(),
                 api_key: String::new(),
                 api_type: ApiType::KomaFree,
@@ -299,6 +251,7 @@ fn from_entry(
         }
         return Some(Resolved {
             model_id: entry.model_id.clone(),
+            provider_uuid: entry.provider_uuid.clone(),
             endpoint: provider.endpoint.clone(),
             api_key: provider.api_key.clone(),
             api_type: provider.api_type,
@@ -403,6 +356,7 @@ fn from_entry(
     };
     Some(Resolved {
         model_id: entry.model_id.clone(),
+        provider_uuid: entry.provider_uuid.clone(),
         endpoint,
         api_key: conn.access_token.clone(),
         api_type,
@@ -435,6 +389,7 @@ fn ext_conn_route(conn: &OAuthConn, entry: &ModelEntry, effort: String) -> Optio
     let (endpoint, api_type) = conn.ext_model_route()?;
     Some(Resolved {
         model_id: entry.model_id.clone(),
+        provider_uuid: entry.provider_uuid.clone(),
         endpoint: endpoint.to_string(),
         api_key: conn.access_token.clone(),
         api_type,
@@ -453,10 +408,11 @@ fn ext_conn_route(conn: &OAuthConn, entry: &ModelEntry, effort: String) -> Optio
 fn legacy_main(settings: &Settings) -> Resolved {
     Resolved {
         model_id: settings.model.clone(),
+        provider_uuid: "legacy".into(),
         endpoint: DEFAULT_BASE_URL.to_string(),
         api_key: settings.api_key.clone(),
         api_type: ApiType::OpenAiCompatible,
-        route: None,
+        route: ModelEntry::normalize_route(Some(settings.provider.clone())),
         effort: settings.effort.clone(),
         account_id: String::new(),
         oauth_uuid: String::new(),
@@ -498,10 +454,11 @@ fn legacy_fallback(settings: &Settings, role: ModelRole) -> Option<Resolved> {
             } else {
                 Some(Resolved {
                     model_id: settings.classifier_model.clone(),
+                    provider_uuid: "legacy".into(),
                     endpoint: DEFAULT_BASE_URL.to_string(),
                     api_key: settings.api_key.clone(),
                     api_type: ApiType::OpenAiCompatible,
-                    route: None,
+                    route: ModelEntry::normalize_route(Some(settings.classifier_provider.clone())),
                     effort: String::new(),
                     account_id: String::new(),
                     oauth_uuid: String::new(),
@@ -512,53 +469,149 @@ fn legacy_fallback(settings: &Settings, role: ModelRole) -> Option<Resolved> {
     }
 }
 
-/// Resolve the concrete route for `role`.
-///
-/// Session overrides (`settings.session_models`) win over the global catalogue
-/// (`config.models`); the chosen model's provider is resolved by uuid against
-/// `config.providers`. A successful resolution returns the assigned route. When no
-/// model is assigned, or the assigned model's provider is dangling, the per-role
-/// legacy fallback applies (see [`legacy_fallback`]). Returns `None` only for an
-/// unresolved Safeguard (fail-closed); every other role always resolves to
-/// `Some`.
-pub fn resolve_role(config: &AppConfig, settings: &Settings, role: ModelRole) -> Option<Resolved> {
-    // 1. Pick the assigned model: per-session overrides first, then the global
-    //    catalogue. A model may hold several roles, so match on whether its
-    //    effective role set CONTAINS `role` (this also folds the legacy
-    //    single-role field in via `effective_roles`).
-    let assigned = settings
+/// Assignment owner, independent of whether its connection is usable.
+fn assigned_model<'a>(
+    config: &'a AppConfig,
+    settings: &'a Settings,
+    role: ModelRole,
+) -> Option<(&'a ModelEntry, &'static str)> {
+    settings
         .session_models
         .iter()
         .find(|e| e.effective_roles().contains(&role))
+        .map(|e| (e, "session"))
         .or_else(|| {
             config
                 .models
                 .iter()
                 .find(|e| e.effective_roles().contains(&role))
-        });
+                .map(|e| (e, "global"))
+        })
+}
 
-    // 2. If a model is assigned AND its provider resolves, that route wins —
-    //    including an explicitly-assigned Awareness model (explicit assignment is
-    //    the only way to give Awareness its own dedicated model).
-    if let Some(entry) = assigned {
-        if let Some(resolved) = from_entry(config, settings, entry, role) {
-            return Some(resolved);
-        }
-        // Assigned but the provider_uuid is dangling → fall through.
+/// Resolve configured ownership for onboarding. Broken explicit owners never inherit.
+pub fn resolve_role(config: &AppConfig, settings: &Settings, role: ModelRole) -> Option<Resolved> {
+    if let Some((entry, _)) = assigned_model(config, settings, role) {
+        return from_entry(config, settings, entry, role);
     }
-
-    // 3. Compactor and Awareness have no config slot of their own — both inherit
-    //    the FULLY-RESOLVED Main route (which honours config.models Main + its
-    //    provider connection's real endpoint/key). This must happen here, where
-    //    `config` is in scope, NOT inside `legacy_fallback`, which only has
-    //    `settings` and would wrongly hard-code DEFAULT_BASE_URL (OpenRouter).
-    //    No infinite recursion: Main never resolves to Compactor or Awareness.
-    if matches!(role, ModelRole::Compactor | ModelRole::Awareness) {
+    if role == ModelRole::Awareness
+        && !settings.awareness_inherit
+        && !settings.awareness_model.trim().is_empty()
+        && !settings.api_key.trim().is_empty()
+    {
+        let mut legacy = legacy_main(settings);
+        legacy.model_id = settings.awareness_model.clone();
+        legacy.route = ModelEntry::normalize_route(Some(settings.awareness_provider.clone()));
+        legacy.effort.clear();
+        return Some(legacy);
+    }
+    if matches!(
+        role,
+        ModelRole::Compactor | ModelRole::Awareness | ModelRole::Planner
+    ) {
         return resolve_role(config, settings, ModelRole::Main);
     }
-
-    // 4. No assignment, or a dangling provider → per-role legacy fallback.
     legacy_fallback(settings, role)
+}
+
+/// Credential-free diagnosis shared by IPC, UI and dispatch.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RoleResolution {
+    pub role: ModelRole,
+    pub origin: String,
+    pub assignment_uuid: Option<String>,
+    pub source_uuid: Option<String>,
+    pub configured_model: Option<String>,
+    pub provider_uuid: Option<String>,
+    pub effective_model: Option<String>,
+    pub reason: Option<String>,
+}
+
+pub fn role_resolution(config: &AppConfig, settings: &Settings, role: ModelRole) -> RoleResolution {
+    let owner = assigned_model(config, settings, role);
+    let route = resolve_role_dispatch(config, settings, role);
+    let mut report = RoleResolution {
+        role,
+        origin: "default".into(),
+        assignment_uuid: None,
+        source_uuid: None,
+        configured_model: None,
+        provider_uuid: route.as_ref().map(|r| r.provider_uuid.clone()),
+        effective_model: route.as_ref().map(|r| r.model_id.clone()),
+        reason: None,
+    };
+    if let Some((entry, origin)) = owner {
+        report.origin = origin.into();
+        report.assignment_uuid = Some(entry.uuid.clone());
+        report.source_uuid = entry.source_uuid.clone();
+        let source = match entry.source_uuid.as_deref() {
+            Some(uuid) => config.models.iter().find(|m| m.uuid == uuid),
+            None => Some(entry),
+        };
+        if let Some(source) = source {
+            report.configured_model = Some(source.model_id.clone());
+            report.provider_uuid = Some(source.provider_uuid.clone());
+            report.reason = match from_entry(config, settings, entry, role) {
+                Some(r)
+                    if !r.is_routable()
+                        || r.endpoint.trim().is_empty()
+                        || r.model_id.trim().is_empty() =>
+                {
+                    Some("unsupported_route".into())
+                }
+                Some(r) if !r.is_usable() => Some("credentials_unavailable".into()),
+                Some(_) => None,
+                None if config
+                    .providers
+                    .iter()
+                    .any(|p| p.uuid == source.provider_uuid)
+                    || config
+                        .oauth_conns
+                        .iter()
+                        .any(|p| p.uuid == source.provider_uuid) =>
+                {
+                    Some("unsupported_route".into())
+                }
+                None => Some("provider_missing".into()),
+            };
+        } else {
+            report.reason = Some("reference_deleted".into());
+        }
+    } else if let Some(r) = resolve_role(config, settings, role).filter(route_usable) {
+        report.origin = if r.provider_uuid != "legacy"
+            && role != ModelRole::Main
+            && role != ModelRole::Safeguard
+        {
+            "inherit_main"
+        } else {
+            "legacy"
+        }
+        .into();
+        report.configured_model = Some(r.model_id);
+    } else {
+        report.reason = Some("unassigned".into());
+    }
+    report
+}
+
+pub fn role_resolutions(config: &AppConfig, settings: &Settings) -> Vec<RoleResolution> {
+    [
+        ModelRole::Main,
+        ModelRole::Awareness,
+        ModelRole::Safeguard,
+        ModelRole::Compactor,
+        ModelRole::Planner,
+    ]
+    .into_iter()
+    .map(|role| role_resolution(config, settings, role))
+    .collect()
+}
+
+fn route_usable(route: &Resolved) -> bool {
+    route.is_usable()
+        && route.is_routable()
+        && !route.endpoint.trim().is_empty()
+        && !route.model_id.trim().is_empty()
 }
 
 /// Identity of the resolved Main route — model id + endpoint + upstream route
@@ -605,6 +658,7 @@ fn koma_free_dispatch_route(config: &AppConfig, settings: &Settings, role: Model
     };
     Resolved {
         model_id: KOMA_FREE_MODEL.to_string(),
+        provider_uuid: "default-apple".into(),
         endpoint: KOMA_FREE_ENDPOINT.to_string(),
         api_key: String::new(),
         api_type: ApiType::KomaFree,
@@ -616,58 +670,29 @@ fn koma_free_dispatch_route(config: &AppConfig, settings: &Settings, role: Model
     }
 }
 
-/// [`resolve_role`], but with a LAST-RESORT koma-free fallback for Main and every
-/// role that CASCADES to Main (`Compactor`, `Awareness` — see the `resolve_role`
-/// fallback table above), PLUS `Safeguard`: when the resolved route is missing or
-/// [`Resolved::is_usable`] says it carries no usable auth, dispatch against the
-/// keyless koma-free tier instead of sending a doomed empty-key request (Main /
-/// Compactor / Awareness) or silently degrading every risky tool call to a human
-/// prompt (Safeguard).
-///
-/// PERMISSIVE POSTURE (owner override): koma-free now powers every runtime role,
-/// Safeguard included. The original invariant here was "never downgrade the
-/// classifier to a free tier" — deliberately fail-closed, on the theory that an
-/// unverified free-tier model auto-allowing risky tool calls was worse than
-/// falling back to a human prompt. That trade-off flips once keyless koma-free is
-/// the default onboarding path: a keyless user with no classifier configured hit
-/// `resolve_role(Safeguard) == None` on EVERY risky tool call, which the harness
-/// (`harness::classify`) degrades to a human approval prompt in BOTH agent modes —
-/// silently defeating Auto mode's entire pitch (no prompts) for every free-tier
-/// user. Routing Safeguard through koma-free instead keeps Auto mode usable for
-/// keyless users; the harness's unavailable→human-prompt path REMAINS the
-/// backstop for genuine failures (the koma-free call itself errors, times out, or
-/// returns something unparseable), so a broken classifier still degrades safely —
-/// only the "not configured at all" case is upgraded from fail-closed to
-/// free-tier. Planner is still untouched — it already degrades to Main at the
-/// call site ([`resolve_turn_model`]) when unresolved, so it never needs its own
-/// fallback here.
-///
-/// DISPATCH-TIME ONLY. Do NOT call this from a "is anything configured yet?"
-/// GATE — every such gate (the first-run chooser in
-/// `runtime::lifecycle::build_startup`/`install_daemon_session`, the
-/// client-build gate right next to it, and the no-creds banners in
-/// `runtime::actions::onboard`/`session::{attach,cancel,picker}`/
-/// `commands::new_session`) calls [`resolve_role`] directly and MUST keep
-/// observing "not usable" so onboarding still fires for a genuinely
-/// unconfigured install — this function would make that check always pass and
-/// silently swallow the gate. Reserve it for the seam where a network request is
-/// actually about to be built (the Main turn, the Awareness fold/summary call,
-/// `/compact`'s Compactor call, their Main-route retry fallbacks, and the
-/// Safeguard classifier call).
+/// Dispatch default is Apple only for unowned roles. Explicit broken routes fail.
 pub fn resolve_role_dispatch(
     config: &AppConfig,
     settings: &Settings,
     role: ModelRole,
 ) -> Option<Resolved> {
-    let resolved = resolve_role(config, settings, role);
+    if assigned_model(config, settings, role).is_some() {
+        return resolve_role(config, settings, role).filter(route_usable);
+    }
+    if role == ModelRole::Awareness && !settings.awareness_inherit {
+        if let Some(legacy) = resolve_role(config, settings, role).filter(route_usable) {
+            return Some(legacy);
+        }
+    }
     if matches!(
         role,
-        ModelRole::Main | ModelRole::Compactor | ModelRole::Awareness | ModelRole::Safeguard
-    ) && resolved.as_ref().is_none_or(|r| !r.is_usable())
-    {
-        return Some(koma_free_dispatch_route(config, settings, role));
+        ModelRole::Awareness | ModelRole::Compactor | ModelRole::Planner
+    ) {
+        return resolve_role_dispatch(config, settings, ModelRole::Main);
     }
-    resolved
+    resolve_role(config, settings, role)
+        .filter(route_usable)
+        .or_else(|| Some(koma_free_dispatch_route(config, settings, role)))
 }
 
 /// Why a Main turn is being silently downgraded to the keyless koma-free tier by
@@ -767,14 +792,15 @@ pub fn main_fallback_reason(config: &AppConfig, settings: &Settings) -> Option<M
     }
 }
 
-/// True when `a` and `b` name the exact same route: same model id, same
-/// provider endpoint, and the same OpenRouter upstream pin. Deliberately does
-/// NOT compare `api_key`/`api_type`/`effort` — those can never differ for two
-/// entries that already agree on model+endpoint+route (same provider
-/// connection), and effort is set from `settings.effort` identically for both
-/// Main and Planner (see `from_entry`).
-fn same_route(a: &Resolved, b: &Resolved) -> bool {
-    a.model_id == b.model_id && a.endpoint == b.endpoint && a.route == b.route
+/// Complete connection identity, excluding credentials and per-request effort.
+pub(crate) fn same_route(a: &Resolved, b: &Resolved) -> bool {
+    a.model_id == b.model_id
+        && a.endpoint == b.endpoint
+        && a.route == b.route
+        && a.api_type == b.api_type
+        && a.provider_uuid == b.provider_uuid
+        && a.oauth_uuid == b.oauth_uuid
+        && a.account_id == b.account_id
 }
 
 /// Resolve the model that should drive the CURRENT main turn, honouring
@@ -816,10 +842,16 @@ pub fn resolve_turn_model(
     if mode != AgentMode::Plan {
         return Some(main);
     }
-    match resolve_role(config, settings, ModelRole::Planner) {
-        Some(planner) if !same_route(&planner, &main) => Some(planner),
-        _ => Some(main),
+    if assigned_model(config, settings, ModelRole::Planner).is_some() {
+        return resolve_role_dispatch(config, settings, ModelRole::Planner).map(|planner| {
+            if same_route(&planner, &main) {
+                main
+            } else {
+                planner
+            }
+        });
     }
+    Some(main)
 }
 
 /// Resolve the concrete route for a sub-agent ([`AgentDef`]).
@@ -947,6 +979,7 @@ pub fn resolve_agent(
             if let Some(provider) = config.providers.iter().find(|p| p.uuid == uuid) {
                 return Some(with_effort(Resolved {
                     model_id: model_id.to_string(),
+                    provider_uuid: provider.uuid.clone(),
                     endpoint: provider.endpoint.clone(),
                     api_key: provider.api_key.clone(),
                     api_type: provider.api_type,
@@ -988,7 +1021,7 @@ pub fn resolve_agent(
     }
 
     // 2. No usable model/provider → inherit the Main route.
-    resolve_role(config, settings, ModelRole::Main).map(with_effort)
+    resolve_role_dispatch(config, settings, ModelRole::Main).map(with_effort)
 }
 
 #[cfg(test)]

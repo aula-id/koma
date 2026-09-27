@@ -500,7 +500,7 @@ pub async fn run_agent_loop(
                 )
                 .await;
                 if !verdict.available {
-                    let result = format!("blocked: classifier unavailable ({})", verdict.reason);
+                    let result = serde_json::json!({"error": "classifier_unavailable", "executed": false, "reason": verdict.reason}).to_string();
                     convo.push_tool(call.id.clone(), result);
                     continue;
                 }

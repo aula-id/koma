@@ -42,6 +42,7 @@ function useAnchorRect(open: boolean, ref: React.RefObject<HTMLElement | null>) 
 }
 
 export function ModelPicker() {
+  const mainRoute = useKoma((s) => s.session.modelRoutes.find((r) => r.role === 'main'))
   const models = useKoma((s) => s.config.models)
   const providers = useKoma((s) => s.config.providers)
   const oauthConns = useKoma((s) => s.oauth.conns)
@@ -86,10 +87,12 @@ export function ModelPicker() {
     )
   }
 
-  const triggerLabel = localMain ? localMain.name || localMain.modelId || 'main' : '(inherit)'
-  const triggerTitle = localMain
-    ? `${localMain.modelId} · ${providerLabel(localMain.provider)}`
-    : 'Session model'
+  const triggerLabel = mainRoute
+    ? mainRoute.effective_model ?? 'Main unavailable'
+    : localMain ? localMain.name || localMain.modelId || 'main' : '(inherit)'
+  const triggerTitle = mainRoute
+    ? `Assigned: ${mainRoute.configured_model ?? '(unset)'} · Effective: ${mainRoute.effective_model ?? 'unavailable'} · ${mainRoute.origin}${mainRoute.reason ? ` · ${mainRoute.reason}` : ''}`
+    : localMain ? `${localMain.modelId} · ${providerLabel(localMain.provider)}` : 'Session model'
 
   const filtered = query.trim()
     ? globals.filter((m) =>

@@ -74,6 +74,7 @@ fn sample_session_snapshot() -> SessionSnapshot {
         }],
         // Non-empty so the round-trip proves the projected model id survives
         // serialize -> deserialize (an empty string would alias the default).
+        model_routes: Vec::new(),
         resolved_model_id: "anthropic/claude-sonnet-4-5".to_string(),
         pending_steer: Vec::new(),
         bash_jobs: vec![],
@@ -140,6 +141,7 @@ fn sample_global_snapshot() -> GlobalSnapshot {
         // is exercised via the config-setter paths, not this global-snapshot sample).
         providers: Vec::new(),
         config_models: Vec::new(),
+        main_configured: None,
         session_models: Vec::new(),
         mcp_servers: Vec::new(),
         oauth_conn_uuids: Vec::new(),
@@ -208,7 +210,10 @@ fn client_request_variants_roundtrip() {
         ClientRequest::Paste {
             text: "/home/u/shot.png".to_string(),
         },
-        ClientRequest::ApproveTool { approve: true },
+        ClientRequest::ApproveTool {
+            approve: true,
+            call_id: Some("call-1".into()),
+        },
         ClientRequest::PlanDecision {
             decision: "compact".to_string(),
         },
