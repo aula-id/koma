@@ -44,7 +44,7 @@ function sync(edit: StagedEdit, outcome: Outcome, reverse: boolean) {
   const current = useKoma.getState()
   if ((current.remoteState.hostId ?? 'local') !== edit.workspace.hostId || current.coding._sessionGen !== edit.generation) return
   const transfers = edit.files.filter(f => f.existsAfter && !f.existed && f.formatFrom && f.formatFrom !== f.path && edit.files.some(source => source.path === f.formatFrom && source.existed && !source.existsAfter)).map(f => ({ from: reverse ? f.path : f.formatFrom!, to: reverse ? f.formatFrom! : f.path }))
-    .filter(({ from, to }) => { const source = current.coding.files[fileKey(edit.workspace.root, from)], target = current.coding.files[fileKey(edit.workspace.root, to)]; return source && !source.dirty && !source.saving && !source.loading && (!target || !target.dirty && !target.saving && !target.loading) })
+    .filter(({ from, to }) => { const source = current.coding.files[fileKey(edit.workspace.root, from)], target = current.coding.files[fileKey(edit.workspace.root, to)]; return source && !source.dirty && !source.saving && !source.loading && (!target || !target.dirty && !target.saving && !target.loading) && !current.ui.tabs.some(t => t.kind === 'codingFile' && t.root === edit.workspace.root && t.path === to) })
   useKoma.setState(s => {
     const files = { ...s.coding.files }
     for (const { from, to } of transfers) { files[fileKey(edit.workspace.root, to)] = files[fileKey(edit.workspace.root, from)]; delete files[fileKey(edit.workspace.root, from)] }
