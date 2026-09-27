@@ -1082,39 +1082,6 @@ pub(super) fn shutdown() {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn dap_frames_are_length_delimited_and_bounded() {
-        let payload = br#"{"type":"event","event":"stopped"}"#;
-        let frame = format!(
-            "Content-Length: {}\r\n\r\n{}",
-            payload.len(),
-            String::from_utf8_lossy(payload)
-        );
-        assert_eq!(
-            read_message(&mut std::io::Cursor::new(frame)).unwrap()["event"],
-            "stopped"
-        );
-        assert!(
-            read_message(&mut std::io::Cursor::new("Content-Length: 8388609\r\n\r\n")).is_err()
-        );
-        assert!(read_message(&mut std::io::Cursor::new(
-            "Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}"
-        ))
-        .is_err());
-    }
-    #[test]
-    fn missing_file_cannot_silently_launch_another_target() {
-        let mut config = json!({"program":"${file}","cwd":"${workspaceFolder}"});
-        assert!(expand(&mut config, "/project", None).is_err());
-        expand(&mut config, "/project", Some("/project/main.py")).unwrap();
-        assert_eq!(config["program"], "/project/main.py");
-        assert_eq!(config["cwd"], "/project");
-    }
-}
-
 // On poison, keep the service alive rather than incorrectly declaring it idle.
 pub(super) fn has_active() -> bool {
     registry().lock().map_or(true, |sessions| {
@@ -1205,5 +1172,38 @@ fn run_terminal(s: &Session, args: &Value) -> Result<Value> {
             summary["error"]
         );
         std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn dap_frames_are_length_delimited_and_bounded() {
+        let payload = br#"{"type":"event","event":"stopped"}"#;
+        let frame = format!(
+            "Content-Length: {}\r\n\r\n{}",
+            payload.len(),
+            String::from_utf8_lossy(payload)
+        );
+        assert_eq!(
+            read_message(&mut std::io::Cursor::new(frame)).unwrap()["event"],
+            "stopped"
+        );
+        assert!(
+            read_message(&mut std::io::Cursor::new("Content-Length: 8388609\r\n\r\n")).is_err()
+        );
+        assert!(read_message(&mut std::io::Cursor::new(
+            "Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}"
+        ))
+        .is_err());
+    }
+    #[test]
+    fn missing_file_cannot_silently_launch_another_target() {
+        let mut config = json!({"program":"${file}","cwd":"${workspaceFolder}"});
+        assert!(expand(&mut config, "/project", None).is_err());
+        expand(&mut config, "/project", Some("/project/main.py")).unwrap();
+        assert_eq!(config["program"], "/project/main.py");
+        assert_eq!(config["cwd"], "/project");
     }
 }

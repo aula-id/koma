@@ -884,6 +884,128 @@ pub(super) fn shutdown() {
     }
 }
 
+fn discover(root: &Path, tasks: &mut Vec<Task>) -> Result<()> {
+    let mut add =
+        |id: &str, label: &str, group: &str, command: &str, args: Vec<String>| -> Result<()> {
+            if tasks.len() >= 100 || tasks.iter().any(|t| t.id == id) {
+                return Ok(());
+            }
+            tasks.push(serde_json::from_value(
+                json!({"id":id,"label":label,"group":group,"command":command,"args":args}),
+            )?);
+            Ok(())
+        };
+    let package = root.join("package.json");
+    if package.is_file()
+        && package.metadata()?.len() <= 1024 * 1024
+        && package.canonicalize()?.starts_with(root)
+    {
+        if let Ok(value) = serde_json::from_slice::<Value>(&std::fs::read(package)?) {
+            if let Some(scripts) = value.get("scripts").and_then(Value::as_object) {
+                for (name, script) in scripts.iter().take(100) {
+                    if !script.is_string() || name.len() > 80 {
+                        continue;
+                    }
+                    let group = if name.starts_with("test") {
+                        "test"
+                    } else if name.starts_with("build") {
+                        "build"
+                    } else {
+                        "run"
+                    };
+                    add(
+                        &format!("npm:{name}"),
+                        &format!("npm: {name}"),
+                        group,
+                        if cfg!(windows) { "npm.cmd" } else { "npm" },
+                        vec!["run".into(), name.clone()],
+                    )?;
+                }
+            }
+        }
+    }
+    if root.join("Cargo.toml").is_file() {
+        for group in ["build", "test", "run"] {
+            add(
+                &format!("cargo:{group}"),
+                &format!("cargo {group}"),
+                group,
+                "cargo",
+                vec![group.into()],
+            )?;
+        }
+    }
+    if root.join("go.mod").is_file() {
+        for group in ["build", "test"] {
+            add(
+                &format!("go:{group}"),
+                &format!("go {group}"),
+                group,
+                "go",
+                vec![group.into(), "./...".into()],
+            )?;
+        }
+    }
+    if root.join("pytest.ini").is_file() || root.join("pyproject.toml").is_file() {
+        let python = super::environment::test_python(root)?
+            .to_string_lossy()
+            .into_owned();
+        add(
+            "python:test",
+            "Python: pytest",
+            "test",
+            &python,
+            vec!["-m".into(), "pytest".into()],
+        )?;
+    }
+    if root.join("Makefile").is_file() {
+        add("make:build", "Make", "build", "make", vec![])?;
+    }
+    Ok(())
+}
+
+pub(super) fn summary(workspace: &WorkspaceRef, id: &str) -> Result<Value> {
+    find(workspace, id)?.summary()
+}
+
+// On poison, keep the service alive rather than incorrectly declaring it idle.
+pub(super) fn has_active() -> bool {
+    registry().lock().map_or(true, |runs| {
+        runs.iter()
+            .any(|run| run.state.lock().map_or(true, |state| active(&state)))
+    })
+}
+
+pub(super) fn input(workspace: &WorkspaceRef, id: &str, data: &str) -> Result<Value> {
+    anyhow::ensure!(data.len() <= 65536, "Terminal input exceeds 64 KiB");
+    let run = find(workspace, id)?;
+    let mut slot = run.child.checked_lock()?;
+    match slot.as_mut() {
+        Some(TaskChild::Pty(child)) => child.input(data)?,
+        _ => anyhow::bail!("This task has no active terminal"),
+    };
+    Ok(json!({}))
+}
+pub(super) fn resize(workspace: &WorkspaceRef, id: &str, rows: u16, cols: u16) -> Result<Value> {
+    let run = find(workspace, id)?;
+    let slot = run.child.checked_lock()?;
+    match slot.as_ref() {
+        Some(TaskChild::Pty(child)) => child.resize(rows, cols)?,
+        _ => anyhow::bail!("This task has no active terminal"),
+    };
+    Ok(json!({}))
+}
+
+pub(super) fn process_id(workspace: &WorkspaceRef, id: &str) -> Result<Option<u32>> {
+    let run = find(workspace, id)?;
+    let slot = run.child.checked_lock()?;
+    Ok(match slot.as_ref() {
+        Some(TaskChild::Pipe(child)) => Some(child.id()),
+        Some(TaskChild::Pty(child)) => child.process_id(),
+        None => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1041,126 +1163,4 @@ mod tests {
             assert!(page["chunks"].as_array().unwrap().len() <= 64);
         }
     }
-}
-
-fn discover(root: &Path, tasks: &mut Vec<Task>) -> Result<()> {
-    let mut add =
-        |id: &str, label: &str, group: &str, command: &str, args: Vec<String>| -> Result<()> {
-            if tasks.len() >= 100 || tasks.iter().any(|t| t.id == id) {
-                return Ok(());
-            }
-            tasks.push(serde_json::from_value(
-                json!({"id":id,"label":label,"group":group,"command":command,"args":args}),
-            )?);
-            Ok(())
-        };
-    let package = root.join("package.json");
-    if package.is_file()
-        && package.metadata()?.len() <= 1024 * 1024
-        && package.canonicalize()?.starts_with(root)
-    {
-        if let Ok(value) = serde_json::from_slice::<Value>(&std::fs::read(package)?) {
-            if let Some(scripts) = value.get("scripts").and_then(Value::as_object) {
-                for (name, script) in scripts.iter().take(100) {
-                    if !script.is_string() || name.len() > 80 {
-                        continue;
-                    }
-                    let group = if name.starts_with("test") {
-                        "test"
-                    } else if name.starts_with("build") {
-                        "build"
-                    } else {
-                        "run"
-                    };
-                    add(
-                        &format!("npm:{name}"),
-                        &format!("npm: {name}"),
-                        group,
-                        if cfg!(windows) { "npm.cmd" } else { "npm" },
-                        vec!["run".into(), name.clone()],
-                    )?;
-                }
-            }
-        }
-    }
-    if root.join("Cargo.toml").is_file() {
-        for group in ["build", "test", "run"] {
-            add(
-                &format!("cargo:{group}"),
-                &format!("cargo {group}"),
-                group,
-                "cargo",
-                vec![group.into()],
-            )?;
-        }
-    }
-    if root.join("go.mod").is_file() {
-        for group in ["build", "test"] {
-            add(
-                &format!("go:{group}"),
-                &format!("go {group}"),
-                group,
-                "go",
-                vec![group.into(), "./...".into()],
-            )?;
-        }
-    }
-    if root.join("pytest.ini").is_file() || root.join("pyproject.toml").is_file() {
-        let python = super::environment::test_python(root)?
-            .to_string_lossy()
-            .into_owned();
-        add(
-            "python:test",
-            "Python: pytest",
-            "test",
-            &python,
-            vec!["-m".into(), "pytest".into()],
-        )?;
-    }
-    if root.join("Makefile").is_file() {
-        add("make:build", "Make", "build", "make", vec![])?;
-    }
-    Ok(())
-}
-
-pub(super) fn summary(workspace: &WorkspaceRef, id: &str) -> Result<Value> {
-    find(workspace, id)?.summary()
-}
-
-// On poison, keep the service alive rather than incorrectly declaring it idle.
-pub(super) fn has_active() -> bool {
-    registry().lock().map_or(true, |runs| {
-        runs.iter()
-            .any(|run| run.state.lock().map_or(true, |state| active(&state)))
-    })
-}
-
-pub(super) fn input(workspace: &WorkspaceRef, id: &str, data: &str) -> Result<Value> {
-    anyhow::ensure!(data.len() <= 65536, "Terminal input exceeds 64 KiB");
-    let run = find(workspace, id)?;
-    let mut slot = run.child.checked_lock()?;
-    match slot.as_mut() {
-        Some(TaskChild::Pty(child)) => child.input(data)?,
-        _ => anyhow::bail!("This task has no active terminal"),
-    };
-    Ok(json!({}))
-}
-pub(super) fn resize(workspace: &WorkspaceRef, id: &str, rows: u16, cols: u16) -> Result<Value> {
-    let run = find(workspace, id)?;
-    let slot = run.child.checked_lock()?;
-    match slot.as_ref() {
-        Some(TaskChild::Pty(child)) => child.resize(rows, cols)?,
-        _ => anyhow::bail!("This task has no active terminal"),
-    };
-    Ok(json!({}))
-}
-
-pub(super) fn process_id(workspace: &WorkspaceRef, id: &str) -> Result<Option<u32>> {
-    let run = find(workspace, id)?;
-    let slot = run.child.checked_lock()?;
-    Ok(match slot.as_ref() {
-        Some(TaskChild::Pipe(child)) => Some(child.id()),
-        Some(TaskChild::Pty(child)) => child.process_id(),
-        None => None,
-    })
 }

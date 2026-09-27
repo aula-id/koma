@@ -1416,7 +1416,7 @@ fn verify_pass_captures_commit_sha_in_evidence() {
     let evidence = format!("tests pass | commit:{sha}");
     set_verify_bit_with_evidence(&conn, &node_id, true, Some(&evidence)).unwrap();
 
-    let shas = latest_verified_commit_shas(&conn, &[node_id.clone()]).unwrap();
+    let shas = latest_verified_commit_shas(&conn, std::slice::from_ref(&node_id)).unwrap();
     let node_shas = shas.get(&node_id).unwrap();
     assert_eq!(node_shas.len(), 1);
     assert_eq!(node_shas[0], head_short7);

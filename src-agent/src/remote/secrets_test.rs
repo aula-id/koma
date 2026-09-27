@@ -32,9 +32,8 @@ impl TempHome {
             std::env::set_var("LOCALAPPDATA", &dir);
             prev
         };
-        let _ = crate::model::store::base_dir().map(|p| {
-            let _ = std::fs::create_dir_all(&p);
-            p
+        let _ = crate::model::store::base_dir().inspect(|p| {
+            let _ = std::fs::create_dir_all(p);
         });
         Self {
             dir,

@@ -167,16 +167,14 @@ fn parse_include_structured(text: &str) -> Option<(String, ImportKind)> {
     let rest = text.strip_prefix('#')?.trim_start();
     let rest = rest.strip_prefix("include")?.trim_start();
 
-    if rest.starts_with('"') {
-        let rest = &rest[1..];
+    if let Some(rest) = rest.strip_prefix('"') {
         let end = rest.find('"')?;
         let path = rest[..end].to_string();
         if path.is_empty() {
             return None;
         }
         Some((path, ImportKind::IncludeQuoted))
-    } else if rest.starts_with('<') {
-        let rest = &rest[1..];
+    } else if let Some(rest) = rest.strip_prefix('<') {
         let end = rest.find('>')?;
         let path = rest[..end].to_string();
         if path.is_empty() {

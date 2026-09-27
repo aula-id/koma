@@ -149,14 +149,16 @@ pub(super) fn apply(root: &Path, changes: &[Change]) -> Result<Value> {
                 targets[&change.path].metadata()?.permissions(),
             );
         }
-        let mut record = json!({"path":change.path,"backup":if original.is_some(){Some(i)}else{None},"beforeFingerprint":change.fingerprint,"afterFingerprint":after[&change.path].as_ref().map(|b|file_ops::fingerprint_bytes(b)).unwrap_or_default()});
+        let record = json!({"path":change.path,"backup":if original.is_some(){Some(i)}else{None},"beforeFingerprint":change.fingerprint,"afterFingerprint":after[&change.path].as_ref().map(|b|file_ops::fingerprint_bytes(b)).unwrap_or_default()});
         #[cfg(unix)]
-        {
+        let record = {
             use std::os::unix::fs::PermissionsExt;
+            let mut record = record;
             if let Some(mode) = permissions.get(&change.path) {
                 record["mode"] = json!(mode.mode());
             }
-        }
+            record
+        };
         records.push(record);
     }
     super::persistence::atomic_write(

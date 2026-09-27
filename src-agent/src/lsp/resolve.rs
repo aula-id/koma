@@ -167,9 +167,7 @@ fn which(name: &str) -> Option<PathBuf> {
         #[cfg(windows)]
         {
             for ext in ["", ".exe", ".cmd", ".bat"] {
-                let candidate = if ext.is_empty() {
-                    dir.join(name)
-                } else if name.ends_with(ext) {
+                let candidate = if ext.is_empty() || name.ends_with(ext) {
                     dir.join(name)
                 } else {
                     dir.join(format!("{name}{ext}"))
@@ -380,6 +378,7 @@ mod tests {
             let mut f = std::fs::OpenOptions::new()
                 .write(true)
                 .create(true)
+                .truncate(true)
                 .mode(0o755)
                 .open(&bin)
                 .unwrap();
@@ -425,6 +424,7 @@ mod tests {
             let mut f = std::fs::OpenOptions::new()
                 .write(true)
                 .create(true)
+                .truncate(true)
                 .mode(0o755)
                 .open(&bin)
                 .unwrap();

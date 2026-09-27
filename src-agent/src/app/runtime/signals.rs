@@ -243,7 +243,6 @@ pub(super) fn install_killtree_job() {
             // Most likely an already-jobbed process on pre-Win8 (no nested jobs). Release
             // the unused job rather than leak a net that would protect nothing.
             let _ = CloseHandle(job);
-            return;
         }
         // SUCCESS: `job` (a Copy raw HANDLE, no Drop) goes out of scope WITHOUT a
         // CloseHandle — the intentional leak. The kernel closes it when this process

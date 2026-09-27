@@ -119,13 +119,13 @@ fn extension_never_replaces_implicit_primary_workspace() {
         active_extensions: vec![fixture.ext.id.clone()],
         ..Default::default()
     };
-    sync_extension_workspaces(&[fixture.ext.clone()], &mut settings);
+    sync_extension_workspaces(std::slice::from_ref(&fixture.ext), &mut settings);
     assert_eq!(
         PathBuf::from(&settings.workdir[0]),
         std::env::current_dir().unwrap()
     );
     settings.active_extensions.clear();
-    sync_extension_workspaces(&[fixture.ext.clone()], &mut settings);
+    sync_extension_workspaces(std::slice::from_ref(&fixture.ext), &mut settings);
     assert_eq!(settings.workdir.len(), 1);
 }
 
@@ -138,7 +138,7 @@ fn legacy_secondary_roots_are_migrated_but_explicit_and_primary_roots_survive() 
     }))
     .unwrap();
     assert!(sync_extension_workspaces(
-        &[fixture.ext.clone()],
+        std::slice::from_ref(&fixture.ext),
         &mut legacy
     ));
     assert_eq!(legacy.workdir, vec!["/project", "/user-extra"]);
@@ -148,13 +148,13 @@ fn legacy_secondary_roots_are_migrated_but_explicit_and_primary_roots_survive() 
         ..Default::default()
     };
     assert!(!sync_extension_workspaces(
-        &[fixture.ext.clone()],
+        std::slice::from_ref(&fixture.ext),
         &mut explicit
     ));
     let mut primary: Settings =
         serde_json::from_value(serde_json::json!({"workdir":[path]})).unwrap();
     assert!(!sync_extension_workspaces(
-        &[fixture.ext.clone()],
+        std::slice::from_ref(&fixture.ext),
         &mut primary
     ));
     assert_eq!(primary.workdir.len(), 1);

@@ -581,7 +581,7 @@ mod preview_tests {
         std::fs::write(root.join("test.txt"), "hello hello\r\n").unwrap();
         let root_s = root.to_string_lossy().into_owned();
         let result = preview_replacements(ContentQuery { root: &root_s, path: "", query: "hello", case_sensitive: true,
-            whole_word: false, is_regex: false, include_glob: None, exclude_glob: None, request_id: "preview" }, "$1", &[root.clone()]).unwrap();
+            whole_word: false, is_regex: false, include_glob: None, exclude_glob: None, request_id: "preview" }, "$1", std::slice::from_ref(&root)).unwrap();
         assert_eq!(result["files"][0]["after"], "$1 $1\n");
         assert_eq!(std::fs::read(root.join("test.txt")).unwrap(), b"hello hello\r\n");
         assert_eq!(result["matchCount"], 2);

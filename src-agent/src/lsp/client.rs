@@ -2414,71 +2414,6 @@ fn collect_document_symbol(v: &serde_json::Value, out: &mut Vec<LspDocumentSymbo
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn language_servers_are_isolated_by_workspace() {
-        let a = workspace_server_id("vtsls", Path::new("/projects/a"));
-        let b = workspace_server_id("vtsls", Path::new("/projects/b"));
-        assert_ne!(a, b);
-        assert_eq!(a, workspace_server_id("vtsls", Path::new("/projects/a")));
-        assert_ne!(a, workspace_server_id("gopls", Path::new("/projects/a")));
-        let spec = catalog::find("vscode-langservers").unwrap();
-        assert_eq!(
-            display_name_for(&workspace_server_id("vscode-langservers:vscode-html-language-server", Path::new("/projects/a")), spec),
-            "HTML Language Server"
-        );
-    }
-
-    #[test]
-    fn language_id_rust() {
-        assert_eq!(language_id_for_path("src/main.rs"), "rust");
-    }
-
-    #[test]
-    fn language_id_php() {
-        assert_eq!(
-            language_id_for_path("app/Http/Controllers/UserController.php"),
-            "php"
-        );
-        assert_eq!(language_id_for_path("resources/views/welcome.phtml"), "php");
-    }
-
-    #[test]
-    fn parse_completion_list() {
-        let v = serde_json::json!({
-            "isIncomplete": true,
-            "items": [
-                { "label": "foo", "kind": 3, "detail": "fn" },
-                { "label": "bar" }
-            ]
-        });
-        let list = parse_completions(&v);
-        assert!(list.is_incomplete);
-        assert_eq!(list.items.len(), 2);
-        assert_eq!(list.items[0].label, "foo");
-        assert_eq!(list.items[0].kind, Some(3));
-    }
-
-    #[test]
-    fn parse_hover_markdown() {
-        let v = serde_json::json!({
-            "contents": { "kind": "markdown", "value": "**hi**" }
-        });
-        let h = parse_hover(&v).expect("hover");
-        assert!(h.contents.contains("hi"));
-    }
-
-    #[test]
-    fn path_uri_unix() {
-        let u = path_to_uri(Path::new("/tmp/foo.rs"));
-        assert!(u.starts_with("file://"));
-        assert!(u.contains("/tmp/foo.rs"));
-    }
-}
-
 struct PendingWorkspaceEdit {
     root: String,
     stdin: Arc<Mutex<ChildStdin>>,
@@ -2586,5 +2521,70 @@ impl LspManager {
                 let _ = server.notify("workspace/didChangeWatchedFiles", serde_json::json!({"changes":changes}));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn language_servers_are_isolated_by_workspace() {
+        let a = workspace_server_id("vtsls", Path::new("/projects/a"));
+        let b = workspace_server_id("vtsls", Path::new("/projects/b"));
+        assert_ne!(a, b);
+        assert_eq!(a, workspace_server_id("vtsls", Path::new("/projects/a")));
+        assert_ne!(a, workspace_server_id("gopls", Path::new("/projects/a")));
+        let spec = catalog::find("vscode-langservers").unwrap();
+        assert_eq!(
+            display_name_for(&workspace_server_id("vscode-langservers:vscode-html-language-server", Path::new("/projects/a")), spec),
+            "HTML Language Server"
+        );
+    }
+
+    #[test]
+    fn language_id_rust() {
+        assert_eq!(language_id_for_path("src/main.rs"), "rust");
+    }
+
+    #[test]
+    fn language_id_php() {
+        assert_eq!(
+            language_id_for_path("app/Http/Controllers/UserController.php"),
+            "php"
+        );
+        assert_eq!(language_id_for_path("resources/views/welcome.phtml"), "php");
+    }
+
+    #[test]
+    fn parse_completion_list() {
+        let v = serde_json::json!({
+            "isIncomplete": true,
+            "items": [
+                { "label": "foo", "kind": 3, "detail": "fn" },
+                { "label": "bar" }
+            ]
+        });
+        let list = parse_completions(&v);
+        assert!(list.is_incomplete);
+        assert_eq!(list.items.len(), 2);
+        assert_eq!(list.items[0].label, "foo");
+        assert_eq!(list.items[0].kind, Some(3));
+    }
+
+    #[test]
+    fn parse_hover_markdown() {
+        let v = serde_json::json!({
+            "contents": { "kind": "markdown", "value": "**hi**" }
+        });
+        let h = parse_hover(&v).expect("hover");
+        assert!(h.contents.contains("hi"));
+    }
+
+    #[test]
+    fn path_uri_unix() {
+        let u = path_to_uri(Path::new("/tmp/foo.rs"));
+        assert!(u.starts_with("file://"));
+        assert!(u.contains("/tmp/foo.rs"));
     }
 }

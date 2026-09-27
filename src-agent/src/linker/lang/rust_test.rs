@@ -140,6 +140,6 @@ fn grouped_self_and_glob_filtered() {
     let uses: Vec<&str> = structured.iter().map(|r| r.raw.as_str()).collect();
     // `self` and `*` should be filtered out by expand_grouped_use
     assert!(uses.contains(&"crate::foo::Bar"));
-    assert!(!uses.iter().any(|u| *u == "crate::foo::self"));
-    assert!(!uses.iter().any(|u| *u == "crate::foo::*"));
+    assert!(!uses.contains(&"crate::foo::self"));
+    assert!(!uses.contains(&"crate::foo::*"));
 }

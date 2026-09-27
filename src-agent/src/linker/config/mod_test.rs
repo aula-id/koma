@@ -20,8 +20,7 @@ fn compile_flags_parse_i() {
     let mut flags = CompileFlags::default();
     for line in content.lines() {
         let line = line.trim();
-        if line.starts_with("-I") {
-            let rest = &line[2..];
+        if let Some(rest) = line.strip_prefix("-I") {
             flags.include_paths.push(resolve_rel(base, rest));
         }
     }

@@ -410,22 +410,6 @@ fn fuzzy_score(path: &str, query: &str) -> Option<i64> {
     Some(score - path.len() as i64 / 4)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn fuzzy_matches_unicode_and_prefers_basename() {
-        assert!(fuzzy_score("src/école.ts", "éct").is_some());
-        assert!(fuzzy_score("src/main.rs", "mx").is_none());
-        assert!(fuzzy_score("src/main.rs", "main") > fuzzy_score("main/other.rs", "main"));
-    }
-    #[test]
-    fn rejects_unknown_config_versions() {
-        assert!(validate_config(&json!({"version":2})).is_err());
-        assert!(validate_config(&json!({"version":1,"tasks":{}})).is_err());
-    }
-}
-
 fn file_operation(request: &Request, body: &Value, workdirs: &[PathBuf]) -> Result<Value> {
     #[derive(serde::Deserialize)]
     #[serde(tag = "r", rename_all_fields = "camelCase")]
@@ -535,4 +519,20 @@ fn file_operation(request: &Request, body: &Value, workdirs: &[PathBuf]) -> Resu
             }
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn fuzzy_matches_unicode_and_prefers_basename() {
+        assert!(fuzzy_score("src/école.ts", "éct").is_some());
+        assert!(fuzzy_score("src/main.rs", "mx").is_none());
+        assert!(fuzzy_score("src/main.rs", "main") > fuzzy_score("main/other.rs", "main"));
+    }
+    #[test]
+    fn rejects_unknown_config_versions() {
+        assert!(validate_config(&json!({"version":2})).is_err());
+        assert!(validate_config(&json!({"version":1,"tasks":{}})).is_err());
+    }
 }

@@ -82,7 +82,7 @@ async fn proxy_forwards_frames_both_ways() {
     drop(client_stdin_w);
     drop(sock_daemon);
 
-    let _ = tokio::time::timeout(Duration::from_secs(2), bridge)
+    tokio::time::timeout(Duration::from_secs(2), bridge)
         .await
         .expect("bridge should finish after EOF")
         .expect("bridge task");
@@ -152,7 +152,7 @@ async fn stdio_eof_does_not_inject_quit_daemon() {
     );
 
     drop(sock_daemon);
-    let _ = tokio::time::timeout(Duration::from_secs(2), bridge)
+    tokio::time::timeout(Duration::from_secs(2), bridge)
         .await
         .expect("bridge should finish")
         .expect("bridge task");

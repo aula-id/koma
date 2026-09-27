@@ -19,6 +19,7 @@
 //! Call [`exit_multiplex`] only when leaving the **host** entirely (disconnect),
 //! not when detaching a session back to the remote hub.
 
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::process::{Command as StdCommand, Stdio};
 

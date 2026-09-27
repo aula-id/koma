@@ -388,10 +388,12 @@ mod tests {
 
     #[test]
     fn resolve_user_over_mission_and_charter() {
-        let mut s = Settings::default();
-        s.session_goal = "user steer".into();
-        s.session_goal_source = "user".into();
-        s.session_charter = "kickoff charter".into();
+        let s = Settings {
+            session_goal: "user steer".into(),
+            session_goal_source: "user".into(),
+            session_charter: "kickoff charter".into(),
+            ..Settings::default()
+        };
         let mission = MissionSnap {
             approved: true,
             mission_goal: "mission goal".into(),
@@ -406,8 +408,10 @@ mod tests {
 
     #[test]
     fn resolve_mission_when_no_user() {
-        let mut s = Settings::default();
-        s.session_charter = "kickoff".into();
+        let s = Settings {
+            session_charter: "kickoff".into(),
+            ..Settings::default()
+        };
         let mission = MissionSnap {
             approved: true,
             mission_goal: "big goal".into(),
@@ -421,8 +425,10 @@ mod tests {
 
     #[test]
     fn resolve_charter_fallback() {
-        let mut s = Settings::default();
-        s.session_charter = "build headless run".into();
+        let s = Settings {
+            session_charter: "build headless run".into(),
+            ..Settings::default()
+        };
         let eg = resolve_effective_goal(&s, None);
         assert_eq!(eg.source, GoalSource::Charter);
         assert_eq!(eg.objective, "build headless run");
@@ -431,8 +437,10 @@ mod tests {
 
     #[test]
     fn resolve_legacy_goal_without_source() {
-        let mut s = Settings::default();
-        s.session_goal = "legacy goal".into();
+        let s = Settings {
+            session_goal: "legacy goal".into(),
+            ..Settings::default()
+        };
         // source empty → None parse, still user-owned when goal non-empty
         let eg = resolve_effective_goal(&s, None);
         assert_eq!(eg.source, GoalSource::User);
@@ -441,8 +449,10 @@ mod tests {
 
     #[test]
     fn resolve_multi_active_skips_mission() {
-        let mut s = Settings::default();
-        s.session_charter = "charter only".into();
+        let s = Settings {
+            session_charter: "charter only".into(),
+            ..Settings::default()
+        };
         // load_mission_snap would set active_leaf None; simulate here
         let mission = MissionSnap {
             approved: true,
@@ -474,8 +484,10 @@ mod tests {
 
     #[test]
     fn clear_does_not_imply_wipe_charter_in_resolve() {
-        let mut s = Settings::default();
-        s.session_charter = "still here".into();
+        let mut s = Settings {
+            session_charter: "still here".into(),
+            ..Settings::default()
+        };
         s.session_goal.clear();
         s.session_goal_source = "none".into();
         let eg = resolve_effective_goal(&s, None);

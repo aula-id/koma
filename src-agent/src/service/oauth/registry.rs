@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn codex_models_match_open_code_allowlist_shape() {
         // No bare gpt-5.6; OpenCode denies bare 5.6 / pro modes.
-        assert!(!CODEX_MODELS.iter().any(|m| *m == "gpt-5.6"));
+        assert!(!CODEX_MODELS.contains(&"gpt-5.6"));
         assert!(!CODEX_MODELS.iter().any(|m| m.contains("-pro")));
         // Required plain ids.
         for id in ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"] {
