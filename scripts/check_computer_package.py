@@ -39,7 +39,29 @@ def check(directory: Path) -> None:
                            env=environment, check=True, capture_output=True, timeout=15)
             if not list(app.rglob("libXtst.so*")):
                 raise RuntimeError(f"{artifact}: missing XTEST library")
-            print(f"{artifact.name}: bundled English OCR and XTEST present")
+            gst = app / "usr/bin/gst-launch-1.0"
+            plugins = app / "usr/lib/gstreamer-1.0"
+            for plugin in ['libgstcoreelements.so', 'libgstpipewire.so', 'libgstpng.so']:
+                if not (plugins / plugin).is_file():
+                    raise RuntimeError(f"{artifact}: missing portal capture plugin {plugin}")
+            if not any((plugins / p).is_file() for p in ['libgstvideoconvert.so', 'libgstvideoconvertscale.so']):
+                raise RuntimeError(f"{artifact}: missing video conversion plugin")
+            subprocess.run([str(gst), '--version'], env=environment, check=True,
+                           capture_output=True, timeout=15)
+            environment['GST_PLUGIN_SYSTEM_PATH_1_0'] = str(plugins)
+            environment['GST_PLUGIN_PATH_1_0'] = str(plugins)
+            environment['GST_PLUGIN_SCANNER_1_0'] = str(app / 'usr/libexec/gstreamer-1.0/gst-plugin-scanner')
+            environment['GST_REGISTRY_1_0'] = str(Path(scratch) / 'gst-registry.bin')
+            for element in ['pipewiresrc', 'videoconvert', 'pngenc', 'fdsink']:
+                subprocess.run([str(app / 'usr/bin/gst-inspect-1.0'), element], env=environment,
+                               check=True, capture_output=True, timeout=15)
+            for relative in ['share/pipewire/client.conf',
+                             'lib/pipewire-0.3/libpipewire-module-protocol-native.so',
+                             'lib/pipewire-0.3/libpipewire-module-client-node.so',
+                             'lib/spa-0.2/support/libspa-support.so']:
+                if not (app / 'usr' / relative).is_file():
+                    raise RuntimeError(f'{artifact}: missing PipeWire client runtime {relative}')
+            print(f"{artifact.name}: bundled English OCR, XTEST and portal capture runtime present")
 
 
 if __name__ == "__main__":

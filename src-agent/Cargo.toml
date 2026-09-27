@@ -127,14 +127,14 @@ category = "DeveloperTool"
 icons = ["../assets/icon.ico", "../assets/icon.icns", "../assets/icon*.png"]
 
 [package.metadata.packager.deb]
-depends = ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libxtst6", "at-spi2-core", "tesseract-ocr", "tesseract-ocr-eng"]
+depends = ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libxtst6", "at-spi2-core", "tesseract-ocr", "tesseract-ocr-eng", "xdg-desktop-portal", "gstreamer1.0-tools", "gstreamer1.0-pipewire", "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good", "pipewire-bin"]
 section = "utils"
 desktop-template = "../packaging/linux/koma.desktop.hbs"
 
 [package.metadata.packager.wix]
 template = "../packaging/windows/main.wxs"
-fragment-paths = ["../packaging/windows/path-and-shortcut.wxs"]
-component-group-refs = ["KomaPathAndShortcut"]
+fragment-paths = ["../packaging/windows/path-and-shortcut.wxs", "../packaging/windows/ocr-files.wxs"]
+component-group-refs = ["KomaPathAndShortcut", "KomaOcrFiles"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11-dl = { version = "2.21", optional = true }
@@ -146,6 +146,7 @@ zbus = { version = "=5.17.0", optional = true }
 bins = ["/usr/bin/tesseract"]
 libs = ["libXtst.so.6"]
 [package.metadata.packager.appimage.files]
+"../packaging/linux/gstreamer" = "usr"
 "/usr/share/tesseract-ocr" = "usr/share/tesseract-ocr"
 "/usr/share/doc/tesseract-ocr" = "usr/share/doc/tesseract-ocr"
 "/usr/share/doc/tesseract-ocr-eng" = "usr/share/doc/tesseract-ocr-eng"

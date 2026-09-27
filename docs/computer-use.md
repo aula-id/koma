@@ -1,8 +1,10 @@
 # Computer use: implementation and validation status
 
-This is a partial implementation of the native computer-use plan. The daemon,
-model-loop integration, GUI panel, deterministic tests, and Linux X11 adapter are
-implemented. It is **not yet the planned cross-platform release**.
+The daemon, model-loop integration, GUI preview and native desktop adapters are
+implemented in source. **macOS and Windows still need compilation with their SDKs
+and device validation.** Wayland supports portal observations; input is explicitly
+unavailable because the standard portal cannot verify window focus and obstruction.
+This is an experimental implementation, not a cross-platform validation claim.
 
 ## What is implemented
 
@@ -51,122 +53,210 @@ one-shot operation results, never recurring session snapshots. Context shaping
 retains the latest actionable attachment. Desktop content is labelled as external
 task data. Accessibility/OCR overlays do not change the PNG.
 
-AT-SPI extraction matches the selected window by process identity, title and
-bounds. It reads only labels/roles/states/bounds, skips password controls, traverses
-at most 256 nodes and 12 levels, and uses a 750 ms traversal deadline with 100 ms
-DBus method timeouts. Local English Tesseract OCR has a two-second deadline and
-bounded output. Enrichment failure preserves a valid screenshot and component
-status. OCR text never becomes a clickable accessibility target.
+Accessibility extraction is limited to the selected window. macOS matches AX
+windows by process, title and geometry; Windows starts UI Automation at the
+selected HWND; X11 matches AT-SPI windows by process, title and bounds. Traversal
+is bounded to 256 nodes, 12 levels and a 750 ms traversal budget, with 100 ms
+provider-call timeouts. No value/text interfaces are read, and protected controls
+are omitted. Provider calls and root matching can add to the traversal budget.
 
-## Platform capability matrix
+Local OCR operates on the captured PNG/image: Vision on macOS, English Tesseract
+on Windows/Linux. It has a two-second budget and at most 256 regions/words. Both
+sources identify their provenance; OCR confidence is normalized to 0..1. Failure
+returns the valid screenshot with an explicit component status. OCR text does not
+establish interactivity and cannot be used as an accessibility click target.
 
-| Platform | Capture, listing, focus | Pointer / keyboard | Accessibility / OCR | Viewer |
+## Platform capabilities and build requirements
+
+| Platform | Capture / window selection | Input | Accessibility / OCR | Preview |
 | --- | --- | --- | --- | --- |
-| Linux X11 | Implemented for local Unix-socket displays and EWMH windows with PID metadata | XTEST; typing limited to characters in the current keyboard map | AT-SPI, local Tesseract when installed/bundled | Draggable/resizable panel and detached viewer |
-| Linux Wayland | Unavailable; portal adapter not implemented, including source-picker integration | Unavailable | No native observations | In-app panel with limitations |
-| macOS | Unavailable; ScreenCaptureKit adapter not implemented | Unavailable | Accessibility / Vision adapter not implemented | In-app panel with limitations |
-| Windows | Unavailable; Graphics Capture adapter not implemented | Unavailable | UI Automation adapter not implemented | In-app panel with limitations |
+| macOS 14+ | On-demand ScreenCaptureKit screenshot; native window listing | CGEvent pointer, Unicode text and named chords; AX focus | AX / local Vision | Panel and detached viewer; OS content protection requested |
+| Windows 10 1903+ | One requested Graphics Capture frame; native window listing | SendInput pointer, UTF-16 text and named chords; foreground activation | UI Automation / bundled Tesseract | Panel and detached viewer; OS content protection requested |
+| Linux X11 | XGetImage on a visible EWMH window, local Unix-socket display | XTEST, including temporary-keycode Unicode fallback | AT-SPI / Tesseract | Panel and detached viewer; obstruction checks |
+| Linux Wayland | Window-only ScreenCast portal picker and one-frame PipeWire consumer | Unavailable; no verified native target/focus/occlusion from the standard portal | AX unavailable for opaque portal identity / Tesseract | In-app panel |
 
-X11 capture/input reject an obstructed target, including obstruction by Koma's
-preview. Koma's own windows and windows without process identity are excluded.
-Coordinates use the X server's pixel space. A coordinate/focus check followed by
-OS input still has a small desktop race; this is not an OS-level transactional
-input API. XID/PID identity does not completely eliminate rare same-process XID
-reuse. Native support should remain experimental pending broader validation.
+Capabilities are reported individually at activation. Missing permissions,
+unsupported OS versions, missing OCR or compositor limitations appear in the GUI
+and tool results. Missing enrichment does not disable an otherwise valid capture.
 
-## Packaging
+**macOS:** build with Xcode 15+ and the macOS 14+ SDK, Node 24 and the Rust toolchain.
+The Objective-C++ bridge is compiled only with the GUI feature. ScreenCaptureKit
+is weak-linked and guarded by runtime availability checks. Grant Screen Recording
+and Accessibility to Koma in System Settings; stop and enable control again after
+permission changes (the OS may require relaunch). Screen Recording permits
+observation; Accessibility is additionally needed for labels, focus and input.
+The implementation uses Apple's [SCScreenshotManager](https://developer.apple.com/documentation/screencapturekit/scscreenshotmanager)
+for explicit observations, without maintaining a capture stream.
 
-The Linux Debian metadata requires Tesseract, English data, AT-SPI and XTEST.
-AppImage metadata includes the Tesseract binary, language/config data, notices and
-XTEST library. The release workflow installs those build-time inputs and runs
-`scripts/check_computer_package.py` against the resulting artifact before upload.
-That check extracts the artifact and loads English using its bundled executable
-and libraries. These packaging paths follow the existing
-[cargo-packager configuration](https://docs.crabnebula.dev/packager/configuration/).
+**Windows:** build with the MSVC Rust target, Visual Studio C++ tools and a recent
+Windows 10/11 SDK containing C++/WinRT and Graphics Capture headers. GNU builds
+remain available with `--no-default-features`; the GUI SDK bridge requires MSVC.
+The [CreateForWindow API](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow)
+sets the Windows 10 1903 minimum. The adapter uses physical pixel coordinates and
+rejects a capture whose dimensions do not match the window's DWM frame bounds.
+Secure desktops, protected content and elevated applications can reject capture
+or input. RDP/non-console sessions are rejected. Foreground activation can be
+refused by Windows: activate the target manually and select it for observation in
+the GUI. UI Automation runs on the desktop worker's MTA.
 
-Development/raw/custom binaries may lack Tesseract; this is reported as an OCR
-limitation. OCR dependencies are confined to GUI builds. Windows OCR release
-bundling is still outstanding; the WiX packaging system is unchanged.
+**X11:** requires EWMH window/PID metadata and XTEST for input. Unicode characters
+absent from the active keymap use a temporarily reserved unused keycode; the map
+is restored on completion/cancellation unless another client changed it. The
+application must support Unicode keysyms. Legacy XLookupString-only applications,
+unavailable keycodes, non-primary keyboard groups and locked/sticky modifiers
+can prevent typing. Mapping delivery uses short bounded delays and still needs
+validation against actual applications. Release physical keys/buttons before
+letting the agent act.
 
-## Remaining delivery work
+**Wayland:** enable Computer and choose **Choose window in system dialog**. The
+compositor must expose window capture via the [ScreenCast portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html).
+Monitor-only portals are rejected. The user owns source selection; listing and
+programmatic switching are unavailable. The source-picker request allows up to
+120 seconds for consent. GStreamer consumes one frame only when an observation is
+requested, using the portal's restricted PipeWire file descriptor. The portal
+session stays open between observations but Koma has no idle frame consumer.
+Pause, Stop, disconnect and session changes close it; resuming requires choosing
+the source again. There is no XWayland fallback or automatically restored grant.
+The portal's opaque source identity is insufficient for selected-window AT-SPI
+matching or the input contract, so this implementation deliberately exposes
+neither. A future compositor-specific adapter would be needed for verified input.
 
-- macOS ScreenCaptureKit, Accessibility, native input and Vision adapters, with
-  native permissions and minimum-version handling.
-- Windows Graphics Capture, UI Automation and native input adapters, plus bundled
-  Tesseract runtime and English data in the existing WiX package.
-- Wayland portal capture/input and user-mediated source selection.
-- Broader native validation of the detached viewer on each desktop. The X11 viewer uses
-  non-focusable window hints and pauses/falls back to the in-app panel if the
-  compositor focuses it. Capture exclusion is unavailable on X11; obstruction
-  checks remain active.
-- General Unicode injection beyond the active X11 keyboard map.
-- Broader native validation: mixed-DPI hardware, multiple monitors, compositor
-  obstruction, permission revocation and all supported OS versions.
+Native adapters reject input when another window (including Koma's preview)
+obstructs the selected target. macOS/Windows window capture may still observe an
+occluded target. X11 also rejects occluded capture. Native windows are configured
+not to steal focus; if a desktop focuses the detached viewer, Koma pauses and
+falls back to the panel. Content-protection/exclusion support depends on the OS.
 
-## Verification
+Desktop validation and OS input are not atomic: focus/content can change between
+a check and an input event. Bounds/title checks cannot detect every same-window
+content change. Native window identifiers also retain a rare same-process window-ID reuse
+limitation, even when combined with process identity. No timeout or lost response triggers an
+automatic input retry. Cancellation prevents future input and releases injected
+keys/buttons on a best-effort basis; it does not undo completed actions.
 
-Final Linux build checks passed with default GUI features and with
-`--no-default-features`. Clippy passed in both configurations with `-D warnings`,
-and the GUI TypeScript check passed. The default workspace suite passed **1,817
-tests**, with the two native tests ignored in that run; each native test passed
-when invoked explicitly. The headless computer regression subset passed **10
-tests**. Commands used `--offline` for Cargo; tests needing local sockets and
-application-data fixtures were run outside the sandbox.
+## Release packaging
 
-An earlier full run exposed a lock-release race while other tests created child
-processes. Controller and native-worker locks now explicitly unlock before closing,
-and the regression retains a duplicate file handle while verifying takeover. The
-final full-suite result above includes that fix.
+OCR and portal dependencies are confined to GUI builds/packages. Raw development
+and custom builds may use installed Tesseract from PATH; missing English data or
+OCR failures are reported with the screenshot. macOS uses OS-provided Vision and
+ships no Tesseract runtime.
 
-Automated tests exercise an isolated desktop fixture and no desktop input unless
-an ignored native test is explicitly selected. They cover capture count,
-selection/click/type/observation, partial failure without replay, cleanup,
-focus/geometry/closure rejection, cancellation, duplicate and late replies,
-controller contention, generation changes after approval, model/preview byte
-identity, missing enrichment, crop mapping, OCR provenance and delegated dispatch.
+The existing Windows WiX installer now includes `ocr/tesseract.exe`, its DLLs,
+English data, configuration and upstream notices. Run from the repository root:
 
-Commands:
-
-```sh
-cargo check --workspace
-cargo check --workspace --no-default-features
-cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy --workspace --no-default-features --all-targets -- -D warnings
-cargo test --workspace
-cargo test --workspace --no-default-features computer
-cd src-webgui && npx tsc --noEmit
+```powershell
+./scripts/prepare_windows_ocr.ps1
+cargo build --release -p agent
+cargo packager --release --formats wix --verbose
+./scripts/check_windows_ocr.ps1
 ```
 
-The X11 native test creates its own disposable fixture process, selects only that
-window, injects one click and `Koma42`, checks the fixture's received input, and
-captures a subsequent observation. It requires a local X11 desktop with an EWMH
-window manager, XTEST, `cc` and X11 development headers:
+Preparation downloads a pinned upstream Tesseract installer, verifies its SHA-256,
+installs it into a temporary staging directory, and generates the WiX fragment
+under `packaging/windows/`. The fragment is generated per checkout and ignored by
+Git. The verification script administratively extracts the actual MSI and runs
+its packaged OCR against a synthetic blank image. The existing WiX template and
+version scheme are unchanged.
+
+Linux Debian metadata requires Tesseract/English data, AT-SPI, XTEST, the desktop
+portal and GStreamer/PipeWire packages. The user's desktop must supply the matching
+portal backend. AppImage staging includes the Tesseract runtime/data/notices,
+XTEST, GStreamer launcher/plugins/scanner, and PipeWire client modules/SPA plugins
+and configuration. PipeWire's dynamically loaded modules need explicit staging in
+addition to linked libraries; its [runtime path settings](https://docs.pipewire.org/page_man_pipewire_1.html)
+are applied only to the capture subprocess.
+
+Install the packages named in the release workflow, then run from the repository
+root on the native Linux packaging architecture:
+
+```sh
+python3 scripts/stage_linux_portal.py
+cargo build --release -p agent
+cargo packager --release --formats deb,appimage --verbose
+python3 scripts/check_computer_package.py target/release
+```
+
+The release workflow runs these preparation and artifact checks. The ARM64 package
+job uses the native `ubuntu-22.04-arm` runner listed in the
+[GitHub runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners),
+so the executable and staged libraries match the advertised architecture.
+The AppImage check executes bundled OCR and loads bundled GStreamer plugins; it
+does not open a portal or capture a desktop. These gates are source implementation,
+not evidence that a release artifact has been built or validated in this session.
+
+## Verification evidence
+
+For this continuation, the user requested implementation and static checks only,
+with device testing left to them. No native smoke test, desktop capture, input
+injection, new automated test-suite execution, installer build or package execution
+was performed. The macOS/Windows bridges have been source-reviewed but **have not
+been compiled** here because the corresponding SDKs are unavailable.
+
+Linux workspace checks and Clippy with `-D warnings` passed with default GUI
+features and with `--no-default-features`. The GUI TypeScript check and Python
+packaging-script syntax checks also passed. Commands used:
+
+```sh
+cargo check --workspace --offline
+cargo check --workspace --no-default-features --offline
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo clippy --workspace --no-default-features --all-targets --offline -- -D warnings
+# From src-webgui:
+npx --no-install tsc --noEmit
+```
+
+The existing fake-desktop coverage checks capture counts, select/click/type/observe,
+partial execution and cleanup, stale focus/geometry/title, cancellation,
+controller contention, duplicate/late replies, generation changes after approval,
+model/preview byte identity, crop transforms, enrichment failure and tool dispatch.
+These tests are compiled by Clippy's `--all-targets`; compiling is not executing.
+
+Historical evidence from the preceding X11-only implementation (before this
+continuation): 1,817 workspace tests passed, two opt-in native tests were excluded
+from that suite, and the headless computer subset passed 10 tests. The two native
+tests were subsequently run explicitly on 2026-09-27 on X.Org 1.20.14 at 1280×720.
+They verified ASCII fixture click/type/capture/cleanup and detached-viewer focus
+plus Pause IPC. WebKit emitted a DRI3 warning but the tests passed. Those results
+do not validate the new Unicode path, portal adapter, native macOS/Windows bridges,
+OCR/AX coverage, mixed-DPI hardware or release packages.
+
+## Device walkthrough
+
+Open `docs/testing/computer-fixture.html` locally in a browser. Start a local Koma
+GUI session, enable Computer and choose that window (system picker on Wayland).
+Use the existing Main model with image input and follow normal action approvals.
+
+1. Observe and compare the preview against the exact saved model attachment.
+   Enable AX/OCR overlays and inspect their component statuses. Confirm that the
+   password value is absent from extracted metadata. Crop an observation and
+   confirm that the original capture count does not increase.
+2. On input-capable platforms, select/focus through the model, click the Message
+   field and type `Koma42 — café 世界 🌍`. Use an AX editable target for a combined
+   click/type sequence, or observe after a coordinate click before typing. Click
+   Apply in a separate sequence; the counter must increment once and text match.
+   Try Ctrl+A (Command+A on macOS), Backspace and Return/Tab as separate final keys.
+3. Scroll the fixture in its own sequence. Resize/move the target, including
+   between differently scaled monitors and a monitor with a negative origin;
+   an old observation must be rejected and a new observation must map correctly.
+4. Obstruct the target with the preview/another window and verify input refusal.
+   Switch focus or close the target during an approval and verify no subsequent
+   input. Pause/Stop/Take over during a sequence; verify no replay and no stuck keys.
+5. Switch sessions, disconnect/reconnect and compete from a second GUI. Explicit
+   reactivation must be required. In Plan mode allow observation but reject model
+   focus/input. TUI, headless, remote and subagent paths must not gain control.
+6. Verify no new PNG artifacts while idle or during intermediate `observe=false`
+   input. A selection/final requested observation should add exactly one capture.
+   Missing OCR/AX must leave the screenshot available with a component limitation.
+7. On macOS revoke Screen Recording/Accessibility and reactivate; on Windows try
+   an elevated/protected target. On Wayland cancel the source dialog, revoke its
+   sharing grant, pause/resume and choose a replacement source. Input must remain
+   unavailable and monitor-only selection must never silently replace a window.
+
+Record OS/build/desktop versions, window scaling, permission state, component
+statuses and exact errors separately from compile/lint results. Opt-in X11 tests
+remain available for local execution when desired:
 
 ```sh
 cargo test --bin koma native_fixture_round_trip -- --ignored --nocapture
 cargo test --bin koma native_viewer_preserves_focus_and_routes_controls -- --ignored --nocapture
 ```
-
-For a GUI walkthrough, open `docs/testing/computer-fixture.html` locally in a
-browser. Enable control and select that fixture. Verify the Apply counter and
-message after approval; test scrolling as a separate sequence. Move the preview
-over the target and verify refusal. Pause during approval, resize/close the target,
-switch sessions, disconnect/reconnect, and compete from a second GUI. Confirm no
-new PNGs appear while idle, and compare the preview artifact with the model's
-attachment. Record native platform results separately from fake-adapter tests.
-
-### Native evidence from this environment
-
-On 2026-09-27, the opt-in `native_fixture_round_trip` test passed on the configured
-X11 display (X.Org 1.20.14, 1280×720, XTEST present) after running outside the
-filesystem/network sandbox. It verified window listing and focus, window capture,
-a left click, typing `Koma42`, received fixture input, a changed final image, and
-released injected keys/buttons. The separate native viewer smoke test also passed:
-it opened a disposable target and detached WebView, preserved the target's focus,
-and routed the viewer's Pause IPC without changing saved placement. WebKit emitted
-a DRI3 hardware-acceleration warning on this display; the test still passed.
-These tests did not exercise AT-SPI controls, Tesseract, multi-monitor DPI, a
-Wayland session, macOS, or Windows. The viewer test checks native focus and IPC,
-not a full model-driven GUI walkthrough or rendered-image visual comparison.
-No release installer/AppImage was built or executed here; the package validation
-gate is implementation, not packaging runtime evidence.
