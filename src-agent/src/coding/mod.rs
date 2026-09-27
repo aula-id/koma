@@ -1,9 +1,13 @@
 //! Coding operations are owned by the GUI, independently of the chat session.
 //! All operations carry their host and root; UI selection is never a routing key.
 
+mod cargo_tests;
 #[cfg(unix)]
 mod daemon;
 mod debug;
+pub(crate) fn cargo_tests_main() -> anyhow::Result<()> {
+    cargo_tests::main()
+}
 pub(crate) mod environment;
 mod language;
 mod packs;

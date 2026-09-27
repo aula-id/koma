@@ -103,7 +103,16 @@ impl Results {
             .get(&id)
             .cloned()
             .unwrap_or_else(|| json!({"id":id,"label":id,"status":"discovered"}));
-        for field in ["label", "file", "suite", "message", "status"] {
+        for field in [
+            "label",
+            "file",
+            "suite",
+            "message",
+            "status",
+            "selector",
+            "entryFile",
+            "executable",
+        ] {
             if let Some(text) = value[field].as_str() {
                 if field == "status" && next["status"] == "failed" && text != "failed" {
                     continue;
@@ -184,22 +193,6 @@ impl Results {
                     self.record(json!({"id":format!("{package}::{test}"),"label":test,"suite":package,"status":status,"durationMs":v["Elapsed"].as_f64().map(|n|n*1000.)}));
                 }
             }
-        } else if kind == "cargo" {
-            if discover {
-                if let Some(name) = line.strip_suffix(": test") {
-                    self.record(json!({"id":name,"status":"discovered"}));
-                }
-            } else if let Some(rest) = line.strip_prefix("test ") {
-                if let Some((name, status)) = rest.rsplit_once(" ... ") {
-                    let status = match status {
-                        "ok" => "passed",
-                        "FAILED" => "failed",
-                        v if v.starts_with("ignored") => "skipped",
-                        _ => return,
-                    };
-                    self.record(json!({"id":name,"status":status}));
-                }
-            }
         }
     }
 }
@@ -248,6 +241,13 @@ pub(super) fn results(workspace: &WorkspaceRef, id: &str) -> Result<Value> {
         let line = std::mem::take(&mut result.pending);
         result.line(&run.profile.kind, run.mode == "discover", &line);
     }
+    if summary["task"]["outputComplete"] == true {
+        for item in result.items.values_mut() {
+            if item["status"] == "running" {
+                item["status"] = json!("notRun");
+            }
+        }
+    }
     Ok(
         json!({"run":summary,"items":result.items.values().collect::<Vec<_>>(),"truncated":result.truncated}),
     )
@@ -283,6 +283,12 @@ fn node_files(root: &Path) -> Vec<String> {
 }
 fn command(program: &str, args: Vec<String>) -> Value {
     json!({"command":program,"args":args,"group":"test","timeoutMs":3_600_000,"continueOnError":true})
+}
+fn go_pattern(name: &str) -> String {
+    name.split('/')
+        .map(|part| format!("^{}$", regex::escape(part)))
+        .collect::<Vec<_>>()
+        .join("/")
 }
 fn recipe(root: &Path, p: &Profile, discover: bool, items: &[Value]) -> Result<Vec<Value>> {
     let selected: Vec<String> = items
@@ -335,81 +341,79 @@ fn recipe(root: &Path, p: &Profile, discover: bool, items: &[Value]) -> Result<V
                     );
                 }
                 for (package, names) in packages {
-                    let pattern = format!(
-                        "^({})$",
-                        names
-                            .iter()
-                            .map(|n| regex::escape(n))
-                            .collect::<Vec<_>>()
-                            .join("|")
-                    );
-                    let mut args = vec![
-                        "test".into(),
-                        "-json".into(),
-                        "-count=1".into(),
-                        "-run".into(),
-                        pattern,
-                    ];
-                    args.extend(p.args.clone());
-                    args.push(package);
-                    commands.push(command(program.unwrap_or("go"), args));
+                    // Go applies each slash-delimited regexp to its corresponding
+                    // subtest level. Separate invocations avoid a cross-product.
+                    for name in names {
+                        let mut args = vec![
+                            "test".into(),
+                            "-json".into(),
+                            "-count=1".into(),
+                            "-run".into(),
+                            go_pattern(&name),
+                        ];
+                        args.extend(p.args.clone());
+                        args.push(package.clone());
+                        commands.push(command(program.unwrap_or("go"), args));
+                    }
                 }
             }
         }
         "cargo" => {
-            let targets: Vec<Option<String>> = if selected.is_empty() {
-                vec![None]
-            } else {
-                selected.into_iter().map(Some).collect()
-            };
-            for target in targets {
-                let mut args = vec!["test".into()];
-                args.extend(p.args.clone());
-                if let Some(ref target) = target {
-                    args.push(target.clone());
-                }
-                args.push("--".into());
-                if discover {
-                    args.extend(["--list".into(), "--format".into(), "terse".into()]);
-                } else {
-                    args.extend(["--color".into(), "never".into()]);
-                    if target.is_some() {
-                        args.push("--exact".into());
-                    }
-                }
-                commands.push(command(program.unwrap_or("cargo"), args));
-            }
+            let cargo = super::environment::executable(root, program.unwrap_or("cargo"))?;
+            let exe = std::env::current_exe()?;
+            let spec =
+                json!({"command":cargo,"args":p.args,"discover":discover,"selected":selected});
+            commands.push(command(
+                &exe.to_string_lossy(),
+                vec!["coding-test-cargo".into(), spec.to_string()],
+            ));
         }
         "node" => {
             let dir = crate::model::store::base_dir()?.join("coding/runners");
             std::fs::create_dir_all(&dir)?;
             let reporter = dir.join("node-reporter.mjs");
             super::persistence::atomic_write(&reporter, include_bytes!("test_reporter.mjs"))?;
-            let mut args = vec![
-                "--test".into(),
-                format!("--test-reporter={}", reporter.to_string_lossy()),
-            ];
-            args.extend(p.args.clone());
-            let files = if items.is_empty() {
-                node_files(root)
+            let mut groups: BTreeMap<String, Vec<Option<String>>> = BTreeMap::new();
+            if items.is_empty() {
+                for file in node_files(root) {
+                    groups.entry(file).or_default().push(None);
+                }
             } else {
-                items
-                    .iter()
-                    .filter_map(|i| i["file"].as_str().map(str::to_owned))
-                    .collect()
-            };
-            let mut seen = std::collections::HashSet::new();
-            for file in files {
+                for item in items {
+                    let file = item["entryFile"]
+                        .as_str()
+                        .or_else(|| item["file"].as_str())
+                        .context("Test has no entry file")?;
+                    groups
+                        .entry(file.into())
+                        .or_default()
+                        .push(item["selector"].as_str().map(str::to_owned));
+                }
+            }
+            anyhow::ensure!(!groups.is_empty(), "No Node test files were found");
+            for (file, selectors) in groups {
                 let path = root.join(&file).canonicalize()?;
                 anyhow::ensure!(
                     path.starts_with(root) && path.is_file(),
                     "Test file is outside workspace"
                 );
-                if seen.insert(path.clone()) {
-                    args.push(path.to_string_lossy().into_owned());
+                let mut args = vec![
+                    "--test".into(),
+                    format!("--test-reporter={}", reporter.to_string_lossy()),
+                ];
+                args.extend(p.args.clone());
+                if selectors.iter().all(Option::is_some) {
+                    let pattern = selectors
+                        .iter()
+                        .flatten()
+                        .map(|s| regex::escape(s))
+                        .collect::<Vec<_>>()
+                        .join("|");
+                    args.push(format!("--test-name-pattern=^(?:{pattern})$"));
                 }
+                args.push(path.to_string_lossy().into_owned());
+                commands.push(command(program.unwrap_or("node"), args));
             }
-            commands.push(command(program.unwrap_or("node"), args));
         }
         "json" => {
             let mut args = if discover {
@@ -588,19 +592,46 @@ pub(super) fn debug(
             args.push(item_id.into());
             (
                 "debugpy",
-                json!({"module":"pytest","python":super::environment::test_python(root)?,"args":args,"console":"internalConsole"}),
+                json!({"module":"pytest","python":profile.command.map(std::path::PathBuf::from).unwrap_or(super::environment::test_python(root)?),"args":args,"console":"internalConsole"}),
             )
         }
         "node" => {
-            let file = item["file"].as_str().context("Test has no source file")?;
+            let file = item["entryFile"]
+                .as_str()
+                .or_else(|| item["file"].as_str())
+                .context("Test has no entry file")?;
             let file = root.join(file).canonicalize()?;
             anyhow::ensure!(
                 file.starts_with(root) && file.is_file(),
                 "Test file is outside workspace"
             );
+            let mut args = vec!["--test".to_string(), "--test-concurrency=1".into()];
+            args.extend(profile.args);
+            if let Some(selector) = item["selector"].as_str() {
+                args.push(format!("--test-name-pattern=^{}$", regex::escape(selector)));
+            }
             (
                 "js-debug",
-                json!({"type":"pwa-node","program":file,"runtimeArgs":["--test","--test-concurrency=1"],"console":"internalConsole"}),
+                json!({"type":"pwa-node","program":file,"runtimeArgs":args,"console":"internalConsole"}),
+            )
+        }
+        "cargo" => {
+            let binary = Path::new(
+                item["executable"]
+                    .as_str()
+                    .context("Discover Cargo test binaries again before debugging")?,
+            )
+            .canonicalize()?;
+            anyhow::ensure!(
+                binary.is_file(),
+                "Cargo test executable is missing; discover again to rebuild"
+            );
+            let name = item["selector"]
+                .as_str()
+                .context("Cargo test has no selector")?;
+            (
+                "lldb-dap",
+                json!({"program":binary,"args":["--exact",name,"--nocapture"],"cwd":root}),
             )
         }
         "go" => {
@@ -625,7 +656,7 @@ pub(super) fn debug(
             );
             (
                 "delve",
-                json!({"mode":"test","program":program,"args":["-test.run",format!("^{}$",regex::escape(item["label"].as_str().unwrap_or("")))]}),
+                json!({"mode":"test","program":program,"args":["-test.run",go_pattern(item["label"].as_str().unwrap_or(""))]}),
             )
         }
         _ => anyhow::bail!(
