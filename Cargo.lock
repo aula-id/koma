@@ -109,6 +109,7 @@ dependencies = [
  "wry",
  "x11-dl",
  "xz2",
+ "zbus",
  "zip",
 ]
 

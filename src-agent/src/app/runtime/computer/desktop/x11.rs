@@ -29,8 +29,8 @@ unsafe extern "C" fn error_handler(
 }
 pub fn capabilities() -> Capabilities {
     match X11::open(Arc::new(AtomicBool::new(false))) {
-        Ok(x) => Capabilities {capture:true,windows:true,focus:true,pointer:x.test.is_some(),keyboard:x.test.is_some(),
-            limitations:vec!["X11: fully visible windows only; typing requires characters present in the active keyboard map. Accessibility and floating viewer unavailable.".into()],..Default::default()},
+        Ok(x) => Capabilities {capture:true,windows:true,focus:true,pointer:x.test.is_some(),keyboard:x.test.is_some(), accessibility:std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some(), ocr:crate::app::runtime::computer::enrichment::ocr_available(),
+            limitations:vec!["X11: fully visible windows only; typing requires characters present in the active keyboard map. Floating viewer unavailable; accessibility requires a uniquely matching AT-SPI window.".into()],..Default::default()},
         Err(e)=>Capabilities {limitations:vec![e.to_string()],..Default::default()},
     }
 }

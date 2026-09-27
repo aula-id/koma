@@ -95,12 +95,26 @@ fn ingest(rt: &mut SessionRuntime, reply: &mut Reply) -> anyhow::Result<()> {
     );
     anyhow::ensure!(reply.png.len() <= 20 * 1024 * 1024, "image too large");
     anyhow::ensure!(obs.elements.len() <= 512, "too many extracted elements");
+    let dimensions =
+        image::ImageReader::with_format(std::io::Cursor::new(&reply.png), image::ImageFormat::Png)
+            .into_dimensions()?;
+    anyhow::ensure!(
+        u64::from(dimensions.0) * u64::from(dimensions.1) <= 32_000_000,
+        "decoded image too large"
+    );
     let img = image::load_from_memory_with_format(&reply.png, image::ImageFormat::Png)?;
     anyhow::ensure!(
         img.width() == obs.transform.width && img.height() == obs.transform.height,
         "image geometry mismatch"
     );
     obs.transform.map(0.0, 0.0)?;
+    anyhow::ensure!(
+        obs.elements.iter().all(|e| e.label.len() <= 1024
+            && e.role.len() <= 320
+            && e.id.len() <= 512
+            && matches!(e.source.as_str(), "accessibility" | "ocr")),
+        "invalid enrichment metadata"
+    );
     let session = rt
         .session
         .as_mut()

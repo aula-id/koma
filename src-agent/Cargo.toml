@@ -98,7 +98,7 @@ muda = { version = "0.19", optional = true, default-features = false }
 
 [features]
 default = ["gui", "linker"]
-gui = ["dep:x11-dl", "dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd", "dep:muda"]
+gui = ["dep:zbus", "dep:x11-dl", "dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd", "dep:muda"]
 linker = [
     "dep:tree-sitter",
     "dep:tree-sitter-rust",
@@ -137,3 +137,4 @@ component-group-refs = ["KomaPathAndShortcut"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11-dl = { version = "2.21", optional = true }
+zbus = { version = "=5.17.0", optional = true }

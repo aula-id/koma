@@ -82,10 +82,23 @@ impl Drop for Worker {
     }
 }
 fn run(request: &Request, cancelled: &Arc<AtomicBool>) -> Reply {
+    if let Operation::Observe { crop: Some(bounds) } = &request.operation {
+        return super::enrichment::crop(request, *bounds).unwrap_or_else(|e| Reply {
+            id: request.id.clone(),
+            session: request.session.clone(),
+            generation: request.generation.clone(),
+            error: Some(e.to_string()),
+            ..Default::default()
+        });
+    }
     #[cfg(target_os = "linux")]
     if std::env::var_os("WAYLAND_DISPLAY").is_none() {
         match x11::X11::open(cancelled.clone()) {
-            Ok(mut desktop) => return super::executor::execute(&mut desktop, request, cancelled),
+            Ok(mut desktop) => {
+                let mut reply = super::executor::execute(&mut desktop, request, cancelled);
+                super::enrichment::enrich(&mut reply, cancelled);
+                return reply;
+            }
             Err(e) => {
                 return Reply {
                     id: request.id.clone(),
