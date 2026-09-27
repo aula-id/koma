@@ -9,6 +9,7 @@ pub(crate) fn cargo_tests_main() -> anyhow::Result<()> {
     cargo_tests::main()
 }
 pub(crate) mod environment;
+mod framework_tests;
 mod language;
 mod packs;
 pub(crate) mod persistence;
@@ -18,6 +19,9 @@ mod pty;
 mod resources;
 mod tasks;
 mod tests;
+pub(crate) fn framework_tests_main() -> anyhow::Result<()> {
+    framework_tests::main()
+}
 #[cfg(feature = "gui")]
 mod transport;
 mod watch;

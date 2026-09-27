@@ -72,6 +72,7 @@ fn main() -> anyhow::Result<()> {
         return coding::worker_main();
     }
     if std::env::args().nth(1).as_deref() == Some("coding-test-cargo") { return coding::cargo_tests_main(); }
+    if std::env::args().nth(1).as_deref()==Some("coding-test-framework"){return coding::framework_tests_main();}
     // Install a panic hook that logs to ~/.koma/error.log before exiting.
     // Daemon stderr goes to /dev/null, so the default hook's eprintln is invisible.
     // This makes every panic (including .expect()/.unwrap() failures) diagnosable.

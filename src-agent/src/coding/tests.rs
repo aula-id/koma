@@ -42,6 +42,7 @@ fn profiles(root: &Path) -> Result<(Vec<Profile>, String)> {
     };
     if root.join("Cargo.toml").is_file() {
         add("cargo", "Rust tests", "cargo");
+        add("cargo-doc", "Rust doctests", "cargo-doc");
     }
     if root.join("go.mod").is_file() {
         add("go", "Go tests", "go");
@@ -60,13 +61,47 @@ fn profiles(root: &Path) -> Result<(Vec<Profile>, String)> {
     if root.join("package.json").is_file() {
         add("node", "Node test runner", "node");
     }
+    if let Ok(raw) = std::fs::read(root.join("package.json")) {
+        if let Ok(package) = serde_json::from_slice::<Value>(&raw) {
+            for id in ["jest", "vitest"] {
+                if package["dependencies"].get(id).is_some()
+                    || package["devDependencies"].get(id).is_some()
+                {
+                    add(id, if id == "jest" { "Jest" } else { "Vitest" }, id);
+                }
+            }
+        }
+    }
+    if root.join("phpunit.xml").is_file()
+        || root.join("phpunit.xml.dist").is_file()
+        || root.join("vendor/bin/phpunit").is_file()
+    {
+        add("phpunit", "PHPUnit", "phpunit");
+    }
+    if root.join("CTestTestfile.cmake").is_file()
+        || root.join("build/CTestTestfile.cmake").is_file()
+    {
+        add("ctest", "CTest", "ctest");
+    }
     anyhow::ensure!(profiles.len() <= 50, "At most 50 test profiles");
     let mut ids = std::collections::HashSet::new();
     for p in &profiles {
         anyhow::ensure!(
             !p.id.is_empty()
                 && ids.insert(&p.id)
-                && matches!(p.kind.as_str(), "cargo" | "go" | "pytest" | "node" | "json"),
+                && matches!(
+                    p.kind.as_str(),
+                    "cargo"
+                        | "cargo-doc"
+                        | "go"
+                        | "pytest"
+                        | "node"
+                        | "json"
+                        | "jest"
+                        | "vitest"
+                        | "phpunit"
+                        | "ctest"
+                ),
             "Invalid test profile"
         );
     }
@@ -417,6 +452,62 @@ fn recipe(root: &Path, p: &Profile, discover: bool, items: &[Value]) -> Result<V
                 commands.push(command(program.unwrap_or("node"), args));
             }
         }
+        "jest" | "vitest" | "phpunit" | "ctest" | "cargo-doc" => {
+            let (runtime, prefix) = if let Some(program) = program {
+                (std::path::PathBuf::from(program), vec![])
+            } else {
+                match p.kind.as_str() {
+                    "jest" => (
+                        super::environment::executable(root, "node")?,
+                        vec![root
+                            .join("node_modules/jest/bin/jest.js")
+                            .to_string_lossy()
+                            .into_owned()],
+                    ),
+                    "vitest" => (
+                        super::environment::executable(root, "node")?,
+                        vec![root
+                            .join("node_modules/vitest/vitest.mjs")
+                            .to_string_lossy()
+                            .into_owned()],
+                    ),
+                    "phpunit" => (
+                        super::environment::executable(root, "php")?,
+                        vec![root
+                            .join("vendor/bin/phpunit")
+                            .to_string_lossy()
+                            .into_owned()],
+                    ),
+                    "cargo-doc" => (super::environment::executable(root, "cargo")?, vec![]),
+                    _ => (std::path::PathBuf::from("ctest"), vec![]),
+                }
+            };
+            let mut args = p.args.clone();
+            if p.kind == "ctest"
+                && args.is_empty()
+                && root.join("build/CTestTestfile.cmake").is_file()
+            {
+                args.extend(["--test-dir".into(), "build".into()]);
+            }
+            let spec = json!({"kind":p.kind,"command":runtime,"prefix":prefix,"args":args,"discover":discover,"items":items});
+            let mut step = command(
+                &std::env::current_exe()?.to_string_lossy(),
+                vec!["coding-test-framework".into(), spec.to_string()],
+            );
+            step["env"] = json!(super::environment::variables(
+                root,
+                if p.kind == "phpunit" {
+                    "php"
+                } else if p.kind == "cargo-doc" {
+                    "cargo"
+                } else if p.kind == "ctest" {
+                    "clang"
+                } else {
+                    "node"
+                }
+            )?);
+            commands.push(step);
+        }
         "json" => {
             let mut args = if discover {
                 p.discover_args.clone()
@@ -615,6 +706,43 @@ pub(super) fn debug(
             (
                 "js-debug",
                 json!({"type":"pwa-node","program":file,"runtimeArgs":args,"console":"internalConsole"}),
+            )
+        }
+        "jest" | "vitest" => {
+            anyhow::ensure!(
+                profile.command.is_none(),
+                "Set debugProfile when using a custom framework command"
+            );
+            let name = item["selector"].as_str();
+            let mut args = if profile.kind == "jest" {
+                vec!["--runInBand".into()]
+            } else {
+                vec![
+                    "run".into(),
+                    "--no-file-parallelism".into(),
+                    "--maxWorkers=1".into(),
+                ]
+            };
+            args.extend(profile.args);
+            if let Some(name) = name {
+                args.push(format!("--testNamePattern=^{}$", regex::escape(name)));
+            }
+            if let Some(file) = item["file"].as_str() {
+                if profile.kind == "jest" {
+                    args.push("--runTestsByPath".into());
+                }
+                args.push(file.into());
+            }
+            let program = root
+                .join(if profile.kind == "jest" {
+                    "node_modules/jest/bin/jest.js"
+                } else {
+                    "node_modules/vitest/vitest.mjs"
+                })
+                .canonicalize()?;
+            (
+                "js-debug",
+                json!({"type":"pwa-node","program":program,"args":args,"autoAttachChildProcesses":true,"console":"internalConsole"}),
             )
         }
         "cargo" => {
