@@ -53,11 +53,12 @@ pub(super) fn decode(bytes: &[u8]) -> Result<TextFile, DecodeError> {
     let (text, encoding) = if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
         let little = bytes[0] == 0xff;
         let bytes = &bytes[2..];
-        if bytes.len() % 2 != 0 {
+        let (pairs, remainder) = bytes.as_chunks::<2>();
+        if !remainder.is_empty() {
             return Err(DecodeError::UnsupportedEncoding);
         }
-        let units: Vec<_> = bytes
-            .chunks_exact(2)
+        let units: Vec<_> = pairs
+            .iter()
             .map(|c| {
                 if little {
                     u16::from_le_bytes([c[0], c[1]])

@@ -67,11 +67,9 @@ fn utf8(value: &Option<Vec<u8>>) -> Result<String, String> {
     }
     String::from_utf8(b.to_vec()).map_err(|_| "Binary file — text operations unavailable".into())
 }
-fn sides(
-    root: &Path,
-    path: &str,
-    staged: bool,
-) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>, String), String> {
+type DiffSides = (Option<Vec<u8>>, Option<Vec<u8>>, String);
+
+fn sides(root: &Path, path: &str, staged: bool) -> Result<DiffSides, String> {
     safe_path(root, path)?;
     let index = text(root, &["ls-files", "--stage", "-z", "--", path])?;
     if index
@@ -246,7 +244,9 @@ fn partial_allowed(root: &Path, path: &str, staged: bool, index: &str) -> Result
     )?;
     let parts: Vec<_> = attributes.split(|b| *b == 0).collect();
     if parts
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .any(|p| p[2] != b"unspecified" && p[2] != b"unset")
     {
         return Ok(false);

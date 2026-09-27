@@ -88,7 +88,8 @@ pub(crate) enum Action {
     StashInspect {
         oid: String,
     },
-    StashAction {
+    #[serde(rename = "stashAction")]
+    Stash {
         oid: String,
         operation: String,
     },
@@ -422,7 +423,7 @@ fn execute(root: &Path, action: &Action) -> Result<Value, String> {
                 json!({"patch":text(root,&["stash","show","--include-untracked","--no-ext-diff","--no-color","-p",&r])?}),
             )
         }
-        StashAction {
+        Stash {
             oid: hash,
             operation,
         } => {

@@ -378,7 +378,7 @@ pub fn search_messages_before(
     max_msg_id: i64,
     limit: i64,
 ) -> anyhow::Result<Vec<MessageMatch>> {
-    let limit = limit.max(1).min(20);
+    let limit = limit.clamp(1, 20);
     let mut out: Vec<MessageMatch> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 

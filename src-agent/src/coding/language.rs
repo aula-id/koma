@@ -7,8 +7,8 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-static MANAGERS: OnceLock<Mutex<HashMap<(WorkspaceRef, String), Arc<Mutex<LspManager>>>>> =
-    OnceLock::new();
+type Managers = HashMap<(WorkspaceRef, String), Arc<Mutex<LspManager>>>;
+static MANAGERS: OnceLock<Mutex<Managers>> = OnceLock::new();
 
 thread_local! { static CLIENT: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) }; }
 fn client_id() -> String {
@@ -27,23 +27,20 @@ pub(super) fn with_client<T>(client: &str, operation: impl FnOnce() -> T) -> T {
 #[derive(Deserialize)]
 #[serde(tag = "r", rename_all_fields = "camelCase")]
 enum Message {
-    LspDidOpen {
+    #[serde(rename = "LspDidOpen")]
+    DidOpen {
         path: String,
         language_id: String,
         text: String,
     },
-    LspDidChange {
-        path: String,
-        text: String,
-    },
-    LspDidSave {
-        path: String,
-        text: Option<String>,
-    },
-    LspDidClose {
-        path: String,
-    },
-    LspCompletion {
+    #[serde(rename = "LspDidChange")]
+    DidChange { path: String, text: String },
+    #[serde(rename = "LspDidSave")]
+    DidSave { path: String, text: Option<String> },
+    #[serde(rename = "LspDidClose")]
+    DidClose { path: String },
+    #[serde(rename = "LspCompletion")]
+    Completion {
         path: String,
         line: u32,
         character: u32,
@@ -51,34 +48,36 @@ enum Message {
         trigger_character: Option<String>,
         request_id: String,
     },
-    LspCompletionResolve {
+    #[serde(rename = "LspCompletionResolve")]
+    CompletionResolve {
         path: String,
         item: Box<crate::lsp::LspCompletionItem>,
         request_id: String,
     },
-    LspHover {
+    #[serde(rename = "LspHover")]
+    Hover {
         path: String,
         line: u32,
         character: u32,
         request_id: String,
     },
-    LspDefinition {
+    #[serde(rename = "LspDefinition")]
+    Definition {
         path: String,
         line: u32,
         character: u32,
         request_id: String,
     },
-    LspReferences {
+    #[serde(rename = "LspReferences")]
+    References {
         path: String,
         line: u32,
         character: u32,
         include_declaration: bool,
         request_id: String,
     },
-    LspDocumentSymbol {
-        path: String,
-        request_id: String,
-    },
+    #[serde(rename = "LspDocumentSymbol")]
+    DocumentSymbol { path: String, request_id: String },
 }
 
 pub(super) fn dispatch(workspace: &WorkspaceRef, body: &Value) -> Result<Value, String> {
@@ -86,7 +85,7 @@ pub(super) fn dispatch(workspace: &WorkspaceRef, body: &Value) -> Result<Value, 
     let manager = manager(workspace)?;
     let root = workspace.root.clone();
     let ctl = match msg {
-        Message::LspDidOpen {
+        Message::DidOpen {
             path,
             language_id,
             text,
@@ -96,10 +95,10 @@ pub(super) fn dispatch(workspace: &WorkspaceRef, body: &Value) -> Result<Value, 
             language_id,
             text,
         },
-        Message::LspDidChange { path, text } => HostCtl::LspDidChange { root, path, text },
-        Message::LspDidSave { path, text } => HostCtl::LspDidSave { root, path, text },
-        Message::LspDidClose { path } => HostCtl::LspDidClose { root, path },
-        Message::LspCompletion {
+        Message::DidChange { path, text } => HostCtl::LspDidChange { root, path, text },
+        Message::DidSave { path, text } => HostCtl::LspDidSave { root, path, text },
+        Message::DidClose { path } => HostCtl::LspDidClose { root, path },
+        Message::Completion {
             path,
             line,
             character,
@@ -115,7 +114,7 @@ pub(super) fn dispatch(workspace: &WorkspaceRef, body: &Value) -> Result<Value, 
             trigger_character,
             request_id,
         },
-        Message::LspCompletionResolve {
+        Message::CompletionResolve {
             path,
             item,
             request_id,
@@ -125,7 +124,7 @@ pub(super) fn dispatch(workspace: &WorkspaceRef, body: &Value) -> Result<Value, 
             item,
             request_id,
         },
-        Message::LspHover {
+        Message::Hover {
             path,
             line,
             character,
@@ -137,7 +136,7 @@ pub(super) fn dispatch(workspace: &WorkspaceRef, body: &Value) -> Result<Value, 
             character,
             request_id,
         },
-        Message::LspDefinition {
+        Message::Definition {
             path,
             line,
             character,
@@ -149,7 +148,7 @@ pub(super) fn dispatch(workspace: &WorkspaceRef, body: &Value) -> Result<Value, 
             character,
             request_id,
         },
-        Message::LspReferences {
+        Message::References {
             path,
             line,
             character,
@@ -163,7 +162,7 @@ pub(super) fn dispatch(workspace: &WorkspaceRef, body: &Value) -> Result<Value, 
             include_declaration,
             request_id,
         },
-        Message::LspDocumentSymbol { path, request_id } => HostCtl::LspDocumentSymbol {
+        Message::DocumentSymbol { path, request_id } => HostCtl::LspDocumentSymbol {
             root,
             path,
             request_id,

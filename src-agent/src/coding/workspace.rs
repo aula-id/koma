@@ -430,37 +430,32 @@ fn file_operation(request: &Request, body: &Value, workdirs: &[PathBuf]) -> Resu
     #[derive(serde::Deserialize)]
     #[serde(tag = "r", rename_all_fields = "camelCase")]
     enum FileOperation {
-        FileDownloadBytes {
-            path: String,
-        },
-        FileTree {
-            path: String,
-        },
-        FileRead {
-            path: String,
-        },
-        FileSave {
+        #[serde(rename = "FileDownloadBytes")]
+        DownloadBytes { path: String },
+        #[serde(rename = "FileTree")]
+        Tree { path: String },
+        #[serde(rename = "FileRead")]
+        Read { path: String },
+        #[serde(rename = "FileSave")]
+        Save {
             path: String,
             content: String,
             expected_fingerprint: String,
         },
-        FileCreate {
-            path: String,
-            kind: String,
-        },
-        FileRename {
-            old_path: String,
-            new_path: String,
-        },
-        FileDelete {
-            path: String,
-        },
-        FileWriteBytes {
+        #[serde(rename = "FileCreate")]
+        Create { path: String, kind: String },
+        #[serde(rename = "FileRename")]
+        Rename { old_path: String, new_path: String },
+        #[serde(rename = "FileDelete")]
+        Delete { path: String },
+        #[serde(rename = "FileWriteBytes")]
+        WriteBytes {
             path: String,
             bytes_b64: String,
             overwrite: bool,
         },
-        FileContentSearch {
+        #[serde(rename = "FileContentSearch")]
+        ContentSearch {
             path: String,
             query: String,
             case_sensitive: bool,
@@ -474,16 +469,16 @@ fn file_operation(request: &Request, body: &Value, workdirs: &[PathBuf]) -> Resu
     let id = &request.id;
     Ok(
         match serde_json::from_value::<FileOperation>(body.clone())? {
-            FileOperation::FileDownloadBytes { path } => {
+            FileOperation::DownloadBytes { path } => {
                 serde_json::to_value(file_ops::exec_file_download_bytes(r, &path, id, workdirs))?
             }
-            FileOperation::FileTree { path } => {
+            FileOperation::Tree { path } => {
                 serde_json::to_value(file_ops::exec_file_tree(r, &path, id, workdirs))?
             }
-            FileOperation::FileRead { path } => {
+            FileOperation::Read { path } => {
                 serde_json::to_value(file_ops::exec_file_read(r, &path, id, workdirs))?
             }
-            FileOperation::FileSave {
+            FileOperation::Save {
                 path,
                 content,
                 expected_fingerprint,
@@ -495,23 +490,23 @@ fn file_operation(request: &Request, body: &Value, workdirs: &[PathBuf]) -> Resu
                 id,
                 workdirs,
             ))?,
-            FileOperation::FileCreate { path, kind } => {
+            FileOperation::Create { path, kind } => {
                 serde_json::to_value(file_ops::exec_file_create(r, &path, &kind, id, workdirs))?
             }
-            FileOperation::FileRename { old_path, new_path } => serde_json::to_value(
+            FileOperation::Rename { old_path, new_path } => serde_json::to_value(
                 file_ops::exec_file_rename(r, &old_path, &new_path, id, workdirs),
             )?,
-            FileOperation::FileDelete { path } => {
+            FileOperation::Delete { path } => {
                 serde_json::to_value(file_ops::exec_file_delete(r, &path, id, workdirs))?
             }
-            FileOperation::FileWriteBytes {
+            FileOperation::WriteBytes {
                 path,
                 bytes_b64,
                 overwrite,
             } => serde_json::to_value(file_ops::exec_file_write_bytes(
                 r, &path, &bytes_b64, overwrite, id, workdirs,
             ))?,
-            FileOperation::FileContentSearch {
+            FileOperation::ContentSearch {
                 path,
                 query,
                 case_sensitive,
