@@ -9,11 +9,11 @@ type Definitions = { tasks: CodingTask[]; fingerprint: string }
 type Chunk = { seq: number; stream: string; text: string }
 type Output = { chunks: Chunk[]; next: number; truncated: boolean; more: boolean }
 const button = 'flex h-6 items-center justify-center gap-1 rounded px-1.5 text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:opacity-40 disabled:pointer-events-none'
-const live = (run?: CodingTaskRun) => run?.status === 'running' || run?.status === 'stopping'
+const live = (run?: CodingTaskRun) => run?.status === 'queued' || run?.status === 'running' || run?.status === 'stopping'
 const message = (e: unknown) => String(e instanceof Error ? e.message : e)
 
-export function showCodingTasks(group?: Group) {
-  window.dispatchEvent(new CustomEvent('koma-coding-tasks', { detail: { group } }))
+export function showCodingTasks(group?: Group, workspace?: WorkspaceRef, runId?: string) {
+  window.dispatchEvent(new CustomEvent('koma-coding-tasks', { detail: { group, workspace, runId } }))
 }
 
 /** Native owns the processes. This view may close or change scope at any time. */
@@ -38,6 +38,7 @@ export function CodingTasks() {
   const output = useRef<HTMLPreElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
+  const requestedRun = useRef('')
   const generation = useRef(0)
   const mutation = useRef(false)
   const mutationEpoch = useRef(0)
@@ -53,7 +54,10 @@ export function CodingTasks() {
       const hostId = state.remoteState.hostId ?? 'local'
       const root = state.coding.activeRoot ?? state.settingsValues?.workdir?.[0]
       previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-      if (root) setWorkspace({ hostId, root })
+      const target = (event as CustomEvent<{ workspace?: WorkspaceRef; runId?: string }>).detail
+      if (target?.workspace) setWorkspace(target.workspace)
+      else if (root) setWorkspace({ hostId, root })
+      requestedRun.current = target?.runId ?? ''
       const requested = (event as CustomEvent<{ group?: Group }>).detail?.group
       if (requested) setGroup(requested)
       setOpen(true); setRefresh(n => n + 1)
@@ -98,7 +102,8 @@ export function CodingTasks() {
         const value = await codingRequest<CodingTaskRun[]>(workspace, { op: 'taskRuns' }, controller.signal)
         if (controller.signal.aborted || epoch !== mutationEpoch.current) return
         setRuns(value); setPollError('')
-        setRunId(id => value.some(r => r.id === id) ? id : value[value.length - 1]?.id ?? '')
+        const target = requestedRun.current; requestedRun.current = ''
+        setRunId(id => value.some(r => r.id === target) ? target : value.some(r => r.id === id) ? id : value[value.length - 1]?.id ?? '')
       } catch (e) { if (!controller.signal.aborted) setPollError(message(e)) }
       finally { if (!controller.signal.aborted) timer = setTimeout(poll, 1000) }
     }

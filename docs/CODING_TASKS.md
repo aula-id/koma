@@ -141,3 +141,12 @@ Regression sources in `coding::tasks::tests` cover stale configuration,
 ambiguous definitions, split Unicode, workspace identity, literal arguments,
 exit status, duplicate execution, Stop, deadlines, descendant pipes, and output
 pagination/truncation. They are supplied for execution by the user.
+
+## Discovery and dependencies
+
+The task selector discovers package.json scripts, Cargo, Go, pytest and Make entry
+points when their project files are present. Explicit tasks with the same ID take
+precedence. Discovery does not execute project commands. `dependsOn: ["task-id"]`
+adds sequential prerequisites; cycles and missing IDs are rejected. Shared
+prerequisites run once per invocation. A failed or canceled prerequisite prevents
+later steps. The task output identifies each step. Timeouts apply per step.

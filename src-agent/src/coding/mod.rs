@@ -1,12 +1,16 @@
 //! Coding operations are owned by the GUI, independently of the chat session.
 //! All operations carry their host and root; UI selection is never a routing key.
 
+mod debug;
+pub(crate) mod environment;
 mod language;
+mod packs;
 pub(crate) mod persistence;
+pub(crate) mod provision;
 mod tasks;
-mod watch;
 #[cfg(feature = "gui")]
 mod transport;
+mod watch;
 mod workspace;
 
 use serde::{Deserialize, Serialize};
@@ -25,6 +29,7 @@ pub(crate) fn shutdown() {
     SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::Release);
     transport::shutdown();
     tasks::shutdown();
+    debug::shutdown();
     watch::shutdown();
     language::shutdown();
 }
@@ -57,6 +62,40 @@ pub(crate) struct Request {
 pub(crate) enum Operation {
     Hello,
     Watch,
+    DebugDefinitions,
+    DebugSessions,
+    DebugStart {
+        profile_id: String,
+        fingerprint: String,
+        file: Option<String>,
+        breakpoints: Value,
+    },
+    DebugEvents {
+        session_id: String,
+        after: u64,
+    },
+    DebugRequest {
+        session_id: String,
+        command: String,
+        arguments: Value,
+        generation: Option<u64>,
+    },
+    DebugStop {
+        session_id: String,
+    },
+    Packs,
+    PackPlan {
+        pack_id: String,
+        runtime: bool,
+    },
+    PackApply {
+        plan_id: String,
+    },
+    EnvironmentSelect {
+        language: String,
+        executable: String,
+        fingerprint: String,
+    },
     File {
         body: Value,
     },
@@ -177,10 +216,16 @@ impl Service {
                     };
                 let result = result.and_then(|value| {
                     if let Operation::File { body } = &request.operation {
-                        if body.get("r").and_then(Value::as_str) == Some("FileDownloadBytes") && body.get("saveAs").and_then(Value::as_bool) == Some(true) {
+                        if body.get("r").and_then(Value::as_str) == Some("FileDownloadBytes")
+                            && body.get("saveAs").and_then(Value::as_bool) == Some(true)
+                        {
                             use crate::app::runtime::client::file_ops;
-                            let read: file_ops::FileDownloadBytesResult = serde_json::from_value(value).map_err(|e| e.to_string())?;
-                            return serde_json::to_value(file_ops::finalize_download_bytes(read, true)).map_err(|e| e.to_string());
+                            let read: file_ops::FileDownloadBytesResult =
+                                serde_json::from_value(value).map_err(|e| e.to_string())?;
+                            return serde_json::to_value(file_ops::finalize_download_bytes(
+                                read, true,
+                            ))
+                            .map_err(|e| e.to_string());
                         }
                     }
                     Ok(value)
@@ -261,6 +306,7 @@ pub(crate) fn worker_main() -> anyhow::Result<()> {
         fn drop(&mut self) {
             SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::Release);
             tasks::shutdown();
+            debug::shutdown();
             watch::shutdown();
             language::shutdown();
         }
@@ -301,4 +347,12 @@ pub(crate) fn worker_main() -> anyhow::Result<()> {
         output.flush()?;
     }
     Ok(())
+}
+
+pub(crate) fn provision_main() -> anyhow::Result<()> {
+    provision::install(
+        &std::env::args()
+            .nth(2)
+            .ok_or_else(|| anyhow::anyhow!("Missing component"))?,
+    )
 }

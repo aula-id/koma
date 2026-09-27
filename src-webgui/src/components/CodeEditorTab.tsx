@@ -1,3 +1,4 @@
+import { bindDebugEditor } from '../lib/coding-debug'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
 import { Download, X } from 'lucide-react'
@@ -222,6 +223,7 @@ function WorkspaceCodeEditor({ tab }: { tab: CodingTab }) {
     })
     monaco.editor.setTheme(theme)
     editorRef.current = editor
+    const stopDebug = bindDebugEditor(monaco, editor, { hostId, root: tab.root }, tab.path)
     const rememberLocation = () => {
       const position = editor.getPosition()
       if (position && editor.hasTextFocus()) recordCodingLocation(hostId, { root: tab.root, path: tab.path, line: position.lineNumber, column: position.column })
@@ -393,6 +395,7 @@ function WorkspaceCodeEditor({ tab }: { tab: CodingTab }) {
       window.removeEventListener('koma-reveal-line', onReveal)
       window.removeEventListener('koma-coding-command', onCodingCommand)
       stopConfiguration()
+      stopDebug()
       cursor.dispose(); focus.dispose()
       const view = editor.saveViewState()
       if (view) viewStates.set(viewKey, view)

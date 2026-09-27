@@ -9,6 +9,15 @@ export type CodingReply = {
   error?: string
 }
 export type CodingOperation =
+  | { op: 'debugDefinitions' | 'debugSessions' }
+  | { op: 'debugStart'; profileId: string; fingerprint: string; file?: string; breakpoints: Record<string, unknown> }
+  | { op: 'debugEvents'; sessionId: string; after: number }
+  | { op: 'debugRequest'; sessionId: string; command: string; arguments: Record<string, unknown>; generation?: number }
+  | { op: 'debugStop'; sessionId: string }
+  | { op: 'packs' }
+  | { op: 'packPlan'; packId: string; runtime: boolean }
+  | { op: 'packApply'; planId: string }
+  | { op: 'environmentSelect'; language: string; executable: string; fingerprint: string }
   | { op: 'file'; body: Record<string, unknown> }
   | { op: 'hello' | 'watch' | 'configRead' | 'configEnsure' | 'backups' }
   | { op: 'paths'; query: string }
@@ -51,6 +60,7 @@ export type CodingTask = {
   cwd?: string
   env?: Record<string, string>
   timeoutMs?: number
+  dependsOn?: string[]
 }
 export type CodingTaskRun = {
   id: string
@@ -63,7 +73,7 @@ export type CodingTaskRun = {
   cwd: string
   started: number
   ended: number | null
-  status: 'running' | 'stopping' | 'succeeded' | 'failed' | 'stopped'
+  status: 'queued' | 'running' | 'stopping' | 'succeeded' | 'failed' | 'stopped'
   exitCode: number | null
   error: string | null
   outputComplete: boolean

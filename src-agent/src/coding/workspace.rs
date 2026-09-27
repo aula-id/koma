@@ -15,6 +15,27 @@ fn root(request: &Request) -> Result<PathBuf> {
 pub(super) fn execute(request: &Request) -> Result<Value> {
     // Existing processes remain inspectable/stoppable even after root deletion.
     match &request.operation {
+        Operation::DebugSessions => return super::debug::sessions(&request.workspace),
+        Operation::DebugEvents { session_id, after } => {
+            return super::debug::events(&request.workspace, session_id, *after)
+        }
+        Operation::DebugRequest {
+            session_id,
+            command,
+            arguments,
+            generation,
+        } => {
+            return super::debug::request(
+                &request.workspace,
+                session_id,
+                command,
+                arguments,
+                *generation,
+            )
+        }
+        Operation::DebugStop { session_id } => {
+            return super::debug::stop(&request.workspace, session_id)
+        }
         Operation::TaskRuns => return super::tasks::runs(&request.workspace),
         Operation::TaskStop { run_id } => return super::tasks::stop(&request.workspace, run_id),
         Operation::TaskOutput { run_id, after } => {
@@ -27,7 +48,7 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
     let r = &request.workspace.root;
     match &request.operation {
         Operation::Hello => Ok(json!({"protocol":1,"root":canonical.to_string_lossy(),
-            "capabilities":["paths","read","save","config","tasks"], "version":env!("CARGO_PKG_VERSION")})),
+            "capabilities":["paths","read","save","config","tasks","packs","debug"], "version":env!("CARGO_PKG_VERSION")})),
         Operation::TaskDefinitions => super::tasks::definitions(&canonical),
         Operation::TaskStart {
             task_id,
@@ -41,6 +62,36 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
         ))?),
         Operation::File { body } => file_operation(request, body, &workdirs),
         Operation::Watch => super::watch::watch(&request.workspace, &canonical),
+        Operation::DebugDefinitions => super::debug::definitions(&canonical),
+        Operation::DebugStart {
+            profile_id,
+            fingerprint,
+            file,
+            breakpoints,
+        } => super::debug::start(
+            &request.workspace,
+            &canonical,
+            profile_id,
+            fingerprint,
+            file.as_deref(),
+            breakpoints,
+        ),
+        Operation::DebugSessions
+        | Operation::DebugEvents { .. }
+        | Operation::DebugRequest { .. }
+        | Operation::DebugStop { .. } => unreachable!(),
+        Operation::Packs => super::packs::status(&canonical),
+        Operation::PackPlan { pack_id, runtime } => {
+            super::packs::plan(&request.workspace, &canonical, pack_id, *runtime)
+        }
+        Operation::PackApply { plan_id } => {
+            super::packs::apply(&request.workspace, &canonical, plan_id)
+        }
+        Operation::EnvironmentSelect {
+            language,
+            executable,
+            fingerprint,
+        } => super::environment::select(&canonical, language, executable, fingerprint),
         Operation::Save {
             path,
             content,

@@ -10,11 +10,11 @@ two-pane layout, visual tokens, and interaction patterns.
 | --- | --- |
 | Host/workspace identity and independent coding lifecycle | In progress |
 | Document views, recovery, history, external changes | In progress |
-| Language packs, toolchains, environment selection | Pending |
+| Language packs, toolchains, environment selection | Initial implementation; platform coverage pending |
 | Quick Open, commands, outline, navigation, settings | In progress |
 | Workspace edits, formatting, rename, code actions, LSP extensions | In progress |
 | Search/replace preview and task runner | In progress |
-| Debug Adapter Protocol and debugger UI | Pending |
+| Debug Adapter Protocol and debugger UI | Initial implementation; native acceptance pending |
 | Test Explorer and complete language catalogue | Pending |
 | Cross-platform integration and native acceptance | Pending |
 
@@ -232,3 +232,16 @@ open identical paths on two hosts, including binary previews; switch while a
 save/read/rename is pending. Exercise format-on-save with concurrent typing and
 failure, Outline after edits, Back/Forward, semantic colors, and external
 create/rename/delete. Functional/platform execution remains with the user.
+
+### Language packs, task dependencies and DAP
+
+Language Packs now reviews host-bound installation commands, runs them in Tasks,
+and selects a project runtime/interpreter. LuaLS/ZLS/nil managed provisioning is
+connected to the existing LSP resolver. Task discovery and dependency execution
+are implemented. See [language packs](CODING_LANGUAGE_PACKS.md) and
+[tasks](CODING_TASKS.md) for supported platforms and remaining limitations.
+
+The debugger provides a workspace/session selector, launch/attach, persistent
+breakpoints, conditions, stepping, call stacks, variables and watch expressions.
+See [debugger configuration and acceptance](CODING_DEBUGGER.md). Adapter reverse
+terminal requests and native cross-platform acceptance remain outstanding.

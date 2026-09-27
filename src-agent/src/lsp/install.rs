@@ -41,13 +41,15 @@ pub fn install_one(id: &str, force: bool, mut progress: Option<ProgressFn>) -> R
         }
     }
 
-    let result = match spec.kind {
+    let result = if matches!(id, "lua-language-server" | "zls" | "nil") {
+        crate::coding::provision::install(id)
+    } else { match spec.kind {
         InstallKind::GithubGz => install_github_gz(spec, &mut progress),
         InstallKind::GithubZip => install_github_zip(spec, &mut progress),
         InstallKind::Npm => install_npm(spec, &mut progress),
         InstallKind::PipVenv => install_pip_venv(spec, &mut progress),
         InstallKind::GoInstall => install_go(spec, &mut progress),
-    };
+    }};
 
     match result {
         Ok(()) => {
@@ -99,6 +101,8 @@ pub fn install_all(force: bool, mut progress: Option<ProgressFn>) -> Result<()> 
 /// nothing is installed under the managed dir.
 pub fn uninstall_one(id: &str) -> Result<()> {
     let _spec = catalog::find(id).ok_or_else(|| anyhow!("unknown language server id: {id}"))?;
+    let tools = crate::coding::provision::tools_dir()?.join(id);
+    if tools.exists() { std::fs::remove_dir_all(&tools)?; }
     let dir = manifest::server_dir(id)?;
     if dir.exists() {
         std::fs::remove_dir_all(&dir).with_context(|| format!("remove {}", dir.display()))?;
@@ -125,6 +129,7 @@ fn managed_install_supported(spec: &ServerSpec) -> bool {
             | "vscode-langservers"
             | "bash-language-server"
             | "intelephense"
+            | "lua-language-server" | "zls" | "nil"
     )
 }
 

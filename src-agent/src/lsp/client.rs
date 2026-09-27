@@ -1423,6 +1423,7 @@ fn spawn_server_process(
     for a in args {
         cmd.arg(a);
     }
+    cmd.envs(crate::coding::environment::variables(root, binary.file_stem().and_then(|s| s.to_str()).unwrap_or("")).map_err(|e| e.to_string())?);
     cmd.current_dir(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1549,7 +1550,7 @@ fn reader_loop<R: Read>(stdout: R, ctx: ReaderCtx) {
                 let result = if method == "window/workDoneProgress/create" {
                     serde_json::Value::Null
                 } else if method == "workspace/configuration" {
-                    configuration_reply(&msg, &server_id)
+                    configuration_reply(&msg, &server_id, &server_root)
                 } else {
                     // Unsupported server request — null result is the least-bad ack.
                     serde_json::Value::Null
@@ -2266,8 +2267,14 @@ fn initialization_options_for(server_id: &str) -> serde_json::Value {
     })
 }
 
-fn configuration_reply(msg: &serde_json::Value, server_id: &str) -> serde_json::Value {
-    let defaults = initialization_options_for(server_id);
+fn configuration_reply(msg: &serde_json::Value, server_id: &str, root: &str) -> serde_json::Value {
+    let mut defaults = initialization_options_for(server_id);
+    if let Ok(python) = crate::coding::environment::executable(Path::new(root), "python3") {
+        if python.is_absolute() {
+            defaults["python"] = serde_json::json!({"pythonPath":python});
+            defaults["python.pythonPath"] = serde_json::json!(python);
+        }
+    }
     let items = msg
         .get("params")
         .and_then(|p| p.get("items"))

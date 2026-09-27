@@ -1,3 +1,4 @@
+import { CodingDebug } from '../components/CodingDebug'
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ChatView } from '../components/ChatView'
@@ -12,6 +13,7 @@ import { ResumePalette } from '../components/ResumePalette'
 import { RenameOverlay } from '../components/RenameOverlay'
 import { OmniSearchPalette } from '../components/OmniSearchPalette'
 import { CodingPalette } from '../components/CodingPalette'
+import { CodingPacks } from '../components/CodingPacks'
 import { CodingTasks } from '../components/CodingTasks'
 import { CodingHistory } from '../components/CodingHistory'
 import { CodingRefactor } from '../components/CodingRefactor'
@@ -448,6 +450,8 @@ function RootLayout() {
       {omnisearchOpen && <OmniSearchPalette onClose={closeOmniSearch} />}
       <CodingPalette />
       <CodingTasks />
+      <CodingPacks />
+      <CodingDebug />
       <CodingHistory />
       <CodingRefactor />
       <SwitchingOverlay

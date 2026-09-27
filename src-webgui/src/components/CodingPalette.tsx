@@ -1,9 +1,11 @@
+import { showCodingDebug } from './CodingDebug'
 import { useEffect, useRef, useState } from 'react'
 import { File, Search, Terminal, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { codingRequest } from '../lib/coding-service'
 import { BrailleSpinner } from './BrailleSpinner'
 import { showCodingHistory } from './CodingHistory'
+import { showCodingPacks } from './CodingPacks'
 import { showCodingTasks } from './CodingTasks'
 
 type Command = { id: string; title: string; shortcut?: string; editor?: boolean }
@@ -28,6 +30,9 @@ const commands: Command[] = [
   { id: 'editor.action.commentLine', title: 'Toggle Line Comment', editor: true },
   { id: 'editor.action.toggleWordWrap', title: 'Toggle Word Wrap', editor: true },
   { id: 'projectSettings', title: 'Open Project Coding Settings' },
+  { id: 'debug', title: 'Debug: Launch, Attach and Inspect' },
+  { id: 'koma.toggleBreakpoint', title: 'Toggle Breakpoint', shortcut: 'F9', editor: true },
+  { id: 'packs', title: 'Language Packs: Install, Update and Select Environment' },
   { id: 'tasks', title: 'Tasks: Show Output and Running Tasks' },
   { id: 'taskRun', title: 'Tasks: Run Task…' },
   { id: 'taskBuild', title: 'Tasks: Build…' },
@@ -142,6 +147,8 @@ export function CodingPalette() {
     }
     else if (command.id === 'saveAll') { for (const tab of store.ui.tabs) if (tab.kind === 'codingFile' && !tab.preview) store.saveCodingFile(tab.root, tab.path) }
     else if (command.id === 'recovery') showCodingHistory()
+    else if (command.id === 'debug') showCodingDebug()
+    else if (command.id === 'packs') showCodingPacks()
     else if (command.id === 'tasks') showCodingTasks()
     else if (command.id === 'taskRun') showCodingTasks('run')
     else if (command.id === 'taskBuild') showCodingTasks('build')

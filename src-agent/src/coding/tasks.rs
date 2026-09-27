@@ -35,6 +35,8 @@ struct Task {
     env: BTreeMap<String, String>,
     #[serde(default)]
     timeout_ms: Option<u64>,
+    #[serde(default)]
+    depends_on: Vec<String>,
 }
 fn default_group() -> String {
     "run".into()
@@ -45,13 +47,14 @@ fn default_cwd() -> String {
 
 fn load(root: &Path) -> Result<(Vec<Task>, String)> {
     let config = super::workspace::read_config(root)?;
-    let tasks: Vec<Task> =
+    let mut tasks: Vec<Task> =
         serde_json::from_value(config.get("tasks").cloned().unwrap_or(json!([])))
             .context("Invalid tasks in .koma/coding.json")?;
     anyhow::ensure!(
         tasks.len() <= 100,
         "At most 100 project tasks are supported"
     );
+    discover(root, &mut tasks)?;
     let mut ids = std::collections::HashSet::new();
     for task in &tasks {
         anyhow::ensure!(
@@ -133,10 +136,11 @@ struct Run {
     id: String,
     workspace: WorkspaceRef,
     task: Task,
+    reserved: Vec<String>,
     started: u64,
-    clock: Instant,
     // A single lock serializes Stop against process exit; output uses a separate lock.
     child: Mutex<Option<Box<dyn ChildWrapper>>>,
+    canceled: std::sync::atomic::AtomicBool,
     state: Mutex<State>,
 }
 static RUNS: OnceLock<Mutex<VecDeque<Arc<Run>>>> = OnceLock::new();
@@ -150,7 +154,7 @@ fn now() -> u64 {
         .as_millis() as u64
 }
 fn active(state: &State) -> bool {
-    matches!(state.status, "running" | "stopping") || state.readers > 0
+    matches!(state.status, "queued" | "running" | "stopping") || state.readers > 0
 }
 
 impl Run {
@@ -355,17 +359,82 @@ pub(super) fn start(
         "Tasks changed on disk. Refresh and select the task again."
     );
     let task = tasks
-        .into_iter()
+        .iter()
         .find(|t| t.id == id)
-        .context("Unknown project task")?;
-    let cwd = root
-        .join(&task.cwd)
-        .canonicalize()
-        .context("Task working directory is unavailable")?;
+        .context("Unknown project task")?
+        .clone();
+    let mut ordered = Vec::new();
+    let mut visiting = std::collections::HashSet::new();
+    let mut done = std::collections::HashSet::new();
+    let all = tasks;
+    fn visit(
+        id: &str,
+        tasks: &[Task],
+        visiting: &mut std::collections::HashSet<String>,
+        done: &mut std::collections::HashSet<String>,
+        ordered: &mut Vec<Task>,
+    ) -> Result<()> {
+        if done.contains(id) {
+            return Ok(());
+        }
+        anyhow::ensure!(visiting.insert(id.into()), "Task dependency cycle at {id}");
+        let task = tasks
+            .iter()
+            .find(|t| t.id == id)
+            .with_context(|| format!("Unknown task dependency: {id}"))?;
+        for dep in &task.depends_on {
+            visit(dep, tasks, visiting, done, ordered)?;
+        }
+        visiting.remove(id);
+        done.insert(id.into());
+        ordered.push(task.clone());
+        Ok(())
+    }
+    visit(id, &all, &mut visiting, &mut done, &mut ordered)?;
+    start_recipe(workspace, root, task, ordered)
+}
+
+/// Internal callers supply a concrete, already-reviewed sequence of commands.
+/// The public task RPC still accepts only IDs plus a definition fingerprint.
+pub(super) fn run_commands(
+    workspace: &WorkspaceRef,
+    root: &Path,
+    id: &str,
+    label: &str,
+    commands: Vec<Value>,
+) -> Result<Value> {
     anyhow::ensure!(
-        cwd.starts_with(root) && cwd.is_dir(),
-        "Task working directory must be inside the workspace"
+        !commands.is_empty() && commands.len() <= 100,
+        "Invalid command sequence"
     );
+    let mut steps = Vec::new();
+    for (i, mut value) in commands.into_iter().enumerate() {
+        value["id"] = json!(format!("{id}:{i}"));
+        value["label"] = json!(label);
+        steps.push(serde_json::from_value::<Task>(value)?);
+    }
+    let mut task = steps[0].clone();
+    task.id = id.into();
+    task.label = label.into();
+    start_recipe(workspace, root, task, steps)
+}
+
+fn start_recipe(
+    workspace: &WorkspaceRef,
+    root: &Path,
+    task: Task,
+    steps: Vec<Task>,
+) -> Result<Value> {
+    for step in &steps {
+        let cwd = root
+            .join(&step.cwd)
+            .canonicalize()
+            .context("Task working directory is unavailable")?;
+        anyhow::ensure!(
+            cwd.starts_with(root) && cwd.is_dir(),
+            "Task working directory must be inside the workspace"
+        );
+    }
     let mut registry = registry().lock().unwrap();
     anyhow::ensure!(
         !super::SHUTTING_DOWN.load(std::sync::atomic::Ordering::Acquire),
@@ -381,9 +450,16 @@ pub(super) fn start(
     );
     anyhow::ensure!(
         !registry.iter().any(|r| &r.workspace == workspace
-            && r.task.id == id
+            && (r.task.id == task.id || steps.iter().any(|step| r.reserved.contains(&step.id)))
             && active(&r.state.lock().unwrap())),
         "This task is already running in this workspace"
+    );
+    anyhow::ensure!(
+        !task.id.starts_with("pack:")
+            || !registry
+                .iter()
+                .any(|r| r.task.id.starts_with("pack:") && active(&r.state.lock().unwrap())),
+        "Another language pack installation is running on this host"
     );
     while registry.len() >= MAX_RUNS {
         let i = registry
@@ -392,48 +468,16 @@ pub(super) fn start(
             .context("Task history is full")?;
         registry.remove(i);
     }
-    let executable =
-        if task.command.contains(['/', '\\']) && !Path::new(&task.command).is_absolute() {
-            cwd.join(&task.command).into_os_string()
-        } else {
-            task.command.clone().into()
-        };
-    let mut command = Command::new(executable);
-    command
-        .args(&task.args)
-        .current_dir(cwd)
-        .envs(&task.env)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut command = CommandWrap::from(command);
-    command.wrap(Reap);
-    #[cfg(unix)]
-    command.wrap(ProcessTree);
-    #[cfg(windows)]
-    command
-        .wrap(process_wrap::std::JobObject)
-        .wrap(HiddenSuspended);
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("Cannot start {}", task.command))?;
-    let stdout = child
-        .stdout()
-        .take()
-        .context("Task stdout is unavailable")?;
-    let stderr = child
-        .stderr()
-        .take()
-        .context("Task stderr is unavailable")?;
     let run = Arc::new(Run {
         id: uuid::Uuid::new_v4().to_string(),
         workspace: workspace.clone(),
         task,
+        reserved: steps.iter().map(|s| s.id.clone()).collect(),
         started: now(),
-        clock: Instant::now(),
-        child: Mutex::new(Some(child)),
+        child: Mutex::new(None),
+        canceled: std::sync::atomic::AtomicBool::new(false),
         state: Mutex::new(State {
-            status: "running",
+            status: "queued",
             exit_code: None,
             error: None,
             ended: None,
@@ -443,34 +487,84 @@ pub(super) fn start(
             readers: 0,
         }),
     });
-    // Start the supervisor before publishing. Thread creation failure kills and
-    // reaps the child through the guard instead of losing a live process.
     let watched = Arc::clone(&run);
-    if let Err(error) = std::thread::Builder::new()
+    let root = root.to_path_buf();
+    std::thread::Builder::new()
         .name("coding-task".into())
-        .spawn(move || supervise(watched))
+        .spawn(move || supervise(watched, root, steps))?;
+    registry.push_back(Arc::clone(&run));
+    Ok(run.summary())
+}
+
+pub(super) fn spawn_command(command: Command) -> std::io::Result<Box<dyn ChildWrapper>> {
+    let mut command = CommandWrap::from(command);
+    command.wrap(Reap);
+    #[cfg(unix)]
+    command.wrap(ProcessTree);
+    #[cfg(windows)]
+    command
+        .wrap(process_wrap::std::JobObject)
+        .wrap(HiddenSuspended);
+    command.spawn()
+}
+
+fn launch_step(run: &Arc<Run>, root: &Path, task: &Task) -> Result<()> {
+    let cwd = root.join(&task.cwd).canonicalize()?;
+    anyhow::ensure!(
+        cwd.starts_with(root),
+        "Task working directory moved outside the workspace"
+    );
+    let executable =
+        if task.command.contains(['/', '\\']) && !Path::new(&task.command).is_absolute() {
+            cwd.join(&task.command).into_os_string()
+        } else {
+            super::environment::executable(root, &task.command)?.into_os_string()
+        };
+    let mut command = Command::new(executable);
+    command
+        .args(&task.args)
+        .current_dir(cwd)
+        .envs(super::environment::variables(root, &task.command)?)
+        .envs(&task.env)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut slot = run.child.lock().unwrap();
+    anyhow::ensure!(
+        !run.canceled.load(std::sync::atomic::Ordering::Acquire),
+        "Task stopped"
+    );
+    let mut child =
+        spawn_command(command).with_context(|| format!("Cannot start {}", task.command))?;
+    let stdout = child
+        .stdout()
+        .take()
+        .context("Task stdout is unavailable")?;
+    let stderr = child
+        .stderr()
+        .take()
+        .context("Task stderr is unavailable")?;
+    *slot = Some(child);
     {
-        if let Some(mut c) = run.child.lock().unwrap().take() {
-            let _ = c.kill();
-        }
-        return Err(error.into());
+        let mut s = run.state.lock().unwrap();
+        s.status = "running";
+        s.readers += 2;
     }
+    drop(slot);
     for (stream, pipe) in [
         ("stdout", Box::new(stdout) as Box<dyn Read + Send>),
         ("stderr", Box::new(stderr) as Box<dyn Read + Send>),
     ] {
-        run.state.lock().unwrap().readers += 1;
-        let reader_run = Arc::clone(&run);
+        let capture = Arc::clone(run);
         if let Err(error) = std::thread::Builder::new()
             .name(format!("task-{stream}"))
-            .spawn(move || read_output(reader_run, stream, pipe))
+            .spawn(move || read_output(capture, stream, pipe))
         {
             run.state.lock().unwrap().readers -= 1;
-            let _ = stop_run(&run, Some(format!("Cannot capture task output: {error}")));
+            stop_run(run, Some(format!("Cannot capture task output: {error}")))?;
         }
     }
-    registry.push_back(Arc::clone(&run));
-    Ok(run.summary())
+    Ok(())
 }
 
 fn read_output(run: Arc<Run>, stream: &'static str, mut pipe: Box<dyn Read + Send>) {
@@ -530,16 +624,20 @@ fn decode_output(pending: &mut Vec<u8>) -> String {
 
 fn stop_run(run: &Run, reason: Option<String>) -> Result<()> {
     let mut child = run.child.lock().unwrap();
+    let mut s = run.state.lock().unwrap();
+    if !matches!(s.status, "queued" | "running" | "stopping") {
+        return Ok(());
+    }
+    run.canceled
+        .store(true, std::sync::atomic::Ordering::Release);
     if let Some(child) = child.as_mut() {
-        // Force-stop is deliberate: bounded cancellation for build/watch tools.
         child
             .start_kill()
             .context("Cannot stop task process group")?;
-        let mut s = run.state.lock().unwrap();
-        s.status = "stopping";
-        if reason.is_some() {
-            s.error = reason;
-        }
+    }
+    s.status = "stopping";
+    if reason.is_some() {
+        s.error = reason;
     }
     Ok(())
 }
@@ -548,54 +646,68 @@ pub(super) fn stop(workspace: &WorkspaceRef, id: &str) -> Result<Value> {
     stop_run(&run, None)?;
     Ok(run.summary())
 }
-fn supervise(run: Arc<Run>) {
-    loop {
-        if run
-            .task
-            .timeout_ms
-            .is_some_and(|ms| run.clock.elapsed() >= Duration::from_millis(ms))
-            && run.state.lock().unwrap().status == "running"
-        {
-            let _ = stop_run(&run, Some("Task exceeded timeoutMs".into()));
+fn supervise(run: Arc<Run>, root: std::path::PathBuf, steps: Vec<Task>) {
+    let mut outcome = Ok(0);
+    for step in &steps {
+        if run.canceled.load(std::sync::atomic::Ordering::Acquire) {
+            break;
         }
-        {
-            let mut slot = run.child.lock().unwrap();
-            let Some(child) = slot.as_mut() else { return };
-            match child.try_wait() {
-                Ok(None) => {}
-                result => {
-                    // A task owns its descendants; a parent exiting must not
-                    // leave background watchers behind or stdout pipes open.
-                    let _ = child.start_kill();
-                    let mut s = run.state.lock().unwrap();
-                    match result {
-                        Ok(Some(exit)) => {
-                            s.exit_code = exit.code();
-                            s.status = if s.error.is_some() {
-                                "failed"
-                            } else if s.status == "stopping" {
-                                "stopped"
-                            } else if exit.success() {
-                                "succeeded"
-                            } else {
-                                "failed"
-                            };
-                        }
-                        Err(error) => {
-                            s.status = "failed";
-                            s.error = Some(error.to_string());
-                        }
-                        _ => unreachable!(),
-                    }
-                    s.ended = Some(now());
-                    drop(s);
-                    slot.take();
-                    return;
-                }
+        if steps.len() > 1 {
+            run.append("system", format!("\n▶ {}\n", step.label));
+        }
+        if let Err(error) = launch_step(&run, &root, step) {
+            if !run.canceled.load(std::sync::atomic::Ordering::Acquire) {
+                outcome = Err(format!("{error:#}"));
             }
+            break;
         }
-        std::thread::sleep(Duration::from_millis(100));
+        let clock = Instant::now();
+        loop {
+            if step
+                .timeout_ms
+                .is_some_and(|ms| clock.elapsed() >= Duration::from_millis(ms))
+                && !run.canceled.load(std::sync::atomic::Ordering::Acquire)
+            {
+                let _ = stop_run(&run, Some("Task exceeded timeoutMs".into()));
+            }
+            let exited = {
+                let mut slot = run.child.lock().unwrap();
+                match slot.as_mut().unwrap().try_wait() {
+                    Ok(None) => false,
+                    result => {
+                        let _ = slot.as_mut().unwrap().start_kill();
+                        outcome = result
+                            .map(|exit| exit.unwrap().code().unwrap_or(-1))
+                            .map_err(|e| e.to_string());
+                        slot.take();
+                        true
+                    }
+                }
+            };
+            if exited {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if !matches!(outcome, Ok(0)) {
+            break;
+        }
     }
+    let mut s = run.state.lock().unwrap();
+    s.exit_code = outcome.as_ref().ok().copied();
+    if s.error.is_none() {
+        s.error = outcome.as_ref().err().cloned();
+    }
+    s.status = if s.error.is_some() {
+        "failed"
+    } else if run.canceled.load(std::sync::atomic::Ordering::Acquire) {
+        "stopped"
+    } else if matches!(outcome, Ok(0)) {
+        "succeeded"
+    } else {
+        "failed"
+    };
+    s.ended = Some(now());
 }
 pub(super) fn shutdown() {
     let runs: Vec<_> = registry().lock().unwrap().iter().cloned().collect();
@@ -761,4 +873,93 @@ mod tests {
             assert!(page["chunks"].as_array().unwrap().len() <= 64);
         }
     }
+}
+
+fn discover(root: &Path, tasks: &mut Vec<Task>) -> Result<()> {
+    let mut add =
+        |id: &str, label: &str, group: &str, command: &str, args: Vec<String>| -> Result<()> {
+            if tasks.len() >= 100 || tasks.iter().any(|t| t.id == id) {
+                return Ok(());
+            }
+            tasks.push(serde_json::from_value(
+                json!({"id":id,"label":label,"group":group,"command":command,"args":args}),
+            )?);
+            Ok(())
+        };
+    let package = root.join("package.json");
+    if package.is_file()
+        && package.metadata()?.len() <= 1024 * 1024
+        && package.canonicalize()?.starts_with(root)
+    {
+        if let Ok(value) = serde_json::from_slice::<Value>(&std::fs::read(package)?) {
+            if let Some(scripts) = value.get("scripts").and_then(Value::as_object) {
+                for (name, script) in scripts.iter().take(100) {
+                    if !script.is_string() || name.len() > 80 {
+                        continue;
+                    }
+                    let group = if name.starts_with("test") {
+                        "test"
+                    } else if name.starts_with("build") {
+                        "build"
+                    } else {
+                        "run"
+                    };
+                    add(
+                        &format!("npm:{name}"),
+                        &format!("npm: {name}"),
+                        group,
+                        if cfg!(windows) { "npm.cmd" } else { "npm" },
+                        vec!["run".into(), name.clone()],
+                    )?;
+                }
+            }
+        }
+    }
+    if root.join("Cargo.toml").is_file() {
+        for group in ["build", "test", "run"] {
+            add(
+                &format!("cargo:{group}"),
+                &format!("cargo {group}"),
+                group,
+                "cargo",
+                vec![group.into()],
+            )?;
+        }
+    }
+    if root.join("go.mod").is_file() {
+        for group in ["build", "test"] {
+            add(
+                &format!("go:{group}"),
+                &format!("go {group}"),
+                group,
+                "go",
+                vec![group.into(), "./...".into()],
+            )?;
+        }
+    }
+    if root.join("pytest.ini").is_file() || root.join("pyproject.toml").is_file() {
+        let local = if cfg!(windows) {
+            ".venv/Scripts/python.exe"
+        } else {
+            ".venv/bin/python"
+        };
+        let python = if root.join(local).is_file() {
+            local
+        } else if cfg!(windows) {
+            "python"
+        } else {
+            "python3"
+        };
+        add(
+            "python:test",
+            "Python: pytest",
+            "test",
+            python,
+            vec!["-m".into(), "pytest".into()],
+        )?;
+    }
+    if root.join("Makefile").is_file() {
+        add("make:build", "Make", "build", "make", vec![])?;
+    }
+    Ok(())
 }
