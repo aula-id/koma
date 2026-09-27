@@ -98,7 +98,7 @@ muda = { version = "0.19", optional = true, default-features = false }
 
 [features]
 default = ["gui", "linker"]
-gui = ["dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd", "dep:muda"]
+gui = ["dep:x11-dl", "dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd", "dep:muda"]
 linker = [
     "dep:tree-sitter",
     "dep:tree-sitter-rust",
@@ -134,3 +134,6 @@ desktop-template = "../packaging/linux/koma.desktop.hbs"
 template = "../packaging/windows/main.wxs"
 fragment-paths = ["../packaging/windows/path-and-shortcut.wxs"]
 component-group-refs = ["KomaPathAndShortcut"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11-dl = { version = "2.21", optional = true }

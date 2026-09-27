@@ -196,6 +196,8 @@ pub(super) fn push_loop(
     >,
 ) -> HostTransition {
     use std::sync::mpsc::TryRecvError;
+    #[cfg(feature = "gui")]
+    let mut computer_worker = crate::app::runtime::computer::desktop::Worker::default();
 
     // The shadow is a real AppState reconstructed purely from frames (identical to
     // `render_loop`); the first Snapshot replaces the neutral placeholder.
@@ -604,6 +606,24 @@ pub(super) fn push_loop(
                 // attached; this only lands here if the attach state flipped between the
                 // check and the send). Forward the carried request to the daemon — it owns
                 // the authoritative config and re-pushes a fresh `Config` on the change.
+                Ok(super::HostCtl::Computer { action }) => {
+                    #[cfg(feature = "gui")]
+                    if remote_ctx.is_none() {
+                        use crate::app::runtime::computer::{Control, desktop};
+                        let control = match action.as_str() {
+                            "enable" => Some(Control::Enable { capabilities: desktop::capabilities() }),
+                            "pause" => { computer_worker.cancel(); Some(Control::Pause) },
+                            "resume" => Some(Control::Resume),
+                            "stop" | "take_over" => { computer_worker.cancel(); Some(Control::Stop) },
+                            _ => None,
+                        };
+                        if let Some(control) = control { let _ = req_tx.send(ClientRequest::Computer(control)); }
+                    } else {
+                        push(serde_json::json!({"k":"ComputerError","message":"Computer control is limited to local GUI sessions"}).to_string());
+                    }
+                    #[cfg(not(feature = "gui"))]
+                    let _ = action;
+                }
                 Ok(super::HostCtl::ConfigMutate(req)) => {
                     let _ = req_tx.send(req);
                 }
@@ -1516,6 +1536,17 @@ pub(super) fn push_loop(
                     // OAuthState) is re-pushed to JS as its own `PushEnvelope` HERE, BEFORE
                     // folding — see `push_intercept` (split out for file size; pure code
                     // motion, no behaviour change).
+                    #[cfg(feature = "gui")]
+                    match &frame.event {
+                        DaemonEvent::ComputerStatus(status) if remote_ctx.is_none() => {
+                            computer_worker.status(status);
+                            push(serde_json::json!({"k":"Computer","status":status}).to_string());
+                        }
+                        DaemonEvent::ComputerOperation(request) if remote_ctx.is_none() => {
+                            computer_worker.request(request.clone(), req_tx.clone());
+                        }
+                        _ => {}
+                    }
                     push_intercept::repush_before_fold(&frame, push);
                     // Keep remote-fs sandbox roots in sync with the remote session's
                     // workdirs (from SettingsValues or Snapshot). Local session_workdirs_for

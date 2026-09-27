@@ -6,3 +6,5 @@ pub(crate) mod controller;
 pub(crate) mod executor;
 pub(crate) use contract::*;
 pub(crate) use controller::Controller;
+#[cfg(feature = "gui")]
+pub(crate) mod desktop;
