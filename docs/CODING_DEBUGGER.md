@@ -10,6 +10,10 @@ editor line marker; the console accepts expressions while paused.
 Click a stack frame to open its source on the currently selected host. Stop for
 an attach profile requests detachment without terminating the attached program.
 Closing the panel or switching chats does not stop a session.
+Frames with a DAP `sourceReference` fetch source from that paused adapter and open
+a read-only Monaco view inside the existing Debug panel. The viewer supports up
+to 5 MiB; session changes/resume invalidate pending source requests. It creates
+no writable file or extra editor pane.
 
 Python and Node current-file profiles are provided; Go projects also get a package
 profile. Save your source before starting. More profiles live in `debug` in
@@ -57,8 +61,15 @@ sessions and 32 retained session summaries are held per native host process.
 Integrated `runInTerminal` requests use workspace-owned PTY tasks. Open their
 input/output with the debugger terminal button. External terminal and shell-
 interpreted argument requests are explicitly rejected. Terminal cwd must stay
-inside the workspace, and launch-session teardown stops its terminal tasks. Unix remote sessions use the persistent coding service and can be adopted after
-SSH reconnect; Windows remote workers retain their original connection lifecycle.
+inside the workspace, and launch-session teardown stops its terminal tasks. Unix
+and supported Windows remote sessions use the persistent coding service and can
+be adopted after SSH reconnect; see [platform requirements](CODING_REMOTE_SERVICE.md).
+
+Rust Test Explorer Debug rebuilds the selected test target before launching its
+fresh executable through lldb-dap. A failed or canceled build prevents launch;
+the build is visible in Tasks and the debug terminal button. Save edited sources
+first. Jest/Vitest use their project runner through js-debug; custom commands and
+other frameworks can name an explicit `debugProfile`.
 
 Native acceptance (not executed by the implementation agent): each managed adapter
 on each supported OS, breakpoints set before/after launch, condition rejection,

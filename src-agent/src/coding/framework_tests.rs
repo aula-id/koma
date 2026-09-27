@@ -56,8 +56,11 @@ fn execute(recipe: &Recipe, args: Vec<String>, capture: bool) -> Result<(bool, S
     }
     Ok((child.wait()?.success(), String::from_utf8(bytes)?))
 }
-fn js_records(report: &Value) {
-    for suite in report["testResults"].as_array().into_iter().flatten() {
+fn js_records(report: &Value) -> Result<()> {
+    for suite in report["testResults"]
+        .as_array()
+        .context("Invalid framework JSON report")?
+    {
         let file = suite["name"].as_str().unwrap_or("");
         for test in suite["assertionResults"].as_array().into_iter().flatten() {
             let name = test["fullName"]
@@ -74,15 +77,38 @@ fn js_records(report: &Value) {
             );
         }
     }
+    Ok(())
 }
 fn junit(bytes: &[u8], kind: &str, mut emit: impl FnMut(Value)) -> Result<()> {
     use quick_xml::events::Event;
     let mut reader = quick_xml::Reader::from_reader(bytes);
     let mut current: Option<Value> = None;
     let mut detail = false;
+    let mut depth = 0usize;
+    let mut suite = false;
     loop {
         let event = reader.read_event()?;
         let empty = matches!(event, Event::Empty(_));
+        match &event {
+            Event::Start(e) | Event::Empty(e) => {
+                if depth == 0 {
+                    anyhow::ensure!(
+                        matches!(e.name().as_ref(), b"testsuite" | b"testsuites"),
+                        "Invalid JUnit report root"
+                    );
+                    anyhow::ensure!(!suite, "Multiple JUnit document roots");
+                    suite = true;
+                }
+                if !empty {
+                    depth += 1;
+                }
+            }
+            Event::End(_) => {
+                depth = depth.checked_sub(1).context("Invalid JUnit nesting")?;
+            }
+            Event::Eof => anyhow::ensure!(suite && depth == 0, "Incomplete JUnit report"),
+            _ => {}
+        }
         match event {
             Event::DocType(_) => anyhow::bail!("DTD is not supported in test reports"),
             Event::Start(ref e) | Event::Empty(ref e) if e.name().as_ref() == b"testcase" => {
@@ -366,7 +392,7 @@ pub(super) fn main() -> Result<()> {
         let bytes = read(&report)
             .context("Framework did not produce its structured report; inspect Tasks output")?;
         if matches!(r.kind.as_str(), "jest" | "vitest") {
-            js_records(&serde_json::from_slice(&bytes)?);
+            js_records(&serde_json::from_slice(&bytes)?)?;
         } else {
             junit(&bytes, &r.kind, emit)?;
         }
@@ -397,6 +423,9 @@ mod regression {
     }
     #[test]
     fn junit_rejects_dtd_and_malformed_reports() {
+        assert!(junit(b"<testsuite><testcase/>", "ctest", |_| {}).is_err());
+        assert!(junit(b"<other/>", "ctest", |_| {}).is_err());
+        assert!(js_records(&json!({})).is_err());
         assert!(junit(b"<!DOCTYPE x><testsuite/>", "ctest", |_| {}).is_err());
         assert!(junit(
             b"<testsuite><testcase></wrong></testsuite>",

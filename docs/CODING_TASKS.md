@@ -98,16 +98,16 @@ Use Save or Save All first when needed. Task configuration values, including
   The UI also bounds retained output and reports discarded earlier output.
 - There are at most 100 configured tasks, each at most 64 KiB. The whole project
   configuration still has the existing 1 MiB limit.
-- Run history/output is in memory. Closing Koma stops local tasks. Unix SSH
+- Run history/output is in memory. Closing Koma stops local tasks. Unix and Windows SSH
   tasks belong to a persistent remote service and can be adopted after reconnect;
-  Windows SSH workers stop on EOF. No host-reboot or daemon-crash durability is
+  Windows requires SSH job breakaway permission. No host-reboot or daemon-crash durability is
   claimed. Check the outcome after a transport error; commands are not retried.
 - Task Runs, Output, and Stop do not require the workspace directory or config to
   remain readable. A deleted root or malformed config must not block Stop.
 
 Language packs and Test Explorer share the same supervisor. Debugger integrated
-terminals and pre-launch tasks appear here too. Custom problem-matcher definitions
-are not supported; common compiler/source locations are recognized automatically.
+terminals and pre-launch tasks appear here too. Common compiler/source locations
+are recognized automatically; custom matchers can add project-specific formats.
 
 ## Native review
 
@@ -122,14 +122,14 @@ Functional execution is left to the user. Suggested acceptance cases:
    Run must reject the stale definition until Refresh. Invalid JSON, duplicate
    IDs, unknown fields, and a cwd outside the root must report errors.
 4. Run a command that spawns a child. Stop it and verify descendants stop too.
-   Also verify cleanup when its parent exits first, Koma closes, and a remote
-   Windows worker reaches EOF; Unix remote jobs should remain adoptable. Repeat on Linux, macOS, and Windows.
+   Also verify cleanup when its parent exits first and Koma closes. Remote jobs
+   should remain adoptable after SSH EOF. Repeat on Linux, macOS, and Windows.
 5. Exercise Unicode split across writes, mixed stdout/stderr, very noisy output,
    Follow on/off, selection/copy, and reopening an old run after truncation.
    The panel must remain responsive and clearly report discarded output.
 6. Delete/rename a running workspace or corrupt its config. Output/Stop must
    remain usable. Disconnect SSH and verify errors are shown without rerunning
-   the command. On Unix reconnect, verify adoption without duplicate execution.
+   the command. On reconnect, verify adoption without duplicate execution.
 7. Keep an unsaved editor change, run a task, and confirm it uses saved disk
    content. Check the panel's appearance and keyboard focus in the native app.
 
@@ -176,3 +176,32 @@ Common GCC/Clang, Rust, TypeScript and Python output locations are listed above
 output as clickable source links. Paths are resolved against the task's workspace
 and working directory; links require that host to be active. The text is never
 interpreted as HTML. Up to 200 distinct retained locations are shown.
+
+## Custom problem matchers
+
+Add `problemMatchers` to a task. Capture indexes are one-based; `file` and `line`
+are required, while `column` defaults to 1 and `message` defaults to the line:
+
+```json
+{
+  "id": "lint",
+  "label": "Project lint",
+  "command": "my-linter",
+  "problemMatchers": [{
+    "pattern": "^(.+):(\\d+):(\\d+): (.*)$",
+    "file": 1,
+    "line": 2,
+    "column": 3,
+    "message": 4
+  }]
+}
+```
+
+Patterns use Rust regex syntax (no backreferences/lookaround), with at most 16
+matchers, 4096 bytes per pattern and a 1 MiB compiled-regex limit. Definitions are
+validated before any step starts. The native supervisor handles chunk boundaries,
+separate streams, ANSI CSI sequences and each step's working directory. It keeps
+up to 200 distinct locations even after raw output is truncated; lines over
+64 KiB are omitted. Matchers are single-line; VS Code multiline/background
+matcher imports are not implemented. Clicking a location still requires its host
+to be active.
