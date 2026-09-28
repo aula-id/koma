@@ -121,6 +121,7 @@
       "reasoning": {
         "mandatory": true,
         "supported_efforts": [
+          "minimal",
           "low",
           "medium",
           "high",
@@ -139,6 +140,7 @@
       "reasoning": {
         "mandatory": false,
         "supported_efforts": [
+          "minimal",
           "low",
           "medium",
           "high",
@@ -157,6 +159,7 @@
       "reasoning": {
         "mandatory": false,
         "supported_efforts": [
+          "minimal",
           "low",
           "medium",
           "high",
