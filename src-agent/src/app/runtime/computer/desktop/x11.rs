@@ -417,6 +417,33 @@ impl X11 {
         self.buttons.clear();
         Ok(())
     }
+    fn chord_codes(&self, keys: &[String]) -> Result<Vec<u32>> {
+        keys.iter()
+            .map(|k| {
+                let name = CString::new(match k.as_str() {
+                    "Control" | "Ctrl" => "Control_L",
+                    "Shift" => "Shift_L",
+                    "Alt" => "Alt_L",
+                    "Super" | "Command" => "Super_L",
+                    "Meta" => "Meta_L",
+                    "Enter" => "Return",
+                    "Esc" => "Escape",
+                    "Backspace" => "BackSpace",
+                    "Space" => "space",
+                    "PageUp" => "Prior",
+                    "PageDown" => "Next",
+                    "ArrowLeft" => "Left",
+                    "ArrowRight" => "Right",
+                    "ArrowUp" => "Up",
+                    "ArrowDown" => "Down",
+                    other => other,
+                })?;
+                let symbol = unsafe { (self.x.XStringToKeysym)(name.as_ptr()) };
+                ensure!(symbol != 0, "unknown X11 key name");
+                Ok(self.mapped(symbol)?.0)
+            })
+            .collect::<Result<Vec<_>>>()
+    }
     fn mapped(&self, symbol: c_ulong) -> Result<(u32, bool)> {
         let code = unsafe { (self.x.XKeysymToKeycode)(self.display, symbol) };
         ensure!(
@@ -688,6 +715,9 @@ impl Desktop for X11 {
         if matches!(action, Action::Type { .. } | Action::Key { .. }) {
             self.guard_keyboard()?;
         }
+        if let Action::Key { keys } = action {
+            self.chord_codes(keys).map_err(|e| anyhow::anyhow!("Key chord unavailable: {e}; observe again and use keys available in this layout"))?;
+        }
         Ok(())
     }
     fn input(&mut self, action: &Action, transform: &Transform) -> Result<()> {
@@ -780,30 +810,7 @@ impl Desktop for X11 {
                 }
             }
             Action::Key { keys } => {
-                let codes = keys
-                    .iter()
-                    .map(|k| {
-                        let name = CString::new(match k.as_str() {
-                            "Control" | "Ctrl" => "Control_L",
-                            "Shift" => "Shift_L",
-                            "Alt" => "Alt_L",
-                            "Super" | "Command" => "Super_L",
-                            "Meta" => "Meta_L",
-                            "Enter" => "Return",
-                            "Esc" => "Escape",
-                            "Backspace" => "BackSpace",
-                            "Space" => "space",
-                            "ArrowLeft" => "Left",
-                            "ArrowRight" => "Right",
-                            "ArrowUp" => "Up",
-                            "ArrowDown" => "Down",
-                            other => other,
-                        })?;
-                        let symbol = unsafe { (self.x.XStringToKeysym)(name.as_ptr()) };
-                        ensure!(symbol != 0, "unknown X11 key name");
-                        Ok(self.mapped(symbol)?.0)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                let codes = self.chord_codes(keys)?;
                 for code in &codes {
                     self.key(*code, true)?;
                 }

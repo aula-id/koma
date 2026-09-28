@@ -331,7 +331,7 @@ static CGKeyCode keyCode(NSString *s) {
         @"F12" : @111
     };
     NSNumber *code = keys[s] ?: keys[s.lowercaseString];
-    require(code != nil, "Unsupported macOS key name");
+    require(code != nil, "Unsupported macOS key name; observe again and use a supported named key");
     return (CGKeyCode)code.unsignedShortValue;
 }
 static CGEventFlags modifier(CGKeyCode key) {
@@ -783,6 +783,8 @@ static id dispatch(NSDictionary *r) {
         guardInput();
         NSString *kind = r[@"action"][@"kind"];
         if ([kind isEqual:@"type"] || [kind isEqual:@"key"]) guardKeyboard();
+        if ([kind isEqual:@"key"])
+            for (NSString *name in r[@"action"][@"keys"]) keyCode(name);
         return NSNull.null;
     }
     if ([command isEqual:@"input"]) {

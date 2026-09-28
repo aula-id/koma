@@ -93,6 +93,15 @@ With `observe=false`, another observation is required before further input.
 Coordinate clicks, scroll and navigation keys end a sequence. Typing uses current
 native focus; click the intended visible application and observe before typing.
 There is no drag or held-button tool.
+Key names use one case-insensitive vocabulary across validation and native adapters.
+For example, `Command`/`cmd`/`Meta`/`Super` plus `Space`/`space`/a literal space all
+resolve to the same Spotlight chord on macOS. `Control`/`Ctrl`, `Alt`/`Option`,
+`Shift`, letters/digits, navigation keys and F1–F12 are supported; Windows/X11 also
+accept F13–F24 when available in the active keymap. A chord has modifiers followed
+by exactly one non-modifier key. Use `type` for text. Unknown names fail before
+dispatch without revoking control. Native key lookup is also checked before input,
+so an unavailable platform key does not falsely report uncertain injected input.
+
 
 The daemon owns mode, approvals and controller lifecycle; the GUI owns native SDK
 handles. Ownership binds the GUI connection, local desktop and session, with an
@@ -270,6 +279,12 @@ Validation completed on the Linux host for this change:
   theme classes. The standalone portable C++ sizing helper compiled with
   `-std=c++17 -Wall -Wextra -Werror` and passed its resolution assertions.
 - Packaging Python syntax and `git diff --check` passed.
+
+Key-chord follow-up: the computer subset now passes 25 tests, including both
+reported Spotlight spellings, canonical keys reaching adapter preflight, unsupported
+key rejection preserving controller state, and preflight failures reporting zero
+uncertain input. GUI/headless all-target Clippy with `-D warnings` also passed for
+this follow-up. macOS/Windows SDK compilation and native shortcut tests were not run.
 
 These are compilation/automated checks, not native SDK or device evidence. Regression
 coverage includes 4K/8K/portrait/ultrawide budgets, negative-origin and Retina-point

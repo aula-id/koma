@@ -5,6 +5,7 @@ pub(crate) mod bridge;
 pub(crate) mod contract;
 pub(crate) mod controller;
 pub(crate) mod executor;
+mod keys;
 pub(crate) use contract::*;
 pub(crate) use controller::Controller;
 #[cfg(feature = "gui")]

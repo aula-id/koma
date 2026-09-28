@@ -315,7 +315,7 @@ static WORD keycode(hstring name) {
         if (n >= 1 && n <= 24)
             return static_cast<WORD>(VK_F1 + n - 1);
     }
-    throw hresult_error(E_INVALIDARG, L"Unsupported Windows key name");
+    throw hresult_error(E_INVALIDARG, L"Unsupported Windows key name; observe again and use a supported named key");
 }
 static void input(JsonObject a, JsonObject t) {
     guardInput();
@@ -786,6 +786,8 @@ static IJsonValue dispatch(JsonObject r) {
         guardInput();
         auto kind = r.GetNamedObject(L"action").GetNamedString(L"kind");
         if (kind == L"type" || kind == L"key") guardKeyboard();
+        if (kind == L"key")
+            for (auto name : r.GetNamedObject(L"action").GetNamedArray(L"keys")) keycode(name.GetString());
         return JsonValue::CreateNullValue();
     }
     if (command == L"input") {

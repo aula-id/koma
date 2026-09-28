@@ -90,37 +90,14 @@ pub fn validate_actions(obs: &Observation, actions: &[Action], caps: &Capabiliti
             {
                 bail!("use a final named key action for control characters")
             }
-            Action::Key { keys }
-                if !caps.keyboard
-                    || keys.is_empty()
-                    || keys.len() > 5
-                    || keys.iter().any(|k| {
-                        k.is_empty() || k.len() > 64 || k.chars().any(char::is_control)
-                    })
-                    || keys.iter().take(keys.len().saturating_sub(1)).any(|k| {
-                        !matches!(
-                            k.as_str(),
-                            "Shift"
-                                | "Shift_L"
-                                | "Shift_R"
-                                | "Control"
-                                | "Ctrl"
-                                | "Control_L"
-                                | "Control_R"
-                                | "Alt"
-                                | "Alt_L"
-                                | "Alt_R"
-                                | "Super"
-                                | "Super_L"
-                                | "Super_R"
-                                | "Meta"
-                                | "Meta_L"
-                                | "Meta_R"
-                                | "Command"
-                        )
-                    }) =>
-            {
-                bail!("invalid key chord or keyboard unsupported")
+            Action::Key { keys } => {
+                if !caps.keyboard {
+                    bail!("keyboard input unsupported");
+                }
+                super::keys::chord(keys)?;
+                if i + 1 != actions.len() {
+                    bail!("scroll or key navigation must end the sequence");
+                }
             }
             Action::Type { text }
                 if text.char_indices().any(|(offset, c)| {
@@ -130,8 +107,8 @@ pub fn validate_actions(obs: &Observation, actions: &[Action], caps: &Capabiliti
             {
                 bail!("a typed navigation key must be the final character of the sequence; observe before continuing")
             }
-            // Key events can navigate; conservatively end every chord sequence.
-            Action::Key { .. } | Action::Scroll { .. } if i + 1 != actions.len() => {
+            // Scrolling changes visible targets; observe before further input.
+            Action::Scroll { .. } if i + 1 != actions.len() => {
                 bail!("scroll or key navigation must end the sequence")
             }
             Action::Scroll { delta, .. } if delta.unsigned_abs() > 20 || *delta == 0 => {
@@ -232,6 +209,10 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                         y: Some(y),
                         element: None,
                         button: *button,
+                    }
+                } else if let Action::Key { keys } = action {
+                    Action::Key {
+                        keys: super::keys::chord(keys)?,
                     }
                 } else {
                     action.clone()
@@ -343,6 +324,7 @@ mod fixture_tests {
         closed: bool,
         display: bool,
         front: u8,
+        reject_key: bool,
     }
     impl Fixture {
         fn window(&self) -> Window {
@@ -400,6 +382,19 @@ mod fixture_tests {
                 vec![self.front],
             ))
         }
+        fn validate_input(&mut self, action: &Action) -> Result<()> {
+            if let Action::Key { keys } = action {
+                assert_eq!(
+                    keys,
+                    &super::super::keys::chord(keys).unwrap(),
+                    "native preflight must receive canonical keys"
+                );
+                if self.reject_key {
+                    bail!("Key unavailable in active layout; observe again");
+                }
+            }
+            Ok(())
+        }
         fn input(&mut self, action: &Action, _: &Transform) -> Result<()> {
             if self.inputs == self.fail_at {
                 bail!("fixture failure");
@@ -415,6 +410,99 @@ mod fixture_tests {
         }
     }
     #[test]
+    fn spotlight_aliases_reach_input_and_key_preflight_has_no_uncertain_input() {
+        let mut desktop = Fixture {
+            captures: 0,
+            inputs: 0,
+            fail_at: usize::MAX,
+            released: false,
+            focus: true,
+            closed: false,
+            display: true,
+            front: 1,
+            reject_key: false,
+        };
+        let cancelled = AtomicBool::new(false);
+        let mut request = Request {
+            id: "select".into(),
+            session: "s".into(),
+            generation: "g".into(),
+            observation: None,
+            operation: Operation::Select {
+                window: "display:fixture".into(),
+                generation: "g".into(),
+            },
+        };
+        request.observation = execute(&mut desktop, &request, &cancelled).observation;
+        for keys in [["cmd", "space"], ["Meta", " "]] {
+            request.operation = Operation::Act {
+                observation: request.observation.as_ref().unwrap().id.clone(),
+                actions: vec![Action::Key {
+                    keys: keys.map(str::to_string).to_vec(),
+                }],
+                observe: true,
+            };
+            let reply = execute(&mut desktop, &request, &cancelled);
+            assert!(reply.error.is_none(), "{:?}", reply.error);
+            assert_eq!(reply.completed, 1);
+            assert!(!reply.uncertain);
+            request.observation = reply.observation;
+        }
+        desktop.reject_key = true;
+        request.operation = Operation::Act {
+            observation: request.observation.as_ref().unwrap().id.clone(),
+            actions: vec![Action::Key {
+                keys: vec!["cmd".into(), "space".into()],
+            }],
+            observe: true,
+        };
+        let rejected = execute(&mut desktop, &request, &cancelled);
+        assert!(rejected.error.unwrap().contains("observe again"));
+        assert_eq!(rejected.completed, 0);
+        assert!(!rejected.uncertain);
+        assert_eq!(desktop.inputs, 2);
+        assert_eq!(desktop.captures, 3);
+        assert!(desktop.released);
+
+        let mut controller = Controller::default();
+        let path = std::env::temp_dir().join(format!("computer-key-{}.lock", uuid::Uuid::new_v4()));
+        controller
+            .enable(
+                1,
+                "s",
+                "fixture",
+                Capabilities {
+                    keyboard: true,
+                    ..Default::default()
+                },
+                &path,
+            )
+            .unwrap();
+        let mut obs = request.observation.unwrap();
+        obs.generation = controller.status.generation.clone();
+        let observation = obs.id.clone();
+        controller.status.observation = Some(obs);
+        controller.actionable = true;
+        assert!(controller
+            .begin(
+                "bad-name".into(),
+                Operation::Act {
+                    observation,
+                    actions: vec![Action::Key {
+                        keys: vec!["cmd".into(), "bogus".into()]
+                    }],
+                    observe: true
+                },
+                false
+            )
+            .is_err());
+        assert!(controller.status.enabled && controller.actionable);
+        assert!(controller.outbound.is_none());
+        drop(controller);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn desktop_click_switches_app_and_returns_composed_frame_without_losing_source() {
         let mut desktop = Fixture {
             captures: 0,
@@ -425,6 +513,7 @@ mod fixture_tests {
             closed: false,
             display: true,
             front: 1,
+            reject_key: false,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -514,6 +603,7 @@ mod fixture_tests {
             closed: false,
             display: false,
             front: 1,
+            reject_key: false,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -564,6 +654,7 @@ mod fixture_tests {
             closed: false,
             display: false,
             front: 1,
+            reject_key: false,
         };
         let cancel = AtomicBool::new(false);
         let mut r = Request {
