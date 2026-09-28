@@ -897,6 +897,31 @@ static NSDictionary *capture(NSString *identity, bool enrich, NSDictionary *regi
         @"ocr_status" : ocrStatus
     };
 }
+static void primeCorner(NSDictionary *r) {
+    check();
+    NSString *wid = r[@"window"];
+    require(!isDisplay(wid), "screen share is not primed");
+    NSDictionary *w = lookup(wid);
+    target = describe(w);
+    raiseApplication(w);
+    CGPoint point = CGPointMake([r[@"x"] doubleValue], [r[@"y"] doubleValue]);
+    struct ArrowGuard {
+        ~ArrowGuard() { hideArrow(); }
+    } guard;
+    (void)guard;
+    playGlide(r[@"glide"][@"steps"], point);
+    CGEventRef down =
+        CGEventCreateMouseEvent(nullptr, kCGEventLeftMouseDown, point, kCGMouseButtonLeft);
+    CGEventRef up =
+        CGEventCreateMouseEvent(nullptr, kCGEventLeftMouseUp, point, kCGMouseButtonLeft);
+    require(down && up, "Unable to click");
+    CGEventSetIntegerValueField(down, kCGMouseEventClickState, 1);
+    CGEventSetIntegerValueField(up, kCGMouseEventClickState, 1);
+    postInputEvent(down);
+    postInputEvent(up);
+    CFRelease(down);
+    CFRelease(up);
+}
 static id dispatch(NSDictionary *r) {
     NSString *command = r[@"command"];
     if ([command isEqual:@"release"]) {
@@ -995,6 +1020,10 @@ static id dispatch(NSDictionary *r) {
         if ([kind isEqual:@"type"] || [kind isEqual:@"key"]) guardKeyboard();
         if ([kind isEqual:@"key"])
             for (NSString *name in r[@"action"][@"keys"]) keyCode(name);
+        return NSNull.null;
+    }
+    if ([command isEqual:@"prime"]) {
+        primeCorner(r);
         return NSNull.null;
     }
     if ([command isEqual:@"pointer"]) {

@@ -65,11 +65,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                     }
                 }
             }
-            if let Ok(g) = ctx.req.lock() {
-                if let Some(tx) = g.as_ref() {
-                    let _ = tx.send(ClientRequest::SubmitInput { text });
-                }
-            }
+            let _ = ctx.ctl.send(HostCtl::Submit { text });
         }
         // Hub pick / new session: the client-thread (re)attaches.
         GuiReq::SelectSession { id } => {

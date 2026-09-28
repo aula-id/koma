@@ -171,6 +171,14 @@ struct PointerPoint {
     y: f64,
 }
 impl Native {
+    pub(super) fn click_screen_point(&mut self, window: &Window, x: f64, y: f64) -> Result<()> {
+        let mut request = json!({"command":"prime","window":window.id,"x":x,"y":y});
+        if let Ok((from_x, from_y)) = self.pointer() {
+            request["glide"] = serde_json::to_value(cursor_glide::samples(from_x, from_y, x, y))?;
+        }
+        call::<serde_json::Value>(request)?;
+        Ok(())
+    }
     fn pointer(&self) -> Result<(f64, f64)> {
         let point: PointerPoint = call(json!({"command":"pointer"}))?;
         ensure!(

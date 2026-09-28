@@ -298,6 +298,11 @@ pub(crate) enum HostCtl {
     ComputerPrepared {
         id: String,
     },
+    /// Chat send. An application-window share raises that window and clicks its
+    /// top-left corner before the turn starts. A screen share sends as usual.
+    Submit {
+        text: String,
+    },
     /// The webview page booted / reloaded: re-push the full authoritative state.
     Ready,
     /// Attach to this existing session UUID (a hub `SelectSession` pick).
