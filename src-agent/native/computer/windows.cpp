@@ -283,10 +283,10 @@ static DWORD extended(WORD code) {
 }
 static HWND cursorWnd = nullptr;
 static HBITMAP cursorBmp = nullptr;
-static const int kArrow = 108;
-static const int kHot = 6;
+static const int kArrow = 43;
+static const int kHot = 2;
 static bool insideArrow(double x, double y) {
-    static const double poly[][2] = {{6, 6}, {6, 84}, {27, 63}, {42, 96}, {57, 87}, {39, 57}, {66, 57}};
+    static const double poly[][2] = {{2, 2}, {2, 34}, {11, 25}, {17, 38}, {23, 35}, {16, 23}, {26, 23}};
     bool inside = false;
     for (int i = 0, j = 6; i < 7; j = i++) {
         double yi = poly[i][1], yj = poly[j][1], xi = poly[i][0], xj = poly[j][0];
@@ -329,8 +329,8 @@ static void ensureArrow() {
     for (int y = 0; y < kArrow; ++y) {
         for (int x = 0; x < kArrow; ++x) {
             bool on = insideArrow(x + 0.5, y + 0.5);
-            bool edge = on && (!insideArrow(x + 3.5, y + 0.5) || !insideArrow(x - 2.5, y + 0.5) ||
-                               !insideArrow(x + 0.5, y + 3.5) || !insideArrow(x + 0.5, y - 2.5));
+            bool edge = on && (!insideArrow(x + 1.5, y + 0.5) || !insideArrow(x - 0.5, y + 0.5) ||
+                               !insideArrow(x + 0.5, y + 1.5) || !insideArrow(x + 0.5, y - 0.5));
             BYTE *pixel = pixels + (y * kArrow + x) * 4;
             if (!on)
                 pixel[0] = pixel[1] = pixel[2] = pixel[3] = 0;

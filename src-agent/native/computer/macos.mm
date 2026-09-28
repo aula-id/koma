@@ -289,8 +289,8 @@ static void guardInput() {
         unobstructed(w);
     }
 }
-static const CGFloat kArrow = 108;
-static const CGFloat kHot = 6;
+static const CGFloat kArrow = 43;
+static const CGFloat kHot = 2;
 static NSPanel *cursorPanel = nil;
 static bool arrowShown = false;
 static void hideArrowMain() { [cursorPanel orderOut:nil]; }
@@ -330,7 +330,7 @@ static void ensureArrowMain() {
     [flip scaleXBy:1 yBy:-1];
     [flip concat];
     NSBezierPath *path = [NSBezierPath bezierPath];
-    CGFloat pts[][2] = {{6, 6}, {6, 84}, {27, 63}, {42, 96}, {57, 87}, {39, 57}, {66, 57}};
+    CGFloat pts[][2] = {{2, 2}, {2, 34}, {11, 25}, {17, 38}, {23, 35}, {16, 23}, {26, 23}};
     [path moveToPoint:NSMakePoint(pts[0][0], pts[0][1])];
     for (int i = 1; i < 7; ++i)
         [path lineToPoint:NSMakePoint(pts[i][0], pts[i][1])];
@@ -338,7 +338,7 @@ static void ensureArrowMain() {
     [NSColor.whiteColor setFill];
     [path fill];
     [NSColor.blackColor setStroke];
-    path.lineWidth = 4.5;
+    path.lineWidth = 1.5;
     [path stroke];
     [image unlockFocus];
     NSImageView *view = [[NSImageView alloc] initWithFrame:NSMakeRect(0, 0, kArrow, kArrow)];

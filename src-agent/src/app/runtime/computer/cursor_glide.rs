@@ -2,15 +2,15 @@
 //!
 //! The whole segment is played. A click, move, or scroll does not warp ahead
 //! of the motion. Smoothstep keeps the first and last frames short so the
-//! pointer leaves where it is and settles on the exact target. Duration tracks
-//! distance and stays inside 64–240 ms, one sample every 16 ms.
+//! pointer leaves where it is and settles on the exact target. Speed is
+//! anchored at 1980 pixels in 2 seconds, and every other distance uses that
+//! same pace. One sample every 16 ms.
 use serde::Serialize;
 
 pub const STEP_MS: u64 = 16;
 const MIN_PX: f64 = 8.0;
-const MIN_MS: f64 = 64.0;
-const MAX_MS: f64 = 240.0;
-const MS_PER_PX: f64 = 0.18;
+const ANCHOR_PX: f64 = 1980.0;
+const ANCHOR_MS: f64 = 2000.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Glide {
@@ -26,8 +26,8 @@ pub fn samples(from_x: f64, from_y: f64, to_x: f64, to_y: f64) -> Glide {
             steps: vec![[to_x, to_y]],
         };
     }
-    let ms = (dist * MS_PER_PX).clamp(MIN_MS, MAX_MS);
-    let n = (ms / STEP_MS as f64).round().max(1.0) as usize;
+    let ms = dist / ANCHOR_PX * ANCHOR_MS;
+    let n = (ms / STEP_MS as f64).round().max(2.0) as usize;
     let mut steps = Vec::with_capacity(n);
     for i in 1..=n {
         let u = i as f64 / n as f64;
@@ -77,18 +77,15 @@ mod tests {
     }
 
     #[test]
-    fn sample_count_follows_the_duration_clamp() {
-        let short = samples(0.0, 0.0, 40.0, 0.0);
-        let capped = samples(0.0, 0.0, 4_000.0, 0.0);
+    fn sample_count_follows_the_1980_pixel_anchor() {
+        let anchor = samples(0.0, 0.0, ANCHOR_PX, 0.0);
         assert_eq!(
-            short.steps.len(),
-            (MIN_MS / STEP_MS as f64).round() as usize
+            anchor.steps.len(),
+            (ANCHOR_MS / STEP_MS as f64).round() as usize
         );
-        assert_eq!(
-            capped.steps.len(),
-            (MAX_MS / STEP_MS as f64).round() as usize
-        );
-        assert_eq!(*capped.steps.last().unwrap(), [4_000.0, 0.0]);
-        assert!(capped.steps[0][0] < 400.0);
+        let twice = samples(0.0, 0.0, ANCHOR_PX * 2.0, 0.0);
+        assert_eq!(twice.steps.len(), anchor.steps.len() * 2);
+        assert_eq!(*twice.steps.last().unwrap(), [ANCHOR_PX * 2.0, 0.0]);
+        assert!(twice.steps[0][0] < 200.0);
     }
 }

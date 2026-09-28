@@ -272,16 +272,22 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                 reply.uncertain = false;
                 reply.completed += 1;
                 if index + 1 < actions.len() {
-                    // Posted click/key events return before many apps finish
-                    // changing focus. Let that transition settle without a
-                    // screenshot; cancellation still interrupts the batch.
-                    if matches!(action, Action::Click { .. } | Action::Key { .. }) {
-                        for _ in 0..10 {
-                            if cancelled.load(Ordering::SeqCst) {
-                                bail!("cancelled; completed inputs were not undone");
-                            }
-                            std::thread::sleep(std::time::Duration::from_millis(10));
+                    // A click returns before the page paints. Wait about 200 ms
+                    // so the next step sees the new scene. A key chord only
+                    // needs the shorter focus settle. Cancellation still
+                    // interrupts the batch. There is no screenshot between steps.
+                    let pauses = if matches!(action, Action::Click { .. }) {
+                        20
+                    } else if matches!(action, Action::Key { .. }) {
+                        10
+                    } else {
+                        0
+                    };
+                    for _ in 0..pauses {
+                        if cancelled.load(Ordering::SeqCst) {
+                            bail!("cancelled; completed inputs were not undone");
                         }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
                     }
                     // Refresh native focus metadata after a predicted transition,
                     // without capturing a frame between actions in this batch.

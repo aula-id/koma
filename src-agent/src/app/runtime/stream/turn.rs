@@ -76,6 +76,11 @@ fn computer_turn_stalled(rt: &crate::app::state::SessionRuntime, content: &str) 
         return false;
     }
     let text = content.trim().to_lowercase().replace('’', "'");
+    // A loading page is not a finished result. Ask for another observation
+    // instead of letting the turn end.
+    if page_still_loading(&text) {
+        return true;
+    }
     // Bounded, plain action announcements, including a clause after a completed
     // step ("Compass is focused — selecting the screen and inspecting it").
     // Questions, handoffs, explanations and reports are allowed to finish.
@@ -122,6 +127,27 @@ fn computer_turn_stalled(rt: &crate::app::state::SessionRuntime, content: &str) 
     PROMISE.get_or_init(|| crate::re_util::static_re(
         r"(?:^|[.!;,:]\s+|[—–]\s*|\s-\s)(?:(?:now|then)\s+)?(?:(?:i am|i'm|i’m)\s+)?(?:selecting|inspecting|observing|checking|clicking|opening|launching|focusing|switching|scrolling|typing|pressing|moving|navigating|bringing|searching|retrying|grabbing a fresh frame|taking a fresh screenshot|capturing a fresh frame)\b",
     )).is_match(&text)
+}
+
+fn page_still_loading(text: &str) -> bool {
+    if text.len() > 500 || text.lines().count() > 6 {
+        return false;
+    }
+    if text.contains("finished loading")
+        || text.contains("done loading")
+        || text.contains("has loaded")
+        || text.contains("page loaded")
+    {
+        return false;
+    }
+    text.contains("still loading")
+        || text.contains("page is loading")
+        || text.contains("page's loading")
+        || text.contains("loading the page")
+        || text.contains("waiting for the page")
+        || text.contains("not loaded yet")
+        || text.contains("hasn't loaded")
+        || text.contains("has not loaded")
 }
 
 fn observation_recovery_stalled(rt: &crate::app::state::SessionRuntime, content: &str) -> bool {

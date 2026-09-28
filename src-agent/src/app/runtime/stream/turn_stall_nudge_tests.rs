@@ -137,6 +137,8 @@ fn computer_successful_round_still_requires_promised_tool_call() {
         "Clicking `mpos_dev` in the sidebar.",
         "I’ll inspect the desktop now.",
         "", // Empty/reasoning-only completion after desktop tools.
+        "The page is still loading.",
+        "Still loading — checking the screen again.",
     ] {
         assert!(super::computer_turn_stalled(rt, promise), "{promise}");
     }
@@ -148,6 +150,7 @@ fn computer_successful_round_still_requires_promised_tool_call() {
         "I'll wait for your approval.",
         "Selecting the screen would require another approval.",
         "I cannot inspect this window; please take over.",
+        "The page finished loading and the form is visible.",
     ] {
         assert!(
             !super::computer_turn_stalled(rt, final_answer),

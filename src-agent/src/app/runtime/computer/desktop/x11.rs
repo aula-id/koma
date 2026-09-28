@@ -16,14 +16,14 @@ static PREVIOUS: std::sync::OnceLock<Option<ErrorHandler>> = std::sync::OnceLock
 thread_local! { static OWN: std::cell::Cell<*mut xlib::Display> = const {std::cell::Cell::new(ptr::null_mut())}; static ERROR: std::cell::Cell<bool> = const {std::cell::Cell::new(false)}; }
 fn arrow_points() -> [xlib::XPoint; 8] {
     [
-        (6, 6),
-        (6, 84),
-        (27, 63),
-        (42, 96),
-        (57, 87),
-        (39, 57),
-        (66, 57),
-        (6, 6),
+        (2, 2),
+        (2, 34),
+        (11, 25),
+        (17, 38),
+        (23, 35),
+        (16, 23),
+        (26, 23),
+        (2, 2),
     ]
     .map(|(x, y)| xlib::XPoint {
         x: x as c_short,
@@ -157,7 +157,7 @@ impl X11 {
         let Some(fixes) = xfixes::Xlib::open().ok() else {
             return false;
         };
-        const SIZE: u32 = 108;
+        const SIZE: u32 = 43;
         const SHAPE_BOUNDING: c_int = 0;
         const SHAPE_INPUT: c_int = 2;
         let screen = unsafe { (self.x.XDefaultScreen)(self.display) };
@@ -256,7 +256,7 @@ impl X11 {
             (self.x.XSetLineAttributes)(
                 self.display,
                 gc,
-                4,
+                1,
                 xlib::LineSolid,
                 xlib::CapButt,
                 xlib::JoinMiter,
@@ -282,8 +282,8 @@ impl X11 {
             (self.x.XMoveWindow)(
                 self.display,
                 self.arrow,
-                x.round() as c_int - 6,
-                y.round() as c_int - 6,
+                x.round() as c_int - 2,
+                y.round() as c_int - 2,
             );
             (self.x.XMapRaised)(self.display, self.arrow);
         }

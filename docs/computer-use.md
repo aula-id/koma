@@ -140,8 +140,11 @@ With `observe=false`, another observation is required before further input.
 Up to 16 predicted actions can run in one batch, including coordinate click →
 type, keyboard navigation and repeated scrolls. The model should batch only when
 confident about the next target; coordinates refer to the starting screenshot.
-Clicks and key chords get a short cancellable focus-settling delay between
-steps. Typed characters do not. Native focus metadata is refreshed after each
+A click waits about 200 ms before the next step, so a navigation can start
+painting. Key chords get a shorter cancellable focus-settling delay. Typed
+characters do not. If the frame after a click still shows the page loading,
+the model calls `computer_observe` again and continues. It does not end the
+turn or stop sharing on a loading page. Native focus metadata is refreshed after each
 action without a screenshot. The default is one final observation for the
 entire batch. After the last action, macOS, Windows, and X11 wait a cancellable
 200 ms, then capture once. That frame is the next actionable observation.
