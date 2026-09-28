@@ -21,7 +21,7 @@ previews cannot bury Applications below the screen list. Opening during an activ
 operation defers source refresh until the worker is available. A Wayland application
 is labelled view only. On macOS, Windows, and X11 an application share is labelled
 like any other share; selecting it does not raise the window until an input action.
-The titlebar shows Sharing and provides **Take back control**, **Give
+The titlebar uses one icon for choose-source, paused, and sharing, and provides **Take back control**, **Give
 control** and **Stop sharing**. Taking back control pauses/cancels input while
 keeping the share and live preview; resuming requires a fresh model observation.
 Stopping, disconnecting or changing sessions ends sharing and closes both preview
