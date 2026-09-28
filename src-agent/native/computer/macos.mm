@@ -71,6 +71,32 @@ static NSArray *windowInfo() {
     return CFBridgingRelease(CGWindowListCopyWindowInfo(
         kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
 }
+// Discovery and capture must use the same set of shareable windows. Quartz
+// window titles are optional; a missing title must not hide an application.
+static SCShareableContent *shareableContent() API_AVAILABLE(macos(14.0)) {
+    check();
+    require(CGPreflightScreenCaptureAccess(),
+            "Grant Screen Recording access and reactivate control");
+    __block SCShareableContent *content = nil;
+    __block NSError *error = nil;
+    dispatch_semaphore_t ready = dispatch_semaphore_create(0);
+    [SCShareableContent
+        getShareableContentExcludingDesktopWindows:YES
+                               onScreenWindowsOnly:YES
+                                 completionHandler:^(SCShareableContent *c, NSError *e) {
+                                   content = c;
+                                   error = e;
+                                   dispatch_semaphore_signal(ready);
+                                 }];
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (dispatch_semaphore_wait(ready, dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_MSEC)) != 0) {
+        check();
+        require(std::chrono::steady_clock::now() < deadline, "Window discovery timed out");
+    }
+    check();
+    require(!error && content, "ScreenCaptureKit window discovery failed");
+    return content;
+}
 static NSDictionary *lookup(NSString *identity) {
     NSArray *parts = [identity componentsSeparatedByString:@":"];
     require(parts.count == 2, "Invalid macOS window identity");
@@ -179,11 +205,18 @@ static bool focused(NSDictionary *w) {
            front && sameRect(axBounds((__bridge AXUIElementRef)front), windowBounds(w));
 }
 static NSDictionary *describe(NSDictionary *w) {
+    NSString *application = limited(w[(id)kCGWindowOwnerName]);
+    if (!application.length) {
+        pid_t pid = [w[(id)kCGWindowOwnerPID] intValue];
+        application = limited([NSRunningApplication runningApplicationWithProcessIdentifier:pid].localizedName);
+        if (!application.length) application = [NSString stringWithFormat:@"Application %d", pid];
+    }
+    NSString *title = limited(w[(id)kCGWindowName]);
     return @{
         @"id" :
             [NSString stringWithFormat:@"%@:%@", w[(id)kCGWindowNumber], w[(id)kCGWindowOwnerPID]],
-        @"application" : limited(w[(id)kCGWindowOwnerName]),
-        @"title" : limited(w[(id)kCGWindowName]),
+        @"application" : application,
+        @"title" : title.length ? title : application,
         @"geometry" : rect(windowBounds(w)),
         @"focused" : @(focused(w))
     };
@@ -509,26 +542,7 @@ static NSDictionary *capture(NSString *identity, bool enrich, NSDictionary *regi
     CGDirectDisplayID display = displaySource ? displayID(identity) : kCGNullDirectDisplay;
     NSDictionary *w = displaySource ? nil : lookup(identity);
     CGRect desktop = displaySource ? CGDisplayBounds(display) : windowBounds(w);
-    require(CGPreflightScreenCaptureAccess(),
-            "Grant Screen Recording access and reactivate control");
-    __block SCShareableContent *content = nil;
-    __block NSError *error = nil;
-    dispatch_semaphore_t ready = dispatch_semaphore_create(0);
-    [SCShareableContent
-        getShareableContentExcludingDesktopWindows:YES
-                               onScreenWindowsOnly:YES
-                                 completionHandler:^(SCShareableContent *c, NSError *e) {
-                                   content = c;
-                                   error = e;
-                                   dispatch_semaphore_signal(ready);
-                                 }];
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (dispatch_semaphore_wait(ready, dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_MSEC)) !=
-           0) {
-        check();
-        require(std::chrono::steady_clock::now() < deadline, "Window discovery timed out");
-    }
-    require(!error && content, "ScreenCaptureKit window discovery failed");
+    SCShareableContent *content = shareableContent();
     SCContentFilter *filter = nil;
     if (displaySource) {
         SCDisplay *selected = nil;
@@ -565,8 +579,8 @@ static NSDictionary *capture(NSString *identity, bool enrich, NSDictionary *regi
     configuration.ignoreShadowsSingleWindow = YES;
     configuration.shouldBeOpaque = YES;
     __block id capturedImage = nil;
-    error = nil;
-    ready = dispatch_semaphore_create(0);
+    __block NSError *error = nil;
+    dispatch_semaphore_t ready = dispatch_semaphore_create(0);
     [SCScreenshotManager captureImageWithFilter:filter
                                   configuration:configuration
                               completionHandler:^(CGImageRef img, NSError *e) {
@@ -575,7 +589,7 @@ static NSDictionary *capture(NSString *identity, bool enrich, NSDictionary *regi
                                 error = e;
                                 dispatch_semaphore_signal(ready);
                               }];
-    deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     // Finish the bounded SDK request before returning; its block owns the image.
     while (dispatch_semaphore_wait(ready, dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_MSEC)) !=
            0) {
@@ -747,12 +761,27 @@ static id dispatch(NSDictionary *r) {
             check();
             [result addObject:describeDisplay(displays[i])];
         }
-        for (NSDictionary *w in windowInfo()) {
-            check();
-            if (result.count >= 288) break;
-            if ([w[(id)kCGWindowOwnerPID] intValue] == getpid() ||
-                [w[(id)kCGWindowLayer] intValue] != 0 || [limited(w[(id)kCGWindowName]) length] == 0) continue;
-            try { [result addObject:describe(w)]; } catch (...) {}
+        if (@available(macOS 14.0, *)) {
+            SCShareableContent *content = shareableContent();
+            for (SCWindow *w in content.windows) {
+                check();
+                if (result.count >= 288) break;
+                SCRunningApplication *app = w.owningApplication;
+                CGRect frame = w.frame;
+                if (!app || app.processID <= 0 || app.processID == getpid() ||
+                    w.windowLayer != 0 || CGRectIsEmpty(frame) || CGRectIsNull(frame)) continue;
+                NSString *application = limited(app.applicationName);
+                if (!application.length) application = limited(app.bundleIdentifier);
+                if (!application.length) application = [NSString stringWithFormat:@"Application %d", app.processID];
+                NSString *title = limited(w.title);
+                [result addObject:@{
+                    @"id": [NSString stringWithFormat:@"%u:%d", w.windowID, app.processID],
+                    @"application": application,
+                    @"title": title.length ? title : application,
+                    @"geometry": rect(frame),
+                    @"focused": @NO
+                }];
+            }
         }
         return result;
     }

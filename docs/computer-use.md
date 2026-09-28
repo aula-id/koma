@@ -11,7 +11,10 @@ Native device validation is separate from the compilation and regression evidenc
 
 Use the monitor shortcut immediately left of Terminal, or **Settings → Computer
 use → Start sharing**. Choose a source in the preview's hover/keyboard-accessible picker. It has separate
-**Screens** and **Applications** sections. Applications are labelled **Assist · view
+**Screens** and **Applications** sections, with both category buttons pinned above
+the scrollable list. While open, the picker uses the preview's full area so small
+previews cannot bury Applications below the screen list. Opening during an active
+operation defers source refresh until the worker is available. Applications are labelled **Assist · view
 only** in the picker, preview and titlebar. Selecting one does not focus/raise it. The titlebar shows Sharing and provides **Take back control**, **Give
 control** and **Stop sharing**. Taking back control pauses/cancels input while
 keeping the share and live preview; resuming requires a fresh model observation.
@@ -166,6 +169,14 @@ permission changes (the OS may require relaunch). Screen Recording permits
 observation; Accessibility is additionally needed for focus checks and input.
 The implementation uses Apple's [SCScreenshotManager](https://developer.apple.com/documentation/screencapturekit/scscreenshotmanager)
 for explicit observations, without maintaining a capture stream.
+The Applications picker uses ScreenCaptureKit's
+[shareable windows](https://developer.apple.com/documentation/screencapturekit/scshareablecontent?language=objc),
+the same discovery API used for capture. Untitled windows use the application
+name; a missing Quartz window title no longer removes them from the picker.
+Minimized/off-screen windows and Koma's own windows are excluded. Source discovery
+does not capture screenshots or traverse each application's Accessibility tree.
+After an update, fully quit and relaunch the rebuilt GUI executable; the picker
+and native adapter run in the GUI process. Open the picker again to refresh sources.
 
 Darwin builds support `aarch64-apple-darwin` (Apple Silicon, primary) and
 `x86_64-apple-darwin` (Intel). From the repository root:
@@ -278,6 +289,21 @@ does not open a portal or capture a desktop. These gates are source implementati
 not evidence that a release artifact has been built or validated in this session.
 
 ## Verification and device walkthrough
+
+Picker layout regression: with the GUI dev server and a headless Chrome instance
+already running with a remote debugging port, run:
+
+```sh
+KOMA_GUI_URL=http://127.0.0.1:5173 KOMA_BROWSER_CDP_URL=http://127.0.0.1:9222 node scripts/check_computer_picker.mjs
+```
+
+This uses fixture sources in the detached-viewer web route and never captures or
+controls the desktop. Browser checks passed for category/row visibility at
+560×315, 420×236, 240×135 and 320×120, application selection and focus restoration,
+deferred refresh while busy, and application portal request routing. GUI TypeScript
+checks and the production build passed (existing bundle-size warnings remain).
+This is not native macOS/Windows/Linux capture validation; the macOS discovery
+change still requires an SDK build and device check.
 
 Current desktop-sharing verification is recorded separately from native runtime
 validation. No desktop capture/input or portal smoke tests were run for this change.
