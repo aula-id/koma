@@ -5,6 +5,7 @@
 #import <ImageIO/ImageIO.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <Vision/Vision.h>
+#include "capture_limits.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -89,6 +90,52 @@ static CGRect windowBounds(NSDictionary *w) {
     require(r.size.width > 0 && r.size.height > 0, "Invalid window geometry");
     return r;
 }
+// Display sources use global Quartz coordinates (including negative origins).
+static bool isDisplay(NSString *identity) { return [identity hasPrefix:@"display:"]; }
+static CGDirectDisplayID displayID(NSString *identity) {
+    require(isDisplay(identity), "Select a display before desktop input");
+    unsigned long long value = [[identity substringFromIndex:8] longLongValue];
+    require(value > 0 && value <= UINT32_MAX, "Invalid display identity");
+    CGDirectDisplayID display = (CGDirectDisplayID)value;
+    require(CGDisplayIsActive(display), "Shared display disconnected; select a display again");
+    return display;
+}
+static NSString *desktopFocus() {
+    NSRunningApplication *app = NSWorkspace.sharedWorkspace.frontmostApplication;
+    if (!app) return @"none";
+    AXUIElementRef ax = AXUIElementCreateApplication(app.processIdentifier);
+    AXUIElementSetMessagingTimeout(ax, 0.1f);
+    id focusedWindow = attr(ax, kAXFocusedWindowAttribute);
+    CFRelease(ax);
+    CGRect r = focusedWindow ? axBounds((__bridge AXUIElementRef)focusedWindow) : CGRectZero;
+    return [NSString stringWithFormat:@"%d:%.0f:%.0f:%.0f:%.0f:%@", app.processIdentifier,
+        r.origin.x, r.origin.y, r.size.width, r.size.height,
+        focusedWindow ? limited(attr((__bridge AXUIElementRef)focusedWindow, kAXTitleAttribute)) : @""];
+}
+static NSDictionary *describeDisplay(CGDirectDisplayID display) {
+    return @{
+        @"id": [NSString stringWithFormat:@"display:%u", display],
+        @"application": @"Desktop",
+        @"title": [NSString stringWithFormat:@"Display %u%@", display, display == CGMainDisplayID() ? @" · Main" : @""],
+        @"geometry": rect(CGDisplayBounds(display)), @"focused": @YES,
+        @"focus": desktopFocus()
+    };
+}
+static void guardKeyboard() {
+    if (!isDisplay(target[@"id"])) return;
+    require([desktopFocus() isEqual:target[@"focus"]], "Desktop focus changed; observe again");
+    NSRunningApplication *app = NSWorkspace.sharedWorkspace.frontmostApplication;
+    require(app != nil, "Keyboard focus unavailable; observe again");
+    AXUIElementRef ax = AXUIElementCreateApplication(app.processIdentifier);
+    AXUIElementSetMessagingTimeout(ax, 0.1f);
+    id focusedWindow = attr(ax, kAXFocusedWindowAttribute);
+    CFRelease(ax);
+    if (focusedWindow) {
+        CGRect r = axBounds((__bridge AXUIElementRef)focusedWindow);
+        require(CGRectContainsPoint(bounds(target[@"geometry"]), CGPointMake(CGRectGetMidX(r), CGRectGetMidY(r))),
+                "Keyboard focus is outside the shared display; click a visible window and observe again");
+    }
+}
 // Retained selected-window AX reference. Match only the selected process and
 // exact window geometry/title, and reject ambiguous application windows.
 static AXUIElementRef axWindow(NSDictionary *w) {
@@ -160,12 +207,18 @@ static void unobstructed(NSDictionary *w) {
 static void guardInput() {
     check();
     require(target != nil, "No input target");
-    NSDictionary *w = lookup(target[@"id"]);
-    require(sameRect(windowBounds(w), bounds(target[@"geometry"])), "Window geometry changed");
-    require([limited(w[(id)kCGWindowName]) isEqual:target[@"title"]],
-            "Window title changed; observe again");
-    require(focused(w), "Selected window lost focus");
-    unobstructed(w);
+    require(CGPreflightScreenCaptureAccess() && AXIsProcessTrusted(), "Desktop permissions revoked; reactivate control");
+    if (isDisplay(target[@"id"])) {
+        require(sameRect(CGDisplayBounds(displayID(target[@"id"])), bounds(target[@"geometry"])),
+                "Display geometry changed; observe again");
+        // Overlapping windows are part of the captured desktop, not obstructions.
+    } else {
+        NSDictionary *w = lookup(target[@"id"]);
+        require(sameRect(windowBounds(w), bounds(target[@"geometry"])), "Window geometry changed");
+        require([limited(w[(id)kCGWindowName]) isEqual:target[@"title"]], "Window title changed; observe again");
+        require(focused(w), "Selected window lost focus");
+        unobstructed(w);
+    }
     for (CGKeyCode code = 0; code < 128; ++code)
         require(!CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, code) ||
                     std::find(held.begin(), held.end(), code) != held.end(),
@@ -310,16 +363,20 @@ static CGPoint mapPoint(NSDictionary *a, NSDictionary *t) {
     double x = [a[@"x"] doubleValue], y = [a[@"y"] doubleValue];
     double width = [t[@"width"] doubleValue], height = [t[@"height"] doubleValue];
     require(x >= 0 && y >= 0 && x < width && y < height, "Invalid screenshot coordinate");
-    return CGPointMake(r.origin.x + x * r.size.width / width,
-                       r.origin.y + y * r.size.height / height);
+    CGPoint point = CGPointMake(r.origin.x + x * r.size.width / width,
+                                r.origin.y + y * r.size.height / height);
+    require(CGRectContainsPoint(bounds(target[@"geometry"]), point), "Input outside shared source");
+    return point;
 }
 static void input(NSDictionary *a, NSDictionary *t) {
     guardInput();
     NSString *kind = a[@"kind"];
     if ([kind isEqual:@"type"]) {
+        guardKeyboard();
         NSString *text = a[@"text"];
         for (NSUInteger i = 0; i < text.length;) {
             guardInput();
+            guardKeyboard();
             NSRange range = [text rangeOfComposedCharacterSequenceAtIndex:i];
             // CGEvent carries UTF-16 directly; no layout mutation or clipboard replacement.
             NSString *chunk = [text substringWithRange:range];
@@ -346,6 +403,7 @@ static void input(NSDictionary *a, NSDictionary *t) {
             i = NSMaxRange(range);
         }
     } else if ([kind isEqual:@"key"]) {
+        guardKeyboard();
         std::vector<CGKeyCode> codes;
         for (NSString *s in a[@"keys"])
             codes.push_back(keyCode(s));
@@ -444,10 +502,12 @@ static void accessibility(NSDictionary *w, CGRect desktop, size_t width, size_t 
         }
     }
 }
-static NSDictionary *capture(NSString *identity, bool enrich) API_AVAILABLE(macos(14.0)) {
+static NSDictionary *capture(NSString *identity, bool enrich, NSDictionary *region) API_AVAILABLE(macos(14.0)) {
     check();
-    NSDictionary *w = lookup(identity);
-    CGRect desktop = windowBounds(w);
+    bool displaySource = isDisplay(identity);
+    CGDirectDisplayID display = displaySource ? displayID(identity) : kCGNullDirectDisplay;
+    NSDictionary *w = displaySource ? nil : lookup(identity);
+    CGRect desktop = displaySource ? CGDisplayBounds(display) : windowBounds(w);
     require(CGPreflightScreenCaptureAccess(),
             "Grant Screen Recording access and reactivate control");
     __block SCShareableContent *content = nil;
@@ -468,15 +528,35 @@ static NSDictionary *capture(NSString *identity, bool enrich) API_AVAILABLE(maco
         require(std::chrono::steady_clock::now() < deadline, "Window discovery timed out");
     }
     require(!error && content, "ScreenCaptureKit window discovery failed");
-    SCWindow *selected = nil;
-    for (SCWindow *candidate in content.windows)
-        if (candidate.windowID == [w[(id)kCGWindowNumber] unsignedIntValue])
-            selected = candidate;
-    require(selected, "Selected window no longer shareable");
-    SCContentFilter *filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:selected];
+    SCContentFilter *filter = nil;
+    if (displaySource) {
+        SCDisplay *selected = nil;
+        for (SCDisplay *candidate in content.displays)
+            if (candidate.displayID == display) selected = candidate;
+        require(selected, "Selected display no longer shareable");
+        filter = [[SCContentFilter alloc] initWithDisplay:selected excludingWindows:@[]];
+    } else {
+        SCWindow *selected = nil;
+        for (SCWindow *candidate in content.windows)
+            if (candidate.windowID == [w[(id)kCGWindowNumber] unsignedIntValue]) selected = candidate;
+        require(selected, "Selected window no longer shareable");
+        filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:selected];
+    }
     SCStreamConfiguration *configuration = [SCStreamConfiguration new];
-    configuration.width = (size_t)llround(filter.contentRect.size.width * filter.pointPixelScale);
-    configuration.height = (size_t)llround(filter.contentRect.size.height * filter.pointPixelScale);
+    CGRect sourceDesktop = desktop;
+    if (region) {
+        require(displaySource && [region isKindOfClass:NSDictionary.class], "Region capture requires a display");
+        CGRect selectedRegion = bounds(region);
+        require(selectedRegion.size.width > 0 && selectedRegion.size.height > 0 && CGRectContainsRect(desktop, selectedRegion), "Region outside shared display");
+        configuration.sourceRect = CGRectMake(selectedRegion.origin.x - desktop.origin.x,
+            selectedRegion.origin.y - desktop.origin.y, selectedRegion.size.width, selectedRegion.size.height);
+        sourceDesktop = selectedRegion;
+    }
+    auto size = captureSize((size_t)llround(sourceDesktop.size.width * filter.pointPixelScale),
+                            (size_t)llround(sourceDesktop.size.height * filter.pointPixelScale), !enrich);
+    configuration.width = size.first;
+    configuration.height = size.second;
+    configuration.scalesToFit = YES;
     require(configuration.width > 0 && configuration.height > 0 &&
                 configuration.width * configuration.height <= 32000000,
             "Capture dimensions exceed limit");
@@ -504,8 +584,9 @@ static NSDictionary *capture(NSString *identity, bool enrich) API_AVAILABLE(maco
     CGImageRef image = (__bridge CGImageRef)capturedImage;
     require(image && !error, "ScreenCaptureKit screenshot failed");
     check();
-    require(sameRect(desktop, windowBounds(lookup(identity))),
-            "Window geometry changed during capture");
+    require(sameRect(desktop, displaySource ? CGDisplayBounds(displayID(identity)) : windowBounds(lookup(identity))),
+            "Source geometry changed during capture; observe again");
+    desktop = sourceDesktop;
     size_t width = CGImageGetWidth(image), height = CGImageGetHeight(image);
     NSMutableData *data = [NSMutableData data];
     CGImageDestinationRef encoder = CGImageDestinationCreateWithData(
@@ -527,7 +608,10 @@ static NSDictionary *capture(NSString *identity, bool enrich) API_AVAILABLE(maco
                          @"750 ms; protected values omitted";
     @try {
         try {
-            accessibility(w, desktop, width, height, elements);
+            if (displaySource)
+                axStatus = @"unavailable: display observations use visible pixels and OCR; window-only AX targets may be occluded";
+            else
+                accessibility(w, desktop, width, height, elements);
         } catch (const std::exception &e) {
             axStatus = [@"unavailable: " stringByAppendingString:@(e.what())];
         }
@@ -639,13 +723,14 @@ static id dispatch(NSDictionary *r) {
         if (!ax)
             [limits addObject:@"Grant Accessibility access in System Settings for focus/input and "
                               @"labels, then reactivate"];
+        [limits addObject:@"Display sharing includes visible windows, dialogs and desktop chrome. Input uses the native cursor and keyboard. AX element targets are unavailable for composed displays; use screenshot coordinates."];
         return @{
             @"capture" : @(capture),
             @"windows" : @(capture),
             @"focus" : @(capture && ax),
             @"pointer" : @(capture && ax),
             @"keyboard" : @(capture && ax),
-            @"accessibility" : @(ax),
+            @"accessibility" : @NO,
             @"ocr" : @(supported),
             @"floating" : @YES,
             @"limitations" : limits
@@ -654,21 +739,20 @@ static id dispatch(NSDictionary *r) {
     check();
     if ([command isEqual:@"windows"]) {
         NSMutableArray *result = [NSMutableArray array];
-        for (NSDictionary *w in windowInfo()) {
+        CGDirectDisplayID displays[32];
+        uint32_t count = 0;
+        require(CGGetActiveDisplayList(32, displays, &count) == kCGErrorSuccess, "Display discovery failed");
+        for (uint32_t i = 0; i < count; ++i) {
             check();
-            if (result.count >= 256)
-                break;
-            if ([w[(id)kCGWindowOwnerPID] intValue] == getpid() ||
-                [w[(id)kCGWindowLayer] intValue] != 0)
-                continue;
-            try {
-                [result addObject:describe(w)];
-            } catch (...) {
-            }
+            [result addObject:describeDisplay(displays[i])];
         }
         return result;
     }
     if ([command isEqual:@"inspect"] || [command isEqual:@"select"]) {
+        if (isDisplay(r[@"window"])) {
+            target = describeDisplay(displayID(r[@"window"]));
+            return target;
+        }
         NSDictionary *w = lookup(r[@"window"]);
         if ([command isEqual:@"select"]) {
             AXUIElementRef ax = axWindow(w);
@@ -692,8 +776,14 @@ static id dispatch(NSDictionary *r) {
     }
     if ([command isEqual:@"capture"] || [command isEqual:@"preview"]) {
         if (@available(macOS 14.0, *))
-            return capture(r[@"window"], [command isEqual:@"capture"]);
+            return capture(r[@"window"], [command isEqual:@"capture"], r[@"region"]);
         throw std::runtime_error("Capture requires macOS 14+");
+    }
+    if ([command isEqual:@"validate_input"]) {
+        guardInput();
+        NSString *kind = r[@"action"][@"kind"];
+        if ([kind isEqual:@"type"] || [kind isEqual:@"key"]) guardKeyboard();
+        return NSNull.null;
     }
     if ([command isEqual:@"input"]) {
         try {

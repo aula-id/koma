@@ -10,6 +10,14 @@ pub trait Desktop {
     fn select(&mut self, id: &str) -> Result<Window>;
     fn inspect(&mut self, id: &str) -> Result<Window>;
     fn capture(&mut self, window: &Window) -> Result<(Transform, Vec<u8>)>;
+    fn capture_region(&mut self, _window: &Window, _region: Rect) -> Result<(Transform, Vec<u8>)> {
+        bail!("High-detail region capture is unavailable on this adapter")
+    }
+    /// A failed preflight sent no input. Adapters also recheck inside input()
+    /// because the desktop can change between this check and event injection.
+    fn validate_input(&mut self, _action: &Action) -> Result<()> {
+        Ok(())
+    }
     fn input(&mut self, action: &Action, transform: &Transform) -> Result<()>;
     fn release(&mut self);
 }
@@ -153,19 +161,20 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
             }
             Operation::Select { window, .. } => desktop.select(window)?,
             Operation::InspectWindow { window } => desktop.inspect(window)?,
-            Operation::Observe { crop: Some(_) } => {
+            Operation::Observe { crop: Some(_), .. } => {
                 bail!("crop must be served from the persisted observation")
             }
             Operation::Observe { .. } | Operation::Act { .. } => {
                 let obs = request
                     .observation
                     .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("select a window first"))?;
+                    .ok_or_else(|| anyhow::anyhow!("select a display first"))?;
                 let window = desktop.inspect(&obs.window.id)?;
                 if matches!(request.operation, Operation::Act { .. })
                     && (window.geometry != obs.window.geometry
                         || window.title != obs.window.title
-                        || !window.focused)
+                        || !window.focused
+                        || window.focus != obs.window.focus)
                 {
                     bail!(
                         "window moved, resized, closed, navigated, or focus changed; observe again"
@@ -211,8 +220,9 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                 if current.geometry != window.geometry
                     || current.title != window.title
                     || !current.focused
+                    || current.focus != window.focus
                 {
-                    bail!("focus or geometry changed");
+                    bail!("focus or geometry changed; observe again");
                 }
                 let resolved = if let Action::Click { button, .. } = action {
                     let (x, y) = target(action, obs)?
@@ -226,6 +236,7 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                 } else {
                     action.clone()
                 };
+                desktop.validate_input(&resolved)?;
                 reply.uncertain = true;
                 desktop.input(&resolved, &obs.transform)?;
                 reply.uncertain = false;
@@ -239,7 +250,29 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
             bail!("cancelled");
         }
         let current = desktop.inspect(&window.id)?;
-        let (transform, png) = desktop.capture(&current)?;
+        let (transform, png) = if let Operation::Observe {
+            region: Some(bounds),
+            ..
+        } = request.operation
+        {
+            let source = request
+                .observation
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Observe the display first"))?;
+            anyhow::ensure!(
+                source.window.geometry == current.geometry && source.window.focus == current.focus,
+                "Desktop changed; observe again"
+            );
+            let region = source.transform.crop(bounds)?.desktop;
+            desktop.capture_region(&current, region)?
+        } else {
+            desktop.capture(&current)?
+        };
+        let after_capture = desktop.inspect(&window.id)?;
+        anyhow::ensure!(
+            after_capture.geometry == current.geometry && after_capture.focus == current.focus,
+            "Desktop changed during capture; observe again"
+        );
         if cancelled.load(Ordering::SeqCst) {
             bail!("cancelled; capture discarded");
         }
@@ -308,11 +341,18 @@ mod fixture_tests {
         released: bool,
         focus: bool,
         closed: bool,
+        display: bool,
+        front: u8,
     }
     impl Fixture {
         fn window(&self) -> Window {
             Window {
-                id: "fixture".into(),
+                id: if self.display {
+                    "display:fixture"
+                } else {
+                    "fixture"
+                }
+                .into(),
                 application: "fixture".into(),
                 title: "deterministic".into(),
                 geometry: Rect {
@@ -322,6 +362,7 @@ mod fixture_tests {
                     height: 100.0,
                 },
                 focused: self.focus,
+                focus: self.display.then(|| self.front.to_string()),
             }
         }
     }
@@ -345,20 +386,123 @@ mod fixture_tests {
                     width: 100,
                     height: 100,
                 },
-                vec![],
+                vec![self.front],
             ))
         }
-        fn input(&mut self, _: &Action, _: &Transform) -> Result<()> {
+        fn capture_region(&mut self, _: &Window, region: Rect) -> Result<(Transform, Vec<u8>)> {
+            self.captures += 1;
+            Ok((
+                Transform {
+                    desktop: region,
+                    width: 200,
+                    height: 100,
+                },
+                vec![self.front],
+            ))
+        }
+        fn input(&mut self, action: &Action, _: &Transform) -> Result<()> {
             if self.inputs == self.fail_at {
                 bail!("fixture failure");
             }
             self.inputs += 1;
+            if self.display && matches!(action, Action::Click { .. }) {
+                self.front += 1;
+            }
             Ok(())
         }
         fn release(&mut self) {
             self.released = true;
         }
     }
+    #[test]
+    fn desktop_click_switches_app_and_returns_composed_frame_without_losing_source() {
+        let mut desktop = Fixture {
+            captures: 0,
+            inputs: 0,
+            fail_at: usize::MAX,
+            released: false,
+            focus: true,
+            closed: false,
+            display: true,
+            front: 1,
+        };
+        let cancelled = AtomicBool::new(false);
+        let mut request = Request {
+            id: "desktop".into(),
+            session: "s".into(),
+            generation: "g".into(),
+            operation: Operation::Select {
+                window: "display:fixture".into(),
+                generation: "g".into(),
+            },
+            observation: None,
+        };
+        let selected = execute(&mut desktop, &request, &cancelled);
+        assert_eq!(selected.png, vec![1]);
+        request.observation = selected.observation;
+        request.operation = Operation::Act {
+            observation: request.observation.as_ref().unwrap().id.clone(),
+            actions: vec![Action::Click {
+                x: Some(20.0),
+                y: Some(20.0),
+                element: None,
+                button: Button::Left,
+            }],
+            observe: true,
+        };
+        let clicked = execute(&mut desktop, &request, &cancelled);
+        assert!(clicked.error.is_none());
+        assert_eq!(clicked.completed, 1);
+        assert_eq!(clicked.png, vec![2], "observe the newly foregrounded app");
+        assert_eq!(
+            clicked.observation.as_ref().unwrap().window.id,
+            "display:fixture"
+        );
+        // Reusing a frame from before the app switch cannot target the new focus.
+        let stale = execute(&mut desktop, &request, &cancelled);
+        assert_eq!(stale.completed, 0);
+        assert!(!stale.uncertain);
+        assert!(stale.error.unwrap().contains("observe again"));
+        assert_eq!(desktop.inputs, 1);
+        request.observation = clicked.observation;
+        request.operation = Operation::Act {
+            observation: request.observation.as_ref().unwrap().id.clone(),
+            actions: vec![Action::Type {
+                text: "hello 世界".into(),
+            }],
+            observe: true,
+        };
+        assert_eq!(execute(&mut desktop, &request, &cancelled).completed, 1);
+        assert_eq!(desktop.captures, 3);
+        // A fresh close-up is a new capture, but keeps the original display
+        // identity and maps local image coordinates into the requested region.
+        request.operation = Operation::Observe {
+            crop: None,
+            region: Some(Rect {
+                x: 20.0,
+                y: 30.0,
+                width: 40.0,
+                height: 20.0,
+            }),
+        };
+        let detail = execute(&mut desktop, &request, &cancelled);
+        assert!(detail.error.is_none());
+        let observation = detail.observation.unwrap();
+        assert_eq!(observation.window.geometry.width, 100.0);
+        assert_eq!(
+            observation.transform.map(100.0, 50.0).unwrap(),
+            (40.0, 40.0)
+        );
+        assert_eq!(desktop.captures, 4);
+        desktop.front += 1;
+        let stale_detail = execute(&mut desktop, &request, &cancelled);
+        assert!(stale_detail.error.unwrap().contains("observe again"));
+        assert_eq!(
+            desktop.captures, 4,
+            "stale region must not capture a different app"
+        );
+    }
+
     #[test]
     fn navigation_inside_a_single_action_cannot_send_followup_input() {
         let mut desktop = Fixture {
@@ -368,6 +512,8 @@ mod fixture_tests {
             released: false,
             focus: true,
             closed: false,
+            display: false,
+            front: 1,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -416,6 +562,8 @@ mod fixture_tests {
             released: false,
             focus: true,
             closed: false,
+            display: false,
+            front: 1,
         };
         let cancel = AtomicBool::new(false);
         let mut r = Request {

@@ -1,4 +1,4 @@
-//! User-mediated, window-only Wayland portal observations. Standard portals do
+//! User-mediated, display-only Wayland portal observations. Standard portals do
 //! not expose target focus/obstruction identity, so they cannot authorize Koma's
 //! input contract. Never substitute XWayland or global unverified injection.
 use super::*;
@@ -49,10 +49,13 @@ pub fn capabilities() -> Capabilities {
             .build()?;
         let proxy = zbus::blocking::Proxy::new(&conn, DEST, ROOT, CAST)?;
         let sources: u32 = proxy.get_property("AvailableSourceTypes")?;
-        ensure!(sources & 2 != 0, "This compositor's portal does not support window capture (monitor-only capture is outside this tool's scope)");
+        ensure!(
+            sources & 1 != 0,
+            "This compositor's portal does not support display capture"
+        );
         Ok(())
     })();
-    let mut limitations = vec!["Wayland: select the source in the system portal dialog. Window listing, switching, focus and obstruction verification are compositor-restricted; input is unavailable without verified target identity. The in-app preview is used.".into()];
+    let mut limitations = vec!["Wayland: select the source in the system portal dialog. Display listing and switching require system consent. This ScreenCast adapter is observation-only; RemoteDesktop input is not implemented. The in-app preview is used.".into()];
     if let Err(e) = &check {
         limitations.push(e.to_string());
     }
@@ -145,7 +148,7 @@ impl Portal {
             let result = async {
                 let t = token();
                 let mut args = options(&t);
-                args.insert("types", Value::from(2u32));
+                args.insert("types", Value::from(1u32));
                 args.insert("multiple", Value::from(false));
                 args.insert("cursor_mode", Value::from(1u32));
                 request(
@@ -169,18 +172,24 @@ impl Portal {
                     Vec::try_from(result.remove("streams").context("Portal omitted streams")?)?;
                 ensure!(
                     streams.len() == 1,
-                    "Select exactly one window in the portal"
+                    "Select exactly one display in the portal"
                 );
                 let (node, properties) = streams
                     .into_iter()
                     .next()
                     .context("Portal returned no stream")?;
                 if let Some(kind) = properties.get("source_type") {
-                    ensure!(u32::try_from(kind)? == 2, "Portal did not select a window");
+                    ensure!(u32::try_from(kind)? == 1, "Portal did not select a display");
                 }
                 let size = properties
                     .get("size")
                     .and_then(|v| <(i32, i32)>::try_from(v.try_clone().ok()?).ok());
+                ensure!(
+                    size.is_some_and(|(w, h)| w > 0
+                        && h > 0
+                        && i64::from(w) * i64::from(h) <= 67_108_864),
+                    "Portal did not report valid bounded display dimensions"
+                );
                 let proxy = Proxy::new(&connection, DEST, ROOT, CAST).await?;
                 let fd: zbus::zvariant::OwnedFd = proxy
                     .call(
@@ -224,7 +233,8 @@ impl Portal {
                 }
             }
         })?;
-        let (width, height) = size.unwrap_or((1, 1));
+        let (width, height) =
+            size.context("Portal did not report display dimensions; bounded capture unavailable")?;
         ensure!(
             width > 0 && height > 0,
             "Portal reported invalid logical source dimensions"
@@ -238,7 +248,7 @@ impl Portal {
             window: Window {
                 id: format!("portal:{}", uuid::Uuid::new_v4()),
                 application: "Desktop portal".into(),
-                title: "User-selected Wayland window".into(),
+                title: "User-selected Wayland display".into(),
                 geometry: Rect {
                     x: 0.0,
                     y: 0.0,
@@ -246,6 +256,7 @@ impl Portal {
                     height: height as f64,
                 },
                 focused: false,
+                focus: None,
             },
             live,
         }))
@@ -267,13 +278,19 @@ impl Portal {
             }
         });
     }
-    fn capture(&self, cancelled: &AtomicBool) -> Result<(Transform, Vec<u8>)> {
+    fn capture(&self, cancelled: &AtomicBool, preview: bool) -> Result<(Transform, Vec<u8>)> {
         ensure!(
             !cancelled.load(Ordering::SeqCst) && self.live.load(Ordering::SeqCst),
             "Portal capture cancelled, source closed or permission revoked"
         );
         // Start a one-frame consumer only at observation time. Pass the portal's
         // restricted PipeWire fd; never connect to the compositor's unrestricted socket.
+        let (width, height) = capture_size(
+            self.window.geometry.width as u32,
+            self.window.geometry.height as u32,
+            preview,
+        );
+        let caps = format!("video/x-raw,width={width},height={height},pixel-aspect-ratio=1/1");
         let fd = self.remote.try_clone()?;
         let raw = fd.as_raw_fd();
         let mut command = Command::new(executable());
@@ -286,6 +303,11 @@ impl Portal {
                 "num-buffers=1",
                 "!",
                 "videoconvert",
+                "!",
+                "videoscale",
+                "add-borders=false",
+                "!",
+                &caps,
                 "!",
                 "pngenc",
                 "snapshot=true",
@@ -369,14 +391,10 @@ impl Portal {
                     )
                     .into_dimensions()?;
                     ensure!(
-                        u64::from(width) * u64::from(height) <= 32_000_000,
+                        capture_size(width, height, preview) == (width, height),
                         "Portal image exceeds pixel limit"
                     );
-                    let mut desktop = self.window.geometry;
-                    if desktop.width == 1.0 && desktop.height == 1.0 {
-                        desktop.width = width as f64;
-                        desktop.height = height as f64;
-                    }
+                    let desktop = self.window.geometry;
                     let _ = child.try_wait();
                     return Ok((
                         Transform {
@@ -402,7 +420,7 @@ fn picker() -> Window {
     Window {
         id: PICKER.into(),
         application: "Desktop portal".into(),
-        title: "Choose a window in the system dialog…".into(),
+        title: "Choose a display in the system dialog…".into(),
         geometry: Rect {
             x: 0.0,
             y: 0.0,
@@ -410,6 +428,7 @@ fn picker() -> Window {
             height: 1.0,
         },
         focused: false,
+        focus: None,
     }
 }
 pub(super) fn preview(window: &Window, cancelled: &AtomicBool, cache: &Cache) -> Result<Vec<u8>> {
@@ -419,7 +438,7 @@ pub(super) fn preview(window: &Window, cancelled: &AtomicBool, cache: &Cache) ->
         .clone()
         .context("No shared portal source")?;
     ensure!(portal.window.id == window.id, "Portal source changed");
-    Ok(portal.capture(cancelled)?.1)
+    Ok(portal.capture(cancelled, true)?.1)
 }
 
 pub fn execute(request: &Request, cancelled: &AtomicBool, cache: &Cache) -> Reply {
@@ -453,12 +472,12 @@ pub fn execute(request: &Request, cancelled: &AtomicBool, cache: &Cache) -> Repl
                 portal = Some(selected);
             }
             Operation::Act { .. } | Operation::Select { .. } => {
-                anyhow::bail!("Wayland portal does not expose verified window focus/obstruction; input and programmatic focus are unavailable. Choose a source in the GUI.");
+                anyhow::bail!("Wayland ScreenCast sharing is observation-only; RemoteDesktop input is not implemented. Choose a display in the GUI.");
             }
             _ => {}
         }
         let portal =
-            portal.context("Choose a window using the GUI's system source picker first")?;
+            portal.context("Choose a display using the GUI's system source picker first")?;
         if let Some(obs) = &request.observation {
             if !matches!(request.operation, Operation::InspectWindow { .. }) {
                 ensure!(
@@ -473,7 +492,7 @@ pub fn execute(request: &Request, cancelled: &AtomicBool, cache: &Cache) -> Repl
                 "Portal source no longer selected"
             );
         }
-        let (transform, png) = portal.capture(cancelled)?;
+        let (transform, png) = portal.capture(cancelled, false)?;
         ensure!(
             !cancelled.load(Ordering::SeqCst),
             "Late portal observation discarded"

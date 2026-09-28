@@ -53,7 +53,7 @@ impl Controller {
         self.owner = Some(owner);
         self.used.clear();
         let message = if capabilities.capture {
-            "Ready; select a window".into()
+            "Ready; select a display".into()
         } else {
             format!(
                 "Capture unavailable: {}",
@@ -122,17 +122,26 @@ impl Controller {
         let caps = &self.status.capabilities;
         match &operation {
             Operation::Select { generation, .. } if generation != &self.status.generation => {
-                bail!("controller changed since window listing/approval")
+                bail!("controller changed since display listing/approval")
             }
-            Operation::Windows if !caps.windows => bail!("window listing unsupported"),
+            Operation::Windows if !caps.windows => bail!("display listing unsupported"),
             Operation::Select { .. } if !caps.focus || !caps.capture => {
-                bail!("window selection unsupported; use the OS source picker")
+                bail!("display selection unsupported; use the OS source picker")
             }
             Operation::Observe { .. } | Operation::InspectWindow { .. } if !caps.capture => {
                 bail!("capture unsupported")
             }
-            Operation::Observe { crop: Some(_) } if !self.actionable => {
+            Operation::Observe {
+                crop: Some(_),
+                region: Some(_),
+            } => bail!("choose crop or region, not both"),
+            Operation::Observe { crop: Some(_), .. } if !self.actionable => {
                 bail!("cannot crop a stale observation; capture first")
+            }
+            Operation::Observe {
+                region: Some(_), ..
+            } if !self.actionable => {
+                bail!("cannot target a region from a stale observation; observe the display first")
             }
             Operation::Act {
                 observation,
@@ -153,6 +162,19 @@ impl Controller {
                 super::executor::validate_actions(current, actions, caps)?;
             }
             _ => {}
+        }
+        if let Operation::Observe { crop, region } = &operation {
+            if let Some(bounds) = crop.or(*region) {
+                let current = self
+                    .status
+                    .observation
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("observe before inspecting a region"))?;
+                current.transform.crop(bounds)?;
+                if region.is_some() && !current.window.id.starts_with("display:") {
+                    bail!("fresh region capture unavailable for this source; use crop or a full observation");
+                }
+            }
         }
         let request = Request {
             id: id.clone(),

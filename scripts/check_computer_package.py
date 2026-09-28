@@ -52,7 +52,7 @@ def check(directory: Path) -> None:
             environment['GST_PLUGIN_PATH_1_0'] = str(plugins)
             environment['GST_PLUGIN_SCANNER_1_0'] = str(app / 'usr/libexec/gstreamer-1.0/gst-plugin-scanner')
             environment['GST_REGISTRY_1_0'] = str(Path(scratch) / 'gst-registry.bin')
-            for element in ['pipewiresrc', 'videoconvert', 'pngenc', 'fdsink']:
+            for element in ['pipewiresrc', 'videoconvert', 'videoscale', 'pngenc', 'fdsink']:
                 subprocess.run([str(app / 'usr/bin/gst-inspect-1.0'), element], env=environment,
                                check=True, capture_output=True, timeout=15)
             for relative in ['share/pipewire/client.conf',

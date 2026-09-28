@@ -68,7 +68,7 @@ def main() -> None:
     if not launch:
         raise RuntimeError('gstreamer1.0-tools is required')
     plugin_dir = Path(subprocess.check_output(['pkg-config', '--variable=pluginsdir', 'gstreamer-1.0'], text=True).strip())
-    for choices in [('libgstcoreelements.so',), ('libgstpipewire.so',), ('libgstpng.so',), ('libgstvideoconvertscale.so', 'libgstvideoconvert.so')]:
+    for choices in [('libgstcoreelements.so',), ('libgstpipewire.so',), ('libgstpng.so',), ('libgstvideoconvertscale.so', 'libgstvideoconvert.so'), ('libgstvideoconvertscale.so', 'libgstvideoscale.so')]:
         plugin = next((plugin_dir / name for name in choices if (plugin_dir / name).is_file()), None)
         if plugin is None:
             raise RuntimeError(f'Missing GStreamer plugin: {choices}')

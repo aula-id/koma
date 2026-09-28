@@ -7,7 +7,7 @@ use std::{
     os::raw::{c_int, c_ulong},
     ptr,
 };
-use x11_dl::{xlib, xtest};
+use x11_dl::{xlib, xrandr, xtest};
 
 // Xlib's default error handler exits the process for stale XIDs. Preserve the
 // host's handler for other displays and catch errors on this worker's display.
@@ -36,10 +36,10 @@ pub fn capabilities() -> Capabilities {
             pointer: x.test.is_some(),
             keyboard: x.test.is_some(),
             floating: true,
-            accessibility: std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some(),
+            accessibility: false,
             ocr: crate::app::runtime::computer::enrichment::ocr_available(),
             limitations: vec![
-                "X11: fully visible windows only. Unicode typing temporarily uses an unused keycode and restores it; the target must support Unicode keysyms. Floating viewer cannot be excluded from X11 capture; obstructed targets are rejected. Accessibility requires a uniquely matching AT-SPI window.".into()
+                "X11: composed display capture includes overlapping windows. Unicode typing uses a temporary keycode and restores it. The preview cannot be excluded from live X11 frames; it is hidden for model observations and input. Display AX targets are unavailable; use screenshot coordinates.".into()
             ],
         },
         Err(e)=>Capabilities {limitations:vec![e.to_string()],..Default::default()},
@@ -188,6 +188,94 @@ impl X11 {
         ensure!(r.valid(), "invalid window bounds");
         Ok(r)
     }
+    fn desktop_focus(&self) -> Result<String> {
+        let window = self
+            .property(self.root, "_NET_ACTIVE_WINDOW")?
+            .first()
+            .copied()
+            .unwrap_or(0);
+        Ok(format!("{window}:{:?}", self.geometry(window).ok()))
+    }
+    fn displays(&self) -> Result<Vec<Window>> {
+        let mut sources = vec![];
+        if let Ok(randr) = xrandr::Xrandr::open() {
+            let (mut major, mut minor) = (0, 0);
+            let ok = unsafe { (randr.XRRQueryVersion)(self.display, &mut major, &mut minor) };
+            if ok != 0 && (major, minor) >= (1, 5) {
+                let mut count = 0;
+                let monitors =
+                    unsafe { (randr.XRRGetMonitors)(self.display, self.root, 1, &mut count) };
+                if !monitors.is_null() {
+                    let _free =
+                        scopeguard::guard(monitors, |m| unsafe { (randr.XRRFreeMonitors)(m) });
+                    ensure!((0..=256).contains(&count), "Invalid monitor count");
+                    for m in unsafe { std::slice::from_raw_parts(monitors, count as usize) } {
+                        let geometry = Rect {
+                            x: m.x as f64,
+                            y: m.y as f64,
+                            width: m.width as f64,
+                            height: m.height as f64,
+                        };
+                        if !geometry.valid() {
+                            continue;
+                        }
+                        sources.push(Window {
+                            id: format!("display:{}:{}", self.root, m.name),
+                            application: "Desktop".into(),
+                            title: format!(
+                                "Display {}{}",
+                                sources.len() + 1,
+                                if m.primary != 0 { " · Main" } else { "" }
+                            ),
+                            geometry,
+                            focused: true,
+                            focus: Some(self.desktop_focus()?),
+                        });
+                    }
+                }
+            }
+        }
+        if sources.is_empty() {
+            sources.push(Window {
+                id: format!("display:{}:root", self.root),
+                application: "Desktop".into(),
+                title: "Entire X11 desktop (all monitors)".into(),
+                geometry: self.geometry(self.root)?,
+                focused: true,
+                focus: Some(self.desktop_focus()?),
+            });
+        }
+        self.sync()?;
+        Ok(sources)
+    }
+    fn display_source(&self, id: &str) -> Result<Window> {
+        self.displays()?
+            .into_iter()
+            .find(|w| w.id == id)
+            .ok_or_else(|| anyhow::anyhow!("Shared display disconnected; select a display again"))
+    }
+    fn guard_keyboard(&self) -> Result<()> {
+        let target = self
+            .target
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no input target"))?;
+        if !target.id.starts_with("display:") {
+            return Ok(());
+        }
+        ensure!(
+            target.focus.as_deref() == Some(self.desktop_focus()?.as_str()),
+            "Desktop focus changed; observe again"
+        );
+        let window = self
+            .property(self.root, "_NET_ACTIVE_WINDOW")?
+            .first()
+            .copied()
+            .unwrap_or(self.root);
+        let r = self.geometry(window)?;
+        ensure!(target.geometry.contains(r.x + r.width / 2.0, r.y + r.height / 2.0),
+            "Keyboard focus is outside the shared display; click a visible window and observe again");
+        Ok(())
+    }
     fn unobstructed(&self, window: c_ulong, bounds: Rect) -> Result<()> {
         // Root children include the WM frames, popups, panels and Koma viewer.
         let (mut root, mut parent, mut children, mut count) = (0, 0, ptr::null_mut(), 0);
@@ -260,15 +348,23 @@ impl X11 {
             .target
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("no input target"))?;
-        let xid = self.xid(&target.id)?;
-        ensure!(
-            self.geometry(xid)? == target.geometry,
-            "target geometry changed"
-        );
-        ensure!(
-            self.property(self.root, "_NET_ACTIVE_WINDOW")?.first() == Some(&xid),
-            "focus changed"
-        );
+        if target.id.starts_with("display:") {
+            ensure!(
+                self.display_source(&target.id)?.geometry == target.geometry,
+                "Display geometry changed; observe again"
+            );
+        } else {
+            let xid = self.xid(&target.id)?;
+            ensure!(
+                self.geometry(xid)? == target.geometry,
+                "target geometry changed"
+            );
+            ensure!(
+                self.property(self.root, "_NET_ACTIVE_WINDOW")?.first() == Some(&xid),
+                "focus changed"
+            );
+            self.unobstructed(xid, target.geometry)?;
+        }
         let mut keys = [0 as std::os::raw::c_char; 32];
         unsafe {
             (self.x.XQueryKeymap)(self.display, keys.as_mut_ptr());
@@ -283,7 +379,7 @@ impl X11 {
         ensure!(status == 0 && state.group == 0 && state.latched_mods == 0
             && u32::from(state.locked_mods) & !xlib::Mod2Mask == 0 && state.ptr_buttons == 0,
             "Release mouse buttons and locked/sticky modifiers, and use the primary keyboard group before input");
-        self.unobstructed(xid, target.geometry)
+        Ok(())
     }
     fn key(&mut self, code: u32, down: bool) -> Result<()> {
         let t = self
@@ -292,6 +388,7 @@ impl X11 {
             .ok_or_else(|| anyhow::anyhow!("XTEST unavailable"))?;
         if down {
             self.guard_input()?;
+            self.guard_keyboard()?;
             ensure!(!self.cancelled.load(Ordering::SeqCst), "cancelled");
             self.held.push(code);
         }
@@ -390,30 +487,121 @@ impl X11 {
         Ok(code)
     }
 }
+impl X11 {
+    pub fn capture_source(
+        &mut self,
+        window: &Window,
+        region: Option<Rect>,
+        preview: bool,
+    ) -> Result<(Transform, Vec<u8>)> {
+        let display_source = window.id.starts_with("display:");
+        let xid = if display_source {
+            ensure!(
+                self.display_source(&window.id)?.geometry == window.geometry,
+                "Display geometry changed; observe again"
+            );
+            self.root
+        } else {
+            let xid = self.xid(&window.id)?;
+            self.unobstructed(xid, window.geometry)?;
+            xid
+        };
+        let desktop = if let Some(region) = region {
+            ensure!(
+                display_source
+                    && region.valid()
+                    && region.x >= window.geometry.x
+                    && region.y >= window.geometry.y
+                    && region.x + region.width <= window.geometry.x + window.geometry.width
+                    && region.y + region.height <= window.geometry.y + window.geometry.height,
+                "Region outside shared display"
+            );
+            Rect {
+                x: region.x.floor(),
+                y: region.y.floor(),
+                width: (region.x + region.width).ceil() - region.x.floor(),
+                height: (region.y + region.height).ceil() - region.y.floor(),
+            }
+        } else {
+            window.geometry
+        };
+        let (left, top) = if display_source {
+            (desktop.x as i32, desktop.y as i32)
+        } else {
+            (0, 0)
+        };
+        let w = desktop.width as u32;
+        let h = desktop.height as u32;
+        ensure!(
+            u64::from(w) * u64::from(h) <= 67_108_864,
+            "Display exceeds the 64-megapixel native capture budget"
+        );
+        let raw =
+            unsafe { (self.x.XGetImage)(self.display, xid, left, top, w, h, !0, xlib::ZPixmap) };
+        let guard = scopeguard::guard(raw, |image| unsafe {
+            if !image.is_null() {
+                (self.x.XDestroyImage)(image);
+            }
+        });
+        self.sync()?;
+        ensure!(!raw.is_null(), "capture failed");
+        let (width, height) = capture_size(w, h, preview);
+        let mut image = image::RgbImage::new(width, height);
+        let masks = unsafe { [(*raw).red_mask, (*raw).green_mask, (*raw).blue_mask] };
+        ensure!(masks.iter().all(|v| *v != 0), "unsupported X11 visual");
+        // Sample the native XImage into a bounded buffer before PNG/OCR/IPC.
+        for (x, y, pixel) in image.enumerate_pixels_mut() {
+            if x == 0 {
+                ensure!(!self.cancelled.load(Ordering::SeqCst), "cancelled");
+            }
+            let sx = ((f64::from(x) + 0.5) * f64::from(w) / f64::from(width) - 0.5)
+                .clamp(0.0, f64::from(w - 1));
+            let sy = ((f64::from(y) + 0.5) * f64::from(h) / f64::from(height) - 0.5)
+                .clamp(0.0, f64::from(h - 1));
+            let (x0, y0) = (sx as u32, sy as u32);
+            let mut rgb = [0.0; 3];
+            for (px, py, weight) in [
+                (x0, y0, (1.0 - sx.fract()) * (1.0 - sy.fract())),
+                ((x0 + 1).min(w - 1), y0, sx.fract() * (1.0 - sy.fract())),
+                (x0, (y0 + 1).min(h - 1), (1.0 - sx.fract()) * sy.fract()),
+                (
+                    (x0 + 1).min(w - 1),
+                    (y0 + 1).min(h - 1),
+                    sx.fract() * sy.fract(),
+                ),
+            ] {
+                let value = unsafe { (self.x.XGetPixel)(*guard, px as i32, py as i32) };
+                for (i, mask) in masks.iter().enumerate() {
+                    let shift = mask.trailing_zeros();
+                    rgb[i] += (((value & mask) >> shift) * 255 / (mask >> shift)) as f64 * weight;
+                }
+            }
+            *pixel = image::Rgb(rgb.map(|v| v.round() as u8));
+        }
+        let mut png = std::io::Cursor::new(vec![]);
+        image.write_to(&mut png, image::ImageFormat::Png)?;
+        ensure!(
+            png.get_ref().len() <= 20 * 1024 * 1024,
+            "captured PNG exceeds the 20 MiB observation limit"
+        );
+        Ok((
+            Transform {
+                desktop,
+                width,
+                height,
+            },
+            png.into_inner(),
+        ))
+    }
+}
 impl Desktop for X11 {
     fn windows(&mut self) -> Result<Vec<Window>> {
-        let mut windows = vec![];
-        for xid in self
-            .property(self.root, "_NET_CLIENT_LIST")?
-            .into_iter()
-            .take(256)
-        {
-            let pid = self
-                .property(xid, "_NET_WM_PID")?
-                .first()
-                .copied()
-                .unwrap_or(0);
-            // Never offer Koma's own native windows as targets.
-            if pid == std::process::id() as c_ulong {
-                continue;
-            }
-            if let Ok(window) = self.inspect(&format!("{xid}:{pid}")) {
-                windows.push(window);
-            }
-        }
-        Ok(windows)
+        self.displays()
     }
     fn select(&mut self, id: &str) -> Result<Window> {
+        if id.starts_with("display:") {
+            return self.inspect(id);
+        }
         let xid = self.xid(id)?;
         self.geometry(xid)?;
         let mut event: xlib::XEvent = unsafe { std::mem::zeroed() };
@@ -446,6 +634,11 @@ impl Desktop for X11 {
         bail!("window manager did not grant focus")
     }
     fn inspect(&mut self, id: &str) -> Result<Window> {
+        if id.starts_with("display:") {
+            let result = self.display_source(id)?;
+            self.target = Some(result.clone());
+            return Ok(result);
+        }
         let xid = self.xid(id)?;
         let geometry = self.geometry(xid)?;
         let mut title = ptr::null_mut();
@@ -479,53 +672,23 @@ impl Desktop for X11 {
             title: name,
             geometry,
             focused,
+            focus: None,
         };
         self.target = Some(result.clone());
         Ok(result)
     }
     fn capture(&mut self, window: &Window) -> Result<(Transform, Vec<u8>)> {
-        let xid = self.xid(&window.id)?;
-        self.unobstructed(xid, window.geometry)?;
-        let w = window.geometry.width as u32;
-        let h = window.geometry.height as u32;
-        ensure!(
-            u64::from(w) * u64::from(h) <= 32_000_000,
-            "window too large"
-        );
-        let raw = unsafe { (self.x.XGetImage)(self.display, xid, 0, 0, w, h, !0, xlib::ZPixmap) };
-        let guard = scopeguard::guard(raw, |image| unsafe {
-            if !image.is_null() {
-                (self.x.XDestroyImage)(image);
-            }
-        });
-        self.sync()?;
-        ensure!(!raw.is_null(), "capture failed");
-        let mut image = image::RgbImage::new(w, h);
-        let masks = unsafe { [(*raw).red_mask, (*raw).green_mask, (*raw).blue_mask] };
-        ensure!(masks.iter().all(|v| *v != 0), "unsupported X11 visual");
-        for (x, y, pixel) in image.enumerate_pixels_mut() {
-            let value = unsafe { (self.x.XGetPixel)(*guard, x as i32, y as i32) };
-            let mut rgb = [0; 3];
-            for (i, mask) in masks.iter().enumerate() {
-                let shift = mask.trailing_zeros();
-                rgb[i] = (((value & mask) >> shift) * 255 / (mask >> shift)) as u8;
-            }
-            *pixel = image::Rgb(rgb);
+        self.capture_source(window, None, false)
+    }
+    fn capture_region(&mut self, window: &Window, region: Rect) -> Result<(Transform, Vec<u8>)> {
+        self.capture_source(window, Some(region), false)
+    }
+    fn validate_input(&mut self, action: &Action) -> Result<()> {
+        self.guard_input()?;
+        if matches!(action, Action::Type { .. } | Action::Key { .. }) {
+            self.guard_keyboard()?;
         }
-        let mut png = std::io::Cursor::new(vec![]);
-        image.write_to(&mut png, image::ImageFormat::Png)?;
-        ensure!(
-            png.get_ref().len() <= 20 * 1024 * 1024,
-            "captured PNG exceeds the 20 MiB observation limit"
-        );
-        Ok((
-            Transform {
-                desktop: window.geometry,
-                width: w,
-                height: h,
-            },
-            png.into_inner(),
-        ))
+        Ok(())
     }
     fn input(&mut self, action: &Action, transform: &Transform) -> Result<()> {
         self.guard_input()?;
@@ -539,6 +702,12 @@ impl Desktop for X11 {
                 ..
             } => {
                 let (x, y) = transform.map(*x, *y)?;
+                ensure!(
+                    self.target
+                        .as_ref()
+                        .is_some_and(|w| w.geometry.contains(x, y)),
+                    "Input outside shared source"
+                );
                 let t = self
                     .test
                     .as_ref()
@@ -798,7 +967,10 @@ mod native_tests {
         }
         assert_eq!(std::fs::read_to_string(&state).unwrap(), "1\nKoma42");
         request.id = "observe".into();
-        request.operation = Operation::Observe { crop: None };
+        request.operation = Operation::Observe {
+            crop: None,
+            region: None,
+        };
         let observed =
             crate::app::runtime::computer::executor::execute(&mut desktop, &request, &token);
         assert!(observed.error.is_none(), "{:?}", observed.error);

@@ -45,7 +45,9 @@ pub fn enrich(reply: &mut Reply, cancelled: &AtomicBool) {
         return;
     };
     #[cfg(target_os = "linux")]
-    if !obs.window.id.starts_with("portal:") {
+    if obs.window.id.starts_with("display:") {
+        obs.accessibility_status = "unavailable: composed display observations use visible pixels and OCR; window-only AT-SPI targets may be occluded".into();
+    } else if !obs.window.id.starts_with("portal:") {
         match atspi::extract(obs, cancelled) {
             Ok(elements) => {
                 obs.elements = elements;
@@ -250,6 +252,7 @@ mod tests {
                     height: 4.0,
                 },
                 focused: true,
+                focus: None,
             },
             transform: Transform {
                 desktop: Rect {
@@ -288,7 +291,7 @@ mod tests {
             id: "crop".into(),
             session: "s".into(),
             generation: "g".into(),
-            operation: Operation::Observe { crop: None },
+            operation: Operation::Observe { crop: None, region: None },
             observation: Some(obs.clone()),
         };
         let result = crop(

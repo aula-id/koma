@@ -61,6 +61,7 @@ pub struct Worker {
     generation: String,
     session: String,
     active: bool,
+    sharing: bool,
     cancelled: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
     seen: std::collections::HashSet<String>,
@@ -74,25 +75,29 @@ pub struct Worker {
 }
 impl Worker {
     pub fn status(&mut self, status: &Status) {
-        if self.generation != status.generation
-            || !status.enabled
-            || status.paused
-            || status.desktop != identity()
-        {
+        if self.generation != status.generation || !status.enabled || status.desktop != identity() {
             self.cancelled.store(true, Ordering::SeqCst);
             #[cfg(target_os = "linux")]
-            self.close_portal();
+            if !status.enabled || status.desktop != identity() || self.session != status.session {
+                self.close_portal();
+            }
             self.cancelled = Arc::new(AtomicBool::new(false));
             self.seen.clear();
         }
         self.generation = status.generation.clone();
         self.session = status.session.clone();
-        self.active = status.enabled && !status.paused && status.desktop == identity();
+        self.sharing = status.enabled && status.desktop == identity();
+        self.active = self.sharing && !status.paused;
         self.preview_window = status.observation.as_ref().map(|o| o.window.clone());
         self.preview_allowed = status.capabilities.capture && !status.busy;
     }
+    pub fn pause_input(&mut self) {
+        self.active = false;
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
     pub fn cancel(&mut self) {
         self.active = false;
+        self.sharing = false;
         self.cancelled.store(true, Ordering::SeqCst);
         #[cfg(target_os = "linux")]
         self.close_portal();
@@ -189,7 +194,10 @@ fn run(
     let _lock = scopeguard::guard(lock, |file| {
         let _ = file.unlock();
     });
-    if let Operation::Observe { crop: Some(bounds) } = &request.operation {
+    if let Operation::Observe {
+        crop: Some(bounds), ..
+    } = &request.operation
+    {
         return super::enrichment::crop(request, *bounds).unwrap_or_else(|e| Reply {
             id: request.id.clone(),
             session: request.session.clone(),

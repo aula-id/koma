@@ -1,6 +1,32 @@
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
+pub const OBSERVATION_MAX_EDGE: u32 = 1920;
+pub const OBSERVATION_MAX_PIXELS: u64 = 2_073_600;
+#[cfg(any(feature = "gui", test))]
+pub fn capture_size(width: u32, height: u32, preview: bool) -> (u32, u32) {
+    if width == 0 || height == 0 {
+        return (0, 0);
+    }
+    let (max_width, max_height, pixels) = if preview {
+        (1280.0, 960.0, 1_228_800.0)
+    } else {
+        (
+            f64::from(OBSERVATION_MAX_EDGE),
+            f64::from(OBSERVATION_MAX_EDGE),
+            OBSERVATION_MAX_PIXELS as f64,
+        )
+    };
+    let scale = 1.0_f64
+        .min(max_width / f64::from(width))
+        .min(max_height / f64::from(height))
+        .min((pixels / (f64::from(width) * f64::from(height))).sqrt());
+    (
+        (f64::from(width) * scale).floor().max(1.0) as u32,
+        (f64::from(height) * scale).floor().max(1.0) as u32,
+    )
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Capabilities {
     pub capture: bool,
@@ -68,7 +94,6 @@ impl Transform {
             self.desktop.y + y * self.desktop.height / self.height as f64,
         ))
     }
-    #[cfg(any(feature = "gui", test))]
     pub fn crop(&self, bounds: Rect) -> Result<Self> {
         if !bounds.valid()
             || bounds.x.fract() != 0.0
@@ -95,11 +120,17 @@ impl Transform {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Window {
+    // The wire name is retained for saved sessions. Native pickers now return
+    // display:* sources whose geometry is the full composed display.
     pub id: String,
     pub application: String,
     pub title: String,
     pub geometry: Rect,
     pub focused: bool,
+    /// Focus identity at observation time for composed desktop sources.
+    /// Legacy window observations do not carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Element {
@@ -172,6 +203,9 @@ pub enum Operation {
     },
     Observe {
         crop: Option<Rect>,
+        /// Fresh higher-detail capture of a screenshot-relative region. Unlike
+        /// crop, this samples desktop pixels again instead of enlarging saved pixels.
+        region: Option<Rect>,
     },
     Act {
         observation: String,
@@ -288,5 +322,97 @@ mod wire_tests {
         assert!(!serde_json::to_string(&Status::default())
             .unwrap()
             .contains("png"));
+    }
+}
+
+#[cfg(test)]
+mod resolution_tests {
+    use super::*;
+    #[test]
+    fn computer_frames_bound_4k_8k_portrait_and_ultrawide_without_upscaling() {
+        for (w, h) in [
+            (3840, 2160),
+            (7680, 4320),
+            (4320, 7680),
+            (15360, 4320),
+            (5120, 5120),
+            (2560, 1600),
+            (640, 480),
+            (1, 8192),
+        ] {
+            for preview in [false, true] {
+                let (width, height) = capture_size(w, h, preview);
+                assert!(width > 0 && height > 0 && width <= w && height <= h);
+                assert!(width <= if preview { 1280 } else { 1920 });
+                assert!(height <= if preview { 960 } else { 1920 });
+                assert!(
+                    u64::from(width) * u64::from(height)
+                        <= if preview {
+                            1_228_800
+                        } else {
+                            OBSERVATION_MAX_PIXELS
+                        }
+                );
+                assert_eq!(capture_size(width, height, preview), (width, height));
+            }
+        }
+        assert_eq!(capture_size(7680, 4320, false), (1920, 1080));
+        assert_eq!(capture_size(7680, 4320, true), (1280, 720));
+        assert_eq!(capture_size(640, 480, false), (640, 480));
+        assert_eq!(capture_size(0, 480, false), (0, 0));
+    }
+    #[test]
+    fn computer_8k_closeup_maps_negative_origins_and_retina_points() {
+        for desktop in [
+            Rect {
+                x: -7680.0,
+                y: -200.0,
+                width: 7680.0,
+                height: 4320.0,
+            },
+            Rect {
+                x: -3840.0,
+                y: 100.0,
+                width: 3840.0,
+                height: 2160.0,
+            },
+        ] {
+            let overview = Transform {
+                desktop,
+                width: 1920,
+                height: 1080,
+            };
+            let region = overview
+                .crop(Rect {
+                    x: 480.0,
+                    y: 270.0,
+                    width: 480.0,
+                    height: 270.0,
+                })
+                .unwrap()
+                .desktop;
+            let closeup = Transform {
+                desktop: region,
+                width: 1920,
+                height: 1080,
+            };
+            assert_eq!(
+                closeup.map(960.0, 540.0).unwrap(),
+                overview.map(720.0, 405.0).unwrap()
+            );
+            assert_eq!(
+                closeup.map(0.0, 0.0).unwrap(),
+                overview.map(480.0, 270.0).unwrap()
+            );
+            assert!(overview
+                .crop(Rect {
+                    x: 1900.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0
+                })
+                .is_err());
+            assert!(closeup.map(1920.0, 0.0).is_err());
+        }
     }
 }

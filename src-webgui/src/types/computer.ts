@@ -6,7 +6,7 @@ export type ComputerObservationView = {
   captured_ms: number; width: number; height: number
   accessibility_status: string; ocr_status: string
 }
-export type ComputerWindow = { id: string; application: string; title: string; geometry: ComputerRect; focused: boolean }
+export type ComputerWindow = { id: string; application: string; title: string; geometry: ComputerRect; focused: boolean; focus?: string }
 export type ComputerObservation = {
   id: string; session: string; generation: string; window: ComputerWindow
   transform: { desktop: ComputerRect; width: number; height: number }

@@ -139,10 +139,20 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
         rt.computer.status.observation = Some(obs.clone());
         rt.computer.actionable = reply.error.is_none();
     }
+    // A scene/focus/layout change invalidates coordinates, not permission to
+    // share the desktop. Keep sharing and require observation before more input.
+    let observe_again = !reply.uncertain
+        && reply
+            .error
+            .as_ref()
+            .is_some_and(|e| e.contains("observe again"));
     if let Some(error) = &reply.error {
-        rt.computer.stop(&format!(
-            "Native operation failed: {error}; reactivate explicitly"
-        ));
+        rt.computer.actionable = false;
+        if !observe_again {
+            rt.computer.stop(&format!(
+                "Native operation failed: {error}; reactivate explicitly"
+            ));
+        }
     }
     rt.computer.status.message = reply
         .error
@@ -156,6 +166,13 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
         result["controller_enabled"] = false.into();
         result["requires_user_action"] = true.into();
         result["recovery"] = recovery_nudge();
+    } else if observe_again {
+        result["controller_enabled"] = true.into();
+        result["requires_observation"] = true.into();
+        result["recovery"] = serde_json::json!({
+            "kind": "desktop_changed",
+            "model_instruction": "The desktop changed. Sharing remains enabled. Call computer_observe to inspect a fresh frame, then decide the next action. Do not replay completed inputs or reuse old coordinates. Overlapping windows are visible desktop content; use native desktop actions, not browser tools, to interact with them."
+        });
     }
     let text = result.to_string();
     settle(rt, reply.id, text);
@@ -174,8 +191,10 @@ fn ingest(rt: &mut SessionRuntime, reply: &mut Reply) -> anyhow::Result<()> {
         image::ImageReader::with_format(std::io::Cursor::new(&reply.png), image::ImageFormat::Png)
             .into_dimensions()?;
     anyhow::ensure!(
-        u64::from(dimensions.0) * u64::from(dimensions.1) <= 32_000_000,
-        "decoded image too large"
+        dimensions.0 <= OBSERVATION_MAX_EDGE
+            && dimensions.1 <= OBSERVATION_MAX_EDGE
+            && u64::from(dimensions.0) * u64::from(dimensions.1) <= OBSERVATION_MAX_PIXELS,
+        "observation exceeds the 1920-pixel / 2-megapixel budget"
     );
     let img = image::load_from_memory_with_format(&reply.png, image::ImageFormat::Png)?;
     anyhow::ensure!(
@@ -282,6 +301,7 @@ mod tests {
                     title: "test".into(),
                     geometry: bounds,
                     focused: true,
+                    focus: None,
                 },
                 transform: Transform {
                     desktop: bounds,
@@ -297,7 +317,7 @@ mod tests {
             ..Default::default()
         };
         ingest(&mut rt, &mut reply).unwrap();
-        let obs = reply.observation.unwrap();
+        let obs = reply.observation.as_ref().unwrap();
         let preview = std::fs::read(&obs.image_path).unwrap();
         assert_eq!(preview, reply.png);
         let message = rt.computer.latest_message.as_ref().unwrap();
@@ -315,6 +335,15 @@ mod tests {
         let mut empty = vec![];
         rt.computer.preserve_observation(&mut empty);
         assert!(empty.is_empty());
+        let mut oversized = std::io::Cursor::new(vec![]);
+        image::RgbImage::new(1921, 1)
+            .write_to(&mut oversized, image::ImageFormat::Png)
+            .unwrap();
+        reply.png = oversized.into_inner();
+        assert!(ingest(&mut rt, &mut reply)
+            .unwrap_err()
+            .to_string()
+            .contains("budget"));
         std::fs::remove_dir_all(path).unwrap();
     }
 }
@@ -385,6 +414,82 @@ mod approval_tests {
             "late replies must not settle twice"
         );
         drop(state);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn desktop_change_keeps_sharing_but_requires_new_observation_without_replay() {
+        let mut rt = SessionRuntime::new();
+        let path =
+            std::env::temp_dir().join(format!("koma-display-recovery-{}", uuid::Uuid::new_v4()));
+        rt.computer
+            .enable(
+                1,
+                &rt.id,
+                "fixture",
+                Capabilities {
+                    capture: true,
+                    focus: true,
+                    ..Default::default()
+                },
+                &path,
+            )
+            .unwrap();
+        rt.computer
+            .begin(
+                "changed".into(),
+                Operation::Select {
+                    window: "display:fixture".into(),
+                    generation: rt.computer.status.generation.clone(),
+                },
+                false,
+            )
+            .unwrap();
+        rt.pending_tool_tasks.push("changed".into());
+        rt.computer.outbound.take(); // The IPC dispatcher consumes the queued operation.
+        let reply = Reply {
+            id: "changed".into(),
+            session: rt.id.clone(),
+            generation: rt.computer.status.generation.clone(),
+            completed: 1,
+            uncertain: false,
+            error: Some("Desktop focus changed; observe again".into()),
+            ..Default::default()
+        };
+        receive(&mut rt, 1, reply.clone());
+        assert!(rt.computer.status.enabled);
+        assert!(!rt.computer.actionable);
+        assert!(rt.computer.outbound.is_none());
+        let result: serde_json::Value = serde_json::from_str(&rt.tool_results[0].1).unwrap();
+        assert_eq!(result["controller_enabled"], true);
+        assert_eq!(result["requires_observation"], true);
+        assert_eq!(result["completed"], 1);
+        receive(&mut rt, 1, reply);
+        assert_eq!(rt.tool_results.len(), 1);
+        assert!(rt
+            .computer
+            .begin(
+                "stale".into(),
+                Operation::Act {
+                    observation: "old".into(),
+                    actions: vec![],
+                    observe: true
+                },
+                false
+            )
+            .is_err());
+        rt.computer
+            .begin(
+                "fresh".into(),
+                Operation::Observe {
+                    crop: None,
+                    region: None,
+                },
+                false,
+            )
+            .unwrap();
+        assert!(rt.computer.outbound.is_some());
+        drop(rt);
         std::fs::remove_file(path).unwrap();
     }
 

@@ -62,8 +62,8 @@ export function ComputerPanel() {
     if (start) setBounds(v => bounded({ ...v, x: start.left + event.clientX - start.x, y: start.top + event.clientY - start.y }, aspect.current))
   }
   if (!session || !local || !open) return null
-  return <section role="dialog" aria-label="Shared window preview"
-    className="fixed z-40 rounded-xl bg-koma-panel shadow-2xl ring-1 ring-koma-border"
+  return <section role="dialog" aria-label="Shared desktop preview"
+    className="computer-preview-panel fixed z-40 rounded-xl bg-koma-panel shadow-2xl ring-1 ring-koma-border"
     style={{ left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height, overflow: 'hidden' }}>
     <ComputerPreview status={current} control={control} onImageSize={imageSize} chrome={<>
       <span role="img" aria-label="Drag preview" title="Drag preview" className="cursor-move touch-none rounded-md p-1.5 text-koma-dim hover:bg-koma-hover"

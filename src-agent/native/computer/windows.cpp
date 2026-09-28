@@ -1,6 +1,7 @@
 // Windows 10 1903+ GUI SDK bridge. Graphics Capture consumes one requested frame
 // and closes immediately; no background screenshot or video processing.
 #include <windows.h>
+#include "capture_limits.h"
 #include <UIAutomation.h>
 #include <algorithm>
 #include <atomic>
@@ -34,6 +35,8 @@ using namespace winrt::Windows::Graphics::DirectX;
 using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
 static std::atomic<bool> cancelled(false);
 static HWND target = nullptr;
+static HMONITOR targetMonitor = nullptr;
+static HWND targetForeground = nullptr;
 static RECT targetRect{};
 static std::wstring targetTitle;
 static std::wstring targetId;
@@ -129,6 +132,59 @@ static JsonObject describe(HWND window) {
     r.SetNamedValue(L"focused", boolean(GetForegroundWindow() == window));
     return r;
 }
+// Monitor sources capture the composed desktop, including dialogs and panels.
+static bool isDisplay(hstring id) { return std::wstring_view(id.c_str()).rfind(L"display:", 0) == 0; }
+static MONITORINFOEXW monitorInfo(HMONITOR monitor) {
+    MONITORINFOEXW info{};
+    info.cbSize = sizeof(info);
+    require(GetMonitorInfoW(monitor, reinterpret_cast<MONITORINFO *>(&info)), L"Shared display disconnected; select a display again");
+    return info;
+}
+static std::wstring monitorId(HMONITOR monitor) {
+    return L"display:" + std::wstring(monitorInfo(monitor).szDevice);
+}
+static std::vector<HMONITOR> monitors() {
+    std::vector<HMONITOR> result;
+    require(EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR monitor, HDC, LPRECT, LPARAM value) -> BOOL {
+        reinterpret_cast<std::vector<HMONITOR> *>(value)->push_back(monitor);
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&result)), L"Display discovery failed");
+    return result;
+}
+static HMONITOR lookupMonitor(hstring id) {
+    for (HMONITOR monitor : monitors()) if (monitorId(monitor) == id.c_str()) return monitor;
+    throw hresult_error(E_FAIL, L"Shared display disconnected; select a display again");
+}
+static std::wstring desktopFocus() {
+    HWND front = GetForegroundWindow();
+    DWORD pid = 0;
+    GetWindowThreadProcessId(front, &pid);
+    RECT r{};
+    GetWindowRect(front, &r);
+    return std::to_wstring(reinterpret_cast<uintptr_t>(front)) + L":" + std::to_wstring(pid) + L":" + title(front)
+        + L":" + std::to_wstring(r.left) + L":" + std::to_wstring(r.top)
+        + L":" + std::to_wstring(r.right) + L":" + std::to_wstring(r.bottom);
+}
+static JsonObject describeMonitor(HMONITOR monitor) {
+    auto info = monitorInfo(monitor);
+    JsonObject r;
+    r.SetNamedValue(L"id", str(monitorId(monitor)));
+    r.SetNamedValue(L"application", str(L"Desktop"));
+    r.SetNamedValue(L"title", str(std::wstring(info.szDevice) + ((info.dwFlags & MONITORINFOF_PRIMARY) ? L" · Main display" : L" · Display")));
+    r.SetNamedValue(L"geometry", rectangle(info.rcMonitor));
+    r.SetNamedValue(L"focused", boolean(true));
+    r.SetNamedValue(L"focus", str(desktopFocus()));
+    return r;
+}
+static void guardKeyboard() {
+    if (!targetMonitor) return;
+    HWND front = GetForegroundWindow();
+    require(front && front == targetForeground, L"Desktop focus changed; observe again");
+    RECT r{};
+    require(GetWindowRect(front, &r), L"Keyboard focus unavailable; observe again");
+    POINT center{r.left + (r.right - r.left) / 2, r.top + (r.bottom - r.top) / 2};
+    require(PtInRect(&targetRect, center), L"Keyboard focus is outside the shared display; click a visible window and observe again");
+}
 static bool same(RECT a, RECT b) {
     return a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom;
 }
@@ -164,12 +220,16 @@ static void desktopAvailable() {
 static void guardInput() {
     check();
     require(localSession(), L"Computer input requires the local console session");
-    require(target && IsWindow(target), L"No live input target");
-    require(lookup(hstring(targetId)) == target, L"Input window identity changed");
-    require(same(geometry(target), targetRect) && title(target) == targetTitle,
-            L"Window geometry or title changed; observe again");
-    require(GetForegroundWindow() == target, L"Selected window lost focus");
-    unobstructed(target, targetRect);
+    if (targetMonitor) {
+        require(lookupMonitor(hstring(targetId)) == targetMonitor && same(monitorInfo(targetMonitor).rcMonitor, targetRect),
+                L"Display geometry changed; observe again");
+    } else {
+        require(target && IsWindow(target), L"No live input target");
+        require(lookup(hstring(targetId)) == target, L"Input window identity changed");
+        require(same(geometry(target), targetRect) && title(target) == targetTitle, L"Window geometry or title changed; observe again");
+        require(GetForegroundWindow() == target, L"Selected window lost focus");
+        unobstructed(target, targetRect);
+    }
     desktopAvailable();
     for (WORD code = 1; code < 255; ++code) {
         // Generic modifier states mirror their left/right keys, which are checked below.
@@ -261,9 +321,11 @@ static void input(JsonObject a, JsonObject t) {
     guardInput();
     auto kind = a.GetNamedString(L"kind");
     if (kind == L"type") {
+        guardKeyboard();
         auto text = a.GetNamedString(L"text");
         for (uint32_t i = 0; i < text.size();) {
             guardInput();
+            guardKeyboard();
             size_t n = 1;
             wchar_t c = text[i];
             if (c == L'\n' || c == L'\r' || c == L'\t') {
@@ -302,6 +364,7 @@ static void input(JsonObject a, JsonObject t) {
             codes.push_back(keycode(name.GetString()));
         for (WORD code : codes) {
             guardInput();
+            guardKeyboard();
             held.push_back(code);
             INPUT e{};
             e.type = INPUT_KEYBOARD;
@@ -317,6 +380,8 @@ static void input(JsonObject a, JsonObject t) {
         require(x >= 0 && y >= 0 && x < width && y < height, L"Invalid screenshot coordinate");
         double px = r.GetNamedNumber(L"x") + x * r.GetNamedNumber(L"width") / width,
                py = r.GetNamedNumber(L"y") + y * r.GetNamedNumber(L"height") / height;
+        require(px >= targetRect.left && px < targetRect.right && py >= targetRect.top && py < targetRect.bottom,
+                L"Input outside shared source");
         int left = GetSystemMetrics(SM_XVIRTUALSCREEN), top = GetSystemMetrics(SM_YVIRTUALSCREEN),
             w = GetSystemMetrics(SM_CXVIRTUALSCREEN), h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
         require(w > 1 && h > 1 && px >= left && py >= top && px < left + w && py < top + h,
@@ -374,10 +439,10 @@ static std::wstring base64(const std::vector<uint8_t> &bytes) {
     return out;
 }
 static std::vector<uint8_t> png(ID3D11Device *device, ID3D11DeviceContext *context,
-                                ID3D11Texture2D *texture, int width, int height) {
+                                ID3D11Texture2D *texture, int width, int height, RECT region, int outWidth, int outHeight) {
     D3D11_TEXTURE2D_DESC desc{};
     texture->GetDesc(&desc);
-    require(width > 0 && height > 0 && uint64_t(width) * height <= 32000000,
+    require(width > 0 && height > 0 && uint64_t(width) * height <= 67108864 && uint64_t(desc.Width) * desc.Height <= 67108864,
             L"Capture dimensions exceed limit");
     require(static_cast<UINT>(width) <= desc.Width && static_cast<UINT>(height) <= desc.Height,
             L"Capture texture geometry changed");
@@ -391,13 +456,29 @@ static std::vector<uint8_t> png(ID3D11Device *device, ID3D11DeviceContext *conte
     D3D11_MAPPED_SUBRESOURCE mapped{};
     check_hresult(context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped));
     Finally unmap{[&] { context->Unmap(staging.get(), 0); }};
-    std::vector<BYTE> pixels(static_cast<size_t>(width) * height * 3);
-    for (int y = 0; y < height; ++y) {
+    // Sample the mapped GPU frame directly into a bounded RGB buffer. Do not
+    // allocate or encode another full-resolution CPU copy of a 4K/8K desktop.
+    std::vector<BYTE> pixels(static_cast<size_t>(outWidth) * outHeight * 3);
+    for (int y = 0; y < outHeight; ++y) {
         check();
-        auto row = static_cast<BYTE *>(mapped.pData) + y * mapped.RowPitch;
-        for (int x = 0; x < width; ++x)
-            std::memcpy(pixels.data() + (static_cast<size_t>(y) * width + x) * 3, row + x * 4, 3);
+        double sy = std::clamp(region.top + (y + 0.5) * (region.bottom - region.top) / outHeight - 0.5,
+                               double(region.top), double(region.bottom - 1));
+        int y0 = int(sy), y1 = std::min(y0 + 1, int(region.bottom - 1));
+        auto row0 = static_cast<BYTE *>(mapped.pData) + size_t(y0) * mapped.RowPitch;
+        auto row1 = static_cast<BYTE *>(mapped.pData) + size_t(y1) * mapped.RowPitch;
+        for (int x = 0; x < outWidth; ++x) {
+            double sx = std::clamp(region.left + (x + 0.5) * (region.right - region.left) / outWidth - 0.5,
+                                   double(region.left), double(region.right - 1));
+            int x0 = int(sx), x1 = std::min(x0 + 1, int(region.right - 1));
+            for (int c = 0; c < 3; ++c) {
+                double top = row0[x0 * 4 + c] * (1 - (sx - x0)) + row0[x1 * 4 + c] * (sx - x0);
+                double bottom = row1[x0 * 4 + c] * (1 - (sx - x0)) + row1[x1 * 4 + c] * (sx - x0);
+                pixels[(size_t(y) * outWidth + x) * 3 + c] = BYTE(top * (1 - (sy - y0)) + bottom * (sy - y0));
+            }
+        }
     }
+    width = outWidth;
+    height = outHeight;
     com_ptr<IWICImagingFactory> factory;
     check_hresult(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
                                    __uuidof(IWICImagingFactory), factory.put_void()));
@@ -525,13 +606,16 @@ static JsonArray accessibility(HWND window, RECT desktop, int width, int height)
     }
     return elements;
 }
-static JsonObject capture(HWND window, bool enrich) {
+static JsonObject capture(HWND window, bool enrich, HMONITOR monitor = nullptr, JsonObject region = nullptr) {
     check();
     require(GraphicsCaptureSession::IsSupported(), L"Windows Graphics Capture unavailable");
-    RECT desktop = geometry(window);
+    RECT desktop = monitor ? monitorInfo(monitor).rcMonitor : geometry(window);
     auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
     GraphicsCaptureItem item{nullptr};
-    check_hresult(interop->CreateForWindow(window, guid_of<GraphicsCaptureItem>(), put_abi(item)));
+    if (monitor)
+        check_hresult(interop->CreateForMonitor(monitor, guid_of<GraphicsCaptureItem>(), put_abi(item)));
+    else
+        check_hresult(interop->CreateForWindow(window, guid_of<GraphicsCaptureItem>(), put_abi(item)));
     com_ptr<ID3D11Device> device;
     com_ptr<ID3D11DeviceContext> context;
     D3D_FEATURE_LEVEL level;
@@ -546,6 +630,9 @@ static JsonObject capture(HWND window, bool enrich) {
     com_ptr<::IInspectable> inspectable;
     check_hresult(CreateDirect3D11DeviceFromDXGIDevice(dxgi.get(), inspectable.put()));
     auto d3d = inspectable.as<IDirect3DDevice>();
+    auto sourceSize = item.Size();
+    require(sourceSize.Width > 0 && sourceSize.Height > 0 && uint64_t(sourceSize.Width) * sourceSize.Height <= 67108864,
+            L"Display exceeds the 64-megapixel native capture budget");
     auto pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
         d3d, DirectXPixelFormat::B8G8R8A8UIntNormalized, 1, item.Size());
     auto session = pool.CreateCaptureSession(item);
@@ -566,7 +653,7 @@ static JsonObject capture(HWND window, bool enrich) {
     }
     Finally frameClose{[&] { frame.Close(); }};
     check();
-    require(same(geometry(window), desktop), L"Window geometry changed during capture");
+    require(same(monitor ? monitorInfo(monitor).rcMonitor : geometry(window), desktop), L"Source geometry changed during capture; observe again");
     auto size = frame.ContentSize();
     // WGC reports physical pixels. Do not invent a scale if an OS/theme returns
     // a different frame crop: its origin would be unknown and clicks would drift.
@@ -577,12 +664,27 @@ static JsonObject capture(HWND window, bool enrich) {
                       .as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
     com_ptr<ID3D11Texture2D> texture;
     check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D), texture.put_void()));
-    auto bytes = png(device.get(), context.get(), texture.get(), size.Width, size.Height);
+    RECT sample{0, 0, size.Width, size.Height};
+    if (region) {
+        require(monitor, L"Region capture requires a display");
+        RECT requested{LONG(std::floor(region.GetNamedNumber(L"x"))), LONG(std::floor(region.GetNamedNumber(L"y"))),
+            LONG(std::ceil(region.GetNamedNumber(L"x") + region.GetNamedNumber(L"width"))),
+            LONG(std::ceil(region.GetNamedNumber(L"y") + region.GetNamedNumber(L"height")))};
+        require(requested.left >= desktop.left && requested.top >= desktop.top && requested.right <= desktop.right && requested.bottom <= desktop.bottom
+                && requested.right > requested.left && requested.bottom > requested.top, L"Region outside shared display");
+        sample = {requested.left - desktop.left, requested.top - desktop.top, requested.right - desktop.left, requested.bottom - desktop.top};
+        desktop = requested;
+    }
+    auto output = captureSize(sample.right - sample.left, sample.bottom - sample.top, !enrich);
+    auto bytes = png(device.get(), context.get(), texture.get(), size.Width, size.Height, sample, int(output.first), int(output.second));
+    size.Width = int(output.first);
+    size.Height = int(output.second);
     JsonArray elements;
     hstring status = L"UI Automation selected-window labels/roles/bounds; 256 nodes, depth 12, 750 "
                      L"ms; password values omitted";
     try {
-        if (enrich) elements = accessibility(window, desktop, size.Width, size.Height);
+        if (monitor) status = L"unavailable: display observations use visible pixels and OCR; window-only UI Automation targets may be occluded";
+        else if (enrich) elements = accessibility(window, desktop, size.Width, size.Height);
     } catch (const hresult_error &e) {
         status = L"unavailable: " + e.message();
     }
@@ -608,6 +710,8 @@ static IJsonValue dispatch(JsonObject r) {
         release();
         cancelled = false;
         target = nullptr;
+        targetMonitor = nullptr;
+        targetForeground = nullptr;
         return JsonValue::CreateNullValue();
     }
     if (command == L"capabilities") {
@@ -620,8 +724,9 @@ static IJsonValue dispatch(JsonObject r) {
         }
         JsonObject result;
         for (auto key :
-             {L"capture", L"windows", L"focus", L"pointer", L"keyboard", L"accessibility"})
+             {L"capture", L"windows", L"focus", L"pointer", L"keyboard"})
             result.SetNamedValue(key, boolean(supported));
+        result.SetNamedValue(L"accessibility", boolean(false));
         result.SetNamedValue(L"ocr", boolean(false));
         result.SetNamedValue(L"floating", boolean(true));
         JsonArray limits;
@@ -638,33 +743,24 @@ static IJsonValue dispatch(JsonObject r) {
     desktopAvailable();
     if (command == L"windows") {
         JsonArray windows;
-        EnumWindows(
-            [](HWND w, LPARAM value) -> BOOL {
-                auto out = reinterpret_cast<JsonArray *>(value);
-                if (cancelled.load() || out->Size() >= 256)
-                    return FALSE;
-                DWORD pid = 0;
-                GetWindowThreadProcessId(w, &pid);
-                // Owned top-level dialogs are selectable targets too. EnumWindows
-                // already excludes ordinary child controls.
-                if (!pid || pid == GetCurrentProcessId() || !IsWindowVisible(w) || IsIconic(w))
-                    return TRUE;
-                DWORD cloaked = 0;
-                DwmGetWindowAttribute(w, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
-                if (cloaked)
-                    return TRUE;
-                try {
-                    out->Append(describe(w));
-                } catch (...) {
-                }
-                return TRUE;
-            },
-            reinterpret_cast<LPARAM>(&windows));
+        for (HMONITOR monitor : monitors()) {
+            check();
+            windows.Append(describeMonitor(monitor));
+        }
         check();
         return windows;
     }
     if (command == L"inspect" || command == L"select") {
-        HWND w = lookup(r.GetNamedString(L"window"));
+        auto id = r.GetNamedString(L"window");
+        if (isDisplay(id)) {
+            targetMonitor = lookupMonitor(id);
+            targetRect = monitorInfo(targetMonitor).rcMonitor;
+            targetId = monitorId(targetMonitor);
+            targetForeground = GetForegroundWindow();
+            return describeMonitor(targetMonitor);
+        }
+        targetMonitor = nullptr;
+        HWND w = lookup(id);
         if (command == L"select") {
             require(
                 SetForegroundWindow(w),
@@ -681,8 +777,17 @@ static IJsonValue dispatch(JsonObject r) {
         targetId = identity(w);
         return describe(w);
     }
-    if (command == L"capture" || command == L"preview")
-        return capture(lookup(r.GetNamedString(L"window")), command == L"capture");
+    if (command == L"capture" || command == L"preview") {
+        auto id = r.GetNamedString(L"window");
+        return isDisplay(id) ? capture(nullptr, command == L"capture", lookupMonitor(id), r.HasKey(L"region") ? r.GetNamedObject(L"region") : nullptr)
+                             : capture(lookup(id), command == L"capture");
+    }
+    if (command == L"validate_input") {
+        guardInput();
+        auto kind = r.GetNamedObject(L"action").GetNamedString(L"kind");
+        if (kind == L"type" || kind == L"key") guardKeyboard();
+        return JsonValue::CreateNullValue();
+    }
     if (command == L"input") {
         try {
             input(r.GetNamedObject(L"action"), r.GetNamedObject(L"transform"));

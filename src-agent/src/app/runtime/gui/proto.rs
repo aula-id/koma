@@ -41,6 +41,8 @@ pub(super) enum WinCmd {
 #[derive(serde::Deserialize)]
 #[serde(tag = "t")]
 pub(super) enum ClientMsg {
+    #[serde(rename = "computer-prepared")]
+    ComputerPrepared { id: String },
     #[serde(rename = "coding")]
     Coding { request: crate::coding::Request },
     /// Custom-titlebar window command: drag / minimize / toggle-maximize / close.

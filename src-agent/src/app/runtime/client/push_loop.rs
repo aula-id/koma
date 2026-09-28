@@ -663,12 +663,12 @@ pub(super) fn push_loop(
                             }
                             "windows" => Some(Control::ListWindows),
                             "select" => window.map(|window| Control::InspectWindow { window }),
-                            "pause" => {
-                                computer_worker.cancel();
+                            "pause" | "take_over" => {
+                                computer_worker.pause_input();
                                 Some(Control::Pause)
                             }
                             "resume" => Some(Control::Resume),
-                            "stop" | "take_over" => {
+                            "stop" => {
                                 computer_worker.cancel();
                                 Some(Control::Stop)
                             }

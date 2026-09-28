@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { ComputerPreview } from './ComputerPreview'
 import type { ComputerStatus } from '../types/computer'
 
-/** Native floating window: the shared frame and hover window picker. */
+/** Native floating window: the shared frame and hover display picker. */
 export function ComputerViewer() {
   const [status, setStatus] = useState<ComputerStatus | null>(window.__komaComputerInitial ?? null)
   useEffect(() => {

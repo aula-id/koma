@@ -9,6 +9,9 @@
 @import "@xyflow/react/dist/style.css";
 @source "../node_modules/streamdown/dist/*.js";
 
+/* The native worker waits for this hide to paint before desktop observation/input. */
+html[data-computer-preparing="true"] .computer-preview-panel { visibility: hidden; }
+
 @theme {
   /* Global mono font. The bundled KomaMono (JetBrains Mono, @font-face below)
      is the ONE family for the entire GUI — chrome, panels, forms, buttons,

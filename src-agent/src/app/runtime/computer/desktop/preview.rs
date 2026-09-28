@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 impl Worker {
     pub fn accepts_preview(&self, request: &PreviewRequest) -> bool {
-        self.active
+        self.sharing
             && self.preview_allowed
             && request.session == self.session
             && request.generation == self.generation
@@ -71,7 +71,7 @@ impl Worker {
                 );
                 let (width, height) = reader.into_dimensions()?;
                 ensure!(
-                    width > 0 && height > 0 && u64::from(width) * u64::from(height) <= 32_000_000,
+                    width > 0 && height > 0 && capture_size(width, height, true) == (width, height),
                     "Preview dimensions exceed limit"
                 );
                 let image = image::load_from_memory_with_format(&png, image::ImageFormat::Png)?
@@ -132,7 +132,7 @@ fn capture(
         use super::super::executor::Desktop;
         let mut desktop = x11::X11::open(cancelled.clone())?;
         let current = desktop.inspect(&window.id)?;
-        Ok(desktop.capture(&current)?.1)
+        Ok(desktop.capture_source(&current, None, true)?.1)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
@@ -158,6 +158,7 @@ mod tests {
                 height: 60.0,
             },
             focused: false,
+            focus: None,
         };
         let observation = Observation {
             id: "model-frame".into(),
@@ -196,6 +197,14 @@ mod tests {
         let mut worker = Worker::default();
         worker.status(&status);
         assert!(worker.accepts_preview(&request));
+        status.paused = true;
+        worker.status(&status);
+        assert!(
+            worker.accepts_preview(&request),
+            "take back keeps sharing live"
+        );
+        assert!(!worker.active, "paused sharing cannot inject input");
+        status.paused = false;
         status.busy = true;
         worker.status(&status);
         assert!(!worker.accepts_preview(&request));

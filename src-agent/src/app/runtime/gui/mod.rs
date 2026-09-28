@@ -478,6 +478,9 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 Err(_) => return, // malformed / unknown -> ignore, never panic
             };
             match msg {
+                ClientMsg::ComputerPrepared { id } => {
+                    let _ = gui_ctx.ctl.send(crate::app::runtime::client::HostCtl::ComputerPrepared { id });
+                }
                 ClientMsg::Coding { request } => {
                     let id = request.id.clone();
                     let workspace = request.workspace.clone();
@@ -599,7 +602,16 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                             if value.get("hide").and_then(|v| v.as_bool()) == Some(true) {
                                 if let Some(viewer) = &computer_viewer { viewer.window.set_visible(false); }
                             }
-                            let _ = computer_ctl.send(crate::app::runtime::client::HostCtl::ComputerPrepared { id: id.into() });
+                            if value.get("hide").and_then(|v| v.as_bool()) == Some(true) {
+                                // The in-app preview is HTML in the main window. Wait
+                                // for its hide to paint before capturing or injecting input.
+                                let id = serde_json::to_string(id).unwrap_or_default();
+                                let _ = webview.evaluate_script(&format!(
+                                    "(()=>{{document.documentElement.dataset.computerPreparing='true';const ack=()=>window.ipc.postMessage(JSON.stringify({{t:'computer-prepared',id:{id}}}));if(document.hidden)ack();else requestAnimationFrame(()=>requestAnimationFrame(ack));}})();"
+                                ));
+                            } else {
+                                let _ = computer_ctl.send(crate::app::runtime::client::HostCtl::ComputerPrepared { id: id.into() });
+                            }
                         }
                         return;
                     }
@@ -616,6 +628,9 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                                 viewer.update(&status);
                                 if !status.busy { viewer.window.set_visible(true); }
                             }
+                            if !status.busy {
+                                let _ = webview.evaluate_script("delete document.documentElement.dataset.computerPreparing;");
+                            }
                             computer_status = Some(status);
                         }
                     }
@@ -624,6 +639,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                             value.get("session").and_then(|v| v.as_str()) != Some(s.session.as_str())
                         });
                     if switched || matches!(kind, Some("Switching" | "Hub")) {
+                        let _ = webview.evaluate_script("delete document.documentElement.dataset.computerPreparing;");
                         computer_viewer = None;
                         computer_status = None;
                     }

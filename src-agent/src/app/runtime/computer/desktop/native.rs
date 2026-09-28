@@ -48,6 +48,35 @@ pub struct Native {
     capture: Option<Capture>,
 }
 impl Native {
+    fn capture_source(
+        &mut self,
+        window: &Window,
+        region: Option<Rect>,
+    ) -> Result<(Transform, Vec<u8>)> {
+        let mut request = json!({"command":"capture","window":window.id});
+        if let Some(region) = region {
+            request["region"] = serde_json::to_value(region)?;
+        }
+        let mut capture: Capture = call(request)?;
+        ensure!(
+            capture.elements.len() <= 512,
+            "native extraction exceeds element limit"
+        );
+        let png =
+            base64::engine::general_purpose::STANDARD.decode(std::mem::take(&mut capture.png))?;
+        ensure!(
+            png.len() <= 20 * 1024 * 1024,
+            "native PNG exceeds size limit"
+        );
+        let transform = capture.transform.clone();
+        ensure!(
+            capture_size(transform.width, transform.height, false)
+                == (transform.width, transform.height),
+            "Native observation exceeds resolution budget"
+        );
+        self.capture = Some(capture);
+        Ok((transform, png))
+    }
     pub fn preview(&mut self, window: &str) -> Result<Vec<u8>> {
         let capture: Capture = call(json!({"command":"preview","window":window}))?;
         let png = base64::engine::general_purpose::STANDARD.decode(capture.png)?;
@@ -100,20 +129,14 @@ impl Desktop for Native {
         call(json!({"command":"inspect","window":id}))
     }
     fn capture(&mut self, window: &Window) -> Result<(Transform, Vec<u8>)> {
-        let mut capture: Capture = call(json!({"command":"capture","window":window.id}))?;
-        ensure!(
-            capture.elements.len() <= 512,
-            "native extraction exceeds element limit"
-        );
-        let png =
-            base64::engine::general_purpose::STANDARD.decode(std::mem::take(&mut capture.png))?;
-        ensure!(
-            png.len() <= 20 * 1024 * 1024,
-            "native PNG exceeds size limit"
-        );
-        let transform = capture.transform.clone();
-        self.capture = Some(capture);
-        Ok((transform, png))
+        self.capture_source(window, None)
+    }
+    fn capture_region(&mut self, window: &Window, region: Rect) -> Result<(Transform, Vec<u8>)> {
+        self.capture_source(window, Some(region))
+    }
+    fn validate_input(&mut self, action: &Action) -> Result<()> {
+        call::<serde_json::Value>(json!({"command":"validate_input","action":action}))?;
+        Ok(())
     }
     fn input(&mut self, action: &Action, transform: &Transform) -> Result<()> {
         call::<serde_json::Value>(

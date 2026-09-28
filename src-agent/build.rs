@@ -39,6 +39,7 @@ fn main() {
 
 #[cfg(feature = "gui")]
 fn build_computer_bridge() {
+    println!("cargo:rerun-if-changed=native/computer/capture_limits.h");
     let target = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let mut build = cc::Build::new();
     // cc-rs uses Cargo's TARGET for the archive architecture (Darwin arm64 or

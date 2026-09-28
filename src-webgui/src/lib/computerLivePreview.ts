@@ -7,7 +7,7 @@ export function useComputerLivePreview(status: ComputerStatus | null) {
   const session = status?.session
   const generation = status?.generation
   const selected = status?.observation?.window.id
-  const active = !!status?.enabled && !status.paused && !status.busy && !!status.capabilities.capture
+  const active = !!status?.enabled && !status.busy && !!status.capabilities.capture
   useEffect(() => {
     setFrame(null)
     if (!active || !session || !generation || !selected) return
