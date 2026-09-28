@@ -4,16 +4,32 @@ use crate::app::runtime::computer::executor::Desktop;
 use anyhow::{bail, ensure, Result};
 use std::{
     ffi::{CStr, CString},
-    os::raw::{c_int, c_ulong},
+    os::raw::{c_int, c_short, c_ulong},
     ptr,
 };
-use x11_dl::{xlib, xrandr, xtest};
+use x11_dl::{xfixes, xlib, xrandr, xtest};
 
 // Xlib's default error handler exits the process for stale XIDs. Preserve the
 // host's handler for other displays and catch errors on this worker's display.
 type ErrorHandler = unsafe extern "C" fn(*mut xlib::Display, *mut xlib::XErrorEvent) -> c_int;
 static PREVIOUS: std::sync::OnceLock<Option<ErrorHandler>> = std::sync::OnceLock::new();
 thread_local! { static OWN: std::cell::Cell<*mut xlib::Display> = const {std::cell::Cell::new(ptr::null_mut())}; static ERROR: std::cell::Cell<bool> = const {std::cell::Cell::new(false)}; }
+fn arrow_points() -> [xlib::XPoint; 8] {
+    [
+        (6, 6),
+        (6, 84),
+        (27, 63),
+        (42, 96),
+        (57, 87),
+        (39, 57),
+        (66, 57),
+        (6, 6),
+    ]
+    .map(|(x, y)| xlib::XPoint {
+        x: x as c_short,
+        y: y as c_short,
+    })
+}
 unsafe extern "C" fn error_handler(
     display: *mut xlib::Display,
     event: *mut xlib::XErrorEvent,
@@ -39,7 +55,7 @@ pub fn capabilities() -> Capabilities {
             accessibility: std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some(),
             ocr: crate::app::runtime::computer::enrichment::ocr_available(),
             limitations: vec![
-                "X11: a screen share includes overlapping windows. An application share is that window only; input brings it forward and clicks with the real pointer. Unicode typing uses a temporary keycode and restores it. The preview cannot be excluded from live X11 frames; it is hidden for model observations and input. AT-SPI metadata is available only for application observations; use screenshot coordinates.".into()
+                "X11: a screen share includes overlapping windows. An application share is that window only; input brings it forward and the real pointer glides to the point. An enlarged arrow is drawn over that pointer during the glide and is unmapped before the screenshot. Unicode typing uses a temporary keycode and restores it. The preview cannot be excluded from live X11 frames; it is hidden for model observations and input. AT-SPI metadata is available only for application observations; use screenshot coordinates.".into()
             ],
         },
         Err(e)=>Capabilities {limitations:vec![e.to_string()],..Default::default()},
@@ -56,6 +72,8 @@ pub struct X11 {
     input_started: bool,
     target: Option<Window>,
     temporary_key: Option<(u8, Vec<c_ulong>, c_ulong)>,
+    arrow: c_ulong,
+    arrow_gc: xlib::GC,
 }
 impl X11 {
     pub fn open(cancelled: Arc<AtomicBool>) -> Result<Self> {
@@ -86,6 +104,8 @@ impl X11 {
             input_started: false,
             target: None,
             temporary_key: None,
+            arrow: 0,
+            arrow_gc: ptr::null_mut(),
         })
     }
     fn sync(&self) -> Result<()> {
@@ -96,6 +116,216 @@ impl X11 {
             !ERROR.with(|v| v.replace(false)),
             "X11 window changed or permission denied"
         );
+        Ok(())
+    }
+    fn pointer_pos(&self) -> Result<(f64, f64)> {
+        let (mut root, mut child, mut root_x, mut root_y, mut win_x, mut win_y, mut mask) =
+            (0, 0, 0, 0, 0, 0, 0);
+        let ok = unsafe {
+            (self.x.XQueryPointer)(
+                self.display,
+                self.root,
+                &mut root,
+                &mut child,
+                &mut root_x,
+                &mut root_y,
+                &mut win_x,
+                &mut win_y,
+                &mut mask,
+            )
+        };
+        ensure!(ok != 0, "X11 pointer unavailable");
+        Ok((f64::from(root_x), f64::from(root_y)))
+    }
+    fn motion(&mut self, x: f64, y: f64) -> Result<()> {
+        let t = self
+            .test
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("XTEST unavailable"))?;
+        unsafe {
+            (t.XTestFakeMotionEvent)(self.display, -1, x.round() as i32, y.round() as i32, 0);
+        }
+        self.sync()
+    }
+    /// Click-through enlarged arrow. The bounding shape is the arrow; the input
+    /// shape is empty, so the click falls through to the window underneath.
+    /// Unmapped before `input` returns, which is before the model capture.
+    fn ensure_arrow(&mut self) -> bool {
+        if self.arrow != 0 {
+            return true;
+        }
+        let Some(fixes) = xfixes::Xlib::open().ok() else {
+            return false;
+        };
+        const SIZE: u32 = 108;
+        const SHAPE_BOUNDING: c_int = 0;
+        const SHAPE_INPUT: c_int = 2;
+        let screen = unsafe { (self.x.XDefaultScreen)(self.display) };
+        let mut attr: xlib::XSetWindowAttributes = unsafe { std::mem::zeroed() };
+        attr.override_redirect = 1;
+        attr.background_pixel = unsafe { (self.x.XWhitePixel)(self.display, screen) };
+        attr.border_pixel = 0;
+        attr.backing_store = xlib::Always;
+        let window = unsafe {
+            (self.x.XCreateWindow)(
+                self.display,
+                self.root,
+                -(SIZE as c_int),
+                -(SIZE as c_int),
+                SIZE,
+                SIZE,
+                0,
+                xlib::CopyFromParent,
+                xlib::InputOutput as u32,
+                ptr::null_mut(),
+                xlib::CWOverrideRedirect
+                    | xlib::CWBackPixel
+                    | xlib::CWBorderPixel
+                    | xlib::CWBackingStore,
+                &mut attr,
+            )
+        };
+        if window == 0 {
+            return false;
+        }
+        let mask = unsafe { (self.x.XCreatePixmap)(self.display, self.root, SIZE, SIZE, 1) };
+        let mask_gc = unsafe { (self.x.XCreateGC)(self.display, mask, 0, ptr::null_mut()) };
+        let mut points = arrow_points();
+        let shaped = !mask_gc.is_null() && mask != 0;
+        if shaped {
+            unsafe {
+                (self.x.XSetForeground)(self.display, mask_gc, 0);
+                (self.x.XFillRectangle)(self.display, mask, mask_gc, 0, 0, SIZE, SIZE);
+                (self.x.XSetForeground)(self.display, mask_gc, 1);
+                (self.x.XFillPolygon)(
+                    self.display,
+                    mask,
+                    mask_gc,
+                    points.as_mut_ptr(),
+                    points.len() as c_int,
+                    xlib::Nonconvex,
+                    xlib::CoordModeOrigin,
+                );
+                let region = (fixes.XFixesCreateRegionFromBitmap)(self.display, mask);
+                (fixes.XFixesSetWindowShapeRegion)(
+                    self.display,
+                    window,
+                    SHAPE_BOUNDING,
+                    0,
+                    0,
+                    region,
+                );
+                (fixes.XFixesDestroyRegion)(self.display, region);
+                let empty = (fixes.XFixesCreateRegion)(self.display, ptr::null_mut(), 0);
+                (fixes.XFixesSetWindowShapeRegion)(self.display, window, SHAPE_INPUT, 0, 0, empty);
+                (fixes.XFixesDestroyRegion)(self.display, empty);
+                (self.x.XFreeGC)(self.display, mask_gc);
+                (self.x.XFreePixmap)(self.display, mask);
+            }
+        }
+        let gc = unsafe { (self.x.XCreateGC)(self.display, window, 0, ptr::null_mut()) };
+        if gc.is_null() || !shaped {
+            unsafe {
+                if !shaped {
+                    if !mask_gc.is_null() {
+                        (self.x.XFreeGC)(self.display, mask_gc);
+                    }
+                    if mask != 0 {
+                        (self.x.XFreePixmap)(self.display, mask);
+                    }
+                }
+                if !gc.is_null() {
+                    (self.x.XFreeGC)(self.display, gc);
+                }
+                (self.x.XDestroyWindow)(self.display, window);
+            }
+            return false;
+        }
+        unsafe {
+            (self.x.XSetForeground)(self.display, gc, (self.x.XWhitePixel)(self.display, screen));
+            (self.x.XFillPolygon)(
+                self.display,
+                window,
+                gc,
+                points.as_mut_ptr(),
+                points.len() as c_int,
+                xlib::Nonconvex,
+                xlib::CoordModeOrigin,
+            );
+            (self.x.XSetForeground)(self.display, gc, (self.x.XBlackPixel)(self.display, screen));
+            (self.x.XSetLineAttributes)(
+                self.display,
+                gc,
+                4,
+                xlib::LineSolid,
+                xlib::CapButt,
+                xlib::JoinMiter,
+            );
+            (self.x.XDrawLines)(
+                self.display,
+                window,
+                gc,
+                points.as_mut_ptr(),
+                points.len() as c_int,
+                xlib::CoordModeOrigin,
+            );
+        }
+        self.arrow = window;
+        self.arrow_gc = gc;
+        true
+    }
+    fn place_arrow(&mut self, x: f64, y: f64) {
+        if !self.ensure_arrow() {
+            return;
+        }
+        unsafe {
+            (self.x.XMoveWindow)(
+                self.display,
+                self.arrow,
+                x.round() as c_int - 6,
+                y.round() as c_int - 6,
+            );
+            (self.x.XMapRaised)(self.display, self.arrow);
+        }
+    }
+    fn hide_arrow(&mut self) {
+        if self.arrow != 0 {
+            unsafe {
+                (self.x.XUnmapWindow)(self.display, self.arrow);
+            }
+        }
+    }
+    fn glide(&mut self, to_x: f64, to_y: f64) -> Result<()> {
+        let (from_x, from_y) = self.pointer_pos().unwrap_or((to_x, to_y));
+        let glide = super::super::cursor_glide::samples(from_x, from_y, to_x, to_y);
+        self.input_started = true;
+        let mut previous = (from_x, from_y);
+        for (index, step) in glide.steps.iter().enumerate() {
+            ensure!(!self.cancelled.load(Ordering::SeqCst), "cancelled");
+            self.motion(step[0], step[1])?;
+            self.place_arrow(step[0], step[1]);
+            if let Ok((px, py)) = self.pointer_pos() {
+                let dx = px - step[0];
+                let dy = py - step[1];
+                let lx = px - previous.0;
+                let ly = py - previous.1;
+                // A sample that has not been applied yet still sits on the
+                // previous point. Only a position away from both is the hand
+                // taking the mouse.
+                if dx * dx + dy * dy > 144.0 && lx * lx + ly * ly > 144.0 {
+                    self.motion(to_x, to_y)?;
+                    self.place_arrow(to_x, to_y);
+                    break;
+                }
+            }
+            previous = (step[0], step[1]);
+            if index + 1 != glide.steps.len() {
+                for _ in 0..2 {
+                    ensure!(!self.cancelled.load(Ordering::SeqCst), "cancelled");
+                    std::thread::sleep(std::time::Duration::from_millis(8));
+                }
+            }
+        }
         Ok(())
     }
     fn atom(&self, name: &str) -> Result<c_ulong> {
@@ -373,8 +603,8 @@ impl X11 {
         }
         Ok(())
     }
-    /// Bring one window forward so a real click lands in it. The user's pointer
-    /// moves. This is not a second background cursor.
+    /// Bring one window forward so a real click lands in it. The pointer then
+    /// glides to the programmed point, with an enlarged arrow drawn over it.
     fn raise_window(&self, xid: c_ulong) -> Result<()> {
         unsafe {
             (self.x.XRaiseWindow)(self.display, xid);
@@ -820,35 +1050,27 @@ impl Desktop for X11 {
                         .is_some_and(|w| w.geometry.contains(x, y)),
                     "Input outside shared source"
                 );
-                let t = self
-                    .test
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("XTEST unavailable"))?;
-                unsafe {
-                    self.input_started = true;
-                    (t.XTestFakeMotionEvent)(
-                        self.display,
-                        -1,
-                        x.round() as i32,
-                        y.round() as i32,
-                        0,
-                    );
-                }
-                self.sync()?;
-                match action {
-                    Action::Click { button, .. } => {
-                        self.button(if *button == Button::Right { 3 } else { 1 })?;
-                        if *button == Button::Double {
-                            self.button(1)?;
+                let played = (|| -> Result<()> {
+                    self.glide(x, y)?;
+                    match action {
+                        Action::Click { button, .. } => {
+                            self.button(if *button == Button::Right { 3 } else { 1 })?;
+                            if *button == Button::Double {
+                                self.button(1)?;
+                            }
                         }
-                    }
-                    Action::Scroll { delta, .. } => {
-                        for _ in 0..delta.unsigned_abs() {
-                            self.button(if *delta > 0 { 5 } else { 4 })?;
+                        Action::Scroll { delta, .. } => {
+                            for _ in 0..delta.unsigned_abs() {
+                                self.button(if *delta > 0 { 5 } else { 4 })?;
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
-                }
+                    Ok(())
+                })();
+                self.hide_arrow();
+                let _ = self.sync();
+                played?;
             }
             Action::Type { text } => {
                 self.guard_layout()?;
@@ -909,6 +1131,7 @@ impl Desktop for X11 {
         Ok(())
     }
     fn release(&mut self) {
+        self.hide_arrow();
         if let Some(t) = &self.test {
             unsafe {
                 for key in self.held.drain(..).rev() {
@@ -949,6 +1172,12 @@ impl Drop for X11 {
     fn drop(&mut self) {
         self.release();
         unsafe {
+            if !self.arrow_gc.is_null() {
+                (self.x.XFreeGC)(self.display, self.arrow_gc);
+            }
+            if self.arrow != 0 {
+                (self.x.XDestroyWindow)(self.display, self.arrow);
+            }
             (self.x.XCloseDisplay)(self.display);
         };
         OWN.with(|v| v.set(ptr::null_mut()));

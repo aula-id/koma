@@ -1,6 +1,7 @@
 //! A narrow, in-process JSON bridge to the platform SDKs. Only this GUI worker
 //! can call it; consent, ownership and action ordering remain in Rust.
 use super::*;
+use crate::app::runtime::computer::cursor_glide;
 use crate::app::runtime::computer::executor::Desktop;
 use agent::computer_native::{koma_computer_call, koma_computer_cancel, koma_computer_free};
 use anyhow::{ensure, Result};
@@ -148,13 +149,46 @@ impl Desktop for Native {
         Ok(())
     }
     fn input(&mut self, action: &Action, transform: &Transform) -> Result<()> {
-        call::<serde_json::Value>(
-            json!({"command":"input","action":action,"transform":transform}),
-        )?;
+        let mut request = json!({"command":"input","action":action,"transform":transform});
+        if let Some((x, y)) = pointer_target(action) {
+            if let Ok((to_x, to_y)) = transform.map(x, y) {
+                if let Ok((from_x, from_y)) = self.pointer() {
+                    request["glide"] =
+                        serde_json::to_value(cursor_glide::samples(from_x, from_y, to_x, to_y))?;
+                }
+            }
+        }
+        call::<serde_json::Value>(request)?;
         Ok(())
     }
     fn release(&mut self) {
         let _ = call::<serde_json::Value>(json!({"command":"release"}));
+    }
+}
+#[derive(serde::Deserialize)]
+struct PointerPoint {
+    x: f64,
+    y: f64,
+}
+impl Native {
+    fn pointer(&self) -> Result<(f64, f64)> {
+        let point: PointerPoint = call(json!({"command":"pointer"}))?;
+        ensure!(
+            point.x.is_finite() && point.y.is_finite(),
+            "native pointer is not a coordinate"
+        );
+        Ok((point.x, point.y))
+    }
+}
+fn pointer_target(action: &Action) -> Option<(f64, f64)> {
+    match action {
+        Action::Move { x, y } | Action::Scroll { x, y, .. } => Some((*x, *y)),
+        Action::Click {
+            x: Some(x),
+            y: Some(y),
+            ..
+        } => Some((*x, *y)),
+        _ => None,
     }
 }
 impl Drop for Native {

@@ -7,6 +7,7 @@
 #include <UIAutomation.h>
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -280,7 +281,135 @@ static DWORD extended(WORD code) {
                ? KEYEVENTF_EXTENDEDKEY
                : 0;
 }
+static HWND cursorWnd = nullptr;
+static HBITMAP cursorBmp = nullptr;
+static const int kArrow = 108;
+static const int kHot = 6;
+static bool insideArrow(double x, double y) {
+    static const double poly[][2] = {{6, 6}, {6, 84}, {27, 63}, {42, 96}, {57, 87}, {39, 57}, {66, 57}};
+    bool inside = false;
+    for (int i = 0, j = 6; i < 7; j = i++) {
+        double yi = poly[i][1], yj = poly[j][1], xi = poly[i][0], xj = poly[j][0];
+        if ((yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi)
+            inside = !inside;
+    }
+    return inside;
+}
+static void ensureArrow() {
+    if (cursorWnd)
+        return;
+    WNDCLASSW windowClass{};
+    windowClass.lpfnWndProc = DefWindowProcW;
+    windowClass.hInstance = GetModuleHandleW(nullptr);
+    windowClass.lpszClassName = L"KomaCursorArrow";
+    RegisterClassW(&windowClass);
+    cursorWnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE |
+                                    WS_EX_TOOLWINDOW,
+                                windowClass.lpszClassName, L"", WS_POPUP, 0, 0, kArrow, kArrow, nullptr, nullptr,
+                                windowClass.hInstance, nullptr);
+    if (!cursorWnd)
+        return;
+    using SetAffinity = BOOL(WINAPI *)(HWND, DWORD);
+    if (auto setAffinity = reinterpret_cast<SetAffinity>(
+            GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetWindowDisplayAffinity")))
+        setAffinity(cursorWnd, 0x11);
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(info.bmiHeader);
+    info.bmiHeader.biWidth = kArrow;
+    info.bmiHeader.biHeight = -kArrow;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    void *bits = nullptr;
+    HDC screen = GetDC(nullptr);
+    cursorBmp = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    ReleaseDC(nullptr, screen);
+    if (!bits)
+        return;
+    auto pixels = static_cast<BYTE *>(bits);
+    for (int y = 0; y < kArrow; ++y) {
+        for (int x = 0; x < kArrow; ++x) {
+            bool on = insideArrow(x + 0.5, y + 0.5);
+            bool edge = on && (!insideArrow(x + 3.5, y + 0.5) || !insideArrow(x - 2.5, y + 0.5) ||
+                               !insideArrow(x + 0.5, y + 3.5) || !insideArrow(x + 0.5, y - 2.5));
+            BYTE *pixel = pixels + (y * kArrow + x) * 4;
+            if (!on)
+                pixel[0] = pixel[1] = pixel[2] = pixel[3] = 0;
+            else if (edge)
+                pixel[0] = pixel[1] = pixel[2] = 0, pixel[3] = 255;
+            else
+                pixel[0] = pixel[1] = pixel[2] = pixel[3] = 255;
+        }
+    }
+}
+static void hideArrow() {
+    if (cursorWnd)
+        ShowWindow(cursorWnd, SW_HIDE);
+}
+static void placeArrow(double x, double y) {
+    ensureArrow();
+    if (!cursorWnd || !cursorBmp)
+        return;
+    POINT origin{static_cast<LONG>(std::lround(x)) - kHot, static_cast<LONG>(std::lround(y)) - kHot};
+    SIZE size{kArrow, kArrow};
+    POINT source{0, 0};
+    BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    HDC screen = GetDC(nullptr);
+    HDC memory = CreateCompatibleDC(screen);
+    HGDIOBJ previous = SelectObject(memory, cursorBmp);
+    UpdateLayeredWindow(cursorWnd, screen, &origin, &size, memory, &source, 0, &blend, ULW_ALPHA);
+    SelectObject(memory, previous);
+    DeleteDC(memory);
+    ReleaseDC(nullptr, screen);
+}
+static void send(INPUT *events, UINT count);
+static void movePointer(double px, double py) {
+    int left = GetSystemMetrics(SM_XVIRTUALSCREEN), top = GetSystemMetrics(SM_YVIRTUALSCREEN),
+        width = GetSystemMetrics(SM_CXVIRTUALSCREEN), height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    require(width > 1 && height > 1, L"Target outside current desktop geometry");
+    INPUT move{};
+    move.type = INPUT_MOUSE;
+    move.mi.dx = static_cast<LONG>((px - left) * 65535 / (width - 1));
+    move.mi.dy = static_cast<LONG>((py - top) * 65535 / (height - 1));
+    move.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+    send(&move, 1);
+}
+static void playGlide(JsonArray steps, double px, double py) {
+    if (!steps || steps.Size() == 0) {
+        movePointer(px, py);
+        return;
+    }
+    POINT previous{};
+    GetCursorPos(&previous);
+    for (uint32_t i = 0; i < steps.Size(); ++i) {
+        check();
+        auto pair = steps.GetArrayAt(i);
+        require(pair.Size() == 2, L"Invalid glide step");
+        double x = pair.GetNumberAt(0), y = pair.GetNumberAt(1);
+        movePointer(x, y);
+        placeArrow(x, y);
+        POINT now{};
+        GetCursorPos(&now);
+        double dx = now.x - x, dy = now.y - y;
+        double lx = now.x - previous.x, ly = now.y - previous.y;
+        // A sample that has not been applied yet still sits on the previous
+        // point. Only a position away from both is the hand taking the mouse.
+        if (dx * dx + dy * dy > 144.0 && lx * lx + ly * ly > 144.0) {
+            movePointer(px, py);
+            placeArrow(px, py);
+            return;
+        }
+        previous.x = static_cast<LONG>(std::lround(x));
+        previous.y = static_cast<LONG>(std::lround(y));
+        if (i + 1 < steps.Size()) {
+            for (int pause = 0; pause < 2; ++pause) {
+                check();
+                std::this_thread::sleep_for(std::chrono::milliseconds(8));
+            }
+        }
+    }
+}
 static void release() {
+    hideArrow();
     for (auto i = held.rbegin(); i != held.rend(); ++i) {
         INPUT e{};
         e.type = INPUT_KEYBOARD;
@@ -359,7 +488,7 @@ static WORD keycode(hstring name) {
     }
     throw hresult_error(E_INVALIDARG, L"key is not available: unsupported Windows key name");
 }
-static void input(JsonObject a, JsonObject t) {
+static void input(JsonObject a, JsonObject t, JsonArray glide) {
     guardInput();
     auto kind = a.GetNamedString(L"kind");
     if (kind == L"type") {
@@ -455,12 +584,8 @@ static void input(JsonObject a, JsonObject t) {
             w = GetSystemMetrics(SM_CXVIRTUALSCREEN), h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
         require(w > 1 && h > 1 && px >= left && py >= top && px < left + w && py < top + h,
                 L"Target outside current desktop geometry");
-        INPUT move{};
-        move.type = INPUT_MOUSE;
-        move.mi.dx = static_cast<LONG>((px - left) * 65535 / (w - 1));
-        move.mi.dy = static_cast<LONG>((py - top) * 65535 / (h - 1));
-        move.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-        send(&move, 1);
+        Finally hideCursor{[] { hideArrow(); }};
+        playGlide(glide, px, py);
         if (kind == L"click") {
             auto button = a.GetNamedString(L"button");
             int count = button == L"double" ? 2 : 1;
@@ -829,7 +954,7 @@ static IJsonValue dispatch(JsonObject r) {
                               L"Graphics Capture support"));
         limits.Append(str(L"Secure desktop, protected content and elevated applications can reject "
                           L"capture/input; no privilege escalation is attempted"));
-        limits.Append(str(L"Screen shares include the whole display. An application share is that window only: input brings it forward and clicks with the real pointer. There is no second background cursor. UI Automation metadata applies to application observations; clicks use screenshot coordinates."));
+        limits.Append(str(L"Screen shares include the whole display. An application share is that window only: input brings it forward and the real pointer glides to the point. An enlarged arrow follows that pointer during the glide and is left out of the screenshot. UI Automation metadata applies to application observations; clicks use screenshot coordinates."));
         result.SetNamedValue(L"limitations", limits);
         return result;
     }
@@ -896,9 +1021,20 @@ static IJsonValue dispatch(JsonObject r) {
             for (auto name : r.GetNamedObject(L"action").GetNamedArray(L"keys")) keycode(name.GetString());
         return JsonValue::CreateNullValue();
     }
+    if (command == L"pointer") {
+        POINT point{};
+        require(GetCursorPos(&point), L"Windows pointer unavailable");
+        JsonObject result;
+        result.SetNamedValue(L"x", num(point.x));
+        result.SetNamedValue(L"y", num(point.y));
+        return result;
+    }
     if (command == L"input") {
         try {
-            input(r.GetNamedObject(L"action"), r.GetNamedObject(L"transform"));
+            JsonArray glide{nullptr};
+            if (r.HasKey(L"glide"))
+                glide = r.GetNamedObject(L"glide").GetNamedArray(L"steps");
+            input(r.GetNamedObject(L"action"), r.GetNamedObject(L"transform"), glide);
         } catch (...) {
             release();
             throw;

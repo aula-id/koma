@@ -289,7 +289,118 @@ static void guardInput() {
         unobstructed(w);
     }
 }
+static const CGFloat kArrow = 108;
+static const CGFloat kHot = 6;
+static NSPanel *cursorPanel = nil;
+static bool arrowShown = false;
+static void hideArrowMain() { [cursorPanel orderOut:nil]; }
+static void onMain(void (^block)(void)) {
+    if ([NSThread isMainThread])
+        block();
+    else
+        dispatch_sync(dispatch_get_main_queue(), block);
+}
+static void hideArrow() {
+    if (!arrowShown)
+        return;
+    onMain(^{ hideArrowMain(); });
+    arrowShown = false;
+}
+static void ensureArrowMain() {
+    if (cursorPanel)
+        return;
+    cursorPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, kArrow, kArrow)
+                                              styleMask:NSWindowStyleMaskBorderless
+                                                backing:NSBackingStoreBuffered
+                                                  defer:NO];
+    cursorPanel.opaque = NO;
+    cursorPanel.backgroundColor = NSColor.clearColor;
+    cursorPanel.ignoresMouseEvents = YES;
+    cursorPanel.level = NSStatusWindowLevel;
+    cursorPanel.hidesOnDeactivate = NO;
+    cursorPanel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
+                                     NSWindowCollectionBehaviorStationary |
+                                     NSWindowCollectionBehaviorFullScreenAuxiliary |
+                                     NSWindowCollectionBehaviorIgnoresCycle;
+    [cursorPanel setSharingType:NSWindowSharingNone];
+    NSImage *image = [[NSImage alloc] initWithSize:NSMakeSize(kArrow, kArrow)];
+    [image lockFocus];
+    NSAffineTransform *flip = [NSAffineTransform transform];
+    [flip translateXBy:0 yBy:kArrow];
+    [flip scaleXBy:1 yBy:-1];
+    [flip concat];
+    NSBezierPath *path = [NSBezierPath bezierPath];
+    CGFloat pts[][2] = {{6, 6}, {6, 84}, {27, 63}, {42, 96}, {57, 87}, {39, 57}, {66, 57}};
+    [path moveToPoint:NSMakePoint(pts[0][0], pts[0][1])];
+    for (int i = 1; i < 7; ++i)
+        [path lineToPoint:NSMakePoint(pts[i][0], pts[i][1])];
+    [path closePath];
+    [NSColor.whiteColor setFill];
+    [path fill];
+    [NSColor.blackColor setStroke];
+    path.lineWidth = 4.5;
+    [path stroke];
+    [image unlockFocus];
+    NSImageView *view = [[NSImageView alloc] initWithFrame:NSMakeRect(0, 0, kArrow, kArrow)];
+    view.image = image;
+    cursorPanel.contentView = view;
+}
+static void placeArrow(CGPoint point) {
+    onMain(^{
+        ensureArrowMain();
+        CGFloat height = NSScreen.screens.firstObject.frame.size.height;
+        [cursorPanel setFrameOrigin:NSMakePoint(point.x - kHot, height - (point.y - kHot) - kArrow)];
+        [cursorPanel orderFrontRegardless];
+    });
+    arrowShown = true;
+}
+static CGPoint currentPointer() {
+    CGEventRef event = CGEventCreate(nullptr);
+    CGPoint point = event ? CGEventGetLocation(event) : CGPointZero;
+    if (event)
+        CFRelease(event);
+    return point;
+}
+static void movePointer(CGPoint point) {
+    CGEventRef move = CGEventCreateMouseEvent(nullptr, kCGEventMouseMoved, point, kCGMouseButtonLeft);
+    require(move, "Unable to move pointer");
+    postInputEvent(move);
+    CFRelease(move);
+}
+static void playGlide(NSArray *steps, CGPoint target) {
+    if (![steps isKindOfClass:NSArray.class] || steps.count == 0) {
+        movePointer(target);
+        return;
+    }
+    CGPoint previous = currentPointer();
+    for (NSUInteger i = 0; i < steps.count; ++i) {
+        check();
+        NSArray *pair = steps[i];
+        require([pair isKindOfClass:NSArray.class] && pair.count == 2, "Invalid glide step");
+        CGPoint point = CGPointMake([pair[0] doubleValue], [pair[1] doubleValue]);
+        movePointer(point);
+        placeArrow(point);
+        CGPoint now = currentPointer();
+        double dx = now.x - point.x, dy = now.y - point.y;
+        double lx = now.x - previous.x, ly = now.y - previous.y;
+        // A sample that has not been applied yet still sits on the previous
+        // point. Only a position away from both is the hand taking the mouse.
+        if (dx * dx + dy * dy > 144.0 && lx * lx + ly * ly > 144.0) {
+            movePointer(target);
+            placeArrow(target);
+            return;
+        }
+        previous = point;
+        if (i + 1 < steps.count) {
+            for (int s = 0; s < 2; ++s) {
+                check();
+                std::this_thread::sleep_for(std::chrono::milliseconds(8));
+            }
+        }
+    }
+}
 static void release() {
+    hideArrow();
     for (auto it = held.rbegin(); it != held.rend(); ++it) {
         CGEventRef e = CGEventCreateKeyboardEvent(nullptr, *it, false);
         if (e) {
@@ -435,7 +546,7 @@ static CGPoint mapPoint(NSDictionary *a, NSDictionary *t) {
     require(CGRectContainsPoint(bounds(target[@"geometry"]), point), "Input outside shared source");
     return point;
 }
-static void input(NSDictionary *a, NSDictionary *t) {
+static void input(NSDictionary *a, NSDictionary *t, NSArray *glide) {
     guardInput();
     NSString *kind = a[@"kind"];
     if ([kind isEqual:@"type"]) {
@@ -510,11 +621,11 @@ static void input(NSDictionary *a, NSDictionary *t) {
         release();
     } else {
         CGPoint p = mapPoint(a, t);
-        CGEventRef move =
-            CGEventCreateMouseEvent(nullptr, kCGEventMouseMoved, p, kCGMouseButtonLeft);
-        require(move, "Unable to move pointer");
-        postInputEvent(move);
-        CFRelease(move);
+        struct ArrowGuard {
+            ~ArrowGuard() { hideArrow(); }
+        } guard;
+        (void)guard;
+        playGlide(glide, p);
         if ([kind isEqual:@"click"]) {
             bool right = [a[@"button"] isEqual:@"right"];
             int count = [a[@"button"] isEqual:@"double"] ? 2 : 1;
@@ -802,7 +913,7 @@ static id dispatch(NSDictionary *r) {
         if (!ax)
             [limits addObject:@"Grant Accessibility access in System Settings for focus/input and "
                               @"labels, then reactivate"];
-        [limits addObject:@"Screen shares include visible windows, dialogs and desktop chrome. An application share is that window only: input brings it forward and clicks with the real pointer. There is no second background cursor. AX metadata is available for application observations; clicks use screenshot coordinates."];
+        [limits addObject:@"Screen shares include visible windows, dialogs and desktop chrome. An application share is that window only: input brings it forward and the real pointer glides to the point. An enlarged arrow follows that pointer during the glide and is left out of the screenshot. AX metadata is available for application observations; clicks use screenshot coordinates."];
         return @{
             @"capture" : @(capture),
             @"windows" : @(capture),
@@ -871,9 +982,13 @@ static id dispatch(NSDictionary *r) {
             for (NSString *name in r[@"action"][@"keys"]) keyCode(name);
         return NSNull.null;
     }
+    if ([command isEqual:@"pointer"]) {
+        CGPoint point = currentPointer();
+        return @{@"x" : @(point.x), @"y" : @(point.y)};
+    }
     if ([command isEqual:@"input"]) {
         try {
-            input(r[@"action"], r[@"transform"]);
+            input(r[@"action"], r[@"transform"], r[@"glide"][@"steps"]);
         } catch (...) {
             release();
             throw;

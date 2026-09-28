@@ -4,7 +4,9 @@ Computer use offers two source groups: **Screens** and **Applications**. A scree
 includes visible applications, dialogs, menus and desktop chrome. An application
 shares only its selected window, and on macOS, Windows, and X11 that window accepts
 real clicks and typing. The click brings the window forward and uses the real pointer.
-There is no second background cursor. Wayland portal shares stay observation-only.
+A programmed point does not teleport: the pointer glides quickly along the whole path,
+and an enlarged arrow is drawn over it for that move. The arrow is left out of the
+model screenshot. Wayland portal shares stay observation-only.
 Native device validation is separate from the compilation and regression evidence below.
 
 ## Workflow and UI

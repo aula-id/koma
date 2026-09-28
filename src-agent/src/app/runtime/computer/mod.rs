@@ -4,6 +4,7 @@
 pub(crate) mod bridge;
 pub(crate) mod contract;
 pub(crate) mod controller;
+mod cursor_glide;
 pub(crate) mod executor;
 mod keys;
 mod ruler;
