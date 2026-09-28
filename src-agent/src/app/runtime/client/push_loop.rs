@@ -1584,18 +1584,6 @@ pub(super) fn push_loop(
                     let sid = current_owned.as_deref().unwrap_or("");
                     super::project::serve_history_page(last, sid, before, push);
                 }
-                Ok(super::HostCtl::Submit { text }) => {
-                    #[cfg(feature = "gui")]
-                    let prime = remote_ctx.is_none();
-                    #[cfg(not(feature = "gui"))]
-                    let prime = false;
-                    if prime {
-                        #[cfg(feature = "gui")]
-                        computer_worker.deliver_submit(text, req_tx.clone());
-                    } else {
-                        let _ = req_tx.send(ClientRequest::SubmitInput { text });
-                    }
-                }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.
                 Err(TryRecvError::Disconnected) => return HostTransition::Exit,

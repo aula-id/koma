@@ -1,4 +1,4 @@
-import { AppWindow, Eye, Hand, LoaderCircle, Monitor, Pause, Play, Square } from 'lucide-react'
+import { Eye, Hand, LoaderCircle, Monitor, Pause, Play, Square } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { isViewOnlySource } from '../types/computer'
 import { useComputerPreview } from '../store/computerPreview'
@@ -15,8 +15,8 @@ export function ComputerShortcut() {
   const assist = !!computer?.observation && isViewOnlySource(computer.observation.window.id, !!computer.capabilities?.pointer, !!computer.capabilities?.keyboard)
   const paused = enabled && computer.paused
   const choosing = enabled && !computer.observation
-  const label = pending ? 'Starting sharing' : !enabled ? 'Share screen or application' : choosing ? 'Choose source' : paused ? 'Sharing paused' : assist ? 'View only' : 'Sharing'
-  const Icon = pending ? LoaderCircle : choosing ? AppWindow : paused ? Pause : assist ? Eye : Monitor
+  const label = pending ? 'Starting sharing' : !enabled ? 'Share a screen' : choosing ? 'Choose a screen' : paused ? 'Sharing paused' : assist ? 'View only' : 'Sharing'
+  const Icon = pending ? LoaderCircle : paused ? Pause : assist ? Eye : Monitor
   const controlClass = 'pointer-events-auto flex h-[22px] w-[22px] items-center justify-center rounded-md border border-koma-border bg-koma-panel text-koma-fg hover:bg-koma-hover'
   return <div className="flex flex-none items-center gap-1" role="group" aria-label="Computer sharing">
     <button type="button" aria-label={label} title={label} aria-pressed={enabled} disabled={pending}

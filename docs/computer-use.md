@@ -72,15 +72,10 @@ High-resolution displays are bounded before PNG encoding, OCR and IPC:
 
 Transforms map these image coordinates back to the captured desktop rectangle,
 including negative display origins, different display scales and cropped regions.
-A model frame large enough to spare an edge carries a ruler in the margin around
-the page, plus a light grid on the page. The numbers are outside the capture so
-they are not read as part of the UI. They are screen pixels. A window share
-prints that window's position on the screen, so the corner is not zero unless
-the window is at the screen origin. Click the printed number; it is not added
-to the window origin again, and the margin is not part of the click surface.
-The `x` / `y` caption is still desktop pixels per screenshot pixel. Do not
-multiply a tick by that caption. Region and crop rectangles stay in image
-pixels of the page, not of the expanded frame. The live preview is not marked.
+The model frame is the screen itself. It has no ruler and no grid. Recognized
+words are listed as OCR ids; a click on an id hits the center of that word.
+A point with no text id uses pixels from the top-left of the screenshot.
+Region and crop rectangles stay in those image pixels. The live preview is unmarked.
 Do not multiply model coordinates by the display scale manually. Each new capture
 or crop has its own observation ID and coordinate system. Observe without options
 to return from a close-up to the full display.
@@ -115,20 +110,18 @@ screenshot. The latest actionable attachment survives context shaping.
 ## Tools, ownership and execution
 
 The four tool names and the `window` wire field remain compatible with saved
-sessions. `computer_windows` lists both `display:*` screens and application windows;
-each tool result identifies `source_type` and `view_only`. `computer_select_window`
-selects either source without focusing an app. Application input is rejected by the
-daemon, worker and native adapters, even if an application window has focus. Use native clicks or key chords to switch
-applications, then observe. `computer_observe` captures the shared display or a
-close-up. `computer_act` requires a current screen observation and defaults to one final capture.
+sessions. `computer_windows` lists `display:*` screens only. Application windows
+are not a share target. `computer_select_window` selects a screen.
+`computer_observe` captures that screen or a close-up and lists OCR word ids.
+`computer_act` requires a current screen observation and defaults to one final capture.
 Use the exact `observation_id` returned with the frame (also `observation.id`),
 not the top-level tool request `id` or a scene description. Invalid references and
 expired observations are rejected before input with `completed=0`,
 `uncertain=false`, and `requires_observation=true`; observe and re-plan using the
 new ID. Never silently substitute the current frame or replay previous input.
-Screen clicks use screenshot `x`/`y` and omit `element`; accessibility metadata is
-not needed for coordinate control. Element IDs, when available, must come from
-that observation and cannot be combined with coordinates.
+Text clicks copy an OCR id from that observation and omit `x`/`y`. A point with
+no text id uses pixels from the top-left of the screenshot. Element ids cannot
+be combined with coordinates.
 
 During a computer-use conversation, the main model's bash dispatcher rejects
 recognized desktop-automation fallbacks (including `osascript`, `cliclick`,
@@ -507,9 +500,9 @@ mapping, fresh close-up mapping, app switching, stale coordinates, partial outco
 cancellation, ownership and preview correlation, and preserved screenshot attachments
 when enrichment fails. Full native validation remains for the device walkthrough.
 
-1. On macOS, Windows, or X11, share an application window and confirm it is not
-   labelled view-only. A click brings that window forward and lands inside its
-   screenshot. On Wayland, the share stays view-only and the model selects a screen.
+1. On macOS, Windows, or X11, share a screen. The picker lists screens only.
+   A click lands in that screen. On Wayland, the share stays view-only until a
+   screen is selected.
    Share a screen with `docs/testing/computer-fixture.html` open. Verify the model
    and chat card receive the same bounded PNG; the preview can show newer frames.
 2. Put another application/dialog over the fixture. Observe the composed desktop,
@@ -529,8 +522,8 @@ when enrichment fails. Full native validation remains for the device walkthrough
 6. Switch sessions or compete from a second GUI. Reactivation must remain explicit.
    If the owning window drops while the agent is still iterating, sharing stays on:
    the same window reattaches, or a new one opens on that session, and the turn
-   continues. An idle share still stops. Verify native control also works in Plan
-   mode, with no TUI/headless/subagent tools.
+   continues. An idle share still stops. Sharing is a screen, not an application
+   window. Verify native control also works in Plan mode, with no TUI/headless/subagent tools.
 7. With the preview closed, idle/intermediate `observe=false` actions must create no
    timed captures. Open preview and check bounded live frames without model artifacts.
    Inspect errors in chat: header short, explanation only inside expandable details.

@@ -462,6 +462,25 @@ pub fn execute(request: &Request, cancelled: &AtomicBool, cache: &Cache) -> Repl
     };
     let result = (|| -> Result<()> {
         ensure!(!cancelled.load(Ordering::SeqCst), "Cancelled");
+        if let Operation::Select { window, .. } | Operation::InspectWindow { window } =
+            &request.operation
+        {
+            ensure!(
+                is_screen(window) || window == "portal:choose" || window == "portal:choose:screen",
+                "Computer use shares a whole screen. Choose a display: source, not an application window."
+            );
+        }
+        if let Some(obs) = request.observation.as_ref() {
+            if matches!(
+                request.operation,
+                Operation::Observe { .. } | Operation::Act { .. }
+            ) {
+                ensure!(
+                    is_screen(&obs.window.id),
+                    "Computer use shares a whole screen. Select a display and observe it."
+                );
+            }
+        }
         let mut portal = cache.lock().unwrap_or_else(|p| p.into_inner()).clone();
         match &request.operation {
             Operation::Windows => {

@@ -1028,35 +1028,6 @@ static IJsonValue dispatch(JsonObject r) {
             for (auto name : r.GetNamedObject(L"action").GetNamedArray(L"keys")) keycode(name.GetString());
         return JsonValue::CreateNullValue();
     }
-    if (command == L"prime") {
-        check();
-        auto id = r.GetNamedString(L"window");
-        require(!isDisplay(id), L"screen share is not primed");
-        targetMonitor = nullptr;
-        HWND w = lookup(id);
-        target = w;
-        targetRect = geometry(w);
-        targetTitle = title(w);
-        targetId = identity(w);
-        raiseWindow(w);
-        double x = r.GetNamedNumber(L"x"), y = r.GetNamedNumber(L"y");
-        JsonArray glide{nullptr};
-        if (r.HasKey(L"glide"))
-            glide = r.GetNamedObject(L"glide").GetNamedArray(L"steps");
-        Finally hideCursor{[] { hideArrow(); }};
-        playGlide(glide, x, y);
-        INPUT e[2]{};
-        e[0].type = e[1].type = INPUT_MOUSE;
-        e[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-        e[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
-        try {
-            send(e, 2);
-        } catch (...) {
-            SendInput(1, &e[1], sizeof(INPUT));
-            throw;
-        }
-        return JsonValue::CreateNullValue();
-    }
     if (command == L"pointer") {
         POINT point{};
         require(GetCursorPos(&point), L"Windows pointer unavailable");

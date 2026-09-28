@@ -108,54 +108,6 @@ impl Worker {
             std::thread::spawn(move || portal.close());
         }
     }
-    /// Chat send while an application window is shared. Returns that window
-    /// when Send should raise it and click its top-left corner first.
-    /// A screen or a view-only share returns None and the message goes out
-    /// with no pointer motion.
-    pub fn focus_on_send(&self) -> Option<Window> {
-        if !self.active {
-            return None;
-        }
-        let window = self.preview_window.as_ref()?;
-        if is_screen(&window.id) || window.id.starts_with("portal:") {
-            return None;
-        }
-        corner_click(&window.geometry)?;
-        Some(window.clone())
-    }
-    /// Raise the shared application window, glide to its top-left corner, click,
-    /// then deliver the chat message. The click is what gives the window focus;
-    /// it does not wait for the focus poll that rejects ordinary input.
-    pub fn deliver_submit(&mut self, text: String, tx: Sender<ClientRequest>) {
-        let Some(window) = self.focus_on_send() else {
-            let _ = tx.send(ClientRequest::SubmitInput { text });
-            return;
-        };
-        if self.busy.swap(true, Ordering::SeqCst) {
-            let _ = tx.send(ClientRequest::SubmitInput { text });
-            return;
-        }
-        let cancelled = self.cancelled.clone();
-        let busy = self.busy.clone();
-        let native_gate = self.native_gate.clone();
-        std::thread::spawn(move || {
-            {
-                let _guard = scopeguard::guard((), |_| {
-                    busy.store(false, Ordering::SeqCst);
-                });
-                let _native = native_gate.lock().unwrap_or_else(|p| p.into_inner());
-                if !cancelled.load(Ordering::SeqCst) {
-                    if let Err(e) = focus_shared_window(&window, &cancelled) {
-                        crate::model::store::append_global_error_log(
-                            "computer.focus",
-                            &format!("corner click failed: {e}"),
-                        );
-                    }
-                }
-            }
-            let _ = tx.send(ClientRequest::SubmitInput { text });
-        });
-    }
     pub fn request(&mut self, request: Request, tx: Sender<ClientRequest>) {
         if !self.active
             || request.generation != self.generation
@@ -206,46 +158,6 @@ impl Drop for Worker {
 }
 // Also held by live previews: a replaced GUI must not reset native cancellation
 // or release keys while the previous GUI's capture worker is still unwinding.
-/// A few pixels inside the window's screen top-left. The exact origin can
-/// sit on the outer frame; this still is the corner, and it stays off the
-/// title-bar buttons that live further in.
-const CORNER_INSET_PX: f64 = 4.0;
-
-pub(crate) fn corner_click(geometry: &Rect) -> Option<(f64, f64)> {
-    if !geometry.valid() || geometry.width < 8.0 || geometry.height < 8.0 {
-        return None;
-    }
-    Some((
-        (geometry.x + CORNER_INSET_PX).min(geometry.x + geometry.width - 1.0),
-        (geometry.y + CORNER_INSET_PX).min(geometry.y + geometry.height - 1.0),
-    ))
-}
-
-fn focus_shared_window(window: &Window, cancelled: &Arc<AtomicBool>) -> anyhow::Result<()> {
-    #[cfg(target_os = "linux")]
-    {
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            return Ok(());
-        }
-        let mut desktop = x11::X11::open(Arc::clone(cancelled))?;
-        return desktop.focus_corner(window);
-    }
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    {
-        let mut desktop = native::Native::open(Arc::clone(cancelled))?;
-        let live = super::executor::Desktop::inspect(&mut desktop, &window.id)
-            .unwrap_or_else(|_| window.clone());
-        let (x, y) = corner_click(&live.geometry)
-            .ok_or_else(|| anyhow::anyhow!("application window has no top-left corner to click"))?;
-        return desktop.click_screen_point(&live, x, y);
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        let _ = (window, cancelled);
-        Ok(())
-    }
-}
-
 fn acquire_native_lock() -> anyhow::Result<std::fs::File> {
     let dir = crate::model::store::base_dir()?;
     let file = std::fs::OpenOptions::new()
@@ -390,43 +302,5 @@ mod tests {
             matches!(rx.recv().unwrap(),ClientRequest::Computer(Control::Result(r)) if r.error.is_some())
         );
         assert!(!worker.busy.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn send_clicks_an_application_corner_and_leaves_a_screen_alone() {
-        let geometry = Rect {
-            x: 100.0,
-            y: 200.0,
-            width: 800.0,
-            height: 600.0,
-        };
-        assert_eq!(corner_click(&geometry), Some((104.0, 204.0)));
-        assert!(corner_click(&Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 7.0,
-            height: 100.0,
-        })
-        .is_none());
-        let app = Window {
-            id: "10:20".into(),
-            application: "App".into(),
-            title: "Title".into(),
-            geometry,
-            focused: false,
-            focus: None,
-        };
-        let mut worker = Worker::default();
-        worker.preview_window = Some(app);
-        assert!(worker.focus_on_send().is_none());
-        worker.active = true;
-        assert_eq!(
-            worker.focus_on_send().as_ref().map(|w| w.id.as_str()),
-            Some("10:20")
-        );
-        worker.preview_window.as_mut().unwrap().id = "display:1".into();
-        assert!(worker.focus_on_send().is_none());
-        worker.preview_window.as_mut().unwrap().id = "portal:window:1".into();
-        assert!(worker.focus_on_send().is_none());
     }
 }

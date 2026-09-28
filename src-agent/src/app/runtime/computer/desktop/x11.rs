@@ -732,38 +732,6 @@ impl X11 {
         }
         Ok(())
     }
-    /// Send-time focus cheat. Raise the application window, then click a few
-    /// pixels inside its live top-left. The ordinary focus poll is not consulted:
-    /// this click is what makes the window the one in front.
-    pub(super) fn focus_corner(&mut self, window: &Window) -> Result<()> {
-        let xid = self.xid(&window.id)?;
-        let live = self.geometry(xid)?;
-        let (x, y) = super::corner_click(&live)
-            .ok_or_else(|| anyhow::anyhow!("application window has no top-left corner to click"))?;
-        self.target = Some(Window {
-            geometry: live,
-            ..window.clone()
-        });
-        let _ = self.raise_window(xid);
-        self.glide(x, y)?;
-        self.click_without_focus_gate(1)?;
-        self.hide_arrow();
-        let _ = self.sync();
-        Ok(())
-    }
-    fn click_without_focus_gate(&mut self, button: u32) -> Result<()> {
-        ensure!(!self.cancelled.load(Ordering::SeqCst), "cancelled");
-        let t = self
-            .test
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("XTEST unavailable"))?;
-        self.input_started = true;
-        unsafe {
-            (t.XTestFakeButtonEvent)(self.display, button, 1, 0);
-            (t.XTestFakeButtonEvent)(self.display, button, 0, 0);
-        }
-        self.sync()
-    }
     fn button(&mut self, button: u32) -> Result<()> {
         self.guard_input()?;
         ensure!(!self.cancelled.load(Ordering::SeqCst), "cancelled");

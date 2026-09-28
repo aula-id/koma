@@ -4,7 +4,7 @@ import { isViewOnlySource } from '../types/computer'
 import { useComputerPreview } from '../store/computerPreview'
 
 const button = 'inline-flex items-center gap-2 rounded-md border border-koma-border bg-koma-panel px-3 py-2 text-xs transition-colors hover:bg-koma-hover disabled:opacity-40 disabled:cursor-not-allowed'
-const capabilityLabels: Record<string, string> = { capture: 'Screen/window capture', windows: 'Screen and application selection', focus: 'Model source selection', pointer: 'Pointer input', keyboard: 'Keyboard input', accessibility: 'Application accessibility', ocr: 'Text recognition', floating: 'Detached preview' }
+const capabilityLabels: Record<string, string> = { capture: 'Screen capture', windows: 'Screen selection', focus: 'Model source selection', pointer: 'Pointer input', keyboard: 'Keyboard input', accessibility: 'Accessibility', ocr: 'Text recognition', floating: 'Detached preview' }
 
 export function ComputerSettings() {
   const session = useKoma(s => s.session.id)
@@ -29,11 +29,11 @@ export function ComputerSettings() {
     <div className="rounded-lg border border-koma-border bg-koma-panel/40 p-4">
       <div className="flex items-center gap-3">
         <div className="rounded-lg border border-koma-border bg-koma-bg p-2.5 text-koma-accent"><Monitor size={20} strokeWidth={1.5} /></div>
-        <h3 className="min-w-0 flex-1 font-medium">Screen and application sharing</h3>
+        <h3 className="min-w-0 flex-1 font-medium">Screen sharing</h3>
         <span className={`flex items-center gap-1.5 rounded-full border border-koma-border px-2 py-1 text-[10px] ${enabled ? 'text-koma-accent' : 'text-koma-dim'}`}><span className={`h-1.5 w-1.5 rounded-full ${enabled ? 'bg-koma-accent' : 'bg-koma-dim'}`} />{label}</span>
       </div>
       <p className="mt-3 text-xs leading-relaxed text-koma-dim">The model can move the pointer, click, type, and scroll. Starting sharing is the approval.</p>
-      {assist && <p className="mt-3 text-xs text-koma-fg">This share is view only. On Wayland, pick a screen to click. On macOS, Windows, and X11, share the application window.</p>}
+      {assist && <p className="mt-3 text-xs text-koma-fg">This share is view only. Pick a screen to click and type.</p>}
       <div className="mt-4 flex flex-wrap gap-2">
         {!enabled ? <button type="button" disabled={!available || enabling} className={`${button} text-koma-accent`} onClick={() => { if (session) requestShow(session); control('enable') }}><Monitor size={14} />{enabling ? 'Enabling…' : 'Start sharing'}</button> : <>
           <button type="button" className={button} onClick={() => control(status?.paused ? 'resume' : 'pause')}>{status?.paused ? <Play size={14} /> : <Pause size={14} />}{status?.paused ? assist ? 'Resume assist' : 'Give control' : 'Pause'}</button>
@@ -41,13 +41,13 @@ export function ComputerSettings() {
           {!status?.paused && !assist && <button type="button" className={button} onClick={() => control('take_over')}><Hand size={14} />Take back control</button>}
         </>}
       </div>
-      <p role="status" className="mt-3 text-xs leading-relaxed text-koma-dim">{!available ? 'Available in a local GUI session.' : status?.message || 'Then pick a screen or a window in the preview.'}</p>
+      <p role="status" className="mt-3 text-xs leading-relaxed text-koma-dim">{!available ? 'Available in a local GUI session.' : status?.message || 'Then pick a screen in the preview.'}</p>
       {error && <p role="alert" className="mt-2 text-xs text-koma-error">{error}</p>}
     </div>
 
     <div>
       <h3 className="font-medium">Preview</h3>
-      <p className="mt-1 text-xs leading-relaxed text-koma-dim">Resize the preview to inspect the share. Hover it to pick a screen or window. The model gets a separate frame.</p>
+      <p className="mt-1 text-xs leading-relaxed text-koma-dim">Resize the preview to inspect the share. Hover it to pick a screen. The model gets a separate frame.</p>
       <div className="mt-3 flex flex-wrap gap-2">
         <button type="button" className={button} disabled={!available || !enabled} onClick={() => { if (session) show(session) }}><PictureInPicture2 size={14} />Open preview</button>
         {status?.capabilities.floating && <button type="button" className={button} disabled={!enabled || status.busy} onClick={() => { hide(); window.ipc?.postMessage(JSON.stringify({ t: 'win', a: 'computer-viewer' })) }}><ExternalLink size={14} />Detach preview</button>}

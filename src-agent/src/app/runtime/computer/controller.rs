@@ -175,6 +175,15 @@ impl Controller {
             Operation::Select { .. } if !caps.focus || !caps.capture => {
                 bail!("display selection unsupported; use the OS source picker")
             }
+            Operation::Select { window, .. }
+                if !(is_screen(window)
+                    || window == "portal:choose"
+                    || window == "portal:choose:screen") =>
+            {
+                bail!(
+                    "Computer use shares a whole screen. Choose a display: source, not an application window."
+                )
+            }
             Operation::Observe { .. } | Operation::InspectWindow { .. } if !caps.capture => {
                 bail!("capture unsupported")
             }
@@ -209,6 +218,9 @@ impl Controller {
                 }
                 if view_only(&current.window.id, caps.pointer, caps.keyboard) {
                     return Err(ScreenRequired.into());
+                }
+                if !is_screen(&current.window.id) {
+                    bail!("Computer use shares a whole screen. Select a display and observe it.");
                 }
                 super::executor::validate_actions(current, actions, caps)?;
             }

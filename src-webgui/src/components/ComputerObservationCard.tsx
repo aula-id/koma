@@ -57,7 +57,7 @@ export function ComputerToolCall({ call }: { call: ToolCallView }) {
     <div className="max-h-72 space-y-3 overflow-auto border-t border-koma-border p-3 text-xs leading-relaxed text-koma-fg">
       {error && <p>{error}</p>}
       {uncertain && <p>Some input may have completed. Inspect a fresh observation before deciding what to do next.</p>}
-      {result?.requires_screen && <p>This share cannot receive input. On Wayland the model selects a screen. On macOS, Windows, and X11 it shares the application window and clicks inside that screenshot.</p>}
+      {result?.requires_screen && <p>This share cannot receive input. Pick a screen, then continue.</p>}
       {result?.input_busy && !uncertain && <p>Release held keys or mouse buttons. Sharing is still active; the agent can observe and continue.</p>}
       {result?.requires_observation && !result?.input_busy && <p>The desktop changed. Sharing is still active; a fresh observation is required.</p>}
       {recovery && <p><strong>Computer control stopped. </strong>{recovery}</p>}

@@ -35,9 +35,14 @@ pub fn target(action: &Action, observation: &Observation) -> Result<Option<(f64,
                 let e = observation
                     .elements
                     .iter()
-                    .find(|e| e.id == *id && e.source == "accessibility" && e.enabled)
+                    .find(|e| {
+                        e.id == *id
+                            && (e.source == "ocr" || (e.source == "accessibility" && e.enabled))
+                    })
                     .ok_or_else(|| {
-                        anyhow::anyhow!("element is not a visible enabled accessibility target")
+                        anyhow::anyhow!(
+                            "element is not an OCR word or an enabled accessibility target from this observation"
+                        )
                     })?;
                 if !e.bounds.valid()
                     || e.bounds.x < 0.0
@@ -78,7 +83,9 @@ pub fn validate_actions(obs: &Observation, actions: &[Action], caps: &Capabiliti
                 element: None,
                 ..
             } => {
-                obs.transform.screen_to_image(*x, *y)?;
+                // Pixels from the top-left of the screenshot. The picture has
+                // no ruler, so these are not screen coordinates.
+                obs.transform.map(*x, *y)?;
             }
             Action::Click {
                 element: Some(_), ..
@@ -144,14 +151,19 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
         let mut window = match &request.operation {
             Operation::Windows => {
                 reply.windows = desktop.windows()?;
+                reply.windows.retain(|w| is_screen(&w.id));
                 return Ok(());
             }
             Operation::Select { window, .. } => {
-                if is_screen(window) {
-                    desktop.select(window)?
-                } else {
-                    desktop.inspect(window)?
+                if !(is_screen(window)
+                    || window == "portal:choose"
+                    || window == "portal:choose:screen")
+                {
+                    bail!(
+                        "Computer use shares a whole screen. Choose a display: source, not an application window."
+                    );
                 }
+                desktop.select(window)?
             }
             Operation::InspectWindow { window } => desktop.inspect(window)?,
             Operation::Observe { crop: Some(_), .. } => {
@@ -162,6 +174,9 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                     .observation
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("select a display first"))?;
+                if !is_screen(&obs.window.id) {
+                    bail!("Computer use shares a whole screen. Select a display and observe it.");
+                }
                 let window = desktop.inspect(&obs.window.id)?;
                 if matches!(request.operation, Operation::Act { .. }) {
                     if let Some(reason) = display_unusable(&window) {
@@ -200,11 +215,8 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                 .observation
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("missing observation"))?;
-            // The model sends the screen pixel printed on the ruler. Convert
-            // it with the frame it saw, then aim that image point at the
-            // rectangle as it is now, so a move or resize still hits the same
-            // relative place.
-            let seen = obs.transform.clone();
+            // x/y are pixels of the screenshot the model saw. Aim that image
+            // point at the screen rectangle as it is now.
             let mut transform = obs.transform.clone();
             for (index, action) in actions.iter().enumerate() {
                 if cancelled.load(Ordering::SeqCst) {
@@ -216,32 +228,23 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                 }
                 transform.desktop = current.geometry;
                 let resolved = match action {
-                    Action::Move { x, y } => {
-                        let (x, y) = seen.screen_to_image(*x, *y)?;
-                        Action::Move { x, y }
-                    }
-                    Action::Scroll { x, y, delta } => {
-                        let (x, y) = seen.screen_to_image(*x, *y)?;
-                        Action::Scroll {
-                            x,
-                            y,
-                            delta: *delta,
-                        }
-                    }
+                    Action::Move { x, y } => Action::Move { x: *x, y: *y },
+                    Action::Scroll { x, y, delta } => Action::Scroll {
+                        x: *x,
+                        y: *y,
+                        delta: *delta,
+                    },
                     Action::Click {
                         x: Some(x),
                         y: Some(y),
                         element: None,
                         button,
-                    } => {
-                        let (x, y) = seen.screen_to_image(*x, *y)?;
-                        Action::Click {
-                            x: Some(x),
-                            y: Some(y),
-                            element: None,
-                            button: *button,
-                        }
-                    }
+                    } => Action::Click {
+                        x: Some(*x),
+                        y: Some(*y),
+                        element: None,
+                        button: *button,
+                    },
                     Action::Click { button, .. } => {
                         let (x, y) = target(action, obs)?
                             .ok_or_else(|| anyhow::anyhow!("missing click target"))?;
@@ -886,7 +889,7 @@ mod fixture_tests {
         }
     }
     #[test]
-    fn application_window_accepts_input_and_switching_screen_requires_new_observation() {
+    fn an_application_window_is_refused_and_a_screen_needs_its_own_observation() {
         let mut desktop = Fixture {
             captures: 0,
             inputs: 0,
@@ -915,48 +918,14 @@ mod fixture_tests {
                 generation: "g".into(),
             },
         };
-        let selected = execute(&mut desktop, &request, &cancelled);
-        assert!(selected.error.is_none());
-        assert_eq!(desktop.captures, 1);
-        assert!(!desktop.focus, "selecting an application must not focus it");
-        let app = selected.observation.unwrap();
-        let original_app = app.id.clone();
-        request.observation = Some(app.clone());
-        let mut current_id = app.id.clone();
-        for action in [
-            Action::Move { x: 20.0, y: 20.0 },
-            Action::Click {
-                x: Some(20.0),
-                y: Some(20.0),
-                element: None,
-                button: Button::Left,
-            },
-            Action::Type {
-                text: "typed".into(),
-            },
-            Action::Key {
-                keys: vec!["Return".into()],
-            },
-            Action::Scroll {
-                x: 20.0,
-                y: 20.0,
-                delta: 1,
-            },
-        ] {
-            request.operation = Operation::Act {
-                observation: current_id,
-                actions: vec![action],
-                observe: true,
-            };
-            let acted = execute(&mut desktop, &request, &cancelled);
-            assert!(acted.error.is_none(), "{:?}", acted.error);
-            assert!(!acted.requires_screen);
-            assert_eq!(acted.completed, 1);
-            request.observation = acted.observation;
-            current_id = request.observation.as_ref().unwrap().id.clone();
-        }
-        assert_eq!(desktop.inputs, 5);
-        assert!(desktop.captures > 1);
+        let refused = execute(&mut desktop, &request, &cancelled);
+        assert!(refused
+            .error
+            .unwrap()
+            .contains("not an application window"));
+        assert_eq!(desktop.captures, 0);
+        assert_eq!(desktop.inputs, 0);
+        let original_app = "stale-app-observation".to_string();
         request.operation = Operation::Select {
             window: "display:fixture".into(),
             generation: "g".into(),
@@ -973,9 +942,9 @@ mod fixture_tests {
         };
         assert!(
             execute(&mut desktop, &request, &cancelled).error.is_some(),
-            "an old application observation cannot authorize the newly selected screen"
+            "an old observation id cannot authorize the newly selected screen"
         );
-        assert_eq!(desktop.inputs, 5);
+        assert_eq!(desktop.inputs, 0);
         if let Operation::Act { observation, .. } = &mut request.operation {
             *observation = request.observation.as_ref().unwrap().id.clone();
         }
@@ -1350,22 +1319,13 @@ mod fixture_tests {
         };
         r.observation.as_mut().unwrap().window.geometry = stale;
         r.observation.as_mut().unwrap().transform.desktop = stale;
-        let frame = r.observation.as_ref().unwrap().transform.clone();
-        let screen = |px: f64, py: f64| {
-            (
-                frame.desktop.x + px * frame.desktop.width / f64::from(frame.width),
-                frame.desktop.y + py * frame.desktop.height / f64::from(frame.height),
-            )
-        };
-        let (mx, my) = screen(5.0, 5.0);
-        let (cx, cy) = screen(10.0, 10.0);
         r.operation = Operation::Act {
             observation: r.observation.as_ref().unwrap().id.clone(),
             actions: vec![
-                Action::Move { x: mx, y: my },
+                Action::Move { x: 5.0, y: 5.0 },
                 Action::Click {
-                    x: Some(cx),
-                    y: Some(cy),
+                    x: Some(10.0),
+                    y: Some(10.0),
                     element: None,
                     button: Button::Left,
                 },
@@ -1384,6 +1344,65 @@ mod fixture_tests {
         let result = execute(&mut d, &r, &cancel);
         assert_eq!(result.completed, 0);
         assert!(result.error.unwrap().contains("closed"));
+    }
+
+    #[test]
+    fn an_ocr_word_clicks_the_center_of_its_bounds() {
+        let obs = Observation {
+            id: "o".into(),
+            session: "s".into(),
+            generation: "g".into(),
+            window: Window {
+                id: "display:1".into(),
+                application: "Screen".into(),
+                title: "Screen".into(),
+                geometry: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0,
+                },
+                focused: true,
+                focus: None,
+            },
+            transform: Transform {
+                desktop: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0,
+                },
+                width: 100,
+                height: 100,
+            },
+            captured_ms: 0,
+            elements: vec![Element {
+                id: "o:ocr:0".into(),
+                source: "ocr".into(),
+                label: "Calendar".into(),
+                role: "text".into(),
+                bounds: Rect {
+                    x: 10.0,
+                    y: 20.0,
+                    width: 30.0,
+                    height: 8.0,
+                },
+                enabled: false,
+                selected: false,
+                focused: false,
+                confidence: Some(0.9),
+            }],
+            accessibility_status: String::new(),
+            ocr_status: String::new(),
+            image_path: String::new(),
+        };
+        let action = Action::Click {
+            x: None,
+            y: None,
+            element: Some("o:ocr:0".into()),
+            button: Button::Left,
+        };
+        assert_eq!(target(&action, &obs).unwrap(), Some((25.0, 24.0)));
     }
 
     #[test]

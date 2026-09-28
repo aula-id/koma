@@ -1634,8 +1634,6 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             }
             // History pull only meaningful while attached (PushState stash).
             Ok(HostCtl::HistoryPage { .. }) => {}
-            // Chat send only exists once a session is attached.
-            Ok(HostCtl::Submit { .. }) => {}
             // The ipc side hung up (window gone) — leave the host.
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return HostStep::Done,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
@@ -2399,7 +2397,6 @@ fn host_remote_attach(
             Ok(HostCtl::SubmitRemotePassword { password }) => {
                 remote_shared.submit_password(password);
             }
-            Ok(HostCtl::Submit { .. }) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return HostStep::Done,
             // Ignore other ctls while attaching.
             Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
