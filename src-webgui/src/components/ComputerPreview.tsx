@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Check, ChevronDown, Monitor, RefreshCw, AppWindow, Eye, X } from 'lucide-react'
 import { useComputerLivePreview } from '../lib/computerLivePreview'
-import { isComputerScreen, type ComputerStatus } from '../types/computer'
+import { isComputerScreen, isViewOnlySource, type ComputerStatus } from '../types/computer'
 
 export function computerImageUrl(path: string) {
   const origin = ['http:', 'https:'].includes(location.protocol) ? location.origin : 'koma://localhost'
@@ -9,11 +9,10 @@ export function computerImageUrl(path: string) {
 }
 
 /** Live shared-source view, with a clearly labelled saved-observation fallback. */
-export function ComputerPreview({ status, control, chrome, onImageSize }: {
+export function ComputerPreview({ status, control, chrome }: {
   status: ComputerStatus | null
   control: (action: 'windows' | 'select', window?: string) => void
   chrome?: ReactNode
-  onImageSize?: (width: number, height: number) => void
 }) {
   const [menu, setMenu] = useState(false)
   const [sourceGroup, setSourceGroup] = useState<'screen' | 'application'>('screen')
@@ -23,7 +22,8 @@ export function ComputerPreview({ status, control, chrome, onImageSize }: {
   const trigger = useRef<HTMLButtonElement>(null)
   const picker = useRef<HTMLDivElement>(null)
   const observation = status?.observation
-  const assist = !!observation && !isComputerScreen(observation.window.id)
+  const application = !!observation && !isComputerScreen(observation.window.id)
+  const viewOnly = !!observation && isViewOnlySource(observation.window.id, !!status?.capabilities.pointer, !!status?.capabilities.keyboard)
   const live = useComputerLivePreview(status)
   const image = live?.image ?? (observation ? computerImageUrl(observation.image_path) : null)
   const unavailable = !status?.enabled || status.paused || status.busy
@@ -52,7 +52,6 @@ export function ComputerPreview({ status, control, chrome, onImageSize }: {
     onKeyDown={e => { if (e.key === 'Escape' && menu) { e.stopPropagation(); closeMenu() } }}>
     {image && failedImage !== image
       ? <img src={image} draggable={false}
-          onLoad={e => onImageSize?.(e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}
           onError={() => setFailedImage(image)}
           alt={`${live?.image ? 'Live preview' : 'Last model observation'}: ${observation?.window.title || observation?.window.application}`}
           className="absolute inset-0 block h-full w-full object-contain" />
@@ -64,9 +63,9 @@ export function ComputerPreview({ status, control, chrome, onImageSize }: {
     <div inert={menu} className={`pointer-events-none absolute inset-x-0 top-0 flex max-h-full flex-col p-2 transition-opacity duration-150 group-hover/preview:opacity-100 group-focus-within/preview:opacity-100 [@media(hover:none)]:opacity-100 ${menu || !observation ? 'opacity-100' : 'opacity-0'}`}>
       <div className="pointer-events-auto flex shrink-0 items-center gap-1 rounded-lg border border-koma-border bg-koma-panel/95 p-1 shadow-lg backdrop-blur-md">
         <button ref={trigger} type="button" aria-expanded={menu} aria-controls="computer-display-picker" disabled={!status?.enabled}
-          onClick={() => { refreshPending.current = !menu; setSourceGroup(assist ? 'application' : 'screen'); setMenu(v => !v) }}
+          onClick={() => { refreshPending.current = !menu; setSourceGroup(application ? 'application' : 'screen'); setMenu(v => !v) }}
           className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-koma-hover focus-visible:outline focus-visible:outline-koma-accent disabled:opacity-50">
-          {assist ? <Eye size={14} className="shrink-0 text-koma-accent" /> : <Monitor size={14} className="shrink-0 text-koma-accent" />}
+          {viewOnly ? <Eye size={14} className="shrink-0 text-koma-accent" /> : <Monitor size={14} className="shrink-0 text-koma-accent" />}
           <span className="min-w-0 flex-1 truncate">{observation?.window.title || observation?.window.application || 'Select source'}</span>
           <ChevronDown size={13} className={`shrink-0 transition-transform ${menu ? 'rotate-180' : ''}`} />
         </button>
@@ -92,7 +91,7 @@ export function ComputerPreview({ status, control, chrome, onImageSize }: {
         const group = screen ? 'screen' : 'application'
         const Icon = screen ? Monitor : AppWindow
         return <section key={group} id={`computer-sources-${group}`} hidden={sourceGroup !== group} aria-label={screen ? 'Screens' : 'Applications'} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          <p className="px-2 py-1 text-[10px] text-koma-dim">{screen ? status?.capabilities.pointer || status?.capabilities.keyboard ? 'Screen sharing · native control' : 'Screen sharing · view only' : 'Application sharing · assist, view only'}</p>
+          <p className="px-2 py-1 text-[10px] text-koma-dim">{screen ? status?.capabilities.pointer || status?.capabilities.keyboard ? 'Screen sharing · native control' : 'Screen sharing · view only' : status?.capabilities.pointer || status?.capabilities.keyboard ? 'Application sharing · this window' : 'Application sharing · view only'}</p>
           {sources.map(w => <button key={w.id} type="button" disabled={unavailable} aria-pressed={w.id === observation?.window.id}
             onClick={() => { control('select', w.id); closeMenu() }}
             className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-koma-hover focus-visible:outline focus-visible:outline-koma-accent disabled:opacity-40">
@@ -107,7 +106,7 @@ export function ComputerPreview({ status, control, chrome, onImageSize }: {
     </div>}
     {observation && <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-2 opacity-0 transition-opacity group-hover/preview:opacity-100 group-focus-within/preview:opacity-100 [@media(hover:none)]:opacity-100">
       <span title={live?.error ?? undefined} className="max-w-full truncate rounded-full border border-koma-border bg-koma-panel/95 px-3 py-1 text-[10px] text-koma-dim shadow-sm">
-        {assist && 'Assist · view only · '}
+        {viewOnly && 'View only · '}
         {!status?.enabled ? 'Sharing stopped' : status.paused ? 'Paused' : status.busy ? 'Updating…' : live?.image ? 'Live' : live?.error ? 'Live unavailable · last model frame' : 'Last model frame'}
         {observation && ` · ${new Date(live?.image ? live.captured_ms : observation.captured_ms).toLocaleTimeString()}`}
       </span>

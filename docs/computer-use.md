@@ -1,10 +1,10 @@
 # Desktop sharing: implementation and validation status
 
-Computer use offers two source groups: **Screens** for native control, and
-**Applications** for view-only assist mode. A screen includes visible applications,
-dialogs, menus and desktop chrome. An application shares only its selected window. The model uses the native cursor and keyboard. It does
-not have an independent background cursor. macOS (ARM and Intel), Windows and X11
-have display capture/input implementations; Wayland remains portal observation-only.
+Computer use offers two source groups: **Screens** and **Applications**. A screen
+includes visible applications, dialogs, menus and desktop chrome. An application
+shares only its selected window, and on macOS, Windows, and X11 that window accepts
+real clicks and typing. The click brings the window forward and uses the real pointer.
+There is no second background cursor. Wayland portal shares stay observation-only.
 Native device validation is separate from the compilation and regression evidence below.
 
 ## Workflow and UI
@@ -18,8 +18,10 @@ Choose a source in the preview's hover/keyboard-accessible picker. It has separa
 **Screens** and **Applications** sections, with both category buttons pinned above
 the scrollable list. While open, the picker uses the preview's full area so small
 previews cannot bury Applications below the screen list. Opening during an active
-operation defers source refresh until the worker is available. Applications are labelled **Assist · view
-only** in the picker, preview and titlebar. Selecting one does not focus/raise it. The titlebar shows Sharing and provides **Take back control**, **Give
+operation defers source refresh until the worker is available. A Wayland application
+is labelled view only. On macOS, Windows, and X11 an application share is labelled
+like any other share; selecting it does not raise the window until an input action.
+The titlebar shows Sharing and provides **Take back control**, **Give
 control** and **Stop sharing**. Taking back control pauses/cancels input while
 keeping the share and live preview; resuming requires a fresh model observation.
 Stopping, disconnecting or changing sessions ends sharing and closes both preview
@@ -27,8 +29,9 @@ styles. Reconnection requires explicit activation. Native failures that disable
 control also close previews.
 
 Before a source is selected, the preview resizes freely on either axis and shows
-only its source picker and a small empty-state icon. With a source selected, it
-preserves the image ratio, with picker/status controls floating over the frame.
+only its source picker and a small empty-state icon. After the user sizes it, that
+width and height stay. A new frame does not resize the window; the picture fits
+inside the user's box. The viewport can only shrink a side that would leave the screen.
 Its position and size persist. A detached viewer is available on supported
 platforms. Before model capture or input, Koma hides both its detached viewer and
 in-app preview, acknowledging the paint before dispatch. It restores them afterward
@@ -487,9 +490,9 @@ mapping, fresh close-up mapping, app switching, stale coordinates, partial outco
 cancellation, ownership and preview correlation, and preserved screenshot attachments
 when enrichment fails. Full native validation remains for the device walkthrough.
 
-1. Share an application window first and confirm Assist/view-only labels, no focus
-   change and no input. Ask for a task requiring control: the model should get the
-   compact screen-selection nudge and select a screen without an additional approval prompt.
+1. On macOS, Windows, or X11, share an application window and confirm it is not
+   labelled view-only. A click brings that window forward and lands inside its
+   screenshot. On Wayland, the share stays view-only and the model selects a screen.
    Share a screen with `docs/testing/computer-fixture.html` open. Verify the model
    and chat card receive the same bounded PNG; the preview can show newer frames.
 2. Put another application/dialog over the fixture. Observe the composed desktop,

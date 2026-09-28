@@ -159,7 +159,7 @@ impl Controller {
                 {
                     return Err(ObservationRequired("Stale observation: this frame is no longer actionable; observe again and use the new observation_id").into());
                 }
-                if !is_screen(&current.window.id) {
+                if view_only(&current.window.id, caps.pointer, caps.keyboard) {
                     return Err(ScreenRequired.into());
                 }
                 super::executor::validate_actions(current, actions, caps)?;

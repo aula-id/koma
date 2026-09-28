@@ -31,7 +31,7 @@ fn recovery_nudge() -> serde_json::Value {
 fn screen_nudge(status: &Status) -> serde_json::Value {
     serde_json::json!({
         "kind": "screen_required",
-        "model_instruction": "Application sharing is view-only assist mode. To continue a task that needs input, call computer_windows, choose the screen containing the application, then call computer_select_window with that screen ID and the current generation. Enabling Computer use already grants consent for native source selection and input; no per-action approval is needed. Inspect the resulting screen observation and continue the user's task using its new coordinates. Do not ask the user to stop/re-enable sharing or use shell/browser tools to bypass assist mode. Never replay completed or uncertain input. If screen capture/input or programmatic source selection is unavailable, explain that capability limitation and request the OS picker when needed.",
+        "model_instruction": "This share cannot receive input. It is a Wayland portal share. To continue a task that needs input, call computer_windows, choose the screen containing the application, then call computer_select_window with that screen ID and the current generation. On macOS, Windows, and X11, share the application window itself and click inside its screenshot instead. Enabling Computer use already grants consent for native source selection and input; no per-action approval is needed. Do not ask the user to stop/re-enable sharing or use shell/browser tools to bypass this. Never replay completed or uncertain input.",
         "generation": status.generation,
     })
 }
@@ -315,10 +315,12 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
         for window in windows {
             let screen = window["id"].as_str().is_some_and(is_screen);
             window["source_type"] = if screen { "screen" } else { "application" }.into();
-            window["view_only"] = (!screen
-                || (!rt.computer.status.capabilities.pointer
-                    && !rt.computer.status.capabilities.keyboard))
-                .into();
+            window["view_only"] = view_only(
+                window["id"].as_str().unwrap_or(""),
+                rt.computer.status.capabilities.pointer,
+                rt.computer.status.capabilities.keyboard,
+            )
+            .into();
         }
     }
     if let Some(obs) = &reply.observation {
@@ -329,10 +331,12 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
             "application"
         }
         .into();
-        result["view_only"] = (!is_screen(&obs.window.id)
-            || (!rt.computer.status.capabilities.pointer
-                && !rt.computer.status.capabilities.keyboard))
-            .into();
+        result["view_only"] = view_only(
+            &obs.window.id,
+            rt.computer.status.capabilities.pointer,
+            rt.computer.status.capabilities.keyboard,
+        )
+        .into();
     }
     let text = result.to_string();
     settle(rt, reply.id, text);
@@ -391,9 +395,12 @@ fn ingest(rt: &mut SessionRuntime, reply: &mut Reply) -> anyhow::Result<()> {
     metadata["observation_id"] = obs.id.clone().into();
     let screen = is_screen(&obs.window.id);
     metadata["source_type"] = if screen { "screen" } else { "application" }.into();
-    metadata["view_only"] = (!screen
-        || (!rt.computer.status.capabilities.pointer && !rt.computer.status.capabilities.keyboard))
-        .into();
+    metadata["view_only"] = view_only(
+        &obs.window.id,
+        rt.computer.status.capabilities.pointer,
+        rt.computer.status.capabilities.keyboard,
+    )
+    .into();
     std::fs::write(
         artifact,
         serde_json::to_vec_pretty(
@@ -712,8 +719,23 @@ mod approval_tests {
         assert!(rt.computer.status.enabled);
         assert!(rt.computer.actionable);
         assert!(rt.computer.outbound.is_none());
-        let call=ToolCall {id:"assist-input".into(),kind:"function".into(),function:FunctionCall {name:"computer_act".into(),arguments:serde_json::json!({"observation":"app-observation","actions":[{"kind":"type","text":"blocked"}]}).to_string()}};
+        let call=ToolCall {id:"assist-input".into(),kind:"function".into(),function:FunctionCall {name:"computer_act".into(),arguments:serde_json::json!({"observation":"app-observation","actions":[{"kind":"type","text":"hello"}]}).to_string()}};
         dispatch(&mut state, 0, &call);
+        let rt = &mut state.rest.sessions[0];
+        assert!(
+            rt.computer.outbound.is_some(),
+            "an application window with pointer input is dispatched, not refused"
+        );
+        assert!(rt.computer.status.enabled);
+        assert_eq!(rt.computer.owner, Some(1));
+        rt.computer.outbound.take();
+        rt.computer.pending = None;
+        rt.computer.actionable = true;
+        rt.computer.status.busy = false;
+        rt.pending_tool_tasks.clear();
+        rt.computer.status.observation.as_mut().unwrap().window.id = "portal:window:1".into();
+        let portal=ToolCall {id:"portal-input".into(),kind:"function".into(),function:FunctionCall {name:"computer_act".into(),arguments:serde_json::json!({"observation":"app-observation","actions":[{"kind":"type","text":"blocked"}]}).to_string()}};
+        dispatch(&mut state, 0, &portal);
         let rt = &mut state.rest.sessions[0];
         let result: serde_json::Value =
             serde_json::from_str(&rt.tool_results.last().unwrap().1).unwrap();

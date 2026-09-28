@@ -209,7 +209,7 @@ static void unobstructed(HWND window, RECT r) {
             continue;
         RECT intersection{};
         require(!IntersectRect(&intersection, &r, &other),
-                L"Target obstructed by another window; move the preview");
+                L"The application window is still covered; observe again");
     }
 }
 static void desktopAvailable() {
@@ -224,6 +224,24 @@ static void desktopAvailable() {
                 std::wcscmp(inputName, ownName) == 0,
             L"Input desktop changed; stop and reactivate control");
 }
+static void raiseWindow(HWND window) {
+    if (IsIconic(window))
+        ShowWindow(window, SW_RESTORE);
+    HWND foreground = GetForegroundWindow();
+    DWORD foregroundThread = foreground ? GetWindowThreadProcessId(foreground, nullptr) : 0;
+    DWORD targetThread = GetWindowThreadProcessId(window, nullptr);
+    DWORD current = GetCurrentThreadId();
+    if (foregroundThread && foregroundThread != current)
+        AttachThreadInput(current, foregroundThread, TRUE);
+    if (targetThread && targetThread != current && targetThread != foregroundThread)
+        AttachThreadInput(current, targetThread, TRUE);
+    SetForegroundWindow(window);
+    BringWindowToTop(window);
+    if (targetThread && targetThread != current && targetThread != foregroundThread)
+        AttachThreadInput(current, targetThread, FALSE);
+    if (foregroundThread && foregroundThread != current)
+        AttachThreadInput(current, foregroundThread, FALSE);
+}
 static void guardInput() {
     check();
     waitForInputIdle(check, [] {
@@ -235,7 +253,6 @@ static void guardInput() {
         return false;
     });
     require(localSession(), L"Computer input requires the local console session");
-    require(targetMonitor != nullptr, L"Application sharing is view-only; select a screen before input");
     if (targetMonitor) {
         // Still the same monitor. Screenshot points are mapped onto its
         // current rectangle, so a move or resize does not cancel the batch.
@@ -244,9 +261,14 @@ static void guardInput() {
     } else {
         require(target && IsWindow(target), L"No live input target");
         require(lookup(hstring(targetId)) == target, L"Input window identity changed");
-        require(same(geometry(target), targetRect) && title(target) == targetTitle, L"Window geometry or title changed; observe again");
-        require(GetForegroundWindow() == target, L"Selected window lost focus");
-        unobstructed(target, targetRect);
+        raiseWindow(target);
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+        while (GetForegroundWindow() != target && std::chrono::steady_clock::now() < deadline) {
+            check();
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        require(GetForegroundWindow() == target, L"Could not bring the application window forward; observe again");
+        unobstructed(target, geometry(target));
     }
     desktopAvailable();
 }
@@ -807,7 +829,7 @@ static IJsonValue dispatch(JsonObject r) {
                               L"Graphics Capture support"));
         limits.Append(str(L"Secure desktop, protected content and elevated applications can reject "
                           L"capture/input; no privilege escalation is attempted"));
-        limits.Append(str(L"Screen shares permit native input. Application windows are view-only assist mode; UI Automation metadata applies only to application observations."));
+        limits.Append(str(L"Screen shares include the whole display. An application share is that window only: input brings it forward and clicks with the real pointer. There is no second background cursor. UI Automation metadata applies to application observations; clicks use screenshot coordinates."));
         result.SetNamedValue(L"limitations", limits);
         return result;
     }

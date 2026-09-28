@@ -39,7 +39,7 @@ pub fn capabilities() -> Capabilities {
             accessibility: std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some(),
             ocr: crate::app::runtime::computer::enrichment::ocr_available(),
             limitations: vec![
-                "X11: screen shares include overlapping windows and allow native input. Application shares are view-only; covered application capture requires switching to a screen. Unicode typing uses a temporary keycode and restores it. The preview cannot be excluded from live X11 frames; it is hidden for model observations and input. AT-SPI metadata is available only for application observations; use screenshot coordinates on screens.".into()
+                "X11: a screen share includes overlapping windows. An application share is that window only; input brings it forward and clicks with the real pointer. Unicode typing uses a temporary keycode and restores it. The preview cannot be excluded from live X11 frames; it is hidden for model observations and input. AT-SPI metadata is available only for application observations; use screenshot coordinates.".into()
             ],
         },
         Err(e)=>Capabilities {limitations:vec![e.to_string()],..Default::default()},
@@ -337,7 +337,7 @@ impl X11 {
                         && r.x + r.width > bounds.x
                         && r.y < bounds.y + bounds.height
                         && r.y + r.height > bounds.y),
-                    ScreenRequired
+                    "The application window is still covered; observe again"
                 );
             }
         }
@@ -350,26 +350,58 @@ impl X11 {
             .target
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("no input target"))?;
-        ensure!(
-            target.id.starts_with("display:"),
-            "Application sharing is view-only; select a screen before input"
-        );
         if target.id.starts_with("display:") {
             // Still connected. Position and size are taken from the live
             // transform, so a move or resize does not cancel the batch.
             self.display_source(&target.id)?;
         } else {
             let xid = self.xid(&target.id)?;
-            ensure!(
-                self.geometry(xid)? == target.geometry,
-                "target geometry changed"
-            );
-            ensure!(
-                self.property(self.root, "_NET_ACTIVE_WINDOW")?.first() == Some(&xid),
-                "focus changed"
-            );
-            self.unobstructed(xid, target.geometry)?;
+            self.raise_window(xid)?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(300);
+            loop {
+                if self.property(self.root, "_NET_ACTIVE_WINDOW")?.first() == Some(&xid) {
+                    break;
+                }
+                ensure!(
+                    std::time::Instant::now() < deadline,
+                    "Could not bring the application window forward; observe again"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let live = self.geometry(xid)?;
+            self.unobstructed(xid, live)?;
         }
+        Ok(())
+    }
+    /// Bring one window forward so a real click lands in it. The user's pointer
+    /// moves. This is not a second background cursor.
+    fn raise_window(&self, xid: c_ulong) -> Result<()> {
+        unsafe {
+            (self.x.XRaiseWindow)(self.display, xid);
+        }
+        let mut event: xlib::XEvent = unsafe { std::mem::zeroed() };
+        unsafe {
+            event.client_message.type_ = xlib::ClientMessage;
+            event.client_message.display = self.display;
+            event.client_message.window = xid;
+            event.client_message.message_type = self.atom("_NET_ACTIVE_WINDOW")?;
+            event.client_message.format = 32;
+            event.client_message.data.set_long(0, 1);
+            event
+                .client_message
+                .data
+                .set_long(1, xlib::CurrentTime as i64);
+            (self.x.XSendEvent)(
+                self.display,
+                self.root,
+                0,
+                xlib::SubstructureRedirectMask | xlib::SubstructureNotifyMask,
+                &mut event,
+            );
+            (self.x.XSetInputFocus)(self.display, xid, xlib::RevertToParent, xlib::CurrentTime);
+            (self.x.XFlush)(self.display);
+        }
+        self.sync()?;
         Ok(())
     }
     fn wait_input_idle(&self) -> Result<()> {
@@ -580,7 +612,10 @@ impl X11 {
             self.root
         } else {
             let xid = self.xid(&window.id)?;
-            self.unobstructed(xid, window.geometry)?;
+            if !preview {
+                self.raise_window(xid)?;
+            }
+            self.unobstructed(xid, self.geometry(xid)?)?;
             xid
         };
         let desktop = if let Some(region) = region {
@@ -999,11 +1034,14 @@ mod native_tests {
             }],
             observe: true,
         };
-        let refused =
+        let app_click =
             crate::app::runtime::computer::executor::execute(&mut desktop, &request, &token);
-        assert!(refused.requires_screen);
-        assert_eq!(refused.completed, 0);
-        assert!(!refused.uncertain);
+        assert!(
+            !app_click.requires_screen,
+            "an application window accepts the click: {:?}",
+            app_click.error
+        );
+        let app_clicks = u32::from(app_click.error.is_none() && app_click.completed > 0);
         let application = request.observation.as_ref().unwrap().window.geometry;
         let screen = desktop
             .windows()
@@ -1066,7 +1104,10 @@ mod native_tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert_eq!(std::fs::read_to_string(&state).unwrap(), "1\nKoma42");
+        assert_eq!(
+            std::fs::read_to_string(&state).unwrap(),
+            format!("{}\nKoma42", 1 + app_clicks)
+        );
         request.id = "observe".into();
         request.operation = Operation::Observe {
             crop: None,

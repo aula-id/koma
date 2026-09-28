@@ -1,6 +1,6 @@
 import { LoaderCircle, Monitor, Hand, Play, Square } from 'lucide-react'
 import { useKoma } from '../store/koma'
-import { isComputerScreen } from '../types/computer'
+import { isViewOnlySource } from '../types/computer'
 import { useComputerPreview } from '../store/computerPreview'
 
 /** Native titlebar shortcut; detailed controls remain in Settings. */
@@ -12,7 +12,7 @@ export function ComputerShortcut() {
   const pending = useComputerPreview(s => s.requestedSession === session && !!session)
   const enabled = !!computer?.enabled && computer.session === session
   if (!session || ['ready', 'connected', 'connecting'].includes(remote)) return null
-  const assist = !!computer?.observation && !isComputerScreen(computer.observation.window.id)
+  const assist = !!computer?.observation && isViewOnlySource(computer.observation.window.id, !!computer.capabilities?.pointer, !!computer.capabilities?.keyboard)
   const paused = enabled && computer.paused
   const label = pending ? 'Starting sharing…' : enabled ? `Show shared source: ${computer.observation?.window.title || 'choose a source'}` : 'Share screen or application'
   const controlClass = 'pointer-events-auto flex h-[22px] items-center rounded-md border border-koma-border bg-koma-panel px-1.5 text-koma-fg hover:bg-koma-hover'

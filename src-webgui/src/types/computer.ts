@@ -20,5 +20,8 @@ export type ComputerStatus = {
   observation: ComputerObservation | null; windows: ComputerWindow[]; message: string
 }
 
-/** Source IDs are assigned by native adapters; every application stays view-only. */
+/** Source IDs are assigned by native adapters. A portal share cannot take input. */
 export function isComputerScreen(id: string) { return id.startsWith('display:') || id.startsWith('portal:screen:') }
+export function isViewOnlySource(id: string, pointer: boolean, keyboard: boolean) {
+  return id.startsWith('portal:') || (!pointer && !keyboard)
+}

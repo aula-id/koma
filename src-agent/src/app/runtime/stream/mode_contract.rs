@@ -68,8 +68,10 @@ pub(super) fn render(rt: &SessionRuntime) -> String {
                 are independent of the workspace-mode rules above, including Plan and SDLC: no \
                 workspace sandbox classifier or per-action human approval applies. Continue the \
                 requested desktop task with computer tools; do not ask for redundant permission \
-                because of earlier harness denials. Application shares remain view-only; select a \
-                screen for input and use its current observation. This consent does not change \
+                because of earlier harness denials. On macOS, Windows, and X11 an application \
+                window share accepts clicks and typing in that window's screenshot; the window is \
+                brought forward. Wayland portal shares stay view-only; select a screen there. \
+                This consent does not change \
                 approvals for shell, file, browser or other tools.\n");
         }
     } else if !computer.status.session.is_empty() {

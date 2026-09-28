@@ -121,7 +121,7 @@ impl Transform {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Window {
     // The wire name is retained for saved sessions. Native pickers return
-    // display:* screens plus application windows, which are always view-only.
+    // display:* screens plus application windows.
     pub id: String,
     pub application: String,
     pub title: String,
@@ -132,15 +132,20 @@ pub struct Window {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<String>,
 }
-/// Screen IDs are minted by the GUI adapter; other sources are view-only.
+/// Screen IDs are minted by the GUI adapter.
 pub fn is_screen(id: &str) -> bool {
     id.starts_with("display:") || id.starts_with("portal:screen:")
+}
+/// Portal shares cannot take input. Every other source can when this machine
+/// can move the pointer or type. The click brings that window forward.
+pub fn view_only(id: &str, pointer: bool, keyboard: bool) -> bool {
+    id.starts_with("portal:") || (!pointer && !keyboard)
 }
 #[derive(Debug)]
 pub struct ScreenRequired;
 impl std::fmt::Display for ScreenRequired {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Application sharing is assist mode (view-only). Select a screen to control the computer.")
+        f.write_str("This share cannot receive input. Wayland portal shares are view-only; select a screen. On macOS, Windows, and X11, share the application window and click inside its screenshot.")
     }
 }
 impl std::error::Error for ScreenRequired {}

@@ -99,7 +99,9 @@ pub fn validate_actions(obs: &Observation, actions: &[Action], caps: &Capabiliti
 /// the batch. A display that is no longer a usable target does.
 #[cfg(any(feature = "gui", test))]
 fn display_unusable(live: &Window) -> Option<&'static str> {
-    if !live.focused {
+    // An application window is raised by the native click. Only a display that
+    // reports itself unusable stops the batch before that raise.
+    if is_screen(&live.id) && !live.focused {
         Some("display is not actionable; observe again")
     } else {
         None
@@ -139,10 +141,6 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                     .observation
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("select a display first"))?;
-                if matches!(request.operation, Operation::Act { .. }) && !is_screen(&obs.window.id)
-                {
-                    return Err(ScreenRequired.into());
-                }
                 let window = desktop.inspect(&obs.window.id)?;
                 if matches!(request.operation, Operation::Act { .. }) {
                     if let Some(reason) = display_unusable(&window) {
@@ -833,7 +831,7 @@ mod fixture_tests {
         }
     }
     #[test]
-    fn application_assist_blocks_all_input_and_switching_screen_requires_new_observation() {
+    fn application_window_accepts_input_and_switching_screen_requires_new_observation() {
         let mut desktop = Fixture {
             captures: 0,
             inputs: 0,
@@ -867,7 +865,9 @@ mod fixture_tests {
         assert_eq!(desktop.captures, 1);
         assert!(!desktop.focus, "selecting an application must not focus it");
         let app = selected.observation.unwrap();
+        let original_app = app.id.clone();
         request.observation = Some(app.clone());
+        let mut current_id = app.id.clone();
         for action in [
             Action::Move { x: 20.0, y: 20.0 },
             Action::Click {
@@ -877,7 +877,7 @@ mod fixture_tests {
                 button: Button::Left,
             },
             Action::Type {
-                text: "no input".into(),
+                text: "typed".into(),
             },
             Action::Key {
                 keys: vec!["Return".into()],
@@ -889,17 +889,19 @@ mod fixture_tests {
             },
         ] {
             request.operation = Operation::Act {
-                observation: app.id.clone(),
+                observation: current_id,
                 actions: vec![action],
                 observe: true,
             };
-            let refused = execute(&mut desktop, &request, &cancelled);
-            assert!(refused.requires_screen);
-            assert_eq!(refused.completed, 0);
-            assert!(!refused.uncertain);
+            let acted = execute(&mut desktop, &request, &cancelled);
+            assert!(acted.error.is_none(), "{:?}", acted.error);
+            assert!(!acted.requires_screen);
+            assert_eq!(acted.completed, 1);
+            request.observation = acted.observation;
+            current_id = request.observation.as_ref().unwrap().id.clone();
         }
-        assert_eq!(desktop.inputs, 0);
-        assert_eq!(desktop.captures, 1);
+        assert_eq!(desktop.inputs, 5);
+        assert!(desktop.captures > 1);
         request.operation = Operation::Select {
             window: "display:fixture".into(),
             generation: "g".into(),
@@ -908,7 +910,7 @@ mod fixture_tests {
         assert!(shared.error.is_none());
         request.observation = shared.observation;
         request.operation = Operation::Act {
-            observation: app.id,
+            observation: original_app,
             actions: vec![Action::Type {
                 text: "hello".into(),
             }],
@@ -916,9 +918,9 @@ mod fixture_tests {
         };
         assert!(
             execute(&mut desktop, &request, &cancelled).error.is_some(),
-            "an application observation cannot authorize screen input"
+            "an old application observation cannot authorize the newly selected screen"
         );
-        assert_eq!(desktop.inputs, 0);
+        assert_eq!(desktop.inputs, 5);
         if let Operation::Act { observation, .. } = &mut request.operation {
             *observation = request.observation.as_ref().unwrap().id.clone();
         }

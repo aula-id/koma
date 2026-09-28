@@ -242,9 +242,23 @@ static void unobstructed(NSDictionary *w) {
             continue;
         CGRect overlap = CGRectIntersection(r, windowBounds(above));
         require(CGRectIsNull(overlap) || CGRectIsEmpty(overlap),
-                "Target obstructed by another window; ask the user to clear it before reactivating control");
+                "The application window is still covered; observe again");
     }
     require(found, "Target no longer visible");
+}
+static void raiseApplication(NSDictionary *w) {
+    pid_t pid = [w[(id)kCGWindowOwnerPID] intValue];
+    NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+    if (app)
+        [app activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+    if (!AXIsProcessTrusted())
+        return;
+    try {
+        AXUIElementRef ax = axWindow(w);
+        AXUIElementPerformAction(ax, kAXRaiseAction);
+        CFRelease(ax);
+    } catch (const std::exception &) {
+    }
 }
 static void guardInput() {
     check();
@@ -258,7 +272,6 @@ static void guardInput() {
         return false;
     });
     require(target != nil, "No input target");
-    require(isDisplay(target[@"id"]), "Application sharing is view-only; select a screen before input");
     require(CGPreflightScreenCaptureAccess() && AXIsProcessTrusted(), "Desktop permissions revoked; reactivate control");
     if (isDisplay(target[@"id"])) {
         // Still connected. Screenshot points are mapped onto the current
@@ -266,9 +279,13 @@ static void guardInput() {
         (void)displayID(target[@"id"]);
     } else {
         NSDictionary *w = lookup(target[@"id"]);
-        require(sameRect(windowBounds(w), bounds(target[@"geometry"])), "Window geometry changed");
-        require([limited(w[(id)kCGWindowName]) isEqual:target[@"title"]], "Window title changed; observe again");
-        require(focused(w), "Selected window lost focus");
+        raiseApplication(w);
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+        while (!focused(w) && std::chrono::steady_clock::now() < deadline) {
+            check();
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        require(focused(w), "Could not bring the application window forward; observe again");
         unobstructed(w);
     }
 }
@@ -785,7 +802,7 @@ static id dispatch(NSDictionary *r) {
         if (!ax)
             [limits addObject:@"Grant Accessibility access in System Settings for focus/input and "
                               @"labels, then reactivate"];
-        [limits addObject:@"Screen shares include visible windows, dialogs and desktop chrome and permit native input. Application shares are view-only assist mode. AX metadata is available only for application observations; use screenshot coordinates on screens."];
+        [limits addObject:@"Screen shares include visible windows, dialogs and desktop chrome. An application share is that window only: input brings it forward and clicks with the real pointer. There is no second background cursor. AX metadata is available for application observations; clicks use screenshot coordinates."];
         return @{
             @"capture" : @(capture),
             @"windows" : @(capture),
