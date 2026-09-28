@@ -3,14 +3,17 @@
 //! conversation are preserved; SQLite stores derived search/boundary metadata.
 
 pub(crate) mod budget;
+mod frame;
 mod goal;
 mod recovery;
 mod window;
 
+pub use frame::retain_latest_computer_frame;
 #[cfg(test)]
 use goal::GoalWire;
 pub use goal::{load_mission_snap, refresh_goal_state};
 pub use window::shape;
+pub(crate) use window::{shape_live, LiveSend};
 
 /// Shared conservative fallback for callers without the exact tool schema set.
 pub(crate) fn estimate_prompt_tokens_for_max_clamp(

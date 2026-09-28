@@ -26,56 +26,41 @@ pub trait Desktop {
         std::time::Duration::from_millis(200)
     }
 }
-/// How far a guessed point may sit outside a measured word and still be
-/// moved onto that word's locator pixel.
-const LOCATOR_PAD: f64 = 32.0;
-
-/// Move a pointer point onto the measured center of a recognized word when
-/// the guess lands on that word or a few tens of pixels beside it. A point
-/// that is not near any word is left unchanged.
+/// Move a pointer point onto the measured center of a word when it lands
+/// inside that word's rectangle. A point outside every word is unchanged.
 pub fn snap_to_locator(observation: &Observation, x: f64, y: f64) -> (f64, f64) {
-    let mut best: Option<(u8, f64, f64, f64, f64)> = None;
+    let mut best: Option<(f64, f64, f64, f64)> = None;
     for element in observation.elements.iter().filter(|element| {
         element.source == "ocr" || (element.source == "accessibility" && element.enabled)
     }) {
         let Some((cx, cy)) = element.bounds.locator() else {
             continue;
         };
-        let bounds = element.bounds;
-        let inside = x >= bounds.x
-            && y >= bounds.y
-            && x < bounds.x + bounds.width
-            && y < bounds.y + bounds.height;
-        let near = x >= bounds.x - LOCATOR_PAD
-            && y >= bounds.y - LOCATOR_PAD
-            && x < bounds.x + bounds.width + LOCATOR_PAD
-            && y < bounds.y + bounds.height + LOCATOR_PAD;
-        if !near {
+        if !element.bounds.contains(x, y) {
             continue;
         }
         let dx = x - cx;
         let dy = y - cy;
         let rank = (
-            u8::from(!inside),
-            bounds.width * bounds.height,
+            element.bounds.width * element.bounds.height,
             dx * dx + dy * dy,
             cx,
             cy,
         );
         let replace = match best {
             None => true,
-            Some(previous) => {
-                rank.0 < previous.0
-                    || (rank.0 == previous.0 && rank.1 < previous.1)
-                    || (rank.0 == previous.0 && rank.1 == previous.1 && rank.2 < previous.2)
-            }
+            Some(previous) => match rank.0.partial_cmp(&previous.0) {
+                Some(std::cmp::Ordering::Less) => true,
+                Some(std::cmp::Ordering::Equal) => rank.1 < previous.1,
+                _ => false,
+            },
         };
         if replace {
             best = Some(rank);
         }
     }
     match best {
-        Some((_, _, _, cx, cy)) => (cx, cy),
+        Some((_, _, cx, cy)) => (cx, cy),
         None => (x, y),
     }
 }
@@ -983,10 +968,7 @@ mod fixture_tests {
             },
         };
         let refused = execute(&mut desktop, &request, &cancelled);
-        assert!(refused
-            .error
-            .unwrap()
-            .contains("not an application window"));
+        assert!(refused.error.unwrap().contains("not an application window"));
         assert_eq!(desktop.captures, 0);
         assert_eq!(desktop.inputs, 0);
         let original_app = "stale-app-observation".to_string();
@@ -1468,9 +1450,10 @@ mod fixture_tests {
         };
         assert_eq!(target(&action, &obs).unwrap(), Some((25.0, 24.0)));
         assert_eq!(snap_to_locator(&obs, 25.0, 24.0), (25.0, 24.0));
-        // A guess a few tens of pixels beside the word uses the measured pixel.
-        assert_eq!(snap_to_locator(&obs, 55.0, 40.0), (25.0, 24.0));
-        // Far from every word, the point is unchanged.
+        // Inside the word, off the published center, still uses that center.
+        assert_eq!(snap_to_locator(&obs, 12.0, 22.0), (25.0, 24.0));
+        // Outside the rectangle, including beside the label, the point is sent as given.
+        assert_eq!(snap_to_locator(&obs, 55.0, 40.0), (55.0, 40.0));
         assert_eq!(snap_to_locator(&obs, 90.0, 90.0), (90.0, 90.0));
     }
 

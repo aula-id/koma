@@ -944,5 +944,138 @@ fn activity_tracks_condensed_history_including_reuse_but_not_index_only_or_disab
     assert!(!send_shaped(&fresh, &archive, 100_000).drss_active);
 }
 
+fn picture(n: usize) -> crate::dto::chat::Attachment {
+    crate::dto::chat::Attachment {
+        kind: Default::default(),
+        marker_n: n,
+        rel_path: format!("images/{n}.png"),
+        mime: "image/png".into(),
+    }
+}
+
+fn archived_frame(archive: &Archive, n: usize, id: &str) -> ChatMessage {
+    archive
+        .append(
+            Role::User,
+            format!(
+                "Computer observation [Image #{n}]. {{\"observation_id\":\"{id}\",\"text\":[{{\"id\":\"w\",\"x\":{n},\"y\":4}}]}}"
+            ),
+        )
+        .with_attachments(vec![picture(n)])
+}
+
+#[test]
+fn flag_off_keeps_every_computer_frame() {
+    let archive = Archive::new();
+    let history = vec![
+        ChatMessage::new(Role::System, "system"),
+        archive.append(Role::User, "continue"),
+        archived_frame(&archive, 1, "old"),
+        archived_frame(&archive, 2, "live"),
+    ];
+    let out = send(&history, &archive, 100_000);
+    let frames: Vec<_> = out
+        .iter()
+        .filter(|m| m.content.starts_with("Computer observation ["))
+        .collect();
+    assert_eq!(frames.len(), 2);
+    assert!(frames.iter().all(|m| m.attachments.len() == 1));
+}
+
+#[test]
+fn computer_frames_omit_older_pictures_without_archiving_the_stub() {
+    let archive = Archive::new();
+    let old = archived_frame(&archive, 1, "old");
+    let live = archived_frame(&archive, 2, "live");
+    let history = vec![
+        ChatMessage::new(Role::System, "system"),
+        ChatMessage::new(Role::User, "see [Image #9]").with_attachments(vec![picture(9)]),
+        old.clone(),
+        live.clone(),
+        ChatMessage::new(Role::User, "thanks"),
+    ];
+    let shaped = shape_live(
+        history,
+        &archive.0,
+        &Settings {
+            short_send_enabled: false,
+            ..Settings::default()
+        },
+        "thanks",
+        &GoalWire::default(),
+        &limits(100_000),
+        LiveSend {
+            schemas: 0,
+            computer_frames: true,
+        },
+    )
+    .unwrap();
+    assert!(!shaped.drss_active);
+    assert!(shaped.history.iter().any(|m| {
+        m.attachments.is_empty()
+            && m.content.contains("observation_id=old")
+            && !m.content.contains("\"x\"")
+    }));
+    assert!(shaped.history.iter().any(|m| {
+        m.attachments.iter().any(|a| a.marker_n == 2) && m.content.contains("\"x\":2")
+    }));
+    assert!(shaped
+        .history
+        .iter()
+        .any(|m| m.attachments.iter().any(|a| a.marker_n == 9)));
+    assert_eq!(
+        msglog::fetch_blob_content(&archive.0, 1).unwrap(),
+        old.content
+    );
+    assert_eq!(
+        msglog::fetch_blob_content(&archive.0, 2).unwrap(),
+        live.content
+    );
+}
+
+#[test]
+fn computer_frames_do_not_push_ordinary_chat_out_of_the_live_tail() {
+    let archive = Archive::new();
+    let line = "keep this ordinary assistant line";
+    let mut history = vec![ChatMessage::new(Role::System, "sys")];
+    history.push(archive.append(Role::Assistant, line));
+    history.push(archived_frame(&archive, 1, "old"));
+    history.push(archived_frame(&archive, 2, "live"));
+    let settings = Settings::default();
+    let window = limits(10_000);
+    let on = shape_live(
+        history.clone(),
+        &archive.0,
+        &settings,
+        "continue",
+        &GoalWire::default(),
+        &window,
+        LiveSend {
+            schemas: 0,
+            computer_frames: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(on.history[0], history[0]);
+    assert!(on.history.iter().any(|m| m.content == line));
+    assert!(!on.drss_active);
+    assert!(on
+        .history
+        .iter()
+        .any(|m| m.attachments.iter().any(|a| a.marker_n == 2)));
+    match shape(
+        history,
+        &archive.0,
+        &settings,
+        "continue",
+        &GoalWire::default(),
+        &window,
+        0,
+    ) {
+        Err(_) => {}
+        Ok(off) => assert!(off.history.iter().all(|m| m.content != line)),
+    }
+}
+
 #[path = "cache_tests.rs"]
 mod cache_tests;

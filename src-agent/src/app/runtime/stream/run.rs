@@ -593,10 +593,16 @@ over sec_remote (stateful socket).\n",
         };
     // A parked seat (the window dropped mid-turn) still owns the desktop.
     // Keep the tools so the next hop can observe instead of ending the turn.
-    let computer = &state.rest.sessions[sess_idx].computer;
-    if !computer.status.enabled || (computer.owner.is_none() && computer.detached_at.is_none()) {
-        advertise.retain(|name| !name.starts_with("computer_"));
-    }
+    // The same gate sends only the latest computer frame.
+    let computer_frames = {
+        let computer = &state.rest.sessions[sess_idx].computer;
+        let active =
+            computer.status.enabled && (computer.owner.is_some() || computer.detached_at.is_some());
+        if !active {
+            advertise.retain(|name| !name.starts_with("computer_"));
+        }
+        active
+    };
     // Security daemon tools for the MAIN agent. Gated on BOTH the runtime enable
     // flag (`security_enabled`) AND having a manager, AND NOT being in Plan mode
     // (Plan is read-only; the sec_ toolkit is offensive/mutating by nature, so it
@@ -694,15 +700,31 @@ over sec_remote (stateful socket).\n",
             };
         let (mut history, drss_active) = match reshape {
             Some((session_dir, settings, user_intent, goal_wire)) => {
-                match super::super::shortsend::shape(
-                    history,
-                    &session_dir,
-                    &settings,
-                    &user_intent,
-                    &goal_wire,
-                    &limits,
-                    shape_schemas,
-                ) {
+                let shaped = if computer_frames {
+                    super::super::shortsend::shape_live(
+                        history,
+                        &session_dir,
+                        &settings,
+                        &user_intent,
+                        &goal_wire,
+                        &limits,
+                        super::super::shortsend::LiveSend {
+                            schemas: shape_schemas,
+                            computer_frames: true,
+                        },
+                    )
+                } else {
+                    super::super::shortsend::shape(
+                        history,
+                        &session_dir,
+                        &settings,
+                        &user_intent,
+                        &goal_wire,
+                        &limits,
+                        shape_schemas,
+                    )
+                };
+                match shaped {
                     Ok(shaped) => (shaped.history, shaped.drss_active),
                     Err(error) => {
                         let _ = tx.send(crate::service::StreamEvent::Error(error.to_string()));
@@ -710,7 +732,12 @@ over sec_remote (stateful socket).\n",
                     }
                 }
             }
-            None => (history, false),
+            None => {
+                if computer_frames {
+                    super::super::shortsend::retain_latest_computer_frame(&mut history);
+                }
+                (history, false)
+            }
         };
         if history.first() != Some(&expected_system) {
             let _ = tx.send(crate::service::StreamEvent::Error(
