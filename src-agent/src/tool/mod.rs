@@ -55,10 +55,12 @@ pub(crate) use plan_policy::{delegated_tool_allowed_in_plan, plan_tool_call_allo
 /// single-source definition used by both the interactive approval gate and the
 /// sub-agent engine. NOTE: `git_worktree remove` is gated separately, inside
 /// its interception in `process_tools` (it never reaches this generic gate).
+/// Native computer tools use explicit GUI enablement as consent instead of TAC
+/// or per-action approval. Their controller validates that consent at dispatch.
 pub(crate) fn tool_is_risky(name: &str) -> bool {
     matches!(
         name,
-        "computer_act" | "computer_select_window" | "write"
+        "write"
             | "delete"
             | "edit"
             | "bash"
@@ -72,10 +74,16 @@ pub(crate) fn tool_is_risky(name: &str) -> bool {
 
 /// Tools reachable while [`crate::app::state::AgentMode::Plan`] is active — the
 /// read-only / reasoning / delegation surface a planning turn is allowed to use.
+/// Explicitly enabled native computer control has its own consent lifecycle,
+/// independent of the workspace mode (including Plan and SDLC assess).
 pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
     matches!(
         name,
-        "computer_windows" | "computer_observe" | "read"
+        "computer_windows"
+            | "computer_observe"
+            | "computer_select_window"
+            | "computer_act"
+            | "read"
             | "grep"
             | "glob"
             | "dir_list"
@@ -650,7 +658,10 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
 
 /// Tool names the /agents editor's tool picker EXCLUDES from the selectable list.
 const AGENT_PICKER_EXCLUDED: &[&str] = &[
-    "computer_windows", "computer_select_window", "computer_observe", "computer_act",
+    "computer_windows",
+    "computer_select_window",
+    "computer_observe",
+    "computer_act",
     "task",
     "task_send",
     "pong",
@@ -686,7 +697,10 @@ const INTERNAL_ONLY: &[&str] = &[
 
 /// Tools that MUST run off the UI/event-loop thread because they do blocking I/O.
 pub const DEFERRED_TOOLS: &[&str] = &[
-    "computer_windows", "computer_select_window", "computer_observe", "computer_act",
+    "computer_windows",
+    "computer_select_window",
+    "computer_observe",
+    "computer_act",
     "read",
     "write",
     "edit",

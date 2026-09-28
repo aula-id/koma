@@ -109,12 +109,11 @@ impl Controller {
         self.changed = true;
         pending
     }
-    pub fn begin(&mut self, id: String, operation: Operation, plan: bool) -> Result<()> {
+    /// GUI enablement authorizes native operations until pause/stop/disconnect,
+    /// independently of workspace approval modes and the tool classifier.
+    pub fn begin(&mut self, id: String, operation: Operation) -> Result<()> {
         if !self.status.enabled || self.owner.is_none() || self.status.paused {
             bail!("no active local GUI controller");
-        }
-        if plan && operation.mutates() {
-            bail!("plan mode blocks focus and input");
         }
         if self.pending.is_some() || self.used.contains(&id) {
             bail!("duplicate or concurrent computer request");
@@ -122,7 +121,7 @@ impl Controller {
         let caps = &self.status.capabilities;
         match &operation {
             Operation::Select { generation, .. } if generation != &self.status.generation => {
-                bail!("controller changed since source listing/approval")
+                bail!("controller changed since source listing")
             }
             Operation::Windows if !caps.windows => bail!("source listing unsupported"),
             Operation::Select { .. } if !caps.focus || !caps.capture => {
@@ -236,15 +235,13 @@ mod tests {
             windows: true,
             ..Default::default()
         };
-        assert!(a
-            .begin("before-enable".into(), Operation::Windows, false)
-            .is_err());
+        assert!(a.begin("before-enable".into(), Operation::Windows).is_err());
         a.enable(1, "s", "fixture", caps.clone(), &path).unwrap();
         let inherited = a.lock.as_ref().unwrap().try_clone().unwrap();
         assert!(b
             .enable(2, "other", "fixture", caps.clone(), &path)
             .is_err());
-        a.begin("call".into(), Operation::Windows, false).unwrap();
+        a.begin("call".into(), Operation::Windows).unwrap();
         let r = a.outbound.clone().unwrap();
         let reply = Reply {
             id: r.id,
@@ -254,11 +251,11 @@ mod tests {
         };
         assert!(a.accepts(1, &reply));
         assert!(!a.accepts(2, &reply));
-        assert!(a.begin("call".into(), Operation::Windows, false).is_err());
+        assert!(a.begin("call".into(), Operation::Windows).is_err());
         a.pause(true);
         assert!(!a.accepts(1, &reply));
         a.pause(false);
-        assert!(a.begin("call".into(), Operation::Windows, false).is_err());
+        assert!(a.begin("call".into(), Operation::Windows).is_err());
         a.stop("disconnect");
         assert!(!a.accepts(1, &reply));
         b.enable(2, "other", "fixture", caps, &path).unwrap();

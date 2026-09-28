@@ -251,11 +251,6 @@ pub enum Operation {
 fn yes() -> bool {
     true
 }
-impl Operation {
-    pub fn mutates(&self) -> bool {
-        matches!(self, Self::Select { .. } | Self::Act { .. })
-    }
-}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
     pub id: String,

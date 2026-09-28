@@ -78,9 +78,9 @@ impl DaemonHub {
                         }
                         _ => computer::Operation::Windows,
                     };
-                    if let Err(e) =
-                        rt.computer
-                            .begin(format!("gui:{}", uuid::Uuid::new_v4()), operation, false)
+                    if let Err(e) = rt
+                        .computer
+                        .begin(format!("gui:{}", uuid::Uuid::new_v4()), operation)
                     {
                         rt.computer.status.message = e.to_string();
                         rt.computer.changed = true;

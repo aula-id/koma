@@ -10,7 +10,11 @@ Native device validation is separate from the compilation and regression evidenc
 ## Workflow and UI
 
 Use the monitor shortcut immediately left of Terminal, or **Settings → Computer
-use → Start sharing**. Choose a source in the preview's hover/keyboard-accessible picker. It has separate
+use → Start sharing**. Enabling Computer use grants consent for native desktop
+source selection and input until paused, stopped, or disconnected. Computer tools
+run without the workspace Safeguard classifier or per-action approval prompts in
+Normal, Auto, Yolo, Plan and SDLC modes. This does not change shell/file approvals.
+Choose a source in the preview's hover/keyboard-accessible picker. It has separate
 **Screens** and **Applications** sections, with both category buttons pinned above
 the scrollable list. While open, the picker uses the preview's full area so small
 previews cannot bury Applications below the screen list. Opening during an active
@@ -174,16 +178,16 @@ dispatch without revoking control. Native key lookup is also checked before inpu
 so an unavailable platform key does not falsely report uncertain injected input.
 
 
-The daemon owns mode, approvals and controller lifecycle; the GUI owns native SDK
+The daemon owns the controller consent lifecycle; the GUI owns native SDK
 handles. Ownership binds the GUI connection, local desktop and session, with an
 OS-backed lock and controller generation. A second lock remains held until input
 cleanup finishes. GUI-only, local Main-model ownership is unchanged. TUI, headless,
 remote and subagents cannot control the desktop. The existing model is retained;
-known lack of image support produces an explicit error. Plan mode permits authorized
-observation but blocks model source selection and input under the existing policy.
+known lack of image support produces an explicit error. Workspace mode does not
+restrict explicitly enabled native control, including source selection and input.
 
-Approvals bind the exact sequence and observation. Dispatch rechecks ownership,
-mode, generation, capabilities and bounds after approval. The worker checks display
+Dispatch rechecks active consent, ownership, generation, capabilities and bounds.
+The worker checks display
 geometry and foreground identity before input, rejects duplicates and releases
 injected keys/buttons on cancellation. Keyboard focus outside the selected display
 is rejected. Completed input is never undone or automatically replayed.
@@ -228,15 +232,15 @@ Observation JSON artifacts associate captures with tool-call IDs; PNGs live in t
 session's `images/`. Image bytes travel in one-shot results, not recurring snapshots.
 If the model tries to act on an application share, the result has
 `requires_screen=true`, `controller_enabled=true`, and a short recovery instruction:
-list sources, select the screen containing the app through normal approvals, inspect
+list sources, select the screen containing the app under the existing GUI consent, inspect
 its new observation, and continue the user's task. Do not stop/re-enable sharing or
 substitute browser/shell input. Old application observations cannot authorize screen
 input. On X11, an occluded application cannot be captured reliably; that observation
 also returns the screen-selection nudge rather than disabling sharing. Permission
 loss and uncertain native input retain the existing stopped-control recovery.
 
-This nudge is model guidance, not an automatic replay or an approval bypass. All
-source changes and input still pass through the existing mode/approval policy.
+This nudge is model guidance, not an automatic replay. All source changes and
+input require the active local GUI controller; pause and stop revoke that consent.
 
 ## Platform capabilities and build requirements
 
@@ -434,7 +438,7 @@ when enrichment fails. Full native validation remains for the device walkthrough
 
 1. Share an application window first and confirm Assist/view-only labels, no focus
    change and no input. Ask for a task requiring control: the model should get the
-   compact screen-selection nudge and select a screen under normal approvals.
+   compact screen-selection nudge and select a screen without an additional approval prompt.
    Share a screen with `docs/testing/computer-fixture.html` open. Verify the model
    and chat card receive the same bounded PNG; the preview can show newer frames.
 2. Put another application/dialog over the fixture. Observe the composed desktop,
@@ -447,12 +451,12 @@ when enrichment fails. Full native validation remains for the device walkthrough
 4. Show the in-app and detached previews over the intended target. Verify they hide
    before model capture/input and reappear without taking focus. Stop sharing must
    close them. Check CPU/memory and capture latency on an 8K display.
-5. Change foreground app or display geometry during approval. Input must not use
+5. Change foreground app or display geometry after observation and before input. Input must not use
    stale coordinates; safe pre-input changes should ask for a fresh observation
    while keeping sharing active. Take back control mid-sequence: future input stops,
    keys release, live preview continues. Give control requires a fresh observation.
 6. Switch sessions/disconnect/reconnect/compete from a second GUI. Reactivation must
-   remain explicit. Verify Plan mode restrictions and no TUI/headless/subagent tools.
+   remain explicit. Verify native control also works in Plan mode, with no TUI/headless/subagent tools.
 7. With the preview closed, idle/intermediate `observe=false` actions must create no
    timed captures. Open preview and check bounded live frames without model artifacts.
    Inspect errors in chat: header short, explanation only inside expandable details.

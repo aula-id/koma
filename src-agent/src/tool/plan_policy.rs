@@ -7,6 +7,10 @@ use serde_json::Value;
 /// `checklist` directly, for example, would write the ordinary project TODO.
 pub(crate) fn delegated_tool_allowed_in_plan(name: &str) -> bool {
     super::tool_allowed_in_plan(name)
+        && !matches!(
+            name,
+            "computer_windows" | "computer_observe" | "computer_select_window" | "computer_act"
+        )
         && !matches!(name, "seqthink" | "checklist" | "plan_enter" | "plan_ready")
 }
 

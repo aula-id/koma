@@ -709,8 +709,7 @@ mod fixture_tests {
                         keys: vec!["cmd".into(), "bogus".into()]
                     }],
                     observe: true
-                },
-                false
+                }
             )
             .is_err());
         assert!(controller.status.enabled && controller.actionable);

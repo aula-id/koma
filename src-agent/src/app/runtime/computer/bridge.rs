@@ -1,4 +1,8 @@
 //! Daemon integration: asynchronous computer calls use the existing deferred lane.
+#[cfg(test)]
+#[path = "consent_tests.rs"]
+mod consent_tests;
+
 use super::*;
 use crate::{
     app::state::{AppState, SessionRuntime},
@@ -27,7 +31,7 @@ fn recovery_nudge() -> serde_json::Value {
 fn screen_nudge(status: &Status) -> serde_json::Value {
     serde_json::json!({
         "kind": "screen_required",
-        "model_instruction": "Application sharing is view-only assist mode. To continue a task that needs input, call computer_windows, choose the screen containing the application, then call computer_select_window with that screen ID and the current generation. Follow normal approvals. Inspect the resulting screen observation and continue the user's task using its new coordinates. Do not ask the user to stop/re-enable sharing or use shell/browser tools to bypass assist mode. Never replay completed or uncertain input. If screen capture/input or programmatic source selection is unavailable, explain that capability limitation and request the OS picker when needed.",
+        "model_instruction": "Application sharing is view-only assist mode. To continue a task that needs input, call computer_windows, choose the screen containing the application, then call computer_select_window with that screen ID and the current generation. Enabling Computer use already grants consent for native source selection and input; no per-action approval is needed. Inspect the resulting screen observation and continue the user's task using its new coordinates. Do not ask the user to stop/re-enable sharing or use shell/browser tools to bypass assist mode. Never replay completed or uncertain input. If screen capture/input or programmatic source selection is unavailable, explain that capability limitation and request the OS picker when needed.",
         "generation": status.generation,
     })
 }
@@ -134,11 +138,7 @@ pub fn dispatch(state: &mut AppState, index: usize, call: &ToolCall) {
         );
         let operation = serde_json::from_value(serde_json::Value::Object(args))?;
         anyhow::ensure!(accepts_images || matches!(operation, Operation::Windows), "The existing Main model does not support image input; computer observation/input is unavailable. Select an image-capable Main model explicitly.");
-        rt.computer.begin(
-            call.id.clone(),
-            operation,
-            rt.agent_mode == crate::app::state::AgentMode::Plan,
-        )
+        rt.computer.begin(call.id.clone(), operation)
     })();
     rt.tool_idx += 1;
     match result {
@@ -622,7 +622,6 @@ mod approval_tests {
                 Operation::InspectWindow {
                     window: "app:fixture".into(),
                 },
-                false,
             )
             .unwrap();
         rt.computer.outbound.take();
@@ -678,7 +677,6 @@ mod approval_tests {
                     window: "fixture".into(),
                     generation: rt.computer.status.generation.clone(),
                 },
-                false,
             )
             .unwrap();
         rt.pending_tool_tasks.push("failed".into());
@@ -741,7 +739,6 @@ mod approval_tests {
                     window: "display:fixture".into(),
                     generation: rt.computer.status.generation.clone(),
                 },
-                false,
             )
             .unwrap();
         rt.pending_tool_tasks.push("changed".into());
@@ -773,8 +770,7 @@ mod approval_tests {
                     observation: "old".into(),
                     actions: vec![],
                     observe: true
-                },
-                false
+                }
             )
             .is_err());
         rt.computer
@@ -784,7 +780,6 @@ mod approval_tests {
                     crop: None,
                     region: None,
                 },
-                false,
             )
             .unwrap();
         assert!(rt.computer.outbound.is_some());
@@ -793,7 +788,7 @@ mod approval_tests {
     }
 
     #[test]
-    fn approval_precedes_dispatch_and_cannot_revive_cancelled_selection() {
+    fn enabled_consent_dispatches_and_cannot_revive_stopped_selection() {
         let mut state = AppState::new(Mode::Chat);
         let path = std::env::temp_dir().join(format!("koma-approval-{}", uuid::Uuid::new_v4()));
         let rt = &mut state.rest.sessions[0];
@@ -818,15 +813,14 @@ mod approval_tests {
             .build()
             .unwrap();
         crate::app::runtime::stream::process_tools(&mut state, 0, &None, runtime.handle());
-        assert!(state.rest.sessions[0].awaiting_approval);
-        assert!(state.rest.sessions[0].computer.outbound.is_none());
+        assert!(!state.rest.sessions[0].awaiting_approval);
+        assert!(state.rest.sessions[0].computer.outbound.is_some());
         stop(&mut state.rest.sessions[0], "take over");
         let cancelled: serde_json::Value =
             serde_json::from_str(&state.rest.sessions[0].tool_results.last().unwrap().1).unwrap();
         assert_eq!(cancelled["controller_enabled"], false);
         assert_eq!(cancelled["requires_user_action"], true);
-        assert_eq!(cancelled["uncertain"], false);
-        state.rest.sessions[0].awaiting_approval = false;
+        assert_eq!(cancelled["uncertain"], true);
         crate::app::runtime::stream::dispatch_deferred(&mut state, 0, &call);
         assert!(state.rest.sessions[0].computer.outbound.is_none());
         assert!(state.rest.sessions[0]
@@ -857,14 +851,6 @@ mod approval_tests {
             .unwrap()
             .1
             .contains("controller changed"));
-        state.rest.sessions[0].agent_mode = AgentMode::Plan;
-        dispatch(&mut state, 0, &call);
-        assert!(state.rest.sessions[0]
-            .tool_results
-            .last()
-            .unwrap()
-            .1
-            .contains("plan mode"));
         drop(state);
         std::fs::remove_file(path).unwrap();
     }

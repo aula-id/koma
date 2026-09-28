@@ -29,11 +29,11 @@ export function ComputerSettings() {
     <div className="rounded-lg border border-koma-border bg-koma-panel/40 p-4">
       <div className="flex items-center gap-3">
         <div className="rounded-lg border border-koma-border bg-koma-bg p-2.5 text-koma-accent"><Monitor size={20} strokeWidth={1.5} /></div>
-        <div className="min-w-0 flex-1"><h3 className="font-medium">Screen and application sharing</h3><p className="mt-1 text-xs text-koma-dim">Share a screen for control, or an application for view-only assistance. Inspect exact model observations in chat.</p></div>
+        <div className="min-w-0 flex-1"><h3 className="font-medium">Screen and application sharing</h3><p className="mt-1 text-xs text-koma-dim">Enabling Computer use lets the model choose screens and control your mouse and keyboard without per-action approvals. Application views remain read-only; pause or stop sharing to end control.</p></div>
         <span className={`flex items-center gap-1.5 rounded-full border border-koma-border px-2 py-1 text-[10px] ${enabled ? 'text-koma-accent' : 'text-koma-dim'}`}><span className={`h-1.5 w-1.5 rounded-full ${enabled ? 'bg-koma-accent' : 'bg-koma-dim'}`} />{label}</span>
       </div>
       <p className="mt-3 text-xs leading-relaxed text-koma-dim">Model frames fit within 1920 pixels and 2 megapixels. Live previews fit within 1280 × 960. The model can request a fresh close-up for small text on native displays.</p>
-      {assist && <p className="mt-3 text-xs text-koma-fg">Assist mode · view only. To act, the model can select a screen through the normal approval flow.</p>}
+      {assist && <p className="mt-3 text-xs text-koma-fg">Assist mode · view only. To act, the model can select a screen while sharing is enabled.</p>}
       <div className="mt-4 flex flex-wrap gap-2">
         {!enabled ? <button type="button" disabled={!available || enabling} className={`${button} text-koma-accent`} onClick={() => { if (session) requestShow(session); control('enable') }}><Monitor size={14} />{enabling ? 'Enabling…' : 'Start sharing'}</button> : <>
           <button type="button" className={button} onClick={() => control(status?.paused ? 'resume' : 'pause')}>{status?.paused ? <Play size={14} /> : <Pause size={14} />}{status?.paused ? assist ? 'Resume assist' : 'Give control' : 'Pause'}</button>
@@ -41,7 +41,7 @@ export function ComputerSettings() {
           {!status?.paused && !assist && <button type="button" className={button} onClick={() => control('take_over')}><Hand size={14} />Take back control</button>}
         </>}
       </div>
-      <p role="status" className="mt-3 text-xs leading-relaxed text-koma-dim">{!available ? 'Computer use is available in a local GUI session.' : status?.message || 'Enable sharing, then choose a screen or application. Application shares are view-only; screen shares allow native input with your session’s approval mode.'}</p>
+      <p role="status" className="mt-3 text-xs leading-relaxed text-koma-dim">{!available ? 'Computer use is available in a local GUI session.' : status?.message || 'Enable sharing, then choose a screen or application. Application shares are view-only; enabling Computer use authorizes screen control without per-action approvals in every mode.'}</p>
       {error && <p role="alert" className="mt-2 text-xs text-koma-error">{error}</p>}
     </div>
 
