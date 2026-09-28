@@ -23,12 +23,104 @@ fn should_stall_nudge(content: &str, nudges: u8) -> bool {
     nudges < MAIN_STALL_NUDGE_BUDGET && super::is_stall(content)
 }
 
-const COMPUTER_RECOVERY_NUDGE_MSG: &str = "The previous computer result requires a fresh observation. \
-    If continuing the desktop task, call computer_observe now, inspect its result, then decide what to do. \
-    Do not repeat the previous click or any completed/uncertain input. If you cannot continue, explain \
-    the blocker to the user. A statement that you are observing is not an observation.";
-const COMPUTER_RECOVERY_PAUSED_MSG: &str = "Computer task paused: the model described another observation \
+const COMPUTER_RECOVERY_NUDGE_MSG: &str = "You described another desktop step but ended without calling a tool. \
+    Continue the user's task using computer tools now: list/select the intended source if needed, \
+    otherwise observe the current screen before deciding the next input. Copy the exact observation_id. \
+    Do not repeat completed/uncertain input or switch to shell/app-launcher/browser automation. \
+    If the task is complete, report the verified result; if blocked, explain what is needed from the user. \
+    Announcing a selection, observation or input does not execute it.";
+const COMPUTER_RECOVERY_PAUSED_MSG: &str = "Computer task paused: the model announced another desktop step \
     but did not call a tool after two reminders. No input was replayed. Send Continue to resume from a fresh observation.";
+const COMPUTER_CONTINUATION_UNAVAILABLE_MSG: &str = "Computer task paused: the model announced another desktop step, \
+    but Koma could not start the follow-up model request. No input was replayed. Check the Main model connection, then send Continue.";
+
+/// Scope continuation to this desktop turn, not an unrelated later chat while
+/// sharing happens to remain enabled. Observations/reminders are synthetic user
+/// messages; an actual user message marks the turn boundary.
+fn desktop_tools_in_turn(rt: &crate::app::state::SessionRuntime) -> bool {
+    let Some(session) = &rt.session else {
+        return false;
+    };
+    for message in session.conversation.messages().iter().rev() {
+        if message.role == Role::User
+            && !(message.content.starts_with("Computer observation ")
+                && !message.attachments.is_empty())
+            && message.content != COMPUTER_RECOVERY_NUDGE_MSG
+            && message.content != MAIN_STALL_NUDGE_MSG
+        {
+            break;
+        }
+        if message.role == Role::Assistant
+            && message.tool_calls.as_ref().is_some_and(|calls| {
+                calls
+                    .iter()
+                    .any(|call| call.function.name.starts_with("computer_"))
+            })
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn computer_turn_stalled(rt: &crate::app::state::SessionRuntime, content: &str) -> bool {
+    if !rt.computer.status.enabled || rt.computer.status.paused {
+        return false;
+    }
+    if observation_recovery_stalled(rt, content) {
+        return true;
+    }
+    if !desktop_tools_in_turn(rt) {
+        return false;
+    }
+    let text = content.trim().to_lowercase().replace('’', "'");
+    // Bounded, plain action announcements, including a clause after a completed
+    // step ("Compass is focused — selecting the screen and inspecting it").
+    // Questions, handoffs, explanations and reports are allowed to finish.
+    if text.len() >= 600
+        || text.contains('?')
+        || text.contains("```")
+        || text.lines().count() > 4
+        || [
+            "cannot",
+            "can't",
+            "unable",
+            "blocked",
+            "requires",
+            "unavailable",
+            "disabled",
+            "please",
+            "need you",
+            "needs your",
+            "wait for",
+            "waiting for you",
+            "you can",
+            "would",
+            "allows",
+            "means",
+            "approval",
+            "confirmed",
+            "revealed",
+            "showed",
+            "worked",
+            "succeeded",
+            "finished",
+            "completed",
+            "permission",
+        ]
+        .iter()
+        .any(|word| text.contains(word))
+    {
+        return false;
+    }
+    if super::is_stall(&text) {
+        return true;
+    }
+    static PROMISE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    PROMISE.get_or_init(|| crate::re_util::static_re(
+        r"(?:^|[.!;,:]\s+|[—–]\s*|\s-\s)(?:(?:now|then)\s+)?(?:(?:i am|i'm|i’m)\s+)?(?:selecting|inspecting|observing|checking|clicking|opening|launching|focusing|switching|scrolling|typing|pressing|moving|navigating|bringing|searching|retrying|grabbing a fresh frame|taking a fresh screenshot|capturing a fresh frame)\b",
+    )).is_match(&text)
+}
 
 fn observation_recovery_stalled(rt: &crate::app::state::SessionRuntime, content: &str) -> bool {
     if !rt.computer.status.enabled
@@ -472,8 +564,8 @@ pub(crate) fn advance_turn(
     //    ending the turn on "Let me read…".
     if pending.is_empty() {
         let nudges = state.rest.sessions[sess_idx].main_stall_nudges;
-        let desktop_stall =
-            observation_recovery_stalled(&state.rest.sessions[sess_idx], &answer_content);
+        let desktop_stall = computer_turn_stalled(&state.rest.sessions[sess_idx], &answer_content);
+        let mut desktop_notice = COMPUTER_RECOVERY_PAUSED_MSG;
         if state.rest.sessions[sess_idx].computer.status.enabled {
             crate::model::store::append_global_error_log(
                 "computer.turn",
@@ -481,7 +573,7 @@ pub(crate) fn advance_turn(
                     "session={} outcome={} observation_actionable={} nudges={nudges}",
                     state.rest.sessions[sess_idx].id,
                     if desktop_stall {
-                        "observation_promised_without_tool"
+                        "desktop_step_promised_without_tool"
                     } else {
                         "model_finished_without_tools"
                     },
@@ -489,7 +581,8 @@ pub(crate) fn advance_turn(
                 ),
             );
         }
-        if should_stall_nudge(&answer_content, nudges)
+        let desktop_turn = desktop_tools_in_turn(&state.rest.sessions[sess_idx]);
+        if (should_stall_nudge(&answer_content, nudges) && !desktop_turn)
             || (desktop_stall && nudges < MAIN_STALL_NUDGE_BUDGET)
         {
             let nudge = if desktop_stall {
@@ -497,20 +590,19 @@ pub(crate) fn advance_turn(
             } else {
                 MAIN_STALL_NUDGE_MSG
             };
-            // Keep the turn alive: waiting stays true, agent_steps untouched,
-            // queued steers stay parked until a real end-of-turn.
-            state.rest.sessions[sess_idx].main_stall_nudges = nudges.saturating_add(1);
-            if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-                let _ = crate::model::msglog::append(&sess.path, Role::User, nudge, None, None);
-                sess.conversation.push_user(nudge.to_string());
-                if let Err(e) = sess.save() {
-                    save_err = Some(e.to_string());
-                }
-            }
-            if let Some(e) = save_err {
-                state.rest.sessions[sess_idx].set_toast(e);
-            }
             if client.is_some() && state.rest.sessions[sess_idx].session.is_some() {
+                // Keep the turn alive; queued steers wait for a tool boundary.
+                state.rest.sessions[sess_idx].main_stall_nudges = nudges.saturating_add(1);
+                if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                    let _ = crate::model::msglog::append(&sess.path, Role::User, nudge, None, None);
+                    sess.conversation.push_user(nudge.to_string());
+                    if let Err(e) = sess.save() {
+                        save_err = Some(e.to_string());
+                    }
+                }
+                if let Some(e) = save_err.take() {
+                    state.rest.sessions[sess_idx].set_toast(e);
+                }
                 let history = state.rest.sessions[sess_idx]
                     .session
                     .as_ref()
@@ -521,16 +613,19 @@ pub(crate) fn advance_turn(
                 state.rest.sessions[sess_idx].pending_tool_calls.clear();
                 state.rest.sessions[sess_idx].status = "thinking".into();
                 super::run::start_stream_task(history, state, sess_idx, client, handle);
-            } else {
-                // No client/session to continue with — fall through to end-turn
-                // so we don't leave waiting stuck true forever.
-                state.rest.sessions[sess_idx].waiting = false;
-                state.rest.sessions[sess_idx].current_task = None;
-                state.rest.sessions[sess_idx].agent_steps = 0;
-                state.rest.sessions[sess_idx].main_stall_nudges = 0;
-                state.rest.sessions[sess_idx].status = "ready".into();
+                if state.rest.sessions[sess_idx].waiting {
+                    return;
+                }
+                // Synchronous request preparation can also fail before a stream
+                // is created. Preserve its error as well as the desktop notice.
+                save_err = state.rest.sessions[sess_idx]
+                    .toast
+                    .as_ref()
+                    .map(|(message, _, _)| message.clone());
             }
-            return;
+            // No route to continue with: finish visibly, without claiming that
+            // reminders were sent or marking unfinished desktop work complete.
+            desktop_notice = COMPUTER_CONTINUATION_UNAVAILABLE_MSG;
         }
 
         state.rest.sessions[sess_idx].waiting = false;
@@ -543,17 +638,17 @@ pub(crate) fn advance_turn(
                 let _ = crate::model::msglog::append(
                     &sess.path,
                     Role::Assistant,
-                    COMPUTER_RECOVERY_PAUSED_MSG,
+                    desktop_notice,
                     None,
                     None,
                 );
                 sess.conversation
-                    .push_assistant(COMPUTER_RECOVERY_PAUSED_MSG, None, false);
+                    .push_assistant(desktop_notice, None, false);
                 if let Err(e) = sess.save() {
                     save_err = Some(e.to_string());
                 }
             }
-            rt.set_toast(COMPUTER_RECOVERY_PAUSED_MSG.into());
+            rt.set_toast(desktop_notice.into());
         }
         // Status + toast are per-session (C6); this runs per-session unbracketed, so
         // write them on `sessions[sess_idx]` — the projection shows them only to the
@@ -563,7 +658,7 @@ pub(crate) fn advance_turn(
                 state.rest.sessions[sess_idx].set_toast(e.clone());
                 format!("error: {e}")
             }
-            None if desktop_stall => "paused: model did not request the next observation".into(),
+            None if desktop_stall => "paused: model did not request the next desktop step".into(),
             None => "ready".into(),
         };
         state.rest.sessions[sess_idx].status = status;

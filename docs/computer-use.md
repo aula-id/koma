@@ -109,7 +109,8 @@ that observation and cannot be combined with coordinates.
 
 During a computer-use conversation, the main model's bash dispatcher rejects
 recognized desktop-automation fallbacks (including `osascript`, `cliclick`,
-`xdotool`, `pyautogui`, and `SendKeys`) before spawning foreground or background
+`xdotool`, `pyautogui`, `SendKeys`, and app launchers such as `open -a`,
+`xdg-open`, and `Start-Process`) before spawning foreground or background
 jobs. This restriction remains after pause/stop/disconnect; normal shell commands
 remain available. It is a targeted tool-routing guard, not a sandbox against
 arbitrary or obfuscated programs. Native move, click and scroll actions use the
@@ -155,10 +156,17 @@ original scene and require a fresh full observation if it changes. If the scene
 does not settle, the result retains the completed input count and asks the model
 to observe again.
 
-If the model responds to that recovery with only an observation promise such as
-“Observing again after the desktop shift,” Koma uses the existing two-reminder
-budget to request the missing tool call. Exhaustion produces a persistent chat
-notice rather than silently marking the task complete. A model stream that loses
+If the model ends a desktop turn with a short action announcement but no tool
+call (for example, “Compass is focused — selecting the screen and inspecting it”),
+Koma uses the existing two-reminder budget to request the missing tool call.
+This covers successful tool rounds as well as observation-recovery failures and
+empty completions. The continuation only asks the model to choose its next tool;
+it never synthesizes or replays native input. Finished reports, questions and
+requests for user help may end normally. The check is scoped to desktop tool use
+in the current conversation turn, so leaving sharing enabled does not make later
+unrelated chats continue automatically. Exhaustion or an unavailable continuation
+client produces a persistent chat notice rather than silently marking the task
+complete. A model stream that loses
 its producer without a terminal event ends with a visible interruption error;
 returned request errors are forwarded to the chat instead of discarded.
 

@@ -33,7 +33,7 @@ fn desktop_automation_command(command: &str) -> bool {
     static DESKTOP_RE: OnceLock<Regex> = OnceLock::new();
     DESKTOP_RE
         .get_or_init(|| crate::re_util::static_re(
-            r"(?i)(?:^|[\s;&|(])(?:[^\s;|]*[/\\])?(?:osascript|cliclick|xdotool|ydotool|wtype|wmctrl|nircmd)(?:\s|$)|\b(?:pyautogui|pynput|CGEventPost|CGWarpMouseCursorPosition|SendKeys|SendInput|SetCursorPos|mouse_event|keybd_event)\b",
+            r"(?i)(?:^|[\s;&|(])(?:[^\s;|]*[/\\])?(?:osascript|cliclick|xdotool|ydotool|wtype|wmctrl|nircmd|xdg-open|gtk-launch)(?:\s|$)|(?:^|[\s;&|(])(?:[^\s;|]*/)?open\s+(?:-[^\s]+\s+)*-[aAbB]\s|(?:^|[\s;&|(])gio\s+(?:open|launch)\b|\b(?:Start-Process|Invoke-Item|pyautogui|pynput|CGEventPost|CGWarpMouseCursorPosition|SendKeys|SendInput|SetCursorPos|mouse_event|keybd_event)\b",
         ))
         .is_match(command)
 }
@@ -328,6 +328,14 @@ mod computer_policy_tests {
             "xdotool mousemove 10 20 click 1",
             "ydotool type hello",
             "cliclick c:10,20",
+            "open -a \"MongoDB Compass\"",
+            "/usr/bin/open -g -a 'Discord'",
+            "open -b com.apple.finder",
+            "xdg-open https://example.com",
+            "gtk-launch org.gnome.Calculator",
+            "gio open /tmp/report.pdf",
+            "powershell -Command 'Start-Process notepad.exe'",
+            "powershell -Command 'Invoke-Item report.pdf'",
         ] {
             assert!(computer_shell_rejection(&status, command).is_some(), "{command}");
             assert!(computer_shell_rejection(&Status::default(), command).is_none());
@@ -337,6 +345,7 @@ mod computer_policy_tests {
             "ls -la",
             "python3 -c 'print(1)'",
             "rg 'AX' src-agent",
+            "python3 -c 'print(open(\"README.md\").read())'",
         ] {
             assert!(
                 computer_shell_rejection(&status, command).is_none(),
