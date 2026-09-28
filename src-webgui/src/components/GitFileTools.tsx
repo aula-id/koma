@@ -1,4 +1,14 @@
-import { CodePane } from './GitCodePane'
+import { CodePane, type CodePaneScroll } from './GitCodePane'
+import {
+  BLAME_LANE_WIDTH,
+  BLAME_LINE_HEIGHT,
+  blameBlocks,
+  blameLaneColor,
+  relativeBlameTime,
+  visibleBlameBlocks,
+  type BlameBlock,
+  type BlameRow,
+} from '../lib/blameBlocks'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown,
@@ -551,14 +561,78 @@ export function GitConflictView({
 type BlameData = {
   head: string
   workingTreeDiffers: boolean
-  rows: {
-    oid: string
-    author: string
-    time: string
-    summary: string
-    text: string
-  }[]
+  rows: BlameRow[]
 }
+
+function blameWhen(time: string): string {
+  const n = Number(time)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  return new Date(n * 1000).toLocaleString()
+}
+
+function BlameCard({
+  block,
+  anchorTop,
+  viewHeight,
+  active,
+  onOpen,
+  onEnter,
+  onLeave,
+}: {
+  block: BlameBlock
+  anchorTop: number
+  viewHeight: number
+  active: boolean
+  onOpen: () => void
+  onEnter: () => void
+  onLeave: () => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [top, setTop] = useState(anchorTop)
+  const when = blameWhen(block.time)
+  const relative = relativeBlameTime(block.time)
+  useLayoutEffect(() => {
+    const height = ref.current?.offsetHeight ?? 0
+    const maxTop = Math.max(8, viewHeight - height - 8)
+    setTop(Math.min(Math.max(8, anchorTop), maxTop))
+  }, [anchorTop, viewHeight, block.body, block.summary, block.oid])
+  return (
+    <div
+      ref={ref}
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
+      className="absolute z-30 w-72 max-w-[calc(100%-184px)] overflow-auto rounded border border-koma-border bg-koma-panel p-2.5 text-[12px] text-koma-fg shadow-lg"
+      style={{
+        left: BLAME_LANE_WIDTH + 8,
+        top,
+        maxHeight: Math.max(96, viewHeight - 16),
+      }}
+    >
+      <div className="flex items-baseline gap-2">
+        <span className="min-w-0 truncate font-medium">{block.author}</span>
+        <span className="shrink-0 text-[11px] text-koma-dim">
+          {relative}
+          {when ? ` · ${when}` : ''}
+        </span>
+      </div>
+      <p className="mt-1">{block.summary || block.oid.slice(0, 8)}</p>
+      {block.body && (
+        <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-[11px] text-koma-dim">
+          {block.body}
+        </p>
+      )}
+      <button
+        type="button"
+        disabled={!active}
+        onClick={onOpen}
+        className="mt-2 font-mono text-[11px] text-koma-accent hover:underline disabled:opacity-35"
+      >
+        {block.oid.slice(0, 7)}
+      </button>
+    </div>
+  )
+}
+
 export function GitBlameView({
   tab,
   work,
@@ -567,18 +641,82 @@ export function GitBlameView({
   work: GitWork
 }) {
   const [data, setData] = useState<BlameData>()
-  const [limit, setLimit] = useState(500)
+  const [scrollTop, setScrollTop] = useState(0)
+  const [viewHeight, setViewHeight] = useState(0)
+  const [lineHeight, setLineHeight] = useState(BLAME_LINE_HEIGHT)
+  const [hover, setHover] = useState<number | null>(null)
+  const frameRef = useRef<HTMLDivElement>(null)
+  const laneRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<CodePaneScroll | null>(null)
+  const desiredRef = useRef(0)
+  const lineHeightRef = useRef(lineHeight)
+  const closeTimer = useRef<number | null>(null)
+  lineHeightRef.current = lineHeight
   const { run, busy, active } = work
   const reload = useCallback(async () => {
     const next = await run<BlameData>({ kind: 'blame', path: tab.path! })
-    if (next) {
-      setData(next)
-      setLimit(500)
-    }
+    if (next) setData(next)
   }, [run, tab.path])
   useEffect(() => {
     void reload()
   }, [reload])
+  const blocks = useMemo(() => blameBlocks(data?.rows ?? []), [data])
+  const text = useMemo(
+    () => (data?.rows ?? []).map((row) => row.text).join('\n'),
+    [data],
+  )
+  const visible = useMemo(
+    () => visibleBlameBlocks(blocks, scrollTop, viewHeight, lineHeight),
+    [blocks, scrollTop, viewHeight, lineHeight],
+  )
+  const hovered = blocks.find((block) => block.start === hover) ?? null
+  const cancelClose = useCallback(() => {
+    if (closeTimer.current != null) window.clearTimeout(closeTimer.current)
+    closeTimer.current = null
+  }, [])
+  const armClose = useCallback(() => {
+    cancelClose()
+    closeTimer.current = window.setTimeout(() => setHover(null), 100)
+  }, [cancelClose])
+  useEffect(() => () => cancelClose(), [cancelClose])
+  useEffect(() => {
+    setScrollTop(0)
+    desiredRef.current = 0
+    setHover(null)
+  }, [tab.path])
+  useLayoutEffect(() => {
+    const frame = frameRef.current
+    if (!frame) return
+    const measure = () => setViewHeight(frame.clientHeight)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(frame)
+    return () => observer.disconnect()
+  }, [data])
+  useEffect(() => {
+    const lane = laneRef.current
+    if (!lane) return
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault()
+      const dy =
+        event.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? event.deltaY * lineHeightRef.current
+          : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+            ? event.deltaY * lane.clientHeight
+            : event.deltaY
+      desiredRef.current = Math.max(0, desiredRef.current + dy)
+      scrollRef.current?.setScrollTop(desiredRef.current)
+    }
+    lane.addEventListener('wheel', onWheel, { passive: false })
+    return () => lane.removeEventListener('wheel', onWheel)
+  }, [data])
+  const onScroll = useCallback((next: number) => {
+    desiredRef.current = next
+    setScrollTop(next)
+  }, [])
+  const openHovered = (block: BlameBlock) => {
+    if (active) openCommit(block.oid)
+  }
   return (
     <>
       <Actions>
@@ -596,35 +734,84 @@ export function GitBlameView({
           committed version.
         </Note>
       )}
-      <div className="min-h-0 flex-1 overflow-auto font-mono text-[12px]">
-        {data?.rows.slice(0, limit).map((r, i) => (
-          <div
-            key={i}
-            className="flex min-w-max items-center border-b border-koma-border/30 leading-6 hover:bg-koma-hover"
-          >
+      <div
+        ref={frameRef}
+        className="relative flex min-h-0 flex-1 overflow-hidden"
+      >
+        <div
+          ref={laneRef}
+          className="relative shrink-0 overflow-hidden border-r border-koma-border"
+          style={{ width: BLAME_LANE_WIDTH }}
+        >
+          {visible.map((block) => (
             <button
-              disabled={!active}
-              onClick={() => openCommit(r.oid)}
-              title={`${r.summary}\n${new Date(Number(r.time) * 1000).toLocaleString()}`}
-              className="flex w-64 flex-none gap-2 truncate px-3 text-left text-koma-dim hover:text-koma-accent"
+              key={block.start}
+              type="button"
+              tabIndex={-1}
+              onMouseEnter={() => {
+                cancelClose()
+                setHover(block.start)
+              }}
+              onMouseLeave={armClose}
+              onClick={() => openHovered(block)}
+              className="absolute left-0 right-0 border-0 bg-transparent p-0 text-left hover:bg-koma-hover"
+              style={{
+                top: (block.start - 1) * lineHeight - scrollTop,
+                height: (block.end - block.start + 1) * lineHeight,
+                background:
+                  hover === block.start ? 'var(--color-koma-hover)' : undefined,
+              }}
             >
-              <span>{r.oid.slice(0, 8)}</span>
-              <span className="truncate">{r.author}</span>
+              <span
+                className="absolute bottom-0 left-0 top-0 w-0.5"
+                style={{ background: blameLaneColor(block.oid) }}
+              />
+              <span
+                className="flex min-w-0 items-center gap-1.5 pl-2 pr-1.5"
+                style={{ height: lineHeight }}
+              >
+                <span className="truncate text-[11px] text-koma-dim">
+                  {block.summary || block.oid.slice(0, 8)}
+                </span>
+                <span className="shrink-0 text-[10px] text-koma-dim">
+                  {relativeBlameTime(block.time)}
+                </span>
+              </span>
             </button>
-            <span className="w-12 flex-none select-none text-right text-koma-dim">
-              {i + 1}
-            </span>
-            <span className="whitespace-pre px-3 text-koma-fg">
-              {r.text || ' '}
-            </span>
-          </div>
-        ))}
-        {data && data.rows.length > limit && (
-          <Actions>
-            <Button onClick={() => setLimit((n) => n + 500)}>
-              Show next 500 lines
-            </Button>
-          </Actions>
+          ))}
+        </div>
+        <div className="min-h-0 min-w-0 flex-1">
+          {data && (
+            <CodePane
+              value={text}
+              path={tab.path ?? ''}
+              tabId={tab.id}
+              readOnly
+              lineHeight={BLAME_LINE_HEIGHT}
+              folding={false}
+              stickyScroll={false}
+              wordWrap="off"
+              onScroll={onScroll}
+              onLineHeight={setLineHeight}
+              scrollRef={scrollRef}
+              highlight={
+                hovered
+                  ? { start: hovered.start, end: hovered.end }
+                  : null
+              }
+            />
+          )}
+        </div>
+        {hovered && (
+          <BlameCard
+            block={hovered}
+            anchorTop={(hovered.start - 1) * lineHeight - scrollTop}
+            viewHeight={viewHeight}
+            active={active}
+            onOpen={() => openHovered(hovered)}
+            onEnter={cancelClose}
+            onLeave={armClose}
+          />
         )}
       </div>
     </>

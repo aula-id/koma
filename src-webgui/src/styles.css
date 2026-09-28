@@ -796,6 +796,9 @@ svg.animate-spin {
 .monaco-editor .koma-debug-execution {
   background: color-mix(in srgb, var(--koma-accent) 15%, transparent);
 }
+.monaco-editor .koma-blame-line {
+  background: color-mix(in srgb, var(--koma-accent) 12%, transparent);
+}
 .monaco-editor .koma-debug-location {
   border-left: 2px solid var(--koma-accent);
 }

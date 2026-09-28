@@ -1,5 +1,6 @@
 use super::*;
 use base64::Engine;
+use std::collections::{HashMap, HashSet};
 const TEXT_CAP: usize = 2 * 1024 * 1024;
 const IMAGE_CAP: usize = 16 * 1024 * 1024;
 
@@ -530,18 +531,62 @@ pub(super) fn resolve(
         conflict(root, path)
     }
 }
+struct BlameLine {
+    oid: String,
+    author: String,
+    time: String,
+    summary: String,
+    text: String,
+}
+
+// One log per batch. A failed batch leaves those bodies empty; the gutter still renders.
+fn blame_bodies(root: &Path, oids: &[String]) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for chunk in oids.chunks(400) {
+        let mut args = Vec::with_capacity(chunk.len() + 5);
+        args.push("--no-pager");
+        args.push("log");
+        args.push("--no-walk");
+        args.push("-z");
+        args.push("--pretty=tformat:%H%x1e%b");
+        args.extend(chunk.iter().map(String::as_str));
+        let Ok(raw) = git(root, &args) else {
+            continue;
+        };
+        let raw = String::from_utf8_lossy(&raw);
+        for record in raw.split('\0') {
+            let Some((hash, body)) = record.split_once('\u{1e}') else {
+                continue;
+            };
+            let hash = hash.trim();
+            if hash.len() < 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+                continue;
+            }
+            let body: String = body.trim().chars().take(500).collect();
+            map.insert(hash.to_string(), body);
+        }
+    }
+    map
+}
+
 pub(super) fn blame(root: &Path, path: &str) -> Result<Value, String> {
     safe_path(root, path)?;
     let head = oid(root, "HEAD")?;
     let source = blob(root, &format!("{head}:{path}"))?;
     utf8(&source)?;
     let raw = text(root, &["blame", "--line-porcelain", &head, "--", path])?;
-    let mut rows = Vec::new();
+    let mut parsed = Vec::new();
     let (mut hash, mut author, mut time, mut summary) =
         (String::new(), String::new(), String::new(), String::new());
     for l in raw.lines() {
         if let Some(t) = l.strip_prefix('\t') {
-            rows.push(json!({"oid":hash,"author":author,"time":time,"summary":summary,"text":t}));
+            parsed.push(BlameLine {
+                oid: hash.clone(),
+                author: author.clone(),
+                time: time.clone(),
+                summary: summary.clone(),
+                text: t.to_string(),
+            });
         } else if let Some(v) = l.strip_prefix("author ") {
             author = v.into()
         } else if let Some(v) = l.strip_prefix("author-time ") {
@@ -556,5 +601,42 @@ pub(super) fn blame(root: &Path, path: &str) -> Result<Value, String> {
             hash = l.split_whitespace().next().unwrap_or_default().into();
         }
     }
-    Ok(json!({"head":head,"rows":rows,"workingTreeDiffers":worktree(root,path)?!=source}))
+    let mut seen = HashSet::new();
+    let mut oids = Vec::new();
+    for line in &parsed {
+        if seen.insert(line.oid.clone()) {
+            oids.push(line.oid.clone());
+        }
+    }
+    let bodies = blame_bodies(root, &oids);
+    // Body rides on the first row of each contiguous oid run so a lockfile
+    // does not repeat the message on every line. The gutter copies it onto the block.
+    let mut last = String::new();
+    let rows: Vec<Value> = parsed
+        .into_iter()
+        .map(|line| {
+            let fresh = line.oid != last;
+            if fresh {
+                last.clone_from(&line.oid);
+            }
+            let body = if fresh {
+                bodies.get(&line.oid).map(String::as_str).unwrap_or("")
+            } else {
+                ""
+            };
+            json!({
+                "oid": line.oid,
+                "author": line.author,
+                "time": line.time,
+                "summary": line.summary,
+                "text": line.text,
+                "body": body,
+            })
+        })
+        .collect();
+    Ok(json!({
+        "head": head,
+        "rows": rows,
+        "workingTreeDiffers": worktree(root, path)? != source
+    }))
 }

@@ -35,7 +35,7 @@ const features = [
   },
   {
     title: 'Blame HEAD',
-    text: 'Right-click a file in Coding, or choose Blame HEAD from a working diff, to see the author and commit for each committed line. Click the attribution to open that commit in the graph. Blame is read-only and uses HEAD; Koma shows a notice when the working file differs.',
+    text: 'Right-click a file in Coding, or choose Blame HEAD from a working diff, to open the committed file in a read-only editor with a narrow commit gutter. Click a commit to open it in the graph. Blame uses HEAD; Koma shows a notice when the working file differs.',
   },
   {
     title: 'Remotes',
