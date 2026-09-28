@@ -4,6 +4,10 @@
 pub(crate) mod bridge;
 pub(crate) mod contract;
 pub(crate) mod controller;
+// Headless CI builds this bin with `--no-default-features`, which drops the
+// desktop adapters. Keep the glide out of that build, and in `cfg(test)` so
+// the unit tests still run there.
+#[cfg(any(test, feature = "gui"))]
 mod cursor_glide;
 pub(crate) mod executor;
 mod keys;
