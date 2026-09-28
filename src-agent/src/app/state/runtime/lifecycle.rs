@@ -324,6 +324,21 @@ impl SessionRuntime {
             })
     }
 
+    /// The main turn is still walking tool calls, a stream, or a computer
+    /// operation. A closed window during this window is a reconnect, not a
+    /// stop: sharing stays armed until the turn ends or the GUI comes back.
+    pub fn agent_iterating(&self) -> bool {
+        if self.closed {
+            return false;
+        }
+        self.is_ui_busy()
+            || self.current_task.is_some()
+            || self.active_rx.is_some()
+            || self.computer.status.busy
+            || self.computer.pending.is_some()
+            || self.agent_steps > 0
+    }
+
     /// True once this session has been tombstoned via [`close()`](Self::close) —
     /// its slot stays in `sessions` (so no index shifts) but it is inert. Read by
     /// the session-hub cooking builder (a closed session must not reappear) and by

@@ -591,9 +591,10 @@ over sec_remote (stateful socket).\n",
             }
             None => (Vec::new(), crate::tool::main_tool_names()),
         };
-    if !state.rest.sessions[sess_idx].computer.status.enabled
-        || state.rest.sessions[sess_idx].computer.owner.is_none()
-    {
+    // A parked seat (the window dropped mid-turn) still owns the desktop.
+    // Keep the tools so the next hop can observe instead of ending the turn.
+    let computer = &state.rest.sessions[sess_idx].computer;
+    if !computer.status.enabled || (computer.owner.is_none() && computer.detached_at.is_none()) {
         advertise.retain(|name| !name.starts_with("computer_"));
     }
     // Security daemon tools for the MAIN agent. Gated on BOTH the runtime enable

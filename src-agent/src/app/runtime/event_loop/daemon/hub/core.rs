@@ -476,8 +476,9 @@ impl DaemonHub {
     pub(super) fn deregister(&mut self, idx: usize, state: &mut AppState) {
         for rt in &mut state.rest.sessions {
             if rt.computer.owner == Some(self.clients[idx].id) {
-                crate::app::runtime::computer::bridge::stop(rt, "GUI disconnected");
-                rt.computer.owner = None;
+                // Idle share stops. A turn that is still iterating keeps the
+                // seat parked so the window can reattach or be opened again.
+                crate::app::runtime::computer::bridge::gui_client_lost(rt);
             }
         }
         if state.rest.oauth_gui_client == Some(self.clients[idx].id) {

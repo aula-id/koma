@@ -17,6 +17,12 @@ pub struct Controller {
     pub latest_message: Option<crate::dto::chat::ChatMessage>,
     used: HashSet<String>,
     lock: Option<File>,
+    /// Set when the owning GUI client left during a live turn. Sharing, the
+    /// desktop lock, and the current observation stay put so the returning
+    /// window can adopt the seat without a new grant.
+    pub detached_at: Option<Instant>,
+    pub relaunch_sent: bool,
+    pub notified_client: Option<u64>,
 }
 impl Controller {
     pub fn preserve_observation(&self, history: &mut Vec<crate::dto::chat::ChatMessage>) {
@@ -81,10 +87,33 @@ impl Controller {
         self.actionable = false;
         self.status.generation = uuid::Uuid::new_v4().to_string();
         self.status.message = reason.into();
+        self.detached_at = None;
+        self.relaunch_sent = false;
+        self.notified_client = None;
         self.changed = true;
         // Retain owner until the disabled status has been delivered by the hub.
         self.release_lock();
         pending
+    }
+    /// The GUI client vanished mid-turn. Keep sharing and the observation.
+    pub fn detach_for_reconnect(&mut self) {
+        self.owner = None;
+        if self.detached_at.is_none() {
+            self.detached_at = Some(Instant::now());
+        }
+        self.status.message = "GUI reconnecting; sharing stays on".into();
+        self.changed = true;
+    }
+    /// A replacement GUI for this same desktop takes the parked seat.
+    /// The generation is unchanged, so the frame the model already has
+    /// stays actionable.
+    pub fn adopt(&mut self, owner: u64) {
+        self.owner = Some(owner);
+        self.detached_at = None;
+        self.relaunch_sent = false;
+        self.notified_client = None;
+        self.status.message = "GUI reconnected; sharing stays on".into();
+        self.changed = true;
     }
     /// The turn was interrupted. Drop the in-flight desktop action and keep
     /// sharing enabled; only the user's stop control turns it off.
@@ -126,7 +155,12 @@ impl Controller {
     /// GUI enablement authorizes native operations until pause/stop/disconnect,
     /// independently of workspace approval modes and the tool classifier.
     pub fn begin(&mut self, id: String, operation: Operation) -> Result<()> {
-        if !self.status.enabled || self.owner.is_none() || self.status.paused {
+        // A parked seat (owner gone, detach in progress) may queue the next
+        // operation. It is delivered once the replacement GUI adopts.
+        if !self.status.enabled
+            || self.status.paused
+            || (self.owner.is_none() && self.detached_at.is_none())
+        {
             bail!("no active local GUI controller");
         }
         if self.pending.is_some() || self.used.contains(&id) {
@@ -220,6 +254,10 @@ impl Controller {
             })
     }
     pub fn expired(&self) -> bool {
+        // The reconnect grace owns the deadline while the window is coming back.
+        if self.detached_at.is_some() {
+            return false;
+        }
         self.pending
             .as_ref()
             .is_some_and(|(request, t)| {
@@ -298,6 +336,33 @@ mod tests {
         assert!(controller.status.message.contains("sharing stays on"));
         controller.stop("user turned sharing off");
         assert!(!controller.status.enabled);
+        drop(controller);
+        let _ = std::fs::remove_file(path);
+    }
+    #[test]
+    fn a_parked_seat_still_queues_the_next_operation() {
+        let path =
+            std::env::temp_dir().join(format!("computer-park-{}.lock", uuid::Uuid::new_v4()));
+        let mut controller = Controller::default();
+        let caps = Capabilities {
+            windows: true,
+            ..Default::default()
+        };
+        controller.enable(1, "s", "fixture", caps, &path).unwrap();
+        let generation = controller.status.generation.clone();
+        controller.actionable = true;
+        controller.detach_for_reconnect();
+        assert!(controller.status.enabled);
+        assert!(controller.owner.is_none());
+        assert_eq!(controller.status.generation, generation);
+        controller.begin("next".into(), Operation::Windows).unwrap();
+        assert!(controller.outbound.is_some());
+        assert!(!controller.expired());
+        controller.adopt(7);
+        assert_eq!(controller.owner, Some(7));
+        assert_eq!(controller.status.generation, generation);
+        assert!(controller.status.enabled);
+        assert!(controller.detached_at.is_none());
         drop(controller);
         let _ = std::fs::remove_file(path);
     }

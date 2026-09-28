@@ -201,6 +201,8 @@ pub(super) fn push_loop(
     #[cfg(feature = "gui")]
     let mut computer_requested = false;
     #[cfg(feature = "gui")]
+    let mut computer_registered = false;
+    #[cfg(feature = "gui")]
     let (preview_tx, preview_rx) =
         std::sync::mpsc::channel::<crate::app::runtime::computer::PreviewFrame>();
     #[cfg(feature = "gui")]
@@ -426,15 +428,16 @@ pub(super) fn push_loop(
             match ctl_rx.try_recv() {
                 // The page (re)booted: re-push the full authoritative state this frame.
                 Ok(super::HostCtl::Ready) => {
+                    // The page rebooted inside the same window. Sharing stays
+                    // on; tell the daemon this desktop is still the owner so a
+                    // parked turn can adopt it instead of stopping.
                     #[cfg(feature = "gui")]
-                    {
-                        computer_worker.cancel();
-                        if computer_requested {
-                            let _ = req_tx.send(ClientRequest::Computer(
-                                crate::app::runtime::computer::Control::Stop,
-                            ));
-                            computer_requested = false;
-                        }
+                    if computer_requested {
+                        let _ = req_tx.send(ClientRequest::Computer(
+                            crate::app::runtime::computer::Control::Register {
+                                desktop: crate::app::runtime::computer::desktop::identity(),
+                            },
+                        ));
                     }
                     last.reset();
                     dirty = true;
@@ -1605,6 +1608,20 @@ pub(super) fn push_loop(
                         DaemonEvent::ComputerStatus(status) if remote_ctx.is_none() => {
                             computer_requested = status.enabled;
                             computer_worker.status(status);
+                            if status.enabled
+                                && status.desktop
+                                    == crate::app::runtime::computer::desktop::identity()
+                                && !computer_registered
+                            {
+                                computer_registered = true;
+                                let _ = req_tx.send(ClientRequest::Computer(
+                                    crate::app::runtime::computer::Control::Register {
+                                        desktop: status.desktop.clone(),
+                                    },
+                                ));
+                            } else if !status.enabled {
+                                computer_registered = false;
+                            }
                             push(serde_json::json!({"k":"Computer","status":status}).to_string());
                         }
                         DaemonEvent::ComputerOperation(request) if remote_ctx.is_none() => {
@@ -1658,6 +1675,18 @@ pub(super) fn push_loop(
                 // The reader task dropped its sender: the daemon's socket closed. Fall
                 // back to the hub so the user can pick another session.
                 Err(TryRecvError::Disconnected) => {
+                    #[cfg(feature = "gui")]
+                    if remote_ctx.is_none() && computer_requested {
+                        if let Some(id) = current_session {
+                            // The window is still open. Reattach this session
+                            // so the parked turn adopts the new connection
+                            // instead of dropping onto the session list.
+                            return HostTransition::Attach {
+                                id: id.to_string(),
+                                workdir: None,
+                            };
+                        }
+                    }
                     #[cfg(feature = "gui")]
                     if remote_ctx.is_none() {
                         computer_worker.cancel();

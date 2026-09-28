@@ -93,6 +93,46 @@ pub fn cancel_approval(rt: &mut SessionRuntime, reason: &str) {
         rt.awaiting_tool_tasks = true;
     }
 }
+fn reconnecting_result() -> String {
+    serde_json::json!({
+        "error": "GUI disconnected; observe again",
+        "completed": 0,
+        "uncertain": false,
+        "executed": false,
+        "controller_enabled": true,
+        "requires_user_action": false,
+        "recovery": {
+            "kind": "gui_reconnecting",
+            "model_instruction": "The desktop window disconnected and is reconnecting. Sharing stays on. Call computer_observe and continue from the fresh frame. Do not end the turn, do not stop sharing, and do not ask the user to re-enable Computer use."
+        }
+    })
+    .to_string()
+}
+
+/// The owning GUI client left. An idle share stops. A share whose turn is
+/// still iterating keeps the lock and the observation so the window can
+/// reattach, or be opened again, and continue.
+pub fn gui_client_lost(rt: &mut SessionRuntime) {
+    if rt.computer.status.enabled && rt.agent_iterating() {
+        if let Some((request, _)) = rt.computer.pending.take() {
+            rt.computer.outbound = None;
+            rt.computer.status.busy = false;
+            rt.computer.actionable = false;
+            settle(rt, request.id, reconnecting_result());
+        }
+        rt.computer.detach_for_reconnect();
+        diagnostic(
+            rt,
+            "computer.reconnect",
+            "none",
+            "GUI left during the turn; sharing stays on",
+        );
+        return;
+    }
+    stop(rt, "GUI disconnected");
+    rt.computer.owner = None;
+}
+
 pub fn stop(rt: &mut SessionRuntime, reason: &str) {
     diagnostic(
         rt,

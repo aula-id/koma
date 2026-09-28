@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use super::core::DaemonHub;
 use crate::{
     app::{
@@ -6,6 +8,9 @@ use crate::{
     },
     ipc::proto::DaemonEvent,
 };
+
+const RECONNECT_RELAUNCH_AFTER: Duration = Duration::from_secs(4);
+const RECONNECT_GIVE_UP_AFTER: Duration = Duration::from_secs(25);
 impl DaemonHub {
     pub(super) fn computer(&mut self, idx: usize, state: &mut AppState, control: Control) {
         let owner = self.clients[idx].id;
@@ -112,12 +117,20 @@ impl DaemonHub {
             if rt.closed && rt.computer.status.enabled {
                 computer::bridge::stop(rt, "Session closed");
             }
+            if rt
+                .computer
+                .owner
+                .is_some_and(|owner| self.clients.iter().all(|c| c.id != owner))
+            {
+                computer::bridge::gui_client_lost(rt);
+            }
+            if rt.computer.detached_at.is_some() {
+                self.reconnect_computer(rt);
+            }
             let Some(owner) = rt.computer.owner else {
                 continue;
             };
             let Some(idx) = self.clients.iter().position(|c| c.id == owner) else {
-                computer::bridge::stop(rt, "GUI disconnected");
-                rt.computer.owner = None;
                 continue;
             };
             if self.clients[idx].foreground.as_deref() != Some(rt.id.as_str()) {
@@ -137,6 +150,91 @@ impl DaemonHub {
             }
             if !rt.computer.status.enabled {
                 rt.computer.owner = None;
+            }
+        }
+    }
+
+    /// Parked computer seat: adopt a GUI that registered the same desktop, or
+    /// tell the attached window sharing is still on so it registers. If the
+    /// window is gone, open it again. Give up only after the grace.
+    fn reconnect_computer(&mut self, rt: &mut crate::app::state::SessionRuntime) {
+        let Some(since) = rt.computer.detached_at else {
+            return;
+        };
+        if !rt.computer.status.enabled || !rt.agent_iterating() {
+            computer::bridge::stop(rt, "GUI disconnected");
+            rt.computer.owner = None;
+            return;
+        }
+        let desktop = rt.computer.status.desktop.clone();
+        if let Some(idx) = self.clients.iter().position(|c| {
+            c.attached
+                && c.foreground.as_deref() == Some(rt.id.as_str())
+                && c.computer_desktop.as_deref() == Some(desktop.as_str())
+        }) {
+            let id = self.clients[idx].id;
+            rt.computer.adopt(id);
+            return;
+        }
+        if let Some(idx) = self
+            .clients
+            .iter()
+            .position(|c| c.attached && c.foreground.as_deref() == Some(rt.id.as_str()))
+        {
+            let id = self.clients[idx].id;
+            if rt.computer.notified_client != Some(id) {
+                self.send_to(idx, DaemonEvent::ComputerStatus(rt.computer.status.clone()));
+                rt.computer.notified_client = Some(id);
+            }
+        }
+        if since.elapsed() >= RECONNECT_RELAUNCH_AFTER && !rt.computer.relaunch_sent {
+            rt.computer.relaunch_sent = true;
+            relaunch_gui(&rt.id);
+        }
+        if since.elapsed() >= RECONNECT_GIVE_UP_AFTER {
+            computer::bridge::stop(rt, "GUI disconnected");
+            rt.computer.owner = None;
+        }
+    }
+}
+
+fn relaunch_gui(session_id: &str) {
+    #[cfg(test)]
+    {
+        let _ = session_id;
+    }
+    #[cfg(not(test))]
+    {
+        let Ok(exe) = std::env::current_exe() else {
+            crate::model::store::append_global_error_log(
+                "computer.reconnect",
+                &format!(
+                    "session={session_id} request=none relaunch failed: no current executable"
+                ),
+            );
+            return;
+        };
+        match std::process::Command::new(exe)
+            .args(["gui", "--session", session_id])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(child) => {
+                crate::model::store::append_global_error_log(
+                    "computer.reconnect",
+                    &format!(
+                        "session={session_id} request=none relaunched GUI pid={}",
+                        child.id()
+                    ),
+                );
+            }
+            Err(e) => {
+                crate::model::store::append_global_error_log(
+                    "computer.reconnect",
+                    &format!("session={session_id} request=none relaunch failed: {e}"),
+                );
             }
         }
     }
@@ -211,6 +309,116 @@ mod tests {
         assert!(!state.rest.fg().computer.status.enabled);
         hub.drain_computer(&mut state);
         assert!(state.rest.fg().computer.owner.is_none());
+        drop(state);
+        std::fs::remove_file(lock).unwrap();
+    }
+
+    #[test]
+    fn gui_loss_during_a_turn_keeps_sharing_and_the_next_window_adopts() {
+        let mut state = AppState::new(Mode::Chat);
+        let (mut hub, _sender) = DaemonHub::new();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        hub.handle_inbound(
+            HubInbound::Register {
+                client_id: 1,
+                frame_tx: tx,
+            },
+            &mut state,
+            &mut None,
+            runtime.handle(),
+        );
+        let lock = std::env::temp_dir().join(format!("koma-reconnect-{}", uuid::Uuid::new_v4()));
+        let generation = {
+            let rt = state.rest.fg_mut();
+            let id = rt.id.clone();
+            rt.computer
+                .enable(1, &id, "fixture", Default::default(), &lock)
+                .unwrap();
+            rt.waiting = true;
+            rt.agent_steps = 1;
+            rt.computer.status.generation.clone()
+        };
+        hub.handle_inbound(
+            HubInbound::Disconnect { client_id: 1 },
+            &mut state,
+            &mut None,
+            runtime.handle(),
+        );
+        {
+            let rt = state.rest.fg();
+            assert!(rt.computer.status.enabled);
+            assert!(rt.computer.owner.is_none());
+            assert!(rt.computer.detached_at.is_some());
+            assert!(rt.computer.status.message.contains("reconnecting"));
+            assert_eq!(rt.computer.status.generation, generation);
+        }
+        let (tx2, rx2) = std::sync::mpsc::channel();
+        hub.handle_inbound(
+            HubInbound::Register {
+                client_id: 2,
+                frame_tx: tx2,
+            },
+            &mut state,
+            &mut None,
+            runtime.handle(),
+        );
+        let sid = state.rest.fg().id.clone();
+        hub.clients[0].attached = true;
+        hub.clients[0].foreground = Some(sid);
+        hub.clients[0].computer_desktop = Some("fixture".into());
+        hub.drain_computer(&mut state);
+        let rt = state.rest.fg();
+        assert!(rt.computer.status.enabled);
+        assert_eq!(rt.computer.owner, Some(2));
+        assert!(rt.computer.detached_at.is_none());
+        assert_eq!(rt.computer.status.generation, generation);
+        assert!(rt.computer.status.message.contains("reconnected"));
+        assert!(matches!(
+            rx2.try_recv().unwrap().event,
+            DaemonEvent::ComputerStatus(_)
+        ));
+        drop(state);
+        std::fs::remove_file(lock).unwrap();
+    }
+
+    #[test]
+    fn gui_loss_while_idle_stops_sharing() {
+        let mut state = AppState::new(Mode::Chat);
+        let (mut hub, _sender) = DaemonHub::new();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        hub.handle_inbound(
+            HubInbound::Register {
+                client_id: 1,
+                frame_tx: tx,
+            },
+            &mut state,
+            &mut None,
+            runtime.handle(),
+        );
+        let lock = std::env::temp_dir().join(format!("koma-idle-stop-{}", uuid::Uuid::new_v4()));
+        {
+            let rt = state.rest.fg_mut();
+            let id = rt.id.clone();
+            rt.computer
+                .enable(1, &id, "fixture", Default::default(), &lock)
+                .unwrap();
+        }
+        hub.handle_inbound(
+            HubInbound::Disconnect { client_id: 1 },
+            &mut state,
+            &mut None,
+            runtime.handle(),
+        );
+        let rt = state.rest.fg();
+        assert!(!rt.computer.status.enabled);
+        assert!(rt.computer.owner.is_none());
+        assert!(rt.computer.detached_at.is_none());
         drop(state);
         std::fs::remove_file(lock).unwrap();
     }

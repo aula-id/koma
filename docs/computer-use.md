@@ -526,8 +526,11 @@ when enrichment fails. Full native validation remains for the device walkthrough
    stale coordinates; safe pre-input changes should ask for a fresh observation
    while keeping sharing active. Take back control mid-sequence: future input stops,
    keys release, live preview continues. Give control requires a fresh observation.
-6. Switch sessions/disconnect/reconnect/compete from a second GUI. Reactivation must
-   remain explicit. Verify native control also works in Plan mode, with no TUI/headless/subagent tools.
+6. Switch sessions or compete from a second GUI. Reactivation must remain explicit.
+   If the owning window drops while the agent is still iterating, sharing stays on:
+   the same window reattaches, or a new one opens on that session, and the turn
+   continues. An idle share still stops. Verify native control also works in Plan
+   mode, with no TUI/headless/subagent tools.
 7. With the preview closed, idle/intermediate `observe=false` actions must create no
    timed captures. Open preview and check bounded live frames without model artifacts.
    Inspect errors in chat: header short, explanation only inside expandable details.
