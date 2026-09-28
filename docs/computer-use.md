@@ -73,8 +73,11 @@ High-resolution displays are bounded before PNG encoding, OCR and IPC:
 Transforms map these image coordinates back to the captured desktop rectangle,
 including negative display origins, different display scales and cropped regions.
 A model frame large enough to spare an edge carries a top and left ruler. The tick
-numbers are screenshot pixels, and the `x` / `y` caption is desktop pixels per
-screenshot pixel on that axis. Do not multiply a tick by that caption. The live
+numbers are screen pixels. A window share prints that window's position on the
+screen, so the corner is not zero unless the window is at the screen origin.
+Click the printed number; it is not added to the window origin again. The `x` / `y`
+caption is still desktop pixels per screenshot pixel. Do not multiply a tick by
+that caption. Region and crop rectangles stay in image pixels. The live
 preview is not marked. Do not multiply model coordinates by the display scale manually. Each new capture
 or crop has its own observation ID and coordinate system. Observe without options
 to return from a close-up to the full display.

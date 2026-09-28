@@ -62,11 +62,32 @@ pub fn validate_actions(obs: &Observation, actions: &[Action], caps: &Capabiliti
         bail!("actions must contain 1..16 steps");
     }
     for action in actions {
-        if let Some((x, y)) = target(action, obs)? {
-            if !caps.pointer {
-                bail!("pointer unsupported");
+        if matches!(
+            action,
+            Action::Move { .. } | Action::Scroll { .. } | Action::Click { .. }
+        ) && !caps.pointer
+        {
+            bail!("pointer unsupported");
+        }
+        match action {
+            Action::Move { x, y }
+            | Action::Scroll { x, y, .. }
+            | Action::Click {
+                x: Some(x),
+                y: Some(y),
+                element: None,
+                ..
+            } => {
+                obs.transform.screen_to_image(*x, *y)?;
             }
-            obs.transform.map(x, y)?;
+            Action::Click {
+                element: Some(_), ..
+            } => {
+                if let Some((x, y)) = target(action, obs)? {
+                    obs.transform.map(x, y)?;
+                }
+            }
+            _ => {}
         }
         match action {
             Action::Type { text } if !caps.keyboard || text.len() > 8192 => {
@@ -179,9 +200,11 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                 .observation
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("missing observation"))?;
-            // Screenshot pixels stay the model's coordinates. The desktop
-            // rectangle below is replaced with the display as it is now, so a
-            // move or resize still hits the same relative point.
+            // The model sends the screen pixel printed on the ruler. Convert
+            // it with the frame it saw, then aim that image point at the
+            // rectangle as it is now, so a move or resize still hits the same
+            // relative place.
+            let seen = obs.transform.clone();
             let mut transform = obs.transform.clone();
             for (index, action) in actions.iter().enumerate() {
                 if cancelled.load(Ordering::SeqCst) {
@@ -192,21 +215,47 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                     bail!(reason);
                 }
                 transform.desktop = current.geometry;
-                let resolved = if let Action::Click { button, .. } = action {
-                    let (x, y) = target(action, obs)?
-                        .ok_or_else(|| anyhow::anyhow!("missing click target"))?;
+                let resolved = match action {
+                    Action::Move { x, y } => {
+                        let (x, y) = seen.screen_to_image(*x, *y)?;
+                        Action::Move { x, y }
+                    }
+                    Action::Scroll { x, y, delta } => {
+                        let (x, y) = seen.screen_to_image(*x, *y)?;
+                        Action::Scroll {
+                            x,
+                            y,
+                            delta: *delta,
+                        }
+                    }
                     Action::Click {
                         x: Some(x),
                         y: Some(y),
                         element: None,
-                        button: *button,
+                        button,
+                    } => {
+                        let (x, y) = seen.screen_to_image(*x, *y)?;
+                        Action::Click {
+                            x: Some(x),
+                            y: Some(y),
+                            element: None,
+                            button: *button,
+                        }
                     }
-                } else if let Action::Key { keys } = action {
-                    Action::Key {
+                    Action::Click { button, .. } => {
+                        let (x, y) = target(action, obs)?
+                            .ok_or_else(|| anyhow::anyhow!("missing click target"))?;
+                        Action::Click {
+                            x: Some(x),
+                            y: Some(y),
+                            element: None,
+                            button: *button,
+                        }
+                    }
+                    Action::Key { keys } => Action::Key {
                         keys: super::keys::chord(keys)?,
-                    }
-                } else {
-                    action.clone()
+                    },
+                    other => other.clone(),
                 };
                 desktop.validate_input(&resolved)?;
                 // Preflight can briefly wait for physical input to clear.
@@ -1295,6 +1344,31 @@ mod fixture_tests {
         };
         r.observation.as_mut().unwrap().window.geometry = stale;
         r.observation.as_mut().unwrap().transform.desktop = stale;
+        let frame = r.observation.as_ref().unwrap().transform.clone();
+        let screen = |px: f64, py: f64| {
+            (
+                frame.desktop.x + px * frame.desktop.width / f64::from(frame.width),
+                frame.desktop.y + py * frame.desktop.height / f64::from(frame.height),
+            )
+        };
+        let (mx, my) = screen(5.0, 5.0);
+        let (cx, cy) = screen(10.0, 10.0);
+        r.operation = Operation::Act {
+            observation: r.observation.as_ref().unwrap().id.clone(),
+            actions: vec![
+                Action::Move { x: mx, y: my },
+                Action::Click {
+                    x: Some(cx),
+                    y: Some(cy),
+                    element: None,
+                    button: Button::Left,
+                },
+                Action::Type {
+                    text: "hello 世界".into(),
+                },
+            ],
+            observe: true,
+        };
         let result = execute(&mut d, &r, &cancel);
         assert!(result.error.is_none(), "{:?}", result.error);
         assert_eq!(result.completed, 3);

@@ -94,6 +94,24 @@ impl Transform {
             self.desktop.y + y * self.desktop.height / self.height as f64,
         ))
     }
+    /// `x` and `y` are the screen pixels printed on the ruler. They already
+    /// include where this window or display sits, so the result is the same
+    /// point measured from the image corner.
+    pub fn screen_to_image(&self, x: f64, y: f64) -> Result<(f64, f64)> {
+        if !self.desktop.valid()
+            || self.width == 0
+            || self.height == 0
+            || !x.is_finite()
+            || !y.is_finite()
+            || !self.desktop.contains(x, y)
+        {
+            bail!("point is outside the shared screen rectangle");
+        }
+        Ok((
+            (x - self.desktop.x) * self.width as f64 / self.desktop.width,
+            (y - self.desktop.y) * self.height as f64 / self.desktop.height,
+        ))
+    }
     pub fn crop(&self, bounds: Rect) -> Result<Self> {
         if !bounds.valid()
             || bounds.x.fract() != 0.0
@@ -468,5 +486,36 @@ mod resolution_tests {
                 .is_err());
             assert!(closeup.map(1920.0, 0.0).is_err());
         }
+    }
+
+    #[test]
+    fn screen_pixels_on_a_window_become_image_pixels() {
+        let window = Transform {
+            desktop: Rect {
+                x: 200.0,
+                y: 80.0,
+                width: 1000.0,
+                height: 800.0,
+            },
+            width: 1000,
+            height: 800,
+        };
+        assert_eq!(window.screen_to_image(200.0, 80.0).unwrap(), (0.0, 0.0));
+        assert_eq!(window.screen_to_image(880.0, 96.0).unwrap(), (680.0, 16.0));
+        assert!(window.screen_to_image(0.0, 0.0).is_err());
+        let scaled = Transform {
+            desktop: Rect {
+                x: 100.0,
+                y: 50.0,
+                width: 2000.0,
+                height: 1000.0,
+            },
+            width: 1000,
+            height: 500,
+        };
+        assert_eq!(
+            scaled.screen_to_image(1100.0, 550.0).unwrap(),
+            (500.0, 250.0)
+        );
     }
 }

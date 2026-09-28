@@ -1256,8 +1256,30 @@ mod native_tests {
         request.operation = Operation::Act {
             observation: request.observation.as_ref().unwrap().id.clone(),
             actions: vec![Action::Click {
-                x: Some(40.0),
-                y: Some(40.0),
+                x: Some(
+                    request.observation.as_ref().unwrap().transform.desktop.x
+                        + 40.0
+                            * request
+                                .observation
+                                .as_ref()
+                                .unwrap()
+                                .transform
+                                .desktop
+                                .width
+                            / f64::from(request.observation.as_ref().unwrap().transform.width),
+                ),
+                y: Some(
+                    request.observation.as_ref().unwrap().transform.desktop.y
+                        + 40.0
+                            * request
+                                .observation
+                                .as_ref()
+                                .unwrap()
+                                .transform
+                                .desktop
+                                .height
+                            / f64::from(request.observation.as_ref().unwrap().transform.height),
+                ),
                 element: None,
                 button: Button::Left,
             }],
@@ -1294,16 +1316,8 @@ mod native_tests {
         request.operation = Operation::Act {
             observation: obs.id.clone(),
             actions: vec![Action::Click {
-                x: Some(
-                    (application.x + 40.0 - obs.transform.desktop.x)
-                        * f64::from(obs.transform.width)
-                        / obs.transform.desktop.width,
-                ),
-                y: Some(
-                    (application.y + 40.0 - obs.transform.desktop.y)
-                        * f64::from(obs.transform.height)
-                        / obs.transform.desktop.height,
-                ),
+                x: Some(application.x + 40.0),
+                y: Some(application.y + 40.0),
                 element: None,
                 button: Button::Left,
             }],

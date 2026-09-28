@@ -1,6 +1,7 @@
-//! Edge ruler burned into the model observation only. Tick numbers are screenshot
-//! pixels, which is the coordinate space `computer_act` uses. `x` and `y` are
-//! desktop pixels per screenshot pixel on each axis. The live preview is untouched.
+//! Edge ruler burned into the model observation only. Tick numbers are screen
+//! pixels: the window or display origin plus the screenshot pixel times the
+//! scale. That printed number is what `computer_act` sends. The caption is
+//! desktop pixels per screenshot pixel. The live preview is untouched.
 use super::contract::Transform;
 use image::{Rgba, RgbaImage};
 
@@ -36,8 +37,8 @@ pub(crate) fn stamp(png: &[u8], transform: &Transform) -> Option<Vec<u8>> {
     }
     let mut white = Vec::new();
     let mut black = Vec::new();
-    horizontal(&img, caption_x, &mut white);
-    vertical(&img, &mut white);
+    horizontal(&img, caption_x, transform, &mut white);
+    vertical(&img, transform, &mut white);
     queue_text(&caption, caption_x, 1, &mut white);
     for (x, y) in white {
         halo(&img, x, y, &mut black);
@@ -47,8 +48,8 @@ pub(crate) fn stamp(png: &[u8], transform: &Transform) -> Option<Vec<u8>> {
     }
     // Recompute the white pixels; halo must not erase the glyph.
     let mut white = Vec::new();
-    horizontal(&img, caption_x, &mut white);
-    vertical(&img, &mut white);
+    horizontal(&img, caption_x, transform, &mut white);
+    vertical(&img, transform, &mut white);
     queue_text(&caption, caption_x, 1, &mut white);
     for (x, y) in white {
         plot(&mut img, x, y, Rgba([255, 255, 255, 255]));
@@ -58,7 +59,11 @@ pub(crate) fn stamp(png: &[u8], transform: &Transform) -> Option<Vec<u8>> {
     Some(encoded.into_inner())
 }
 
-fn horizontal(img: &RgbaImage, stop: i32, out: &mut Vec<(i32, i32)>) {
+pub(crate) fn screen_tick(origin: f64, span: f64, pixels: u32, at: i32) -> i64 {
+    (origin + f64::from(at) * span / f64::from(pixels)).round() as i64
+}
+
+fn horizontal(img: &RgbaImage, stop: i32, transform: &Transform, out: &mut Vec<(i32, i32)>) {
     let width = img.width() as i32;
     let mut x = 0;
     while x < stop && x < width {
@@ -70,20 +75,33 @@ fn horizontal(img: &RgbaImage, stop: i32, out: &mut Vec<(i32, i32)>) {
             }
         }
         if major {
-            queue_text(&x.to_string(), x + 2, 1, out);
+            let label = screen_tick(
+                transform.desktop.x,
+                transform.desktop.width,
+                transform.width,
+                x,
+            )
+            .to_string();
+            queue_text(&label, x + 2, 1, out);
         }
         x += 50;
     }
 }
 
-fn vertical(img: &RgbaImage, out: &mut Vec<(i32, i32)>) {
+fn vertical(img: &RgbaImage, transform: &Transform, out: &mut Vec<(i32, i32)>) {
     let height = img.height() as i32;
     let mut y = 100;
     while y < height {
         for x in 0..8 {
             out.push((x, y));
         }
-        let label = y.to_string();
+        let label = screen_tick(
+            transform.desktop.y,
+            transform.desktop.height,
+            transform.height,
+            y,
+        )
+        .to_string();
         let top = y - GLYPH_H * SCALE / 2;
         if top > GLYPH_H * SCALE + 2 {
             queue_text(&label, 2, top, out);
@@ -152,6 +170,7 @@ fn glyph(ch: char) -> [u8; 7] {
         '7' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
         '8' => [0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E],
         '9' => [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C],
+        '-' => [0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00],
         '.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06],
         'x' => [0x00, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x00],
         'y' => [0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04],
@@ -208,6 +227,15 @@ mod tests {
             marked,
             "horizontal and vertical scale caption is on the frame"
         );
+    }
+
+    #[test]
+    fn window_ticks_use_the_screen_position() {
+        assert_eq!(screen_tick(200.0, 1000.0, 1000, 0), 200);
+        assert_eq!(screen_tick(200.0, 1000.0, 1000, 680), 880);
+        assert_eq!(screen_tick(80.0, 800.0, 800, 16), 96);
+        assert_eq!(screen_tick(-1920.0, 1920.0, 960, 100), -1720);
+        assert_eq!(screen_tick(0.0, 1920.0, 1920, 0), 0);
     }
 
     #[test]
