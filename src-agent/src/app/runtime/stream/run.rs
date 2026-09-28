@@ -746,7 +746,7 @@ over sec_remote (stateful socket).\n",
                     effective_window: limits.effective_window,
                     drss_active,
                 });
-                let _ = c
+                if let Err(error) = c
                     .stream_complete(
                         m.conn(),
                         &m.model_id,
@@ -757,9 +757,14 @@ over sec_remote (stateful socket).\n",
                         &mcp_tools,
                         image_ctx,
                         max_tokens,
-                        tx,
+                        tx.clone(),
                     )
-                    .await;
+                    .await
+                {
+                    let _ = tx.send(crate::service::StreamEvent::Error(format!(
+                        "Model request failed: {error:#}"
+                    )));
+                }
             }
         }
     });

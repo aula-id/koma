@@ -240,33 +240,62 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
         if cancelled.load(Ordering::SeqCst) {
             bail!("cancelled");
         }
-        let current = desktop.inspect(&window.id)?;
-        let (transform, png) = if let Operation::Observe {
-            region: Some(bounds),
-            ..
-        } = request.operation
-        {
-            let source = request
-                .observation
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("Observe the display first"))?;
-            anyhow::ensure!(
-                source.window.geometry == current.geometry && source.window.focus == current.focus,
-                "Desktop changed; observe again"
-            );
-            let region = source.transform.crop(bounds)?.desktop;
-            desktop.capture_region(&current, region)?
-        } else {
-            desktop.capture(&current)?
+        // Input has already completed. Only recapture pixels while an app
+        // activation/animation settles; never loop back over injected actions.
+        // A region is tied to the old scene and cannot be retargeted this way.
+        let region = match request.operation {
+            Operation::Observe { region, .. } => region,
+            _ => None,
         };
-        let after_capture = desktop.inspect(&window.id)?;
-        anyhow::ensure!(
-            after_capture.geometry == current.geometry && after_capture.focus == current.focus,
-            "Desktop changed during capture; observe again"
-        );
-        if cancelled.load(Ordering::SeqCst) {
-            bail!("cancelled; capture discarded");
-        }
+        let attempts = if region.is_some() { 1 } else { 3 };
+        let mut attempt = 0;
+        let (current, transform, png) = loop {
+            if cancelled.load(Ordering::SeqCst) {
+                bail!("cancelled; capture discarded");
+            }
+            let current = desktop.inspect(&window.id)?;
+            let (transform, png) = if let Some(bounds) = region {
+                let source = request
+                    .observation
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Observe the display first"))?;
+                anyhow::ensure!(
+                    source.window.geometry == current.geometry
+                        && source.window.focus == current.focus,
+                    "Desktop changed; observe again"
+                );
+                let region = source.transform.crop(bounds)?.desktop;
+                desktop.capture_region(&current, region)?
+            } else {
+                desktop.capture(&current)?
+            };
+            if cancelled.load(Ordering::SeqCst) {
+                bail!("cancelled; capture discarded");
+            }
+            let after_capture = desktop.inspect(&window.id)?;
+            if cancelled.load(Ordering::SeqCst) {
+                bail!("cancelled; capture discarded");
+            }
+            if after_capture.geometry == current.geometry && after_capture.focus == current.focus {
+                break (current, transform, png);
+            }
+            attempt += 1;
+            crate::model::store::append_global_error_log("computer.capture", &format!(
+                "session={} request={} scene_changed attempt={attempt}/{attempts} completed={} retry_input=false",
+                request.session, request.id, reply.completed,
+            ));
+            anyhow::ensure!(
+                attempt < attempts,
+                "Desktop changed during capture; observe again"
+            );
+            // Bounded, cancellable settling delay on the desktop worker only.
+            for _ in 0..5 {
+                if cancelled.load(Ordering::SeqCst) {
+                    bail!("cancelled; capture discarded");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        };
         reply.png = png;
         reply.observation = Some(Observation {
             id: uuid::Uuid::new_v4().to_string(),
@@ -336,6 +365,8 @@ mod fixture_tests {
         display: bool,
         front: u8,
         reject_key: bool,
+        capture_focus_changes: usize,
+        cancel_on_capture: Option<std::sync::Arc<AtomicBool>>,
     }
     impl Fixture {
         fn window(&self) -> Window {
@@ -372,6 +403,13 @@ mod fixture_tests {
         }
         fn capture(&mut self, w: &Window) -> Result<(Transform, Vec<u8>)> {
             self.captures += 1;
+            if let Some(cancelled) = &self.cancel_on_capture {
+                cancelled.store(true, Ordering::SeqCst);
+            }
+            if self.capture_focus_changes > 0 {
+                self.capture_focus_changes -= 1;
+                self.front += 1;
+            }
             Ok((
                 Transform {
                     desktop: w.geometry,
@@ -420,6 +458,84 @@ mod fixture_tests {
         }
     }
     #[test]
+    fn post_click_scene_change_retries_only_capture_and_is_bounded() {
+        for (changes, cancel) in [(1, false), (10, false), (1, true)] {
+            let mut desktop = Fixture {
+                captures: 0,
+                inputs: 0,
+                fail_at: usize::MAX,
+                released: false,
+                focus: true,
+                closed: false,
+                display: true,
+                front: 1,
+                reject_key: false,
+                capture_focus_changes: 0,
+                cancel_on_capture: None,
+            };
+            let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+            let mut request = Request {
+                id: "settling".into(),
+                session: "s".into(),
+                generation: "g".into(),
+                observation: None,
+                operation: Operation::Select {
+                    window: "display:fixture".into(),
+                    generation: "g".into(),
+                },
+            };
+            let observation = execute(&mut desktop, &request, &cancelled)
+                .observation
+                .unwrap();
+            request.operation = Operation::Act {
+                observation: observation.id.clone(),
+                observe: true,
+                actions: vec![Action::Click {
+                    x: Some(10.0),
+                    y: Some(10.0),
+                    element: None,
+                    button: Button::Left,
+                }],
+            };
+            request.observation = Some(observation);
+            desktop.capture_focus_changes = changes;
+            desktop.cancel_on_capture = cancel.then(|| cancelled.clone());
+            let reply = execute(&mut desktop, &request, &cancelled);
+            assert_eq!(reply.completed, 1);
+            assert!(!reply.uncertain);
+            assert_eq!(
+                desktop.inputs, 1,
+                "capture retry must never replay the click"
+            );
+            assert!(desktop.released);
+            if cancel {
+                assert!(reply.error.unwrap().contains("cancelled"));
+                assert!(reply.observation.is_none());
+                assert_eq!(desktop.captures, 2, "cancellation prevents recapture");
+            } else if changes == 1 {
+                assert!(reply.error.is_none(), "{:?}", reply.error);
+                assert_eq!(desktop.captures, 3); // Selection + discarded + stable.
+                assert_eq!(
+                    reply.observation.unwrap().window.focus,
+                    Some(desktop.front.to_string())
+                );
+            } else {
+                assert!(reply.error.unwrap().contains("observe again"));
+                assert!(reply.observation.is_none());
+                assert_eq!(desktop.captures, 4); // Selection + at most three attempts.
+                desktop.capture_focus_changes = 0;
+                request.operation = Operation::Observe {
+                    crop: None,
+                    region: None,
+                };
+                let recovered = execute(&mut desktop, &request, &cancelled);
+                assert!(recovered.error.is_none());
+                assert!(recovered.observation.is_some());
+                assert_eq!(desktop.inputs, 1);
+            }
+        }
+    }
+    #[test]
     fn application_assist_blocks_all_input_and_switching_screen_requires_new_observation() {
         let mut desktop = Fixture {
             captures: 0,
@@ -431,6 +547,8 @@ mod fixture_tests {
             display: true,
             front: 1,
             reject_key: false,
+            capture_focus_changes: 0,
+            cancel_on_capture: None,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -518,6 +636,8 @@ mod fixture_tests {
             display: true,
             front: 1,
             reject_key: false,
+            capture_focus_changes: 0,
+            cancel_on_capture: None,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -611,6 +731,8 @@ mod fixture_tests {
             display: true,
             front: 1,
             reject_key: false,
+            capture_focus_changes: 0,
+            cancel_on_capture: None,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -701,6 +823,8 @@ mod fixture_tests {
             display: false,
             front: 1,
             reject_key: false,
+            capture_focus_changes: 0,
+            cancel_on_capture: None,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -752,6 +876,8 @@ mod fixture_tests {
             display: false,
             front: 1,
             reject_key: false,
+            capture_focus_changes: 0,
+            cancel_on_capture: None,
         };
         let cancel = AtomicBool::new(false);
         let mut r = Request {

@@ -5,6 +5,15 @@ use crate::{
     dto::chat::ToolCall,
 };
 
+fn diagnostic(rt: &SessionRuntime, event: &str, request: &str, detail: &str) {
+    // Never log action arguments, typed text, screenshots or extracted content.
+    let body = format!("session={} request={request} {detail}", rt.id);
+    crate::model::store::append_global_error_log(event, &body);
+    if let Some(session) = &rt.session {
+        crate::model::store::append_error_log(&session.path, event, &body);
+    }
+}
+
 // Runtime guidance is separate from untrusted window/OCR text. A stopped desktop
 // controller must not send the model looking for an alternate input mechanism.
 fn recovery_nudge() -> serde_json::Value {
@@ -70,6 +79,15 @@ pub fn cancel_approval(rt: &mut SessionRuntime, reason: &str) {
     }
 }
 pub fn stop(rt: &mut SessionRuntime, reason: &str) {
+    diagnostic(
+        rt,
+        "computer.stop",
+        rt.computer
+            .pending
+            .as_ref()
+            .map_or("none", |(r, _)| r.id.as_str()),
+        reason,
+    );
     let pending = rt.computer.stop(reason);
     cancel_approval(rt, reason);
     if let Some(id) = pending {
@@ -114,10 +132,22 @@ pub fn dispatch(state: &mut AppState, index: usize, call: &ToolCall) {
     rt.tool_idx += 1;
     match result {
         Ok(()) => {
+            diagnostic(
+                rt,
+                "computer.dispatch",
+                &call.id,
+                &format!("tool={} state=queued", call.function.name),
+            );
             rt.pending_tool_tasks.push(call.id.clone());
             rt.awaiting_tool_tasks = true;
         }
         Err(e) => {
+            diagnostic(
+                rt,
+                "computer.rejected",
+                &call.id,
+                &format!("tool={} error={e}", call.function.name),
+            );
             let message = if rt.computer.status.enabled && e.is::<ScreenRequired>() {
                 screen_required_result(&rt.computer.status)
             } else if rt.computer.status.enabled {
@@ -135,8 +165,19 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
         || !rt.computer.accepts(owner, &reply)
         || (!reply.id.starts_with("gui:") && !rt.pending_tool_tasks.contains(&reply.id))
     {
+        diagnostic(
+            rt,
+            "computer.reply_dropped",
+            &reply.id,
+            "stale, expired, or unowned result",
+        );
         return;
     }
+    let elapsed = rt
+        .computer
+        .pending
+        .as_ref()
+        .map_or(0, |(_, started)| started.elapsed().as_millis());
     if rt
         .computer
         .pending
@@ -176,6 +217,11 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
         .clone()
         .unwrap_or_else(|| format!("Completed {} inputs", reply.completed));
     rt.computer.changed = true;
+    diagnostic(rt, "computer.result", &reply.id, &format!(
+        "elapsed_ms={elapsed} completed={} uncertain={} observation={} enabled={} requires_observation={observe_again} error={}",
+        reply.completed, reply.uncertain, reply.observation.is_some(), rt.computer.status.enabled,
+        reply.error.as_deref().unwrap_or("none"),
+    ));
     reply.capabilities = Some(rt.computer.status.capabilities.clone());
     reply.png.clear();
     let mut result = serde_json::json!(&reply);

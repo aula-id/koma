@@ -130,6 +130,27 @@ A pre-input focus/layout change invalidates coordinates and returns
 `requires_observation=true`; sharing remains active. The model must observe and
 re-plan. Permission loss, uncertain input and other fatal failures stop control
 with recovery guidance. Cancellation or lost responses never trigger replay.
+When the desktop changes during a requested full-source capture (for example,
+after a click brings an app forward), the worker makes at most three capture
+attempts with short cancellable settling delays. Only observations are retried;
+the action sequence is never replayed. Region captures remain bound to their
+original scene and require a fresh full observation if it changes. If the scene
+does not settle, the result retains the completed input count and asks the model
+to observe again.
+
+If the model responds to that recovery with only an observation promise such as
+“Observing again after the desktop shift,” Koma uses the existing two-reminder
+budget to request the missing tool call. Exhaustion produces a persistent chat
+notice rather than silently marking the task complete. A model stream that loses
+its producer without a terminal event ends with a visible interruption error;
+returned request errors are forwarded to the chat instead of discarded.
+
+Diagnostics in `~/.koma/error.log` include `computer.dispatch`, `computer.rejected`,
+`computer.result`, `computer.reply_dropped`, `computer.stop`, `computer.capture`,
+`computer.turn` and `turn.error`. Operation entries correlate session/request IDs,
+elapsed time, completed count, uncertainty and recovery state. They do not include
+action arguments, typed text, screenshots or OCR metadata. Operation diagnostics
+also go to the session's `error.log`; `gui-pace` entries alone only show UI delivery.
 Desktop checks and OS input are not atomic: content can change between observation,
 validation and an event. Simultaneous user typing can interrupt control; use Take
 back control to chat without agent input competing for the native keyboard.
