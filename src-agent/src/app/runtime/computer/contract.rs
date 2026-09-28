@@ -155,6 +155,17 @@ impl std::fmt::Display for ObservationRequired {
 }
 impl std::error::Error for ObservationRequired {}
 
+#[derive(Debug)]
+pub struct RegionCaptureUnavailable(pub Rect);
+impl std::fmt::Display for RegionCaptureUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "Fresh region capture is unavailable for this source; inspect a saved crop instead",
+        )
+    }
+}
+impl std::error::Error for RegionCaptureUnavailable {}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Element {
     pub id: String,

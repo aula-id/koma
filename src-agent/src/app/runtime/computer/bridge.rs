@@ -163,6 +163,20 @@ pub fn dispatch(state: &mut AppState, index: usize, call: &ToolCall) {
                 screen_required_result(&rt.computer.status)
             } else if rt.computer.status.enabled && e.is::<ObservationRequired>() {
                 observation_required_result(&e.to_string())
+            } else if let Some(RegionCaptureUnavailable(bounds)) = e
+                .downcast_ref::<RegionCaptureUnavailable>()
+                .filter(|_| rt.computer.status.enabled)
+            {
+                serde_json::json!({
+                    "error": e.to_string(), "completed":0,"uncertain":false,"executed":false,
+                    "controller_enabled":true,"requires_user_action":false,
+                    "recovery": {
+                        "kind":"saved_image_inspection",
+                        "model_instruction":"Sharing remains active. Fresh high-detail region capture is only supported for native display sources. For this application or portal source, call computer_observe with crop using the same rectangle to inspect the saved observation on any platform. To load an older image or sample exact RGB hex/RGBA colors, use load_image with image_path as path (or image_n), optional crop and points; attach=false returns numeric metadata only. Do not use bash/Python/PIL for image cropping or pixel sampling. Saved crops do not restore detail; use a full computer_observe if you need a fresh frame.",
+                        "crop_call":{"tool":"computer_observe","arguments":{"crop":bounds}},
+                        "image_path":rt.computer.status.observation.as_ref().map(|o|&o.image_path)
+                    }
+                }).to_string()
             } else if rt.computer.status.enabled {
                 format!("error: {e}")
             } else {
@@ -349,7 +363,7 @@ fn ingest(rt: &mut SessionRuntime, reply: &mut Reply) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn main_accepts_images(state: &AppState, index: usize) -> bool {
+pub(crate) fn main_accepts_images(state: &AppState, index: usize) -> bool {
     let main = state.rest.sessions[index].session.as_ref().and_then(|s| {
         crate::app::resolve::resolve_role_dispatch(
             &state.rest.config,
@@ -562,6 +576,28 @@ mod approval_tests {
             assert!(rt.computer.outbound.is_none());
             assert!(rt.pending_tool_tasks.is_empty());
         }
+        let region = ToolCall {
+            id: "app-region".into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: "computer_observe".into(),
+                arguments: serde_json::json!({"region":{"x":10,"y":20,"width":30,"height":40}})
+                    .to_string(),
+            },
+        };
+        dispatch(&mut state, 0, &region);
+        let rt = &state.rest.sessions[0];
+        let fallback: serde_json::Value =
+            serde_json::from_str(&rt.tool_results.last().unwrap().1).unwrap();
+        assert_eq!(fallback["recovery"]["kind"], "saved_image_inspection");
+        assert_eq!(
+            fallback["recovery"]["crop_call"]["arguments"]["crop"]["x"],
+            10.0
+        );
+        assert_eq!(fallback["executed"], false);
+        assert!(rt.computer.status.enabled);
+        assert!(rt.computer.actionable);
+        assert!(rt.computer.outbound.is_none());
         let call=ToolCall {id:"assist-input".into(),kind:"function".into(),function:FunctionCall {name:"computer_act".into(),arguments:serde_json::json!({"observation":"app-observation","actions":[{"kind":"type","text":"blocked"}]}).to_string()}};
         dispatch(&mut state, 0, &call);
         let rt = &mut state.rest.sessions[0];

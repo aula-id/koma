@@ -38,25 +38,34 @@ fn desktop_automation_command(command: &str) -> bool {
         .is_match(command)
 }
 
+fn image_inspection_command(command: &str) -> bool {
+    static IMAGE_RE: OnceLock<Regex> = OnceLock::new();
+    IMAGE_RE.get_or_init(|| crate::re_util::static_re(
+        r"(?s)\b(?:python[23]?|pypy[23]?)\b.*\b(?:PIL|cv2)\b.*\.(?:getpixel|crop|load|getdata|imread)\s*\(",
+    )).is_match(command)
+}
+
 fn computer_shell_rejection(
     status: &crate::app::runtime::computer::Status,
     command: &str,
 ) -> Option<String> {
     // Session stays marked after Stop/disconnect: losing the controller must
     // not unlock an alternate desktop-input path in the same conversation.
-    if status.session.is_empty() || !desktop_automation_command(command) {
+    if status.session.is_empty()
+        || !(desktop_automation_command(command) || image_inspection_command(command))
+    {
         return None;
     }
     Some(serde_json::json!({
-        "error": "Desktop automation through bash is unavailable in a computer-use session. No shell command executed.",
+        "error": "Use the built-in computer/image tools for desktop automation and image inspection in this session. No shell command executed.",
         "executed": false,
         "controller_enabled": status.enabled,
         "recovery": {
             "kind": "computer_tools_required",
             "model_instruction": if status.enabled && !status.paused {
-                "Use computer tools for this desktop task. Missing AX metadata does not prevent screenshot-coordinate input. Call computer_observe, copy its exact observation_id, then use computer_act with x/y and no element for screen clicks. Use native key actions for app switching and type actions for text. Do not route desktop input through shell scripts, browser tools, or delegated agents."
+                "For saved-image cropping or pixel colors, call load_image with path/image_n, crop and/or points; attach=false returns numeric hex/RGBA samples without another attachment. Use this instead of Python/PIL; it does not need fresh capture. For desktop actions use computer tools. Missing AX metadata does not prevent screenshot-coordinate input. Observe, copy the exact observation_id, then use computer_act with x/y and no element for screen clicks. Use native key actions for app switching and type actions for text. Do not route desktop input through shell scripts, browser tools, or delegated agents."
             } else {
-                "Computer control is paused or stopped. Stop desktop input and wait for the user to resume or explicitly enable Computer use. Do not bypass this state through shell scripts, browser tools, or delegated agents."
+                "Computer control is paused or stopped. Stop desktop input and wait for the user to resume or explicitly enable Computer use. Saved files can still be inspected with load_image crop/points without any desktop input or capture. Do not bypass control state through shell scripts, browser tools, or delegated agents."
             }
         }
     }).to_string())
@@ -336,6 +345,8 @@ mod computer_policy_tests {
             "gio open /tmp/report.pdf",
             "powershell -Command 'Start-Process notepad.exe'",
             "powershell -Command 'Invoke-Item report.pdf'",
+            "python3 - <<'PY'\nfrom PIL import Image\nim=Image.open('computer.png')\nprint(im.getpixel((10,20)))\nPY",
+            "python -c 'import cv2; print(cv2.imread(\"frame.png\"))'",
         ] {
             assert!(computer_shell_rejection(&status, command).is_some(), "{command}");
             assert!(computer_shell_rejection(&Status::default(), command).is_none());

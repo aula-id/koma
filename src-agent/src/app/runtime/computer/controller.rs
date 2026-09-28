@@ -176,7 +176,7 @@ impl Controller {
                     .ok_or_else(|| anyhow::anyhow!("observe before inspecting a region"))?;
                 current.transform.crop(bounds)?;
                 if region.is_some() && !current.window.id.starts_with("display:") {
-                    bail!("fresh region capture unavailable for this source; use crop or a full observation");
+                    return Err(RegionCaptureUnavailable(bounds).into());
                 }
             }
         }

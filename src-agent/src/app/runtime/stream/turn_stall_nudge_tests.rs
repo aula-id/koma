@@ -178,6 +178,15 @@ fn computer_turn_scope_skips_observations_and_reminders_but_ends_at_new_user() {
             mime: "image/png".into(),
         }],
     );
+    conversation.push_user_with_attachments(
+        "[Image loaded: image-inspection]",
+        vec![Attachment {
+            kind: AttachmentKind::Image,
+            marker_n: 2,
+            rel_path: "images/crop.png".into(),
+            mime: "image/png".into(),
+        }],
+    );
     conversation.push_user(super::COMPUTER_RECOVERY_NUDGE_MSG);
     assert!(super::computer_turn_stalled(rt, "Selecting the screen."));
     rt.session

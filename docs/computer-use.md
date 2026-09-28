@@ -122,6 +122,48 @@ With `observe=false`, another observation is required before further input.
 Coordinate clicks, scroll and navigation keys end a sequence. Typing uses current
 native focus; click the intended visible application and observe before typing.
 There is no drag or held-button tool.
+
+### Saved-image inspection
+
+`computer_observe({"crop":{"x":100,"y":80,"width":300,"height":200}})`
+inspects the saved current observation on all platforms, including application
+and portal shares. `region` requests a **fresh** high-detail capture and only
+works on supported native display sources. An unsupported application/portal
+region request now returns a concrete crop call and keeps sharing active.
+
+`load_image` also handles saved images independently of desktop control. Use a
+session `image_n` or an allowed `path` (including an observation's `image_path`):
+
+```json
+{"image_n":1,"crop":{"x":100,"y":80,"width":300,"height":200}}
+```
+
+The crop is attached immediately as a new image artifact. The source stays
+unchanged; tool details retain source dimensions, crop bounds, the new image
+marker/path, and the output-to-source coordinate mapping. Image inspection does
+not refresh or authorize a computer observation. Use a current observation and
+map coordinates back before computer input.
+
+For exact color values without another attachment:
+
+```json
+{"image_n":1,"points":[{"x":120,"y":90},{"x":240,"y":90}],"attach":false}
+```
+
+Points always address the full EXIF-oriented source image, even when a crop is
+also requested. Results include RGB hex and 8-bit RGBA values sampled before
+resizing; alpha is retained separately from RGB hex. These are saved pixel values,
+not color-managed screen measurements. `attach:false` without points returns
+image dimensions/crop metadata. Inspection accepts at most 64 points, 20 MiB of
+encoded input and 32 megapixels of decoded image; attached inspection images are
+capped at 1920 pixels per edge and 2 megapixels. It uses the existing Rust image
+decoder on macOS, Windows and Linux, without Python or a new native dependency.
+The computer-session shell guard redirects common PIL/OpenCV crop and pixel
+sampling commands to this built-in path. As with desktop shell fallbacks, this is
+a targeted routing guard, not a sandbox for arbitrary scripts.
+
+### Native execution
+
 Key names use one case-insensitive vocabulary across validation and native adapters.
 For example, `Command`/`cmd`/`Meta`/`Super` plus `Space`/`space`/a literal space all
 resolve to the same Spotlight chord on macOS. `Control`/`Ctrl`, `Alt`/`Option`,

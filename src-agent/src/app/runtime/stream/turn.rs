@@ -43,7 +43,9 @@ fn desktop_tools_in_turn(rt: &crate::app::state::SessionRuntime) -> bool {
     };
     for message in session.conversation.messages().iter().rev() {
         if message.role == Role::User
-            && !(message.content.starts_with("Computer observation ")
+            && !((message.content.starts_with("Computer observation ")
+                || message.content.starts_with("[Image loaded:")
+                || message.content.starts_with("[Screenshot loaded:"))
                 && !message.attachments.is_empty())
             && message.content != COMPUTER_RECOVERY_NUDGE_MSG
             && message.content != MAIN_STALL_NUDGE_MSG
