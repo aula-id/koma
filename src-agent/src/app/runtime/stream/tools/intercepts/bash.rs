@@ -27,6 +27,41 @@ fn git_command_re() -> &'static Regex {
     GIT_RE.get_or_init(|| crate::re_util::static_re(r"(?:^|[\s;&|(])git\b"))
 }
 
+/// Catch common desktop-tool fallbacks before either foreground or background
+/// jobs spawn. This is a routing guard, not a sandbox for arbitrary shell code.
+fn desktop_automation_command(command: &str) -> bool {
+    static DESKTOP_RE: OnceLock<Regex> = OnceLock::new();
+    DESKTOP_RE
+        .get_or_init(|| crate::re_util::static_re(
+            r"(?i)(?:^|[\s;&|(])(?:[^\s;|]*[/\\])?(?:osascript|cliclick|xdotool|ydotool|wtype|wmctrl|nircmd)(?:\s|$)|\b(?:pyautogui|pynput|CGEventPost|CGWarpMouseCursorPosition|SendKeys|SendInput|SetCursorPos|mouse_event|keybd_event)\b",
+        ))
+        .is_match(command)
+}
+
+fn computer_shell_rejection(
+    status: &crate::app::runtime::computer::Status,
+    command: &str,
+) -> Option<String> {
+    // Session stays marked after Stop/disconnect: losing the controller must
+    // not unlock an alternate desktop-input path in the same conversation.
+    if status.session.is_empty() || !desktop_automation_command(command) {
+        return None;
+    }
+    Some(serde_json::json!({
+        "error": "Desktop automation through bash is unavailable in a computer-use session. No shell command executed.",
+        "executed": false,
+        "controller_enabled": status.enabled,
+        "recovery": {
+            "kind": "computer_tools_required",
+            "model_instruction": if status.enabled && !status.paused {
+                "Use computer tools for this desktop task. Missing AX metadata does not prevent screenshot-coordinate input. Call computer_observe, copy its exact observation_id, then use computer_act with x/y and no element for screen clicks. Use native key actions for app switching and type actions for text. Do not route desktop input through shell scripts, browser tools, or delegated agents."
+            } else {
+                "Computer control is paused or stopped. Stop desktop input and wait for the user to resume or explicitly enable Computer use. Do not bypass this state through shell scripts, browser tools, or delegated agents."
+            }
+        }
+    }).to_string())
+}
+
 pub(in crate::app::runtime::stream::tools) fn intercept_bash_background(
     state: &mut AppState,
     sess_idx: usize,
@@ -52,6 +87,10 @@ pub(in crate::app::runtime::stream::tools) fn intercept_bash_background(
     // Shared validation for FG and BG — push an error tool result and continue.
     let err = if command.trim().is_empty() {
         Some("error: bash requires a non-empty 'command'".to_string())
+    } else if let Some(rejection) =
+        computer_shell_rejection(&state.rest.sessions[sess_idx].computer.status, &command)
+    {
+        Some(rejection)
     } else if git_command_re().is_match(command.trim()) {
         Some(
             "error: use the git_operator tool for git commands, not bash. \
@@ -264,4 +303,75 @@ pub(in crate::app::runtime::stream::tools) fn intercept_bash_kill(
         .push((call.id.clone(), result));
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
+}
+
+#[cfg(test)]
+mod computer_policy_tests {
+    use super::*;
+    use crate::{
+        app::{mode::Mode, runtime::computer::Status},
+        dto::chat::FunctionCall,
+    };
+
+    #[test]
+    fn computer_shell_guard_covers_native_fallbacks_and_retains_normal_shell() {
+        let mut status = Status {
+            session: "fixture".into(),
+            enabled: true,
+            ..Default::default()
+        };
+        for command in [
+            "osascript <<'APPLESCRIPT'\ntell application \"System Events\" to keystroke \"x\"\nAPPLESCRIPT",
+            "/usr/bin/osascript -e 'tell application \"Finder\" to activate'",
+            "python3 -c 'import pyautogui; pyautogui.click(2, 3)'",
+            "powershell -Command '[System.Windows.Forms.SendKeys]::SendWait(\"x\")'",
+            "xdotool mousemove 10 20 click 1",
+            "ydotool type hello",
+            "cliclick c:10,20",
+        ] {
+            assert!(computer_shell_rejection(&status, command).is_some(), "{command}");
+            assert!(computer_shell_rejection(&Status::default(), command).is_none());
+        }
+        for command in [
+            "cargo check",
+            "ls -la",
+            "python3 -c 'print(1)'",
+            "rg 'AX' src-agent",
+        ] {
+            assert!(
+                computer_shell_rejection(&status, command).is_none(),
+                "{command}"
+            );
+        }
+        for (enabled, paused) in [(true, true), (false, false)] {
+            status.enabled = enabled;
+            status.paused = paused;
+            let result = computer_shell_rejection(&status, "osascript -e 'beep'").unwrap();
+            assert!(result.contains("wait for the user"));
+        }
+    }
+
+    #[test]
+    fn computer_shell_fallback_never_spawns_foreground_or_background_jobs() {
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.sessions[0].computer.status.session = state.rest.sessions[0].id.clone();
+        state.rest.sessions[0].computer.status.enabled = true;
+        for background in [false, true] {
+            let call = ToolCall { id: format!("shell-{background}"), kind: "function".into(), function: FunctionCall {
+                name: "bash".into(),
+                arguments: serde_json::json!({"command":"osascript -e 'beep'", "run_in_background":background}).to_string(),
+            }};
+            assert!(matches!(
+                intercept_bash_background(&mut state, 0, &call),
+                InterceptFlow::Continue
+            ));
+            let rt = &state.rest.sessions[0];
+            assert!(rt.bash_jobs.is_empty());
+            assert!(rt.pending_tool_tasks.is_empty());
+            let result: serde_json::Value =
+                serde_json::from_str(&rt.tool_results.last().unwrap().1).unwrap();
+            assert_eq!(result["executed"], false);
+            assert_eq!(result["recovery"]["kind"], "computer_tools_required");
+        }
+    }
 }

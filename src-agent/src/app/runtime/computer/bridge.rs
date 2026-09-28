@@ -49,6 +49,17 @@ fn stopped_result(reason: &str, uncertain: bool) -> String {
     .to_string()
 }
 
+fn observation_required_result(reason: &str) -> String {
+    serde_json::json!({
+        "error": reason, "completed": 0, "uncertain": false, "executed": false,
+        "controller_enabled": true, "requires_observation": true, "requires_user_action": false,
+        "recovery": {
+            "kind": "observation_required",
+            "model_instruction": "No input executed for this rejected call. Call computer_observe (select a screen first if none is selected), inspect the frame, and copy its exact observation_id into computer_act.observation. For a screen click, provide x/y from that screenshot and omit element. Never invent element IDs or describe the scene in observation. Missing AX metadata does not prevent coordinate input. Continue using computer tools, not bash, osascript, or browser tools. Re-plan from the fresh frame; do not replay previous completed or uncertain actions."
+        }
+    }).to_string()
+}
+
 pub fn settle(rt: &mut SessionRuntime, id: String, message: String) {
     if let Some(index) = rt.pending_tool_tasks.iter().position(|v| *v == id) {
         rt.pending_tool_tasks.remove(index);
@@ -150,6 +161,8 @@ pub fn dispatch(state: &mut AppState, index: usize, call: &ToolCall) {
             );
             let message = if rt.computer.status.enabled && e.is::<ScreenRequired>() {
                 screen_required_result(&rt.computer.status)
+            } else if rt.computer.status.enabled && e.is::<ObservationRequired>() {
+                observation_required_result(&e.to_string())
             } else if rt.computer.status.enabled {
                 format!("error: {e}")
             } else {
@@ -252,6 +265,7 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
         }
     }
     if let Some(obs) = &reply.observation {
+        result["observation_id"] = obs.id.clone().into();
         result["source_type"] = if is_screen(&obs.window.id) {
             "screen"
         } else {
@@ -317,6 +331,7 @@ fn ingest(rt: &mut SessionRuntime, reply: &mut Reply) -> anyhow::Result<()> {
     // Use a host-generated artifact name; no controller-controlled path components.
     let artifact = dir.join(format!("{}.json", uuid::Uuid::new_v4()));
     let mut metadata = serde_json::to_value(&*obs)?;
+    metadata["observation_id"] = obs.id.clone().into();
     let screen = is_screen(&obs.window.id);
     metadata["source_type"] = if screen { "screen" } else { "application" }.into();
     metadata["view_only"] = (!screen
@@ -420,6 +435,7 @@ mod tests {
         let message = rt.computer.latest_message.as_ref().unwrap();
         assert!(message.content.contains("\"source_type\":\"application\""));
         assert!(message.content.contains("\"view_only\":true"));
+        assert!(message.content.contains("\"observation_id\":\"o\""));
         assert_eq!(
             preview,
             std::fs::read(path.join(&message.attachments[0].rel_path)).unwrap()
@@ -506,6 +522,46 @@ mod approval_tests {
             image_path: String::new(),
         });
         rt.computer.actionable = true;
+        // Model prose and an old UUID must both be rejected before dispatch,
+        // with different diagnostics and an actionable recovery response.
+        for (id, reference, expected) in [
+            (
+                "prose",
+                "MongoDB Compass partially visible behind koma",
+                "Invalid observation reference",
+            ),
+            (
+                "old",
+                "2ae1b634-d578-45d0-81d7-7583f436bcba",
+                "Stale observation",
+            ),
+        ] {
+            let rejected = ToolCall {
+                id: id.into(),
+                kind: "function".into(),
+                function: FunctionCall {
+                    name: "computer_act".into(),
+                    arguments: serde_json::json!({"observation":reference,"actions":[{
+                        "kind":"click","button":"left","x":50,"y":50,
+                        "element":"MongoDB Compass window area visible behind koma"
+                    }]})
+                    .to_string(),
+                },
+            };
+            dispatch(&mut state, 0, &rejected);
+            let rt = &state.rest.sessions[0];
+            let result: serde_json::Value =
+                serde_json::from_str(&rt.tool_results.last().unwrap().1).unwrap();
+            assert!(result["error"].as_str().unwrap().starts_with(expected));
+            assert_eq!(result["requires_observation"], true);
+            assert_eq!(result["completed"], 0);
+            assert_eq!(result["uncertain"], false);
+            assert_eq!(result["executed"], false);
+            assert!(rt.computer.status.enabled);
+            assert!(rt.computer.pending.is_none());
+            assert!(rt.computer.outbound.is_none());
+            assert!(rt.pending_tool_tasks.is_empty());
+        }
         let call=ToolCall {id:"assist-input".into(),kind:"function".into(),function:FunctionCall {name:"computer_act".into(),arguments:serde_json::json!({"observation":"app-observation","actions":[{"kind":"type","text":"blocked"}]}).to_string()}};
         dispatch(&mut state, 0, &call);
         let rt = &mut state.rest.sessions[0];

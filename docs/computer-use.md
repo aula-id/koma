@@ -98,6 +98,23 @@ selects either source without focusing an app. Application input is rejected by 
 daemon, worker and native adapters, even if an application window has focus. Use native clicks or key chords to switch
 applications, then observe. `computer_observe` captures the shared display or a
 close-up. `computer_act` requires a current screen observation and defaults to one final capture.
+Use the exact `observation_id` returned with the frame (also `observation.id`),
+not the top-level tool request `id` or a scene description. Invalid references and
+expired observations are rejected before input with `completed=0`,
+`uncertain=false`, and `requires_observation=true`; observe and re-plan using the
+new ID. Never silently substitute the current frame or replay previous input.
+Screen clicks use screenshot `x`/`y` and omit `element`; accessibility metadata is
+not needed for coordinate control. Element IDs, when available, must come from
+that observation and cannot be combined with coordinates.
+
+During a computer-use conversation, the main model's bash dispatcher rejects
+recognized desktop-automation fallbacks (including `osascript`, `cliclick`,
+`xdotool`, `pyautogui`, and `SendKeys`) before spawning foreground or background
+jobs. This restriction remains after pause/stop/disconnect; normal shell commands
+remain available. It is a targeted tool-routing guard, not a sandbox against
+arbitrary or obfuscated programs. Native move, click and scroll actions use the
+real OS pointer; a rejected call causes no pointer movement.
+
 With `observe=false`, another observation is required before further input.
 Coordinate clicks, scroll and navigation keys end a sequence. Typing uses current
 native focus; click the intended visible application and observe before typing.

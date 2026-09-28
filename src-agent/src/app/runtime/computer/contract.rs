@@ -145,6 +145,16 @@ impl std::fmt::Display for ScreenRequired {
 }
 impl std::error::Error for ScreenRequired {}
 
+/// A rejected reference never reaches the desktop worker.
+#[derive(Debug)]
+pub struct ObservationRequired(pub &'static str);
+impl std::fmt::Display for ObservationRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for ObservationRequired {}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Element {
     pub id: String,

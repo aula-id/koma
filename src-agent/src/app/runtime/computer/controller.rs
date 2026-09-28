@@ -148,16 +148,17 @@ impl Controller {
                 actions,
                 ..
             } => {
-                let current = self
-                    .status
-                    .observation
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("observe before acting"))?;
+                let current = self.status.observation.as_ref().ok_or(ObservationRequired(
+                    "No observation available; select a screen and observe before acting",
+                ))?;
+                if current.id != *observation && uuid::Uuid::parse_str(observation).is_err() {
+                    return Err(ObservationRequired("Invalid observation reference: copy the exact observation_id from a computer observation result, not a description, request ID, or image number").into());
+                }
                 if !self.actionable
                     || current.id != *observation
                     || current.generation != self.status.generation
                 {
-                    bail!("stale observation");
+                    return Err(ObservationRequired("Stale observation: this frame is no longer actionable; observe again and use the new observation_id").into());
                 }
                 if !is_screen(&current.window.id) {
                     return Err(ScreenRequired.into());
