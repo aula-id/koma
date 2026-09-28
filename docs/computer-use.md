@@ -24,8 +24,11 @@ like any other share; selecting it does not raise the window until an input acti
 The titlebar uses one icon for choose-source, paused, and sharing, and provides **Take back control**, **Give
 control** and **Stop sharing**. Taking back control pauses/cancels input while
 keeping the share and live preview; resuming requires a fresh model observation.
+Interrupting a turn cancels the click in flight and leaves sharing enabled.
+Only the stop control, disconnect, or a session change turns sharing off.
 Stopping, disconnecting or changing sessions ends sharing and closes both preview
-styles. Reconnection requires explicit activation. Native failures that disable
+styles. Selecting another window or screen keeps the current preview picture
+until the next frame has decoded. Reconnection requires explicit activation. Native failures that disable
 control also close previews.
 
 Before a source is selected, the preview resizes freely on either axis and shows

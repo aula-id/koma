@@ -8,6 +8,31 @@ export function computerImageUrl(path: string) {
   return `${origin}/image/${encodeURIComponent(path)}`
 }
 
+/** Keep the current pixels until the next URL has actually decoded. */
+function useHeldImage(src: string | null) {
+  const held = useRef<string | null>(null)
+  const [shown, setShown] = useState<string | null>(null)
+  useEffect(() => {
+    if (!src) return
+    if (!held.current) {
+      held.current = src
+      setShown(src)
+      return
+    }
+    if (held.current === src) return
+    let cancel = false
+    const img = new Image()
+    img.onload = () => {
+      if (cancel) return
+      held.current = src
+      setShown(src)
+    }
+    img.src = src
+    return () => { cancel = true }
+  }, [src])
+  return src ? shown : null
+}
+
 /** Live shared-source view, with a clearly labelled saved-observation fallback. */
 export function ComputerPreview({ status, control, chrome }: {
   status: ComputerStatus | null
@@ -25,7 +50,8 @@ export function ComputerPreview({ status, control, chrome }: {
   const application = !!observation && !isComputerScreen(observation.window.id)
   const viewOnly = !!observation && isViewOnlySource(observation.window.id, !!status?.capabilities.pointer, !!status?.capabilities.keyboard)
   const live = useComputerLivePreview(status)
-  const image = live?.image ?? (observation ? computerImageUrl(observation.image_path) : null)
+  const incoming = live?.image ?? (observation ? computerImageUrl(observation.image_path) : null)
+  const image = useHeldImage(incoming)
   const unavailable = !status?.enabled || status.paused || status.busy
   useEffect(() => { setMenu(false); refreshPending.current = false }, [status?.session, status?.generation])
   useEffect(() => {

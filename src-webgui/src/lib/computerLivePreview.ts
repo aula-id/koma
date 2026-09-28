@@ -7,10 +7,10 @@ export function useComputerLivePreview(status: ComputerStatus | null) {
   const session = status?.session
   const generation = status?.generation
   const selected = status?.observation?.window.id
-  const active = !!status?.enabled && !status.busy && !!status.capabilities.capture
+  const busy = !!status?.busy
+  const enabled = !!status?.enabled && !!status.capabilities.capture
   useEffect(() => {
-    setFrame(null)
-    if (!active || !session || !generation || !selected) return
+    if (!enabled || busy || !session || !generation || !selected) return
     let disposed = false
     let pending: string | null = null
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -26,7 +26,6 @@ export function useComputerLivePreview(status: ComputerStatus | null) {
       timer = setTimeout(() => {
         if (disposed) return
         pending = null
-        setFrame({ request: preview, image: null, error: 'Live preview timed out', captured_ms: Date.now() })
         schedule(1500)
       }, 12_000)
     }
@@ -40,6 +39,7 @@ export function useComputerLivePreview(status: ComputerStatus | null) {
     window.addEventListener('koma-computer-preview', receive)
     request()
     return () => { disposed = true; clearTimeout(timer); window.removeEventListener('koma-computer-preview', receive) }
-  }, [active, session, generation, selected])
-  return frame && frame.request.session === session && frame.request.generation === generation && frame.request.window === selected && active ? frame : null
+  }, [enabled, busy, session, generation, selected])
+  if (!enabled || !session || !frame || frame.request.session !== session) return null
+  return frame
 }

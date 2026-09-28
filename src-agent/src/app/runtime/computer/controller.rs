@@ -86,6 +86,20 @@ impl Controller {
         self.release_lock();
         pending
     }
+    /// The turn was interrupted. Drop the in-flight desktop action and keep
+    /// sharing enabled; only the user's stop control turns it off.
+    pub fn halt_turn(&mut self) -> Option<String> {
+        let pending = self.pending.take().map(|(r, _)| r.id);
+        self.outbound = None;
+        self.status.busy = false;
+        self.actionable = false;
+        self.status.generation = uuid::Uuid::new_v4().to_string();
+        if self.status.enabled {
+            self.status.message = "Turn interrupted; sharing stays on".into();
+        }
+        self.changed = true;
+        pending
+    }
     fn release_lock(&mut self) {
         if let Some(file) = self.lock.take() {
             // Explicitly unlock before closing: concurrent process creation can
@@ -262,6 +276,29 @@ mod tests {
         drop(inherited);
         drop(a);
         drop(b);
+        let _ = std::fs::remove_file(path);
+    }
+    #[test]
+    fn interrupting_a_turn_leaves_sharing_enabled() {
+        let path =
+            std::env::temp_dir().join(format!("computer-halt-{}.lock", uuid::Uuid::new_v4()));
+        let mut controller = Controller::default();
+        controller
+            .enable(1, "s", "fixture", Capabilities::default(), &path)
+            .unwrap();
+        let generation = controller.status.generation.clone();
+        controller.actionable = true;
+        controller.status.busy = true;
+        controller.halt_turn();
+        assert!(controller.status.enabled);
+        assert!(!controller.status.paused);
+        assert!(!controller.actionable);
+        assert!(!controller.status.busy);
+        assert_ne!(controller.status.generation, generation);
+        assert!(controller.status.message.contains("sharing stays on"));
+        controller.stop("user turned sharing off");
+        assert!(!controller.status.enabled);
+        drop(controller);
         let _ = std::fs::remove_file(path);
     }
 }
