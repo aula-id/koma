@@ -17,12 +17,12 @@ thread_local! { static OWN: std::cell::Cell<*mut xlib::Display> = const {std::ce
 fn arrow_points() -> [xlib::XPoint; 8] {
     [
         (2, 2),
-        (2, 34),
-        (11, 25),
-        (17, 38),
-        (23, 35),
-        (16, 23),
-        (26, 23),
+        (2, 28),
+        (9, 21),
+        (14, 32),
+        (19, 29),
+        (13, 19),
+        (22, 19),
         (2, 2),
     ]
     .map(|(x, y)| xlib::XPoint {
@@ -157,7 +157,7 @@ impl X11 {
         let Some(fixes) = xfixes::Xlib::open().ok() else {
             return false;
         };
-        const SIZE: u32 = 43;
+        const SIZE: u32 = 36;
         const SHAPE_BOUNDING: c_int = 0;
         const SHAPE_INPUT: c_int = 2;
         let screen = unsafe { (self.x.XDefaultScreen)(self.display) };

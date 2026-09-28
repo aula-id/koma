@@ -290,10 +290,10 @@ static DWORD extended(WORD code) {
 }
 static HWND cursorWnd = nullptr;
 static HBITMAP cursorBmp = nullptr;
-static const int kArrow = 43;
+static const int kArrow = 36;
 static const int kHot = 2;
 static bool insideArrow(double x, double y) {
-    static const double poly[][2] = {{2, 2}, {2, 34}, {11, 25}, {17, 38}, {23, 35}, {16, 23}, {26, 23}};
+    static const double poly[][2] = {{2, 2}, {2, 28}, {9, 21}, {14, 32}, {19, 29}, {13, 19}, {22, 19}};
     bool inside = false;
     for (int i = 0, j = 6; i < 7; j = i++) {
         double yi = poly[i][1], yj = poly[j][1], xi = poly[i][0], xj = poly[j][0];

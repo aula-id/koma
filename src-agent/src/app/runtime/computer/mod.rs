@@ -11,10 +11,6 @@ pub(crate) mod controller;
 mod cursor_glide;
 pub(crate) mod executor;
 mod keys;
-// The printed ruler made small models mis-click and overthink. OCR word ids
-// are the click path. The painter stays for its tests.
-#[cfg_attr(not(test), allow(dead_code))]
-mod ruler;
 pub(crate) use contract::*;
 pub(crate) use controller::Controller;
 #[cfg(feature = "gui")]

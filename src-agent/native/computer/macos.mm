@@ -304,7 +304,7 @@ static void guardInput() {
         unobstructed(w);
     }
 }
-static const CGFloat kArrow = 43;
+static const CGFloat kArrow = 36;
 static const CGFloat kHot = 2;
 static NSPanel *cursorPanel = nil;
 static bool arrowShown = false;
@@ -345,7 +345,7 @@ static void ensureArrowMain() {
     [flip scaleXBy:1 yBy:-1];
     [flip concat];
     NSBezierPath *path = [NSBezierPath bezierPath];
-    CGFloat pts[][2] = {{2, 2}, {2, 34}, {11, 25}, {17, 38}, {23, 35}, {16, 23}, {26, 23}};
+    CGFloat pts[][2] = {{2, 2}, {2, 28}, {9, 21}, {14, 32}, {19, 29}, {13, 19}, {22, 19}};
     [path moveToPoint:NSMakePoint(pts[0][0], pts[0][1])];
     for (int i = 1; i < 7; ++i)
         [path lineToPoint:NSMakePoint(pts[i][0], pts[i][1])];
