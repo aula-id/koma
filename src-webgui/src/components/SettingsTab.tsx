@@ -160,7 +160,7 @@ export default function SettingsTab() {
           </section>
 
           <section ref={computerRef} className="mt-12">
-            <SectionHeader title="Computer use" desc="Share a window with the model and manage desktop control for this session." />
+            <SectionHeader title="Computer use" desc="Share a screen or an application window with the model." />
             <ComputerSettings />
           </section>
 
