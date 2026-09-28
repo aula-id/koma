@@ -1,5 +1,5 @@
 //! A narrow, in-process JSON bridge to the platform SDKs. Only this GUI worker
-//! can call it; mode, ownership, approval and action ordering remain in Rust.
+//! can call it; consent, ownership and action ordering remain in Rust.
 use super::*;
 use crate::app::runtime::computer::executor::Desktop;
 use agent::computer_native::{koma_computer_call, koma_computer_cancel, koma_computer_free};
@@ -23,6 +23,15 @@ fn call<T: DeserializeOwned>(request: serde_json::Value) -> Result<T> {
     );
     let mut value: serde_json::Value = serde_json::from_slice(bytes)?;
     if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
+        if value.get("input_busy").and_then(|v| v.as_bool()) == Some(true) {
+            return Err(InputBusy {
+                input_started: value
+                    .get("input_started")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
+            }
+            .into());
+        }
         anyhow::bail!("{error}");
     }
     Ok(serde_json::from_value(value["result"].take())?)

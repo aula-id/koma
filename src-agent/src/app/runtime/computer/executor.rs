@@ -56,7 +56,7 @@ pub fn validate_actions(obs: &Observation, actions: &[Action], caps: &Capabiliti
     if actions.is_empty() || actions.len() > 16 {
         bail!("actions must contain 1..16 steps");
     }
-    for (i, action) in actions.iter().enumerate() {
+    for action in actions {
         if let Some((x, y)) = target(action, obs)? {
             if !caps.pointer {
                 bail!("pointer unsupported");
@@ -64,22 +64,6 @@ pub fn validate_actions(obs: &Observation, actions: &[Action], caps: &Capabiliti
             obs.transform.map(x, y)?;
         }
         match action {
-            Action::Click { element, .. } if i + 1 != actions.len() => {
-                let editable = element
-                    .as_ref()
-                    .and_then(|id| obs.elements.iter().find(|e| e.id == *id))
-                    .is_some_and(|e| {
-                        e.source == "accessibility"
-                            && e.enabled
-                            && matches!(
-                                e.role.as_str(),
-                                "entry" | "text box" | "editable text" | "combo box"
-                            )
-                    });
-                if !editable {
-                    bail!("a click that may navigate must end the sequence; click/type sequences require an accessibility editable-field target");
-                }
-            }
             Action::Type { text } if !caps.keyboard || text.len() > 8192 => {
                 bail!("keyboard unsupported or text too long")
             }
@@ -88,28 +72,13 @@ pub fn validate_actions(obs: &Observation, actions: &[Action], caps: &Capabiliti
                     .chars()
                     .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t')) =>
             {
-                bail!("use a final named key action for control characters")
+                bail!("use a named key action for control characters")
             }
             Action::Key { keys } => {
                 if !caps.keyboard {
                     bail!("keyboard input unsupported");
                 }
                 super::keys::chord(keys)?;
-                if i + 1 != actions.len() {
-                    bail!("scroll or key navigation must end the sequence");
-                }
-            }
-            Action::Type { text }
-                if text.char_indices().any(|(offset, c)| {
-                    matches!(c, '\n' | '\r' | '\t')
-                        && (i + 1 != actions.len() || offset + c.len_utf8() != text.len())
-                }) =>
-            {
-                bail!("a typed navigation key must be the final character of the sequence; observe before continuing")
-            }
-            // Scrolling changes visible targets; observe before further input.
-            Action::Scroll { .. } if i + 1 != actions.len() => {
-                bail!("scroll or key navigation must end the sequence")
             }
             Action::Scroll { delta, .. } if delta.unsigned_abs() > 20 || *delta == 0 => {
                 bail!("scroll delta must be in -20..20 and nonzero")
@@ -131,7 +100,7 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
         if cancelled.load(Ordering::SeqCst) {
             bail!("cancelled");
         }
-        let window = match &request.operation {
+        let mut window = match &request.operation {
             Operation::Windows => {
                 reply.windows = desktop.windows()?;
                 return Ok(());
@@ -199,7 +168,7 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                 .observation
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("missing observation"))?;
-            for action in actions {
+            for (index, action) in actions.iter().enumerate() {
                 if cancelled.load(Ordering::SeqCst) {
                     bail!("cancelled; completed inputs were not undone");
                 }
@@ -228,10 +197,42 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                     action.clone()
                 };
                 desktop.validate_input(&resolved)?;
+                // Preflight can briefly wait for physical input to clear.
+                let ready = desktop.inspect(&window.id)?;
+                if ready.geometry != window.geometry
+                    || ready.title != window.title
+                    || !ready.focused
+                    || ready.focus != window.focus
+                {
+                    bail!("focus or geometry changed during input preflight; observe again");
+                }
+                if cancelled.load(Ordering::SeqCst) {
+                    bail!("cancelled; completed inputs were not undone");
+                }
                 reply.uncertain = true;
                 desktop.input(&resolved, &obs.transform)?;
                 reply.uncertain = false;
                 reply.completed += 1;
+                if index + 1 < actions.len() {
+                    // Posted click/key events return before many apps finish
+                    // changing focus. Let that transition settle without a
+                    // screenshot; cancellation still interrupts the batch.
+                    if matches!(action, Action::Click { .. } | Action::Key { .. }) {
+                        for _ in 0..10 {
+                            if cancelled.load(Ordering::SeqCst) {
+                                bail!("cancelled; completed inputs were not undone");
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                    }
+                    // Refresh native focus metadata after a predicted transition,
+                    // without capturing a frame between actions in this batch.
+                    let after = desktop.inspect(&window.id)?;
+                    if after.geometry != window.geometry || !after.focused {
+                        bail!("display geometry or focus unavailable after input; observe again");
+                    }
+                    window = after;
+                }
             }
             if !observe {
                 return Ok(());
@@ -316,6 +317,10 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
     })();
     desktop.release();
     if let Err(e) = result {
+        if let Some(busy) = e.downcast_ref::<InputBusy>() {
+            reply.input_busy = true;
+            reply.uncertain = busy.input_started;
+        }
         reply.requires_screen = e.is::<ScreenRequired>();
         reply.error = Some(e.to_string());
     }
@@ -365,6 +370,7 @@ mod fixture_tests {
         display: bool,
         front: u8,
         reject_key: bool,
+        busy_at: Option<(usize, bool, bool)>,
         capture_focus_changes: usize,
         cancel_on_capture: Option<std::sync::Arc<AtomicBool>>,
     }
@@ -431,6 +437,12 @@ mod fixture_tests {
             ))
         }
         fn validate_input(&mut self, action: &Action) -> Result<()> {
+            if self.busy_at == Some((self.inputs, true, false)) {
+                return Err(InputBusy {
+                    input_started: false,
+                }
+                .into());
+            }
             if let Action::Key { keys } = action {
                 assert_eq!(
                     keys,
@@ -444,6 +456,11 @@ mod fixture_tests {
             Ok(())
         }
         fn input(&mut self, action: &Action, _: &Transform) -> Result<()> {
+            if let Some((at, false, input_started)) = self.busy_at {
+                if at == self.inputs {
+                    return Err(InputBusy { input_started }.into());
+                }
+            }
             if self.inputs == self.fail_at {
                 bail!("fixture failure");
             }
@@ -458,6 +475,131 @@ mod fixture_tests {
         }
     }
     #[test]
+    fn predicted_batch_scrolls_keys_and_types_with_one_final_capture() {
+        let mut desktop = Fixture {
+            captures: 0,
+            inputs: 0,
+            fail_at: usize::MAX,
+            released: false,
+            focus: true,
+            closed: false,
+            display: true,
+            front: 1,
+            reject_key: false,
+            busy_at: None,
+            capture_focus_changes: 0,
+            cancel_on_capture: None,
+        };
+        let cancelled = AtomicBool::new(false);
+        let mut request = Request {
+            id: "batch".into(),
+            session: "s".into(),
+            generation: "g".into(),
+            observation: None,
+            operation: Operation::Select {
+                window: "display:fixture".into(),
+                generation: "g".into(),
+            },
+        };
+        request.observation = execute(&mut desktop, &request, &cancelled).observation;
+        let mut actions = vec![
+            Action::Scroll {
+                x: 50.0,
+                y: 70.0,
+                delta: -15
+            };
+            3
+        ];
+        actions.extend([
+            Action::Click {
+                x: Some(10.0),
+                y: Some(20.0),
+                element: None,
+                button: Button::Left,
+            },
+            Action::Key {
+                keys: vec!["Ctrl".into(), "a".into()],
+            },
+            Action::Type {
+                text: "mpos\nsecond line\tvalue".into(),
+            },
+            Action::Key {
+                keys: vec!["Return".into()],
+            },
+        ]);
+        request.operation = Operation::Act {
+            observation: request.observation.as_ref().unwrap().id.clone(),
+            actions,
+            observe: true,
+        };
+        let reply = execute(&mut desktop, &request, &cancelled);
+        assert!(reply.error.is_none(), "{:?}", reply.error);
+        assert_eq!(reply.completed, 7);
+        assert_eq!(desktop.inputs, 7);
+        assert_eq!(desktop.captures, 2, "selection plus one final capture only");
+        assert_eq!(
+            reply.observation.unwrap().window.focus.as_deref(),
+            Some("2")
+        );
+    }
+
+    #[test]
+    fn input_busy_tracks_preflight_races_and_partial_actions_without_replay() {
+        for preflight in [false, true] {
+            for started in [false, true] {
+                if preflight && started {
+                    continue;
+                }
+                for completed in [0, 1] {
+                    let mut desktop = Fixture {
+                        captures: 0,
+                        inputs: 0,
+                        fail_at: usize::MAX,
+                        released: false,
+                        focus: true,
+                        closed: false,
+                        display: true,
+                        front: 1,
+                        reject_key: false,
+                        busy_at: Some((completed, preflight, started)),
+                        capture_focus_changes: 0,
+                        cancel_on_capture: None,
+                    };
+                    let cancelled = AtomicBool::new(false);
+                    let mut request = Request {
+                        id: "busy".into(),
+                        session: "s".into(),
+                        generation: "g".into(),
+                        observation: None,
+                        operation: Operation::Select {
+                            window: "display:fixture".into(),
+                            generation: "g".into(),
+                        },
+                    };
+                    request.observation = execute(&mut desktop, &request, &cancelled).observation;
+                    request.operation = Operation::Act {
+                        observation: request.observation.as_ref().unwrap().id.clone(),
+                        actions: vec![
+                            Action::Type {
+                                text: "mpos".into()
+                            };
+                            2
+                        ],
+                        observe: true,
+                    };
+                    let reply = execute(&mut desktop, &request, &cancelled);
+                    assert!(reply.input_busy);
+                    assert_eq!(reply.uncertain, started);
+                    assert_eq!(reply.completed, completed);
+                    assert_eq!(desktop.inputs, completed);
+                    assert_eq!(desktop.captures, 1);
+                    assert!(desktop.released);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn post_click_scene_change_retries_only_capture_and_is_bounded() {
         for (changes, cancel) in [(1, false), (10, false), (1, true)] {
             let mut desktop = Fixture {
@@ -470,6 +612,7 @@ mod fixture_tests {
                 display: true,
                 front: 1,
                 reject_key: false,
+                busy_at: None,
                 capture_focus_changes: 0,
                 cancel_on_capture: None,
             };
@@ -547,6 +690,7 @@ mod fixture_tests {
             display: true,
             front: 1,
             reject_key: false,
+            busy_at: None,
             capture_focus_changes: 0,
             cancel_on_capture: None,
         };
@@ -636,6 +780,7 @@ mod fixture_tests {
             display: true,
             front: 1,
             reject_key: false,
+            busy_at: None,
             capture_focus_changes: 0,
             cancel_on_capture: None,
         };
@@ -730,6 +875,7 @@ mod fixture_tests {
             display: true,
             front: 1,
             reject_key: false,
+            busy_at: None,
             capture_focus_changes: 0,
             cancel_on_capture: None,
         };
@@ -811,7 +957,7 @@ mod fixture_tests {
     }
 
     #[test]
-    fn navigation_inside_a_single_action_cannot_send_followup_input() {
+    fn unsupported_control_characters_and_invalid_chords_send_no_input() {
         let mut desktop = Fixture {
             captures: 0,
             inputs: 0,
@@ -822,6 +968,7 @@ mod fixture_tests {
             display: false,
             front: 1,
             reject_key: false,
+            busy_at: None,
             capture_focus_changes: 0,
             cancel_on_capture: None,
         };
@@ -838,12 +985,6 @@ mod fixture_tests {
         };
         request.observation = execute(&mut desktop, &request, &cancelled).observation;
         for action in [
-            Action::Type {
-                text: "navigate\nthen type".into(),
-            },
-            Action::Type {
-                text: "tab\tthen type".into(),
-            },
             Action::Type {
                 text: "escape\u{1b}then type".into(),
             },
@@ -875,6 +1016,7 @@ mod fixture_tests {
             display: false,
             front: 1,
             reject_key: false,
+            busy_at: None,
             capture_focus_changes: 0,
             cancel_on_capture: None,
         };
@@ -908,12 +1050,14 @@ mod fixture_tests {
             focused: false,
             confidence: None,
         });
+        d.display = true;
+        r.observation.as_mut().unwrap().window.focus = Some("1".into());
         let actions = vec![
             Action::Move { x: 5.0, y: 5.0 },
             Action::Click {
-                x: None,
-                y: None,
-                element: Some("input".into()),
+                x: Some(10.0),
+                y: Some(10.0),
+                element: None,
                 button: Button::Left,
             },
             Action::Type {
@@ -929,6 +1073,12 @@ mod fixture_tests {
         assert_eq!(result.completed, 3);
         assert_eq!(d.captures, 2);
         assert!(d.released);
+        r.observation = result.observation;
+        r.operation = Operation::Act {
+            observation: r.observation.as_ref().unwrap().id.clone(),
+            actions: actions.clone(),
+            observe: true,
+        };
         d.fail_at = 4;
         let result = execute(&mut d, &r, &cancel);
         assert_eq!(result.completed, 1);

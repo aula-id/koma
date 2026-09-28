@@ -123,8 +123,13 @@ arbitrary or obfuscated programs. Native move, click and scroll actions use the
 real OS pointer; a rejected call causes no pointer movement.
 
 With `observe=false`, another observation is required before further input.
-Coordinate clicks, scroll and navigation keys end a sequence. Typing uses current
-native focus; click the intended visible application and observe before typing.
+Up to 16 predicted actions can run in one batch, including coordinate click →
+type, keyboard navigation and repeated scrolls. The model should batch only when
+confident about the next target; coordinates refer to the starting screenshot.
+Clicks and key chords get a short cancellable focus-settling delay. Native focus
+metadata is refreshed after each action without a screenshot. The
+default is one final observation for the entire batch. Unexpected focus/display
+changes between actions interrupt the remaining steps and request observation.
 There is no drag or held-button tool.
 
 ### Saved-image inspection
@@ -196,6 +201,23 @@ A pre-input focus/layout change invalidates coordinates and returns
 `requires_observation=true`; sharing remains active. The model must observe and
 re-plan. Permission loss, uncertain input and other fatal failures stop control
 with recovery guidance. Cancellation or lost responses never trigger replay.
+
+On macOS, Windows and X11, physical key/button contention gets a cancellable
+250 ms settling window. This also lets queued synthetic key-up events settle
+before a subsequent character/action checks the OS key-state table. macOS also
+tracks the Unicode carrier key as injected input until typing cleanup, so the
+next character cannot classify its own synthetic key-down as physical input. Persistent
+contention is reported as `input_busy`. Adapters explicitly track whether the
+current action emitted events: if it sent none, the result is `uncertain=false`,
+sharing stays enabled, and the model can observe then decide the remaining input.
+Earlier completed actions remain completed and must not be replayed. If contention
+occurs after input starts, partial input remains uncertain and control stops; the
+runtime never guesses that partially typed text can safely be sent again.
+
+The portable settling helper can be checked without native desktop access:
+`c++ -std=c++17 src-agent/native/computer/input_idle_test.cpp -o /tmp/koma-input-idle-test`
+then `/tmp/koma-input-idle-test`. Device-level macOS/Windows input still requires
+native validation.
 When the desktop changes during a requested full-source capture (for example,
 after a click brings an app forward), the worker makes at most three capture
 attempts with short cancellable settling delays. Only observations are retried;
@@ -443,7 +465,7 @@ when enrichment fails. Full native validation remains for the device walkthrough
    and chat card receive the same bounded PNG; the preview can show newer frames.
 2. Put another application/dialog over the fixture. Observe the composed desktop,
    click/switch apps, observe again, then type `Koma42 — café 世界 🌍`. Ordinary overlap
-   must not end sharing. App switching must return a fresh frame before typing.
+   must not end sharing. Try click → type and key → type batches; confirm one final frame and correct focus.
 3. Test 4K, 8K, portrait and mixed-DPI displays, including negative desktop origins.
    Verify output dimensions and click accuracy. Request a small `region`, read its
    finer text and click within it. An empty observe must restore the full display.

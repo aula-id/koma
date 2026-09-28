@@ -6,6 +6,7 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <Vision/Vision.h>
 #include "capture_limits.h"
+#include "input_idle.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -19,6 +20,11 @@ static std::atomic<bool> cancelled(false);
 static NSDictionary *target;
 static std::vector<CGKeyCode> held;
 static CGEventFlags flags = 0;
+static bool inputStarted = false;
+static void postInputEvent(CGEventRef event) {
+    inputStarted = true;
+    CGEventPost(kCGHIDEventTap, event);
+}
 static void require(bool condition, const char *message) {
     if (!condition)
         throw std::runtime_error(message);
@@ -239,6 +245,15 @@ static void unobstructed(NSDictionary *w) {
 }
 static void guardInput() {
     check();
+    waitForInputIdle(check, [] {
+        for (CGKeyCode code = 0; code < 128; ++code)
+            if (CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, code) &&
+                std::find(held.begin(), held.end(), code) == held.end()) return true;
+        for (uint32_t button = 0; button < 5; ++button)
+            if (CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState,
+                                        static_cast<CGMouseButton>(button))) return true;
+        return false;
+    });
     require(target != nil, "No input target");
     require(isDisplay(target[@"id"]), "Application sharing is view-only; select a screen before input");
     require(CGPreflightScreenCaptureAccess() && AXIsProcessTrusted(), "Desktop permissions revoked; reactivate control");
@@ -253,14 +268,6 @@ static void guardInput() {
         require(focused(w), "Selected window lost focus");
         unobstructed(w);
     }
-    for (CGKeyCode code = 0; code < 128; ++code)
-        require(!CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, code) ||
-                    std::find(held.begin(), held.end(), code) != held.end(),
-                "Release physical keys before computer input");
-    for (uint32_t button = 0; button < 5; ++button)
-        require(!CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState,
-                                          static_cast<CGMouseButton>(button)),
-                "Release physical mouse buttons before computer input");
 }
 static void release() {
     for (auto it = held.rbegin(); it != held.rend(); ++it) {
@@ -389,7 +396,7 @@ static void key(CGKeyCode code, bool down) {
     CGEventRef e = CGEventCreateKeyboardEvent(nullptr, code, down);
     require(e, "Unable to create keyboard event");
     CGEventSetFlags(e, flags);
-    CGEventPost(kCGHIDEventTap, e);
+    postInputEvent(e);
     CFRelease(e);
 }
 static CGPoint mapPoint(NSDictionary *a, NSDictionary *t) {
@@ -430,12 +437,17 @@ static void input(NSDictionary *a, NSDictionary *t) {
             CGEventKeyboardSetUnicodeString(up, chunk.length, chars);
             CGEventSetFlags(down, 0);
             CGEventSetFlags(up, 0);
-            CGEventPost(kCGHIDEventTap, down);
-            CGEventPost(kCGHIDEventTap, up);
+            // Unicode events use virtual key 0. Track our carrier just like a
+            // chord key so the next grapheme cannot mistake its queued down
+            // event for a physical key press. Cleanup also covers cancellation.
+            if (std::find(held.begin(), held.end(), 0) == held.end()) held.push_back(0);
+            postInputEvent(down);
+            postInputEvent(up);
             CFRelease(down);
             CFRelease(up);
             i = NSMaxRange(range);
         }
+        release();
     } else if ([kind isEqual:@"key"]) {
         guardKeyboard();
         std::vector<CGKeyCode> codes;
@@ -449,7 +461,7 @@ static void input(NSDictionary *a, NSDictionary *t) {
         CGEventRef move =
             CGEventCreateMouseEvent(nullptr, kCGEventMouseMoved, p, kCGMouseButtonLeft);
         require(move, "Unable to move pointer");
-        CGEventPost(kCGHIDEventTap, move);
+        postInputEvent(move);
         CFRelease(move);
         if ([kind isEqual:@"click"]) {
             bool right = [a[@"button"] isEqual:@"right"];
@@ -464,8 +476,8 @@ static void input(NSDictionary *a, NSDictionary *t) {
                 require(down && up, "Unable to click");
                 CGEventSetIntegerValueField(down, kCGMouseEventClickState, i);
                 CGEventSetIntegerValueField(up, kCGMouseEventClickState, i);
-                CGEventPost(kCGHIDEventTap, down);
-                CGEventPost(kCGHIDEventTap, up);
+                postInputEvent(down);
+                postInputEvent(up);
                 CFRelease(down);
                 CFRelease(up);
             }
@@ -474,7 +486,7 @@ static void input(NSDictionary *a, NSDictionary *t) {
             CGEventRef e = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 1,
                                                          -[a[@"delta"] intValue]);
             require(e, "Unable to scroll");
-            CGEventPost(kCGHIDEventTap, e);
+            postInputEvent(e);
             CFRelease(e);
         } else
             require([kind isEqual:@"move"], "Unsupported input action");
@@ -820,6 +832,7 @@ static id dispatch(NSDictionary *r) {
 }
 extern "C" char *koma_computer_call(const char *json) {
     @autoreleasepool {
+        inputStarted = false;
         NSDictionary *reply;
         @try {
             try {
@@ -827,6 +840,9 @@ extern "C" char *koma_computer_call(const char *json) {
                 NSDictionary *r = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
                 require([r isKindOfClass:NSDictionary.class], "Invalid native request");
                 reply = @{@"result" : dispatch(r)};
+            } catch (const InputBusy &) {
+                reply = @{@"error" : @"Keyboard or mouse is busy", @"input_busy" : @YES,
+                          @"input_started" : @(inputStarted)};
             } catch (const std::exception &e) {
                 reply = @{@"error" : @(e.what())};
             }

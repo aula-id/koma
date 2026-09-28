@@ -155,6 +155,22 @@ impl std::fmt::Display for ObservationRequired {
 }
 impl std::error::Error for ObservationRequired {}
 
+/// Physical input contention; the adapter records whether this action emitted
+/// any events. Earlier completed actions must never be replayed.
+#[cfg(any(feature = "gui", test))]
+#[derive(Debug)]
+pub struct InputBusy {
+    pub input_started: bool,
+}
+#[cfg(any(feature = "gui", test))]
+impl std::fmt::Display for InputBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Keyboard or mouse is busy; release held keys/buttons before continuing")
+    }
+}
+#[cfg(any(feature = "gui", test))]
+impl std::error::Error for InputBusy {}
+
 #[derive(Debug)]
 pub struct RegionCaptureUnavailable(pub Rect);
 impl std::fmt::Display for RegionCaptureUnavailable {
@@ -266,6 +282,8 @@ pub struct Reply {
     pub generation: String,
     pub completed: usize,
     pub uncertain: bool,
+    #[serde(default)]
+    pub input_busy: bool,
     #[serde(default)]
     pub requires_screen: bool,
     pub error: Option<String>,

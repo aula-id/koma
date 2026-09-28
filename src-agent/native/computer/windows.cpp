@@ -2,6 +2,7 @@
 // and closes immediately; no background screenshot or video processing.
 #include <windows.h>
 #include "capture_limits.h"
+#include "input_idle.h"
 #include <UIAutomation.h>
 #include <algorithm>
 #include <atomic>
@@ -41,6 +42,7 @@ static RECT targetRect{};
 static std::wstring targetTitle;
 static std::wstring targetId;
 static std::vector<WORD> held;
+static bool inputStarted = false;
 static void require(bool condition, const wchar_t *message) {
     if (!condition)
         throw hresult_error(E_FAIL, message);
@@ -219,6 +221,14 @@ static void desktopAvailable() {
 }
 static void guardInput() {
     check();
+    waitForInputIdle(check, [] {
+        for (WORD code = 1; code < 255; ++code) {
+            if (code == VK_SHIFT || code == VK_CONTROL || code == VK_MENU) continue;
+            if ((GetAsyncKeyState(code) & 0x8000) &&
+                std::find(held.begin(), held.end(), code) == held.end()) return true;
+        }
+        return false;
+    });
     require(localSession(), L"Computer input requires the local console session");
     require(targetMonitor != nullptr, L"Application sharing is view-only; select a screen before input");
     if (targetMonitor) {
@@ -232,14 +242,6 @@ static void guardInput() {
         unobstructed(target, targetRect);
     }
     desktopAvailable();
-    for (WORD code = 1; code < 255; ++code) {
-        // Generic modifier states mirror their left/right keys, which are checked below.
-        if (code == VK_SHIFT || code == VK_CONTROL || code == VK_MENU)
-            continue;
-        require(!(GetAsyncKeyState(code) & 0x8000) ||
-                    std::find(held.begin(), held.end(), code) != held.end(),
-                L"Release physical keys and mouse buttons before computer input");
-    }
 }
 static DWORD extended(WORD code) {
     return code == VK_RCONTROL || code == VK_RMENU || code == VK_LWIN || code == VK_RWIN ||
@@ -260,6 +262,7 @@ static void release() {
     held.clear();
 }
 static void send(INPUT *events, UINT count) {
+    inputStarted = true;
     require(SendInput(count, events, sizeof(INPUT)) == count,
             L"Input was partially rejected (privilege/UIPI or desktop changed); do not replay");
 }
@@ -816,6 +819,7 @@ static IJsonValue dispatch(JsonObject r) {
     throw hresult_error(E_INVALIDARG, L"Unknown native desktop command");
 }
 extern "C" char *koma_computer_call(const char *json) {
+    inputStarted = false;
     try {
         HRESULT apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         Finally uninit{[&] {
@@ -834,6 +838,10 @@ extern "C" char *koma_computer_call(const char *json) {
         JsonObject response;
         try {
             response.SetNamedValue(L"result", dispatch(JsonObject::Parse(to_hstring(json))));
+        } catch (const InputBusy &) {
+            response.SetNamedValue(L"error", str(L"Keyboard or mouse is busy"));
+            response.SetNamedValue(L"input_busy", boolean(true));
+            response.SetNamedValue(L"input_started", boolean(inputStarted));
         } catch (const hresult_error &e) {
             response.SetNamedValue(L"error", str(e.message()));
         } catch (const std::exception &e) {

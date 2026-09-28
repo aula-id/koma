@@ -226,6 +226,7 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
     // A scene/focus/layout change invalidates coordinates, not permission to
     // share the desktop. Keep sharing and require observation before more input.
     let screen_required = reply.requires_screen && !reply.uncertain && reply.completed == 0;
+    let input_busy = reply.input_busy && !reply.uncertain;
     let observe_again = !reply.uncertain
         && reply
             .error
@@ -233,7 +234,7 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
             .is_some_and(|e| e.contains("observe again"));
     if let Some(error) = &reply.error {
         rt.computer.actionable = false;
-        if !observe_again && !screen_required {
+        if !observe_again && !screen_required && !input_busy {
             rt.computer.stop(&format!(
                 "Native operation failed: {error}; reactivate explicitly"
             ));
@@ -245,7 +246,7 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
         .unwrap_or_else(|| format!("Completed {} inputs", reply.completed));
     rt.computer.changed = true;
     diagnostic(rt, "computer.result", &reply.id, &format!(
-        "elapsed_ms={elapsed} completed={} uncertain={} observation={} enabled={} requires_observation={observe_again} error={}",
+        "elapsed_ms={elapsed} completed={} uncertain={} observation={} enabled={} input_busy={input_busy} desktop_changed={observe_again} error={}",
         reply.completed, reply.uncertain, reply.observation.is_some(), rt.computer.status.enabled,
         reply.error.as_deref().unwrap_or("none"),
     ));
@@ -260,6 +261,14 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
         result["controller_enabled"] = true.into();
         result["requires_user_action"] = false.into();
         result["recovery"] = screen_nudge(&rt.computer.status);
+    } else if input_busy {
+        result["controller_enabled"] = true.into();
+        result["requires_observation"] = true.into();
+        result["requires_user_action"] = false.into();
+        result["recovery"] = serde_json::json!({
+            "kind": "input_busy",
+            "model_instruction": "Sharing remains active. The busy action sent no input; earlier completed actions remain completed. Koma briefly waited for held keys/buttons to clear. Call computer_observe for a fresh frame and decide the remaining action from that frame. Never replay completed inputs. If physical input remains busy, tell the user to release held keys/buttons and yield instead of retrying repeatedly. No re-enable or approval is needed; do not use shell/browser tools to bypass this."
+        });
     } else if observe_again {
         result["controller_enabled"] = true.into();
         result["requires_observation"] = true.into();
@@ -484,6 +493,77 @@ mod approval_tests {
         app::{mode::Mode, state::AgentMode},
         dto::chat::FunctionCall,
     };
+    #[test]
+    fn physical_input_contention_keeps_sharing_only_when_action_sent_no_input() {
+        for uncertain in [false, true] {
+            for completed in [0, 1] {
+                let mut rt = SessionRuntime::new();
+                let path = std::env::temp_dir().join(format!("koma-busy-{}", uuid::Uuid::new_v4()));
+                rt.computer
+                    .enable(
+                        1,
+                        &rt.id,
+                        "fixture",
+                        Capabilities {
+                            capture: true,
+                            focus: true,
+                            ..Default::default()
+                        },
+                        &path,
+                    )
+                    .unwrap();
+                rt.computer
+                    .begin(
+                        "busy".into(),
+                        Operation::Select {
+                            window: "display:fixture".into(),
+                            generation: rt.computer.status.generation.clone(),
+                        },
+                    )
+                    .unwrap();
+                rt.computer.outbound.take();
+                rt.pending_tool_tasks.push("busy".into());
+                let reply = Reply {
+                    id: "busy".into(),
+                    session: rt.id.clone(),
+                    generation: rt.computer.status.generation.clone(),
+                    completed,
+                    uncertain,
+                    input_busy: true,
+                    error: Some(
+                        InputBusy {
+                            input_started: uncertain,
+                        }
+                        .to_string(),
+                    ),
+                    ..Default::default()
+                };
+                receive(&mut rt, 1, reply.clone());
+                assert_eq!(rt.computer.status.enabled, !uncertain);
+                assert!(!rt.computer.actionable);
+                assert!(rt.computer.outbound.is_none());
+                assert!(rt.pending_tool_tasks.is_empty());
+                let result: serde_json::Value =
+                    serde_json::from_str(&rt.tool_results[0].1).unwrap();
+                assert_eq!(result["completed"], completed);
+                assert_eq!(result["uncertain"], uncertain);
+                assert_eq!(result["controller_enabled"], !uncertain);
+                if !uncertain {
+                    assert_eq!(result["requires_observation"], true);
+                    assert_eq!(result["requires_user_action"], false);
+                    assert_eq!(result["recovery"]["kind"], "input_busy");
+                }
+                receive(&mut rt, 1, reply);
+                assert_eq!(
+                    rt.tool_results.len(),
+                    1,
+                    "duplicate results must not replay input"
+                );
+                drop(rt);
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+    }
     #[test]
     fn application_action_nudge_keeps_owner_and_allows_screen_selection() {
         let mut state = AppState::new(Mode::Chat);

@@ -53,6 +53,7 @@ pub struct X11 {
     cancelled: Arc<AtomicBool>,
     held: Vec<u32>,
     buttons: Vec<u32>,
+    input_started: bool,
     target: Option<Window>,
     temporary_key: Option<(u8, Vec<c_ulong>, c_ulong)>,
 }
@@ -82,6 +83,7 @@ impl X11 {
             cancelled,
             held: vec![],
             buttons: vec![],
+            input_started: false,
             target: None,
             temporary_key: None,
         })
@@ -344,6 +346,7 @@ impl X11 {
     }
     fn guard_input(&self) -> Result<()> {
         ensure!(!self.cancelled.load(Ordering::SeqCst), "cancelled");
+        self.wait_input_idle()?;
         let target = self
             .target
             .as_ref()
@@ -369,21 +372,39 @@ impl X11 {
             );
             self.unobstructed(xid, target.geometry)?;
         }
-        let mut keys = [0 as std::os::raw::c_char; 32];
-        unsafe {
-            (self.x.XQueryKeymap)(self.display, keys.as_mut_ptr());
-        }
-        ensure!(
-            (0..256u32).all(|key| keys[key as usize / 8] as u8 & (1 << (key % 8)) == 0
-                || self.held.contains(&key)),
-            "Physical keyboard input detected; take over or release keys before continuing"
-        );
-        let mut state: xlib::XkbStateRec = unsafe { std::mem::zeroed() };
-        let status = unsafe { (self.x.XkbGetState)(self.display, 0x0100, &mut state) };
-        ensure!(status == 0 && state.group == 0 && state.latched_mods == 0
-            && u32::from(state.locked_mods) & !xlib::Mod2Mask == 0 && state.ptr_buttons == 0,
-            "Release mouse buttons and locked/sticky modifiers, and use the primary keyboard group before input");
         Ok(())
+    }
+    fn wait_input_idle(&self) -> Result<()> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+        loop {
+            ensure!(!self.cancelled.load(Ordering::SeqCst), "cancelled");
+            let mut keys = [0 as std::os::raw::c_char; 32];
+            unsafe {
+                (self.x.XQueryKeymap)(self.display, keys.as_mut_ptr());
+            }
+            let keys_idle = (0..256u32).all(|key| {
+                keys[key as usize / 8] as u8 & (1 << (key % 8)) == 0 || self.held.contains(&key)
+            });
+            let mut state: xlib::XkbStateRec = unsafe { std::mem::zeroed() };
+            let status = unsafe { (self.x.XkbGetState)(self.display, 0x0100, &mut state) };
+            ensure!(status == 0, "Cannot query keyboard state");
+            ensure!(
+                state.group == 0
+                    && state.latched_mods == 0
+                    && u32::from(state.locked_mods) & !xlib::Mod2Mask == 0,
+                "Release locked/sticky modifiers and use the primary keyboard group; observe again"
+            );
+            if keys_idle && state.ptr_buttons == 0 {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(InputBusy {
+                    input_started: self.input_started,
+                }
+                .into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
     fn key(&mut self, code: u32, down: bool) -> Result<()> {
         let t = self
@@ -397,6 +418,7 @@ impl X11 {
             self.held.push(code);
         }
         unsafe {
+            self.input_started = true;
             (t.XTestFakeKeyEvent)(self.display, code, i32::from(down), 0);
         }
         self.sync()?;
@@ -413,6 +435,7 @@ impl X11 {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("XTEST unavailable"))?;
         self.buttons.push(button);
+        self.input_started = true;
         unsafe {
             (t.XTestFakeButtonEvent)(self.display, button, 1, 0);
             (t.XTestFakeButtonEvent)(self.display, button, 0, 0);
@@ -706,6 +729,7 @@ impl Desktop for X11 {
         self.capture_source(window, Some(region), false)
     }
     fn validate_input(&mut self, action: &Action) -> Result<()> {
+        self.input_started = false;
         self.guard_input()?;
         if matches!(action, Action::Type { .. } | Action::Key { .. }) {
             self.guard_keyboard()?;
@@ -716,6 +740,7 @@ impl Desktop for X11 {
         Ok(())
     }
     fn input(&mut self, action: &Action, transform: &Transform) -> Result<()> {
+        self.input_started = false;
         self.guard_input()?;
         ensure!(!self.cancelled.load(Ordering::SeqCst), "cancelled");
         match action {
@@ -738,6 +763,7 @@ impl Desktop for X11 {
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("XTEST unavailable"))?;
                 unsafe {
+                    self.input_started = true;
                     (t.XTestFakeMotionEvent)(
                         self.display,
                         -1,
