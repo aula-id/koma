@@ -57,9 +57,8 @@ export function ComputerPreview({ status, control, chrome, onImageSize }: {
           alt={`${live?.image ? 'Live preview' : 'Last model observation'}: ${observation?.window.title || observation?.window.application}`}
           className="absolute inset-0 block h-full w-full" />
       : <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center text-koma-dim">
-          <Monitor size={30} strokeWidth={1.25} />
-          <p className="text-sm">{observation ? 'Saved frame unavailable' : 'Choose a screen or application'}</p>
-          <p className="max-w-64 text-xs leading-relaxed">{observation ? 'The image could not be loaded from this session.' : 'Screens allow control. Applications are shared in view-only assist mode.'}</p>
+          <Monitor size={30} strokeWidth={1.25} aria-hidden="true" />
+          {observation && <p className="text-sm" title="The image could not be loaded from this session.">Saved frame unavailable</p>}
         </div>}
 
     <div inert={menu} className={`pointer-events-none absolute inset-x-0 top-0 flex max-h-full flex-col p-2 transition-opacity duration-150 group-hover/preview:opacity-100 group-focus-within/preview:opacity-100 [@media(hover:none)]:opacity-100 ${menu || !observation ? 'opacity-100' : 'opacity-0'}`}>
@@ -106,12 +105,12 @@ export function ComputerPreview({ status, control, chrome, onImageSize }: {
         </section>
       })}
     </div>}
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-2 opacity-0 transition-opacity group-hover/preview:opacity-100 group-focus-within/preview:opacity-100 [@media(hover:none)]:opacity-100">
+    {observation && <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-2 opacity-0 transition-opacity group-hover/preview:opacity-100 group-focus-within/preview:opacity-100 [@media(hover:none)]:opacity-100">
       <span title={live?.error ?? undefined} className="max-w-full truncate rounded-full border border-koma-border bg-koma-panel/95 px-3 py-1 text-[10px] text-koma-dim shadow-sm">
         {assist && 'Assist · view only · '}
         {!status?.enabled ? 'Sharing stopped' : status.paused ? 'Paused' : status.busy ? 'Updating…' : live?.image ? 'Live' : live?.error ? 'Live unavailable · last model frame' : 'Last model frame'}
         {observation && ` · ${new Date(live?.image ? live.captured_ms : observation.captured_ms).toLocaleTimeString()}`}
       </span>
-    </div>
+    </div>}
   </div>
 }

@@ -2251,10 +2251,9 @@ type KomaState = {
   lspDiagCounts: { errors: number; warnings: number }
   // Live language-server processes (starting / indexing / ready). Footer drawer.
   lspRuntime: LspRuntimeServer[]
-  // Cross-tab Problems drawer (above UsageFooter).
-  problemsOpen: boolean
-  // Cross-tab Language Servers drawer (twin of Problems).
-  lspDrawerOpen: boolean
+  // One docked panel shared by Tasks, Language Servers and Problems.
+  bottomPanelTab: 'tasks' | 'lsp' | 'problems' | null
+  setBottomPanelTab: (tab: 'tasks' | 'lsp' | 'problems' | null) => void
   // The SSH Keys section's transient "Copy public key" / "Reveal private key"
   // result (latest KeyReveal push), or `null` when nothing has been revealed
   // yet / the reveal box was dismissed. Kept separate from `keys` (the list
@@ -3162,8 +3161,8 @@ export const useKoma = create<KomaState>((set, get) => ({
   lspDiagnostics: {},
   lspDiagCounts: { errors: 0, warnings: 0 },
   lspRuntime: [],
-  problemsOpen: false,
-  lspDrawerOpen: false,
+  bottomPanelTab: null,
+  setBottomPanelTab: (tab) => set({ bottomPanelTab: tab }),
   keyRevealResult: null,
   branches: [],
   branchesLoading: false,
@@ -6073,19 +6072,13 @@ export const useKoma = create<KomaState>((set, get) => ({
     get().req({ r: 'LspUninstall', id })
   },
   setProblemsOpen: (open) =>
-    set({ problemsOpen: !!open, ...(open ? { lspDrawerOpen: false } : {}) }),
+    set(s => ({ bottomPanelTab: open ? 'problems' : s.bottomPanelTab === 'problems' ? null : s.bottomPanelTab })),
   toggleProblemsOpen: () =>
-    set((s) => {
-      const next = !s.problemsOpen
-      return { problemsOpen: next, ...(next ? { lspDrawerOpen: false } : {}) }
-    }),
+    set(s => ({ bottomPanelTab: s.bottomPanelTab === 'problems' ? null : 'problems' })),
   setLspDrawerOpen: (open) =>
-    set({ lspDrawerOpen: !!open, ...(open ? { problemsOpen: false } : {}) }),
+    set(s => ({ bottomPanelTab: open ? 'lsp' : s.bottomPanelTab === 'lsp' ? null : s.bottomPanelTab })),
   toggleLspDrawerOpen: () =>
-    set((s) => {
-      const next = !s.lspDrawerOpen
-      return { lspDrawerOpen: next, ...(next ? { problemsOpen: false } : {}) }
-    }),
+    set(s => ({ bottomPanelTab: s.bottomPanelTab === 'lsp' ? null : 'lsp' })),
   openDiagnostic: (uri, line, character) => {
     const abs = uriToPath(uri)
     if (!abs) return

@@ -22,8 +22,10 @@ Stopping, disconnecting or changing sessions ends sharing and closes both previe
 styles. Reconnection requires explicit activation. Native failures that disable
 control also close previews.
 
-The resizable preview fits the entire image, with picker/status controls floating
-over it. Its position and size persist. A detached viewer is available on supported
+Before a source is selected, the preview resizes freely on either axis and shows
+only its source picker and a small empty-state icon. With a source selected, it
+preserves the image ratio, with picker/status controls floating over the frame.
+Its position and size persist. A detached viewer is available on supported
 platforms. Before model capture or input, Koma hides both its detached viewer and
 in-app preview, acknowledging the paint before dispatch. It restores them afterward
 while sharing remains enabled. Ordinary overlapping application windows are part

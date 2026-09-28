@@ -799,3 +799,10 @@ svg.animate-spin {
 .monaco-editor .koma-debug-location {
   border-left: 2px solid var(--koma-accent);
 }
+
+/* Native task menus need explicit option colors as well as the closed control.
+   The custom chevron/appearance-none avoids OS light-mode select chrome. */
+#workspace-bottom-panel select option {
+  background-color: var(--color-koma-panel);
+  color: var(--color-koma-fg);
+}

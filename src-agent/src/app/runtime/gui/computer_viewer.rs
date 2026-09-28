@@ -193,6 +193,12 @@ impl Viewer {
     }
     pub fn resized(&self) {
         let size = self.window.inner_size();
+        // An empty viewer has no image ratio. Let the window manager resize
+        // either axis until a source observation arrives.
+        if self.source.borrow().is_none() {
+            self.last_size.set(size);
+            return;
+        }
         let previous = self.last_size.get();
         let aspect = self.aspect.get();
         let width = if size.height.abs_diff(previous.height) as f64 * aspect
