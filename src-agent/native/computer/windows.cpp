@@ -1,7 +1,8 @@
-// Windows 10 1903+ GUI SDK bridge. Graphics Capture consumes one requested frame
-// and closes immediately; no background screenshot or video processing.
+// Windows 10 1903+ GUI SDK bridge. Graphics Capture opens one session, keeps the
+// newest frame from a short poll, and closes immediately. No background capture.
 #include <windows.h>
 #include "capture_limits.h"
+#include "frame_poll.h"
 #include "input_idle.h"
 #include <UIAutomation.h>
 #include <algorithm>
@@ -637,8 +638,9 @@ static JsonObject capture(HWND window, bool enrich, HMONITOR monitor = nullptr, 
     auto sourceSize = item.Size();
     require(sourceSize.Width > 0 && sourceSize.Height > 0 && uint64_t(sourceSize.Width) * sourceSize.Height <= 67108864,
             L"Display exceeds the 64-megapixel native capture budget");
+    // Two buffers so a newer frame can arrive while the first is still held.
     auto pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
-        d3d, DirectXPixelFormat::B8G8R8A8UIntNormalized, 1, item.Size());
+        d3d, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, item.Size());
     auto session = pool.CreateCaptureSession(item);
     Finally close{[&] {
         session.Close();
@@ -655,6 +657,31 @@ static JsonObject capture(HWND window, bool enrich, HMONITOR monitor = nullptr, 
         require(std::chrono::steady_clock::now() < deadline, L"Graphics Capture frame timed out");
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    // A static desktop never emits a second frame; the first one stands.
+    // A painting desktop replaces it until this poll ends. One session only.
+    auto pollDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+    for (;;) {
+        check();
+        auto newer = pool.TryGetNextFrame();
+        const bool arrived = static_cast<bool>(newer);
+        const bool past = std::chrono::steady_clock::now() >= pollDeadline;
+        switch (framePoll(true, arrived, past)) {
+        case FramePoll::ReplaceAndContinue:
+            frame.Close();
+            frame = newer;
+            break;
+        case FramePoll::ReplaceAndStop:
+            frame.Close();
+            frame = newer;
+            goto settled_frame;
+        case FramePoll::Keep:
+            goto settled_frame;
+        case FramePoll::Wait:
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            break;
+        }
+    }
+settled_frame:
     Finally frameClose{[&] { frame.Close(); }};
     check();
     require(same(monitor ? monitorInfo(monitor).rcMonitor : geometry(window), desktop), L"Source geometry changed during capture; observe again");

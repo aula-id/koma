@@ -388,12 +388,6 @@ impl X11 {
             let mut state: xlib::XkbStateRec = unsafe { std::mem::zeroed() };
             let status = unsafe { (self.x.XkbGetState)(self.display, 0x0100, &mut state) };
             ensure!(status == 0, "Cannot query keyboard state");
-            ensure!(
-                state.group == 0
-                    && state.latched_mods == 0
-                    && u32::from(state.locked_mods) & !xlib::Mod2Mask == 0,
-                "Release locked/sticky modifiers and use the primary keyboard group; observe again"
-            );
             if keys_idle && state.ptr_buttons == 0 {
                 return Ok(());
             }
@@ -405,6 +399,22 @@ impl X11 {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+    /// Typing and chords are keycodes. Another XKB group, Caps Lock, or a
+    /// latched modifier would change the character. Pointer actions do not
+    /// consult this; the message must not contain "observe again" or the
+    /// model treats a layout mismatch as a desktop change.
+    fn guard_layout(&self) -> Result<()> {
+        let mut state: xlib::XkbStateRec = unsafe { std::mem::zeroed() };
+        let status = unsafe { (self.x.XkbGetState)(self.display, 0x0100, &mut state) };
+        ensure!(status == 0, "Cannot query keyboard state");
+        ensure!(
+            state.group == 0
+                && state.latched_mods == 0
+                && u32::from(state.locked_mods) & !xlib::Mod2Mask == 0,
+            "Release locked/sticky modifiers and use the primary keyboard group before typing"
+        );
+        Ok(())
     }
     fn key(&mut self, code: u32, down: bool) -> Result<()> {
         let t = self
@@ -733,6 +743,7 @@ impl Desktop for X11 {
         self.guard_input()?;
         if matches!(action, Action::Type { .. } | Action::Key { .. }) {
             self.guard_keyboard()?;
+            self.guard_layout()?;
         }
         if let Action::Key { keys } = action {
             self.chord_codes(keys).map_err(|e| anyhow::anyhow!("Key chord unavailable: {e}; observe again and use keys available in this layout"))?;
@@ -789,6 +800,7 @@ impl Desktop for X11 {
                 }
             }
             Action::Type { text } => {
+                self.guard_layout()?;
                 let symbols = text
                     .chars()
                     .map(|c| match c {
@@ -831,6 +843,7 @@ impl Desktop for X11 {
                 }
             }
             Action::Key { keys } => {
+                self.guard_layout()?;
                 let codes = self.chord_codes(keys)?;
                 for code in &codes {
                     self.key(*code, true)?;

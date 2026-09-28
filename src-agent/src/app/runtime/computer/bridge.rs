@@ -232,13 +232,21 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
             .error
             .as_ref()
             .is_some_and(|e| e.contains("observe again"));
+    let keyboard_layout = !reply.uncertain
+        && reply
+            .error
+            .as_ref()
+            .is_some_and(|e| e.contains("primary keyboard group"));
     if let Some(error) = &reply.error {
         rt.computer.actionable = false;
-        if !observe_again && !screen_required && !input_busy {
+        if !observe_again && !screen_required && !input_busy && !keyboard_layout {
             rt.computer.stop(&format!(
                 "Native operation failed: {error}; reactivate explicitly"
             ));
         }
+    }
+    if keyboard_layout && reply.completed == 0 {
+        rt.computer.actionable = true;
     }
     rt.computer.status.message = reply
         .error
@@ -268,6 +276,14 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
         result["recovery"] = serde_json::json!({
             "kind": "input_busy",
             "model_instruction": "Sharing remains active. The busy action sent no input; earlier completed actions remain completed. Koma briefly waited for held keys/buttons to clear. Call computer_observe for a fresh frame and decide the remaining action from that frame. Never replay completed inputs. If physical input remains busy, tell the user to release held keys/buttons and yield instead of retrying repeatedly. No re-enable or approval is needed; do not use shell/browser tools to bypass this."
+        });
+    } else if keyboard_layout {
+        result["controller_enabled"] = true.into();
+        result["requires_user_action"] = false.into();
+        result["requires_observation"] = (reply.completed > 0).into();
+        result["recovery"] = serde_json::json!({
+            "kind": "keyboard_layout",
+            "model_instruction": "Sharing remains active. No key was sent for the rejected action. Pointer moves, clicks, and scrolls still work. Typing and key chords need the primary keyboard layout, with Caps Lock and sticky modifiers released. Ask the user once. Do not treat this as a desktop change and do not retry the same typing. If earlier actions in this batch already ran, observe before the next click."
         });
     } else if observe_again {
         result["controller_enabled"] = true.into();
@@ -865,6 +881,67 @@ mod approval_tests {
         assert!(rt.computer.outbound.is_some());
         drop(rt);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn keyboard_layout_keeps_sharing_and_does_not_look_like_a_desktop_change() {
+        for (completed, actionable) in [(0, true), (1, false)] {
+            let mut rt = SessionRuntime::new();
+            let path = std::env::temp_dir().join(format!(
+                "koma-layout-{}-{}",
+                completed,
+                uuid::Uuid::new_v4()
+            ));
+            rt.computer
+                .enable(
+                    1,
+                    &rt.id,
+                    "fixture",
+                    Capabilities {
+                        capture: true,
+                        focus: true,
+                        pointer: true,
+                        keyboard: true,
+                        ..Default::default()
+                    },
+                    &path,
+                )
+                .unwrap();
+            rt.computer.actionable = true;
+            rt.computer
+                .begin(
+                    "layout".into(),
+                    Operation::Select {
+                        window: "display:fixture".into(),
+                        generation: rt.computer.status.generation.clone(),
+                    },
+                )
+                .unwrap();
+            rt.pending_tool_tasks.push("layout".into());
+            rt.computer.outbound.take();
+            let reply = Reply {
+                id: "layout".into(),
+                session: rt.id.clone(),
+                generation: rt.computer.status.generation.clone(),
+                completed,
+                uncertain: false,
+                error: Some(
+                    "Release locked/sticky modifiers and use the primary keyboard group before typing"
+                        .into(),
+                ),
+                ..Default::default()
+            };
+            receive(&mut rt, 1, reply);
+            assert!(rt.computer.status.enabled);
+            assert_eq!(rt.computer.actionable, actionable);
+            let result: serde_json::Value = serde_json::from_str(&rt.tool_results[0].1).unwrap();
+            assert_eq!(result["controller_enabled"], true);
+            assert_eq!(result["recovery"]["kind"], "keyboard_layout");
+            assert_ne!(result["recovery"]["kind"], "desktop_changed");
+            assert_eq!(result["requires_observation"], completed > 0);
+            drop(rt);
+            std::fs::remove_file(path).unwrap();
+        }
     }
 
     #[test]

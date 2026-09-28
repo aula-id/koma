@@ -20,6 +20,11 @@ pub trait Desktop {
     }
     fn input(&mut self, action: &Action, transform: &Transform) -> Result<()>;
     fn release(&mut self);
+    /// How long to wait after a completed batch before the final capture.
+    /// The fixture returns zero so tests stay fast; real adapters use 200 ms.
+    fn post_action_settle(&mut self) -> std::time::Duration {
+        std::time::Duration::from_millis(200)
+    }
 }
 pub fn target(action: &Action, observation: &Observation) -> Result<Option<(f64, f64)>> {
     match action {
@@ -237,6 +242,25 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
             if !observe {
                 return Ok(());
             }
+            // One cancellable pause after the whole batch, including a run of
+            // typing. The final capture then sees the painted result. There is
+            // still no screenshot between predicted steps.
+            if reply.completed > 0 {
+                let deadline = std::time::Instant::now() + desktop.post_action_settle();
+                while std::time::Instant::now() < deadline {
+                    if cancelled.load(Ordering::SeqCst) {
+                        bail!("cancelled; completed inputs were not undone");
+                    }
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    std::thread::sleep(remaining.min(std::time::Duration::from_millis(10)));
+                }
+                if cancelled.load(Ordering::SeqCst) {
+                    bail!("cancelled; completed inputs were not undone");
+                }
+            }
         }
         if cancelled.load(Ordering::SeqCst) {
             bail!("cancelled");
@@ -321,6 +345,11 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
             reply.input_busy = true;
             reply.uncertain = busy.input_started;
         }
+        // Layout rejection is a preflight: no key was sent, so it must not
+        // look like a partial injection that stops control.
+        if e.to_string().contains("primary keyboard group") {
+            reply.uncertain = false;
+        }
         reply.requires_screen = e.is::<ScreenRequired>();
         reply.error = Some(e.to_string());
     }
@@ -373,6 +402,7 @@ mod fixture_tests {
         busy_at: Option<(usize, bool, bool)>,
         capture_focus_changes: usize,
         cancel_on_capture: Option<std::sync::Arc<AtomicBool>>,
+        settles: usize,
     }
     impl Fixture {
         fn window(&self) -> Window {
@@ -473,6 +503,10 @@ mod fixture_tests {
         fn release(&mut self) {
             self.released = true;
         }
+        fn post_action_settle(&mut self) -> std::time::Duration {
+            self.settles += 1;
+            std::time::Duration::ZERO
+        }
     }
     #[test]
     fn predicted_batch_scrolls_keys_and_types_with_one_final_capture() {
@@ -489,6 +523,7 @@ mod fixture_tests {
             busy_at: None,
             capture_focus_changes: 0,
             cancel_on_capture: None,
+            settles: 0,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -538,6 +573,10 @@ mod fixture_tests {
         assert_eq!(desktop.inputs, 7);
         assert_eq!(desktop.captures, 2, "selection plus one final capture only");
         assert_eq!(
+            desktop.settles, 1,
+            "one settle after the batch, not per action"
+        );
+        assert_eq!(
             reply.observation.unwrap().window.focus.as_deref(),
             Some("2")
         );
@@ -564,6 +603,7 @@ mod fixture_tests {
                         busy_at: Some((completed, preflight, started)),
                         capture_focus_changes: 0,
                         cancel_on_capture: None,
+                        settles: 0,
                     };
                     let cancelled = AtomicBool::new(false);
                     let mut request = Request {
@@ -615,6 +655,7 @@ mod fixture_tests {
                 busy_at: None,
                 capture_focus_changes: 0,
                 cancel_on_capture: None,
+                settles: 0,
             };
             let cancelled = std::sync::Arc::new(AtomicBool::new(false));
             let mut request = Request {
@@ -693,6 +734,7 @@ mod fixture_tests {
             busy_at: None,
             capture_focus_changes: 0,
             cancel_on_capture: None,
+            settles: 0,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -783,6 +825,7 @@ mod fixture_tests {
             busy_at: None,
             capture_focus_changes: 0,
             cancel_on_capture: None,
+            settles: 0,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -878,6 +921,7 @@ mod fixture_tests {
             busy_at: None,
             capture_focus_changes: 0,
             cancel_on_capture: None,
+            settles: 0,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -927,6 +971,10 @@ mod fixture_tests {
         };
         assert_eq!(execute(&mut desktop, &request, &cancelled).completed, 1);
         assert_eq!(desktop.captures, 3);
+        assert_eq!(
+            desktop.settles, 2,
+            "each act settles once; observe has not run"
+        );
         // A fresh close-up is a new capture, but keeps the original display
         // identity and maps local image coordinates into the requested region.
         request.operation = Operation::Observe {
@@ -947,6 +995,10 @@ mod fixture_tests {
             (40.0, 40.0)
         );
         assert_eq!(desktop.captures, 4);
+        assert_eq!(
+            desktop.settles, 2,
+            "a region observe does not use the post-action settle"
+        );
         desktop.front += 1;
         let stale_detail = execute(&mut desktop, &request, &cancelled);
         assert!(stale_detail.error.unwrap().contains("observe again"));
@@ -971,6 +1023,7 @@ mod fixture_tests {
             busy_at: None,
             capture_focus_changes: 0,
             cancel_on_capture: None,
+            settles: 0,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -1019,6 +1072,7 @@ mod fixture_tests {
             busy_at: None,
             capture_focus_changes: 0,
             cancel_on_capture: None,
+            settles: 0,
         };
         let cancel = AtomicBool::new(false);
         let mut r = Request {
@@ -1108,5 +1162,58 @@ mod fixture_tests {
         let result = execute(&mut d, &r, &cancel);
         assert_eq!(result.completed, 0);
         assert!(result.error.unwrap().contains("closed"));
+    }
+
+    #[test]
+    fn observe_false_skips_settle_and_capture() {
+        let mut desktop = Fixture {
+            captures: 0,
+            inputs: 0,
+            fail_at: usize::MAX,
+            released: false,
+            focus: true,
+            closed: false,
+            display: true,
+            front: 1,
+            reject_key: false,
+            busy_at: None,
+            capture_focus_changes: 0,
+            cancel_on_capture: None,
+            settles: 0,
+        };
+        let cancelled = AtomicBool::new(false);
+        let mut request = Request {
+            id: "quiet".into(),
+            session: "s".into(),
+            generation: "g".into(),
+            observation: None,
+            operation: Operation::Select {
+                window: "display:fixture".into(),
+                generation: "g".into(),
+            },
+        };
+        request.observation = execute(&mut desktop, &request, &cancelled).observation;
+        request.operation = Operation::Act {
+            observation: request.observation.as_ref().unwrap().id.clone(),
+            actions: vec![
+                Action::Type { text: "one".into() },
+                Action::Type { text: "two".into() },
+            ],
+            observe: false,
+        };
+        let reply = execute(&mut desktop, &request, &cancelled);
+        assert!(reply.error.is_none(), "{:?}", reply.error);
+        assert_eq!(reply.completed, 2);
+        assert!(reply.observation.is_none());
+        assert_eq!(desktop.captures, 1, "selection only; no final frame");
+        assert_eq!(desktop.settles, 0);
+        request.operation = Operation::Observe {
+            crop: None,
+            region: None,
+        };
+        let observed = execute(&mut desktop, &request, &cancelled);
+        assert!(observed.observation.is_some());
+        assert_eq!(desktop.captures, 2);
+        assert_eq!(desktop.settles, 0, "standalone observe stays immediate");
     }
 }

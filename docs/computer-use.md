@@ -126,11 +126,13 @@ With `observe=false`, another observation is required before further input.
 Up to 16 predicted actions can run in one batch, including coordinate click →
 type, keyboard navigation and repeated scrolls. The model should batch only when
 confident about the next target; coordinates refer to the starting screenshot.
-Clicks and key chords get a short cancellable focus-settling delay. Native focus
-metadata is refreshed after each action without a screenshot. The
-default is one final observation for the entire batch. Unexpected focus/display
-changes between actions interrupt the remaining steps and request observation.
-There is no drag or held-button tool.
+Clicks and key chords get a short cancellable focus-settling delay between
+steps. Typed characters do not. Native focus metadata is refreshed after each
+action without a screenshot. The default is one final observation for the
+entire batch. After the last action, macOS, Windows, and X11 wait a cancellable
+200 ms, then capture once. That frame is the next actionable observation.
+Unexpected focus/display changes between actions interrupt the remaining steps
+and request observation. There is no drag or held-button tool.
 
 ### Saved-image inspection
 
@@ -214,17 +216,20 @@ Earlier completed actions remain completed and must not be replayed. If contenti
 occurs after input starts, partial input remains uncertain and control stops; the
 runtime never guesses that partially typed text can safely be sent again.
 
-The portable settling helper can be checked without native desktop access:
+The portable settling helper and the Windows newest-frame choice can be checked
+without native desktop access:
 `c++ -std=c++17 src-agent/native/computer/input_idle_test.cpp -o /tmp/koma-input-idle-test`
 then `/tmp/koma-input-idle-test`. Device-level macOS/Windows input still requires
 native validation.
 When the desktop changes during a requested full-source capture (for example,
 after a click brings an app forward), the worker makes at most three capture
 attempts with short cancellable settling delays. Only observations are retried;
-the action sequence is never replayed. Region captures remain bound to their
-original scene and require a fresh full observation if it changes. If the scene
-does not settle, the result retains the completed input count and asks the model
-to observe again.
+the action sequence is never replayed. A completed batch waits 200 ms before
+that first capture so the result can paint; the wait is skipped for
+`observe=false` and for a standalone observe. Region captures remain bound to
+their original scene and require a fresh full observation if it changes. If the
+scene does not settle, the result retains the completed input count and asks
+the model to observe again.
 
 If the model ends a desktop turn with a short action announcement but no tool
 call (for example, “Compass is focused — selecting the screen and inspecting it”),
@@ -337,9 +342,18 @@ absent from the active keymap use a temporarily reserved unused keycode; the map
 is restored on completion/cancellation unless another client changed it. The
 application must support Unicode keysyms. Legacy XLookupString-only applications,
 unavailable keycodes, non-primary keyboard groups and locked/sticky modifiers
-can prevent typing. Mapping delivery uses short bounded delays and still needs
-validation against actual applications. Release physical keys/buttons before
-letting the agent act.
+can prevent typing and key chords. Pointer moves, clicks, and scrolls are not
+blocked by the active group, Caps Lock, or a sticky modifier. Mapping delivery
+uses short bounded delays and still needs validation against actual applications.
+Release physical keys/buttons before letting the agent act.
+
+**Windows capture:** one Graphics Capture session per observation. The session
+keeps two buffers and, for up to 100 ms after the first frame, replaces it with
+any newer frame. A desktop that does not change again returns the first frame.
+A second session is not opened for that poll.
+
+**macOS capture:** after the shared post-batch wait, one ScreenCaptureKit
+screenshot. There is no second shot and no frame poll.
 
 **Wayland:** choose a screen or application with **Choose … in system dialog**
 in the corresponding picker section. The compositor must expose that source type
