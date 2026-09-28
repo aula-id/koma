@@ -561,6 +561,9 @@ impl X11 {
             .position(|w| *w == top)
             .ok_or_else(|| anyhow::anyhow!("window is not on desktop"))?;
         for above in &list[pos + 1..] {
+            if *above == self.arrow {
+                continue;
+            }
             if let Ok(r) = self.geometry(*above) {
                 ensure!(
                     !(r.x < bounds.x + bounds.width
@@ -588,8 +591,14 @@ impl X11 {
             let xid = self.xid(&target.id)?;
             self.raise_window(xid)?;
             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(300);
+            let frame = self.frame_of(xid);
             loop {
-                if self.property(self.root, "_NET_ACTIVE_WINDOW")?.first() == Some(&xid) {
+                let active = self
+                    .property(self.root, "_NET_ACTIVE_WINDOW")?
+                    .first()
+                    .copied();
+                // A window manager often activates the frame, not the client.
+                if active == Some(xid) || active == Some(frame) {
                     break;
                 }
                 ensure!(
@@ -602,6 +611,31 @@ impl X11 {
             self.unobstructed(xid, live)?;
         }
         Ok(())
+    }
+    fn frame_of(&self, mut window: c_ulong) -> c_ulong {
+        for _ in 0..32 {
+            let (mut root, mut parent, mut children, mut count) = (0, 0, ptr::null_mut(), 0);
+            unsafe {
+                (self.x.XQueryTree)(
+                    self.display,
+                    window,
+                    &mut root,
+                    &mut parent,
+                    &mut children,
+                    &mut count,
+                );
+            }
+            if !children.is_null() {
+                unsafe {
+                    (self.x.XFree)(children.cast());
+                }
+            }
+            if parent == self.root || parent == 0 {
+                return window;
+            }
+            window = parent;
+        }
+        window
     }
     /// Bring one window forward so a real click lands in it. The pointer then
     /// glides to the programmed point, with an enlarged arrow drawn over it.

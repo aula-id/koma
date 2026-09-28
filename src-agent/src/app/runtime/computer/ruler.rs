@@ -1,18 +1,23 @@
-//! Edge ruler burned into the model observation only. Tick numbers are screen
-//! pixels: the window or display origin plus the screenshot pixel times the
-//! scale. That printed number is what `computer_act` sends. The caption is
-//! desktop pixels per screenshot pixel. The live preview is untouched.
+//! Margin ruler around the model observation. Tick numbers sit outside the
+//! page and are screen pixels: the window or display origin plus the screenshot
+//! pixel times the scale. That printed number is what `computer_act` sends.
+//! A light grid on the page marks the same values. The margin is not a click
+//! surface. The live preview is untouched.
 use super::contract::Transform;
 use image::{Rgba, RgbaImage};
 
 const SCALE: i32 = 2;
 const GLYPH_W: i32 = 5;
-const GLYPH_H: i32 = 7;
 const ADVANCE: i32 = GLYPH_W * SCALE + SCALE;
 
 /// Skip frames too small to spare an edge. A dock strip would be covered by the type.
 const MIN_WIDTH: u32 = 240;
 const MIN_HEIGHT: u32 = 160;
+/// Room for a screen coordinate such as `-7680` beside the page.
+pub(crate) const MARGIN_LEFT: u32 = 92;
+pub(crate) const MARGIN_TOP: u32 = 22;
+const MARGIN_RIGHT: u32 = 8;
+const MARGIN_BOTTOM: u32 = 8;
 
 pub(crate) fn stamp(png: &[u8], transform: &Transform) -> Option<Vec<u8>> {
     if transform.width < MIN_WIDTH
@@ -26,32 +31,44 @@ pub(crate) fn stamp(png: &[u8], transform: &Transform) -> Option<Vec<u8>> {
     if image.width() != transform.width || image.height() != transform.height {
         return None;
     }
-    let mut img = image.to_rgba8();
-    let sx = transform.desktop.width / f64::from(transform.width);
-    let sy = transform.desktop.height / f64::from(transform.height);
-    let caption = format!("x{sx:.3} y{sy:.3}");
-    let caption_w = text_width(&caption);
-    let caption_x = img.width() as i32 - caption_w - 4;
-    if caption_x < ADVANCE * 4 {
-        return None;
+    let page = image.to_rgba8();
+    let width = page.width();
+    let height = page.height();
+    let canvas_w = width + MARGIN_LEFT + MARGIN_RIGHT;
+    let canvas_h = height + MARGIN_TOP + MARGIN_BOTTOM;
+    let mut img = RgbaImage::from_pixel(canvas_w, canvas_h, Rgba([24, 24, 24, 255]));
+    for y in 0..height {
+        for x in 0..width {
+            img.put_pixel(MARGIN_LEFT + x, MARGIN_TOP + y, *page.get_pixel(x, y));
+        }
     }
+    draw_grid(&mut img, width, height);
     let mut white = Vec::new();
     let mut black = Vec::new();
-    horizontal(&img, caption_x, transform, &mut white);
-    vertical(&img, transform, &mut white);
-    queue_text(&caption, caption_x, 1, &mut white);
-    for (x, y) in white {
-        halo(&img, x, y, &mut black);
+    labels(&img, transform, &mut white);
+    let caption = format!(
+        "x{:.3} y{:.3}",
+        transform.desktop.width / f64::from(width),
+        transform.desktop.height / f64::from(height)
+    );
+    let caption_w = text_width(&caption);
+    let caption_x = canvas_w as i32 - caption_w - 4;
+    if caption_x > MARGIN_LEFT as i32 {
+        queue_text(&caption, caption_x, 4, &mut white);
+    }
+    for (x, y) in &white {
+        halo(&img, *x, *y, &mut black);
     }
     for (x, y) in &black {
+        if in_page(&img, *x, *y, width, height) {
+            continue;
+        }
         plot(&mut img, *x, *y, Rgba([0, 0, 0, 255]));
     }
-    // Recompute the white pixels; halo must not erase the glyph.
-    let mut white = Vec::new();
-    horizontal(&img, caption_x, transform, &mut white);
-    vertical(&img, transform, &mut white);
-    queue_text(&caption, caption_x, 1, &mut white);
     for (x, y) in white {
+        if in_page(&img, x, y, width, height) {
+            continue;
+        }
         plot(&mut img, x, y, Rgba([255, 255, 255, 255]));
     }
     let mut encoded = std::io::Cursor::new(Vec::new());
@@ -59,22 +76,62 @@ pub(crate) fn stamp(png: &[u8], transform: &Transform) -> Option<Vec<u8>> {
     Some(encoded.into_inner())
 }
 
-pub(crate) fn screen_tick(origin: f64, span: f64, pixels: u32, at: i32) -> i64 {
-    (origin + f64::from(at) * span / f64::from(pixels)).round() as i64
+fn in_page(img: &RgbaImage, x: i32, y: i32, width: u32, height: u32) -> bool {
+    x >= MARGIN_LEFT as i32
+        && y >= MARGIN_TOP as i32
+        && x < MARGIN_LEFT as i32 + width as i32
+        && y < MARGIN_TOP as i32 + height as i32
+        && x >= 0
+        && y >= 0
+        && (x as u32) < img.width()
+        && (y as u32) < img.height()
 }
 
-fn horizontal(img: &RgbaImage, stop: i32, transform: &Transform, out: &mut Vec<(i32, i32)>) {
-    let width = img.width() as i32;
+fn draw_grid(img: &mut RgbaImage, width: u32, height: u32) {
     let mut x = 0;
-    while x < stop && x < width {
-        let major = x % 100 == 0;
-        let reach = if major { 8 } else { 4 };
+    while x < width {
+        let strong = x % 100 == 0;
         if x % 50 == 0 {
-            for y in 0..reach {
-                out.push((x, y));
+            for y in 0..height {
+                mark(img, MARGIN_LEFT + x, MARGIN_TOP + y, strong);
             }
         }
-        if major {
+        x += 50;
+    }
+    let mut y = 0;
+    while y < height {
+        let strong = y % 100 == 0;
+        if y % 50 == 0 {
+            for x in 0..width {
+                mark(img, MARGIN_LEFT + x, MARGIN_TOP + y, strong);
+            }
+        }
+        y += 50;
+    }
+}
+
+fn mark(img: &mut RgbaImage, x: u32, y: u32, strong: bool) {
+    if x >= img.width() || y >= img.height() {
+        return;
+    }
+    let pixel = *img.get_pixel(x, y);
+    let lum = u16::from(pixel[0]) + u16::from(pixel[1]) + u16::from(pixel[2]);
+    let ink = if lum > 384 { 28.0 } else { 235.0 };
+    let mix = if strong { 0.55 } else { 0.28 };
+    let blend = |channel: u8| (f32::from(channel) * (1.0 - mix) + ink * mix) as u8;
+    img.put_pixel(
+        x,
+        y,
+        Rgba([blend(pixel[0]), blend(pixel[1]), blend(pixel[2]), 255]),
+    );
+}
+
+fn labels(img: &RgbaImage, transform: &Transform, out: &mut Vec<(i32, i32)>) {
+    let width = img.width() as i32 - MARGIN_LEFT as i32 - MARGIN_RIGHT as i32;
+    let height = img.height() as i32 - MARGIN_TOP as i32 - MARGIN_BOTTOM as i32;
+    let mut x = 0;
+    while x < width {
+        if x % 100 == 0 {
             let label = screen_tick(
                 transform.desktop.x,
                 transform.desktop.width,
@@ -82,32 +139,33 @@ fn horizontal(img: &RgbaImage, stop: i32, transform: &Transform, out: &mut Vec<(
                 x,
             )
             .to_string();
-            queue_text(&label, x + 2, 1, out);
+            queue_text(&label, MARGIN_LEFT as i32 + x + 2, 4, out);
         }
-        x += 50;
+        x += 100;
     }
-}
-
-fn vertical(img: &RgbaImage, transform: &Transform, out: &mut Vec<(i32, i32)>) {
-    let height = img.height() as i32;
-    let mut y = 100;
+    let mut y = 0;
     while y < height {
-        for x in 0..8 {
-            out.push((x, y));
-        }
-        let label = screen_tick(
-            transform.desktop.y,
-            transform.desktop.height,
-            transform.height,
-            y,
-        )
-        .to_string();
-        let top = y - GLYPH_H * SCALE / 2;
-        if top > GLYPH_H * SCALE + 2 {
-            queue_text(&label, 2, top, out);
+        if y % 100 == 0 {
+            let label = screen_tick(
+                transform.desktop.y,
+                transform.desktop.height,
+                transform.height,
+                y,
+            )
+            .to_string();
+            let label_w = text_width(&label);
+            let label_x = MARGIN_LEFT as i32 - label_w - 6;
+            let label_y = MARGIN_TOP as i32 + y + 2;
+            if label_x >= 2 {
+                queue_text(&label, label_x, label_y, out);
+            }
         }
         y += 100;
     }
+}
+
+pub(crate) fn screen_tick(origin: f64, span: f64, pixels: u32, at: i32) -> i64 {
+    (origin + f64::from(at) * span / f64::from(pixels)).round() as i64
 }
 
 fn queue_text(text: &str, x: i32, y: i32, out: &mut Vec<(i32, i32)>) {
@@ -209,24 +267,33 @@ mod tests {
         let (png, transform) = frame(320, 200, 640.0, 500.0);
         let stamped = stamp(&png, &transform).unwrap();
         let image = image::load_from_memory(&stamped).unwrap().to_rgba8();
-        assert_eq!((image.width(), image.height()), (320, 200));
-        assert_eq!(image.get_pixel(160, 100).0, [20, 40, 60, 255]);
-        assert_ne!(image.get_pixel(100, 0).0, [20, 40, 60, 255]);
-        assert_ne!(image.get_pixel(0, 100).0, [20, 40, 60, 255]);
+        assert_eq!(
+            (image.width(), image.height()),
+            (320 + MARGIN_LEFT + 8, 200 + MARGIN_TOP + 8)
+        );
+        let page = |x: u32, y: u32| image.get_pixel(MARGIN_LEFT + x, MARGIN_TOP + y).0;
+        assert_ne!(
+            page(100, 100),
+            [20, 40, 60, 255],
+            "major grid crosses the page"
+        );
+        assert_eq!(
+            page(160, 130),
+            [20, 40, 60, 255],
+            "digits stay off the page"
+        );
+        assert_eq!(image.get_pixel(2, 2).0, [24, 24, 24, 255]);
         let caption = "x2.000 y2.500";
-        let origin = 320 - text_width(caption) - 4;
+        let origin = image.width() as i32 - text_width(caption) - 4;
         let mut marked = false;
-        for y in 1..16 {
+        for y in 4..18 {
             for x in origin..origin + 10 {
-                if image.get_pixel(x as u32, y as u32).0[0] == 255 {
+                if x >= 0 && image.get_pixel(x as u32, y as u32).0[0] == 255 {
                     marked = true;
                 }
             }
         }
-        assert!(
-            marked,
-            "horizontal and vertical scale caption is on the frame"
-        );
+        assert!(marked, "scale caption stays in the margin");
     }
 
     #[test]

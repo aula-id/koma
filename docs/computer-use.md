@@ -72,13 +72,16 @@ High-resolution displays are bounded before PNG encoding, OCR and IPC:
 
 Transforms map these image coordinates back to the captured desktop rectangle,
 including negative display origins, different display scales and cropped regions.
-A model frame large enough to spare an edge carries a top and left ruler. The tick
-numbers are screen pixels. A window share prints that window's position on the
-screen, so the corner is not zero unless the window is at the screen origin.
-Click the printed number; it is not added to the window origin again. The `x` / `y`
-caption is still desktop pixels per screenshot pixel. Do not multiply a tick by
-that caption. Region and crop rectangles stay in image pixels. The live
-preview is not marked. Do not multiply model coordinates by the display scale manually. Each new capture
+A model frame large enough to spare an edge carries a ruler in the margin around
+the page, plus a light grid on the page. The numbers are outside the capture so
+they are not read as part of the UI. They are screen pixels. A window share
+prints that window's position on the screen, so the corner is not zero unless
+the window is at the screen origin. Click the printed number; it is not added
+to the window origin again, and the margin is not part of the click surface.
+The `x` / `y` caption is still desktop pixels per screenshot pixel. Do not
+multiply a tick by that caption. Region and crop rectangles stay in image
+pixels of the page, not of the expanded frame. The live preview is not marked.
+Do not multiply model coordinates by the display scale manually. Each new capture
 or crop has its own observation ID and coordinate system. Observe without options
 to return from a close-up to the full display.
 

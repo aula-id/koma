@@ -201,6 +201,10 @@ static void unobstructed(HWND window, RECT r) {
          above = GetWindow(above, GW_HWNDPREV)) {
         if (!IsWindowVisible(above) || IsIconic(above))
             continue;
+        DWORD owner = 0;
+        GetWindowThreadProcessId(above, &owner);
+        if (owner == GetCurrentProcessId())
+            continue;
         DWORD cloaked = 0;
         DwmGetWindowAttribute(above, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
         if (cloaked)
@@ -268,7 +272,10 @@ static void guardInput() {
             check();
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
-        require(GetForegroundWindow() == target, L"Could not bring the application window forward; observe again");
+        HWND front = GetForegroundWindow();
+        HWND frontRoot = front ? GetAncestor(front, GA_ROOT) : nullptr;
+        require(front == target || frontRoot == target,
+                L"Could not bring the application window forward; observe again");
         unobstructed(target, geometry(target));
     }
     desktopAvailable();

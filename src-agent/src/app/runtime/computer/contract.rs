@@ -105,7 +105,7 @@ impl Transform {
             || !y.is_finite()
             || !self.desktop.contains(x, y)
         {
-            bail!("point is outside the shared screen rectangle");
+            bail!("point is outside the shared window or screen");
         }
         Ok((
             (x - self.desktop.x) * self.width as f64 / self.desktop.width,

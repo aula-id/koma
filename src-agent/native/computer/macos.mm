@@ -209,9 +209,20 @@ static bool focused(NSDictionary *w) {
     AXUIElementSetMessagingTimeout(app, 0.1f);
     id front = attr(app, kAXFocusedWindowAttribute);
     CFRelease(app);
-    return NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier ==
-               [w[(id)kCGWindowOwnerPID] intValue] &&
-           front && sameRect(axBounds((__bridge AXUIElementRef)front), windowBounds(w));
+    if (NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier !=
+        [w[(id)kCGWindowOwnerPID] intValue])
+        return false;
+    if (!front)
+        return false;
+    // Accessibility bounds and the window-list bounds often disagree by the
+    // title bar. A one-pixel match rejected Chrome even when it was in front.
+    CGRect ax = axBounds((__bridge AXUIElementRef)front);
+    CGRect cg = windowBounds(w);
+    const CGFloat slop = 28;
+    bool near = fabs(ax.origin.x - cg.origin.x) < slop && fabs(ax.origin.y - cg.origin.y) < slop &&
+                fabs(ax.size.width - cg.size.width) < slop && fabs(ax.size.height - cg.size.height) < slop;
+    CGPoint center = CGPointMake(CGRectGetMidX(ax), CGRectGetMidY(ax));
+    return near || CGRectContainsPoint(CGRectInset(cg, -slop, -slop), center);
 }
 static NSDictionary *describe(NSDictionary *w) {
     NSString *application = limited(w[(id)kCGWindowOwnerName]);
@@ -238,6 +249,10 @@ static void unobstructed(NSDictionary *w) {
             found = true;
             break;
         }
+        // The enlarged arrow is our own window. It overlaps the target on
+        // purpose and must not count as something covering it.
+        if ([above[(id)kCGWindowOwnerPID] intValue] == NSProcessInfo.processInfo.processIdentifier)
+            continue;
         if ([above[(id)kCGWindowAlpha] doubleValue] <= 0)
             continue;
         CGRect overlap = CGRectIntersection(r, windowBounds(above));
