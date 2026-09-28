@@ -454,31 +454,45 @@ impl X11 {
         Ok(())
     }
     fn chord_codes(&self, keys: &[String]) -> Result<Vec<u32>> {
-        keys.iter()
-            .map(|k| {
-                let name = CString::new(match k.as_str() {
-                    "Control" | "Ctrl" => "Control_L",
-                    "Shift" => "Shift_L",
-                    "Alt" => "Alt_L",
-                    "Super" | "Command" => "Super_L",
-                    "Meta" => "Meta_L",
-                    "Enter" => "Return",
-                    "Esc" => "Escape",
-                    "Backspace" => "BackSpace",
-                    "Space" => "space",
-                    "PageUp" => "Prior",
-                    "PageDown" => "Next",
-                    "ArrowLeft" => "Left",
-                    "ArrowRight" => "Right",
-                    "ArrowUp" => "Up",
-                    "ArrowDown" => "Down",
-                    other => other,
-                })?;
-                let symbol = unsafe { (self.x.XStringToKeysym)(name.as_ptr()) };
-                ensure!(symbol != 0, "unknown X11 key name");
-                Ok(self.mapped(symbol)?.0)
-            })
-            .collect::<Result<Vec<_>>>()
+        let mut codes = Vec::with_capacity(keys.len());
+        for k in keys {
+            if k.chars().count() == 1 {
+                let c = k.chars().next().unwrap();
+                if c.is_ascii_graphic() && !c.is_ascii_alphanumeric() && c != ' ' {
+                    let (code, shifted) = self.mapped(c as c_ulong)?;
+                    if shifted {
+                        let shift = self.mapped(0xffe1)?.0;
+                        if !codes.contains(&shift) {
+                            codes.push(shift);
+                        }
+                    }
+                    codes.push(code);
+                    continue;
+                }
+            }
+            let name = CString::new(match k.as_str() {
+                "Control" | "Ctrl" => "Control_L",
+                "Shift" => "Shift_L",
+                "Alt" => "Alt_L",
+                "Super" | "Command" => "Super_L",
+                "Meta" => "Meta_L",
+                "Enter" => "Return",
+                "Esc" => "Escape",
+                "Backspace" => "BackSpace",
+                "Space" => "space",
+                "PageUp" => "Prior",
+                "PageDown" => "Next",
+                "ArrowLeft" => "Left",
+                "ArrowRight" => "Right",
+                "ArrowUp" => "Up",
+                "ArrowDown" => "Down",
+                other => other,
+            })?;
+            let symbol = unsafe { (self.x.XStringToKeysym)(name.as_ptr()) };
+            ensure!(symbol != 0, "unknown X11 key name");
+            codes.push(self.mapped(symbol)?.0);
+        }
+        Ok(codes)
     }
     fn mapped(&self, symbol: c_ulong) -> Result<(u32, bool)> {
         let code = unsafe { (self.x.XKeysymToKeycode)(self.display, symbol) };

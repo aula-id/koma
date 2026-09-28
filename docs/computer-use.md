@@ -143,7 +143,9 @@ chords are not blocked by Caps Lock or the active layout. On X11, `type` still
 refuses before the first character when the group is not primary, Caps Lock is
 on, or a modifier is latched, so a later Enter in that batch is not sent.
 macOS and Windows inject text as Unicode, so that layout gate is not used
-there. There is no drag or held-button tool.
+there. A URL or other string is one click and one `type` of the full text,
+then Return. A single punctuation mark is also a valid key, so a spelled-out
+period does not reject the batch. There is no drag or held-button tool.
 
 ### Saved-image inspection
 

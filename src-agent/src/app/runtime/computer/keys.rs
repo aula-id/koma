@@ -72,8 +72,14 @@ fn canonical(key: &str) -> Result<String> {
         "up" | "arrowup" => "Up",
         "down" | "arrowdown" => "Down",
         _ => {
-            if lower.len() == 1 && lower.as_bytes()[0].is_ascii_alphanumeric() {
-                return Ok(lower);
+            // One ASCII letter, digit, or punctuation mark. A URL is still one
+            // type action; this only keeps a spelled-out "." from rejecting
+            // the whole batch before any click.
+            if lower.chars().count() == 1 {
+                let c = lower.chars().next().unwrap();
+                if c.is_ascii_alphanumeric() || (c.is_ascii_graphic() && c != ' ') {
+                    return Ok(c.to_string());
+                }
             }
             if let Some(number) = lower.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()) {
                 if (1..=24).contains(&number) && lower == format!("f{number}") {
@@ -86,7 +92,7 @@ fn canonical(key: &str) -> Result<String> {
                     return Ok(format!("F{number}"));
                 }
             }
-            bail!("unsupported computer key name {key:?}; use named keys such as Command, Control, Alt, Shift, Space, Return, Tab, Escape, arrows or F1–F12; use type for text");
+            bail!("unsupported computer key name {key:?}; use named keys such as Command, Control, Alt, Shift, Space, Return, Tab, Escape, arrows or F1–F12; enter a whole string, including punctuation, with type");
         }
     };
     Ok(named.into())
@@ -130,5 +136,15 @@ mod tests {
         ] {
             assert!(chord(&keys.into_iter().map(str::to_string).collect::<Vec<_>>()).is_err());
         }
+    }
+    #[test]
+    fn punctuation_is_a_key_and_a_url_is_not_spelled_as_two_keys() {
+        assert_eq!(chord(&[".".into()]).unwrap(), ["."]);
+        assert_eq!(chord(&[":".into()]).unwrap(), [":"]);
+        assert_eq!(
+            chord(&["ctrl".into(), ".".into()]).unwrap(),
+            ["Control_L", "."]
+        );
+        assert!(chord(&["d".into(), ".".into()]).is_err());
     }
 }

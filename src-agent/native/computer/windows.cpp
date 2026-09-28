@@ -317,9 +317,18 @@ static WORD keycode(hstring name) {
         if (name == entry.first)
             return entry.second;
     if (name.size() == 1) {
-        wchar_t c = towupper(name[0]);
-        if ((c >= L'A' && c <= L'Z') || (c >= L'0' && c <= L'9'))
-            return static_cast<WORD>(c);
+        wchar_t c = name[0];
+        wchar_t upper = towupper(c);
+        if ((upper >= L'A' && upper <= L'Z') || (upper >= L'0' && upper <= L'9'))
+            return static_cast<WORD>(upper);
+        // Punctuation is a character. VkKeyScanW finds its virtual key; a
+        // layout with no such key still validates so input can send Unicode.
+        if (c >= 33 && c < 127) {
+            SHORT scan = VkKeyScanW(c);
+            if (scan != -1)
+                return static_cast<WORD>(LOBYTE(scan));
+            return VK_PACKET;
+        }
     }
     if (name.size() >= 2 && name[0] == L'F') {
         int n = _wtoi(name.c_str() + 1);
@@ -370,9 +379,36 @@ static void input(JsonObject a, JsonObject t) {
             i += static_cast<uint32_t>(n);
         }
     } else if (kind == L"key") {
+        auto list = a.GetNamedArray(L"keys");
+        // A lone punctuation mark is text, like type. Control+. stays a chord.
+        if (list.Size() == 1) {
+            auto only = list.GetAt(0).GetString();
+            if (only.size() == 1 && only[0] >= 33 && only[0] < 127 && !iswalnum(only[0])) {
+                guardInput();
+                guardKeyboard();
+                INPUT events[2]{};
+                events[0].type = INPUT_KEYBOARD;
+                events[0].ki.wScan = only[0];
+                events[0].ki.dwFlags = KEYEVENTF_UNICODE;
+                events[1] = events[0];
+                events[1].ki.dwFlags |= KEYEVENTF_KEYUP;
+                send(events, 2);
+                release();
+                return;
+            }
+        }
         std::vector<WORD> codes;
-        for (auto name : a.GetNamedArray(L"keys"))
-            codes.push_back(keycode(name.GetString()));
+        for (auto name : list) {
+            auto text = name.GetString();
+            if (text.size() == 1 && text[0] >= 33 && text[0] < 127 && !iswalnum(text[0])) {
+                SHORT scan = VkKeyScanW(text[0]);
+                require(scan != -1, L"key is not available: unsupported Windows key name");
+                if ((HIBYTE(scan) & 1) && (codes.empty() || codes.back() != VK_SHIFT))
+                    codes.push_back(VK_SHIFT);
+                codes.push_back(static_cast<WORD>(LOBYTE(scan)));
+            } else
+                codes.push_back(keycode(text));
+        }
         for (WORD code : codes) {
             guardInput();
             guardKeyboard();

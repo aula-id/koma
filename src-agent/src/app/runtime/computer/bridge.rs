@@ -293,7 +293,7 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
         result["requires_observation"] = (reply.completed > 0).into();
         result["recovery"] = serde_json::json!({
             "kind": "keyboard_layout",
-            "model_instruction": "Sharing remains active. No character was sent for the rejected type action. Pointer moves, clicks, scrolls, and key chords still work. Typing needs the primary keyboard layout, with Caps Lock and sticky modifiers released. Ask the user once. Do not treat this as a desktop change and do not retry that type. If earlier actions in this batch already ran, observe before the next click."
+            "model_instruction": "Sharing remains active. No character was sent for the rejected type action. Pointer moves, clicks, scrolls, and key chords still work. Typing needs the primary keyboard layout, with Caps Lock and sticky modifiers released. Ask the user once. Do not treat this as a desktop change and do not retry that type. Do not spell the string as one key per character; after the layout is fixed, click and type the whole string. If earlier actions in this batch already ran, observe before the next click."
         });
     } else if key_unavailable {
         result["controller_enabled"] = true.into();

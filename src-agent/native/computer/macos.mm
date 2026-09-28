@@ -361,6 +361,12 @@ static CGKeyCode keyCode(NSString *s) {
         @"k" : @40,
         @"n" : @45,
         @"m" : @46,
+        @"." : @47, @"," : @43, @"/" : @44, @";" : @41, @"'" : @39,
+        @"[" : @33, @"]" : @30, @"\\" : @42, @"-" : @27, @"=" : @24, @"`" : @50,
+        @">" : @47, @"<" : @43, @"?" : @44, @":" : @41, @"\"" : @39,
+        @"{" : @33, @"}" : @30, @"|" : @42, @"_" : @27, @"+" : @24, @"~" : @50,
+        @"!" : @18, @"@" : @19, @"#" : @20, @"$" : @21, @"%" : @23, @"^" : @22,
+        @"&" : @26, @"*" : @28, @"(" : @25, @")" : @29,
         @"F1" : @122,
         @"F2" : @120,
         @"F3" : @99,
@@ -452,9 +458,35 @@ static void input(NSDictionary *a, NSDictionary *t) {
         }
         release();
     } else if ([kind isEqual:@"key"]) {
+        NSArray *keyNames = a[@"keys"];
+        // A lone punctuation mark is a character, same as type. A chord such
+        // as Control+. still uses the keycode below.
+        if (keyNames.count == 1) {
+            NSString *only = keyNames.firstObject;
+            if (only.length == 1) {
+                unichar c = [only characterAtIndex:0];
+                if (c >= 33 && c < 127 && ![[NSCharacterSet alphanumericCharacterSet] characterIsMember:c]) {
+                    guardKeyboard();
+                    UniChar chars[1] = {c};
+                    CGEventRef down = CGEventCreateKeyboardEvent(nullptr, 0, true);
+                    CGEventRef up = CGEventCreateKeyboardEvent(nullptr, 0, false);
+                    require(down && up, "Unable to create Unicode input");
+                    CGEventKeyboardSetUnicodeString(down, 1, chars);
+                    CGEventKeyboardSetUnicodeString(up, 1, chars);
+                    CGEventSetFlags(down, 0);
+                    CGEventSetFlags(up, 0);
+                    postInputEvent(down);
+                    postInputEvent(up);
+                    CFRelease(down);
+                    CFRelease(up);
+                    release();
+                    return;
+                }
+            }
+        }
         guardKeyboard();
         std::vector<CGKeyCode> codes;
-        for (NSString *s in a[@"keys"])
+        for (NSString *s in keyNames)
             codes.push_back(keyCode(s));
         for (auto code : codes)
             key(code, true);
