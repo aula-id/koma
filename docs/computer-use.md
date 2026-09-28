@@ -72,9 +72,11 @@ High-resolution displays are bounded before PNG encoding, OCR and IPC:
 
 Transforms map these image coordinates back to the captured desktop rectangle,
 including negative display origins, different display scales and cropped regions.
-The model frame is the screen itself. It has no ruler and no grid. Recognized
-words are listed as OCR ids; a click on an id hits the center of that word.
-A point with no text id uses pixels from the top-left of the screenshot.
+The model frame is the screen itself. It has no ruler and no grid. Each
+recognized word is listed with the exact image pixel that will be clicked.
+Copy that id, or copy that x and y. A guess within a few tens of pixels of a
+word is moved onto the measured pixel. A point with no nearby word uses
+pixels from the top-left of the screenshot.
 Region and crop rectangles stay in those image pixels. The live preview is unmarked.
 Do not multiply model coordinates by the display scale manually. Each new capture
 or crop has its own observation ID and coordinate system. Observe without options
@@ -119,9 +121,8 @@ not the top-level tool request `id` or a scene description. Invalid references a
 expired observations are rejected before input with `completed=0`,
 `uncertain=false`, and `requires_observation=true`; observe and re-plan using the
 new ID. Never silently substitute the current frame or replay previous input.
-Text clicks copy an OCR id from that observation and omit `x`/`y`. A point with
-no text id uses pixels from the top-left of the screenshot. Element ids cannot
-be combined with coordinates.
+Text clicks copy an OCR id, or the `x`/`y` published with that word. Both are
+the same measured pixel. Element ids cannot be combined with coordinates.
 
 During a computer-use conversation, the main model's bash dispatcher rejects
 recognized desktop-automation fallbacks (including `osascript`, `cliclick`,

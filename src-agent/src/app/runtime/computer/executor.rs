@@ -26,6 +26,60 @@ pub trait Desktop {
         std::time::Duration::from_millis(200)
     }
 }
+/// How far a guessed point may sit outside a measured word and still be
+/// moved onto that word's locator pixel.
+const LOCATOR_PAD: f64 = 32.0;
+
+/// Move a pointer point onto the measured center of a recognized word when
+/// the guess lands on that word or a few tens of pixels beside it. A point
+/// that is not near any word is left unchanged.
+pub fn snap_to_locator(observation: &Observation, x: f64, y: f64) -> (f64, f64) {
+    let mut best: Option<(u8, f64, f64, f64, f64)> = None;
+    for element in observation.elements.iter().filter(|element| {
+        element.source == "ocr" || (element.source == "accessibility" && element.enabled)
+    }) {
+        let Some((cx, cy)) = element.bounds.locator() else {
+            continue;
+        };
+        let bounds = element.bounds;
+        let inside = x >= bounds.x
+            && y >= bounds.y
+            && x < bounds.x + bounds.width
+            && y < bounds.y + bounds.height;
+        let near = x >= bounds.x - LOCATOR_PAD
+            && y >= bounds.y - LOCATOR_PAD
+            && x < bounds.x + bounds.width + LOCATOR_PAD
+            && y < bounds.y + bounds.height + LOCATOR_PAD;
+        if !near {
+            continue;
+        }
+        let dx = x - cx;
+        let dy = y - cy;
+        let rank = (
+            u8::from(!inside),
+            bounds.width * bounds.height,
+            dx * dx + dy * dy,
+            cx,
+            cy,
+        );
+        let replace = match best {
+            None => true,
+            Some(previous) => {
+                rank.0 < previous.0
+                    || (rank.0 == previous.0 && rank.1 < previous.1)
+                    || (rank.0 == previous.0 && rank.1 == previous.1 && rank.2 < previous.2)
+            }
+        };
+        if replace {
+            best = Some(rank);
+        }
+    }
+    match best {
+        Some((_, _, _, cx, cy)) => (cx, cy),
+        None => (x, y),
+    }
+}
+
 pub fn target(action: &Action, observation: &Observation) -> Result<Option<(f64, f64)>> {
     match action {
         Action::Move { x, y } | Action::Scroll { x, y, .. } => Ok(Some((*x, *y))),
@@ -52,10 +106,10 @@ pub fn target(action: &Action, observation: &Observation) -> Result<Option<(f64,
                 {
                     bail!("invalid element bounds");
                 }
-                Ok(Some((
-                    e.bounds.x + e.bounds.width / 2.0,
-                    e.bounds.y + e.bounds.height / 2.0,
-                )))
+                let Some(point) = e.bounds.locator() else {
+                    bail!("invalid element bounds");
+                };
+                Ok(Some(point))
             }
             _ => bail!("click needs either x/y or an observation-scoped element"),
         },
@@ -83,9 +137,10 @@ pub fn validate_actions(obs: &Observation, actions: &[Action], caps: &Capabiliti
                 element: None,
                 ..
             } => {
-                // Pixels from the top-left of the screenshot. The picture has
-                // no ruler, so these are not screen coordinates.
-                obs.transform.map(*x, *y)?;
+                // Copy the locator pixel from text[], or a point already on
+                // that word. A nearby guess is moved onto the measured pixel.
+                let (x, y) = snap_to_locator(obs, *x, *y);
+                obs.transform.map(x, y)?;
             }
             Action::Click {
                 element: Some(_), ..
@@ -228,23 +283,32 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                 }
                 transform.desktop = current.geometry;
                 let resolved = match action {
-                    Action::Move { x, y } => Action::Move { x: *x, y: *y },
-                    Action::Scroll { x, y, delta } => Action::Scroll {
-                        x: *x,
-                        y: *y,
-                        delta: *delta,
-                    },
+                    Action::Move { x, y } => {
+                        let (x, y) = snap_to_locator(obs, *x, *y);
+                        Action::Move { x, y }
+                    }
+                    Action::Scroll { x, y, delta } => {
+                        let (x, y) = snap_to_locator(obs, *x, *y);
+                        Action::Scroll {
+                            x,
+                            y,
+                            delta: *delta,
+                        }
+                    }
                     Action::Click {
                         x: Some(x),
                         y: Some(y),
                         element: None,
                         button,
-                    } => Action::Click {
-                        x: Some(*x),
-                        y: Some(*y),
-                        element: None,
-                        button: *button,
-                    },
+                    } => {
+                        let (x, y) = snap_to_locator(obs, *x, *y);
+                        Action::Click {
+                            x: Some(x),
+                            y: Some(y),
+                            element: None,
+                            button: *button,
+                        }
+                    }
                     Action::Click { button, .. } => {
                         let (x, y) = target(action, obs)?
                             .ok_or_else(|| anyhow::anyhow!("missing click target"))?;
@@ -1403,6 +1467,11 @@ mod fixture_tests {
             button: Button::Left,
         };
         assert_eq!(target(&action, &obs).unwrap(), Some((25.0, 24.0)));
+        assert_eq!(snap_to_locator(&obs, 25.0, 24.0), (25.0, 24.0));
+        // A guess a few tens of pixels beside the word uses the measured pixel.
+        assert_eq!(snap_to_locator(&obs, 55.0, 40.0), (25.0, 24.0));
+        // Far from every word, the point is unchanged.
+        assert_eq!(snap_to_locator(&obs, 90.0, 90.0), (90.0, 90.0));
     }
 
     #[test]

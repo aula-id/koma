@@ -56,6 +56,17 @@ impl Rect {
             && (self.x + self.width).is_finite()
             && (self.y + self.height).is_finite()
     }
+    /// Image pixel a click on this rectangle uses. Rounded so the number
+    /// given to the model is the number that is clicked.
+    pub fn locator(&self) -> Option<(f64, f64)> {
+        if !self.valid() {
+            return None;
+        }
+        Some((
+            (self.x + self.width / 2.0).round(),
+            (self.y + self.height / 2.0).round(),
+        ))
+    }
     pub fn contains(&self, x: f64, y: f64) -> bool {
         self.valid()
             && x.is_finite()
