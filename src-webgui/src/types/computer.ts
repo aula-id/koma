@@ -19,3 +19,6 @@ export type ComputerStatus = {
   capabilities: { capture: boolean; windows: boolean; focus: boolean; pointer: boolean; keyboard: boolean; accessibility: boolean; ocr: boolean; floating: boolean; limitations: string[] }
   observation: ComputerObservation | null; windows: ComputerWindow[]; message: string
 }
+
+/** Source IDs are assigned by native adapters; every application stays view-only. */
+export function isComputerScreen(id: string) { return id.startsWith('display:') || id.startsWith('portal:screen:') }

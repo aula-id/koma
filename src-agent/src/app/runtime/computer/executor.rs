@@ -136,7 +136,13 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                 reply.windows = desktop.windows()?;
                 return Ok(());
             }
-            Operation::Select { window, .. } => desktop.select(window)?,
+            Operation::Select { window, .. } => {
+                if is_screen(window) {
+                    desktop.select(window)?
+                } else {
+                    desktop.inspect(window)?
+                }
+            }
             Operation::InspectWindow { window } => desktop.inspect(window)?,
             Operation::Observe { crop: Some(_), .. } => {
                 bail!("crop must be served from the persisted observation")
@@ -146,6 +152,10 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                     .observation
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("select a display first"))?;
+                if matches!(request.operation, Operation::Act { .. }) && !is_screen(&obs.window.id)
+                {
+                    return Err(ScreenRequired.into());
+                }
                 let window = desktop.inspect(&obs.window.id)?;
                 if matches!(request.operation, Operation::Act { .. })
                     && (window.geometry != obs.window.geometry
@@ -277,6 +287,7 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
     })();
     desktop.release();
     if let Err(e) = result {
+        reply.requires_screen = e.is::<ScreenRequired>();
         reply.error = Some(e.to_string());
     }
     reply
@@ -329,12 +340,7 @@ mod fixture_tests {
     impl Fixture {
         fn window(&self) -> Window {
             Window {
-                id: if self.display {
-                    "display:fixture"
-                } else {
-                    "fixture"
-                }
-                .into(),
+                id: "display:fixture".into(),
                 application: "fixture".into(),
                 title: "deterministic".into(),
                 geometry: Rect {
@@ -356,9 +362,13 @@ mod fixture_tests {
             self.focus = true;
             Ok(self.window())
         }
-        fn inspect(&mut self, _: &str) -> Result<Window> {
+        fn inspect(&mut self, id: &str) -> Result<Window> {
             anyhow::ensure!(!self.closed, "window closed");
-            Ok(self.window())
+            let mut window = self.window();
+            if id.starts_with("app:") {
+                window.id = id.into();
+            }
+            Ok(window)
         }
         fn capture(&mut self, w: &Window) -> Result<(Transform, Vec<u8>)> {
             self.captures += 1;
@@ -409,6 +419,93 @@ mod fixture_tests {
             self.released = true;
         }
     }
+    #[test]
+    fn application_assist_blocks_all_input_and_switching_screen_requires_new_observation() {
+        let mut desktop = Fixture {
+            captures: 0,
+            inputs: 0,
+            fail_at: usize::MAX,
+            released: false,
+            focus: false,
+            closed: false,
+            display: true,
+            front: 1,
+            reject_key: false,
+        };
+        let cancelled = AtomicBool::new(false);
+        let mut request = Request {
+            id: "assist".into(),
+            session: "s".into(),
+            generation: "g".into(),
+            observation: None,
+            operation: Operation::Select {
+                window: "app:fixture".into(),
+                generation: "g".into(),
+            },
+        };
+        let selected = execute(&mut desktop, &request, &cancelled);
+        assert!(selected.error.is_none());
+        assert_eq!(desktop.captures, 1);
+        assert!(!desktop.focus, "selecting an application must not focus it");
+        let app = selected.observation.unwrap();
+        request.observation = Some(app.clone());
+        for action in [
+            Action::Move { x: 20.0, y: 20.0 },
+            Action::Click {
+                x: Some(20.0),
+                y: Some(20.0),
+                element: None,
+                button: Button::Left,
+            },
+            Action::Type {
+                text: "no input".into(),
+            },
+            Action::Key {
+                keys: vec!["Return".into()],
+            },
+            Action::Scroll {
+                x: 20.0,
+                y: 20.0,
+                delta: 1,
+            },
+        ] {
+            request.operation = Operation::Act {
+                observation: app.id.clone(),
+                actions: vec![action],
+                observe: true,
+            };
+            let refused = execute(&mut desktop, &request, &cancelled);
+            assert!(refused.requires_screen);
+            assert_eq!(refused.completed, 0);
+            assert!(!refused.uncertain);
+        }
+        assert_eq!(desktop.inputs, 0);
+        assert_eq!(desktop.captures, 1);
+        request.operation = Operation::Select {
+            window: "display:fixture".into(),
+            generation: "g".into(),
+        };
+        let shared = execute(&mut desktop, &request, &cancelled);
+        assert!(shared.error.is_none());
+        request.observation = shared.observation;
+        request.operation = Operation::Act {
+            observation: app.id,
+            actions: vec![Action::Type {
+                text: "hello".into(),
+            }],
+            observe: true,
+        };
+        assert!(
+            execute(&mut desktop, &request, &cancelled).error.is_some(),
+            "an application observation cannot authorize screen input"
+        );
+        assert_eq!(desktop.inputs, 0);
+        if let Operation::Act { observation, .. } = &mut request.operation {
+            *observation = request.observation.as_ref().unwrap().id.clone();
+        }
+        assert_eq!(execute(&mut desktop, &request, &cancelled).completed, 1);
+    }
+
     #[test]
     fn spotlight_aliases_reach_input_and_key_preflight_has_no_uncertain_input() {
         let mut desktop = Fixture {
@@ -611,7 +708,7 @@ mod fixture_tests {
             session: "s".into(),
             generation: "g".into(),
             operation: Operation::Select {
-                window: "fixture".into(),
+                window: "display:fixture".into(),
                 generation: "g".into(),
             },
             observation: None,
@@ -662,7 +759,7 @@ mod fixture_tests {
             session: "s".into(),
             generation: "g".into(),
             operation: Operation::Select {
-                window: "fixture".into(),
+                window: "display:fixture".into(),
                 generation: "g".into(),
             },
             observation: None,

@@ -120,8 +120,8 @@ impl Transform {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Window {
-    // The wire name is retained for saved sessions. Native pickers now return
-    // display:* sources whose geometry is the full composed display.
+    // The wire name is retained for saved sessions. Native pickers return
+    // display:* screens plus application windows, which are always view-only.
     pub id: String,
     pub application: String,
     pub title: String,
@@ -132,6 +132,19 @@ pub struct Window {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<String>,
 }
+/// Screen IDs are minted by the GUI adapter; other sources are view-only.
+pub fn is_screen(id: &str) -> bool {
+    id.starts_with("display:") || id.starts_with("portal:screen:")
+}
+#[derive(Debug)]
+pub struct ScreenRequired;
+impl std::fmt::Display for ScreenRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Application sharing is assist mode (view-only). Select a screen to control the computer.")
+    }
+}
+impl std::error::Error for ScreenRequired {}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Element {
     pub id: String,
@@ -237,6 +250,8 @@ pub struct Reply {
     pub generation: String,
     pub completed: usize,
     pub uncertain: bool,
+    #[serde(default)]
+    pub requires_screen: bool,
     pub error: Option<String>,
     pub windows: Vec<Window>,
     pub capabilities: Option<Capabilities>,

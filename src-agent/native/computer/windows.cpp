@@ -220,6 +220,7 @@ static void desktopAvailable() {
 static void guardInput() {
     check();
     require(localSession(), L"Computer input requires the local console session");
+    require(targetMonitor != nullptr, L"Application sharing is view-only; select a screen before input");
     if (targetMonitor) {
         require(lookupMonitor(hstring(targetId)) == targetMonitor && same(monitorInfo(targetMonitor).rcMonitor, targetRect),
                 L"Display geometry changed; observe again");
@@ -726,7 +727,7 @@ static IJsonValue dispatch(JsonObject r) {
         for (auto key :
              {L"capture", L"windows", L"focus", L"pointer", L"keyboard"})
             result.SetNamedValue(key, boolean(supported));
-        result.SetNamedValue(L"accessibility", boolean(false));
+        result.SetNamedValue(L"accessibility", boolean(supported));
         result.SetNamedValue(L"ocr", boolean(false));
         result.SetNamedValue(L"floating", boolean(true));
         JsonArray limits;
@@ -735,6 +736,7 @@ static IJsonValue dispatch(JsonObject r) {
                               L"Graphics Capture support"));
         limits.Append(str(L"Secure desktop, protected content and elevated applications can reject "
                           L"capture/input; no privilege escalation is attempted"));
+        limits.Append(str(L"Screen shares permit native input. Application windows are view-only assist mode; UI Automation metadata applies only to application observations."));
         result.SetNamedValue(L"limitations", limits);
         return result;
     }
@@ -747,6 +749,28 @@ static IJsonValue dispatch(JsonObject r) {
             check();
             windows.Append(describeMonitor(monitor));
         }
+        EnumWindows(
+            [](HWND w, LPARAM value) -> BOOL {
+                auto out = reinterpret_cast<JsonArray *>(value);
+                if (cancelled.load() || out->Size() >= 256)
+                    return FALSE;
+                DWORD pid = 0;
+                GetWindowThreadProcessId(w, &pid);
+                // Owned top-level dialogs are selectable targets too. EnumWindows
+                // already excludes ordinary child controls.
+                if (!pid || pid == GetCurrentProcessId() || !IsWindowVisible(w) || IsIconic(w))
+                    return TRUE;
+                DWORD cloaked = 0;
+                DwmGetWindowAttribute(w, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
+                if (cloaked)
+                    return TRUE;
+                try {
+                    out->Append(describe(w));
+                } catch (...) {
+                }
+                return TRUE;
+            },
+            reinterpret_cast<LPARAM>(&windows));
         check();
         return windows;
     }
@@ -761,16 +785,6 @@ static IJsonValue dispatch(JsonObject r) {
         }
         targetMonitor = nullptr;
         HWND w = lookup(id);
-        if (command == L"select") {
-            require(
-                SetForegroundWindow(w),
-                L"Windows refused foreground activation; select the target manually and observe");
-            for (int i = 0; i < 50 && GetForegroundWindow() != w; ++i) {
-                check();
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            }
-            require(GetForegroundWindow() == w, L"Selected window did not gain focus");
-        }
         target = w;
         targetRect = geometry(w);
         targetTitle = title(w);

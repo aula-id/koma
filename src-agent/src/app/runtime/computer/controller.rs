@@ -53,7 +53,7 @@ impl Controller {
         self.owner = Some(owner);
         self.used.clear();
         let message = if capabilities.capture {
-            "Ready; select a display".into()
+            "Ready; select a screen or application".into()
         } else {
             format!(
                 "Capture unavailable: {}",
@@ -122,9 +122,9 @@ impl Controller {
         let caps = &self.status.capabilities;
         match &operation {
             Operation::Select { generation, .. } if generation != &self.status.generation => {
-                bail!("controller changed since display listing/approval")
+                bail!("controller changed since source listing/approval")
             }
-            Operation::Windows if !caps.windows => bail!("display listing unsupported"),
+            Operation::Windows if !caps.windows => bail!("source listing unsupported"),
             Operation::Select { .. } if !caps.focus || !caps.capture => {
                 bail!("display selection unsupported; use the OS source picker")
             }
@@ -158,6 +158,9 @@ impl Controller {
                     || current.generation != self.status.generation
                 {
                     bail!("stale observation");
+                }
+                if !is_screen(&current.window.id) {
+                    return Err(ScreenRequired.into());
                 }
                 super::executor::validate_actions(current, actions, caps)?;
             }
@@ -208,7 +211,7 @@ impl Controller {
             .is_some_and(|(request, t)| {
                 // Only an explicit human source-picker operation gets time for
                 // portal consent. Model input keeps its short, non-replayed deadline.
-                let seconds = if matches!(&request.operation, Operation::InspectWindow { window } if window == "portal:choose") { 120 } else { 30 };
+                let seconds = if matches!(&request.operation, Operation::InspectWindow { window } if window == "portal:choose" || window.starts_with("portal:choose:")) { 120 } else { 30 };
                 t.elapsed() > Duration::from_secs(seconds)
             })
     }

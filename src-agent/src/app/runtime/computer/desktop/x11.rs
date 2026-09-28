@@ -36,10 +36,10 @@ pub fn capabilities() -> Capabilities {
             pointer: x.test.is_some(),
             keyboard: x.test.is_some(),
             floating: true,
-            accessibility: false,
+            accessibility: std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some(),
             ocr: crate::app::runtime::computer::enrichment::ocr_available(),
             limitations: vec![
-                "X11: composed display capture includes overlapping windows. Unicode typing uses a temporary keycode and restores it. The preview cannot be excluded from live X11 frames; it is hidden for model observations and input. Display AX targets are unavailable; use screenshot coordinates.".into()
+                "X11: screen shares include overlapping windows and allow native input. Application shares are view-only; covered application capture requires switching to a screen. Unicode typing uses a temporary keycode and restores it. The preview cannot be excluded from live X11 frames; it is hidden for model observations and input. AT-SPI metadata is available only for application observations; use screenshot coordinates on screens.".into()
             ],
         },
         Err(e)=>Capabilities {limitations:vec![e.to_string()],..Default::default()},
@@ -336,7 +336,7 @@ impl X11 {
                         && r.x + r.width > bounds.x
                         && r.y < bounds.y + bounds.height
                         && r.y + r.height > bounds.y),
-                    "target obstructed by another window; ask the user to clear it before reactivating control"
+                    ScreenRequired
                 );
             }
         }
@@ -348,6 +348,10 @@ impl X11 {
             .target
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("no input target"))?;
+        ensure!(
+            target.id.starts_with("display:"),
+            "Application sharing is view-only; select a screen before input"
+        );
         if target.id.starts_with("display:") {
             ensure!(
                 self.display_source(&target.id)?.geometry == target.geometry,
@@ -623,42 +627,33 @@ impl X11 {
 }
 impl Desktop for X11 {
     fn windows(&mut self) -> Result<Vec<Window>> {
-        self.displays()
+        let mut sources = self.displays()?;
+        for xid in self
+            .property(self.root, "_NET_CLIENT_LIST")?
+            .into_iter()
+            .take(256)
+        {
+            if self.cancelled.load(Ordering::SeqCst) {
+                bail!("cancelled");
+            }
+            let Some(pid) = self
+                .property(xid, "_NET_WM_PID")
+                .ok()
+                .and_then(|v| v.first().copied())
+            else {
+                continue;
+            };
+            if pid == 0 || pid == u64::from(std::process::id()) as c_ulong {
+                continue;
+            }
+            if let Ok(window) = self.inspect(&format!("{xid}:{pid}")) {
+                sources.push(window);
+            }
+        }
+        Ok(sources)
     }
     fn select(&mut self, id: &str) -> Result<Window> {
-        if id.starts_with("display:") {
-            return self.inspect(id);
-        }
-        let xid = self.xid(id)?;
-        self.geometry(xid)?;
-        let mut event: xlib::XEvent = unsafe { std::mem::zeroed() };
-        let mut message: xlib::XClientMessageEvent = unsafe { std::mem::zeroed() };
-        message.type_ = xlib::ClientMessage;
-        message.window = xid;
-        message.message_type = self.atom("_NET_ACTIVE_WINDOW")?;
-        message.format = 32;
-        message.data.set_long(0, 2);
-        message.data.set_long(1, 0);
-        event.client_message = message;
-        unsafe {
-            (self.x.XSendEvent)(
-                self.display,
-                self.root,
-                0,
-                xlib::SubstructureRedirectMask | xlib::SubstructureNotifyMask,
-                &mut event,
-            );
-        }
-        self.sync()?;
-        for _ in 0..50 {
-            ensure!(!self.cancelled.load(Ordering::SeqCst), "cancelled");
-            let window = self.inspect(id)?;
-            if window.focused {
-                return Ok(window);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        bail!("window manager did not grant focus")
+        self.inspect(id)
     }
     fn inspect(&mut self, id: &str) -> Result<Window> {
         if id.starts_with("display:") {
@@ -943,6 +938,49 @@ mod native_tests {
             actions: vec![Action::Click {
                 x: Some(40.0),
                 y: Some(40.0),
+                element: None,
+                button: Button::Left,
+            }],
+            observe: true,
+        };
+        let refused =
+            crate::app::runtime::computer::executor::execute(&mut desktop, &request, &token);
+        assert!(refused.requires_screen);
+        assert_eq!(refused.completed, 0);
+        assert!(!refused.uncertain);
+        let application = request.observation.as_ref().unwrap().window.geometry;
+        let screen = desktop
+            .windows()
+            .unwrap()
+            .into_iter()
+            .find(|w| {
+                is_screen(&w.id)
+                    && w.geometry
+                        .contains(application.x + 40.0, application.y + 40.0)
+            })
+            .unwrap();
+        request.operation = Operation::Select {
+            window: screen.id,
+            generation: "g".into(),
+        };
+        let shared =
+            crate::app::runtime::computer::executor::execute(&mut desktop, &request, &token);
+        assert!(shared.error.is_none(), "{:?}", shared.error);
+        request.observation = shared.observation;
+        let obs = request.observation.as_ref().unwrap();
+        request.operation = Operation::Act {
+            observation: obs.id.clone(),
+            actions: vec![Action::Click {
+                x: Some(
+                    (application.x + 40.0 - obs.transform.desktop.x)
+                        * f64::from(obs.transform.width)
+                        / obs.transform.desktop.width,
+                ),
+                y: Some(
+                    (application.y + 40.0 - obs.transform.desktop.y)
+                        * f64::from(obs.transform.height)
+                        / obs.transform.desktop.height,
+                ),
                 element: None,
                 button: Button::Left,
             }],

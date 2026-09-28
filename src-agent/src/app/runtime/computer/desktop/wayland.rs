@@ -1,4 +1,4 @@
-//! User-mediated, display-only Wayland portal observations. Standard portals do
+//! User-mediated screen/application Wayland portal observations. Standard portals do
 //! not expose target focus/obstruction identity, so they cannot authorize Koma's
 //! input contract. Never substitute XWayland or global unverified injection.
 use super::*;
@@ -50,8 +50,8 @@ pub fn capabilities() -> Capabilities {
         let proxy = zbus::blocking::Proxy::new(&conn, DEST, ROOT, CAST)?;
         let sources: u32 = proxy.get_property("AvailableSourceTypes")?;
         ensure!(
-            sources & 1 != 0,
-            "This compositor's portal does not support display capture"
+            sources & 3 != 0,
+            "This compositor's portal does not support screen or application capture"
         );
         Ok(())
     })();
@@ -124,7 +124,7 @@ pub struct Portal {
     live: Arc<AtomicBool>,
 }
 impl Portal {
-    fn open(cancelled: &AtomicBool) -> Result<Arc<Self>> {
+    fn open(cancelled: &AtomicBool, screen: bool) -> Result<Arc<Self>> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
@@ -148,7 +148,7 @@ impl Portal {
             let result = async {
                 let t = token();
                 let mut args = options(&t);
-                args.insert("types", Value::from(1u32));
+                args.insert("types", Value::from(if screen { 1u32 } else { 2u32 }));
                 args.insert("multiple", Value::from(false));
                 args.insert("cursor_mode", Value::from(1u32));
                 request(
@@ -172,14 +172,17 @@ impl Portal {
                     Vec::try_from(result.remove("streams").context("Portal omitted streams")?)?;
                 ensure!(
                     streams.len() == 1,
-                    "Select exactly one display in the portal"
+                    "Select exactly one source in the portal"
                 );
                 let (node, properties) = streams
                     .into_iter()
                     .next()
                     .context("Portal returned no stream")?;
                 if let Some(kind) = properties.get("source_type") {
-                    ensure!(u32::try_from(kind)? == 1, "Portal did not select a display");
+                    ensure!(
+                        u32::try_from(kind)? == if screen { 1 } else { 2 },
+                        "Portal returned the wrong source type"
+                    );
                 }
                 let size = properties
                     .get("size")
@@ -246,9 +249,18 @@ impl Portal {
             remote,
             node,
             window: Window {
-                id: format!("portal:{}", uuid::Uuid::new_v4()),
+                id: format!(
+                    "portal:{}:{}",
+                    if screen { "screen" } else { "application" },
+                    uuid::Uuid::new_v4()
+                ),
                 application: "Desktop portal".into(),
-                title: "User-selected Wayland display".into(),
+                title: if screen {
+                    "User-selected Wayland screen"
+                } else {
+                    "User-selected Wayland application (assist)"
+                }
+                .into(),
                 geometry: Rect {
                     x: 0.0,
                     y: 0.0,
@@ -459,11 +471,15 @@ pub fn execute(request: &Request, cancelled: &AtomicBool, cache: &Cache) -> Repl
                 }
                 return Ok(());
             }
-            Operation::InspectWindow { window } if window == PICKER => {
+            Operation::InspectWindow { window }
+                if window == PICKER
+                    || window == "portal:choose:screen"
+                    || window == "portal:choose:application" =>
+            {
                 if let Some(old) = portal.take() {
                     old.close();
                 }
-                let selected = Portal::open(cancelled)?;
+                let selected = Portal::open(cancelled, window != "portal:choose:application")?;
                 ensure!(
                     !cancelled.load(Ordering::SeqCst),
                     "Portal selection cancelled"
@@ -488,7 +504,10 @@ pub fn execute(request: &Request, cancelled: &AtomicBool, cache: &Cache) -> Repl
         }
         if let Operation::InspectWindow { window } = &request.operation {
             ensure!(
-                window == PICKER || window == &portal.window.id,
+                window == PICKER
+                    || window == "portal:choose:screen"
+                    || window == "portal:choose:application"
+                    || window == &portal.window.id,
                 "Portal source no longer selected"
             );
         }

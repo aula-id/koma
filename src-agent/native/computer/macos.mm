@@ -207,6 +207,7 @@ static void unobstructed(NSDictionary *w) {
 static void guardInput() {
     check();
     require(target != nil, "No input target");
+    require(isDisplay(target[@"id"]), "Application sharing is view-only; select a screen before input");
     require(CGPreflightScreenCaptureAccess() && AXIsProcessTrusted(), "Desktop permissions revoked; reactivate control");
     if (isDisplay(target[@"id"])) {
         require(sameRect(CGDisplayBounds(displayID(target[@"id"])), bounds(target[@"geometry"])),
@@ -723,14 +724,14 @@ static id dispatch(NSDictionary *r) {
         if (!ax)
             [limits addObject:@"Grant Accessibility access in System Settings for focus/input and "
                               @"labels, then reactivate"];
-        [limits addObject:@"Display sharing includes visible windows, dialogs and desktop chrome. Input uses the native cursor and keyboard. AX element targets are unavailable for composed displays; use screenshot coordinates."];
+        [limits addObject:@"Screen shares include visible windows, dialogs and desktop chrome and permit native input. Application shares are view-only assist mode. AX metadata is available only for application observations; use screenshot coordinates on screens."];
         return @{
             @"capture" : @(capture),
             @"windows" : @(capture),
-            @"focus" : @(capture && ax),
+            @"focus" : @(capture),
             @"pointer" : @(capture && ax),
             @"keyboard" : @(capture && ax),
-            @"accessibility" : @NO,
+            @"accessibility" : @(capture && ax),
             @"ocr" : @(supported),
             @"floating" : @YES,
             @"limitations" : limits
@@ -746,6 +747,13 @@ static id dispatch(NSDictionary *r) {
             check();
             [result addObject:describeDisplay(displays[i])];
         }
+        for (NSDictionary *w in windowInfo()) {
+            check();
+            if (result.count >= 288) break;
+            if ([w[(id)kCGWindowOwnerPID] intValue] == getpid() ||
+                [w[(id)kCGWindowLayer] intValue] != 0 || [limited(w[(id)kCGWindowName]) length] == 0) continue;
+            try { [result addObject:describe(w)]; } catch (...) {}
+        }
         return result;
     }
     if ([command isEqual:@"inspect"] || [command isEqual:@"select"]) {
@@ -754,23 +762,6 @@ static id dispatch(NSDictionary *r) {
             return target;
         }
         NSDictionary *w = lookup(r[@"window"]);
-        if ([command isEqual:@"select"]) {
-            AXUIElementRef ax = axWindow(w);
-            AXError err = AXUIElementPerformAction(ax, kAXRaiseAction);
-            CFRelease(ax);
-            require(err == kAXErrorSuccess, "Application refused window focus");
-            NSRunningApplication *app = [NSRunningApplication
-                runningApplicationWithProcessIdentifier:[w[(id)kCGWindowOwnerPID] intValue]];
-            dispatch_sync(dispatch_get_main_queue(), ^{
-              // Default activation options; ignoringOtherApps has no effect on macOS 14+.
-              [app activateWithOptions:0];
-            });
-            for (int i = 0; i < 50 && !focused(w); ++i) {
-                check();
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            }
-            require(focused(w), "Application did not grant focus");
-        }
         target = describe(w);
         return target;
     }

@@ -1,7 +1,8 @@
 # Desktop sharing: implementation and validation status
 
-Computer use shares one complete display, including visible applications, dialogs,
-menus and desktop chrome. The model uses the native cursor and keyboard. It does
+Computer use offers two source groups: **Screens** for native control, and
+**Applications** for view-only assist mode. A screen includes visible applications,
+dialogs, menus and desktop chrome. An application shares only its selected window. The model uses the native cursor and keyboard. It does
 not have an independent background cursor. macOS (ARM and Intel), Windows and X11
 have display capture/input implementations; Wayland remains portal observation-only.
 Native device validation is separate from the compilation and regression evidence below.
@@ -9,8 +10,9 @@ Native device validation is separate from the compilation and regression evidenc
 ## Workflow and UI
 
 Use the monitor shortcut immediately left of Terminal, or **Settings → Computer
-use → Share desktop**. Choose a display in the preview's hover/keyboard-accessible
-picker. The titlebar shows Sharing and provides **Take back control**, **Give
+use → Start sharing**. Choose a source in the preview's hover/keyboard-accessible picker. It has separate
+**Screens** and **Applications** sections. Applications are labelled **Assist · view
+only** in the picker, preview and titlebar. Selecting one does not focus/raise it. The titlebar shows Sharing and provides **Take back control**, **Give
 control** and **Stop sharing**. Taking back control pauses/cancels input while
 keeping the share and live preview; resuming requires a fresh model observation.
 Stopping, disconnecting or changing sessions ends sharing and closes both preview
@@ -28,6 +30,7 @@ like any other application window, can still be visible in the shared display.
 Chat shows an expandable **Model observation** card with the exact saved PNG sent
 to the model. Live frames are separate and never silently replace model observations.
 Computer tool headers show short states (Working, Completed, Observe again, Stopped).
+An assist-mode action shows **Select a screen**; it does not stop sharing.
 Errors, uncertainty and recovery instructions appear inside the expandable details;
 raw requests/results live in nested Technical details. Text uses the active theme's
 foreground, with semantic colors confined to status icons.
@@ -76,7 +79,8 @@ and does not maintain a frame queue. PipeWire may still allocate native-size fra
 
 The daemon validates PNG dimensions before decoding/persisting. PNGs are limited to
 20 MiB and previews to 2 MiB JPEG. OCR runs locally on the bounded captured image,
-with bounded text/region output and explicit failure status. Composed desktop
+with bounded text/region output and explicit failure status. Application captures
+can include bounded, source-labelled AX/UI Automation/AT-SPI data. Composed desktop
 observations omit window-only AX/UI Automation/AT-SPI targets, which may represent
 hidden controls. OCR text is not proof of interactivity. Screenshots and metadata
 are external task data, never instructions. Missing enrichment preserves a valid
@@ -85,10 +89,12 @@ screenshot. The latest actionable attachment survives context shaping.
 ## Tools, ownership and execution
 
 The four tool names and the `window` wire field remain compatible with saved
-sessions. `computer_windows` now lists `display:*` sources; `computer_select_window`
-selects a display without focusing an app. Use native clicks or key chords to switch
+sessions. `computer_windows` lists both `display:*` screens and application windows;
+each tool result identifies `source_type` and `view_only`. `computer_select_window`
+selects either source without focusing an app. Application input is rejected by the
+daemon, worker and native adapters, even if an application window has focus. Use native clicks or key chords to switch
 applications, then observe. `computer_observe` captures the shared display or a
-close-up. `computer_act` uses a current observation and defaults to one final capture.
+close-up. `computer_act` requires a current screen observation and defaults to one final capture.
 With `observe=false`, another observation is required before further input.
 Coordinate clicks, scroll and navigation keys end a sequence. Typing uses current
 native focus; click the intended visible application and observe before typing.
@@ -127,18 +133,26 @@ back control to chat without agent input competing for the native keyboard.
 
 Observation JSON artifacts associate captures with tool-call IDs; PNGs live in the
 session's `images/`. Image bytes travel in one-shot results, not recurring snapshots.
-Legacy single-window adapter paths retain their earlier obstruction checks, but are
-not advertised in the display picker. Old saved observations cannot authorize input
-after reactivation.
+If the model tries to act on an application share, the result has
+`requires_screen=true`, `controller_enabled=true`, and a short recovery instruction:
+list sources, select the screen containing the app through normal approvals, inspect
+its new observation, and continue the user's task. Do not stop/re-enable sharing or
+substitute browser/shell input. Old application observations cannot authorize screen
+input. On X11, an occluded application cannot be captured reliably; that observation
+also returns the screen-selection nudge rather than disabling sharing. Permission
+loss and uncertain native input retain the existing stopped-control recovery.
+
+This nudge is model guidance, not an automatic replay or an approval bypass. All
+source changes and input still pass through the existing mode/approval policy.
 
 ## Platform capabilities and build requirements
 
-| Platform | Capture / display selection | Input | Accessibility / OCR | Preview |
+| Platform | Capture / source selection | Input | Accessibility / OCR | Preview |
 | --- | --- | --- | --- | --- |
-| macOS 14+ | On-demand ScreenCaptureKit screenshot; native display listing | CGEvent pointer, Unicode text and named chords; foreground checks | desktop pixels / local Vision | Panel and detached viewer; OS content protection requested |
-| Windows 10 1903+ | One requested Graphics Capture frame; native display listing | SendInput pointer, UTF-16 text and named chords; foreground checks | desktop pixels / bundled Tesseract | Panel and detached viewer; OS content protection requested |
-| Linux X11 | XGetImage on the composed root, XRandR monitor listing | XTEST, including temporary-keycode Unicode fallback | desktop pixels / Tesseract | Panel and detached viewer |
-| Linux Wayland | Display-only ScreenCast portal picker and one-frame PipeWire consumer | Unavailable; no verified native target/focus/occlusion from the standard portal | AX unavailable for composed desktop / Tesseract | In-app panel |
+| macOS 14+ | On-demand ScreenCaptureKit screenshot; screen and application listing | CGEvent pointer, Unicode text and named chords; foreground checks | AX for applications / local Vision | Panel and detached viewer; OS content protection requested |
+| Windows 10 1903+ | One requested Graphics Capture frame; screen and application listing | SendInput pointer, UTF-16 text and named chords; foreground checks | UI Automation for applications / bundled Tesseract | Panel and detached viewer; OS content protection requested |
+| Linux X11 | XGetImage on the composed root, XRandR monitor listing | XTEST, including temporary-keycode Unicode fallback | AT-SPI for applications / Tesseract | Panel and detached viewer |
+| Linux Wayland | Screen/application ScreenCast portal picker and one-frame PipeWire consumer | Unavailable; no verified native target/focus/occlusion from the standard portal | AX unavailable for composed desktop / Tesseract | In-app panel |
 
 Capabilities are reported individually at activation. Missing permissions,
 unsupported OS versions, missing OCR or compositor limitations appear in the GUI
@@ -200,16 +214,18 @@ can prevent typing. Mapping delivery uses short bounded delays and still needs
 validation against actual applications. Release physical keys/buttons before
 letting the agent act.
 
-**Wayland:** choose **Choose display in system dialog** from the preview picker.
-The compositor must expose monitor capture through the
+**Wayland:** choose a screen or application with **Choose … in system dialog**
+in the corresponding picker section. The compositor must expose that source type
+through the
 [ScreenCast portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html).
-Window-only portals are rejected. The user owns source selection; programmatic
+Source-type support depends on the compositor. The user owns source selection; programmatic
 listing/switching is unavailable. Consent has a 120-second timeout. A one-frame
 GStreamer consumer uses the portal's restricted PipeWire descriptor for each
 observation/preview. The portal session stays open across Pause/Take back control;
 Stop, disconnect, revocation and session changes close it. This implementation does
 not implement RemoteDesktop input, fresh region capture, or desktop accessibility
-matching. It does not substitute XWayland input or restore an old grant silently.
+matching. New portal IDs retain whether the selected source is a screen or application.
+It does not substitute XWayland input or restore an old grant silently.
 
 ## Release packaging
 
@@ -269,7 +285,7 @@ The macOS and Windows bridges require their native SDK builds; Linux compilation
 does not validate those branches. Release packaging scripts include the scaling
 plugin, but no installer/AppImage has been built for this change.
 
-Validation completed on the Linux host for this change:
+Desktop-sharing baseline validation on the Linux host:
 
 - `cargo check --workspace --offline` passed.
 - `cargo test -p agent --bin koma --offline computer -- --skip native`: 22 passed.
@@ -286,13 +302,24 @@ key rejection preserving controller state, and preflight failures reporting zero
 uncertain input. GUI/headless all-target Clippy with `-D warnings` also passed for
 this follow-up. macOS/Windows SDK compilation and native shortcut tests were not run.
 
+Assist-mode follow-up: 27 computer tests passed, including read-only application
+selection without focus, refusal of every input kind, application-to-screen
+transition requiring a new observation, and recovery that retains ownership. GUI
+TypeScript/build and GUI/headless all-target Clippy with `-D warnings` passed.
+Static React rendering checks passed for the two picker sections, portal choices,
+source classification and compact recovery details. Native SDK/device checks remain
+unexecuted, including the updated opt-in X11 fixture.
+
 These are compilation/automated checks, not native SDK or device evidence. Regression
 coverage includes 4K/8K/portrait/ultrawide budgets, negative-origin and Retina-point
 mapping, fresh close-up mapping, app switching, stale coordinates, partial outcomes,
 cancellation, ownership and preview correlation, and preserved screenshot attachments
 when enrichment fails. Full native validation remains for the device walkthrough.
 
-1. Share a display with `docs/testing/computer-fixture.html` open. Verify the model
+1. Share an application window first and confirm Assist/view-only labels, no focus
+   change and no input. Ask for a task requiring control: the model should get the
+   compact screen-selection nudge and select a screen under normal approvals.
+   Share a screen with `docs/testing/computer-fixture.html` open. Verify the model
    and chat card receive the same bounded PNG; the preview can show newer frames.
 2. Put another application/dialog over the fixture. Observe the composed desktop,
    click/switch apps, observe again, then type `Koma42 — café 世界 🌍`. Ordinary overlap
@@ -319,5 +346,5 @@ when enrichment fails. Full native validation remains for the device walkthrough
 
 Record OS, SDK, architecture, monitor dimensions/scales, permission state and exact
 errors separately from unit-test and compile results. Native X11 fixture tests remain
-opt-in and use the legacy window path; they do not substitute for display/mixed-DPI
-validation.
+opt-in. The fixture checks that application input is refused before switching to a
+screen for click/type/observe; this does not substitute for mixed-DPI validation.
