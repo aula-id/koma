@@ -38,7 +38,7 @@ pub(crate) fn run_tool(state: &mut AppState, sess_idx: usize, call: &ToolCall) -
 /// created lazily once per session, then reused.
 pub(crate) fn dispatch_deferred(state: &mut AppState, sess_idx: usize, call: &ToolCall) {
     if call.function.name.starts_with("computer_") {
-        crate::app::runtime::computer::bridge::dispatch(state,sess_idx,call);
+        crate::app::runtime::computer::bridge::dispatch(state, sess_idx, call);
         return;
     }
     // Lazily create THIS session's result channel once, then reuse it. The

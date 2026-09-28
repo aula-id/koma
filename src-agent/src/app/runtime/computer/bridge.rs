@@ -227,25 +227,35 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
     // share the desktop. Keep sharing and require observation before more input.
     let screen_required = reply.requires_screen && !reply.uncertain && reply.completed == 0;
     let input_busy = reply.input_busy && !reply.uncertain;
-    let observe_again = !reply.uncertain
-        && reply
-            .error
-            .as_ref()
-            .is_some_and(|e| e.contains("observe again"));
     let keyboard_layout = !reply.uncertain
         && reply
             .error
             .as_ref()
             .is_some_and(|e| e.contains("primary keyboard group"));
+    // Wins over an "observe again" substring. A missing key is not a scene
+    // change on macOS, Windows, or X11.
+    let key_unavailable = !reply.uncertain
+        && reply
+            .error
+            .as_ref()
+            .is_some_and(|e| e.contains("key is not available"));
+    let observe_again = !reply.uncertain
+        && !keyboard_layout
+        && !key_unavailable
+        && reply
+            .error
+            .as_ref()
+            .is_some_and(|e| e.contains("observe again"));
     if let Some(error) = &reply.error {
         rt.computer.actionable = false;
-        if !observe_again && !screen_required && !input_busy && !keyboard_layout {
+        if !observe_again && !screen_required && !input_busy && !keyboard_layout && !key_unavailable
+        {
             rt.computer.stop(&format!(
                 "Native operation failed: {error}; reactivate explicitly"
             ));
         }
     }
-    if keyboard_layout && reply.completed == 0 {
+    if (keyboard_layout || key_unavailable) && reply.completed == 0 {
         rt.computer.actionable = true;
     }
     rt.computer.status.message = reply
@@ -283,7 +293,15 @@ pub fn receive(rt: &mut SessionRuntime, owner: u64, mut reply: Reply) {
         result["requires_observation"] = (reply.completed > 0).into();
         result["recovery"] = serde_json::json!({
             "kind": "keyboard_layout",
-            "model_instruction": "Sharing remains active. No key was sent for the rejected action. Pointer moves, clicks, and scrolls still work. Typing and key chords need the primary keyboard layout, with Caps Lock and sticky modifiers released. Ask the user once. Do not treat this as a desktop change and do not retry the same typing. If earlier actions in this batch already ran, observe before the next click."
+            "model_instruction": "Sharing remains active. No character was sent for the rejected type action. Pointer moves, clicks, scrolls, and key chords still work. Typing needs the primary keyboard layout, with Caps Lock and sticky modifiers released. Ask the user once. Do not treat this as a desktop change and do not retry that type. If earlier actions in this batch already ran, observe before the next click."
+        });
+    } else if key_unavailable {
+        result["controller_enabled"] = true.into();
+        result["requires_user_action"] = false.into();
+        result["requires_observation"] = (reply.completed > 0).into();
+        result["recovery"] = serde_json::json!({
+            "kind": "key_unavailable",
+            "model_instruction": "Sharing remains active. That key is not in the active keymap on this machine. Another screenshot will not make it available. Do not retry the same chord. Use type for text, or choose a different named key. Pointer moves, clicks, scrolls, and other chords still work. If earlier actions in this batch already ran, observe before the next click."
         });
     } else if observe_again {
         result["controller_enabled"] = true.into();
@@ -937,6 +955,74 @@ mod approval_tests {
             let result: serde_json::Value = serde_json::from_str(&rt.tool_results[0].1).unwrap();
             assert_eq!(result["controller_enabled"], true);
             assert_eq!(result["recovery"]["kind"], "keyboard_layout");
+            assert_ne!(result["recovery"]["kind"], "desktop_changed");
+            let instruction = result["recovery"]["model_instruction"].as_str().unwrap();
+            assert!(instruction.contains("key chords still work"));
+            assert!(!instruction.contains("chords need"));
+            assert_eq!(result["requires_observation"], completed > 0);
+            drop(rt);
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn missing_key_keeps_sharing_even_if_the_text_also_says_observe_again() {
+        for (completed, actionable, error) in [
+            (0, true, "key is not available: unsupported macOS key name"),
+            (
+                1,
+                false,
+                "key is not available: unsupported Windows key name; observe again",
+            ),
+        ] {
+            let mut rt = SessionRuntime::new();
+            let path = std::env::temp_dir().join(format!(
+                "koma-key-{}-{}",
+                completed,
+                uuid::Uuid::new_v4()
+            ));
+            rt.computer
+                .enable(
+                    1,
+                    &rt.id,
+                    "fixture",
+                    Capabilities {
+                        capture: true,
+                        focus: true,
+                        pointer: true,
+                        keyboard: true,
+                        ..Default::default()
+                    },
+                    &path,
+                )
+                .unwrap();
+            rt.computer.actionable = true;
+            rt.computer
+                .begin(
+                    "missing-key".into(),
+                    Operation::Select {
+                        window: "display:fixture".into(),
+                        generation: rt.computer.status.generation.clone(),
+                    },
+                )
+                .unwrap();
+            rt.pending_tool_tasks.push("missing-key".into());
+            rt.computer.outbound.take();
+            let reply = Reply {
+                id: "missing-key".into(),
+                session: rt.id.clone(),
+                generation: rt.computer.status.generation.clone(),
+                completed,
+                uncertain: false,
+                error: Some(error.into()),
+                ..Default::default()
+            };
+            receive(&mut rt, 1, reply);
+            assert!(rt.computer.status.enabled);
+            assert_eq!(rt.computer.actionable, actionable);
+            let result: serde_json::Value = serde_json::from_str(&rt.tool_results[0].1).unwrap();
+            assert_eq!(result["controller_enabled"], true);
+            assert_eq!(result["recovery"]["kind"], "key_unavailable");
             assert_ne!(result["recovery"]["kind"], "desktop_changed");
             assert_eq!(result["requires_observation"], completed > 0);
             drop(rt);

@@ -264,10 +264,9 @@ impl X11 {
         if !target.id.starts_with("display:") {
             return Ok(());
         }
-        ensure!(
-            target.focus.as_deref() == Some(self.desktop_focus()?.as_str()),
-            "Desktop focus changed; observe again"
-        );
+        // Title, bounds, and window identity are not a batch gate. A predicted
+        // chord or type keeps going when focus moves to another window on this
+        // display. macOS and Windows use the same center check.
         let window = self
             .property(self.root, "_NET_ACTIVE_WINDOW")?
             .first()
@@ -356,10 +355,9 @@ impl X11 {
             "Application sharing is view-only; select a screen before input"
         );
         if target.id.starts_with("display:") {
-            ensure!(
-                self.display_source(&target.id)?.geometry == target.geometry,
-                "Display geometry changed; observe again"
-            );
+            // Still connected. Position and size are taken from the live
+            // transform, so a move or resize does not cancel the batch.
+            self.display_source(&target.id)?;
         } else {
             let xid = self.xid(&target.id)?;
             ensure!(
@@ -400,10 +398,11 @@ impl X11 {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
-    /// Typing and chords are keycodes. Another XKB group, Caps Lock, or a
-    /// latched modifier would change the character. Pointer actions do not
-    /// consult this; the message must not contain "observe again" or the
-    /// model treats a layout mismatch as a desktop change.
+    /// Character typing uses group-0 keycodes. Another XKB group, Caps Lock, or a
+    /// latched modifier would change the character. Key chords, pointer moves,
+    /// clicks, and scrolls do not consult this. macOS and Windows inject text
+    /// as Unicode and do not have this gate. The message must not contain
+    /// "observe again" or the model treats a layout mismatch as a desktop change.
     fn guard_layout(&self) -> Result<()> {
         let mut state: xlib::XkbStateRec = unsafe { std::mem::zeroed() };
         let status = unsafe { (self.x.XkbGetState)(self.display, 0x0100, &mut state) };
@@ -743,10 +742,13 @@ impl Desktop for X11 {
         self.guard_input()?;
         if matches!(action, Action::Type { .. } | Action::Key { .. }) {
             self.guard_keyboard()?;
+        }
+        if matches!(action, Action::Type { .. }) {
             self.guard_layout()?;
         }
         if let Action::Key { keys } = action {
-            self.chord_codes(keys).map_err(|e| anyhow::anyhow!("Key chord unavailable: {e}; observe again and use keys available in this layout"))?;
+            self.chord_codes(keys)
+                .map_err(|e| anyhow::anyhow!("key is not available: {e}"))?;
         }
         Ok(())
     }
@@ -843,8 +845,9 @@ impl Desktop for X11 {
                 }
             }
             Action::Key { keys } => {
-                self.guard_layout()?;
-                let codes = self.chord_codes(keys)?;
+                let codes = self
+                    .chord_codes(keys)
+                    .map_err(|e| anyhow::anyhow!("key is not available: {e}"))?;
                 for code in &codes {
                     self.key(*code, true)?;
                 }

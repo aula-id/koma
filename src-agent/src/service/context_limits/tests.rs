@@ -147,7 +147,14 @@ fn missing_context_still_respects_output_metadata_and_smaller_native_limits() {
             .unwrap();
     // Both exact and normalized identity matches preserve output metadata.
     for query in ["vendor/model-1", "Model 1"] {
-        let got = resolve(query, "", "", 0, std::slice::from_ref(&public), std::slice::from_ref(&native));
+        let got = resolve(
+            query,
+            "",
+            "",
+            0,
+            std::slice::from_ref(&public),
+            std::slice::from_ref(&native),
+        );
         assert_eq!(got.effective_window, 64_000);
         assert_eq!(got.catalogue_source, "active_provider");
         assert_eq!(got.auto_output_tokens, 128_000);

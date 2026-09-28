@@ -155,9 +155,12 @@ static NSDictionary *describeDisplay(CGDirectDisplayID display) {
 }
 static void guardKeyboard() {
     if (!isDisplay(target[@"id"])) return;
-    require([desktopFocus() isEqual:target[@"focus"]], "Desktop focus changed; observe again");
+    // Title, bounds, and window identity are not a batch gate. A predicted
+    // chord or type keeps going when focus moves to another window on this
+    // display. A missing foreground window is not a failure: X11 falls back
+    // to the root, and Windows ignores a null foreground the same way.
     NSRunningApplication *app = NSWorkspace.sharedWorkspace.frontmostApplication;
-    require(app != nil, "Keyboard focus unavailable; observe again");
+    if (!app) return;
     AXUIElementRef ax = AXUIElementCreateApplication(app.processIdentifier);
     AXUIElementSetMessagingTimeout(ax, 0.1f);
     id focusedWindow = attr(ax, kAXFocusedWindowAttribute);
@@ -258,9 +261,9 @@ static void guardInput() {
     require(isDisplay(target[@"id"]), "Application sharing is view-only; select a screen before input");
     require(CGPreflightScreenCaptureAccess() && AXIsProcessTrusted(), "Desktop permissions revoked; reactivate control");
     if (isDisplay(target[@"id"])) {
-        require(sameRect(CGDisplayBounds(displayID(target[@"id"])), bounds(target[@"geometry"])),
-                "Display geometry changed; observe again");
-        // Overlapping windows are part of the captured desktop, not obstructions.
+        // Still connected. Screenshot points are mapped onto the current
+        // bounds, so a move or resize does not cancel the batch.
+        (void)displayID(target[@"id"]);
     } else {
         NSDictionary *w = lookup(target[@"id"]);
         require(sameRect(windowBounds(w), bounds(target[@"geometry"])), "Window geometry changed");
@@ -372,7 +375,7 @@ static CGKeyCode keyCode(NSString *s) {
         @"F12" : @111
     };
     NSNumber *code = keys[s] ?: keys[s.lowercaseString];
-    require(code != nil, "Unsupported macOS key name; observe again and use a supported named key");
+    require(code != nil, "key is not available: unsupported macOS key name");
     return (CGKeyCode)code.unsignedShortValue;
 }
 static CGEventFlags modifier(CGKeyCode key) {

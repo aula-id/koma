@@ -1,9 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use super::*;
-use crate::config::{
-    MAX_READ_CHARS, MAX_READ_LINES, MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_OUTPUT_LINES,
-};
+use crate::config::{MAX_READ_CHARS, MAX_READ_LINES, MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_OUTPUT_LINES};
 use crate::tool::{CallTrack, ToolCtx};
 use serde_json::json;
 use std::sync::{Arc, RwLock};
@@ -159,7 +157,10 @@ fn same_args_same_body_stubs_the_tool_result() {
     let second = finish_tool_output(&t, "read", &same, body.into());
     assert!(second.contains("message_find"), "{second}");
     assert!(second.contains("[repeat:"), "{second}");
-    assert!(!second.contains(body), "duplicate body must not be re-ingested");
+    assert!(
+        !second.contains(body),
+        "duplicate body must not be re-ingested"
+    );
 }
 
 #[test]

@@ -1190,7 +1190,8 @@ mod tests {
                 assert_eq!(run.summary().unwrap()["status"], "succeeded");
             }
             for _ in 0..OUTPUT_CHUNKS + 10 {
-                run.append("stdout", "a".into()).expect("append task output");
+                run.append("stdout", "a".into())
+                    .expect("append task output");
             }
             let page = output(&workspace, &run.id, 0).unwrap();
             assert_eq!(page["truncated"], true);

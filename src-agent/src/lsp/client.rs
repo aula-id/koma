@@ -756,10 +756,19 @@ impl LspManager {
 
     /// Feature-gated JSON LSP requests. The caller cannot select arbitrary
     /// protocol methods or supply another document URI.
-    pub(crate) fn extended_request(&mut self, root: &str, path: &str, method: &str, mut params: serde_json::Value) -> Result<LspPendingRequest, String> {
+    pub(crate) fn extended_request(
+        &mut self,
+        root: &str,
+        path: &str,
+        method: &str,
+        mut params: serde_json::Value,
+    ) -> Result<LspPendingRequest, String> {
         let (method, capability) = match method {
             "textDocument/formatting" => ("textDocument/formatting", "documentFormattingProvider"),
-            "textDocument/rangeFormatting" => ("textDocument/rangeFormatting", "documentRangeFormattingProvider"),
+            "textDocument/rangeFormatting" => (
+                "textDocument/rangeFormatting",
+                "documentRangeFormattingProvider",
+            ),
             "textDocument/prepareRename" => ("textDocument/prepareRename", "renameProvider"),
             "textDocument/rename" => ("textDocument/rename", "renameProvider"),
             "textDocument/codeAction" => ("textDocument/codeAction", "codeActionProvider"),
@@ -767,44 +776,117 @@ impl LspManager {
             "workspace/executeCommand" => ("workspace/executeCommand", "executeCommandProvider"),
             "textDocument/signatureHelp" => ("textDocument/signatureHelp", "signatureHelpProvider"),
             "textDocument/inlayHint" => ("textDocument/inlayHint", "inlayHintProvider"),
-            "textDocument/implementation" => ("textDocument/implementation", "implementationProvider"),
-            "textDocument/typeDefinition" => ("textDocument/typeDefinition", "typeDefinitionProvider"),
-            "textDocument/semanticTokens/full" => ("textDocument/semanticTokens/full", "semanticTokensProvider"),
+            "textDocument/implementation" => {
+                ("textDocument/implementation", "implementationProvider")
+            }
+            "textDocument/typeDefinition" => {
+                ("textDocument/typeDefinition", "typeDefinitionProvider")
+            }
+            "textDocument/semanticTokens/full" => {
+                ("textDocument/semanticTokens/full", "semanticTokensProvider")
+            }
             _ => return Err("Unsupported language operation".into()),
         };
-        if !params.is_object() { return Err("Language parameters must be an object".into()); }
+        if !params.is_object() {
+            return Err("Language parameters must be an object".into());
+        }
         let (uri, server_id) = self.uri_server(root, path)?;
         self.ensure_server_alive(&server_id)?;
-        let session = self.servers.get(&server_id).ok_or("Language server is unavailable")?;
-        let capabilities = session.capabilities.lock().map_err(|_| "LSP capability lock failed")?;
-        let supported = capabilities.get(capability).is_some_and(|v| v.as_bool() == Some(true) || v.is_object());
-        if !supported { return Err(format!("Language server does not support {method}")); }
-        if method == "textDocument/prepareRename" && capabilities.pointer("/renameProvider/prepareSupport").and_then(serde_json::Value::as_bool) != Some(true) {
+        let session = self
+            .servers
+            .get(&server_id)
+            .ok_or("Language server is unavailable")?;
+        let capabilities = session
+            .capabilities
+            .lock()
+            .map_err(|_| "LSP capability lock failed")?;
+        let supported = capabilities
+            .get(capability)
+            .is_some_and(|v| v.as_bool() == Some(true) || v.is_object());
+        if !supported {
+            return Err(format!("Language server does not support {method}"));
+        }
+        if method == "textDocument/prepareRename"
+            && capabilities
+                .pointer("/renameProvider/prepareSupport")
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
+        {
             return Err("Language server does not support prepareRename".into());
         }
-        if method == "codeAction/resolve" && capabilities.pointer("/codeActionProvider/resolveProvider").and_then(serde_json::Value::as_bool) != Some(true) { return Err("Language server does not resolve code actions".into()); }
-        if method == "workspace/executeCommand" {
-            let command = params.get("command").and_then(serde_json::Value::as_str).ok_or("Missing server command")?;
-            if !capabilities.pointer("/executeCommandProvider/commands").and_then(serde_json::Value::as_array).is_some_and(|commands|commands.iter().any(|v|v.as_str()==Some(command))) {return Err("The language server did not advertise this command".into());}
+        if method == "codeAction/resolve"
+            && capabilities
+                .pointer("/codeActionProvider/resolveProvider")
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
+        {
+            return Err("Language server does not resolve code actions".into());
         }
-        if method.starts_with("textDocument/") { params["textDocument"] = serde_json::json!({"uri":uri}); }
-        Ok(LspPendingRequest { io: session.io.clone(), method, params })
+        if method == "workspace/executeCommand" {
+            let command = params
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("Missing server command")?;
+            if !capabilities
+                .pointer("/executeCommandProvider/commands")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|commands| commands.iter().any(|v| v.as_str() == Some(command)))
+            {
+                return Err("The language server did not advertise this command".into());
+            }
+        }
+        if method.starts_with("textDocument/") {
+            params["textDocument"] = serde_json::json!({"uri":uri});
+        }
+        Ok(LspPendingRequest {
+            io: session.io.clone(),
+            method,
+            params,
+        })
     }
 
-    pub(crate) fn semantic_legend(&self, root: &str, path: &str) -> Result<serde_json::Value, String> {
+    pub(crate) fn semantic_legend(
+        &self,
+        root: &str,
+        path: &str,
+    ) -> Result<serde_json::Value, String> {
         let (_, server_id) = self.uri_server(root, path)?;
-        let session = self.servers.get(&server_id).ok_or("Language server is unavailable")?;
-        let caps = session.capabilities.lock().map_err(|_| "LSP capability lock failed")?;
-        Ok(caps.pointer("/semanticTokensProvider/legend").cloned().unwrap_or_default())
+        let session = self
+            .servers
+            .get(&server_id)
+            .ok_or("Language server is unavailable")?;
+        let caps = session
+            .capabilities
+            .lock()
+            .map_err(|_| "LSP capability lock failed")?;
+        Ok(caps
+            .pointer("/semanticTokensProvider/legend")
+            .cloned()
+            .unwrap_or_default())
     }
 
     pub(crate) fn validate_edit_versions(&self, edit: &serde_json::Value) -> Result<(), String> {
-        if let Some(changes) = edit.get("documentChanges").and_then(serde_json::Value::as_array) {
+        if let Some(changes) = edit
+            .get("documentChanges")
+            .and_then(serde_json::Value::as_array)
+        {
             for change in changes {
-                let Some(document) = change.get("textDocument") else { continue };
-                let Some(version) = document.get("version").and_then(serde_json::Value::as_i64) else { continue };
-                let uri = document.get("uri").and_then(serde_json::Value::as_str).ok_or("Language edit has no URI")?;
-                if self.docs.get(uri).is_none_or(|doc| i64::from(doc.version) != version) {
+                let Some(document) = change.get("textDocument") else {
+                    continue;
+                };
+                let Some(version) = document.get("version").and_then(serde_json::Value::as_i64)
+                else {
+                    continue;
+                };
+                let uri = document
+                    .get("uri")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or("Language edit has no URI")?;
+                if self
+                    .docs
+                    .get(uri)
+                    .is_none_or(|doc| i64::from(doc.version) != version)
+                {
                     return Err("Language edit targets an obsolete document version".into());
                 }
             }
@@ -1298,7 +1380,11 @@ impl ServerSession {
             "initializationOptions": initialization_options_for(&self.id)
         });
         let initialized = self.request("initialize", init_params)?;
-        *self.capabilities.lock().map_err(|_| "LSP capability lock failed")? = initialized.get("capabilities").cloned().unwrap_or_default();
+        *self
+            .capabilities
+            .lock()
+            .map_err(|_| "LSP capability lock failed")? =
+            initialized.get("capabilities").cloned().unwrap_or_default();
         self.notify("initialized", serde_json::json!({}))?;
         {
             let mut st = self.runtime.lock().unwrap_or_else(|p| p.into_inner());
@@ -1392,7 +1478,11 @@ impl SessionIo {
             map.remove(&id);
             return Err(e);
         }
-        match rx.recv_timeout(if method == "workspace/executeCommand" {Duration::from_secs(190)} else {REQ_TIMEOUT}) {
+        match rx.recv_timeout(if method == "workspace/executeCommand" {
+            Duration::from_secs(190)
+        } else {
+            REQ_TIMEOUT
+        }) {
             Ok(PendingReply::Ok(v)) => Ok(v),
             Ok(PendingReply::Err(e)) => Err(e),
             Err(RecvTimeoutError::Timeout) => {
@@ -1427,8 +1517,8 @@ fn spawn_server_process(
     push: Arc<dyn Fn(String) + Send + Sync>,
 ) -> Result<ServerSession, String> {
     let mut cmd = if id.starts_with("phpactor") {
-        let runtime = crate::coding::environment::executable(root, "php")
-            .map_err(|e| e.to_string())?;
+        let runtime =
+            crate::coding::environment::executable(root, "php").map_err(|e| e.to_string())?;
         let mut cmd = Command::new(runtime);
         cmd.arg(binary);
         cmd
@@ -1438,7 +1528,13 @@ fn spawn_server_process(
     for a in args {
         cmd.arg(a);
     }
-    cmd.envs(crate::coding::environment::variables(root, binary.file_stem().and_then(|s| s.to_str()).unwrap_or("")).map_err(|e| e.to_string())?);
+    cmd.envs(
+        crate::coding::environment::variables(
+            root,
+            binary.file_stem().and_then(|s| s.to_str()).unwrap_or(""),
+        )
+        .map_err(|e| e.to_string())?,
+    );
     cmd.current_dir(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1561,7 +1657,13 @@ fn reader_loop<R: Read>(stdout: R, ctx: ReaderCtx) {
         if let Some(id_val) = msg.get("id").cloned() {
             if let Some(method) = msg.get("method").and_then(|m| m.as_str()) {
                 if method == "workspace/applyEdit" {
-                    register_workspace_edit(&server_root, &stdin, &push, id_val, msg.get("params").cloned().unwrap_or_default());
+                    register_workspace_edit(
+                        &server_root,
+                        &stdin,
+                        &push,
+                        id_val,
+                        msg.get("params").cloned().unwrap_or_default(),
+                    );
                     continue;
                 }
                 // Server→client request. Acknowledge workDoneProgress/create;
@@ -1919,7 +2021,10 @@ fn display_name_for(spawn_id: &str, spec: &ServerSpec) -> String {
 /// must never compete for a process configured for only one project.
 fn workspace_server_id(kind: &str, root: &Path) -> String {
     use sha2::{Digest, Sha256};
-    format!("{kind}@{:x}", Sha256::digest(root.to_string_lossy().as_bytes()))
+    format!(
+        "{kind}@{:x}",
+        Sha256::digest(root.to_string_lossy().as_bytes())
+    )
 }
 
 // ─── Spawn resolution ────────────────────────────────────────────────────────
@@ -2022,7 +2127,8 @@ fn abs_path(root: &str, path: &str) -> Result<PathBuf, String> {
 }
 
 fn path_to_uri(path: &Path) -> String {
-    url::Url::from_file_path(path).map(|uri| uri.to_string())
+    url::Url::from_file_path(path)
+        .map(|uri| uri.to_string())
         .unwrap_or_else(|_| format!("file://{}", path.to_string_lossy()))
 }
 
@@ -2513,12 +2619,16 @@ pub(crate) fn reply_workspace_edit(
 impl LspManager {
     pub(crate) fn did_change_watched_files(&self, changes: &[(PathBuf, u32)]) {
         for server in self.servers.values() {
-            let changes: Vec<_> = changes.iter()
+            let changes: Vec<_> = changes
+                .iter()
                 .filter(|(path, _)| path.starts_with(&server.root))
                 .map(|(path, kind)| serde_json::json!({"uri":path_to_uri(path),"type":kind}))
                 .collect();
             if !changes.is_empty() {
-                let _ = server.notify("workspace/didChangeWatchedFiles", serde_json::json!({"changes":changes}));
+                let _ = server.notify(
+                    "workspace/didChangeWatchedFiles",
+                    serde_json::json!({"changes":changes}),
+                );
             }
         }
     }
@@ -2537,7 +2647,13 @@ mod tests {
         assert_ne!(a, workspace_server_id("gopls", Path::new("/projects/a")));
         let spec = catalog::find("vscode-langservers").unwrap();
         assert_eq!(
-            display_name_for(&workspace_server_id("vscode-langservers:vscode-html-language-server", Path::new("/projects/a")), spec),
+            display_name_for(
+                &workspace_server_id(
+                    "vscode-langservers:vscode-html-language-server",
+                    Path::new("/projects/a")
+                ),
+                spec
+            ),
             "HTML Language Server"
         );
     }

@@ -930,7 +930,10 @@ impl AppStateRest {
             return;
         }
         if self.sessions[sess_idx].computer.status.enabled {
-            crate::app::runtime::computer::bridge::stop(&mut self.sessions[sess_idx], "Mode changed; reactivate computer control explicitly");
+            crate::app::runtime::computer::bridge::stop(
+                &mut self.sessions[sess_idx],
+                "Mode changed; reactivate computer control explicitly",
+            );
         }
         let entering_plan = new_mode == AgentMode::Plan;
         let leaving_plan = old_mode == AgentMode::Plan;

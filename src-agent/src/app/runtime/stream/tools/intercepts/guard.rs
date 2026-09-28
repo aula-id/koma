@@ -211,7 +211,12 @@ pub(in crate::app::runtime::stream::tools) fn intercept_git_worktree(
                         format!("approve {}? [y/n]", call.function.name);
                     return InterceptFlow::Return;
                 } else {
-                    if super::super::approval::park_classifier_unavailable(state, sess_idx, call, &verdict.reason) {
+                    if super::super::approval::park_classifier_unavailable(
+                        state,
+                        sess_idx,
+                        call,
+                        &verdict.reason,
+                    ) {
                         return InterceptFlow::Return;
                     }
                     state.rest.sessions[sess_idx].tool_results.push((

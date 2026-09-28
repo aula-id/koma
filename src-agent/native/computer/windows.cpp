@@ -38,7 +38,6 @@ using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
 static std::atomic<bool> cancelled(false);
 static HWND target = nullptr;
 static HMONITOR targetMonitor = nullptr;
-static HWND targetForeground = nullptr;
 static RECT targetRect{};
 static std::wstring targetTitle;
 static std::wstring targetId;
@@ -181,10 +180,15 @@ static JsonObject describeMonitor(HMONITOR monitor) {
 }
 static void guardKeyboard() {
     if (!targetMonitor) return;
+    // Title, bounds, and HWND identity are not a batch gate. A predicted
+    // chord or type keeps going when focus moves to another window on this
+    // display. A missing foreground window is not a failure: macOS and X11
+    // continue in that case too. Only a window whose center has left this
+    // display stops the remaining keys.
     HWND front = GetForegroundWindow();
-    require(front && front == targetForeground, L"Desktop focus changed; observe again");
+    if (!front) return;
     RECT r{};
-    require(GetWindowRect(front, &r), L"Keyboard focus unavailable; observe again");
+    if (!GetWindowRect(front, &r)) return;
     POINT center{r.left + (r.right - r.left) / 2, r.top + (r.bottom - r.top) / 2};
     require(PtInRect(&targetRect, center), L"Keyboard focus is outside the shared display; click a visible window and observe again");
 }
@@ -233,8 +237,10 @@ static void guardInput() {
     require(localSession(), L"Computer input requires the local console session");
     require(targetMonitor != nullptr, L"Application sharing is view-only; select a screen before input");
     if (targetMonitor) {
-        require(lookupMonitor(hstring(targetId)) == targetMonitor && same(monitorInfo(targetMonitor).rcMonitor, targetRect),
-                L"Display geometry changed; observe again");
+        // Still the same monitor. Screenshot points are mapped onto its
+        // current rectangle, so a move or resize does not cancel the batch.
+        require(lookupMonitor(hstring(targetId)) == targetMonitor,
+                L"Shared display disconnected; select a display again");
     } else {
         require(target && IsWindow(target), L"No live input target");
         require(lookup(hstring(targetId)) == target, L"Input window identity changed");
@@ -320,7 +326,7 @@ static WORD keycode(hstring name) {
         if (n >= 1 && n <= 24)
             return static_cast<WORD>(VK_F1 + n - 1);
     }
-    throw hresult_error(E_INVALIDARG, L"Unsupported Windows key name; observe again and use a supported named key");
+    throw hresult_error(E_INVALIDARG, L"key is not available: unsupported Windows key name");
 }
 static void input(JsonObject a, JsonObject t) {
     guardInput();
@@ -742,7 +748,6 @@ static IJsonValue dispatch(JsonObject r) {
         cancelled = false;
         target = nullptr;
         targetMonitor = nullptr;
-        targetForeground = nullptr;
         return JsonValue::CreateNullValue();
     }
     if (command == L"capabilities") {
@@ -810,7 +815,6 @@ static IJsonValue dispatch(JsonObject r) {
             targetMonitor = lookupMonitor(id);
             targetRect = monitorInfo(targetMonitor).rcMonitor;
             targetId = monitorId(targetMonitor);
-            targetForeground = GetForegroundWindow();
             return describeMonitor(targetMonitor);
         }
         targetMonitor = nullptr;

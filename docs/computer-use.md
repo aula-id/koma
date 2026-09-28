@@ -131,8 +131,19 @@ steps. Typed characters do not. Native focus metadata is refreshed after each
 action without a screenshot. The default is one final observation for the
 entire batch. After the last action, macOS, Windows, and X11 wait a cancellable
 200 ms, then capture once. That frame is the next actionable observation.
-Unexpected focus/display changes between actions interrupt the remaining steps
-and request observation. There is no drag or held-button tool.
+On macOS, Windows, and X11, a foreground title, bounds, or window-identity
+change does not interrupt the batch, including a change caused by an earlier
+step. The native keyboard check on each platform is only that the focused
+window's center is still inside the shared display. The shared screen moving
+or changing resolution does not stop the batch: screenshot coordinates are
+mapped onto that screen's current rectangle. A display that is not actionable,
+or a focused window that has left that display, still stops the remaining
+steps and requests observation. Named key
+chords are not blocked by Caps Lock or the active layout. On X11, `type` still
+refuses before the first character when the group is not primary, Caps Lock is
+on, or a modifier is latched, so a later Enter in that batch is not sent.
+macOS and Windows inject text as Unicode, so that layout gate is not used
+there. There is no drag or held-button tool.
 
 ### Saved-image inspection
 
@@ -342,8 +353,10 @@ absent from the active keymap use a temporarily reserved unused keycode; the map
 is restored on completion/cancellation unless another client changed it. The
 application must support Unicode keysyms. Legacy XLookupString-only applications,
 unavailable keycodes, non-primary keyboard groups and locked/sticky modifiers
-can prevent typing and key chords. Pointer moves, clicks, and scrolls are not
-blocked by the active group, Caps Lock, or a sticky modifier. Mapping delivery
+can prevent `type`. Named key chords are sent as keycodes and are not blocked
+by the active group, Caps Lock, or a sticky modifier. Pointer moves, clicks,
+and scrolls are not blocked either. An unknown key name stays shared and is
+not reported as a desktop change. Mapping delivery
 uses short bounded delays and still needs validation against actual applications.
 Release physical keys/buttons before letting the agent act.
 

@@ -93,6 +93,19 @@ pub fn validate_actions(obs: &Observation, actions: &[Action], caps: &Capabiliti
     }
     Ok(())
 }
+
+/// The model aims in screenshot space. A display that has moved or changed
+/// pixel size is remapped onto its current rectangle; that does not cancel
+/// the batch. A display that is no longer a usable target does.
+#[cfg(any(feature = "gui", test))]
+fn display_unusable(live: &Window) -> Option<&'static str> {
+    if !live.focused {
+        Some("display is not actionable; observe again")
+    } else {
+        None
+    }
+}
+
 #[cfg(any(feature = "gui", test))]
 pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicBool) -> Reply {
     let mut reply = Reply {
@@ -131,15 +144,10 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                     return Err(ScreenRequired.into());
                 }
                 let window = desktop.inspect(&obs.window.id)?;
-                if matches!(request.operation, Operation::Act { .. })
-                    && (window.geometry != obs.window.geometry
-                        || window.title != obs.window.title
-                        || !window.focused
-                        || window.focus != obs.window.focus)
-                {
-                    bail!(
-                        "window moved, resized, closed, navigated, or focus changed; observe again"
-                    );
+                if matches!(request.operation, Operation::Act { .. }) {
+                    if let Some(reason) = display_unusable(&window) {
+                        bail!(reason);
+                    }
                 }
                 window
             }
@@ -173,18 +181,19 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                 .observation
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("missing observation"))?;
+            // Screenshot pixels stay the model's coordinates. The desktop
+            // rectangle below is replaced with the display as it is now, so a
+            // move or resize still hits the same relative point.
+            let mut transform = obs.transform.clone();
             for (index, action) in actions.iter().enumerate() {
                 if cancelled.load(Ordering::SeqCst) {
                     bail!("cancelled; completed inputs were not undone");
                 }
                 let current = desktop.inspect(&window.id)?;
-                if current.geometry != window.geometry
-                    || current.title != window.title
-                    || !current.focused
-                    || current.focus != window.focus
-                {
-                    bail!("focus or geometry changed; observe again");
+                if let Some(reason) = display_unusable(&current) {
+                    bail!(reason);
                 }
+                transform.desktop = current.geometry;
                 let resolved = if let Action::Click { button, .. } = action {
                     let (x, y) = target(action, obs)?
                         .ok_or_else(|| anyhow::anyhow!("missing click target"))?;
@@ -204,18 +213,15 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                 desktop.validate_input(&resolved)?;
                 // Preflight can briefly wait for physical input to clear.
                 let ready = desktop.inspect(&window.id)?;
-                if ready.geometry != window.geometry
-                    || ready.title != window.title
-                    || !ready.focused
-                    || ready.focus != window.focus
-                {
-                    bail!("focus or geometry changed during input preflight; observe again");
+                if let Some(reason) = display_unusable(&ready) {
+                    bail!(reason);
                 }
+                transform.desktop = ready.geometry;
                 if cancelled.load(Ordering::SeqCst) {
                     bail!("cancelled; completed inputs were not undone");
                 }
                 reply.uncertain = true;
-                desktop.input(&resolved, &obs.transform)?;
+                desktop.input(&resolved, &transform)?;
                 reply.uncertain = false;
                 reply.completed += 1;
                 if index + 1 < actions.len() {
@@ -233,8 +239,8 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
                     // Refresh native focus metadata after a predicted transition,
                     // without capturing a frame between actions in this batch.
                     let after = desktop.inspect(&window.id)?;
-                    if after.geometry != window.geometry || !after.focused {
-                        bail!("display geometry or focus unavailable after input; observe again");
+                    if let Some(reason) = display_unusable(&after) {
+                        bail!(reason);
                     }
                     window = after;
                 }
@@ -345,9 +351,11 @@ pub fn execute(desktop: &mut dyn Desktop, request: &Request, cancelled: &AtomicB
             reply.input_busy = true;
             reply.uncertain = busy.input_started;
         }
-        // Layout rejection is a preflight: no key was sent, so it must not
-        // look like a partial injection that stops control.
-        if e.to_string().contains("primary keyboard group") {
+        // Layout and missing-key rejections send no input for that action, even
+        // when they are raised again inside input() after the batch has been
+        // marked uncertain. They must not look like a partial injection.
+        let message = e.to_string();
+        if message.contains("primary keyboard group") || message.contains("key is not available") {
             reply.uncertain = false;
         }
         reply.requires_screen = e.is::<ScreenRequired>();
@@ -403,6 +411,11 @@ mod fixture_tests {
         capture_focus_changes: usize,
         cancel_on_capture: Option<std::sync::Arc<AtomicBool>>,
         settles: usize,
+        /// Remaining inspects that advance the focus token. Geometry stays put.
+        /// Capture needs two stable inspects, so this stops before the final grab.
+        wobble_left: u8,
+        /// Desktop rectangle the last input was aimed at.
+        aimed: Option<Rect>,
     }
     impl Fixture {
         fn window(&self) -> Window {
@@ -431,6 +444,10 @@ mod fixture_tests {
         }
         fn inspect(&mut self, id: &str) -> Result<Window> {
             anyhow::ensure!(!self.closed, "window closed");
+            if self.wobble_left > 0 {
+                self.wobble_left -= 1;
+                self.front = self.front.wrapping_add(1);
+            }
             let mut window = self.window();
             if id.starts_with("app:") {
                 window.id = id.into();
@@ -480,12 +497,12 @@ mod fixture_tests {
                     "native preflight must receive canonical keys"
                 );
                 if self.reject_key {
-                    bail!("Key unavailable in active layout; observe again");
+                    bail!("key is not available");
                 }
             }
             Ok(())
         }
-        fn input(&mut self, action: &Action, _: &Transform) -> Result<()> {
+        fn input(&mut self, action: &Action, transform: &Transform) -> Result<()> {
             if let Some((at, false, input_started)) = self.busy_at {
                 if at == self.inputs {
                     return Err(InputBusy { input_started }.into());
@@ -495,6 +512,7 @@ mod fixture_tests {
                 bail!("fixture failure");
             }
             self.inputs += 1;
+            self.aimed = Some(transform.desktop);
             if self.display && matches!(action, Action::Click { .. }) {
                 self.front += 1;
             }
@@ -524,6 +542,8 @@ mod fixture_tests {
             capture_focus_changes: 0,
             cancel_on_capture: None,
             settles: 0,
+            wobble_left: 0,
+            aimed: None,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -583,6 +603,95 @@ mod fixture_tests {
     }
 
     #[test]
+    fn focus_token_wobble_does_not_cut_a_predicted_batch() {
+        let mut desktop = Fixture {
+            captures: 0,
+            inputs: 0,
+            fail_at: usize::MAX,
+            released: false,
+            focus: true,
+            closed: false,
+            display: true,
+            front: 1,
+            reject_key: false,
+            busy_at: None,
+            capture_focus_changes: 0,
+            cancel_on_capture: None,
+            settles: 0,
+            wobble_left: 0,
+            aimed: None,
+        };
+        let cancelled = AtomicBool::new(false);
+        let mut request = Request {
+            id: "wobble".into(),
+            session: "s".into(),
+            generation: "g".into(),
+            observation: None,
+            operation: Operation::Select {
+                window: "display:fixture".into(),
+                generation: "g".into(),
+            },
+        };
+        request.observation = execute(&mut desktop, &request, &cancelled).observation;
+        // One step per inspect inside the action loop (preflight, each action,
+        // and the refresh between steps). The final capture then sees a stable
+        // token and must not replay the batch.
+        desktop.wobble_left = 12;
+        request.operation = Operation::Act {
+            observation: request.observation.as_ref().unwrap().id.clone(),
+            actions: vec![
+                Action::Click {
+                    x: Some(10.0),
+                    y: Some(20.0),
+                    element: None,
+                    button: Button::Left,
+                },
+                Action::Key {
+                    keys: vec!["Ctrl".into(), "t".into()],
+                },
+                Action::Type {
+                    text: "dribbble.com".into(),
+                },
+                Action::Key {
+                    keys: vec!["Return".into()],
+                },
+            ],
+            observe: true,
+        };
+        let reply = execute(&mut desktop, &request, &cancelled);
+        assert!(reply.error.is_none(), "{:?}", reply.error);
+        assert_eq!(reply.completed, 4);
+        assert_eq!(desktop.inputs, 4);
+        assert_eq!(desktop.captures, 2, "selection plus one final capture");
+        assert_eq!(desktop.settles, 1);
+        assert_eq!(
+            desktop.wobble_left, 0,
+            "every in-batch inspect saw a new token"
+        );
+        let stale = Rect {
+            x: 500.0,
+            y: -40.0,
+            width: 90.0,
+            height: 80.0,
+        };
+        let observation = request.observation.as_mut().unwrap();
+        observation.window.geometry = stale;
+        observation.transform.desktop = stale;
+        request.operation = Operation::Act {
+            observation: request.observation.as_ref().unwrap().id.clone(),
+            actions: vec![Action::Key {
+                keys: vec!["Return".into()],
+            }],
+            observe: true,
+        };
+        let moved = execute(&mut desktop, &request, &cancelled);
+        assert!(moved.error.is_none(), "{:?}", moved.error);
+        assert_eq!(moved.completed, 1);
+        assert_eq!(desktop.inputs, 5);
+        assert_eq!(desktop.aimed.unwrap(), desktop.window().geometry);
+    }
+
+    #[test]
     fn input_busy_tracks_preflight_races_and_partial_actions_without_replay() {
         for preflight in [false, true] {
             for started in [false, true] {
@@ -604,6 +713,8 @@ mod fixture_tests {
                         capture_focus_changes: 0,
                         cancel_on_capture: None,
                         settles: 0,
+                        wobble_left: 0,
+                        aimed: None,
                     };
                     let cancelled = AtomicBool::new(false);
                     let mut request = Request {
@@ -656,6 +767,8 @@ mod fixture_tests {
                 capture_focus_changes: 0,
                 cancel_on_capture: None,
                 settles: 0,
+                wobble_left: 0,
+                aimed: None,
             };
             let cancelled = std::sync::Arc::new(AtomicBool::new(false));
             let mut request = Request {
@@ -735,6 +848,8 @@ mod fixture_tests {
             capture_focus_changes: 0,
             cancel_on_capture: None,
             settles: 0,
+            wobble_left: 0,
+            aimed: None,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -826,6 +941,8 @@ mod fixture_tests {
             capture_focus_changes: 0,
             cancel_on_capture: None,
             settles: 0,
+            wobble_left: 0,
+            aimed: None,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -862,7 +979,9 @@ mod fixture_tests {
             observe: true,
         };
         let rejected = execute(&mut desktop, &request, &cancelled);
-        assert!(rejected.error.unwrap().contains("observe again"));
+        let rejected_error = rejected.error.unwrap();
+        assert!(rejected_error.contains("key is not available"));
+        assert!(!rejected_error.contains("observe again"));
         assert_eq!(rejected.completed, 0);
         assert!(!rejected.uncertain);
         assert_eq!(desktop.inputs, 2);
@@ -922,6 +1041,8 @@ mod fixture_tests {
             capture_focus_changes: 0,
             cancel_on_capture: None,
             settles: 0,
+            wobble_left: 0,
+            aimed: None,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -955,12 +1076,13 @@ mod fixture_tests {
             clicked.observation.as_ref().unwrap().window.id,
             "display:fixture"
         );
-        // Reusing a frame from before the app switch cannot target the new focus.
-        let stale = execute(&mut desktop, &request, &cancelled);
-        assert_eq!(stale.completed, 0);
-        assert!(!stale.uncertain);
-        assert!(stale.error.unwrap().contains("observe again"));
-        assert_eq!(desktop.inputs, 1);
+        // Focus-token drift since the screenshot does not cancel the batch.
+        // The controller, not this comparison, rejects a replaced observation id.
+        let drifted = execute(&mut desktop, &request, &cancelled);
+        assert!(drifted.error.is_none(), "{:?}", drifted.error);
+        assert_eq!(drifted.completed, 1);
+        assert!(!drifted.uncertain);
+        assert_eq!(desktop.inputs, 2);
         request.observation = clicked.observation;
         request.operation = Operation::Act {
             observation: request.observation.as_ref().unwrap().id.clone(),
@@ -969,10 +1091,12 @@ mod fixture_tests {
             }],
             observe: true,
         };
-        assert_eq!(execute(&mut desktop, &request, &cancelled).completed, 1);
-        assert_eq!(desktop.captures, 3);
+        let typed = execute(&mut desktop, &request, &cancelled);
+        assert_eq!(typed.completed, 1);
+        request.observation = typed.observation;
+        assert_eq!(desktop.captures, 4);
         assert_eq!(
-            desktop.settles, 2,
+            desktop.settles, 3,
             "each act settles once; observe has not run"
         );
         // A fresh close-up is a new capture, but keeps the original display
@@ -994,16 +1118,16 @@ mod fixture_tests {
             observation.transform.map(100.0, 50.0).unwrap(),
             (40.0, 40.0)
         );
-        assert_eq!(desktop.captures, 4);
+        assert_eq!(desktop.captures, 5);
         assert_eq!(
-            desktop.settles, 2,
+            desktop.settles, 3,
             "a region observe does not use the post-action settle"
         );
         desktop.front += 1;
         let stale_detail = execute(&mut desktop, &request, &cancelled);
         assert!(stale_detail.error.unwrap().contains("observe again"));
         assert_eq!(
-            desktop.captures, 4,
+            desktop.captures, 5,
             "stale region must not capture a different app"
         );
     }
@@ -1024,6 +1148,8 @@ mod fixture_tests {
             capture_focus_changes: 0,
             cancel_on_capture: None,
             settles: 0,
+            wobble_left: 0,
+            aimed: None,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {
@@ -1073,6 +1199,8 @@ mod fixture_tests {
             capture_focus_changes: 0,
             cancel_on_capture: None,
             settles: 0,
+            wobble_left: 0,
+            aimed: None,
         };
         let cancel = AtomicBool::new(false);
         let mut r = Request {
@@ -1148,16 +1276,28 @@ mod fixture_tests {
         assert_eq!(result.completed, 0);
         assert_eq!(d.inputs, 4);
         d.focus = true;
+        d.fail_at = usize::MAX;
         r.observation.as_mut().unwrap().window.title = "previous page".into();
+        r.observation.as_mut().unwrap().window.focus = Some("drifted".into());
         let result = execute(&mut d, &r, &cancel);
-        assert_eq!(result.completed, 0);
-        assert_eq!(d.inputs, 4);
-        assert!(result.error.unwrap().contains("navigated"));
+        assert!(result.error.is_none(), "{:?}", result.error);
+        assert_eq!(result.completed, 3);
+        assert_eq!(d.inputs, 7);
         r.observation.as_mut().unwrap().window.title = d.window().title;
-        r.observation.as_mut().unwrap().window.geometry.width = 90.0;
+        r.observation.as_mut().unwrap().window.focus = d.window().focus;
+        let stale = Rect {
+            x: 500.0,
+            y: -40.0,
+            width: 90.0,
+            height: 80.0,
+        };
+        r.observation.as_mut().unwrap().window.geometry = stale;
+        r.observation.as_mut().unwrap().transform.desktop = stale;
         let result = execute(&mut d, &r, &cancel);
-        assert_eq!(result.completed, 0);
-        assert!(result.error.unwrap().contains("resized"));
+        assert!(result.error.is_none(), "{:?}", result.error);
+        assert_eq!(result.completed, 3);
+        assert_eq!(d.inputs, 10);
+        assert_eq!(d.aimed.unwrap(), d.window().geometry);
         d.closed = true;
         let result = execute(&mut d, &r, &cancel);
         assert_eq!(result.completed, 0);
@@ -1180,6 +1320,8 @@ mod fixture_tests {
             capture_focus_changes: 0,
             cancel_on_capture: None,
             settles: 0,
+            wobble_left: 0,
+            aimed: None,
         };
         let cancelled = AtomicBool::new(false);
         let mut request = Request {

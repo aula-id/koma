@@ -425,8 +425,14 @@ pub(crate) fn exec_file_content_replace(
 }
 
 /// Read-only replacement plan. Never silently apply a truncated prefix.
-pub(crate) fn preview_replacements(q: ContentQuery<'_>, replacement: &str, workdirs: &[PathBuf]) -> Result<serde_json::Value, String> {
-    if q.query.is_empty() { return Err("Empty search query".into()); }
+pub(crate) fn preview_replacements(
+    q: ContentQuery<'_>,
+    replacement: &str,
+    workdirs: &[PathBuf],
+) -> Result<serde_json::Value, String> {
+    if q.query.is_empty() {
+        return Err("Empty search query".into());
+    }
     let re = build_pattern(q.query, q.case_sensitive, q.whole_word, q.is_regex)?;
     let include = compile_globs(q.include_glob)?;
     let exclude = compile_globs(q.exclude_glob)?;
@@ -439,24 +445,55 @@ pub(crate) fn preview_replacements(q: ContentQuery<'_>, replacement: &str, workd
     let mut skipped = 0;
     for entry in build_walker(&base) {
         let entry = entry.map_err(|e| format!("Cannot preview all files: {e}"))?;
-        if !entry.file_type().is_some_and(|f| f.is_file()) { continue; }
+        if !entry.file_type().is_some_and(|f| f.is_file()) {
+            continue;
+        }
         scanned += 1;
-        if scanned > 100_000 { return Err("Too many files to preview; narrow the search scope".into()); }
-        let path = normalize_rel(entry.path().strip_prefix(&root).map_err(|e| e.to_string())?);
-        if !path_allowed(&path, include.as_ref(), exclude.as_ref()) { continue; }
+        if scanned > 100_000 {
+            return Err("Too many files to preview; narrow the search scope".into());
+        }
+        let path = normalize_rel(
+            entry
+                .path()
+                .strip_prefix(&root)
+                .map_err(|e| e.to_string())?,
+        );
+        if !path_allowed(&path, include.as_ref(), exclude.as_ref()) {
+            continue;
+        }
         let read = file_ops::exec_file_read(q.root, &path, q.request_id, workdirs);
-        if let Some(error) = read.error { return Err(format!("Cannot preview {path}: {error}")); }
-        if read.binary || read.too_large { skipped += 1; continue; }
-        let Some(content) = read.content else { continue };
+        if let Some(error) = read.error {
+            return Err(format!("Cannot preview {path}: {error}"));
+        }
+        if read.binary || read.too_large {
+            skipped += 1;
+            continue;
+        }
+        let Some(content) = read.content else {
+            continue;
+        };
         let count = re.find_iter(&content).take(10_001).count();
-        if count == 0 { continue; }
+        if count == 0 {
+            continue;
+        }
         matches += count;
-        if matches > 10_000 { return Err("Too many replacements to preview; narrow the search scope".into()); }
-        let after = if q.is_regex { re.replace_all(&content, replacement) }
-            else { re.replace_all(&content, regex::NoExpand(replacement)) };
-        if after == content { continue; }
+        if matches > 10_000 {
+            return Err("Too many replacements to preview; narrow the search scope".into());
+        }
+        let after = if q.is_regex {
+            re.replace_all(&content, replacement)
+        } else {
+            re.replace_all(&content, regex::NoExpand(replacement))
+        };
+        if after == content {
+            continue;
+        }
         bytes += content.len() + after.len();
-        if files.len() >= 100 || bytes > 20 * 1024 * 1024 { return Err("Replacement preview exceeds 100 files or 20 MiB; narrow the search scope".into()); }
+        if files.len() >= 100 || bytes > 20 * 1024 * 1024 {
+            return Err(
+                "Replacement preview exceeds 100 files or 20 MiB; narrow the search scope".into(),
+            );
+        }
         files.push(serde_json::json!({"path":path,"before":content,"after":after,"fingerprint":read.fingerprint}));
     }
     Ok(serde_json::json!({"files":files,"matchCount":matches,"skipped":skipped}))
@@ -576,14 +613,32 @@ mod preview_tests {
     use super::*;
     #[test]
     fn replacement_preview_is_read_only_and_literal_dollar_is_not_a_capture() {
-        let root = std::env::temp_dir().join(format!("koma-replace-preview-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("koma-replace-preview-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("test.txt"), "hello hello\r\n").unwrap();
         let root_s = root.to_string_lossy().into_owned();
-        let result = preview_replacements(ContentQuery { root: &root_s, path: "", query: "hello", case_sensitive: true,
-            whole_word: false, is_regex: false, include_glob: None, exclude_glob: None, request_id: "preview" }, "$1", std::slice::from_ref(&root)).unwrap();
+        let result = preview_replacements(
+            ContentQuery {
+                root: &root_s,
+                path: "",
+                query: "hello",
+                case_sensitive: true,
+                whole_word: false,
+                is_regex: false,
+                include_glob: None,
+                exclude_glob: None,
+                request_id: "preview",
+            },
+            "$1",
+            std::slice::from_ref(&root),
+        )
+        .unwrap();
         assert_eq!(result["files"][0]["after"], "$1 $1\n");
-        assert_eq!(std::fs::read(root.join("test.txt")).unwrap(), b"hello hello\r\n");
+        assert_eq!(
+            std::fs::read(root.join("test.txt")).unwrap(),
+            b"hello hello\r\n"
+        );
         assert_eq!(result["matchCount"], 2);
         std::fs::remove_dir_all(root).unwrap();
     }

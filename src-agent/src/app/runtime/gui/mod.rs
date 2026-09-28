@@ -29,8 +29,8 @@ use wry::http::{Request, Response, StatusCode};
 // `proto`/`dispatch` modules (file size); re-imported here so `run_gui` keeps
 // compiling unchanged. `dispatch_git`/`dispatch_forward` are `dispatch`'s own
 // split-out git/key routing + generic forwarding helpers (file size).
-mod dispatch;
 mod computer_viewer;
+mod dispatch;
 mod dispatch_forward;
 mod dispatch_git;
 mod proto;
@@ -479,15 +479,20 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
             };
             match msg {
                 ClientMsg::ComputerPrepared { id } => {
-                    let _ = gui_ctx.ctl.send(crate::app::runtime::client::HostCtl::ComputerPrepared { id });
+                    let _ = gui_ctx
+                        .ctl
+                        .send(crate::app::runtime::client::HostCtl::ComputerPrepared { id });
                 }
                 ClientMsg::Coding { request } => {
                     let id = request.id.clone();
                     let workspace = request.workspace.clone();
                     if let Err(error) = coding_service.submit(request) {
-                        let _ = coding_error_proxy.send_event(UserEvent::Push(serde_json::json!({
-                            "k":"CodingReply", "id":id, "workspace":workspace, "error":error
-                        }).to_string()));
+                        let _ = coding_error_proxy.send_event(UserEvent::Push(
+                            serde_json::json!({
+                                "k":"CodingReply", "id":id, "workspace":workspace, "error":error
+                            })
+                            .to_string(),
+                        ));
                     }
                 }
                 // Custom-titlebar window commands (the window is undecorated).

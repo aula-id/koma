@@ -291,7 +291,10 @@ mod tests {
             id: "crop".into(),
             session: "s".into(),
             generation: "g".into(),
-            operation: Operation::Observe { crop: None, region: None },
+            operation: Operation::Observe {
+                crop: None,
+                region: None,
+            },
             observation: Some(obs.clone()),
         };
         let result = crop(
