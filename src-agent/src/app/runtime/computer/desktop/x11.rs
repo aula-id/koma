@@ -488,8 +488,8 @@ impl X11 {
     fn chord_codes(&self, keys: &[String]) -> Result<Vec<u32>> {
         let mut codes = Vec::with_capacity(keys.len());
         for k in keys {
-            if k.chars().count() == 1 {
-                let c = k.chars().next().unwrap();
+            let mut chars = k.chars();
+            if let (Some(c), None) = (chars.next(), chars.next()) {
                 if c.is_ascii_graphic() && !c.is_ascii_alphanumeric() && c != ' ' {
                     let (code, shifted) = self.mapped(c as c_ulong)?;
                     if shifted {

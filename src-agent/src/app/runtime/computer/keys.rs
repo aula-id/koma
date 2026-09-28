@@ -75,8 +75,8 @@ fn canonical(key: &str) -> Result<String> {
             // One ASCII letter, digit, or punctuation mark. A URL is still one
             // type action; this only keeps a spelled-out "." from rejecting
             // the whole batch before any click.
-            if lower.chars().count() == 1 {
-                let c = lower.chars().next().unwrap();
+            let mut chars = lower.chars();
+            if let (Some(c), None) = (chars.next(), chars.next()) {
                 if c.is_ascii_alphanumeric() || (c.is_ascii_graphic() && c != ' ') {
                     return Ok(c.to_string());
                 }
