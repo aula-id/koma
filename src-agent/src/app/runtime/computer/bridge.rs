@@ -365,6 +365,9 @@ fn ingest(rt: &mut SessionRuntime, reply: &mut Reply) -> anyhow::Result<()> {
         img.width() == obs.transform.width && img.height() == obs.transform.height,
         "image geometry mismatch"
     );
+    if let Some(stamped) = super::ruler::stamp(&reply.png, &obs.transform) {
+        reply.png = stamped;
+    }
     obs.transform.map(0.0, 0.0)?;
     anyhow::ensure!(
         obs.elements.iter().all(|e| e.label.len() <= 1024
