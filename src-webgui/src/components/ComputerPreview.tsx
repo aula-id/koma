@@ -55,7 +55,7 @@ export function ComputerPreview({ status, control, chrome, onImageSize }: {
           onLoad={e => onImageSize?.(e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}
           onError={() => setFailedImage(image)}
           alt={`${live?.image ? 'Live preview' : 'Last model observation'}: ${observation?.window.title || observation?.window.application}`}
-          className="absolute inset-0 block h-full w-full" />
+          className="absolute inset-0 block h-full w-full object-contain" />
       : <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center text-koma-dim">
           <Monitor size={30} strokeWidth={1.25} aria-hidden="true" />
           {observation && <p className="text-sm" title="The image could not be loaded from this session.">Saved frame unavailable</p>}

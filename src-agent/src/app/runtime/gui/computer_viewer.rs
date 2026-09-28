@@ -21,7 +21,10 @@ pub(super) struct Viewer {
     webview: wry::WebView,
     preferences: Option<std::path::PathBuf>,
     aspect: Cell<f64>,
+    framed: Cell<bool>,
     last_size: Cell<PhysicalSize<u32>>,
+    /// Origin and target while a source-change contain is in flight.
+    settle: Cell<Option<(PhysicalSize<u32>, PhysicalSize<u32>)>>,
     source: RefCell<Option<(String, String, String)>>,
 }
 impl Viewer {
@@ -126,6 +129,8 @@ impl Viewer {
         let viewer = Self {
             last_size: Cell::new(window.inner_size()),
             aspect: Cell::new(16.0 / 9.0),
+            framed: Cell::new(false),
+            settle: Cell::new(None),
             source: RefCell::new(None),
             window,
             webview,
@@ -186,10 +191,35 @@ impl Viewer {
             return;
         }
         let aspect = f64::from(width) / f64::from(height);
-        if (aspect / self.aspect.get() - 1.0).abs() >= 0.005 {
-            self.aspect.set(aspect);
+        let first = !self.framed.get();
+        let changed = (aspect / self.aspect.get() - 1.0).abs() >= 0.005;
+        if !first && !changed {
+            return;
         }
-        self.resized();
+        self.aspect.set(aspect);
+        self.framed.set(true);
+        if first {
+            self.resized();
+        } else {
+            // A new screen or window fits inside the box the user already has.
+            // Dragging the window still resizes through resized().
+            self.contain();
+        }
+    }
+    fn monitor_size(&self) -> PhysicalSize<u32> {
+        self.window
+            .current_monitor()
+            .map(|m| m.size())
+            .unwrap_or(PhysicalSize::new(1920, 1080))
+    }
+    fn contain(&self) {
+        let size = self.window.inner_size();
+        let fitted = contain_size(size, self.aspect.get(), self.monitor_size());
+        self.last_size.set(fitted);
+        if fitted != size {
+            self.settle.set(Some((size, fitted)));
+            self.window.set_inner_size(fitted);
+        }
     }
     pub fn resized(&self) {
         let size = self.window.inner_size();
@@ -199,8 +229,19 @@ impl Viewer {
             self.last_size.set(size);
             return;
         }
-        let previous = self.last_size.get();
         let aspect = self.aspect.get();
+        if let Some((origin, target)) = self.settle.get() {
+            if size == target || matches_aspect(size, aspect) {
+                self.settle.set(None);
+                self.last_size.set(size);
+                return;
+            }
+            if size == origin {
+                return;
+            }
+            self.settle.set(None);
+        }
+        let previous = self.last_size.get();
         let width = if size.height.abs_diff(previous.height) as f64 * aspect
             > size.width.abs_diff(previous.width) as f64
         {
@@ -208,12 +249,7 @@ impl Viewer {
         } else {
             f64::from(size.width)
         };
-        let limit = self
-            .window
-            .current_monitor()
-            .map(|m| m.size())
-            .unwrap_or(PhysicalSize::new(1920, 1080));
-        let fitted = fit_size(width, aspect, limit);
+        let fitted = fit_size(width, aspect, self.monitor_size());
         self.last_size.set(fitted);
         // Some window managers impose their own minimum. Do not loop forever
         // re-requesting a size the OS just refused.
@@ -235,6 +271,33 @@ impl Viewer {
             }
         }
     }
+}
+
+/// Fit `aspect` inside `current` by shrinking one side. Neither side grows.
+fn contain_size(
+    current: PhysicalSize<u32>,
+    aspect: f64,
+    screen: PhysicalSize<u32>,
+) -> PhysicalSize<u32> {
+    let max_width = f64::from(screen.width.saturating_sub(48).max(1));
+    let max_height = f64::from(screen.height.saturating_sub(100).max(1));
+    let box_w = f64::from(current.width.max(1)).min(max_width);
+    let box_h = f64::from(current.height.max(1)).min(max_height);
+    let (width, height) = if aspect >= box_w / box_h {
+        let height = box_w / aspect;
+        (height * aspect, height)
+    } else {
+        let width = box_h * aspect;
+        (width, width / aspect)
+    };
+    PhysicalSize::new(
+        width.round().max(1.0) as u32,
+        height.round().max(1.0) as u32,
+    )
+}
+
+fn matches_aspect(size: PhysicalSize<u32>, aspect: f64) -> bool {
+    size.height > 0 && (f64::from(size.width) - f64::from(size.height) * aspect).abs() <= 1.5
 }
 
 fn fit_size(width: f64, aspect: f64, screen: PhysicalSize<u32>) -> PhysicalSize<u32> {
@@ -264,6 +327,26 @@ mod sizing_tests {
                 assert!((f64::from(size.width) / aspect - f64::from(size.height)).abs() <= 1.0);
             }
         }
+    }
+
+    #[test]
+    fn source_switch_contains_inside_the_current_box() {
+        let monitor = PhysicalSize::new(1440, 900);
+        let tall = PhysicalSize::new(480, 800);
+        let wide = contain_size(tall, 32.0 / 9.0, monitor);
+        assert!(wide.width <= tall.width);
+        assert!(wide.height < tall.height);
+        assert!((f64::from(wide.width) / f64::from(wide.height) - 32.0 / 9.0).abs() < 0.05);
+
+        let landscape = PhysicalSize::new(800, 450);
+        let portrait = contain_size(landscape, 9.0 / 16.0, monitor);
+        assert!(portrait.width < landscape.width);
+        assert!(portrait.height <= landscape.height);
+        assert!((f64::from(portrait.width) / f64::from(portrait.height) - 9.0 / 16.0).abs() < 0.05);
+
+        let same = contain_size(landscape, 16.0 / 9.0, monitor);
+        assert!((same.width as i32 - landscape.width as i32).abs() <= 1);
+        assert!((same.height as i32 - landscape.height as i32).abs() <= 1);
     }
 }
 

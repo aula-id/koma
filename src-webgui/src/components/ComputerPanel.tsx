@@ -3,7 +3,7 @@ import { GripHorizontal, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { useComputerPreview } from '../store/computerPreview'
 import { ComputerPreview } from './ComputerPreview'
-import { fitComputerPreview, type PreviewBounds as Bounds } from '../lib/computerPreviewLayout'
+import { containComputerPreview, fitComputerPreview, type PreviewBounds as Bounds } from '../lib/computerPreviewLayout'
 
 const preference = 'koma.computer.preview'
 function bounded(value: Partial<Bounds>, aspect: number | null = null): Bounds {
@@ -49,7 +49,7 @@ export function ComputerPanel() {
     const ratio = width / height
     if (aspect.current !== null && Math.abs(ratio / aspect.current - 1) < 0.005) return
     aspect.current = ratio
-    setBounds(v => bounded(v, ratio))
+    setBounds(v => containComputerPreview(v, ratio, { width: window.innerWidth, height: window.innerHeight }))
   }, [])
   const imageWidth = current?.observation?.transform.width
   const imageHeight = current?.observation?.transform.height
