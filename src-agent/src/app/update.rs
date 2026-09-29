@@ -17,8 +17,8 @@ use crate::cli::DaemonSub;
 /// via PowerShell with a two-URL fallback chain.
 ///
 /// The script downloads the latest `koma-x64.msi` from GitHub and runs
-/// `msiexec /i` with a full UI (so UAC elevation can pop). WiX's
-/// `MajorUpgrade` element handles in-place upgrades.
+/// `msiexec /i` with a full UI (so UAC elevation can pop). The WiX template's
+/// Upgrade table removes any already-installed koma before copying the new files.
 #[cfg(windows)]
 pub fn run_update() -> Result<()> {
     // 1. Stop the daemon — same logic as the unix path.
