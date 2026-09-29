@@ -114,6 +114,8 @@ export type Tab =
   // One diagram canvas per `.koma/<name>.diag`. Stable id `diagram:${root}:${path}`,
   // so several diagrams stay open at once and a second click only focuses.
   | { id: string; kind: 'diagram'; root: string; path: string; title: string }
+  // One design canvas per `.koma/<name>.kdsgn`. Stable id `design:${root}:${path}`.
+  | { id: string; kind: 'design'; root: string; path: string; title: string }
   // Interactive terminal tab. `terminalId` is the PTY session id (host-minted);
   // content is an xterm.js instance reading from TerminalOutput push envelopes.
   | { id: string; kind: 'terminal'; terminalId: string; title: string }

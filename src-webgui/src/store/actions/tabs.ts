@@ -1,6 +1,7 @@
 import { forgetCodingDraft } from '../../lib/coding-recovery'
 import type { StoreGet, StoreSet } from '../api'
 import { emptyFileState, fileKey } from '../coding'
+import { dropDesignDocs } from '../design'
 import { dropDiagramDocs } from '../diagram'
 import { setSplitDir as applySplitDir, toggleSplitDir as flipSplitDir, insertGroup, neighbourInGroup, normalizeGroups, reorderTab, resizeGroups } from '../editorGroups'
 import { tabBaseName } from '../initial'
@@ -56,6 +57,15 @@ export function tabActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openD
       if (doc?.saving) return
       if (doc?.dirty && !opts?.force) return
     }
+    const closingDesign = (() => {
+      const closing = get().ui.tabs.find((t) => t.id === id)
+      return closing && closing.kind === 'design' ? closing : null
+    })()
+    if (closingDesign) {
+      const doc = get().design.docs[fileKey(closingDesign.root, closingDesign.path)]
+      if (doc?.saving) return
+      if (doc?.dirty && !opts?.force) return
+    }
     if (closingCoding) {
       if (opts?.force) forgetCodingDraft({ hostId: get().remoteState.hostId ?? 'local', root: closingCoding.root }, closingCoding.path)
       get().req({ r: 'LspDidClose', root: closingCoding.root, path: closingCoding.path })
@@ -107,10 +117,15 @@ export function tabActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openD
         closingDiagram && opts?.force
           ? { ...s.diagram, docs: dropDiagramDocs(s.diagram.docs, closingDiagram.root, closingDiagram.path) }
           : s.diagram
+      const design =
+        closingDesign && opts?.force
+          ? { ...s.design, docs: dropDesignDocs(s.design.docs, closingDesign.root, closingDesign.path) }
+          : s.design
       return {
         ui: normalizeGroups({ ...normalized, tabs, activeTabId }),
         coding,
         diagram,
+        design,
         // Closing the Analytics tab drops its in-flight state so a later reopen
         // starts clean (filters preserved as user preference; data cleared so a
         // stale session-scoped payload can't reappear).

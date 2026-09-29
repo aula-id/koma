@@ -1,5 +1,6 @@
 import type { StoreGet, StoreSet } from '../api'
 import { initialCoding } from '../coding'
+import { initialDesign } from '../design'
 import { initialDiagram } from '../diagram'
 import { DEFAULT_GROUP, normalizeGroups } from '../editorGroups'
 import { makeChatTab } from '../initial'
@@ -194,7 +195,7 @@ export function pushAgents(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
       case 'RemoteState':
         if ((get().remoteState.hostId ?? 'local') !== (env.hostId ?? 'local')) {
           const state = get()
-          codingHostViews.set(state.remoteState.hostId ?? 'local', { coding: state.coding, ui: state.ui, diagram: state.diagram, replies: [] })
+          codingHostViews.set(state.remoteState.hostId ?? 'local', { coding: state.coding, ui: state.ui, diagram: state.diagram, design: state.design, replies: [] })
         }
         // Leaving a remote attach (disconnect / back to hub / connect bounce) must
         // clear session.id so routes flip StartScreen — same job as detachSession
@@ -222,8 +223,8 @@ export function pushAgents(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
           const hostView = codingHostViews.get(env.hostId ?? 'local')
           const restoredUi = hostChanged ? normalizeGroups({
             ...s.ui,
-            tabs: [makeChatTab(), ...(hostView?.ui.tabs.filter(t => t.kind === 'codingFile' || t.kind === 'diagram') ?? [])],
-            activeTabId: hostView?.ui.tabs.some(t => t.id === hostView.ui.activeTabId && (t.kind === 'codingFile' || t.kind === 'diagram')) ? hostView.ui.activeTabId : 'chat',
+            tabs: [makeChatTab(), ...(hostView?.ui.tabs.filter(t => t.kind === 'codingFile' || t.kind === 'diagram' || t.kind === 'design') ?? [])],
+            activeTabId: hostView?.ui.tabs.some(t => t.id === hostView.ui.activeTabId && (t.kind === 'codingFile' || t.kind === 'diagram' || t.kind === 'design')) ? hostView.ui.activeTabId : 'chat',
             groups: hostView?.ui.groups ?? [DEFAULT_GROUP], tabGroup: hostView?.ui.tabGroup ?? {},
             groupActive: hostView?.ui.groupActive ?? { [DEFAULT_GROUP]: 'chat' },
             activeGroupId: hostView?.ui.activeGroupId ?? DEFAULT_GROUP,
@@ -231,6 +232,7 @@ export function pushAgents(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
           }) : s.ui
           const codingReset = hostChanged ? { coding: { ...(hostView?.coding ?? initialCoding), _sessionGen: s.coding._sessionGen + 1 } } : {}
           const diagramReset = hostChanged ? { diagram: hostView?.diagram ?? initialDiagram } : {}
+          const designReset = hostChanged ? { design: hostView?.design ?? initialDesign } : {}
           const remoteState = {
             state: env.state,
             hostId: env.hostId ?? null,
@@ -241,7 +243,7 @@ export function pushAgents(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
             sessions: env.sessions ?? [],
           }
           if (env.state === 'connected' || env.state === 'disconnected' || env.state === 'ready') {
-            return { ...languageReset, ...codingReset, ...diagramReset, remoteState, ui: { ...restoredUi, switchingTo: null } }
+            return { ...languageReset, ...codingReset, ...diagramReset, ...designReset, remoteState, ui: { ...restoredUi, switchingTo: null } }
           }
           if (env.state === 'error') {
             const text = env.error ? `SSH: ${env.error}` : 'SSH connection failed'
@@ -249,7 +251,7 @@ export function pushAgents(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
             return {
               ...languageReset,
               ...codingReset,
-              ...diagramReset,
+              ...diagramReset, ...designReset,
               remoteState,
               ui: {
                 ...restoredUi,
@@ -259,7 +261,7 @@ export function pushAgents(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
               },
             }
           }
-          return { ...languageReset, ...codingReset, ...diagramReset, remoteState, ui: restoredUi }
+          return { ...languageReset, ...codingReset, ...diagramReset, ...designReset, remoteState, ui: restoredUi }
         })
         {
           const host = get().remoteState.hostId ?? 'local'

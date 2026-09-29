@@ -264,7 +264,7 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
       // tracks on macOS/Windows WebViews after the session died.
       ui: normalizeGroups({
         ...s.ui,
-        tabs: [makeChatTab(), ...s.ui.tabs.filter((t) => t.kind === 'terminal' || t.kind === 'codingFile' || t.kind === 'diagram')],
+        tabs: [makeChatTab(), ...s.ui.tabs.filter((t) => t.kind === 'terminal' || t.kind === 'codingFile' || t.kind === 'diagram' || t.kind === 'design')],
         activeTabId: 'chat',
         groups: [DEFAULT_GROUP],
         tabGroup: {},

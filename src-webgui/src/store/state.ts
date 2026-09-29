@@ -1,6 +1,8 @@
+import type { DesignDoc } from '../lib/design'
 import type { DiagramDoc } from '../lib/diagram'
 import type { LspDiagnostic } from '../lib/lsp-bridge'
 import type { CodingSlice } from './coding'
+import type { DesignSlice } from './design'
 import type { DiagramSlice } from './diagram'
 import type { EditorGroupId, SplitDir } from './editorGroups'
 import type { AnalyticsMetric, AnalyticsRange, AnalyticsScope } from './types/analytics'
@@ -656,4 +658,11 @@ export type KomaState = {
   updateDiagram: (root: string, path: string, doc: DiagramDoc) => void
   // `path` is `.koma/<name>.diag`. Creates the file, then seeds an empty document.
   createDiagramFile: (root: string, path: string) => void
+  // ─── UI designer ───────────────────────────────────────────────────────
+  design: DesignSlice
+  openDesignTab: (root: string, path: string) => void
+  saveDesign: (root: string, path: string) => void
+  updateDesign: (root: string, path: string, doc: DesignDoc) => void
+  // `path` is `.koma/<name>.kdsgn`. Creates the file, then seeds an empty document.
+  createDesignFile: (root: string, path: string) => void
 }

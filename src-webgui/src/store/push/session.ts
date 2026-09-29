@@ -90,8 +90,8 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
                 ? {
                     ...(switched
                       ? {
-                          tabs: [makeChatTab(), ...s.ui.tabs.filter((t) => t.kind === 'terminal' || t.kind === 'codingFile' || t.kind === 'diagram')],
-                          activeTabId: s.ui.tabs.some(t => t.id === s.ui.activeTabId && (t.kind === 'codingFile' || t.kind === 'diagram')) ? s.ui.activeTabId : 'chat',
+                          tabs: [makeChatTab(), ...s.ui.tabs.filter((t) => t.kind === 'terminal' || t.kind === 'codingFile' || t.kind === 'diagram' || t.kind === 'design')],
+                          activeTabId: s.ui.tabs.some(t => t.id === s.ui.activeTabId && (t.kind === 'codingFile' || t.kind === 'diagram' || t.kind === 'design')) ? s.ui.activeTabId : 'chat',
                         }
                       : {}),
                     // Keep a real host Loading envelope; never synthesize pending.

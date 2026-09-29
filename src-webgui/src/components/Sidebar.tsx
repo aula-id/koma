@@ -12,11 +12,12 @@ import { ImportGraphPanel } from './panels/ImportGraphPanel'
 import { StorePanel } from './panels/StorePanel'
 import { RemotePanel } from './panels/RemotePanel'
 import { DiagramPanel } from './panels/DiagramPanel'
+import { DesignPanel } from './panels/DesignPanel'
 import { Segmented } from './panels/form'
 import { useKoma } from '../store/koma'
 import { ErrorBoundary } from './ErrorBoundary'
 
-export type SidebarView = 'explore' | 'git' | 'coding' | 'mcp' | 'connector' | 'importGraph' | 'agents' | 'usage' | 'store' | 'remote' | 'diagram'
+export type SidebarView = 'explore' | 'git' | 'coding' | 'mcp' | 'connector' | 'importGraph' | 'agents' | 'usage' | 'store' | 'remote' | 'diagram' | 'design'
 
 type SidebarProps = {
   width: number
@@ -35,6 +36,7 @@ const TITLES: Record<SidebarView, string> = {
   store: 'Extensions',
   remote: 'Remote',
   diagram: 'Diagram',
+  design: 'Design',
 }
 
 // Sidebar shell: header + the active view's panel. Width from RootLayout state.
@@ -150,6 +152,7 @@ export function Sidebar({ width, view }: SidebarProps) {
         {view === 'store' && <StorePanel />}
         {view === 'remote' && <RemotePanel />}
         {view === 'diagram' && <DiagramPanel />}
+        {view === 'design' && <DesignPanel />}
       </div>
     </div>
   )

@@ -545,6 +545,7 @@ const MarkdownPreviewTab = lazy(() => import('../components/MarkdownPreviewTab')
 const TerminalTab = lazy(() => import('../components/TerminalTab').then(m => ({ default: m.TerminalTab })))
 
 const DiagramTab = lazy(() => import('../components/DiagramTab').then((m) => ({ default: m.DiagramTab })))
+const DesignTab = lazy(() => import('../components/DesignTab').then((m) => ({ default: m.DesignTab })))
 
 function DiffFallback() {
   return (
@@ -589,6 +590,8 @@ function TabBody({ tab }: { tab: Exclude<Tab, { kind: 'chat' }> }) {
         <TerminalTab tab={tab} />
       ) : tab.kind === 'diagram' ? (
         <DiagramTab tab={tab} />
+      ) : tab.kind === 'design' ? (
+        <DesignTab tab={tab} />
       ) : null}
     </Suspense>
   )

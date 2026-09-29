@@ -18,6 +18,7 @@ import {
   PanelRight,
   Puzzle,
   Rows2,
+  Frame,
   Settings,
   Shapes,
   SquareTerminal,
@@ -142,6 +143,25 @@ function tabVisual(
     case 'diagram':
       return {
         Icon: Shapes,
+        title: tab.path,
+        label: (
+          <>
+            {diagramMark ? (
+              <span
+                className={`mr-0.5 font-mono text-[10px] font-semibold ${
+                  diagramMark === 'A' ? 'text-koma-success' : 'text-koma-accent'
+                }`}
+              >
+                {diagramMark}
+              </span>
+            ) : null}
+            {tab.title}
+          </>
+        ),
+      }
+    case 'design':
+      return {
+        Icon: Frame,
         title: tab.path,
         label: (
           <>
@@ -413,6 +433,23 @@ export function TabBar({ groupId, focused }: Props) {
     }
     return out
   }, [diagramDirtySig])
+  const designDirtySig = useKoma((s) => {
+    const parts: [string, string][] = []
+    for (const [k, doc] of Object.entries(s.design.docs)) {
+      if (!doc || !(doc.dirty || doc.saving)) continue
+      parts.push([k, `${doc.dirty ? 1 : 0}${doc.saving ? 1 : 0}${doc.savedText == null ? 1 : 0}`])
+    }
+    parts.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    return JSON.stringify(parts)
+  })
+  const designDirty = useMemo(() => {
+    const out: Record<string, { dirty: boolean; saving: boolean; savedNull: boolean }> = {}
+    if (!designDirtySig || designDirtySig === '[]') return out
+    for (const [k, flags] of JSON.parse(designDirtySig) as [string, string][]) {
+      out[k] = { dirty: flags[0] === '1', saving: flags[1] === '1', savedNull: flags[2] === '1' }
+    }
+    return out
+  }, [designDirtySig])
   const codingAutosave = useKoma((s) => !!s.settingsValues?.codingAutosave)
   const saveCodingFile = useKoma((s) => s.saveCodingFile)
   const [menu, setMenu] = useState<MenuState | null>(null)
@@ -464,8 +501,8 @@ export function TabBar({ groupId, focused }: Props) {
           return
         }
       }
-      if (tab.kind === 'diagram') {
-        const doc = diagramDirty[fileKey(tab.root, tab.path)]
+      if (tab.kind === 'diagram' || tab.kind === 'design') {
+        const doc = (tab.kind === 'diagram' ? diagramDirty : designDirty)[fileKey(tab.root, tab.path)]
         if (doc?.saving) {
           e?.stopPropagation()
           return
@@ -479,7 +516,7 @@ export function TabBar({ groupId, focused }: Props) {
       e?.stopPropagation()
       closeTab(tab.id)
     },
-    [closeTab, codingAutosave, codingDirty, diagramDirty, saveCodingFile],
+    [closeTab, codingAutosave, codingDirty, designDirty, diagramDirty, saveCodingFile],
   )
 
   useEffect(() => {
@@ -673,8 +710,8 @@ export function TabBar({ groupId, focused }: Props) {
           const active = tab.id === activeTabId
           const fs =
             tab.kind === 'codingFile' ? codingDirty[fileKey(tab.root, tab.path)] : undefined
-          const diagramDoc = tab.kind === 'diagram' ? diagramDirty[fileKey(tab.root, tab.path)] : undefined
-          const diagramMark = diagramDoc?.dirty ? (diagramDoc.savedNull ? 'A' : 'M') : null
+          const canvasDoc = tab.kind === 'diagram' ? diagramDirty[fileKey(tab.root, tab.path)] : tab.kind === 'design' ? designDirty[fileKey(tab.root, tab.path)] : undefined
+          const diagramMark = canvasDoc?.dirty ? (canvasDoc.savedNull ? 'A' : 'M') : null
           const visual = tabVisual(tab, counts, fs, diagramMark)
           const { Icon } = visual
           const dirtyDot = !!fs?.dirty || diagramMark != null
