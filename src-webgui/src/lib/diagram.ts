@@ -109,6 +109,25 @@ export function defaultNodeSize(kind: DiagramKind): { w: number; h: number; text
   return { w: 160, h: 64, text: 'label' }
 }
 
+/** Same card, new id, shifted. Lines are not part of the copy. */
+export function copyNode(node: DiagramNode, id: string, dx: number, dy: number): DiagramNode {
+  const next: DiagramNode = {
+    id,
+    kind: node.kind,
+    x: node.x + dx,
+    y: node.y + dy,
+    w: node.w,
+    h: node.h,
+    text: node.text,
+  }
+  if (node.rotation) next.rotation = node.rotation
+  if (node.fill != null) next.fill = node.fill
+  if (node.fillColor) next.fillColor = node.fillColor
+  if (node.stroke != null) next.stroke = node.stroke
+  if (node.strokeColor) next.strokeColor = node.strokeColor
+  return next
+}
+
 function isKind(value: unknown): value is DiagramKind {
   return typeof value === 'string' && (KINDS as readonly string[]).includes(value)
 }

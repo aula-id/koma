@@ -19,8 +19,9 @@ import {
 import { pointInDiagramRect, type DiagramRect } from '../lib/diagramMermaid'
 import {
   SHAPE_MIME,
-  defaultNodeSize,
   arrowHead,
+  copyNode,
+  defaultNodeSize,
   edgeRoute,
   edgeStyle,
   DIAGRAM_PORTS,
@@ -85,6 +86,9 @@ const HANDLES: { id: DiagramHandle; x: string; y: string; cursor: string }[] = [
 function mintId(prefix: string): string {
   return `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
 }
+
+/** Last copied card. Lines are never stored here. Shared across diagram tabs. */
+let copiedShape: DiagramNode | null = null
 
 function placeNode(doc: DiagramDoc, kind: DiagramKind, x: number, y: number): DiagramDoc {
   const size = defaultNodeSize(kind)
@@ -430,6 +434,28 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
         redoRef.current()
         return
       }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'c') {
+        if (selection?.type !== 'node') return
+        const node = useKoma.getState().diagram.docs[key]?.doc.nodes.find((item) => item.id === selection.id)
+        if (!node) return
+        e.preventDefault()
+        copiedShape = tidyNode({ ...node })
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'v') {
+        const entry = useKoma.getState().diagram.docs[key]
+        if (!copiedShape || !entry || entry.loading) return
+        e.preventDefault()
+        const step = entry.doc.snap && entry.doc.grid > 0 ? entry.doc.grid : 16
+        const pasted = tidyNode(copyNode(copiedShape, mintId('n'), step, step))
+        copiedShape = pasted
+        commit({ ...entry.doc, nodes: [...entry.doc.nodes, pasted] })
+        setSelection({ type: 'node', id: pasted.id })
+        setEditing(null)
+        setConnectFrom(null)
+        setPropsOpen(true)
+        return
+      }
       if (e.key === 'Escape') {
         setConnectFrom(null)
         setConnectDrag(null)
@@ -475,7 +501,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
       window.removeEventListener('blur', onBlur)
       spaceRef.current = false
     }
-  }, [active, file, saveDiagram, selection, tab.path, tab.root, updateDiagram])
+  }, [active, file, key, saveDiagram, selection, tab.path, tab.root, updateDiagram])
 
   useEffect(() => {
     if (!chatMenu) return
@@ -943,7 +969,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
                 <input
                   autoFocus
                   defaultValue={node.text}
-                  className="z-10 h-7 w-[90%] rounded border border-koma-border bg-koma-bg px-2 text-center text-[12px] text-koma-fg outline-none"
+                  className="z-10 w-full border-0 bg-transparent px-2 text-center text-[12px] text-koma-fg shadow-none outline-none"
                   onPointerDown={(e) => e.stopPropagation()}
                   onChange={(e) => {
                     const text = e.target.value

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import {
   diagramFileName,
   arrowHead,
+  copyNode,
   edgeRoute,
   emptyDiagram,
   isDiagramPath,
@@ -164,6 +165,30 @@ function aligned(points: { x: number; y: number }[]): boolean {
   assert.equal(start.d.includes('L0,3'), true)
   assert.equal(arrowHead('end', true).d.endsWith('Z'), false)
   assert.equal(arrowHead('start', true).d.includes('L0,3'), true)
+}
+
+{
+  const text = { id: 't', kind: 'text' as const, x: 10, y: 20, w: 120, h: 36, text: 'hello' }
+  const copied = copyNode(text, 't2', 16, 16)
+  assert.equal(copied.id, 't2')
+  assert.equal(copied.kind, 'text')
+  assert.equal(copied.text, 'hello')
+  assert.equal(copied.x, 26)
+  assert.equal(copied.y, 36)
+  assert.equal(copied.w, 120)
+  assert.equal(copied.h, 36)
+  assert.equal(copied.fill, undefined)
+  assert.equal(copied.stroke, undefined)
+  const shaped = copyNode(
+    { id: 'r', kind: 'rect', x: 0, y: 0, w: 80, h: 40, text: 'label', rotation: 15, fill: false, fillColor: '#112233' },
+    'r2',
+    16,
+    16,
+  )
+  assert.equal(shaped.rotation, 15)
+  assert.equal(shaped.fill, false)
+  assert.equal(shaped.fillColor, '#112233')
+  assert.equal(shaped.stroke, undefined)
 }
 
 {
