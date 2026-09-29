@@ -1,5 +1,7 @@
+import type { DiagramDoc } from '../lib/diagram'
 import type { LspDiagnostic } from '../lib/lsp-bridge'
 import type { CodingSlice } from './coding'
+import type { DiagramSlice } from './diagram'
 import type { EditorGroupId, SplitDir } from './editorGroups'
 import type { AnalyticsMetric, AnalyticsRange, AnalyticsScope } from './types/analytics'
 import type { EffortOptions, PaletteColors, SettingsValues, UsagePreview } from './types/chat'
@@ -642,4 +644,12 @@ export type KomaState = {
   searchCodingContent: (root: string) => void
   replaceCodingContentAll: (root: string) => void
   openCodingSearchHit: (root: string, path: string, line: number, col?: number) => void
+  // ─── Diagram designer ──────────────────────────────────────────────────
+  diagram: DiagramSlice
+  // Open or focus one diagram tab. Each `.diag` file is its own tab.
+  openDiagramTab: (root: string, path: string) => void
+  saveDiagram: (root: string, path: string) => void
+  updateDiagram: (root: string, path: string, doc: DiagramDoc) => void
+  // `path` is `.koma/<name>.diag`. Creates the file, then seeds an empty document.
+  createDiagramFile: (root: string, path: string) => void
 }

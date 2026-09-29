@@ -3,9 +3,12 @@ import { backupCodingDocument, forgetCodingDraft, recordCodingHistory } from '..
 import { codingRequest, codingWindowId, resolveCodingReply } from '../../lib/coding-service'
 import { resolveFilePreviewBytes } from '../../lib/filePreview'
 import { resolveLspCompletion, resolveLspCompletionResolve, resolveLspDefinition, resolveLspDocumentSymbol, resolveLspFileText, resolveLspHover, resolveLspReferences } from '../../lib/lsp-bridge'
+import { diagramTabId } from '../../lib/diagram'
 import { codingTabId } from '../../lib/markdownPreview'
+import { beginDiagramSeed } from '../actions/diagram'
 import type { StoreGet, StoreSet } from '../api'
 import { baseName as codingBaseName, isPathOrDescendant as codingIsPathOrDescendant, remapPath as codingRemapPath, fileKey, reduceFileContentReplace, reduceFileContentSearch, reduceFileCreate, reduceFileDelete, reduceFileRead, reduceFileRename, reduceFileSave, reduceFileTree, reduceFileWriteBytes } from '../coding'
+import { claimDiagramRead, claimDiagramSave, dropDiagramDocs, remapDiagramDocs } from '../diagram'
 import { normalizeGroups } from '../editorGroups'
 import type { PushEnvelope } from '../types/envelope'
 import type { Tab } from '../types/tabs'
@@ -189,7 +192,22 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
       case 'FileTree':
         set((s) => ({ coding: reduceFileTree(s.coding, env) }))
         break
-      case 'FileRead':
+      case 'FileRead': {
+        const claimed = claimDiagramRead(get().diagram, env)
+        if (claimed) {
+          set({ diagram: claimed.diagram })
+          if (claimed.save) {
+            get().req({
+              r: 'FileSave',
+              root: claimed.save.root,
+              path: claimed.save.path,
+              content: claimed.save.content,
+              expectedFingerprint: claimed.save.fingerprint,
+              requestId: claimed.save.requestId,
+            })
+          }
+          break
+        }
         resolveLspFileText(
           env.requestId,
           env.content ?? null,
@@ -199,7 +217,13 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
         )
         set((s) => ({ coding: reduceFileRead(s.coding, env) }))
         break
+      }
       case 'FileSave': {
+        const diagramSaved = claimDiagramSave(get().diagram, env)
+        if (diagramSaved) {
+          set({ diagram: diagramSaved })
+          break
+        }
         const key = fileKey(env.root, env.path)
         const before = get().coding.files[key]
         const pending = before?.pendingSave
@@ -277,6 +301,21 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
           })
           return { coding }
         })
+        {
+          const pending = get().diagram.pendingCreate
+          if (pending && pending.createReq === env.requestId) {
+            if (env.error) {
+              set((s) => ({
+                diagram: {
+                  ...s.diagram,
+                  pendingCreate: s.diagram.pendingCreate?.createReq === env.requestId ? null : s.diagram.pendingCreate,
+                },
+              }))
+            } else {
+              beginDiagramSeed(set, get, pending.root, pending.path)
+            }
+          }
+        }
         break
       case 'FileRename':
         set((s) => {
@@ -297,10 +336,10 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
           const tabGroup = { ...s.ui.tabGroup }
           const groupActive = { ...s.ui.groupActive }
           const tabs = s.ui.tabs.map((t) => {
-            if (t.kind !== 'codingFile' || t.root !== env.root) return t
+            if ((t.kind !== 'codingFile' && t.kind !== 'diagram') || t.root !== env.root) return t
             const mapped = codingRemapPath(t.path, env.oldPath, env.newPath)
             if (mapped == null) return t
-            const newId = codingTabId(env.root, mapped, t.preview)
+            const newId = t.kind === 'diagram' ? diagramTabId(env.root, mapped) : codingTabId(env.root, mapped, t.preview)
             if (s.ui.activeTabId === t.id) activeTabId = newId
             if (tabGroup[t.id]) {
               tabGroup[newId] = tabGroup[t.id]
@@ -327,7 +366,11 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
             ])
             for (const p of parents) get().refreshCodingDir(env.root, p)
           })
-          return { coding, ui: normalizeGroups({ ...s.ui, tabs, activeTabId, tabGroup, groupActive }) }
+          return {
+            coding,
+            diagram: { ...s.diagram, docs: remapDiagramDocs(s.diagram.docs, env.root, env.oldPath, env.newPath) },
+            ui: normalizeGroups({ ...s.ui, tabs, activeTabId, tabGroup, groupActive }),
+          }
         })
         break
       case 'FileDelete':
@@ -347,7 +390,7 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
           // Close codingFile tabs for the deleted path and every descendant.
           const closed = new Set<string>()
           const tabs = s.ui.tabs.filter((t) => {
-            if (t.kind !== 'codingFile' || t.root !== env.root) return true
+            if ((t.kind !== 'codingFile' && t.kind !== 'diagram') || t.root !== env.root) return true
             if (!codingIsPathOrDescendant(t.path, env.path)) return true
             closed.add(t.id)
             return false
@@ -379,7 +422,11 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
               : ''
             get().refreshCodingDir(env.root, parent)
           })
-          return { coding, ui: { ...s.ui, tabs, activeTabId } }
+          return {
+            coding,
+            diagram: { ...s.diagram, docs: dropDiagramDocs(s.diagram.docs, env.root, env.path) },
+            ui: { ...s.ui, tabs, activeTabId },
+          }
         })
         break
       case 'FileWriteBytes':
