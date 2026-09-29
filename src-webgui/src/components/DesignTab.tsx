@@ -1,25 +1,35 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { Frame, Hand, Minus, MousePointer2, Plus, Square, Type, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { Circle, Frame, Hand, Minus, MousePointer2, PenTool, Plus, Square, Type, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { DesignLayers } from './DesignLayers'
+import { DesignMenu, type DesignMenuItem } from './DesignMenu'
 import {
   COMPONENT_MIME,
   DESIGN_MIME,
   addComponentVariant,
+  autoLayoutDesign,
+  canvasDeltaToSpace,
+  canvasToContent,
   componentView,
+  contentAngle,
   copyTree,
   createComponentFromFrame,
   createNode,
   designChatText,
+  designLayerName,
   deleteDesignNode,
+  flipDesignNode,
   frameAtPoint,
   findDesignNode,
-  hitDesign,
   insertDesignNode,
   layoutDesign,
   locateDesign,
   makeInstance,
+  moveDesignNode,
   nextVariantProps,
   nodeChrome,
+  nodeFromPen,
   nodeOrigin,
+  orderDesignNode,
   parseDesign,
   placeDesignNode,
   renameComponent,
@@ -28,16 +38,24 @@ import {
   resizeDesignNode,
   resolveInstanceTree,
   resolveRef,
+  selectDesignRect,
   serializeDesign,
+  setDesignLocked,
   setDesignMode,
+  setDesignVisible,
   setInstanceVariant,
   setVariantProps,
   snapDesign,
+  stackDesign,
   textStyle,
   updateDesignNode,
+  vectorSvgPath,
   writeComponentView,
+  wrapDesignNodes,
   type DesignDoc,
   type DesignHandle,
+  type DesignOrder,
+  type DesignPenPoint,
   type DesignQuery,
   type DesignNode,
   type DesignWeight,
@@ -51,7 +69,7 @@ import { EditorChrome } from './EditorChrome'
 
 const UNDO_CAP = 50
 const ZOOM_MIN = 0.25
-const ZOOM_MAX = 4
+const ZOOM_MAX = 64
 const HANDLES: { id: DesignHandle; x: string; y: string; cursor: string }[] = [
   { id: 'nw', x: '0%', y: '0%', cursor: 'nwse-resize' },
   { id: 'n', x: '50%', y: '0%', cursor: 'ns-resize' },
@@ -63,15 +81,52 @@ const HANDLES: { id: DesignHandle; x: string; y: string; cursor: string }[] = [
   { id: 'w', x: '0%', y: '50%', cursor: 'ew-resize' },
 ]
 
-type Tool = 'select' | 'frame' | 'rect' | 'text' | 'pan'
+type Tool = 'select' | 'frame' | 'rect' | 'ellipse' | 'line' | 'pen' | 'text' | 'pan'
+type DrawShape = 'frame' | 'rect' | 'ellipse' | 'line' | 'text'
 type View = { panX: number; panY: number; zoom: number }
+type Ghost =
+  | { kind: 'marquee'; x: number; y: number; w: number; h: number }
+  | { kind: 'shape'; shape: DrawShape; x: number; y: number; w: number; h: number; rotation: number }
+type PenDraft = { id: string; parentId: string | null; points: DesignPenPoint[] }
+type DesignCommands = {
+  copy: () => void
+  paste: (at?: { x: number; y: number }) => void
+  remove: () => void
+  wrap: (kind: 'group' | 'frame') => void
+  order: (order: DesignOrder) => void
+  flip: (axis: 'x' | 'y') => void
+  hide: () => void
+  lock: () => void
+  auto: () => void
+  component: () => void
+  select: (id: string) => void
+}
 type Drag =
-  | { kind: 'move'; id: string; startX: number; startY: number; originX: number; originY: number; remembered: boolean }
+  | { kind: 'move'; ids: string[]; startX: number; startY: number; origins: Record<string, { x: number; y: number }>; remembered: boolean }
   | { kind: 'resize'; id: string; handle: DesignHandle; startX: number; startY: number; node: DesignNode; remembered: boolean }
   | { kind: 'pan'; lastX: number; lastY: number }
+  | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number }
+  | { kind: 'draw'; shape: DrawShape; x0: number; y0: number; x1: number; y1: number; parentId: string | null }
+  | { kind: 'pen'; index: number; space: boolean }
 
-let copiedShape: { node: DesignNode; parentId: string | null } | null = null
+let copiedShape: { nodes: DesignNode[]; parentId: string | null } | null = null
 let mintSeq = 0
+
+function drawnBox(x0: number, y0: number, x1: number, y1: number, grid: number, snap: boolean) {
+  const x = snapDesign(Math.min(x0, x1), grid, snap)
+  const y = snapDesign(Math.min(y0, y1), grid, snap)
+  const right = snapDesign(Math.max(x0, x1), grid, snap)
+  const bottom = snapDesign(Math.max(y0, y1), grid, snap)
+  return { x, y, w: Math.max(0, right - x), h: Math.max(0, bottom - y) }
+}
+
+function lineBox(x0: number, y0: number, x1: number, y1: number) {
+  const dx = x1 - x0
+  const dy = y1 - y0
+  const length = Math.max(1, Math.hypot(dx, dy))
+  const rotation = (Math.atan2(dy, dx) * 180) / Math.PI
+  return { x: (x0 + x1) / 2 - length / 2, y: (y0 + y1) / 2 - 1, w: length, h: 2, rotation }
+}
 
 function mintId(prefix: string): string {
   mintSeq += 1
@@ -129,9 +184,19 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   updateRef.current = updateDesign
   const [view, setView] = useState<View>(viewRef.current)
   const [tool, setTool] = useState<Tool>('select')
-  const [selection, setSelection] = useState<string | null>(null)
+  const [selection, setSelection] = useState<string[]>([])
   const [editing, setEditing] = useState<string | null>(null)
-  const [propsOpen, setPropsOpen] = useState(false)
+  const [propsOpen, setPropsOpen] = useState(true)
+  const [ghost, setGhost] = useState<Ghost | null>(null)
+  const [pen, setPen] = useState<PenDraft | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; canvasX: number; canvasY: number } | null>(null)
+  const commandsRef = useRef<DesignCommands | null>(null)
+  const penApplyRef = useRef<(draft: PenDraft, closed?: boolean) => void>(() => {})
+  const penRef = useRef<PenDraft | null>(null)
+  const penNoted = useRef(false)
+  const selectionRef = useRef<string[]>([])
+  selectionRef.current = selection
+  penRef.current = pen
   const [spaceDown, setSpaceDown] = useState(false)
   const [dragCursor, setDragCursor] = useState<string | null>(null)
   const [rev, setRev] = useState(0)
@@ -143,9 +208,11 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   useEffect(() => {
     pastRef.current = []
     futureRef.current = []
-    setSelection(null)
+    setSelection([])
     setEditing(null)
     setFocusId(null)
+    setPen(null)
+    setMenu(null)
     const next = { panX: 40, panY: 40, zoom: 1 }
     viewRef.current = next
     setView(next)
@@ -157,8 +224,9 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       const detail = (event as CustomEvent<{ root: string; path: string; componentId: string | null }>).detail
       if (!detail || detail.root !== tab.root || detail.path !== tab.path) return
       setFocusId(detail.componentId)
-      setSelection(null)
+      setSelection([])
       setEditing(null)
+      setPen(null)
     }
     window.addEventListener('koma-design-focus', onFocus)
     return () => window.removeEventListener('koma-design-focus', onFocus)
@@ -282,6 +350,41 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       setEditing(null)
       setRev((value) => value + 1)
     }
+    const commitDrawn = (doc: DesignDoc, drag: Extract<Drag, { kind: 'draw' }>) => {
+      const stored = useKoma.getState().design.docs[key]?.doc
+      if (!stored) return
+      const tiny = Math.hypot(drag.x1 - drag.x0, drag.y1 - drag.y0) < 4
+      const id = mintId(drag.shape[0])
+      let node = createNode(drag.shape, id, drag.x0, drag.y0)
+      if (!tiny && drag.shape === 'line') {
+        const line = lineBox(drag.x0, drag.y0, drag.x1, drag.y1)
+        node = { ...node, x: line.x, y: line.y, w: line.w, h: line.h, rotation: contentAngle(doc, drag.parentId, line.rotation) }
+      } else if (!tiny) {
+        const box = drawnBox(drag.x0, drag.y0, drag.x1, drag.y1, doc.grid, doc.snap)
+        node = { ...node, x: box.x, y: box.y, w: Math.max(1, box.w), h: Math.max(1, box.h) }
+      } else {
+        node = { ...node, x: snapDesign(drag.x0, doc.grid, doc.snap), y: snapDesign(drag.y0, doc.grid, doc.snap) }
+      }
+      const local = canvasToContent(doc, drag.parentId, node.x, node.y)
+      if (!local) return
+      node = { ...node, x: snapDesign(local.x, doc.grid, doc.snap), y: snapDesign(local.y, doc.grid, doc.snap) }
+      let next = doc
+      if (drag.parentId) next = insertDesignNode(doc, drag.parentId, node)
+      else if (node.kind === 'frame') next = insertDesignNode(doc, null, node)
+      else {
+        const screen = createNode('frame', mintId('f'), node.x, node.y)
+        node.x = 16
+        node.y = 16
+        screen.children = [node]
+        next = insertDesignNode(doc, null, screen)
+      }
+      const laid = projectDoc(stored, focusRef.current, layoutDesign(next))
+      if (serializeDesign(laid) === serializeDesign(stored)) return
+      noteRef.current(stored)
+      updateRef.current(tab.root, tab.path, laid)
+      setSelection([node.id])
+      setPropsOpen(true)
+    }
     const move = (event: PointerEvent) => {
       const drag = dragRef.current
       if (!drag) return
@@ -294,21 +397,83 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         applyView({ ...current, panX: current.panX + dx, panY: current.panY + dy })
         return
       }
+      const point = toDoc(event.clientX, event.clientY)
+      if (drag.kind === 'marquee' && point) {
+        drag.x1 = point.x
+        drag.y1 = point.y
+        const box = drawnBox(drag.x0, drag.y0, drag.x1, drag.y1, 1, false)
+        setGhost({ kind: 'marquee', ...box })
+        return
+      }
+      if (drag.kind === 'draw' && point) {
+        drag.x1 = point.x
+        drag.y1 = point.y
+        if (drag.shape === 'line') {
+          const line = lineBox(drag.x0, drag.y0, drag.x1, drag.y1)
+          setGhost({ kind: 'shape', shape: 'line', ...line })
+        } else {
+          const stored = useKoma.getState().design.docs[key]?.doc
+          const doc = stored ? editingDoc(stored, focusRef.current) : null
+          const box = drawnBox(drag.x0, drag.y0, drag.x1, drag.y1, doc?.grid ?? 8, !!doc?.snap)
+          setGhost({ kind: 'shape', shape: drag.shape, ...box, rotation: 0 })
+        }
+        return
+      }
+      if (drag.kind === 'pen' && point) {
+        const draft = penRef.current
+        if (!draft) return
+        const points = draft.points.slice()
+        const current = points[drag.index]
+        if (!current) return
+        if (drag.space || spaceRef.current) {
+          current.x = point.x
+          current.y = point.y
+        } else {
+          current.outgoing = { x: point.x - current.x, y: point.y - current.y }
+          current.incoming = { x: current.x - point.x, y: current.y - point.y }
+        }
+        const next = { ...draft, points }
+        penRef.current = next
+        setPen(next)
+        penApplyRef.current(next)
+        return
+      }
+      if (drag.kind !== 'move' && drag.kind !== 'resize') return
       const stored = useKoma.getState().design.docs[key]?.doc
       if (!stored) return
       const focus = focusRef.current
       const doc = editingDoc(stored, focus)
       const zoom = viewRef.current.zoom || 1
-      const dx = (event.clientX - drag.startX) / zoom
-      const dy = (event.clientY - drag.startY) / zoom
-      const located = locateDesign(doc, drag.id)
-      if (!located) return
-      const parent = located.parentId ? findDesignNode(doc, located.parentId) : null
-      const inFlow = drag.kind === 'move' && !!parent?.layout && !located.node.absolute
-      const nextNode = drag.kind === 'move'
-        ? { ...located.node, x: snapDesign(drag.originX + dx, doc.grid, doc.snap), y: snapDesign(drag.originY + dy, doc.grid, doc.snap) }
-        : resizeDesignNode(drag.node, drag.handle, dx, dy, doc.grid, doc.snap)
-      const next = projectDoc(stored, focus, layoutDesign(updateDesignNode(doc, drag.id, () => nextNode), inFlow ? drag.id : undefined))
+      const screenDx = (event.clientX - drag.startX) / zoom
+      const screenDy = (event.clientY - drag.startY) / zoom
+      if (drag.kind === 'resize') {
+        const located = locateDesign(doc, drag.id)
+        if (!located) return
+        const delta = canvasDeltaToSpace(doc, located.parentId, screenDx, screenDy)
+        const nextNode = resizeDesignNode(drag.node, drag.handle, delta.x, delta.y, doc.grid, doc.snap)
+        const next = projectDoc(stored, focus, layoutDesign(updateDesignNode(doc, drag.id, () => nextNode)))
+        if (serializeDesign(next) === serializeDesign(stored)) return
+        if (!drag.remembered) {
+          noteRef.current(stored)
+          drag.remembered = true
+        }
+        updateRef.current(tab.root, tab.path, next)
+        return
+      }
+      let view = doc
+      let frozen: string | undefined
+      for (const id of drag.ids) {
+        const located = locateDesign(view, id)
+        const origin = drag.origins[id]
+        if (!located || !origin) continue
+        const parent = located.parentId ? findDesignNode(view, located.parentId) : null
+        if (parent?.layout && !located.node.absolute) frozen = id
+        const delta = canvasDeltaToSpace(view, located.parentId, screenDx, screenDy)
+        const x = snapDesign(origin.x + delta.x, doc.grid, doc.snap)
+        const y = snapDesign(origin.y + delta.y, doc.grid, doc.snap)
+        view = updateDesignNode(view, id, (node) => ({ ...node, x, y }))
+      }
+      const next = projectDoc(stored, focus, layoutDesign(view, frozen))
       if (serializeDesign(next) === serializeDesign(stored)) return
       if (!drag.remembered) {
         noteRef.current(stored)
@@ -320,38 +485,49 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       const drag = dragRef.current
       dragRef.current = null
       setDragCursor(null)
+      setGhost(null)
+      if (!drag || drag.kind === 'pan' || drag.kind === 'pen') return
       const stored = useKoma.getState().design.docs[key]?.doc
-      if (!stored || !drag || drag.kind === 'pan') return
+      if (!stored) return
       const focus = focusRef.current
       const doc = editingDoc(stored, focus)
+      if (drag.kind === 'marquee') {
+        const box = drawnBox(drag.x0, drag.y0, drag.x1, drag.y1, 1, false)
+        if (box.w >= 2 || box.h >= 2) setSelection(selectDesignRect(doc, box.x, box.y, box.w, box.h))
+        return
+      }
+      if (drag.kind === 'draw') {
+        commitDrawn(doc, drag)
+        return
+      }
+      if (drag.kind !== 'move') {
+        if (drag.kind === 'resize' && drag.remembered) return
+        return
+      }
+      const point = toDoc(event.clientX, event.clientY)
+      const dragId = drag.ids[0]
+      if (!dragId) return
+      const located = locateDesign(doc, dragId)
+      const origin = nodeOrigin(doc, dragId)
       let next = doc
-      if (drag.kind === 'move') {
-        const point = toDoc(event.clientX, event.clientY)
-        const located = locateDesign(doc, drag.id)
-        const origin = nodeOrigin(doc, drag.id)
-        if (point && located && origin && !(focus && located.parentId == null)) {
-          const target = frameAtPoint(doc, point.x, point.y, drag.id)
-          const parent = located.parentId ? findDesignNode(doc, located.parentId) : null
-          if (parent?.layout && !located.node.absolute && target === located.parentId) {
-            const parentOrigin = nodeOrigin(doc, parent.id)
-            if (parentOrigin) {
-              const local = parent.layout === 'row' ? origin.x - parentOrigin.x : origin.y - parentOrigin.y
-              let index = 0
-              for (const sibling of parent.children ?? []) {
-                if (sibling.absolute || sibling.id === drag.id) continue
-                const center = parent.layout === 'row' ? sibling.x + sibling.w / 2 : sibling.y + sibling.h / 2
-                if (local > center) index += 1
-              }
-              next = reorderDesignNode(doc, drag.id, index)
+      if (point && located && origin && drag.ids.length === 1 && !(focus && located.parentId == null)) {
+        const target = frameAtPoint(doc, point.x, point.y, dragId)
+        const parent = located.parentId ? findDesignNode(doc, located.parentId) : null
+        if (parent?.layout && !located.node.absolute && target === located.parentId) {
+          const parentOrigin = nodeOrigin(doc, parent.id)
+          if (parentOrigin) {
+            const local = parent.layout === 'row' ? origin.x - parentOrigin.x : origin.y - parentOrigin.y
+            let index = 0
+            for (const sibling of parent.children ?? []) {
+              if (sibling.absolute || sibling.id === dragId) continue
+              const center = parent.layout === 'row' ? sibling.x + sibling.w / 2 : sibling.y + sibling.h / 2
+              if (local > center) index += 1
             }
-          } else if (!(target === located.parentId || (target == null && (located.parentId == null || located.node.kind !== 'frame')))) {
-            const parentOrigin = target ? nodeOrigin(doc, target) : { x: 0, y: 0 }
-            if (parentOrigin) {
-              const x = snapDesign(origin.x - parentOrigin.x, doc.grid, doc.snap)
-              const y = snapDesign(origin.y - parentOrigin.y, doc.grid, doc.snap)
-              next = placeDesignNode(doc, drag.id, target, x, y)
-            }
+            next = reorderDesignNode(doc, dragId, index)
           }
+        } else if (!(target === located.parentId || (target == null && (located.parentId == null || (located.node.kind !== 'frame' && located.node.kind !== 'group'))))) {
+          const local = canvasToContent(doc, target, origin.x, origin.y)
+          if (local) next = placeDesignNode(doc, dragId, target, snapDesign(local.x, doc.grid, doc.snap), snapDesign(local.y, doc.grid, doc.snap))
         }
       }
       const laid = projectDoc(stored, focus, layoutDesign(next))
@@ -430,55 +606,53 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         return
       }
       if (meta && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'c') {
-        const stored = useKoma.getState().design.docs[key]?.doc
-        if (!stored || !selection) return
-        const located = locateDesign(editingDoc(stored, focusRef.current), selection)
-        if (!located) return
-        copiedShape = { node: located.node, parentId: located.parentId }
         event.preventDefault()
+        commandsRef.current?.copy()
         return
       }
       if (meta && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'v') {
-        if (!copiedShape) return
         event.preventDefault()
-        const stored = useKoma.getState().design.docs[key]?.doc
-        if (!stored || file?.loading) return
-        const doc = editingDoc(stored, focusRef.current)
-        const step = doc.snap && doc.grid > 0 ? doc.grid : 16
-        const pasted = copyTree(copiedShape.node, () => mintId('n'), step, step)
-        const parentId = copiedShape.parentId && locateDesign(doc, copiedShape.parentId) ? copiedShape.parentId : null
-        let usedParent = parentId
-        let next = doc
-        if (parentId) next = insertDesignNode(doc, parentId, pasted)
-        else if (pasted.kind === 'frame') next = insertDesignNode(doc, null, pasted)
-        else if (doc.screens[0]) {
-          usedParent = doc.screens[0].id
-          next = insertDesignNode(doc, usedParent, pasted)
-        } else {
-          const screen = createNode('frame', mintId('f'), pasted.x, pasted.y)
-          pasted.x = 16
-          pasted.y = 16
-          screen.children = [pasted]
-          usedParent = screen.id
-          next = insertDesignNode(doc, null, screen)
-        }
-        copiedShape = { node: pasted, parentId: usedParent }
-        commit(next)
-        setSelection(pasted.id)
-        setEditing(null)
-        setPropsOpen(true)
+        commandsRef.current?.paste()
+        return
+      }
+      if (meta && event.key.toLowerCase() === 'g') {
+        event.preventDefault()
+        commandsRef.current?.wrap(event.shiftKey ? 'frame' : 'group')
+        return
+      }
+      if (meta && event.shiftKey && event.key.toLowerCase() === 'h') {
+        event.preventDefault()
+        commandsRef.current?.hide()
+        return
+      }
+      if (event.key === ']' || event.key === '[') {
+        event.preventDefault()
+        const order: DesignOrder = event.key === ']' ? (meta ? 'front' : 'forward') : meta ? 'back' : 'backward'
+        commandsRef.current?.order(order)
+        return
+      }
+      if (!meta && event.shiftKey && event.key.toLowerCase() === 'h') {
+        event.preventDefault()
+        commandsRef.current?.flip('x')
+        return
+      }
+      if (!meta && event.shiftKey && event.key.toLowerCase() === 'v') {
+        event.preventDefault()
+        commandsRef.current?.flip('y')
         return
       }
       if (event.key === 'Delete' || event.key === 'Backspace') {
-        if (!selection) return
         event.preventDefault()
-        const stored = useKoma.getState().design.docs[key]?.doc
-        if (!stored) return
-        commit(deleteDesignNode(editingDoc(stored, focusRef.current), selection))
-        setSelection(null)
-        setEditing(null)
+        commandsRef.current?.remove()
+        return
       }
-      if (event.key === 'Escape') setEditing(null)
+      if (event.key === 'Escape') {
+        setEditing(null)
+        setPen(null)
+        penRef.current = null
+        penNoted.current = false
+        if (toolRef.current === 'pen') setTool('select')
+      }
     }
     window.addEventListener('keydown', onKey)
     window.addEventListener('keyup', onKey)
@@ -488,7 +662,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     }
   }, [active, file?.loading, key, saveDesign, selection, tab.path, tab.root])
 
-  const placeAt = (kind: 'frame' | 'rect' | 'text', point: { x: number; y: number }) => {
+  const placeAt = (kind: DrawShape, point: { x: number; y: number }) => {
     const stored = useKoma.getState().design.docs[key]?.doc
     if (!stored) return
     const doc = editingDoc(stored, focusRef.current)
@@ -496,10 +670,10 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     const node = createNode(kind, mintId(kind[0]), 0, 0)
     let next = doc
     if (parent) {
-      const origin = nodeOrigin(doc, parent)
-      if (!origin) return
-      node.x = snapDesign(point.x - origin.x, doc.grid, doc.snap)
-      node.y = snapDesign(point.y - origin.y, doc.grid, doc.snap)
+      const local = canvasToContent(doc, parent, point.x, point.y)
+      if (!local) return
+      node.x = snapDesign(local.x, doc.grid, doc.snap)
+      node.y = snapDesign(local.y, doc.grid, doc.snap)
       next = insertDesignNode(doc, parent, node)
     } else if (kind === 'frame') {
       node.x = snapDesign(point.x, doc.grid, doc.snap)
@@ -513,10 +687,215 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       next = insertDesignNode(doc, null, screen)
     }
     commit(next)
-    setSelection(node.id)
+    setSelection([node.id])
     setEditing(null)
     setPropsOpen(true)
     setTool('select')
+  }
+
+  const applyPen = (draft: PenDraft, closed = false) => {
+    const stored = useKoma.getState().design.docs[key]?.doc
+    if (!stored) return
+    const focus = focusRef.current
+    const doc = editingDoc(stored, focus)
+    const points = draft.points.map((point) => {
+      const at = canvasToContent(doc, draft.parentId, point.x, point.y)
+      return {
+        x: at?.x ?? point.x,
+        y: at?.y ?? point.y,
+        incoming: canvasDeltaToSpace(doc, draft.parentId, point.incoming.x, point.incoming.y),
+        outgoing: canvasDeltaToSpace(doc, draft.parentId, point.outgoing.x, point.outgoing.y),
+      }
+    })
+    const node = nodeFromPen(draft.id, points, closed)
+    if (!node) return
+    const existing = locateDesign(doc, draft.id)
+    const view = existing
+      ? updateDesignNode(doc, draft.id, (current) => ({ ...current, x: node.x, y: node.y, w: node.w, h: node.h, vector: node.vector, fill: closed ? current.fill === 'none' ? undefined : current.fill : node.fill }))
+      : insertDesignNode(doc, draft.parentId, node)
+    const next = projectDoc(stored, focus, layoutDesign(view))
+    if (serializeDesign(next) === serializeDesign(stored)) return
+    if (!penNoted.current) {
+      note(stored)
+      penNoted.current = true
+    }
+    updateDesign(tab.root, tab.path, next)
+    setSelection([draft.id])
+  }
+  penApplyRef.current = applyPen
+
+  const viewDoc = () => {
+    const stored = useKoma.getState().design.docs[key]?.doc
+    if (!stored) return null
+    return { stored, doc: editingDoc(stored, focusRef.current) }
+  }
+
+  const mutate = (next: DesignDoc | null) => {
+    if (!next) return
+    commit(next)
+  }
+
+  commandsRef.current = {
+    copy: () => {
+      const open = viewDoc()
+      const ids = selectionRef.current
+      if (!open || !ids.length) return
+      const rows = ids.map((id) => locateDesign(open.doc, id)).filter((row) => row != null)
+      if (!rows.length || rows.some((row) => row.parentId !== rows[0].parentId)) return
+      copiedShape = { nodes: rows.map((row) => row.node), parentId: rows[0].parentId }
+    },
+    paste: (at) => {
+      if (!copiedShape?.nodes.length) return
+      const open = viewDoc()
+      if (!open || file?.loading) return
+      const step = open.doc.snap && open.doc.grid > 0 ? open.doc.grid : 10
+      const parentId = at
+        ? frameAtPoint(open.doc, at.x, at.y, '')
+        : copiedShape.parentId && locateDesign(open.doc, copiedShape.parentId)
+          ? copiedShape.parentId
+          : null
+      let next = open.doc
+      const pasted: DesignNode[] = []
+      for (const source of copiedShape.nodes) {
+        const node = copyTree(source, () => mintId('n'), step, step)
+        if (at && parentId) {
+          const local = canvasToContent(open.doc, parentId, at.x, at.y)
+          if (local) {
+            node.x = snapDesign(local.x, open.doc.grid, open.doc.snap)
+            node.y = snapDesign(local.y, open.doc.grid, open.doc.snap)
+          }
+        } else if (at) {
+          node.x = snapDesign(at.x, open.doc.grid, open.doc.snap)
+          node.y = snapDesign(at.y, open.doc.grid, open.doc.snap)
+        }
+        if (parentId) next = insertDesignNode(next, parentId, node)
+        else if (node.kind === 'frame' || node.kind === 'group') next = insertDesignNode(next, null, node)
+        else if (next.screens[0]) next = insertDesignNode(next, next.screens[0].id, node)
+        else {
+          const screen = createNode('frame', mintId('f'), node.x, node.y)
+          node.x = 16
+          node.y = 16
+          screen.children = [node]
+          next = insertDesignNode(next, null, screen)
+        }
+        pasted.push(node)
+      }
+      copiedShape = { nodes: pasted, parentId }
+      commit(next)
+      setSelection(pasted.map((node) => node.id))
+      setPropsOpen(true)
+    },
+    remove: () => {
+      const open = viewDoc()
+      const ids = selectionRef.current
+      if (!open || !ids.length) return
+      const next = ids.reduce((doc, id) => deleteDesignNode(doc, id), open.doc)
+      commit(next)
+      setSelection([])
+      setEditing(null)
+    },
+    wrap: (kind) => {
+      const open = viewDoc()
+      const ids = selectionRef.current
+      if (!open || !ids.length) return
+      if (focusRef.current && ids.some((id) => locateDesign(open.doc, id)?.parentId == null)) return
+      const id = mintId(kind[0])
+      const next = wrapDesignNodes(open.doc, ids, kind, id)
+      if (!next) return
+      commit(next)
+      setSelection([id])
+    },
+    order: (order) => {
+      const open = viewDoc()
+      const ids = selectionRef.current
+      if (!open || !ids.length) return
+      const ranked = ids.flatMap((id) => {
+        const row = locateDesign(open.doc, id)
+        if (!row) return []
+        const siblings = row.parentId == null ? open.doc.screens : findDesignNode(open.doc, row.parentId)?.children ?? []
+        const index = siblings.findIndex((item) => item.id === id)
+        return index < 0 ? [] : [{ id, index }]
+      }).sort((a, b) => a.index - b.index)
+      const sequence = order === 'back' || order === 'backward' ? ranked.reverse() : ranked
+      mutate(sequence.reduce((current, row) => orderDesignNode(current, row.id, order), open.doc))
+    },
+    flip: (axis) => {
+      const open = viewDoc()
+      const ids = selectionRef.current
+      if (!open || !ids.length) return
+      mutate(ids.reduce((doc, id) => flipDesignNode(doc, id, axis), open.doc))
+    },
+    hide: () => {
+      const open = viewDoc()
+      const ids = selectionRef.current
+      if (!open || !ids.length) return
+      const show = ids.some((id) => locateDesign(open.doc, id)?.node.visible === false)
+      mutate(ids.reduce((doc, id) => setDesignVisible(doc, id, show), open.doc))
+    },
+    lock: () => {
+      const open = viewDoc()
+      const ids = selectionRef.current
+      if (!open || !ids.length) return
+      const unlock = ids.every((id) => locateDesign(open.doc, id)?.node.locked)
+      mutate(ids.reduce((doc, id) => setDesignLocked(doc, id, !unlock), open.doc))
+    },
+    auto: () => {
+      const open = viewDoc()
+      const ids = selectionRef.current
+      if (!open || !ids.length) return
+      const next = autoLayoutDesign(open.doc, ids, mintId('f'))
+      if (next) commit(next)
+    },
+    component: () => {
+      const stored = useKoma.getState().design.docs[key]?.doc
+      const id = selectionRef.current.length === 1 ? selectionRef.current[0] : null
+      if (!stored || !id || focusRef.current) return
+      const componentId = mintId('c')
+      const next = createComponentFromFrame(stored, id, componentId, () => mintId('n'))
+      if (!next) return
+      commitStored(next)
+      setFocusId(componentId)
+      setSelection([])
+    },
+    select: (id) => {
+      setSelection([id])
+      setPropsOpen(true)
+    },
+  }
+
+  const beginPen = (point: { x: number; y: number }) => {
+    const open = viewDoc()
+    if (!open) return
+    const draft = penRef.current
+    const zero = { x: 0, y: 0 }
+    if (draft && draft.points.length >= 3) {
+      const first = draft.points[0]
+      if (Math.hypot(first.x - point.x, first.y - point.y) <= 8) {
+        applyPen(draft, true)
+        penRef.current = null
+        setPen(null)
+        penNoted.current = false
+        setTool('select')
+        return
+      }
+    }
+    if (!draft) {
+      penNoted.current = false
+      const parentId = frameAtPoint(open.doc, point.x, point.y, '')
+      const next = { id: mintId('v'), parentId, points: [{ x: point.x, y: point.y, incoming: zero, outgoing: zero }] }
+      penRef.current = next
+      setPen(next)
+      applyPen(next)
+      dragRef.current = { kind: 'pen', index: 0, space: spaceRef.current }
+      return
+    }
+    const points = [...draft.points, { x: point.x, y: point.y, incoming: zero, outgoing: { ...draft.points[draft.points.length - 1].outgoing }, }]
+    points[points.length - 2] = { ...points[points.length - 2], outgoing: draft.points[draft.points.length - 1].outgoing }
+    const next = { ...draft, points }
+    penRef.current = next
+    setPen(next)
+    applyPen(next)
+    dragRef.current = { kind: 'pen', index: points.length - 1, space: spaceRef.current }
   }
 
   const startPan = (event: ReactPointerEvent | PointerEvent) => {
@@ -533,11 +912,28 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     if (event.button !== 0) return
     const point = toDoc(event.clientX, event.clientY)
     if (!point || !file) return
-    if (tool === 'frame' || tool === 'rect' || tool === 'text') {
-      placeAt(tool, point)
+    if (tool === 'pen') {
+      event.preventDefault()
+      beginPen(point)
       return
     }
-    setSelection(null)
+    if (tool === 'frame' || tool === 'rect' || tool === 'ellipse' || tool === 'line' || tool === 'text') {
+      event.preventDefault()
+      const stored = useKoma.getState().design.docs[key]?.doc
+      const doc = stored ? editingDoc(stored, focusRef.current) : null
+      dragRef.current = {
+        kind: 'draw',
+        shape: tool,
+        x0: point.x,
+        y0: point.y,
+        x1: point.x,
+        y1: point.y,
+        parentId: doc ? frameAtPoint(doc, point.x, point.y, '') : null,
+      }
+      return
+    }
+    setSelection([])
+    dragRef.current = { kind: 'marquee', x0: point.x, y0: point.y, x1: point.x, y1: point.y }
   }
 
   const placeInstance = (componentId: string, point: { x: number; y: number }) => {
@@ -550,10 +946,10 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     const parent = frameAtPoint(stored, point.x, point.y, '')
     let next = stored
     if (parent) {
-      const origin = nodeOrigin(stored, parent)
-      if (!origin) return
-      node.x = snapDesign(point.x - origin.x, stored.grid, stored.snap)
-      node.y = snapDesign(point.y - origin.y, stored.grid, stored.snap)
+      const local = canvasToContent(stored, parent, point.x, point.y)
+      if (!local) return
+      node.x = snapDesign(local.x, stored.grid, stored.snap)
+      node.y = snapDesign(local.y, stored.grid, stored.snap)
       next = insertDesignNode(stored, parent, node)
     } else {
       const screen = createNode('frame', mintId('f'), snapDesign(point.x, stored.grid, stored.snap), snapDesign(point.y, stored.grid, stored.snap))
@@ -563,7 +959,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       next = insertDesignNode(stored, null, screen)
     }
     commitStored(next)
-    setSelection(node.id)
+    setSelection([node.id])
     setEditing(null)
     setPropsOpen(true)
     setTool('select')
@@ -579,7 +975,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       return
     }
     const kind = event.dataTransfer.getData(DESIGN_MIME)
-    if (kind !== 'frame' && kind !== 'rect' && kind !== 'text') return
+    if (kind !== 'frame' && kind !== 'rect' && kind !== 'ellipse' && kind !== 'line' && kind !== 'text') return
     placeAt(kind, point)
   }
 
@@ -589,7 +985,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
 
   const storedDoc = file.doc
   const doc = editingDoc(storedDoc, focusId)
-  const located = selection ? locateDesign(doc, selection) : null
+  const selectedId = selection[selection.length - 1] ?? null
+  const located = selectedId ? locateDesign(doc, selectedId) : null
   const selected = located?.node ?? null
   const focusedComponent = focusId ? storedDoc.components.find((component) => component.id === focusId) ?? null : null
   const selectedVariant = focusedComponent && located?.parentId == null
@@ -625,10 +1022,10 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   void rev
 
   const patchSelected = (fn: (node: DesignNode) => DesignNode, noteOnce = false) => {
-    if (!selection) return
+    if (!selectedId) return
     const stored = useKoma.getState().design.docs[key]?.doc
     if (!stored) return
-    const view = updateDesignNode(editingDoc(stored, focusRef.current), selection, fn)
+    const view = updateDesignNode(editingDoc(stored, focusRef.current), selectedId, fn)
     const next = projectDoc(stored, focusRef.current, layoutDesign(view))
     if (serializeDesign(next) === serializeDesign(stored)) return
     if (noteOnce) {
@@ -673,27 +1070,59 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
           }
         />
         {file.error ? <div className="flex-none border-b border-koma-border px-3 py-1 text-[12px] text-koma-error">{file.error}</div> : null}
+        <div className="flex min-h-0 flex-1">
+        <DesignLayers
+          doc={doc}
+          selection={selection}
+          onSelect={(id, shift) => {
+            setSelection(shift ? selection.includes(id) ? selection.filter((item) => item !== id) : [...selection, id] : [id])
+            setPropsOpen(true)
+          }}
+          onRename={(id, name) => {
+            const trimmed = name.trim()
+            commit(updateDesignNode(doc, id, (node) => {
+              const next = { ...node }
+              if (trimmed) next.name = trimmed
+              else delete next.name
+              return next
+            }))
+          }}
+          onVisible={(id, visible) => commit(setDesignVisible(doc, id, visible))}
+          onLocked={(id, locked) => commit(setDesignLocked(doc, id, locked))}
+          onMove={(id, parentId, index) => {
+            if (focusId && parentId == null && locateDesign(doc, id)?.parentId == null) return
+            commit(moveDesignNode(doc, id, parentId, index))
+          }}
+        />
         <div
           ref={canvasRef}
-          className={`relative min-h-0 flex-1 overflow-hidden ${spaceDown || tool === 'pan' ? 'cursor-grab' : ''}`}
+          className={`relative min-h-0 min-w-0 flex-1 overflow-hidden ${spaceDown || tool === 'pan' ? 'cursor-grab' : ''}`}
           onPointerDown={onCanvasPointerDown}
+          onContextMenu={(event) => {
+            event.preventDefault()
+            const point = toDoc(event.clientX, event.clientY)
+            if (!point) return
+            setMenu({ x: event.clientX, y: event.clientY, canvasX: point.x, canvasY: point.y })
+          }}
           onDragOver={(event) => event.preventDefault()}
           onDrop={onDrop}
-          style={{
-            backgroundImage: doc.snap ? 'radial-gradient(circle, var(--color-koma-border) 1px, transparent 1px)' : undefined,
-            backgroundSize: doc.snap ? `${grid * view.zoom}px ${grid * view.zoom}px` : undefined,
-            backgroundPosition: `${view.panX}px ${view.panY}px`,
-          }}
+          style={canvasBackdrop(doc.snap, grid, view)}
         >
+          <DesignRulers panX={view.panX} panY={view.panY} zoom={view.zoom} />
           <div className="pointer-events-none absolute left-0 top-0" style={{ transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`, transformOrigin: '0 0' }}>
             {doc.screens.map((screen) => (
               <DesignNodeView
                 key={screen.id}
                 doc={doc}
                 node={screen}
-                selectedId={selection}
+                selectedIds={selection}
                 editing={editing}
                 dragCursor={dragCursor}
+                onMenu={(id, clientX, clientY) => {
+                  const point = toDoc(clientX, clientY)
+                  if (!selection.includes(id)) setSelection([id])
+                  if (point) setMenu({ x: clientX, y: clientY, canvasX: point.x, canvasY: point.y })
+                }}
                 onSelect={(id, event) => {
                   if (event.button === 1 || spaceRef.current || toolRef.current === 'pan') {
                     event.preventDefault()
@@ -704,17 +1133,23 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   if (event.button !== 0 || toolRef.current !== 'select') return
                   event.preventDefault()
                   event.stopPropagation()
-                  setSelection(id)
+                  const ids = event.shiftKey ? selection.includes(id) ? selection.filter((item) => item !== id) : [...selection, id] : selection.includes(id) ? selection : [id]
+                  setSelection(ids)
                   setPropsOpen(true)
+                  if (event.shiftKey) return
                   const storedNow = useKoma.getState().design.docs[key]?.doc
-                  const located = locateDesign(storedNow ? editingDoc(storedNow, focusRef.current) : doc, id)
+                  const current = storedNow ? editingDoc(storedNow, focusRef.current) : doc
+                  const origins: Record<string, { x: number; y: number }> = {}
+                  for (const item of ids) {
+                    const row = locateDesign(current, item)
+                    if (row) origins[item] = { x: row.node.x, y: row.node.y }
+                  }
                   dragRef.current = {
                     kind: 'move',
-                    id,
+                    ids,
                     startX: event.clientX,
                     startY: event.clientY,
-                    originX: located?.node.x ?? 0,
-                    originY: located?.node.y ?? 0,
+                    origins,
                     remembered: false,
                   }
                   setDragCursor('grabbing')
@@ -722,7 +1157,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 onResize={(id, handle, event) => {
                   event.preventDefault()
                   event.stopPropagation()
-                  setSelection(id)
+                  setSelection([id])
                   const storedNow = useKoma.getState().design.docs[key]?.doc
                   const located = locateDesign(storedNow ? editingDoc(storedNow, focusRef.current) : doc, id)
                   if (!located) return
@@ -741,7 +1176,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   setDragCursor(HANDLES.find((item) => item.id === handle)?.cursor ?? 'grabbing')
                 }}
                 onEdit={(id) => {
-                  setSelection(id)
+                  setSelection([id])
                   setEditing(id)
                   setPropsOpen(true)
                   labelNoted.current = false
@@ -764,12 +1199,22 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 }}
               />
             ))}
+          {ghost ? (
+            <div
+              className="pointer-events-none absolute border border-koma-accent bg-koma-accent/10"
+              style={{ left: ghost.x, top: ghost.y, width: Math.max(ghost.w, 1), height: Math.max(ghost.h, 1), borderRadius: ghost.kind === 'shape' && ghost.shape === 'ellipse' ? '50%' : undefined, transform: ghost.kind === 'shape' && ghost.rotation ? `rotate(${ghost.rotation}deg)` : undefined }}
+            />
+          ) : null}
+          {pen?.points.map((point, index) => (
+            <span key={`${pen.id}-${index}`} className="pointer-events-none absolute h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-koma-accent" style={{ left: point.x, top: point.y }} />
+          ))}
           </div>
           {doc.screens.length === 0 && !file.loading ? (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[12px] text-koma-fg opacity-35">
               Drag a frame onto the canvas
             </div>
           ) : null}
+        </div>
         </div>
         <div className="flex h-8 flex-none items-center gap-1 border-t border-koma-border bg-koma-panel px-2">
           <ToolButton label="Select" selected={tool === 'select'} onClick={() => setTool('select')}>
@@ -780,6 +1225,15 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
           </ToolButton>
           <ToolButton label="Rectangle" selected={tool === 'rect'} onClick={() => setTool('rect')}>
             <Square size={15} strokeWidth={2.25} />
+          </ToolButton>
+          <ToolButton label="Ellipse" selected={tool === 'ellipse'} onClick={() => setTool('ellipse')}>
+            <Circle size={15} strokeWidth={2.25} />
+          </ToolButton>
+          <ToolButton label="Line" selected={tool === 'line'} onClick={() => setTool('line')}>
+            <Minus size={15} strokeWidth={2.25} />
+          </ToolButton>
+          <ToolButton label="Pen" selected={tool === 'pen'} onClick={() => setTool('pen')}>
+            <PenTool size={15} strokeWidth={2.25} />
           </ToolButton>
           <ToolButton label="Text" selected={tool === 'text'} onClick={() => setTool('text')}>
             <Type size={15} strokeWidth={2.25} />
@@ -792,7 +1246,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
               type="button"
               onClick={() => {
                 setFocusId(null)
-                setSelection(null)
+                setSelection([])
               }}
               className="h-6 rounded px-2 text-[12px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
             >
@@ -817,7 +1271,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             }}>
               <Minus size={15} strokeWidth={2.25} />
             </ToolButton>
-            <span className="w-10 text-center text-[11px] text-koma-dim">{Math.round(view.zoom * 100)}%</span>
+            <span className="w-14 text-center text-[11px] text-koma-dim">{Math.round(view.zoom * 100)}%</span>
             <ToolButton label="Zoom in" selected={false} onClick={() => {
               const rect = canvasRef.current?.getBoundingClientRect()
               if (!rect) return
@@ -850,7 +1304,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       {propsOpen ? (
         <aside className="flex w-[260px] flex-none flex-col overflow-y-auto border-l border-koma-border bg-koma-panel">
           <div className="flex h-8 flex-none items-center px-3 text-[12px] text-koma-fg">
-            {selected ? (selected.kind === 'frame' ? 'Frame' : selected.kind === 'rect' ? 'Rectangle' : selected.kind === 'text' ? 'Text' : 'Instance') : 'Properties'}
+            {selection.length > 1 ? `${selection.length} selected` : selected ? designLayerName(selected) : 'Properties'}
           </div>
           {selected ? (
             <NodeSettings
@@ -860,16 +1314,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
               componentName={selectedVariant ? focusedComponent?.name ?? null : null}
               variantProps={selectedVariant ? selectedVariant.props : null}
               axes={selected.kind === 'instance' ? instanceAxes(storedDoc, selected) : null}
-              onMakeComponent={!focusId && selected.kind === 'frame' ? () => {
-                const stored = useKoma.getState().design.docs[key]?.doc
-                if (!stored || !selection) return
-                const componentId = mintId('c')
-                const next = createComponentFromFrame(stored, selection, componentId, () => mintId('n'))
-                if (!next) return
-                commitStored(next)
-                setFocusId(componentId)
-                setSelection(null)
-              } : undefined}
+              onMakeComponent={!focusId && selected.kind === 'frame' ? () => commandsRef.current?.component() : undefined}
               onAddVariant={focusId ? () => {
                 const stored = useKoma.getState().design.docs[key]?.doc
                 const component = stored?.components.find((item) => item.id === focusId)
@@ -879,8 +1324,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
               } : undefined}
               onVariantProps={focusId && selectedVariant ? (props) => {
                 const stored = useKoma.getState().design.docs[key]?.doc
-                if (!stored || !selection) return
-                const next = setVariantProps(stored, focusId, selection, props)
+                if (!stored || !selectedId) return
+                const next = setVariantProps(stored, focusId, selectedId, props)
                 if (next) commitStored(next, true)
               } : undefined}
               onRenameComponent={focusId ? (name) => {
@@ -911,12 +1356,113 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
               }}
             />
           ) : (
-            <p className="px-3 text-[12px] text-koma-dim">Select a frame or a text</p>
+            <p className="px-3 text-[12px] text-koma-dim">Select a layer</p>
           )}
         </aside>
       ) : null}
+      {menu ? (
+        <DesignMenu
+          x={menu.x}
+          y={menu.y}
+          items={designMenuItems(doc, selection, menu.canvasX, menu.canvasY, !!copiedShape?.nodes.length, !focusId && selection.length === 1 && findDesignNode(doc, selection[0])?.kind === 'frame')}
+          onClose={() => setMenu(null)}
+          onPick={(id) => {
+            const here = menu
+            setMenu(null)
+            const commands = commandsRef.current
+            if (!commands) return
+            if (id === 'copy') commands.copy()
+            else if (id === 'paste') commands.paste()
+            else if (id === 'paste-here') commands.paste({ x: here.canvasX, y: here.canvasY })
+            else if (id === 'front' || id === 'forward' || id === 'backward' || id === 'back') commands.order(id)
+            else if (id === 'group') commands.wrap('group')
+            else if (id === 'frame-selection') commands.wrap('frame')
+            else if (id === 'auto') commands.auto()
+            else if (id === 'component') commands.component()
+            else if (id === 'hide') commands.hide()
+            else if (id === 'lock') commands.lock()
+            else if (id === 'flip-x') commands.flip('x')
+            else if (id === 'flip-y') commands.flip('y')
+            else if (id.startsWith('select:')) commands.select(id.slice('select:'.length))
+          }}
+        />
+      ) : null}
     </div>
   )
+}
+
+function canvasBackdrop(snap: boolean, grid: number, view: View): { backgroundImage?: string; backgroundSize?: string; backgroundPosition?: string } {
+  if (view.zoom >= 8) {
+    const cell = view.zoom
+    return {
+      backgroundImage: 'linear-gradient(to right, var(--color-koma-border) 1px, transparent 1px), linear-gradient(to bottom, var(--color-koma-border) 1px, transparent 1px)',
+      backgroundSize: `${cell}px ${cell}px`,
+      backgroundPosition: `${view.panX}px ${view.panY}px`,
+    }
+  }
+  if (!snap) return {}
+  return {
+    backgroundImage: 'radial-gradient(circle, var(--color-koma-border) 1px, transparent 1px)',
+    backgroundSize: `${grid * view.zoom}px ${grid * view.zoom}px`,
+    backgroundPosition: `${view.panX}px ${view.panY}px`,
+  }
+}
+
+function DesignRulers({ panX, panY, zoom }: { panX: number; panY: number; zoom: number }) {
+  const step = zoom >= 32 ? 10 : zoom >= 8 ? 50 : zoom >= 2 ? 100 : 200
+  const ticks = (span: number, origin: number) => {
+    const start = Math.floor(-origin / zoom / step) * step - step
+    const items: { at: number; label: number }[] = []
+    for (let value = start; items.length < 80; value += step) {
+      items.push({ at: origin + value * zoom, label: value })
+    }
+    return items.filter((item) => item.at > -40 && item.at < span + 40)
+  }
+  const span = 4096
+  return (
+    <>
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 h-4 border-b border-koma-border bg-koma-panel/90 text-[9px] text-koma-dim">
+        {ticks(span, panX).map((tick) => (
+          <span key={`x${tick.label}`} className="absolute top-0 h-4 overflow-hidden pl-0.5 leading-4" style={{ left: tick.at }}>{tick.label}</span>
+        ))}
+      </div>
+      <div className="pointer-events-none absolute inset-y-0 left-0 z-20 w-4 border-r border-koma-border bg-koma-panel/90 text-[9px] text-koma-dim">
+        {ticks(span, panY).map((tick) => (
+          <span key={`y${tick.label}`} className="absolute left-0 w-4 overflow-hidden pl-px leading-3" style={{ top: tick.at }}>{tick.label}</span>
+        ))}
+      </div>
+      <div className="pointer-events-none absolute left-0 top-0 z-30 h-4 w-4 border-b border-r border-koma-border bg-koma-panel" />
+    </>
+  )
+}
+
+function designMenuItems(doc: DesignDoc, selection: string[], x: number, y: number, canPaste: boolean, canComponent: boolean): DesignMenuItem[] {
+  const selected = selection.length > 0
+  const rows = selection.map((id) => locateDesign(doc, id))
+  const sameParent = rows.length > 0 && rows.every((row) => row && row.parentId === rows[0]?.parentId)
+  const stack = stackDesign(doc, x, y).slice(0, 12)
+  return [
+    { id: 'copy', label: 'Copy', shortcut: '⌘C', disabled: !sameParent },
+    { id: 'paste', label: 'Paste', shortcut: '⌘V', disabled: !canPaste },
+    { id: 'paste-here', label: 'Paste here', disabled: !canPaste },
+    { id: 'divider-1', label: '' },
+    { id: 'select-layer', label: 'Select layer', disabled: stack.length === 0, children: stack.map((node) => ({ id: `select:${node.id}`, label: designLayerName(node) })) },
+    { id: 'divider-2', label: '' },
+    { id: 'front', label: 'Bring to front', shortcut: '⌘]', disabled: !selected },
+    { id: 'forward', label: 'Bring forward', shortcut: ']', disabled: !selected },
+    { id: 'backward', label: 'Send backward', shortcut: '[', disabled: !selected },
+    { id: 'back', label: 'Send to back', shortcut: '⌘[', disabled: !selected },
+    { id: 'divider-3', label: '' },
+    { id: 'group', label: 'Group selection', shortcut: '⌘G', disabled: !sameParent },
+    { id: 'frame-selection', label: 'Frame selection', shortcut: '⇧⌘G', disabled: !sameParent },
+    { id: 'auto', label: 'Add auto layout', disabled: !sameParent },
+    { id: 'component', label: 'Create component', disabled: !canComponent },
+    { id: 'divider-4', label: '' },
+    { id: 'hide', label: 'Show/Hide', shortcut: '⇧⌘H', disabled: !selected },
+    { id: 'lock', label: 'Lock/Unlock', disabled: !selected },
+    { id: 'flip-x', label: 'Flip horizontal', shortcut: '⇧H', disabled: !selected },
+    { id: 'flip-y', label: 'Flip vertical', shortcut: '⇧V', disabled: !selected },
+  ]
 }
 
 function ToolButton({ label, selected, onClick, children }: { label: string; selected: boolean; onClick: () => void; children: ReactNode }) {
@@ -937,7 +1483,7 @@ function ToolButton({ label, selected, onClick, children }: { label: string; sel
 function DesignNodeView({
   doc,
   node,
-  selectedId,
+  selectedIds,
   editing,
   dragCursor,
   locked = false,
@@ -946,10 +1492,11 @@ function DesignNodeView({
   onEdit,
   onText,
   onTextBlur,
+  onMenu,
 }: {
   doc: DesignDoc
   node: DesignNode
-  selectedId: string | null
+  selectedIds: string[]
   editing: string | null
   dragCursor: string | null
   locked?: boolean
@@ -958,84 +1505,120 @@ function DesignNodeView({
   onEdit: (id: string) => void
   onText: (id: string, text: string) => void
   onTextBlur: () => void
+  onMenu: (id: string, clientX: number, clientY: number) => void
 }) {
+  if (node.visible === false) return null
   const visual = node.kind === 'instance' ? resolveInstanceTree(doc, node) : null
   const chrome = nodeChrome(visual ?? node)
   const style = textStyle(visual && node.kind !== 'instance' ? visual : node)
-  const selected = node.id === selectedId
-  const fill = paintCss(doc, chrome.fill, 'var(--color-koma-panel)')
+  const selected = selectedIds.includes(node.id)
+  const container = node.kind === 'frame' || node.kind === 'group'
+  const bareFill = container && (!node.fill || node.fill === 'none')
+  const bareStroke = container && (!node.stroke || node.stroke === 'none')
+  const fill = bareFill ? 'transparent' : paintCss(doc, chrome.fill, 'var(--color-koma-panel)')
   const stroke = paintCss(doc, chrome.stroke, 'var(--color-koma-border)')
-  const radius = typeof chrome.radius === 'number' ? chrome.radius : Number(resolveRef(doc, chrome.radius)) || 0
+  const radius = node.kind === 'ellipse' ? '50%' : typeof chrome.radius === 'number' ? chrome.radius : Number(resolveRef(doc, chrome.radius)) || 0
   const children = visual?.children ?? (node.kind === 'instance' ? undefined : node.children)
+  const rotation = node.rotation ?? 0
+  const flipX = node.flipX ? -1 : 1
+  const flipY = node.flipY ? -1 : 1
+  const transform = rotation || node.flipX || node.flipY ? `rotate(${rotation}deg) scale(${flipX}, ${flipY})` : undefined
+  const childIds = locked || node.kind === 'instance' ? [] : selectedIds
   return (
     <div
-      className={`absolute ${locked ? 'pointer-events-none' : 'pointer-events-auto'}`}
+      className={`absolute ${locked || node.locked ? 'pointer-events-none' : 'pointer-events-auto'}`}
       style={{
         left: node.x,
         top: node.y,
         width: node.w,
         height: node.h,
         opacity: chrome.opacity,
-        background: fill,
-        border: chrome.stroke === 'none' ? undefined : `${chrome.strokeWidth}px solid ${stroke}`,
-        borderRadius: radius,
+        transform,
         outline: selected ? '1px solid var(--color-koma-accent)' : undefined,
         outlineOffset: -0.5,
-        cursor: locked || dragCursor ? undefined : 'grab',
-        overflow: node.kind === 'instance' ? 'hidden' : undefined,
+        cursor: locked || node.locked || dragCursor ? undefined : 'grab',
       }}
-      onPointerDown={locked ? undefined : (event) => onSelect(node.id, event)}
+      onPointerDown={locked || node.locked ? undefined : (event) => onSelect(node.id, event)}
+      onContextMenu={locked || node.locked ? undefined : (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        onMenu(node.id, event.clientX, event.clientY)
+      }}
       onDoubleClick={(event) => {
-        if (locked || node.kind !== 'text') return
+        if (locked || node.locked || node.kind !== 'text') return
         event.stopPropagation()
         onEdit(node.id)
       }}
     >
-      {node.kind === 'text' && editing === node.id ? (
-        <input
-          autoFocus
-          value={node.text ?? ''}
-          onChange={(event) => onText(node.id, event.target.value)}
-          onBlur={onTextBlur}
-          onPointerDown={(event) => event.stopPropagation()}
-          className="z-10 h-full w-full border-0 bg-transparent px-1 text-koma-fg shadow-none outline-none"
-          style={{ fontSize: style.fontSize, fontWeight: weightCss(style.weight), textAlign: style.align, color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
-        />
-      ) : node.kind === 'text' ? (
-        <div
-          className="flex h-full w-full items-center px-1"
-          style={{ fontSize: style.fontSize, fontWeight: weightCss(style.weight), justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : 'flex-start', color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
-        >
-          <span className="truncate">{node.text || 'Text'}</span>
-        </div>
-      ) : node.kind === 'instance' && !visual ? (
-        <span className="pointer-events-none absolute left-2 top-1 truncate text-[11px] text-koma-dim">Missing component</span>
-      ) : node.name ? (
-        <span className="pointer-events-none absolute left-2 top-1 truncate text-[11px] text-koma-dim">{node.name}</span>
+      {container ? (
+        <span className="pointer-events-none absolute left-0 truncate text-[11px] text-koma-dim" style={{ top: -16, maxWidth: Math.max(node.w, 80) }}>
+          {designLayerName(node)}
+        </span>
       ) : null}
-      {children?.map((child) => (
-        <DesignNodeView
-          key={child.id}
-          doc={doc}
-          node={child}
-          selectedId={locked || node.kind === 'instance' ? null : selectedId}
-          editing={editing}
-          dragCursor={dragCursor}
-          locked={locked || node.kind === 'instance'}
-          onSelect={onSelect}
-          onResize={onResize}
-          onEdit={onEdit}
-          onText={onText}
-          onTextBlur={onTextBlur}
-        />
-      ))}
-      {selected && !locked && !dragCursor ? (
+      <div
+        className="absolute inset-0"
+        style={{
+          background: node.kind === 'line' || node.kind === 'vector' ? 'transparent' : fill,
+          border: bareStroke || chrome.stroke === 'none' || node.kind === 'line' || node.kind === 'vector' ? undefined : `${chrome.strokeWidth}px solid ${stroke}`,
+          borderRadius: radius,
+          overflow: node.kind === 'frame' || node.kind === 'instance' ? 'hidden' : undefined,
+        }}
+      >
+        {node.kind === 'line' ? (
+          <svg className="absolute inset-0 overflow-visible" width={node.w} height={node.h}>
+            <line x1={0} y1={node.h / 2} x2={node.w} y2={node.h / 2} stroke={stroke} strokeWidth={chrome.strokeWidth} />
+          </svg>
+        ) : null}
+        {node.kind === 'vector' && node.vector ? (
+          <svg className="absolute inset-0 overflow-visible" width={node.w} height={node.h}>
+            <path d={vectorSvgPath(node.vector)} fill={chrome.fill === 'none' ? 'none' : fill} stroke={chrome.stroke === 'none' ? 'none' : stroke} strokeWidth={chrome.strokeWidth} />
+          </svg>
+        ) : null}
+        {node.kind === 'text' && editing === node.id ? (
+          <input
+            autoFocus
+            value={node.text ?? ''}
+            onChange={(event) => onText(node.id, event.target.value)}
+            onBlur={onTextBlur}
+            onPointerDown={(event) => event.stopPropagation()}
+            className="z-10 h-full w-full border-0 bg-transparent px-1 text-koma-fg shadow-none outline-none"
+            style={{ fontSize: style.fontSize, fontWeight: weightCss(style.weight), textAlign: style.align, color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
+          />
+        ) : node.kind === 'text' ? (
+          <div
+            className="flex h-full w-full items-center px-1"
+            style={{ fontSize: style.fontSize, fontWeight: weightCss(style.weight), justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : 'flex-start', color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
+          >
+            <span className="truncate">{node.text || 'Text'}</span>
+          </div>
+        ) : node.kind === 'instance' && !visual ? (
+          <span className="pointer-events-none absolute left-2 top-1 truncate text-[11px] text-koma-dim">Missing component</span>
+        ) : null}
+        {children?.map((child) => (
+          <DesignNodeView
+            key={child.id}
+            doc={doc}
+            node={child}
+            selectedIds={childIds}
+            editing={editing}
+            dragCursor={dragCursor}
+            locked={locked || node.kind === 'instance'}
+            onSelect={onSelect}
+            onResize={onResize}
+            onEdit={onEdit}
+            onText={onText}
+            onTextBlur={onTextBlur}
+            onMenu={onMenu}
+          />
+        ))}
+      </div>
+      {selected && !locked && !node.locked && !dragCursor ? (
         HANDLES.map((handle) => (
           <button
             key={handle.id}
             type="button"
             aria-label={`Resize ${handle.id}`}
-            className="absolute h-2 w-2 rounded-full border border-koma-accent bg-koma-bg"
+            className="absolute z-10 h-2 w-2 rounded-full border border-koma-accent bg-koma-bg"
             style={{ left: handle.x, top: handle.y, transform: 'translate(-50%, -50%)', cursor: handle.cursor }}
             onPointerDown={(event) => onResize(node.id, handle.id, event)}
           />
@@ -1086,7 +1669,6 @@ function NodeSettings({
   const [propValue, setPropValue] = useState('')
   const chrome = nodeChrome(node)
   const style = textStyle(node)
-  const shaped = node.kind === 'frame' || node.kind === 'rect'
   const colorTokens = doc.tokens.filter((token) => token.kind === 'color')
   const radiusTokens = doc.tokens.filter((token) => token.kind === 'radius')
   const setField = (patch: Partial<DesignNode>, clear: (keyof DesignNode)[] = []) => {
@@ -1098,9 +1680,12 @@ function NodeSettings({
   }
   const paintChange = (field: 'fill' | 'stroke', next: string | null) => {
     const fallback = field === 'fill' ? '#1a1d27' : '#8b93b8'
+    const container = node.kind === 'frame' || node.kind === 'group'
+    const themed = node.kind === 'rect' || node.kind === 'ellipse' || (node.kind === 'vector' && !!node.vector?.regions.length)
     if (next === 'none') setField({ [field]: 'none' })
     else if (next == null) {
-      if (shaped) setField({}, [field])
+      if (container) setField({ [field]: fallback })
+      else if (themed) setField({}, [field])
       else setField({ [field]: fallback })
     } else setField({ [field]: next })
   }
@@ -1180,9 +1765,8 @@ function NodeSettings({
           Reset overrides
         </button>
       ) : null}
-      {node.kind !== 'rect' ? (
-        <label className="flex flex-col gap-1">
-          <span className="text-koma-dim">{node.kind === 'text' || node.kind === 'instance' ? 'Text' : 'Label'}</span>
+      <label className="flex flex-col gap-1">
+          <span className="text-koma-dim">{node.kind === 'text' || node.kind === 'instance' ? 'Text' : 'Name'}</span>
           <input
             value={node.kind === 'text' || node.kind === 'instance' ? node.text ?? '' : node.name ?? ''}
             placeholder={node.kind === 'instance' ? 'Override' : undefined}
@@ -1204,7 +1788,22 @@ function NodeSettings({
             className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
           />
         </label>
-      ) : null}
+      <Section title="Position">
+        <div className="grid grid-cols-2 gap-1">
+          <GeomField label="X" value={node.x} onChange={(x) => setField({ x })} />
+          <GeomField label="Y" value={node.y} onChange={(y) => setField({ y })} />
+          <GeomField label="Rotation" value={node.rotation ?? 0} onChange={(rotation) => setField(rotation ? { rotation } : {}, rotation ? [] : ['rotation'])} />
+          <div className="flex items-end gap-1">
+            <button type="button" aria-pressed={!!node.flipX} onClick={() => setField(node.flipX ? {} : { flipX: true }, node.flipX ? ['flipX'] : [])} className={`h-7 flex-1 rounded ${node.flipX ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}>Flip H</button>
+            <button type="button" aria-pressed={!!node.flipY} onClick={() => setField(node.flipY ? {} : { flipY: true }, node.flipY ? ['flipY'] : [])} className={`h-7 flex-1 rounded ${node.flipY ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}>Flip V</button>
+          </div>
+        </div>
+      </Section>
+      <Section title="Layout">
+        <div className="grid grid-cols-2 gap-1">
+          <GeomField label="W" value={node.w} onChange={(w) => setField({ w: Math.max(1, w) }, ['wMode'])} />
+          <GeomField label="H" value={node.h} onChange={(h) => setField({ h: Math.max(1, h) }, ['hMode'])} />
+        </div>
       {node.kind === 'frame' ? (
         <Choices
           label="Layout"
@@ -1276,53 +1875,67 @@ function NodeSettings({
           </button>
         </div>
       ) : null}
-      <PaintRow
-        label="Fill"
-        value={chrome.fill}
-        fallback="#1a1d27"
-        resolved={resolveRef(doc, chrome.fill)}
-        tokens={colorTokens}
-        onChange={(next) => paintChange('fill', next)}
-      />
-      <PaintRow
-        label="Border"
-        value={chrome.stroke}
-        fallback="#8b93b8"
-        resolved={resolveRef(doc, chrome.stroke)}
-        tokens={colorTokens}
-        onChange={(next) => paintChange('stroke', next)}
-      />
-      <label className="flex flex-col gap-1">
-        <span className="text-koma-dim">Radius</span>
-        {radiusTokens.length ? (
-          <div className="flex flex-wrap gap-1">
-            {radiusTokens.map((token) => (
-              <button
-                key={token.name}
-                type="button"
-                aria-pressed={node.radius === token.name}
-                onClick={() => setField({ radius: token.name })}
-                className={`h-6 rounded px-1.5 ${node.radius === token.name ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
-              >
-                {token.name}
-              </button>
-            ))}
-          </div>
-        ) : null}
-        <input
-          type="number"
-          min={0}
-          value={typeof node.radius === 'number' ? node.radius : Number(resolveRef(doc, typeof node.radius === 'string' ? node.radius : '')) || 0}
-          onChange={(event) => {
-            const radius = Number(event.target.value)
-            if (!Number.isFinite(radius) || radius <= 0) setField({}, ['radius'])
-            else setField({ radius })
-          }}
-          className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+      </Section>
+      <Section title="Appearance">
+        <GeomField label="Opacity %" value={Math.round((node.opacity ?? 1) * 100)} onChange={(value) => {
+          const opacity = Math.min(100, Math.max(0, value)) / 100
+          setField(opacity < 1 ? { opacity } : {}, opacity < 1 ? [] : ['opacity'])
+        }} />
+        <GeomField label="Stroke" value={chrome.strokeWidth} onChange={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])} />
+        {node.kind === 'line' || node.kind === 'vector' ? null : (
+          <label className="flex flex-col gap-1">
+            <span className="text-koma-dim">Corner radius</span>
+            {radiusTokens.length ? (
+              <div className="flex flex-wrap gap-1">
+                {radiusTokens.map((token) => (
+                  <button
+                    key={token.name}
+                    type="button"
+                    aria-pressed={node.radius === token.name}
+                    onClick={() => setField({ radius: token.name })}
+                    className={`h-6 rounded px-1.5 ${node.radius === token.name ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
+                  >
+                    {token.name}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <input
+              type="number"
+              min={0}
+              value={typeof node.radius === 'number' ? node.radius : Number(resolveRef(doc, typeof node.radius === 'string' ? node.radius : '')) || 0}
+              onChange={(event) => {
+                const radius = Number(event.target.value)
+                if (!Number.isFinite(radius) || radius <= 0) setField({}, ['radius'])
+                else setField({ radius })
+              }}
+              className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+            />
+          </label>
+        )}
+      </Section>
+      <Section title="Fill">
+        <PaintRow
+          label="Fill"
+          value={containerPaint(node, 'fill', chrome.fill)}
+          fallback="#1a1d27"
+          resolved={resolveRef(doc, chrome.fill)}
+          tokens={colorTokens}
+          onChange={(next) => paintChange('fill', next)}
         />
-      </label>
+      </Section>
+      <Section title="Stroke">
+        <PaintRow
+          label="Stroke"
+          value={containerPaint(node, 'stroke', chrome.stroke)}
+          fallback="#8b93b8"
+          resolved={resolveRef(doc, chrome.stroke)}
+          tokens={colorTokens}
+          onChange={(next) => paintChange('stroke', next)}
+        />
+      </Section>
       {node.kind === 'text' ? (
-        <>
+        <Section title="Text">
           <label className="flex flex-col gap-1">
             <span className="text-koma-dim">Size</span>
             <input
@@ -1365,10 +1978,42 @@ function NodeSettings({
             tokens={colorTokens}
             onChange={(next) => setField(next && next !== 'none' ? { color: next } : {}, next && next !== 'none' ? [] : ['color'])}
           />
-        </>
+        </Section>
       ) : null}
     </div>
   )
+}
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-2 border-t border-koma-border pt-2">
+      <div className="text-[11px] text-koma-dim">{title}</div>
+      {children}
+    </section>
+  )
+}
+
+function GeomField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  return (
+    <label className="flex h-7 items-center gap-1 rounded border border-koma-border bg-koma-bg px-1.5">
+      <span className="flex-none text-[11px] text-koma-dim">{label}</span>
+      <input
+        type="number"
+        value={Number.isFinite(value) ? Math.round(value * 100) / 100 : 0}
+        aria-label={label}
+        onChange={(event) => {
+          const next = Number(event.target.value)
+          if (Number.isFinite(next)) onChange(next)
+        }}
+        className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
+      />
+    </label>
+  )
+}
+
+function containerPaint(node: DesignNode, field: 'fill' | 'stroke', chrome: string): string {
+  if ((node.kind === 'frame' || node.kind === 'group') && node[field] == null) return 'none'
+  return chrome
 }
 
 function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {

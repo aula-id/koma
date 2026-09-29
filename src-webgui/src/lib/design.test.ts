@@ -10,6 +10,18 @@ import {
   deleteDesignNode,
   designChatText,
   designFileName,
+  designLayerName,
+  flipDesignNode,
+  moveDesignNode,
+  nodeFromPen,
+  orderDesignNode,
+  selectDesignRect,
+  setDesignLocked,
+  setDesignVisible,
+  snapDesign,
+  stackDesign,
+  vectorSvgPath,
+  wrapDesignNodes,
   dropDesignToken,
   layoutDesign,
   reorderDesignNode,
@@ -439,4 +451,95 @@ function sample(): DesignDoc {
   assert.ok(screen?.includes('"kind":"instance"'))
   assert.equal(designChatText(doc, { component: 'missing' }), null)
   assert.equal(designChatText(doc, { screen: 'missing' }), null)
+}
+
+{
+  const doc = emptyDesign()
+  const frame = createNode('frame', 'screen', 0, 0)
+  frame.w = 200
+  frame.h = 200
+  const a = createNode('rect', 'a', 10, 20)
+  a.w = 40
+  a.h = 30
+  const b = createNode('rect', 'b', 80, 50)
+  b.w = 20
+  b.h = 20
+  frame.children = [a, b]
+  doc.screens = [frame]
+  const grouped = wrapDesignNodes(doc, ['a', 'b'], 'group', 'g')
+  assert.ok(grouped)
+  const group = grouped!.screens[0].children?.[0]
+  assert.equal(group?.kind, 'group')
+  assert.equal(group?.x, 10)
+  assert.equal(group?.y, 20)
+  assert.equal(group?.w, 90)
+  assert.equal(group?.h, 50)
+  assert.equal(group?.children?.[0].id, 'a')
+  assert.equal(group?.children?.[0].x, 0)
+  assert.equal(group?.children?.[1].id, 'b')
+  assert.equal(group?.children?.[1].x, 70)
+  assert.equal(group?.children?.[1].y, 30)
+  assert.equal(wrapDesignNodes(grouped!, ['screen', 'a'], 'group', 'bad'), null)
+  const front = orderDesignNode(grouped!, 'a', 'front')
+  assert.equal(front.screens[0].children?.[0].children?.[1].id, 'a')
+  const back = orderDesignNode(front, 'a', 'back')
+  assert.equal(back.screens[0].children?.[0].children?.[0].id, 'a')
+  const hidden = setDesignVisible(back, 'b', false)
+  assert.equal(hitDesign(hidden, 90, 60)?.id, 'g')
+  assert.equal(stackDesign(hidden, 20, 30)[0]?.id, 'a')
+  const locked = setDesignLocked(back, 'a', true)
+  assert.equal(hitDesign(locked, 20, 30)?.id, 'g')
+  const flipped = flipDesignNode(back, 'g', 'x')
+  assert.equal(flipped.screens[0].children?.[0].flipX, true)
+  assert.equal(flipDesignNode(flipped, 'g', 'x').screens[0].children?.[0].flipX, undefined)
+  const moved = moveDesignNode(back, 'b', 'screen', 0)
+  assert.equal(moved.screens[0].children?.[0].id, 'b')
+  assert.equal(moved.screens[0].children?.[0].x, 80)
+  assert.equal(moved.screens[0].children?.[1].kind, 'group')
+  const picked = selectDesignRect(back, 0, 0, 200, 200)
+  assert.deepEqual(picked, ['screen'])
+  const inner = selectDesignRect(back, 12, 22, 30, 20)
+  assert.deepEqual(inner, ['a'])
+  const round = parseDesign(serializeDesign(flipped))
+  assert.equal(round.error, null)
+  assert.equal(round.doc.screens[0].children?.[0].kind, 'group')
+  assert.equal(round.doc.screens[0].children?.[0].flipX, true)
+  assert.equal(designLayerName(a), 'Rectangle')
+}
+
+{
+  const doc = emptyDesign()
+  const frame = createNode('frame', 'screen', 0, 0)
+  const box = createNode('rect', 'box', 0, 0)
+  box.w = 100
+  box.h = 20
+  box.rotation = 90
+  frame.children = [box]
+  doc.screens = [frame]
+  assert.equal(hitDesign(doc, 50, 50)?.id, 'box')
+  assert.equal(hitDesign(doc, 0, 10)?.id, 'screen')
+  const vector = nodeFromPen('path', [
+    { x: 10, y: 10, incoming: { x: 0, y: 0 }, outgoing: { x: 20, y: 0 } },
+    { x: 80, y: 10, incoming: { x: -20, y: 0 }, outgoing: { x: 0, y: 0 } },
+    { x: 80, y: 60, incoming: { x: 0, y: 0 }, outgoing: { x: 0, y: 0 } },
+  ], true)
+  assert.ok(vector)
+  assert.equal(vector!.x, 10)
+  assert.equal(vector!.y, 10)
+  assert.equal(vector!.w, 70)
+  assert.equal(vector!.h, 50)
+  assert.equal(vector!.vector?.vertices[0].x, 0)
+  assert.equal(vector!.vector?.regions.length, 1)
+  assert.ok(vectorSvgPath(vector!.vector!).includes('Z'))
+  const saved = parseDesign(serializeDesign({ ...emptyDesign(), screens: [{ ...frame, children: [vector!] }] }))
+  assert.equal(saved.error, null)
+  assert.equal(saved.doc.screens[0].children?.[0].kind, 'vector')
+  assert.equal(saved.doc.screens[0].children?.[0].vector?.segments.length, 3)
+}
+
+{
+  assert.equal(snapDesign(12.4, 8, false), 12)
+  assert.equal(snapDesign(12.4, 8, true), 16)
+  const parsed = parseDesign('{"version":1,"screens":[{"id":"s","kind":"frame","x":0,"y":0,"w":10,"h":10}]}')
+  assert.equal(parsed.doc.snap, false)
 }

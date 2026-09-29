@@ -9,15 +9,46 @@ export const COMPONENT_MIME = 'application/x-koma-component'
 export const DESIGN_MIN_W = 8
 export const DESIGN_MIN_H = 8
 
-export type DesignKind = 'frame' | 'rect' | 'text' | 'instance'
+export type DesignKind = 'frame' | 'group' | 'rect' | 'ellipse' | 'line' | 'vector' | 'text' | 'instance'
 export type DesignLayout = 'row' | 'column'
 export type DesignAlign = 'start' | 'center' | 'end'
 export type DesignSize = 'hug' | 'fill'
 export type DesignWeight = 'regular' | 'medium' | 'bold'
 export type DesignTextAlign = 'left' | 'center' | 'right'
 export type DesignTokenKind = 'color' | 'space' | 'type' | 'radius'
+export type DesignOrder = 'front' | 'forward' | 'backward' | 'back'
+export type DesignDrawKind = 'frame' | 'group' | 'rect' | 'ellipse' | 'line' | 'vector' | 'text'
 
-const KINDS: readonly DesignKind[] = ['frame', 'rect', 'text', 'instance']
+export type DesignVectorPoint = { x: number; y: number }
+
+export type DesignVectorSegment = {
+  start: number
+  end: number
+  tangentStart: DesignVectorPoint
+  tangentEnd: DesignVectorPoint
+}
+
+export type DesignVectorRegion = {
+  winding: 'nonzero' | 'evenodd'
+  loops: number[][]
+}
+
+/** Vertices are local to the node box. Tangents are offsets from their vertex. */
+export type DesignVector = {
+  vertices: DesignVectorPoint[]
+  segments: DesignVectorSegment[]
+  regions: DesignVectorRegion[]
+}
+
+/** A pen point in the parent's coordinate space. Handles are relative to the point. */
+export type DesignPenPoint = {
+  x: number
+  y: number
+  incoming: DesignVectorPoint
+  outgoing: DesignVectorPoint
+}
+
+const KINDS: readonly DesignKind[] = ['frame', 'group', 'rect', 'ellipse', 'line', 'vector', 'text', 'instance']
 const LAYOUTS: readonly DesignLayout[] = ['row', 'column']
 const ALIGNS: readonly DesignAlign[] = ['start', 'center', 'end']
 const SIZES: readonly DesignSize[] = ['hug', 'fill']
@@ -60,6 +91,16 @@ export type DesignNode = {
   weight?: DesignWeight
   textAlign?: DesignTextAlign
   color?: DesignRef
+  /** Degrees clockwise around the center. Omitted means 0. */
+  rotation?: number
+  flipX?: boolean
+  flipY?: boolean
+  /** Omitted means visible. */
+  visible?: boolean
+  /** Omitted means unlocked. A locked node is skipped by canvas hits. */
+  locked?: boolean
+  /** Local vector network. Required when kind is vector. */
+  vector?: DesignVector
   /** Instance target. Required when kind is instance. */
   component?: string
   variant?: Record<string, string>
@@ -100,7 +141,7 @@ export function emptyDesign(): DesignDoc {
     version: 1,
     modes: ['light', 'dark'],
     mode: 'light',
-    snap: true,
+    snap: false,
     grid: DESIGN_GRID,
     tokens: [],
     components: [],
@@ -125,10 +166,32 @@ export function designFileName(raw: string): string | null {
   return `${stem}.kdsgn`
 }
 
-export function createNode(kind: 'frame' | 'rect' | 'text', id: string, x: number, y: number): DesignNode {
+export function createNode(kind: DesignDrawKind, id: string, x: number, y: number): DesignNode {
   if (kind === 'frame') return { id, kind, name: 'Frame', x, y, w: 360, h: 240 }
-  if (kind === 'text') return { id, kind, x, y, w: 120, h: 24, text: 'Text' }
-  return { id, kind, x, y, w: 160, h: 64 }
+  if (kind === 'group') return { id, kind, name: 'Group', x, y, w: 8, h: 8, fill: 'none', stroke: 'none' }
+  if (kind === 'text') return { id, kind, name: 'Text', x, y, w: 120, h: 24, text: 'Text' }
+  if (kind === 'ellipse') return { id, kind, name: 'Ellipse', x, y, w: 160, h: 64 }
+  if (kind === 'line') return { id, kind, name: 'Line', x, y, w: 160, h: 2, strokeWidth: 2 }
+  if (kind === 'vector') {
+    return { id, kind, name: 'Vector', x, y, w: 1, h: 1, fill: 'none', vector: { vertices: [{ x: 0, y: 0 }], segments: [], regions: [] } }
+  }
+  return { id, kind, name: 'Rectangle', x, y, w: 160, h: 64 }
+}
+
+export function isDesignContainer(kind: DesignKind): boolean {
+  return kind === 'frame' || kind === 'group'
+}
+
+export function designLayerName(node: DesignNode): string {
+  if (node.name?.trim()) return node.name
+  if (node.kind === 'text') return node.text?.trim() || 'Text'
+  if (node.kind === 'rect') return 'Rectangle'
+  if (node.kind === 'ellipse') return 'Ellipse'
+  if (node.kind === 'line') return 'Line'
+  if (node.kind === 'vector') return 'Vector'
+  if (node.kind === 'group') return 'Group'
+  if (node.kind === 'instance') return 'Instance'
+  return 'Frame'
 }
 
 export function variantKey(props: Record<string, string> | undefined): string {
@@ -225,13 +288,14 @@ export function dropDesignToken(doc: DesignDoc, name: string): DesignDoc {
 
 /** Resolved chrome. An empty fill or stroke means the theme color. `none` is off. */
 export function nodeChrome(node: DesignNode): { fill: string; stroke: string; radius: number | string; opacity: number; strokeWidth: number } {
-  const shaped = node.kind === 'frame' || node.kind === 'rect'
+  const shaped = node.kind === 'frame' || node.kind === 'rect' || node.kind === 'ellipse' || (node.kind === 'vector' && !!node.vector?.regions.length)
+  const stroked = shaped || node.kind === 'line' || node.kind === 'vector'
   return {
     fill: node.fill ?? (shaped ? '' : 'none'),
-    stroke: node.stroke ?? (shaped ? '' : 'none'),
+    stroke: node.stroke ?? (stroked ? '' : 'none'),
     radius: node.radius ?? 0,
     opacity: node.opacity ?? 1,
-    strokeWidth: node.strokeWidth ?? 1,
+    strokeWidth: node.strokeWidth ?? (node.kind === 'line' ? 2 : 1),
   }
 }
 
@@ -274,17 +338,37 @@ function cloneNode(node: DesignNode, mint: () => string): DesignNode {
   if (node.weight) next.weight = node.weight
   if (node.textAlign) next.textAlign = node.textAlign
   if (node.color) next.color = node.color
+  if (node.rotation) next.rotation = node.rotation
+  if (node.flipX) next.flipX = true
+  if (node.flipY) next.flipY = true
+  if (node.visible === false) next.visible = false
+  if (node.locked) next.locked = true
+  if (node.vector) next.vector = cloneVector(node.vector)
   if (node.component) next.component = node.component
   if (node.variant) next.variant = { ...node.variant }
   if (node.children?.length) next.children = node.children.map((child) => cloneNode(child, mint))
   return next
 }
 
+function cloneVector(vector: DesignVector): DesignVector {
+  return {
+    vertices: vector.vertices.map((point) => ({ ...point })),
+    segments: vector.segments.map((segment) => ({
+      ...segment,
+      tangentStart: { ...segment.tangentStart },
+      tangentEnd: { ...segment.tangentEnd },
+    })),
+    regions: vector.regions.map((region) => ({ winding: region.winding, loops: region.loops.map((loop) => loop.slice()) })),
+  }
+}
+
 export type DesignHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
 
+/** Grid snap when enabled. Otherwise the nearest document pixel. */
 export function snapDesign(n: number, grid: number, enabled: boolean): number {
-  if (!enabled || !Number.isFinite(grid) || grid <= 0) return n
-  return Math.round(n / grid) * grid
+  if (!Number.isFinite(n)) return n
+  if (enabled && Number.isFinite(grid) && grid > 0) return Math.round(n / grid) * grid
+  return Math.round(n)
 }
 
 export function resizeDesignNode(
@@ -313,15 +397,21 @@ export function resizeDesignNode(
   } else if (handle.includes('s')) {
     h = snapDesign(bottom + dy, grid, enabled) - y
   }
-  if (w < DESIGN_MIN_W) {
-    if (handle.includes('w')) x = right - DESIGN_MIN_W
-    w = DESIGN_MIN_W
+  const minW = node.kind === 'line' || node.kind === 'vector' ? 1 : DESIGN_MIN_W
+  const minH = node.kind === 'line' || node.kind === 'vector' ? 1 : DESIGN_MIN_H
+  if (w < minW) {
+    if (handle.includes('w')) x = right - minW
+    w = minW
   }
-  if (h < DESIGN_MIN_H) {
-    if (handle.includes('n')) y = bottom - DESIGN_MIN_H
-    h = DESIGN_MIN_H
+  if (h < minH) {
+    if (handle.includes('n')) y = bottom - minH
+    h = minH
   }
-  return { ...node, x, y, w, h }
+  const next: DesignNode = { ...node, x, y, w, h }
+  if (node.kind === 'vector' && node.vector && node.w > 0 && node.h > 0 && (w !== node.w || h !== node.h)) {
+    next.vector = scaleVector(node.vector, w / node.w, h / node.h)
+  }
+  return next
 }
 
 export function findDesignNode(doc: DesignDoc, id: string): DesignNode | null {
@@ -341,13 +431,21 @@ export function locateDesign(doc: DesignDoc, id: string): { node: DesignNode; pa
   return null
 }
 
-/** Top-left of a node in canvas coordinates. */
+/** Canvas position of a node's top-left, after ancestor rotation and flip. */
 export function nodeOrigin(doc: DesignDoc, id: string): { x: number; y: number } | null {
-  for (const screen of doc.screens) {
-    const found = originIn(screen, id, 0, 0)
-    if (found) return found
+  const path = pathToNode(doc, id)
+  if (!path) return null
+  let toCanvas = (x: number, y: number) => ({ x, y })
+  for (let i = 0; i < path.length - 1; i++) {
+    const node = path[i]
+    const outer = toCanvas
+    toCanvas = (x, y) => {
+      const parent = spinToParent(node, x, y)
+      return outer(parent.x, parent.y)
+    }
   }
-  return null
+  const anchor = spinToParent(path[path.length - 1], 0, 0)
+  return toCanvas(anchor.x, anchor.y)
 }
 
 /** Topmost node under a canvas point. */
@@ -390,13 +488,19 @@ export function deleteDesignNode(doc: DesignDoc, id: string): DesignDoc {
 }
 
 export function insertDesignNode(doc: DesignDoc, parentId: string | null, node: DesignNode): DesignDoc {
+  return insertDesignNodeAt(doc, parentId, node, Number.MAX_SAFE_INTEGER)
+}
+
+export function insertDesignNodeAt(doc: DesignDoc, parentId: string | null, node: DesignNode, index: number): DesignDoc {
   if (parentId == null) {
-    if (node.kind !== 'frame') return doc
-    return { ...doc, screens: [...doc.screens, node] }
+    if (!isDesignContainer(node.kind)) return doc
+    const screens = doc.screens.slice()
+    screens.splice(Math.max(0, Math.min(index, screens.length)), 0, node)
+    return { ...doc, screens }
   }
   let changed = false
   const screens = doc.screens.map((screen) => {
-    const next = addChild(screen, parentId, node)
+    const next = addChild(screen, parentId, node, index)
     if (next !== screen) changed = true
     return next
   })
@@ -410,7 +514,7 @@ export function placeDesignNode(doc: DesignDoc, id: string, parentId: string | n
   if (parentId === located.parentId && located.node.x === x && located.node.y === y) return doc
   if (parentId === id) return doc
   if (parentId && containsNode(located.node, parentId)) return doc
-  if (parentId == null && located.node.kind !== 'frame') return doc
+  if (parentId == null && !isDesignContainer(located.node.kind)) return doc
   if (parentId != null && !findDesignNode(doc, parentId)) return doc
   const removed = deleteDesignNode(doc, id)
   return insertDesignNode(removed, parentId, { ...located.node, x, y })
@@ -641,6 +745,426 @@ export function writeComponentView(doc: DesignDoc, componentId: string, view: De
   return { ...view, screens: doc.screens, components }
 }
 
+/** Move a node forward or back among its siblings, screens included. */
+export function orderDesignNode(doc: DesignDoc, id: string, order: DesignOrder): DesignDoc {
+  const located = locateDesign(doc, id)
+  if (!located) return doc
+  if (!located.parentId) {
+    const index = doc.screens.findIndex((screen) => screen.id === id)
+    const screens = moveIndex(doc.screens, index, order)
+    return screens === doc.screens ? doc : { ...doc, screens }
+  }
+  return updateDesignNode(doc, located.parentId, (parent) => {
+    const children = parent.children ?? []
+    const next = moveIndex(children, children.findIndex((child) => child.id === id), order)
+    return next === children ? parent : { ...parent, children: next }
+  })
+}
+
+export function setDesignVisible(doc: DesignDoc, id: string, visible: boolean): DesignDoc {
+  return updateDesignNode(doc, id, (node) => {
+    const next: DesignNode = { ...node }
+    if (visible) delete next.visible
+    else next.visible = false
+    return next
+  })
+}
+
+export function setDesignLocked(doc: DesignDoc, id: string, locked: boolean): DesignDoc {
+  return updateDesignNode(doc, id, (node) => {
+    const next: DesignNode = { ...node }
+    if (locked) next.locked = true
+    else delete next.locked
+    return next
+  })
+}
+
+export function flipDesignNode(doc: DesignDoc, id: string, axis: 'x' | 'y'): DesignDoc {
+  return updateDesignNode(doc, id, (node) => {
+    const next: DesignNode = { ...node }
+    if (axis === 'x') {
+      if (next.flipX) delete next.flipX
+      else next.flipX = true
+    } else if (next.flipY) delete next.flipY
+    else next.flipY = true
+    return next
+  })
+}
+
+/**
+ * Wrap sibling nodes in a group or a frame. The wrapper takes the union of
+ * their boxes and keeps their stacking order. Mixed parents return null.
+ */
+export function wrapDesignNodes(doc: DesignDoc, ids: string[], kind: 'group' | 'frame', id: string): DesignDoc | null {
+  const unique = [...new Set(ids)]
+  if (!unique.length) return null
+  const located = unique.map((item) => locateDesign(doc, item))
+  if (located.some((item) => !item)) return null
+  const rows = located as { node: DesignNode; parentId: string | null }[]
+  const parentId = rows[0].parentId
+  if (rows.some((item) => item.parentId !== parentId)) return null
+  if (rows.some((item) => rows.some((other) => other.node.id !== item.node.id && containsNode(item.node, other.node.id)))) return null
+  const siblings = parentId == null ? doc.screens : findDesignNode(doc, parentId)?.children ?? []
+  const selected = new Set(unique)
+  const ordered = siblings.filter((item) => selected.has(item.id))
+  if (ordered.length !== unique.length) return null
+  const boxes = ordered.map(nodeBounds)
+  const minX = Math.min(...boxes.map((box) => box.x))
+  const minY = Math.min(...boxes.map((box) => box.y))
+  const maxX = Math.max(...boxes.map((box) => box.x + box.w))
+  const maxY = Math.max(...boxes.map((box) => box.y + box.h))
+  const wrapper = createNode(kind, id, minX, minY)
+  wrapper.w = Math.max(1, maxX - minX)
+  wrapper.h = Math.max(1, maxY - minY)
+  wrapper.children = ordered.map((node) => ({ ...node, x: node.x - minX, y: node.y - minY }))
+  const first = siblings.findIndex((item) => selected.has(item.id))
+  let insertAt = 0
+  for (let i = 0; i < first; i++) if (!selected.has(siblings[i].id)) insertAt += 1
+  const removed = unique.reduce((current, item) => deleteDesignNode(current, item), doc)
+  return insertDesignNodeAt(removed, parentId, wrapper, insertAt)
+}
+
+/** Add auto layout. Several nodes are framed first. A lone non-frame is framed too. */
+export function autoLayoutDesign(doc: DesignDoc, ids: string[], wrapId: string): DesignDoc | null {
+  const unique = [...new Set(ids)]
+  if (!unique.length) return null
+  let next: DesignDoc | null = doc
+  let target = unique[0]
+  if (unique.length === 1) {
+    const node = findDesignNode(doc, unique[0])
+    if (!node) return null
+    if (node.kind !== 'frame') {
+      next = wrapDesignNodes(doc, unique, 'frame', wrapId)
+      target = wrapId
+    }
+  } else {
+    next = wrapDesignNodes(doc, unique, 'frame', wrapId)
+    target = wrapId
+  }
+  if (!next) return null
+  return updateDesignNode(next, target, (node) => {
+    if (node.kind !== 'frame') return node
+    if (node.layout) return node
+    return { ...node, layout: 'row', gap: node.gap ?? 8, pad: node.pad ?? 8 }
+  })
+}
+
+/** Reorder within the same parent, or move under a frame or group at an index. */
+export function moveDesignNode(doc: DesignDoc, id: string, parentId: string | null, index: number): DesignDoc {
+  const located = locateDesign(doc, id)
+  if (!located) return doc
+  if (parentId === id || (parentId && containsNode(located.node, parentId))) return doc
+  if (parentId == null && !isDesignContainer(located.node.kind)) return doc
+  if (parentId != null) {
+    const parent = findDesignNode(doc, parentId)
+    if (!parent || !isDesignContainer(parent.kind)) return doc
+  }
+  const siblings = parentId == null ? doc.screens : findDesignNode(doc, parentId)?.children ?? []
+  if (parentId === located.parentId) {
+    const from = siblings.findIndex((item) => item.id === id)
+    if (from < 0) return doc
+    let to = Math.max(0, Math.min(index, siblings.length))
+    if (from < to) to -= 1
+    if (to === from) return doc
+    const next = siblings.slice()
+    const [item] = next.splice(from, 1)
+    next.splice(to, 0, item)
+    if (parentId == null) return { ...doc, screens: next }
+    return updateDesignNode(doc, parentId, (parent) => ({ ...parent, children: next }))
+  }
+  const anchor = nodeOrigin(doc, id)
+  const local = anchor ? canvasToContent(doc, parentId, anchor.x, anchor.y) : null
+  if (!local) return doc
+  const removed = deleteDesignNode(doc, id)
+  return insertDesignNodeAt(removed, parentId, { ...located.node, x: local.x, y: local.y }, index)
+}
+
+/** Build a vector node from pen points in a parent's coordinate space. */
+export function nodeFromPen(id: string, points: DesignPenPoint[], closed: boolean): DesignNode | null {
+  if (!points.length) return null
+  const segments: DesignVectorSegment[] = []
+  const last = closed ? points.length : points.length - 1
+  for (let i = 0; i < last; i++) {
+    const start = points[i]
+    const end = points[(i + 1) % points.length]
+    segments.push({
+      start: i,
+      end: (i + 1) % points.length,
+      tangentStart: start.outgoing,
+      tangentEnd: end.incoming,
+    })
+  }
+  const regions: DesignVectorRegion[] = closed && points.length >= 3 ? [{ winding: 'nonzero', loops: [segments.map((_, index) => index)] }] : []
+  return fitVectorNode({
+    id,
+    kind: 'vector',
+    name: 'Vector',
+    x: 0,
+    y: 0,
+    w: 1,
+    h: 1,
+    ...(closed ? {} : { fill: 'none' as const }),
+    vector: {
+      vertices: points.map((point) => ({ x: point.x, y: point.y })),
+      segments,
+      regions,
+    },
+  })
+}
+
+/** Shift a canvas-space network so its controls sit inside the node box. */
+export function fitVectorNode(node: DesignNode): DesignNode {
+  const vector = node.vector
+  if (!vector?.vertices.length) return node
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  const consider = (x: number, y: number) => {
+    minX = Math.min(minX, x)
+    minY = Math.min(minY, y)
+    maxX = Math.max(maxX, x)
+    maxY = Math.max(maxY, y)
+  }
+  for (const vertex of vector.vertices) consider(vertex.x, vertex.y)
+  for (const segment of vector.segments) {
+    const start = vector.vertices[segment.start]
+    const end = vector.vertices[segment.end]
+    if (!start || !end) continue
+    consider(start.x + segment.tangentStart.x, start.y + segment.tangentStart.y)
+    consider(end.x + segment.tangentEnd.x, end.y + segment.tangentEnd.y)
+  }
+  if (!Number.isFinite(minX)) return node
+  const shift = (point: DesignVectorPoint) => ({ x: point.x - minX, y: point.y - minY })
+  return {
+    ...node,
+    x: minX,
+    y: minY,
+    w: Math.max(1, maxX - minX),
+    h: Math.max(1, maxY - minY),
+    vector: { ...vector, vertices: vector.vertices.map(shift) },
+  }
+}
+
+export function vectorSvgPath(vector: DesignVector): string {
+  if (vector.regions.length) {
+    return vector.regions.map((region) => region.loops.map((loop) => loopPath(vector, loop)).join(' ')).join(' ')
+  }
+  if (!vector.segments.length) {
+    const vertex = vector.vertices[0]
+    return vertex ? `M ${fmt(vertex.x)} ${fmt(vertex.y)}` : ''
+  }
+  return vector.segments.map((segment) => segmentPath(vector, segment, true)).join(' ')
+}
+
+/** Nodes under a canvas point, front to back, skipping hidden and locked nodes. */
+export function stackDesign(doc: DesignDoc, x: number, y: number): DesignNode[] {
+  const found: DesignNode[] = []
+  for (let i = doc.screens.length - 1; i >= 0; i--) stackIn(doc.screens[i], x, y, found)
+  return found
+}
+
+/** Ids touched by a canvas rectangle. A fully covered parent stands in for its children. */
+export function selectDesignRect(doc: DesignDoc, x: number, y: number, w: number, h: number): string[] {
+  const rect = { x: Math.min(x, x + w), y: Math.min(y, y + h), w: Math.abs(w), h: Math.abs(h) }
+  if (rect.w < 1 && rect.h < 1) return []
+  const hits: { id: string; full: boolean; ancestors: string[] }[] = []
+  const walk = (node: DesignNode, ancestors: string[], toCanvas: (px: number, py: number) => DesignVectorPoint) => {
+    if (node.visible === false) return
+    const box = canvasBox(node, toCanvas)
+    if (boxesIntersect(box, rect) && !node.locked) hits.push({ id: node.id, full: boxInside(box, rect), ancestors: [...ancestors] })
+    const nested = (px: number, py: number) => {
+      const parent = spinToParent(node, px, py)
+      return toCanvas(parent.x, parent.y)
+    }
+    for (const child of node.children ?? []) walk(child, [...ancestors, node.id], nested)
+  }
+  for (const screen of doc.screens) walk(screen, [], (px, py) => ({ x: px, y: py }))
+  const full = new Set(hits.filter((hit) => hit.full).map((hit) => hit.id))
+  return hits
+    .filter((hit) => {
+      if (hit.ancestors.some((id) => full.has(id))) return false
+      const hasChild = hits.some((other) => other.ancestors.includes(hit.id))
+      return !(hasChild && !hit.full)
+    })
+    .map((hit) => hit.id)
+}
+
+/** Canvas point into a node's content space. A null id keeps canvas coordinates. */
+export function canvasToContent(doc: DesignDoc, nodeId: string | null, canvasX: number, canvasY: number): DesignVectorPoint | null {
+  if (nodeId == null) return { x: canvasX, y: canvasY }
+  const path = pathToNode(doc, nodeId)
+  if (!path) return null
+  let x = canvasX
+  let y = canvasY
+  for (const node of path) {
+    const local = parentPointToContent(node, x, y)
+    x = local.x
+    y = local.y
+  }
+  return { x, y }
+}
+
+/** Screen delta into the content space of a node. A null id keeps the screen delta. */
+/** Screen angle into the content space of a parent, so a new line stays visually aligned. */
+export function contentAngle(doc: DesignDoc, parentId: string | null, degrees: number): number {
+  if (!parentId) return degrees
+  const path = pathToNode(doc, parentId)
+  if (!path) return degrees
+  let angle = degrees
+  for (const node of path) {
+    angle -= node.rotation ?? 0
+    if (node.flipX) angle = 180 - angle
+    if (node.flipY) angle = -angle
+  }
+  return angle
+}
+
+export function canvasDeltaToSpace(doc: DesignDoc, nodeId: string | null, dx: number, dy: number): DesignVectorPoint {
+  if (!nodeId) return { x: dx, y: dy }
+  const path = pathToNode(doc, nodeId)
+  if (!path) return { x: dx, y: dy }
+  let x = dx
+  let y = dy
+  for (const node of path) {
+    const unrotated = rotateAround(x, y, 0, 0, -(node.rotation ?? 0))
+    x = unrotated.x * (node.flipX ? -1 : 1)
+    y = unrotated.y * (node.flipY ? -1 : 1)
+  }
+  return { x, y }
+}
+
+function moveIndex<T>(items: T[], index: number, order: DesignOrder): T[] {
+  if (index < 0) return items
+  const to = order === 'front' ? items.length - 1 : order === 'back' ? 0 : order === 'forward' ? Math.min(items.length - 1, index + 1) : Math.max(0, index - 1)
+  if (to === index) return items
+  const next = items.slice()
+  const [item] = next.splice(index, 1)
+  next.splice(to, 0, item)
+  return next
+}
+
+function nodeBounds(node: DesignNode): { x: number; y: number; w: number; h: number } {
+  const rotation = node.rotation ?? 0
+  if (!rotation && !node.flipX && !node.flipY) return { x: node.x, y: node.y, w: node.w, h: node.h }
+  const corners = [spinToParent(node, 0, 0), spinToParent(node, node.w, 0), spinToParent(node, 0, node.h), spinToParent(node, node.w, node.h)]
+  const minX = Math.min(...corners.map((point) => point.x))
+  const minY = Math.min(...corners.map((point) => point.y))
+  const maxX = Math.max(...corners.map((point) => point.x))
+  const maxY = Math.max(...corners.map((point) => point.y))
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+}
+
+function scaleVector(vector: DesignVector, sx: number, sy: number): DesignVector {
+  const scale = (point: DesignVectorPoint) => ({ x: point.x * sx, y: point.y * sy })
+  return {
+    vertices: vector.vertices.map(scale),
+    segments: vector.segments.map((segment) => ({
+      ...segment,
+      tangentStart: scale(segment.tangentStart),
+      tangentEnd: scale(segment.tangentEnd),
+    })),
+    regions: vector.regions.map((region) => ({ winding: region.winding, loops: region.loops.map((loop) => loop.slice()) })),
+  }
+}
+
+function loopPath(vector: DesignVector, loop: number[]): string {
+  let path = ''
+  for (const index of loop) {
+    const segment = vector.segments[index]
+    if (!segment) continue
+    path += segmentPath(vector, segment, path === '')
+  }
+  return path ? `${path} Z` : ''
+}
+
+function segmentPath(vector: DesignVector, segment: DesignVectorSegment, move: boolean): string {
+  const start = vector.vertices[segment.start]
+  const end = vector.vertices[segment.end]
+  if (!start || !end) return ''
+  const head = move ? `M ${fmt(start.x)} ${fmt(start.y)} ` : ''
+  return `${head}C ${fmt(start.x + segment.tangentStart.x)} ${fmt(start.y + segment.tangentStart.y)} ${fmt(end.x + segment.tangentEnd.x)} ${fmt(end.y + segment.tangentEnd.y)} ${fmt(end.x)} ${fmt(end.y)}`
+}
+
+function fmt(value: number): string {
+  return String(Math.round(value * 100) / 100)
+}
+
+function stackIn(node: DesignNode, x: number, y: number, into: DesignNode[]) {
+  if (node.visible === false) return
+  const local = parentPointToContent(node, x, y)
+  if (!insideNode(node, local, node.kind === 'line' ? 6 : 0)) return
+  const children = node.children ?? []
+  for (let i = children.length - 1; i >= 0; i--) stackIn(children[i], local.x, local.y, into)
+  if (!node.locked) into.push(node)
+}
+
+function pathToNode(doc: DesignDoc, id: string): DesignNode[] | null {
+  for (const screen of doc.screens) {
+    const path = pathIn(screen, id)
+    if (path) return path
+  }
+  return null
+}
+
+function pathIn(node: DesignNode, id: string): DesignNode[] | null {
+  if (node.id === id) return [node]
+  for (const child of node.children ?? []) {
+    const path = pathIn(child, id)
+    if (path) return [node, ...path]
+  }
+  return null
+}
+
+/** A content-space point of a node, expressed in its parent's space. */
+function spinToParent(node: DesignNode, localX: number, localY: number): DesignVectorPoint {
+  const cx = node.w / 2
+  const cy = node.h / 2
+  const scaledX = (localX - cx) * (node.flipX ? -1 : 1)
+  const scaledY = (localY - cy) * (node.flipY ? -1 : 1)
+  const rotated = rotateAround(scaledX, scaledY, 0, 0, node.rotation ?? 0)
+  return { x: node.x + cx + rotated.x, y: node.y + cy + rotated.y }
+}
+
+/** A parent-space point, expressed in the node's content space. */
+function parentPointToContent(node: DesignNode, px: number, py: number): DesignVectorPoint {
+  const cx = node.w / 2
+  const cy = node.h / 2
+  const unrotated = rotateAround(px - node.x - cx, py - node.y - cy, 0, 0, -(node.rotation ?? 0))
+  return { x: unrotated.x * (node.flipX ? -1 : 1) + cx, y: unrotated.y * (node.flipY ? -1 : 1) + cy }
+}
+
+function rotateAround(x: number, y: number, cx: number, cy: number, degrees: number): DesignVectorPoint {
+  if (!degrees) return { x, y }
+  const radians = (degrees * Math.PI) / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  const dx = x - cx
+  const dy = y - cy
+  return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos }
+}
+
+function insideNode(node: DesignNode, content: DesignVectorPoint, pad: number): boolean {
+  return content.x >= -pad && content.y >= -pad && content.x <= node.w + pad && content.y <= node.h + pad
+}
+
+function canvasBox(node: DesignNode, toCanvas: (px: number, py: number) => DesignVectorPoint): { x: number; y: number; w: number; h: number } {
+  const corners = [spinToParent(node, 0, 0), spinToParent(node, node.w, 0), spinToParent(node, 0, node.h), spinToParent(node, node.w, node.h)].map((point) => toCanvas(point.x, point.y))
+  const minX = Math.min(...corners.map((point) => point.x))
+  const minY = Math.min(...corners.map((point) => point.y))
+  const maxX = Math.max(...corners.map((point) => point.x))
+  const maxY = Math.max(...corners.map((point) => point.y))
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+}
+
+function boxesIntersect(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): boolean {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
+}
+
+function boxInside(inner: { x: number; y: number; w: number; h: number }, outer: { x: number; y: number; w: number; h: number }): boolean {
+  return inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.w <= outer.x + outer.w && inner.y + inner.h <= outer.y + outer.h
+}
+
 /** Move a flow child to a new index among its non-absolute siblings. */
 export function reorderDesignNode(doc: DesignDoc, id: string, index: number): DesignDoc {
   const located = locateDesign(doc, id)
@@ -748,36 +1272,26 @@ function locateIn(node: DesignNode, id: string): { node: DesignNode; parentId: s
   return null
 }
 
-function originIn(node: DesignNode, id: string, ax: number, ay: number): { x: number; y: number } | null {
-  if (node.id === id) return { x: ax + node.x, y: ay + node.y }
-  for (const child of node.children ?? []) {
-    const found = originIn(child, id, ax + node.x, ay + node.y)
-    if (found) return found
-  }
-  return null
-}
-
 function hitIn(node: DesignNode, x: number, y: number): DesignNode | null {
-  if (x < node.x || y < node.y || x > node.x + node.w || y > node.y + node.h) return null
-  const localX = x - node.x
-  const localY = y - node.y
+  if (node.visible === false || node.locked) return null
+  const local = parentPointToContent(node, x, y)
+  if (!insideNode(node, local, node.kind === 'line' ? 6 : 0)) return null
   const children = node.children ?? []
   for (let i = children.length - 1; i >= 0; i--) {
-    const found = hitIn(children[i], localX, localY)
+    const found = hitIn(children[i], local.x, local.y)
     if (found) return found
   }
   return node
 }
 
 function frameIn(node: DesignNode, x: number, y: number, ignoreId: string): string | null {
-  if (node.id === ignoreId) return null
-  if (x < node.x || y < node.y || x > node.x + node.w || y > node.y + node.h) return null
-  const localX = x - node.x
-  const localY = y - node.y
-  if (node.kind === 'frame') {
+  if (node.id === ignoreId || node.visible === false || node.locked) return null
+  const local = parentPointToContent(node, x, y)
+  if (!insideNode(node, local, 0)) return null
+  if (isDesignContainer(node.kind)) {
     const children = node.children ?? []
     for (let i = children.length - 1; i >= 0; i--) {
-      const found = frameIn(children[i], localX, localY, ignoreId)
+      const found = frameIn(children[i], local.x, local.y, ignoreId)
       if (found) return found
     }
     return node.id
@@ -816,12 +1330,16 @@ function withoutNode(node: DesignNode, id: string): DesignNode | null {
   return { ...node, children: children.length ? children : undefined }
 }
 
-function addChild(node: DesignNode, parentId: string, child: DesignNode): DesignNode {
-  if (node.id === parentId && node.kind === 'frame') return { ...node, children: [...(node.children ?? []), child] }
+function addChild(node: DesignNode, parentId: string, child: DesignNode, index: number): DesignNode {
+  if (node.id === parentId && isDesignContainer(node.kind)) {
+    const children = (node.children ?? []).slice()
+    children.splice(Math.max(0, Math.min(index, children.length)), 0, child)
+    return { ...node, children }
+  }
   if (!node.children?.length) return node
   let changed = false
   const children = node.children.map((item) => {
-    const next = addChild(item, parentId, child)
+    const next = addChild(item, parentId, child, index)
     if (next !== item) changed = true
     return next
   })
@@ -908,6 +1426,12 @@ function parseNode(value: unknown): DesignNode | null {
   if (opacity != null && opacity >= 0 && opacity < 1) node.opacity = opacity
   const strokeWidth = num(row.strokeWidth)
   if (strokeWidth != null && strokeWidth > 0 && strokeWidth !== 1) node.strokeWidth = strokeWidth
+  const rotation = num(row.rotation)
+  if (rotation != null && rotation !== 0) node.rotation = rotation
+  if (row.flipX === true) node.flipX = true
+  if (row.flipY === true) node.flipY = true
+  if (row.visible === false) node.visible = false
+  if (row.locked === true) node.locked = true
   if (kind === 'frame') {
     const layout = oneOf(row.layout, LAYOUTS)
     if (layout) node.layout = layout
@@ -919,15 +1443,20 @@ function parseNode(value: unknown): DesignNode | null {
     const justify = oneOf(row.justify, ALIGNS)
     if (align && align !== 'start') node.align = align
     if (justify && justify !== 'start') node.justify = justify
-    if (Array.isArray(row.children) && row.children.length) {
-      const children: DesignNode[] = []
-      for (const child of row.children) {
-        const parsed = parseNode(child)
-        if (!parsed) return null
-        children.push(parsed)
-      }
-      node.children = children
+  }
+  if (kind === 'vector') {
+    const vector = parseVector(row.vector)
+    if (!vector) return null
+    node.vector = vector
+  }
+  if (isDesignContainer(kind) && Array.isArray(row.children) && row.children.length) {
+    const children: DesignNode[] = []
+    for (const child of row.children) {
+      const parsed = parseNode(child)
+      if (!parsed) return null
+      children.push(parsed)
     }
+    node.children = children
   }
   if ((kind === 'text' || kind === 'instance') && typeof row.text === 'string' && row.text) node.text = row.text
   if (kind === 'text') {
@@ -1053,7 +1582,7 @@ export function parseDesign(text: string): { doc: DesignDoc; error: string | nul
     if (!Array.isArray(raw.screens)) return { doc: emptyDesign(), error: 'This file is not a design' }
     for (const item of raw.screens) {
       const screen = parseNode(item)
-      if (!screen || screen.kind !== 'frame') return { doc: emptyDesign(), error: 'This file is not a design' }
+      if (!screen || !isDesignContainer(screen.kind)) return { doc: emptyDesign(), error: 'This file is not a design' }
       screens.push(screen)
     }
   }
@@ -1065,7 +1594,7 @@ export function parseDesign(text: string): { doc: DesignDoc; error: string | nul
       version: 1,
       modes,
       mode,
-      snap: typeof raw.snap === 'boolean' ? raw.snap : true,
+      snap: raw.snap === true,
       grid: grid != null && grid > 0 ? grid : DESIGN_GRID,
       tokens,
       components,
@@ -1096,17 +1625,81 @@ function writeNode(node: DesignNode): DesignNode {
   if (node.weight && node.weight !== 'regular') row.weight = node.weight
   if (node.textAlign && node.textAlign !== 'left') row.textAlign = node.textAlign
   if (node.color && node.color !== 'none') row.color = node.color
+  if (node.rotation) row.rotation = node.rotation
+  if (node.flipX) row.flipX = true
+  if (node.flipY) row.flipY = true
+  if (node.visible === false) row.visible = false
+  if (node.locked) row.locked = true
+  if (node.kind === 'vector' && node.vector) row.vector = cloneVector(node.vector)
   if (node.component) row.component = node.component
   if (node.variant && Object.keys(node.variant).length) row.variant = { ...node.variant }
-  if (node.kind === 'frame' && node.children?.length) row.children = node.children.map(writeNode)
+  if (isDesignContainer(node.kind) && node.children?.length) row.children = node.children.map(writeNode)
   return row
+}
+
+function parsePoint(value: unknown): DesignVectorPoint | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const row = value as Record<string, unknown>
+  const x = num(row.x)
+  const y = num(row.y)
+  if (x == null || y == null) return null
+  return { x, y }
+}
+
+function parseVector(value: unknown): DesignVector | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const row = value as Record<string, unknown>
+  if (!Array.isArray(row.vertices) || !Array.isArray(row.segments)) return null
+  const vertices: DesignVectorPoint[] = []
+  for (const item of row.vertices) {
+    const point = parsePoint(item)
+    if (!point) return null
+    vertices.push(point)
+  }
+  const segments: DesignVectorSegment[] = []
+  for (const item of row.segments) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null
+    const segment = item as Record<string, unknown>
+    const start = num(segment.start)
+    const end = num(segment.end)
+    if (start == null || end == null || !Number.isInteger(start) || !Number.isInteger(end)) return null
+    if (start < 0 || end < 0 || start >= vertices.length || end >= vertices.length) return null
+    segments.push({
+      start,
+      end,
+      tangentStart: parsePoint(segment.tangentStart) ?? { x: 0, y: 0 },
+      tangentEnd: parsePoint(segment.tangentEnd) ?? { x: 0, y: 0 },
+    })
+  }
+  const regions: DesignVectorRegion[] = []
+  if (row.regions !== undefined) {
+    if (!Array.isArray(row.regions)) return null
+    for (const item of row.regions) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null
+      const region = item as Record<string, unknown>
+      const winding = region.winding === 'evenodd' ? 'evenodd' : region.winding === 'nonzero' ? 'nonzero' : null
+      if (!winding || !Array.isArray(region.loops)) return null
+      const loops: number[][] = []
+      for (const loop of region.loops) {
+        if (!Array.isArray(loop) || !loop.length) return null
+        const indexes: number[] = []
+        for (const index of loop) {
+          if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= segments.length) return null
+          indexes.push(index)
+        }
+        loops.push(indexes)
+      }
+      regions.push({ winding, loops })
+    }
+  }
+  return { vertices, segments, regions }
 }
 
 export function serializeDesign(doc: DesignDoc): string {
   const row: Record<string, unknown> = { version: 1 }
   if (doc.modes.length !== 2 || doc.modes[0] !== 'light' || doc.modes[1] !== 'dark') row.modes = doc.modes
   if (doc.mode !== doc.modes[0]) row.mode = doc.mode
-  if (!doc.snap) row.snap = false
+  if (doc.snap) row.snap = true
   if (doc.grid !== DESIGN_GRID) row.grid = doc.grid
   if (doc.tokens.length) {
     row.tokens = doc.tokens.map((token) => ({ name: token.name, kind: token.kind, values: { ...token.values } }))

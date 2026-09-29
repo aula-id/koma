@@ -21,13 +21,15 @@ import {
   type DesignTokenKind,
 } from '../../lib/design'
 
-const SHAPES: { kind: 'frame' | 'rect' | 'text'; label: string }[] = [
+const SHAPES: { kind: 'frame' | 'rect' | 'ellipse' | 'line' | 'text'; label: string }[] = [
   { kind: 'frame', label: 'Frame' },
-  { kind: 'rect', label: 'Rectangle' },
+  { kind: 'rect', label: 'Rect' },
+  { kind: 'ellipse', label: 'Ellipse' },
+  { kind: 'line', label: 'Line' },
   { kind: 'text', label: 'Text' },
 ]
 
-function ShapeTile({ kind, label }: { kind: 'frame' | 'rect' | 'text'; label: string }) {
+function ShapeTile({ kind, label }: { kind: 'frame' | 'rect' | 'ellipse' | 'line' | 'text'; label: string }) {
   return (
     <div
       draggable
@@ -46,8 +48,8 @@ function ShapeTile({ kind, label }: { kind: 'frame' | 'rect' | 'text'; label: st
       {kind === 'text' ? (
         <span className="flex h-8 items-center px-1 text-[13px] leading-none text-koma-fg/80">Text</span>
       ) : (
-        <span className={`flex h-8 items-center justify-center rounded border border-current bg-koma-bg text-[11px] leading-none text-koma-fg/80 ${kind === 'frame' ? 'w-16' : 'w-10'}`}>
-          {kind === 'frame' ? 'Frame' : 'Rect'}
+        <span className={`flex h-8 items-center justify-center rounded border border-current bg-koma-bg text-[11px] leading-none text-koma-fg/80 ${kind === 'frame' ? 'w-14' : kind === 'ellipse' ? 'w-10 rounded-full' : 'w-10'}`}>
+          {label}
         </span>
       )}
     </div>
