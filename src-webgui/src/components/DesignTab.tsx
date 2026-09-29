@@ -189,6 +189,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const [propsOpen, setPropsOpen] = useState(true)
   const [ghost, setGhost] = useState<Ghost | null>(null)
   const [pen, setPen] = useState<PenDraft | null>(null)
+  const [penHover, setPenHover] = useState<{ x: number; y: number } | null>(null)
+  const [penHandle, setPenHandle] = useState<number | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; canvasX: number; canvasY: number } | null>(null)
   const commandsRef = useRef<DesignCommands | null>(null)
   const penApplyRef = useRef<(draft: PenDraft, closed?: boolean) => void>(() => {})
@@ -212,6 +214,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     setEditing(null)
     setFocusId(null)
     setPen(null)
+    setPenHover(null)
+    setPenHandle(null)
     setMenu(null)
     const next = { panX: 40, panY: 40, zoom: 1 }
     viewRef.current = next
@@ -227,10 +231,25 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       setSelection([])
       setEditing(null)
       setPen(null)
+      setPenHover(null)
+      setPenHandle(null)
     }
     window.addEventListener('koma-design-focus', onFocus)
     return () => window.removeEventListener('koma-design-focus', onFocus)
   }, [tab.path, tab.root])
+
+  useEffect(() => {
+    const onTool = (event: Event) => {
+      const kind = (event as CustomEvent<DrawShape>).detail
+      if (!active || (kind !== 'frame' && kind !== 'rect' && kind !== 'ellipse' && kind !== 'line' && kind !== 'text')) return
+      setTool(kind)
+      setPen(null)
+      setPenHover(null)
+      setPenHandle(null)
+    }
+    window.addEventListener('koma-design-tool', onTool)
+    return () => window.removeEventListener('koma-design-tool', onTool)
+  }, [active])
 
   useEffect(() => {
     if (!focusId || !file) return
@@ -384,9 +403,14 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       updateRef.current(tab.root, tab.path, laid)
       setSelection([node.id])
       setPropsOpen(true)
+      setTool('select')
     }
     const move = (event: PointerEvent) => {
       const drag = dragRef.current
+      if (toolRef.current === 'pen' && drag?.kind !== 'pen') {
+        const hover = toDoc(event.clientX, event.clientY)
+        if (hover) setPenHover(hover)
+      }
       if (!drag) return
       if (drag.kind === 'pan') {
         const dx = event.clientX - drag.lastX
@@ -486,6 +510,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       dragRef.current = null
       setDragCursor(null)
       setGhost(null)
+      if (drag?.kind === 'pen') setPenHandle(null)
       if (!drag || drag.kind === 'pan' || drag.kind === 'pen') return
       const stored = useKoma.getState().design.docs[key]?.doc
       if (!stored) return
@@ -649,6 +674,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       if (event.key === 'Escape') {
         setEditing(null)
         setPen(null)
+        setPenHover(null)
+        setPenHandle(null)
         penRef.current = null
         penNoted.current = false
         if (toolRef.current === 'pen') setTool('select')
@@ -711,7 +738,17 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     if (!node) return
     const existing = locateDesign(doc, draft.id)
     const view = existing
-      ? updateDesignNode(doc, draft.id, (current) => ({ ...current, x: node.x, y: node.y, w: node.w, h: node.h, vector: node.vector, fill: closed ? current.fill === 'none' ? undefined : current.fill : node.fill }))
+      ? updateDesignNode(doc, draft.id, (current) => ({
+          ...current,
+          x: node.x,
+          y: node.y,
+          w: node.w,
+          h: node.h,
+          vector: node.vector,
+          fill: closed ? (current.fill && current.fill !== 'none' ? current.fill : '#d0d5dd') : 'none',
+          stroke: current.stroke && current.stroke !== 'none' ? current.stroke : '#1c1c1c',
+          strokeWidth: current.strokeWidth ?? 2,
+        }))
       : insertDesignNode(doc, draft.parentId, node)
     const next = projectDoc(stored, focus, layoutDesign(view))
     if (serializeDesign(next) === serializeDesign(stored)) return
@@ -874,6 +911,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         applyPen(draft, true)
         penRef.current = null
         setPen(null)
+        setPenHover(null)
+        setPenHandle(null)
         penNoted.current = false
         setTool('select')
         return
@@ -885,15 +924,16 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       const next = { id: mintId('v'), parentId, points: [{ x: point.x, y: point.y, incoming: zero, outgoing: zero }] }
       penRef.current = next
       setPen(next)
+      setPenHandle(0)
       applyPen(next)
       dragRef.current = { kind: 'pen', index: 0, space: spaceRef.current }
       return
     }
-    const points = [...draft.points, { x: point.x, y: point.y, incoming: zero, outgoing: { ...draft.points[draft.points.length - 1].outgoing }, }]
-    points[points.length - 2] = { ...points[points.length - 2], outgoing: draft.points[draft.points.length - 1].outgoing }
+    const points = [...draft.points, { x: point.x, y: point.y, incoming: zero, outgoing: zero }]
     const next = { ...draft, points }
     penRef.current = next
     setPen(next)
+    setPenHandle(points.length - 1)
     applyPen(next)
     dragRef.current = { kind: 'pen', index: points.length - 1, space: spaceRef.current }
   }
@@ -1040,7 +1080,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   }
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 bg-koma-bg text-koma-fg">
+    <div className="flex h-full min-h-0 min-w-0 bg-koma-bg text-koma-fg" onContextMenu={(event) => event.preventDefault()}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <EditorChrome
           path={tab.path}
@@ -1093,6 +1133,11 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             if (focusId && parentId == null && locateDesign(doc, id)?.parentId == null) return
             commit(moveDesignNode(doc, id, parentId, index))
           }}
+          onMenu={(id, clientX, clientY) => {
+            if (!selection.includes(id)) setSelection([id])
+            const origin = nodeOrigin(doc, id)
+            setMenu({ x: clientX, y: clientY, canvasX: origin?.x ?? 0, canvasY: origin?.y ?? 0 })
+          }}
         />
         <div
           ref={canvasRef}
@@ -1106,7 +1151,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
           }}
           onDragOver={(event) => event.preventDefault()}
           onDrop={onDrop}
-          style={canvasBackdrop(doc.snap, grid, view)}
+          style={{ backgroundColor: '#e6e8ed', ...canvasBackdrop(doc.snap, grid, view) }}
         >
           <DesignRulers panX={view.panX} panY={view.panY} zoom={view.zoom} />
           <div className="pointer-events-none absolute left-0 top-0" style={{ transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`, transformOrigin: '0 0' }}>
@@ -1201,13 +1246,19 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             ))}
           {ghost ? (
             <div
-              className="pointer-events-none absolute border border-koma-accent bg-koma-accent/10"
-              style={{ left: ghost.x, top: ghost.y, width: Math.max(ghost.w, 1), height: Math.max(ghost.h, 1), borderRadius: ghost.kind === 'shape' && ghost.shape === 'ellipse' ? '50%' : undefined, transform: ghost.kind === 'shape' && ghost.rotation ? `rotate(${ghost.rotation}deg)` : undefined }}
+              className="pointer-events-none absolute border border-koma-accent"
+              style={{
+                left: ghost.x,
+                top: ghost.y,
+                width: Math.max(ghost.w, 1),
+                height: Math.max(ghost.h, 1),
+                background: ghost.kind === 'shape' && ghost.shape === 'frame' ? '#ffffff' : ghost.kind === 'shape' && (ghost.shape === 'rect' || ghost.shape === 'ellipse') ? '#d0d5dd' : 'color-mix(in srgb, var(--color-koma-accent) 16%, transparent)',
+                borderRadius: ghost.kind === 'shape' && ghost.shape === 'ellipse' ? '50%' : undefined,
+                transform: ghost.kind === 'shape' && ghost.rotation ? `rotate(${ghost.rotation}deg)` : undefined,
+              }}
             />
           ) : null}
-          {pen?.points.map((point, index) => (
-            <span key={`${pen.id}-${index}`} className="pointer-events-none absolute h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-koma-accent" style={{ left: point.x, top: point.y }} />
-          ))}
+          {pen ? <PenOverlay draft={pen} hover={penHandle == null ? penHover : null} zoom={view.zoom} /> : null}
           </div>
           {doc.screens.length === 0 && !file.loading ? (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[12px] text-koma-fg opacity-35">
@@ -1383,6 +1434,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             else if (id === 'lock') commands.lock()
             else if (id === 'flip-x') commands.flip('x')
             else if (id === 'flip-y') commands.flip('y')
+            else if (id === 'delete') commands.remove()
             else if (id.startsWith('select:')) commands.select(id.slice('select:'.length))
           }}
         />
@@ -1462,6 +1514,8 @@ function designMenuItems(doc: DesignDoc, selection: string[], x: number, y: numb
     { id: 'lock', label: 'Lock/Unlock', disabled: !selected },
     { id: 'flip-x', label: 'Flip horizontal', shortcut: '⇧H', disabled: !selected },
     { id: 'flip-y', label: 'Flip vertical', shortcut: '⇧V', disabled: !selected },
+    { id: 'divider-5', label: '' },
+    { id: 'delete', label: 'Delete', shortcut: 'Del', danger: true, disabled: !selected },
   ]
 }
 
@@ -1513,10 +1567,11 @@ function DesignNodeView({
   const style = textStyle(visual && node.kind !== 'instance' ? visual : node)
   const selected = selectedIds.includes(node.id)
   const container = node.kind === 'frame' || node.kind === 'group'
-  const bareFill = container && (!node.fill || node.fill === 'none')
-  const bareStroke = container && (!node.stroke || node.stroke === 'none')
-  const fill = bareFill ? 'transparent' : paintCss(doc, chrome.fill, 'var(--color-koma-panel)')
-  const stroke = paintCss(doc, chrome.stroke, 'var(--color-koma-border)')
+  const bareFill = node.fill === 'none' || chrome.fill === 'none'
+  const bareStroke = (node.kind === 'frame' || node.kind === 'group') && (!node.stroke || node.stroke === 'none')
+  const fillFallback = node.kind === 'frame' ? '#ffffff' : node.kind === 'rect' || node.kind === 'ellipse' || node.kind === 'vector' ? '#d0d5dd' : 'var(--color-koma-panel)'
+  const fill = bareFill ? 'transparent' : paintCss(doc, chrome.fill, fillFallback)
+  const stroke = paintCss(doc, chrome.stroke, node.kind === 'line' || node.kind === 'vector' ? '#1c1c1c' : 'var(--color-koma-border)')
   const radius = node.kind === 'ellipse' ? '50%' : typeof chrome.radius === 'number' ? chrome.radius : Number(resolveRef(doc, chrome.radius)) || 0
   const children = visual?.children ?? (node.kind === 'instance' ? undefined : node.children)
   const rotation = node.rotation ?? 0
@@ -1679,7 +1734,7 @@ function NodeSettings({
     })
   }
   const paintChange = (field: 'fill' | 'stroke', next: string | null) => {
-    const fallback = field === 'fill' ? '#1a1d27' : '#8b93b8'
+    const fallback = field === 'fill' ? (node.kind === 'frame' ? '#ffffff' : '#d0d5dd') : '#1c1c1c'
     const container = node.kind === 'frame' || node.kind === 'group'
     const themed = node.kind === 'rect' || node.kind === 'ellipse' || (node.kind === 'vector' && !!node.vector?.regions.length)
     if (next === 'none') setField({ [field]: 'none' })
@@ -2012,8 +2067,51 @@ function GeomField({ label, value, onChange }: { label: string; value: number; o
 }
 
 function containerPaint(node: DesignNode, field: 'fill' | 'stroke', chrome: string): string {
-  if ((node.kind === 'frame' || node.kind === 'group') && node[field] == null) return 'none'
+  if (node.kind === 'group' && node[field] == null) return 'none'
+  if (node.kind === 'frame' && field === 'fill' && node.fill == null) return '#ffffff'
+  if (node.kind === 'frame' && field === 'stroke' && node.stroke == null) return 'none'
+  if ((node.kind === 'rect' || node.kind === 'ellipse') && field === 'fill' && node.fill == null) return '#d0d5dd'
+  if ((node.kind === 'line' || node.kind === 'vector') && field === 'stroke' && node.stroke == null) return '#1c1c1c'
   return chrome
+}
+
+function penCurve(points: DesignPenPoint[], closed: boolean): string {
+  if (!points.length) return ''
+  let path = `M ${points[0].x} ${points[0].y}`
+  const count = closed ? points.length : points.length - 1
+  for (let index = 0; index < count; index++) {
+    const start = points[index]
+    const end = points[(index + 1) % points.length]
+    path += ` C ${start.x + start.outgoing.x} ${start.y + start.outgoing.y} ${end.x + end.incoming.x} ${end.y + end.incoming.y} ${end.x} ${end.y}`
+  }
+  if (closed) path += ' Z'
+  return path
+}
+
+function PenOverlay({ draft, hover, zoom }: { draft: PenDraft; hover: { x: number; y: number } | null; zoom: number }) {
+  const unit = 1 / Math.max(zoom, 0.25)
+  const points = draft.points
+  const last = points[points.length - 1]
+  const rubber = hover && last ? `M ${last.x} ${last.y} C ${last.x + last.outgoing.x} ${last.y + last.outgoing.y} ${hover.x} ${hover.y} ${hover.x} ${hover.y}` : ''
+  return (
+    <svg className="pointer-events-none absolute overflow-visible" width={1} height={1}>
+      <path d={penCurve(points, false)} fill="none" stroke="#1c1c1c" strokeWidth={2} />
+      {rubber ? <path d={rubber} fill="none" stroke="var(--color-koma-accent)" strokeWidth={1.25 * unit} /> : null}
+      {points.map((point, index) => {
+        const showOut = point.outgoing.x !== 0 || point.outgoing.y !== 0
+        const showIn = point.incoming.x !== 0 || point.incoming.y !== 0
+        return (
+          <g key={`${draft.id}-${index}`}>
+            {showOut ? <line x1={point.x} y1={point.y} x2={point.x + point.outgoing.x} y2={point.y + point.outgoing.y} stroke="var(--color-koma-accent)" strokeWidth={unit} /> : null}
+            {showIn ? <line x1={point.x} y1={point.y} x2={point.x + point.incoming.x} y2={point.y + point.incoming.y} stroke="var(--color-koma-accent)" strokeWidth={unit} /> : null}
+            {showOut ? <circle cx={point.x + point.outgoing.x} cy={point.y + point.outgoing.y} r={3 * unit} fill="#ffffff" stroke="var(--color-koma-accent)" strokeWidth={unit} /> : null}
+            {showIn ? <circle cx={point.x + point.incoming.x} cy={point.y + point.incoming.y} r={3 * unit} fill="#ffffff" stroke="var(--color-koma-accent)" strokeWidth={unit} /> : null}
+            <rect x={point.x - 3.5 * unit} y={point.y - 3.5 * unit} width={7 * unit} height={7 * unit} fill="#ffffff" stroke="var(--color-koma-accent)" strokeWidth={unit} />
+          </g>
+        )
+      })}
+    </svg>
+  )
 }
 
 function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {

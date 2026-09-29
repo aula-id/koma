@@ -184,7 +184,7 @@ function sample(): DesignDoc {
 
 {
   const frame = createNode('frame', 'f', 0, 0)
-  assert.equal(nodeChrome(frame).fill, '')
+  assert.equal(nodeChrome(frame).fill, '#ffffff')
   assert.equal(nodeChrome(frame).stroke, '')
   const text = createNode('text', 't', 0, 0)
   assert.equal(nodeChrome(text).fill, 'none')

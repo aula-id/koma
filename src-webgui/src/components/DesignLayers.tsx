@@ -1,4 +1,4 @@
-import { useState, type DragEvent as ReactDragEvent } from 'react'
+import { useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { ChevronRight, Circle, Eye, EyeOff, Frame, Group, Lock, LockOpen, Minus, Spline, Square, Type } from 'lucide-react'
 import { designLayerName, isDesignContainer, type DesignDoc, type DesignNode } from '../lib/design'
 
@@ -12,6 +12,7 @@ export function DesignLayers({
   onVisible,
   onLocked,
   onMove,
+  onMenu,
 }: {
   doc: DesignDoc
   selection: string[]
@@ -20,12 +21,13 @@ export function DesignLayers({
   onVisible: (id: string, visible: boolean) => void
   onLocked: (id: string, locked: boolean) => void
   onMove: (id: string, parentId: string | null, index: number) => void
+  onMenu: (id: string, clientX: number, clientY: number) => void
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<string | null>(null)
   const screens = doc.screens.slice().reverse()
   return (
-    <aside className="flex w-[220px] flex-none flex-col border-r border-koma-border bg-koma-panel">
+    <aside className="flex w-[220px] flex-none flex-col border-r border-koma-border bg-koma-panel" onContextMenu={(event) => event.preventDefault()}>
       <div className="flex h-8 flex-none items-center px-3 text-[12px] text-koma-fg">Layers</div>
       <div className="min-h-0 flex-1 overflow-y-auto pb-2">
         {screens.length === 0 ? <p className="px-3 text-[12px] text-koma-dim">No layers</p> : null}
@@ -54,6 +56,7 @@ export function DesignLayers({
           onVisible={onVisible}
           onLocked={onLocked}
           onMove={onMove}
+          onMenu={onMenu}
         />
       </div>
     </aside>
@@ -75,6 +78,7 @@ function LayerList({
   onVisible,
   onLocked,
   onMove,
+  onMenu,
 }: {
   nodes: DesignNode[]
   parentId: string | null
@@ -90,6 +94,7 @@ function LayerList({
   onVisible: (id: string, visible: boolean) => void
   onLocked: (id: string, locked: boolean) => void
   onMove: (id: string, parentId: string | null, index: number) => void
+  onMenu: (id: string, clientX: number, clientY: number) => void
 }) {
   return (
     <>
@@ -112,6 +117,7 @@ function LayerList({
               onRename={(name) => onRename(node.id, name)}
               onVisible={() => onVisible(node.id, node.visible === false)}
               onLocked={() => onLocked(node.id, !node.locked)}
+              onMenu={(event) => onMenu(node.id, event.clientX, event.clientY)}
               onDrop={(dragId, place) => {
                 if (!dragId || dragId === node.id) return
                 if (place === 'inside') {
@@ -139,6 +145,7 @@ function LayerList({
                 onVisible={onVisible}
                 onLocked={onLocked}
                 onMove={onMove}
+                onMenu={onMenu}
               />
             ) : null}
           </div>
@@ -162,6 +169,7 @@ function LayerRow({
   onVisible,
   onLocked,
   onDrop,
+  onMenu,
 }: {
   node: DesignNode
   depth: number
@@ -176,6 +184,7 @@ function LayerRow({
   onVisible: () => void
   onLocked: () => void
   onDrop: (id: string, place: 'before' | 'inside' | 'after') => void
+  onMenu: (event: ReactMouseEvent<HTMLDivElement>) => void
 }) {
   const [place, setPlace] = useState<'before' | 'inside' | 'after' | null>(null)
   const hidden = node.visible === false
@@ -211,6 +220,11 @@ function LayerRow({
       className={`group relative flex h-7 items-center gap-1 pr-1 text-[12px] ${selected ? 'bg-koma-accent/20 text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'} ${hidden ? 'opacity-50' : ''}`}
       style={{ paddingLeft: 8 + depth * 14 }}
       onClick={(event) => onSelect(event.shiftKey)}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        onMenu(event)
+      }}
       onDoubleClick={(event) => {
         event.stopPropagation()
         onEdit()

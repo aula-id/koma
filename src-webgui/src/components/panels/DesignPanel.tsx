@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { Check, File, Pencil, Trash2, X } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { BrailleSpinner } from '../BrailleSpinner'
@@ -30,10 +30,16 @@ const SHAPES: { kind: 'frame' | 'rect' | 'ellipse' | 'line' | 'text'; label: str
 ]
 
 function ShapeTile({ kind, label }: { kind: 'frame' | 'rect' | 'ellipse' | 'line' | 'text'; label: string }) {
+  const dragged = useRef(false)
   return (
     <div
       draggable
+      onClick={() => {
+        if (dragged.current) return
+        window.dispatchEvent(new CustomEvent('koma-design-tool', { detail: kind }))
+      }}
       onDragStart={(e) => {
+        dragged.current = true
         e.dataTransfer.setData(DESIGN_MIME, kind)
         e.dataTransfer.setData('text/plain', kind)
         try {
@@ -41,6 +47,11 @@ function ShapeTile({ kind, label }: { kind: 'frame' | 'rect' | 'ellipse' | 'line
         } catch {
           /* ignore */
         }
+      }}
+      onDragEnd={() => {
+        setTimeout(() => {
+          dragged.current = false
+        }, 0)
       }}
       className="flex cursor-grab items-center justify-center rounded p-0.5 text-koma-dim hover:bg-koma-hover hover:text-koma-fg active:cursor-grabbing"
       title={`Drag ${label} onto the canvas`}

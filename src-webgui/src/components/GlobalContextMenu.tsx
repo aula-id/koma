@@ -319,11 +319,15 @@ export function GlobalContextMenu({ onResume, hidden }: Props) {
       <MenuItem icon={<RotateCcw size={13} />} onClick={handleResume}>
         Resume
       </MenuItem>
-      <Separator />
-      <SectionLabel>Debug</SectionLabel>
-      <MenuItem icon={<Bug size={13} />} onClick={handleInspect}>
-        Inspect
-      </MenuItem>
+      {import.meta.env.DEV ? (
+        <>
+          <Separator />
+          <SectionLabel>Debug</SectionLabel>
+          <MenuItem icon={<Bug size={13} />} onClick={handleInspect}>
+            Inspect
+          </MenuItem>
+        </>
+      ) : null}
     </div>,
     document.body,
   )

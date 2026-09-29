@@ -167,15 +167,15 @@ export function designFileName(raw: string): string | null {
 }
 
 export function createNode(kind: DesignDrawKind, id: string, x: number, y: number): DesignNode {
-  if (kind === 'frame') return { id, kind, name: 'Frame', x, y, w: 360, h: 240 }
+  if (kind === 'frame') return { id, kind, name: 'Frame', x, y, w: 360, h: 240, fill: '#ffffff' }
   if (kind === 'group') return { id, kind, name: 'Group', x, y, w: 8, h: 8, fill: 'none', stroke: 'none' }
   if (kind === 'text') return { id, kind, name: 'Text', x, y, w: 120, h: 24, text: 'Text' }
-  if (kind === 'ellipse') return { id, kind, name: 'Ellipse', x, y, w: 160, h: 64 }
-  if (kind === 'line') return { id, kind, name: 'Line', x, y, w: 160, h: 2, strokeWidth: 2 }
+  if (kind === 'ellipse') return { id, kind, name: 'Ellipse', x, y, w: 160, h: 64, fill: '#d0d5dd' }
+  if (kind === 'line') return { id, kind, name: 'Line', x, y, w: 160, h: 2, stroke: '#1c1c1c', strokeWidth: 2 }
   if (kind === 'vector') {
-    return { id, kind, name: 'Vector', x, y, w: 1, h: 1, fill: 'none', vector: { vertices: [{ x: 0, y: 0 }], segments: [], regions: [] } }
+    return { id, kind, name: 'Vector', x, y, w: 1, h: 1, fill: 'none', stroke: '#1c1c1c', strokeWidth: 2, vector: { vertices: [{ x: 0, y: 0 }], segments: [], regions: [] } }
   }
-  return { id, kind, name: 'Rectangle', x, y, w: 160, h: 64 }
+  return { id, kind, name: 'Rectangle', x, y, w: 160, h: 64, fill: '#d0d5dd' }
 }
 
 export function isDesignContainer(kind: DesignKind): boolean {
@@ -903,7 +903,9 @@ export function nodeFromPen(id: string, points: DesignPenPoint[], closed: boolea
     y: 0,
     w: 1,
     h: 1,
-    ...(closed ? {} : { fill: 'none' as const }),
+    fill: closed ? '#d0d5dd' : 'none',
+    stroke: '#1c1c1c',
+    strokeWidth: 2,
     vector: {
       vertices: points.map((point) => ({ x: point.x, y: point.y })),
       segments,
