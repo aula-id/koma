@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Koma computer fixture</title>
+<style>
+body { font: 20px system-ui; max-width: 700px; margin: 40px auto; }
+label { display: block; margin: 20px 0; }
+input, button { font: inherit; padding: 8px; }
+#scroll { height: 130px; overflow: auto; border: 2px solid #777; padding: 10px; }
+</style>
+<h1>Koma computer fixture</h1>
+<p>Local, deterministic fixture. Reload to reset.</p>
+<label>Message <input id="message" aria-label="Message" autocomplete="off"></label>
+<button id="apply">Apply message</button>
+<p>Applied <output id="count">0</output> times: <output id="value">(empty)</output></p>
+<label>Protected field <input type="password" value="never-extract-this-value" aria-label="Protected field"></label>
+<div id="scroll" tabindex="0" aria-label="Scroll fixture"><p>Top marker</p><div style="height:400px"></div><p>Bottom marker</p></div>
+<script>
+let count = 0
+const message = document.querySelector('#message')
+document.querySelector('#apply').addEventListener('click', () => {
+  document.querySelector('#count').value = String(++count)
+  document.querySelector('#value').value = message.value
+})
+</script>

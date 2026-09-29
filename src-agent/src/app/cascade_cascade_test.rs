@@ -111,7 +111,13 @@ fn session_settings_drops_dead_provider_and_model_rows() {
     dead_providers.insert("p-dead".into());
 
     assert_eq!(
-        rebind_offline_sessions_at(&tmp, &AppConfig::default(), &dead_models, &dead_providers, &HashSet::new()),
+        rebind_offline_sessions_at(
+            &tmp,
+            &AppConfig::default(),
+            &dead_models,
+            &dead_providers,
+            &HashSet::new()
+        ),
         1
     );
 
@@ -147,9 +153,28 @@ fn scoped_session_agent_rebind_only_touches_that_session() {
 #[test]
 fn deleting_old_provider_keeps_reference_to_source_that_moved() {
     let mut config = AppConfig::default();
-    config.models.push(ModelEntry { uuid: "source".into(), provider_uuid: "new-provider".into(), ..Default::default() });
-    let reference = ModelEntry { uuid: "session".into(), source_uuid: Some("source".into()), provider_uuid: "old-provider".into(), ..Default::default() };
+    config.models.push(ModelEntry {
+        uuid: "source".into(),
+        provider_uuid: "new-provider".into(),
+        ..Default::default()
+    });
+    let reference = ModelEntry {
+        uuid: "session".into(),
+        source_uuid: Some("source".into()),
+        provider_uuid: "old-provider".into(),
+        ..Default::default()
+    };
     let dead = HashSet::from(["old-provider".to_string()]);
-    assert!(!model_reference_removed(&reference, &config, &HashSet::new(), &dead));
-    assert!(model_reference_removed(&reference, &config, &HashSet::from(["source".to_string()]), &HashSet::new()));
+    assert!(!model_reference_removed(
+        &reference,
+        &config,
+        &HashSet::new(),
+        &dead
+    ));
+    assert!(model_reference_removed(
+        &reference,
+        &config,
+        &HashSet::from(["source".to_string()]),
+        &HashSet::new()
+    ));
 }

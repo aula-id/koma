@@ -1,4 +1,6 @@
 # Icons
 
-Real koma logo (512×512 source master, supplied 2026-07-15). Regenerate with `python3 assets/gen-icons.py <source.png>`.
-The gen-placeholder-icons.py is kept only for reference.
+App icon: a free typewriter “K” (Cousine Bold) centered in a dark circle.
+Regenerate with `python3 assets/gen-placeholder-icons.py`.
+
+`gen-icons.py <source.png>` resizes an existing square PNG into the same set.

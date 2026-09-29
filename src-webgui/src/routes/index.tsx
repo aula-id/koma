@@ -7,6 +7,7 @@ import { TAB_DRAG_MIME, TabBar } from '../components/TabBar'
 import { StartScreen } from '../components/StartScreen'
 import { Onboarding } from '../components/Onboarding'
 import { Titlebar, getPlatform } from '../components/Titlebar'
+import { ComputerPanel } from '../components/ComputerPanel'
 import { ResizeHandles } from '../components/ResizeHandles'
 import { ActivityBar } from '../components/ActivityBar'
 import { Sidebar, type SidebarView } from '../components/Sidebar'
@@ -15,7 +16,6 @@ import { RenameOverlay } from '../components/RenameOverlay'
 import { OmniSearchPalette } from '../components/OmniSearchPalette'
 import { CodingPalette } from '../components/CodingPalette'
 import { CodingPacks } from '../components/CodingPacks'
-import { CodingTasks } from '../components/CodingTasks'
 import { CodingTransactions } from '../components/CodingTransactions'
 import { CodingHistory } from '../components/CodingHistory'
 import { CodingRefactor } from '../components/CodingRefactor'
@@ -25,8 +25,7 @@ import { RemotePasswordPrompt } from '../components/RemotePasswordPrompt'
 import { RemotePathPicker } from '../components/RemotePathPicker'
 import { ToastContainer } from '../components/ToastContainer'
 import { UsageFooter } from '../components/UsageFooter'
-import { ProblemsDrawer } from '../components/ProblemsDrawer'
-import { LspDrawer } from '../components/LspDrawer'
+import { BottomPanel } from '../components/BottomPanel'
 import { useKoma } from '../store/koma'
 import { BrailleSpinner } from '../components/BrailleSpinner'
 import { ExtensionPanelFrame } from '../components/ExtensionPanelFrame'
@@ -451,7 +450,6 @@ function RootLayout() {
       {overlay === 'rename' && <RenameOverlay onClose={() => setOverlay('none')} />}
       {omnisearchOpen && <OmniSearchPalette onClose={closeOmniSearch} />}
       <CodingPalette />
-      <CodingTasks />
       <CodingPacks />
       <CodingDebug />
       <CodingTests />
@@ -488,6 +486,7 @@ function RootLayout() {
       />
       <RemotePathPicker />
       <ToastContainer />
+      <ComputerPanel />
       <ResizeHandles />
       {/* Hide while remote cwd picker is open — Ctrl+Enter / right-click must
           not surface the global copy/paste/resume menu over the path dialog. */}
@@ -974,8 +973,7 @@ function TabbedMain() {
           ) : null,
         )}
       </div>
-      <LspDrawer />
-      <ProblemsDrawer />
+      <BottomPanel />
       <UsageFooter />
     </div>
   )

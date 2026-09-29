@@ -51,6 +51,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "base64",
+ "cc",
  "dirs",
  "dom_smoothie",
  "ed25519-dalek",
@@ -107,7 +108,9 @@ dependencies = [
  "windows-sys 0.59.0",
  "winresource",
  "wry",
+ "x11-dl",
  "xz2",
+ "zbus",
  "zip",
 ]
 

@@ -10,9 +10,7 @@
 //! (`git_*`, `cd`, `skill`, sentinels) are never rewritten.
 
 use super::ToolCtx;
-use crate::config::{
-    MAX_READ_CHARS, MAX_READ_LINES, MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_OUTPUT_LINES,
-};
+use crate::config::{MAX_READ_CHARS, MAX_READ_LINES, MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_OUTPUT_LINES};
 use crate::model::store::session_tool_tmp_dir;
 use serde_json::Value;
 use sha2::{Digest, Sha256};

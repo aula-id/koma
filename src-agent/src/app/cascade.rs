@@ -78,7 +78,9 @@ pub fn rebind_consumers_after_model_removal(
                 continue;
             };
             let before = sess.settings.session_models.len();
-            sess.settings.session_models.retain(|m| !model_reference_removed(m, config, dead_model_uuids, dead_provider_uuids));
+            sess.settings.session_models.retain(|m| {
+                !model_reference_removed(m, config, dead_model_uuids, dead_provider_uuids)
+            });
             let models_changed = sess.settings.session_models.len() != before;
             if models_changed {
                 if let Err(e) = sess.save() {
@@ -131,8 +133,12 @@ pub fn rebind_consumers_after_model_removal(
     }
 
     // B. Offline sessions (settings.json only)
-    report.sessions_touched +=
-        rebind_offline_sessions(config, dead_model_uuids, dead_provider_uuids, &skip_session_paths);
+    report.sessions_touched += rebind_offline_sessions(
+        config,
+        dead_model_uuids,
+        dead_provider_uuids,
+        &skip_session_paths,
+    );
 
     // C. Agent files on disk → inherit main when model no longer exists
     report.agents_cleared +=
@@ -235,11 +241,25 @@ fn alive_model_set(
     s
 }
 
-fn model_reference_removed(entry: &crate::model::app_config::ModelEntry, config: &AppConfig, dead_models: &HashSet<String>, dead_providers: &HashSet<String>) -> bool {
-    if dead_models.contains(&entry.uuid) || entry.source_uuid.as_ref().is_some_and(|id| dead_models.contains(id)) {
+fn model_reference_removed(
+    entry: &crate::model::app_config::ModelEntry,
+    config: &AppConfig,
+    dead_models: &HashSet<String>,
+    dead_providers: &HashSet<String>,
+) -> bool {
+    if dead_models.contains(&entry.uuid)
+        || entry
+            .source_uuid
+            .as_ref()
+            .is_some_and(|id| dead_models.contains(id))
+    {
         return true;
     }
-    let source = entry.source_uuid.as_ref().and_then(|id| config.models.iter().find(|model| &model.uuid == id)).unwrap_or(entry);
+    let source = entry
+        .source_uuid
+        .as_ref()
+        .and_then(|id| config.models.iter().find(|model| &model.uuid == id))
+        .unwrap_or(entry);
     dead_providers.contains(&source.provider_uuid)
 }
 
@@ -284,7 +304,9 @@ fn rebind_offline_sessions_at(
                 }
             };
             let before = settings.session_models.len();
-            settings.session_models.retain(|m| !model_reference_removed(m, config, dead_models, dead_providers));
+            settings
+                .session_models
+                .retain(|m| !model_reference_removed(m, config, dead_models, dead_providers));
             if settings.session_models.len() == before {
                 continue;
             }

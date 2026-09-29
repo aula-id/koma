@@ -105,7 +105,9 @@ impl RemoteGitClient {
             None => return,
         };
         let rep = self.request(req);
-        if let (super::HostCtl::GitWorkbench { request }, RemoteGitRep::Error { error }) = (ctl, &rep) {
+        if let (super::HostCtl::GitWorkbench { request }, RemoteGitRep::Error { error }) =
+            (ctl, &rep)
+        {
             super::git_workbench::emit(push, super::git_workbench::Reply::error(request, format!("{error}. Reconnect or update remote Koma if this operation is unsupported.")));
             return;
         }

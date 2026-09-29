@@ -154,6 +154,9 @@ impl SessionRuntime {
     /// and only THIS session's counters are touched. The rest-GLOBAL compaction
     /// cleanup + status line stay with the caller (`actions::chat::handle_interrupt`).
     pub fn interrupt(&mut self) {
+        // Sharing stays on. The generation bump cancels the in-flight click
+        // on the GUI worker; the square stop control is what turns sharing off.
+        self.computer.halt_turn();
         // Abort the in-flight stream task + stop listening to it (the per-session
         // part of `abort_current`): abort the handle, drop the active receiver so
         // any late events from the aborted task vanish, and clear `waiting`.
@@ -319,6 +322,21 @@ impl SessionRuntime {
             || self.subagents.iter().any(|s| {
                 matches!(s.status, crate::app::subagent::SubAgentStatus::Running) && !s.detached
             })
+    }
+
+    /// The main turn is still walking tool calls, a stream, or a computer
+    /// operation. A closed window during this window is a reconnect, not a
+    /// stop: sharing stays armed until the turn ends or the GUI comes back.
+    pub fn agent_iterating(&self) -> bool {
+        if self.closed {
+            return false;
+        }
+        self.is_ui_busy()
+            || self.current_task.is_some()
+            || self.active_rx.is_some()
+            || self.computer.status.busy
+            || self.computer.pending.is_some()
+            || self.agent_steps > 0
     }
 
     /// True once this session has been tombstoned via [`close()`](Self::close) —

@@ -1,0 +1,6 @@
+[env]
+# One baseline for Rust and every native dependency on both Darwin targets.
+# Otherwise a newer Xcode SDK can make cc-rs default to the host OS version
+# while rustc links for an older OS. Non-Apple targets ignore this variable.
+# Computer observation remains runtime-gated to macOS 14+.
+MACOSX_DEPLOYMENT_TARGET = { value = "11.0", force = false }

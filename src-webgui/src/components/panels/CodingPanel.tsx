@@ -829,7 +829,21 @@ export function CodingPanel() {
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.preventDefault()}
         >
-          {!ctxMenu.isDir && contextGitPath && gitRoot && <button type="button" className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-90 hover:bg-koma-hover" onClick={() => { openGitTool('blame', { root: gitRoot, path: contextGitPath }); setCtxMenu(null) }}><History size={12} className="opacity-70" />Blame HEAD</button>}
+          {!ctxMenu.isDir && (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-90 hover:bg-koma-hover"
+              onClick={() => {
+                const root = contextGitPath && gitRoot ? gitRoot : activeRoot
+                const path = contextGitPath && gitRoot ? contextGitPath : ctxMenu.path
+                if (root) openGitTool('blame', { root, path })
+                setCtxMenu(null)
+              }}
+            >
+              <History size={12} className="opacity-70" />
+              Blame HEAD
+            </button>
+          )}
           {!ctxMenu.isDir && isMarkdownPath(ctxMenu.path) && (
             <button
               type="button"

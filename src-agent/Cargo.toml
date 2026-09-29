@@ -6,6 +6,7 @@ license = "Apache-2.0"
 
 [build-dependencies]
 winresource = "0.1"
+cc = { version = "1", optional = true }
 
 [dependencies]
 scopeguard = "1.2"
@@ -98,7 +99,7 @@ muda = { version = "0.19", optional = true, default-features = false }
 
 [features]
 default = ["gui", "linker"]
-gui = ["dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd", "dep:muda"]
+gui = ["dep:cc", "dep:zbus", "dep:x11-dl", "dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd", "dep:muda"]
 linker = [
     "dep:tree-sitter",
     "dep:tree-sitter-rust",
@@ -126,11 +127,26 @@ category = "DeveloperTool"
 icons = ["../assets/icon.ico", "../assets/icon.icns", "../assets/icon*.png"]
 
 [package.metadata.packager.deb]
-depends = ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+depends = ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libxtst6", "at-spi2-core", "tesseract-ocr", "tesseract-ocr-eng", "xdg-desktop-portal", "gstreamer1.0-tools", "gstreamer1.0-pipewire", "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good", "pipewire-bin"]
 section = "utils"
 desktop-template = "../packaging/linux/koma.desktop.hbs"
 
 [package.metadata.packager.wix]
 template = "../packaging/windows/main.wxs"
-fragment-paths = ["../packaging/windows/path-and-shortcut.wxs"]
-component-group-refs = ["KomaPathAndShortcut"]
+fragment-paths = ["../packaging/windows/path-and-shortcut.wxs", "../packaging/windows/ocr-files.wxs"]
+component-group-refs = ["KomaPathAndShortcut", "KomaOcrFiles"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11-dl = { version = "2.21", optional = true }
+zbus = { version = "=5.17.0", optional = true }
+
+# Native X11 input is loaded dynamically. Include it and local English OCR in
+# desktop AppImages; Debian installs the corresponding packages above.
+[package.metadata.packager.appimage]
+bins = ["/usr/bin/tesseract"]
+libs = ["libXtst.so.6"]
+[package.metadata.packager.appimage.files]
+"../packaging/linux/gstreamer" = "usr"
+"/usr/share/tesseract-ocr" = "usr/share/tesseract-ocr"
+"/usr/share/doc/tesseract-ocr" = "usr/share/doc/tesseract-ocr"
+"/usr/share/doc/tesseract-ocr-eng" = "usr/share/doc/tesseract-ocr-eng"

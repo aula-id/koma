@@ -27,3 +27,8 @@ src-docs/.vite/
 # browser screenshots (transient)
 .screenshoot/
 .problems/
+
+# Generated GUI release runtime payloads / WiX manifest.
+packaging/windows/ocr/
+packaging/windows/ocr-files.wxs
+packaging/linux/gstreamer/

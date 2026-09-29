@@ -196,6 +196,17 @@ pub(super) fn push_loop(
     >,
 ) -> HostTransition {
     use std::sync::mpsc::TryRecvError;
+    #[cfg(feature = "gui")]
+    let mut computer_worker = crate::app::runtime::computer::desktop::Worker::default();
+    #[cfg(feature = "gui")]
+    let mut computer_requested = false;
+    #[cfg(feature = "gui")]
+    let mut computer_registered = false;
+    #[cfg(feature = "gui")]
+    let (preview_tx, preview_rx) =
+        std::sync::mpsc::channel::<crate::app::runtime::computer::PreviewFrame>();
+    #[cfg(feature = "gui")]
+    let mut computer_preparing: Option<crate::app::runtime::computer::Request> = None;
 
     // The shadow is a real AppState reconstructed purely from frames (identical to
     // `render_loop`); the first Snapshot replaces the neutral placeholder.
@@ -401,6 +412,12 @@ pub(super) fn push_loop(
     let mut force_push = true;
 
     loop {
+        #[cfg(feature = "gui")]
+        while let Ok(frame) = preview_rx.try_recv() {
+            if remote_ctx.is_none() && computer_worker.accepts_preview(&frame.request) {
+                push(serde_json::json!({"k":"ComputerPreview","frame":frame}).to_string());
+            }
+        }
         let frame_start = Instant::now();
         let mut dirty = force_push;
         let mut need_snapshot = force_push;
@@ -411,6 +428,17 @@ pub(super) fn push_loop(
             match ctl_rx.try_recv() {
                 // The page (re)booted: re-push the full authoritative state this frame.
                 Ok(super::HostCtl::Ready) => {
+                    // The page rebooted inside the same window. Sharing stays
+                    // on; tell the daemon this desktop is still the owner so a
+                    // parked turn can adopt it instead of stopping.
+                    #[cfg(feature = "gui")]
+                    if computer_requested {
+                        let _ = req_tx.send(ClientRequest::Computer(
+                            crate::app::runtime::computer::Control::Register {
+                                desktop: crate::app::runtime::computer::desktop::identity(),
+                            },
+                        ));
+                    }
                     last.reset();
                     dirty = true;
                     need_snapshot = true;
@@ -604,6 +632,60 @@ pub(super) fn push_loop(
                 // attached; this only lands here if the attach state flipped between the
                 // check and the send). Forward the carried request to the daemon — it owns
                 // the authoritative config and re-pushes a fresh `Config` on the change.
+                #[cfg(feature = "gui")]
+                Ok(super::HostCtl::ComputerPrepared { id }) => {
+                    if remote_ctx.is_none()
+                        && computer_preparing.as_ref().is_some_and(|r| r.id == id)
+                    {
+                        if let Some(request) = computer_preparing.take() {
+                            computer_worker.request(request, req_tx.clone());
+                        }
+                    }
+                }
+                Ok(super::HostCtl::ComputerPreview(request)) => {
+                    #[cfg(feature = "gui")]
+                    if remote_ctx.is_none() {
+                        computer_worker.preview(request, preview_tx.clone());
+                    }
+                    #[cfg(not(feature = "gui"))]
+                    let _ = request;
+                }
+                Ok(super::HostCtl::Computer { action, window }) => {
+                    #[cfg(feature = "gui")]
+                    if remote_ctx.is_none() {
+                        use crate::app::runtime::computer::{desktop, Control};
+                        let control = match action.as_str() {
+                            "enable" => {
+                                computer_requested = true;
+                                let _ = req_tx.send(ClientRequest::Computer(Control::Register {
+                                    desktop: desktop::identity(),
+                                }));
+                                Some(Control::Enable {
+                                    capabilities: desktop::capabilities(),
+                                })
+                            }
+                            "windows" => Some(Control::ListWindows),
+                            "select" => window.map(|window| Control::InspectWindow { window }),
+                            "pause" | "take_over" => {
+                                computer_worker.pause_input();
+                                Some(Control::Pause)
+                            }
+                            "resume" => Some(Control::Resume),
+                            "stop" => {
+                                computer_worker.cancel();
+                                Some(Control::Stop)
+                            }
+                            _ => None,
+                        };
+                        if let Some(control) = control {
+                            let _ = req_tx.send(ClientRequest::Computer(control));
+                        }
+                    } else {
+                        push(serde_json::json!({"k":"ComputerError","message":"Computer control is limited to local GUI sessions"}).to_string());
+                    }
+                    #[cfg(not(feature = "gui"))]
+                    let _ = (action, window);
+                }
                 Ok(super::HostCtl::ConfigMutate(req)) => {
                     let _ = req_tx.send(req);
                 }
@@ -708,7 +790,12 @@ pub(super) fn push_loop(
                             super::HostCtl::GitWorkbench { request } => {
                                 let tx = workbench_tx.clone();
                                 let session = current_owned.clone();
-                                std::thread::spawn(move || { let _ = tx.send(super::git_workbench::handle(request, session.as_deref())); });
+                                std::thread::spawn(move || {
+                                    let _ = tx.send(super::git_workbench::handle(
+                                        request,
+                                        session.as_deref(),
+                                    ));
+                                });
                             }
                             super::HostCtl::GitStatus => {
                                 git_host::spawn_git_status_attached(
@@ -1516,6 +1603,34 @@ pub(super) fn push_loop(
                     // OAuthState) is re-pushed to JS as its own `PushEnvelope` HERE, BEFORE
                     // folding — see `push_intercept` (split out for file size; pure code
                     // motion, no behaviour change).
+                    #[cfg(feature = "gui")]
+                    match &frame.event {
+                        DaemonEvent::ComputerStatus(status) if remote_ctx.is_none() => {
+                            computer_requested = status.enabled;
+                            computer_worker.status(status);
+                            if status.enabled
+                                && status.desktop
+                                    == crate::app::runtime::computer::desktop::identity()
+                                && !computer_registered
+                            {
+                                computer_registered = true;
+                                let _ = req_tx.send(ClientRequest::Computer(
+                                    crate::app::runtime::computer::Control::Register {
+                                        desktop: status.desktop.clone(),
+                                    },
+                                ));
+                            } else if !status.enabled {
+                                computer_registered = false;
+                            }
+                            push(serde_json::json!({"k":"Computer","status":status}).to_string());
+                        }
+                        DaemonEvent::ComputerOperation(request) if remote_ctx.is_none() => {
+                            // Native GUI visibility must be applied before dispatching input/capture.
+                            computer_preparing = Some(request.clone());
+                            push(serde_json::json!({"k":"ComputerPrepare","id":request.id,"hide": !matches!(request.operation, crate::app::runtime::computer::Operation::Windows)}).to_string());
+                        }
+                        _ => {}
+                    }
                     push_intercept::repush_before_fold(&frame, push);
                     // Keep remote-fs sandbox roots in sync with the remote session's
                     // workdirs (from SettingsValues or Snapshot). Local session_workdirs_for
@@ -1560,6 +1675,28 @@ pub(super) fn push_loop(
                 // The reader task dropped its sender: the daemon's socket closed. Fall
                 // back to the hub so the user can pick another session.
                 Err(TryRecvError::Disconnected) => {
+                    #[cfg(feature = "gui")]
+                    if remote_ctx.is_none() && computer_requested {
+                        if let Some(id) = current_session {
+                            // The window is still open. Reattach this session
+                            // so the parked turn adopts the new connection
+                            // instead of dropping onto the session list.
+                            return HostTransition::Attach {
+                                id: id.to_string(),
+                                workdir: None,
+                            };
+                        }
+                    }
+                    #[cfg(feature = "gui")]
+                    if remote_ctx.is_none() {
+                        computer_worker.cancel();
+                        let status = crate::app::runtime::computer::Status {
+                            session: shadow.rest.fg().id.clone(),
+                            message: "Desktop connection closed. Enable Computer use again after reconnecting.".into(),
+                            ..Default::default()
+                        };
+                        push(serde_json::json!({"k":"Computer","status":status}).to_string());
+                    }
                     return if let Some(ctx) = remote_ctx {
                         HostTransition::ToRemoteHub {
                             ctx: Box::new(ctx.clone()),
@@ -1653,7 +1790,9 @@ pub(super) fn push_loop(
         // key-reveal/key-op fetches, in the SAME order as before — split out into
         // `git_drain::drain_git_replies` for file size (pure code motion, no
         // behaviour change).
-        while let Ok(reply) = workbench_rx.try_recv() { super::git_workbench::emit(push, reply); }
+        while let Ok(reply) = workbench_rx.try_recv() {
+            super::git_workbench::emit(push, reply);
+        }
         drain_git_replies(
             push,
             &git_status_rx,
@@ -1811,7 +1950,13 @@ fn push_remote_git_unavailable(ctl: &super::HostCtl, push: &dyn Fn(String)) {
     };
     const ERR: &str = "remote-git unavailable";
     match ctl {
-        super::HostCtl::GitWorkbench { request } => super::git_workbench::emit(push, super::git_workbench::Reply::error(request, "Remote Git unavailable; reconnect or update the remote Koma installation")),
+        super::HostCtl::GitWorkbench { request } => super::git_workbench::emit(
+            push,
+            super::git_workbench::Reply::error(
+                request,
+                "Remote Git unavailable; reconnect or update the remote Koma installation",
+            ),
+        ),
         super::HostCtl::GitDiff { path, staged } => {
             push_git_diff(
                 push,

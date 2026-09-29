@@ -132,6 +132,8 @@ pub(super) struct HubClient {
     /// client can never receive a delta before its snapshot (critique #2).
     pub(super) attached: bool,
     pub(super) approval_channel: bool,
+    /// Registered only by the native local GUI relay; absent for TUI/remote clients.
+    pub(super) computer_desktop: Option<String>,
     /// PER-CLIENT monotonic frame seq (blocker #1): the seq of the last frame this
     /// client was sent; its next frame is `last_seq + 1`. Owned per connection — the
     /// `DaemonFrame.seq` contract is "monotonic PER CONNECTION", so each client's
@@ -472,6 +474,13 @@ impl DaemonHub {
     /// re-sent on promotion — the promoted client already holds a live shadow; it simply
     /// gains mutate rights.
     pub(super) fn deregister(&mut self, idx: usize, state: &mut AppState) {
+        for rt in &mut state.rest.sessions {
+            if rt.computer.owner == Some(self.clients[idx].id) {
+                // Idle share stops. A turn that is still iterating keeps the
+                // seat parked so the window can reattach or be opened again.
+                crate::app::runtime::computer::bridge::gui_client_lost(rt);
+            }
+        }
         if state.rest.oauth_gui_client == Some(self.clients[idx].id) {
             state.rest.oauth_gui_client = None;
         }

@@ -1,7 +1,9 @@
 declare global {
+  interface Window { __komaComputerPalette?: Record<string, string>; __komaComputerInitial?: import('./types/computer').ComputerStatus | null }
   // JS -> Rust request payloads, tagged { t: 'req', ...GuiReq } by
   // useKoma().req() (see src/store/koma.ts).
   type GuiReq =
+    | { r: 'Computer'; action: 'enable' | 'windows' | 'select' | 'pause' | 'resume' | 'stop' | 'take_over'; window?: string }
     | { r: 'GitWorkbench'; request: import('./lib/gitWorkbench').GitRequest }
     | { r: 'Ready' }
     | { r: 'Submit'; text: string }

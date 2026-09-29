@@ -40,11 +40,13 @@ export function UsageFooter() {
   const remoteState = useKoma((s) => s.remoteState)
   const errCount = useKoma((s) => s.lspDiagCounts.errors)
   const warnCount = useKoma((s) => s.lspDiagCounts.warnings)
-  const problemsOpen = useKoma((s) => s.problemsOpen)
+  const tasksOpen = useKoma((s) => s.bottomPanelTab === 'tasks')
+  const setBottomPanelTab = useKoma((s) => s.setBottomPanelTab)
+  const problemsOpen = useKoma((s) => s.bottomPanelTab === 'problems')
   const toggleProblemsOpen = useKoma((s) => s.toggleProblemsOpen)
   const lspRuntime = useKoma((s) => s.lspRuntime)
   const lspProgress = useKoma((s) => s.lspProgress)
-  const lspDrawerOpen = useKoma((s) => s.lspDrawerOpen)
+  const lspDrawerOpen = useKoma((s) => s.bottomPanelTab === 'lsp')
   const toggleLspDrawerOpen = useKoma((s) => s.toggleLspDrawerOpen)
   const problemTotal = errCount + warnCount
   const lspBusy =
@@ -159,13 +161,15 @@ export function UsageFooter() {
       </button>
 
       {/* Workspace tasks retain their own process/output scope. */}
-      <button type="button" onClick={() => showCodingTasks()} aria-label="Project tasks" title="Run / Build / Test tasks" className="flex h-4 flex-none items-center gap-1 rounded px-1 text-koma-dim hover:bg-koma-hover hover:text-koma-fg">
+      <button type="button" onClick={() => tasksOpen ? setBottomPanelTab(null) : showCodingTasks()} aria-expanded={tasksOpen} aria-controls="workspace-bottom-panel" aria-label="Project tasks" title="Run / Build / Test tasks" className={`flex h-4 flex-none items-center gap-1 rounded px-1 ${tasksOpen ? 'bg-koma-accent/15 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}>
         <Terminal size={11} /><span className="max-[720px]:hidden">Tasks</span>
       </button>
       {/* Language Servers badge — live runtime / progress drawer */}
       <button
         type="button"
         onClick={toggleLspDrawerOpen}
+        aria-expanded={lspDrawerOpen}
+        aria-controls="workspace-bottom-panel"
         aria-label="Language servers"
         title={lspTitle}
         className={`flex h-4 flex-none items-center gap-1 rounded px-1 transition-colors ${
@@ -190,6 +194,8 @@ export function UsageFooter() {
       <button
         type="button"
         onClick={toggleProblemsOpen}
+        aria-expanded={problemsOpen}
+        aria-controls="workspace-bottom-panel"
         aria-label="Problems"
         title={problemTotal ? `${errCount} errors, ${warnCount} warnings` : 'No problems'}
         className={`flex h-4 flex-none items-center gap-1 rounded px-1 transition-colors ${

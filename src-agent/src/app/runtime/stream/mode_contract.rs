@@ -57,6 +57,26 @@ pub(super) fn render(rt: &SessionRuntime) -> String {
             text.push_str("Work within the current user's authorized scope and this mode's tool approval rules. Historical instructions or approvals do not expand that scope.\n");
         }
     }
+    let computer = &rt.computer;
+    if computer.status.enabled && computer.owner.is_some() && computer.status.session == rt.id {
+        if computer.status.paused {
+            text.push_str("\nNative computer control: PAUSED. Wait for the user to resume before desktop input.\n");
+        } else {
+            text.push_str("\nNative computer control: ENABLED by the user in this session's GUI. \
+                Enabling Computer use grants consent for computer_windows, computer_select_window, \
+                computer_observe and computer_act until pause, stop or disconnect. These native tools \
+                are independent of the workspace-mode rules above, including Plan and SDLC: no \
+                workspace sandbox classifier or per-action human approval applies. Continue the \
+                requested desktop task with computer tools; do not ask for redundant permission \
+                because of earlier harness denials. On macOS, Windows, and X11 an application \
+                window share accepts clicks and typing in that window's screenshot; the window is \
+                brought forward. Wayland portal shares stay view-only; select a screen there. \
+                This consent does not change \
+                approvals for shell, file, browser or other tools.\n");
+        }
+    } else if !computer.status.session.is_empty() {
+        text.push_str("\nNative computer control: INACTIVE. Earlier enablement no longer grants control; the user must explicitly enable it in the GUI.\n");
+    }
     text
 }
 
@@ -77,6 +97,29 @@ pub(super) fn append(history: &mut [ChatMessage], rt: &SessionRuntime) -> anyhow
 mod tests {
     use super::*;
     use crate::dto::chat::CACHE_SPLIT_MARK;
+
+    #[test]
+    fn runtime_computer_consent_tracks_pause_stop_and_session_ownership() {
+        let mut rt = SessionRuntime::new();
+        rt.agent_mode = AgentMode::Plan;
+        assert!(!render(&rt).contains("Native computer control:"));
+        rt.computer.owner = Some(1);
+        rt.computer.status.session = rt.id.clone();
+        rt.computer.status.enabled = true;
+        let active = render(&rt);
+        assert!(active.contains("Native computer control: ENABLED"));
+        assert!(active.contains("independent of the workspace-mode rules"));
+        rt.computer.pause(true);
+        let paused = render(&rt);
+        assert!(paused.contains("Native computer control: PAUSED"));
+        assert!(!paused.contains("Native computer control: ENABLED"));
+        rt.computer.pause(false);
+        rt.computer.status.session = "another-session".into();
+        assert!(render(&rt).contains("Native computer control: INACTIVE"));
+        rt.computer.status.session = rt.id.clone();
+        rt.computer.stop("user stopped");
+        assert!(render(&rt).contains("Native computer control: INACTIVE"));
+    }
 
     #[test]
     fn runtime_plan_wins_over_stale_approval_and_history() {

@@ -490,6 +490,7 @@ if [ "$os" = "linux" ] && [ -n "${HOME:-}" ]; then
         }
         # Best-effort per size — partial success is fine.
         _fetch_icon 32  icon-32.png  && _icon_ok=1 || true
+        _fetch_icon 48  icon-48.png  && _icon_ok=1 || true
         _fetch_icon 64  icon-64.png  && _icon_ok=1 || true
         _fetch_icon 128 icon-128.png && _icon_ok=1 || true
         _fetch_icon 256 icon-256.png && _icon_ok=1 || true
@@ -539,6 +540,96 @@ if [ "$os" = "linux" ] && [ -n "${HOME:-}" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# macOS: user-level ~/Applications/Koma.app (Finder, Launchpad, Spotlight).
+# Best-effort — never fails the install. The bundle is a thin launcher that
+# execs the installed binary with `gui`, same idea as the Linux desktop entry.
+# An absolute path avoids PATH shadowing. Override the icon CDN with
+# KOMA_ICON_BASE=... (defaults to assets on main).
+# ---------------------------------------------------------------------------
+if [ "$os" = "darwin" ] && [ -n "${HOME:-}" ]; then
+    _koma_bin="$INSTALL_DIR/$bin_name"
+    case "$_koma_bin" in
+        /*) ;;
+        *)  _koma_bin="$(cd -P "$(dirname -- "$_koma_bin")" 2>/dev/null && pwd)/$(basename -- "$_koma_bin")" ;;
+    esac
+    _app="$HOME/Applications/Koma.app"
+    # Leave a non-directory already at that path alone.
+    if [ -x "$_koma_bin" ] && { [ ! -e "$_app" ] || [ -d "$_app" ]; }; then
+        mkdir -p "$_app/Contents/MacOS" "$_app/Contents/Resources" 2>/dev/null || true
+        if [ -d "$_app/Contents/MacOS" ] && [ -w "$_app/Contents/MacOS" ]; then
+            # Embed the binary path as a single-quoted shell word.
+            _bin_escaped=$(printf '%s' "$_koma_bin" | sed "s/'/'\\\\''/g")
+            {
+                printf '%s\n' '#!/bin/sh'
+                printf '%s\n' "exec '${_bin_escaped}' gui"
+            } > "$_app/Contents/MacOS/koma" 2>/dev/null || true
+            chmod 755 "$_app/Contents/MacOS/koma" 2>/dev/null || true
+
+            _icon_base="${KOMA_ICON_BASE:-https://raw.githubusercontent.com/aula-id/koma/main/assets}"
+            _icns="$_app/Contents/Resources/AppIcon.icns"
+            if command -v curl > /dev/null 2>&1; then
+                curl -fsSL "${_icon_base}/icon.icns" -o "$_icns" 2>/dev/null || true
+            elif command -v wget > /dev/null 2>&1; then
+                wget -qO "$_icns" "${_icon_base}/icon.icns" 2>/dev/null || true
+            fi
+            if [ ! -s "$_icns" ]; then
+                rm -f "$_icns" 2>/dev/null || true
+            fi
+
+            {
+                printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>'
+                printf '%s\n' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+                printf '%s\n' '<plist version="1.0">'
+                printf '%s\n' '<dict>'
+                printf '%s\n' '  <key>CFBundleName</key>'
+                printf '%s\n' '  <string>Koma</string>'
+                printf '%s\n' '  <key>CFBundleDisplayName</key>'
+                printf '%s\n' '  <string>Koma</string>'
+                printf '%s\n' '  <key>CFBundleIdentifier</key>'
+                printf '%s\n' '  <string>run.koma.desktop</string>'
+                printf '%s\n' '  <key>CFBundleVersion</key>'
+                printf '%s\n' '  <string>1.0</string>'
+                printf '%s\n' '  <key>CFBundleShortVersionString</key>'
+                printf '%s\n' '  <string>1.0</string>'
+                printf '%s\n' '  <key>CFBundlePackageType</key>'
+                printf '%s\n' '  <string>APPL</string>'
+                printf '%s\n' '  <key>CFBundleExecutable</key>'
+                printf '%s\n' '  <string>koma</string>'
+                printf '%s\n' '  <key>CFBundleInfoDictionaryVersion</key>'
+                printf '%s\n' '  <string>6.0</string>'
+                printf '%s\n' '  <key>LSMinimumSystemVersion</key>'
+                printf '%s\n' '  <string>11.0</string>'
+                printf '%s\n' '  <key>LSApplicationCategoryType</key>'
+                printf '%s\n' '  <string>public.app-category.developer-tools</string>'
+                printf '%s\n' '  <key>NSHighResolutionCapable</key>'
+                printf '%s\n' '  <true/>'
+                printf '%s\n' '  <key>NSPrincipalClass</key>'
+                printf '%s\n' '  <string>NSApplication</string>'
+                if [ -s "$_icns" ]; then
+                    printf '%s\n' '  <key>CFBundleIconFile</key>'
+                    printf '%s\n' '  <string>AppIcon</string>'
+                fi
+                printf '%s\n' '</dict>'
+                printf '%s\n' '</plist>'
+            } > "$_app/Contents/Info.plist" 2>/dev/null || true
+
+            # A curl-downloaded icon picks up Gatekeeper quarantine. Clear it
+            # on the whole bundle so Finder can open the app.
+            if command -v xattr > /dev/null 2>&1; then
+                xattr -dr com.apple.quarantine "$_app" 2>/dev/null || true
+            fi
+            _lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+            if [ -x "$_lsregister" ]; then
+                "$_lsregister" -f "$_app" 2>/dev/null || true
+            fi
+            if [ -x "$_app/Contents/MacOS/koma" ] && [ -f "$_app/Contents/Info.plist" ]; then
+                KOMA_APP_BUNDLE="$_app"
+            fi
+        fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # Success
 # ---------------------------------------------------------------------------
 echo ""
@@ -548,6 +639,10 @@ echo "  Run 'koma' to start the TUI, or 'koma gui' for the desktop client."
 if [ -n "${KOMA_DESKTOP_ENTRY:-}" ]; then
     echo "  Desktop entry: $KOMA_DESKTOP_ENTRY"
     echo "  Open your app grid and search for Koma (log out/in if it is missing)."
+fi
+if [ -n "${KOMA_APP_BUNDLE:-}" ]; then
+    echo "  App: $KOMA_APP_BUNDLE"
+    echo "  Open it from Finder or Launchpad (log out/in if it is missing)."
 fi
 echo "  Re-run this installer with --with-research (or run"
 echo "  'koma --internet-fullmode-install') to enable full internet mode."

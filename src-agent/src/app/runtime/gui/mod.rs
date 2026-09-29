@@ -29,6 +29,7 @@ use wry::http::{Request, Response, StatusCode};
 // `proto`/`dispatch` modules (file size); re-imported here so `run_gui` keeps
 // compiling unchanged. `dispatch_git`/`dispatch_forward` are `dispatch`'s own
 // split-out git/key routing + generic forwarding helpers (file size).
+mod computer_viewer;
 mod dispatch;
 mod dispatch_forward;
 mod dispatch_git;
@@ -428,7 +429,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     });
     let coding_error_proxy = proxy.clone();
     let gui_ctx = dispatch::GuiReqCtx {
-        ctl: ctl_tx,
+        ctl: ctl_tx.clone(),
         req: Arc::clone(&live_req),
         marks: Arc::clone(&live_marks),
         view: Arc::clone(&live_view),
@@ -477,18 +478,27 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 Err(_) => return, // malformed / unknown -> ignore, never panic
             };
             match msg {
+                ClientMsg::ComputerPrepared { id } => {
+                    let _ = gui_ctx
+                        .ctl
+                        .send(crate::app::runtime::client::HostCtl::ComputerPrepared { id });
+                }
                 ClientMsg::Coding { request } => {
                     let id = request.id.clone();
                     let workspace = request.workspace.clone();
                     if let Err(error) = coding_service.submit(request) {
-                        let _ = coding_error_proxy.send_event(UserEvent::Push(serde_json::json!({
-                            "k":"CodingReply", "id":id, "workspace":workspace, "error":error
-                        }).to_string()));
+                        let _ = coding_error_proxy.send_event(UserEvent::Push(
+                            serde_json::json!({
+                                "k":"CodingReply", "id":id, "workspace":workspace, "error":error
+                            })
+                            .to_string(),
+                        ));
                     }
                 }
                 // Custom-titlebar window commands (the window is undecorated).
                 ClientMsg::Win { a } => {
                     let cmd = match a.as_str() {
+                        "computer-viewer" => Some(WinCmd::ComputerViewer),
                         "drag" => Some(WinCmd::Drag),
                         "min" => Some(WinCmd::Minimize),
                         "max" => Some(WinCmd::ToggleMax),
@@ -571,7 +581,11 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     let mut next_push_at: Option<Instant> = None;
     let mut last_push_at: Option<Instant> = None;
 
-    event_loop.run(move |event, _target, control_flow| {
+    let mut computer_viewer: Option<computer_viewer::Viewer> = None;
+    let mut computer_status: Option<crate::app::runtime::computer::Status> = None;
+    let computer_ctl = ctl_tx.clone();
+    let mut computer_palette = serde_json::Value::Null;
+    event_loop.run(move |event, target, control_flow| {
         *control_flow = next_push_at
             .map(ControlFlow::WaitUntil)
             .unwrap_or(ControlFlow::Wait);
@@ -580,6 +594,61 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
             // `MainEventsCleared` below drains a whole burst through one JS call,
             // never one synchronous `evaluate_script` per envelope.
             Event::UserEvent(UserEvent::Push(json)) => {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) {
+                    if let Some(palette) = value.get("palette").filter(|v| v.is_object()) {
+                        computer_palette = palette.clone();
+                        if let Some(viewer) = &computer_viewer {
+                            viewer.palette(&computer_palette);
+                        }
+                    }
+                    let kind = value.get("k").and_then(|v| v.as_str());
+                    if kind == Some("ComputerPrepare") {
+                        if let Some(id) = value.get("id").and_then(|v| v.as_str()) {
+                            if value.get("hide").and_then(|v| v.as_bool()) == Some(true) {
+                                if let Some(viewer) = &computer_viewer { viewer.window.set_visible(false); }
+                            }
+                            if value.get("hide").and_then(|v| v.as_bool()) == Some(true) {
+                                // The in-app preview is HTML in the main window. Wait
+                                // for its hide to paint before capturing or injecting input.
+                                let id = serde_json::to_string(id).unwrap_or_default();
+                                let _ = webview.evaluate_script(&format!(
+                                    "(()=>{{document.documentElement.dataset.computerPreparing='true';const ack=()=>window.ipc.postMessage(JSON.stringify({{t:'computer-prepared',id:{id}}}));if(document.hidden)ack();else requestAnimationFrame(()=>requestAnimationFrame(ack));}})();"
+                                ));
+                            } else {
+                                let _ = computer_ctl.send(crate::app::runtime::client::HostCtl::ComputerPrepared { id: id.into() });
+                            }
+                        }
+                        return;
+                    }
+                    if kind == Some("ComputerPreview") {
+                        if let Some(viewer) = &computer_viewer { viewer.frame(&value["frame"]); }
+                    }
+                    if kind == Some("Computer") {
+                        if let Some(status) = value.get("status").and_then(|v| {
+                            serde_json::from_value::<crate::app::runtime::computer::Status>(v.clone()).ok()
+                        }) {
+                            if !status.enabled {
+                                computer_viewer = None;
+                            } else if let Some(viewer) = &computer_viewer {
+                                viewer.update(&status);
+                                if !status.busy { viewer.window.set_visible(true); }
+                            }
+                            if !status.busy {
+                                let _ = webview.evaluate_script("delete document.documentElement.dataset.computerPreparing;");
+                            }
+                            computer_status = Some(status);
+                        }
+                    }
+                    let switched = kind == Some("Snapshot")
+                        && computer_status.as_ref().is_some_and(|s| {
+                            value.get("session").and_then(|v| v.as_str()) != Some(s.session.as_str())
+                        });
+                    if switched || matches!(kind, Some("Switching" | "Hub")) {
+                        let _ = webview.evaluate_script("delete document.documentElement.dataset.computerPreparing;");
+                        computer_viewer = None;
+                        computer_status = None;
+                    }
+                }
                 pending_pushes.push_back(json);
                 if next_push_at.is_none() {
                     let now = Instant::now();
@@ -668,6 +737,24 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
             // drag / minimize / maximize / close / edge-resize all have to be driven
             // from here via tao's `Window` methods rather than native OS chrome.
             Event::UserEvent(UserEvent::Win(cmd)) => match cmd {
+                WinCmd::ComputerViewer => {
+                    if computer_viewer.is_none()
+                        && computer_status.as_ref().is_some_and(|s| s.enabled && !s.busy && s.capabilities.floating)
+                    {
+                        match computer_viewer::Viewer::new(
+                            target, computer_status.as_ref(), &computer_palette, computer_ctl.clone(),
+                        ) {
+                            Ok(viewer) => computer_viewer = Some(viewer),
+                            Err(e) => {
+                                pending_pushes.push_back(serde_json::json!({
+                                    "k": "ComputerError",
+                                    "message": format!("Floating preview unavailable: {e}. Use the in-app preview."),
+                                }).to_string());
+                                next_push_at = Some(Instant::now());
+                            }
+                        }
+                    }
+                }
                 WinCmd::Drag => {
                     let _ = window.drag_window();
                 }
@@ -690,6 +777,27 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                     webview.open_devtools();
                 }
             },
+            Event::WindowEvent { window_id, event: WindowEvent::Focused(true), .. }
+                if computer_viewer.as_ref().is_some_and(|v| v.window.id() == window_id) => {
+                    let _ = computer_ctl.send(crate::app::runtime::client::HostCtl::Computer {
+                        action: "pause".into(), window: None,
+                    });
+                    computer_viewer = None;
+                    pending_pushes.push_back(serde_json::json!({"k":"ComputerError","message":"The desktop focused the floating viewer. Control is paused; use the in-app preview."}).to_string());
+                    next_push_at = Some(Instant::now());
+                }
+            Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. }
+                if computer_viewer.as_ref().is_some_and(|v| v.window.id() == window_id) => {
+                    computer_viewer = None;
+                }
+            Event::WindowEvent { window_id, event: WindowEvent::Resized(_), .. }
+                if computer_viewer.as_ref().is_some_and(|v| v.window.id() == window_id) => {
+                    if let Some(viewer) = &computer_viewer { viewer.resized(); viewer.save(); }
+                }
+            Event::WindowEvent { window_id, event: WindowEvent::Moved(_), .. }
+                if computer_viewer.as_ref().is_some_and(|v| v.window.id() == window_id) => {
+                    if let Some(viewer) = &computer_viewer { viewer.save(); }
+                }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..

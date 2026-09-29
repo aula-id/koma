@@ -265,6 +265,13 @@ pub struct ShapedRequest {
     pub drss_active: bool,
 }
 
+/// Schemas plus the computer-use frame gate. Kept together so request
+/// construction stays within the argument limit of the unflagged `shape`.
+pub(crate) struct LiveSend {
+    pub schemas: u64,
+    pub computer_frames: bool,
+}
+
 pub fn shape(
     history: Vec<ChatMessage>,
     session_dir: &Path,
@@ -274,7 +281,50 @@ pub fn shape(
     limits: &ContextLimits,
     schemas: u64,
 ) -> Result<ShapedRequest> {
+    shape_inner(
+        history,
+        session_dir,
+        settings,
+        user,
+        goal,
+        limits,
+        LiveSend {
+            schemas,
+            computer_frames: false,
+        },
+    )
+}
+
+/// Same request construction as [`shape`], with the computer-use frame gate.
+pub(crate) fn shape_live(
+    history: Vec<ChatMessage>,
+    session_dir: &Path,
+    settings: &Settings,
+    user: &str,
+    goal: &GoalWire,
+    limits: &ContextLimits,
+    send: LiveSend,
+) -> Result<ShapedRequest> {
+    shape_inner(history, session_dir, settings, user, goal, limits, send)
+}
+
+fn shape_inner(
+    mut history: Vec<ChatMessage>,
+    session_dir: &Path,
+    settings: &Settings,
+    user: &str,
+    goal: &GoalWire,
+    limits: &ContextLimits,
+    send: LiveSend,
+) -> Result<ShapedRequest> {
+    let LiveSend {
+        schemas,
+        computer_frames,
+    } = send;
     if !settings.short_send_enabled || history.len() <= 1 {
+        if computer_frames {
+            super::frame::retain_latest_computer_frame(&mut history);
+        }
         return Ok(ShapedRequest {
             history,
             drss_active: false,
@@ -287,8 +337,6 @@ pub fn shape(
     let window = limits.effective_window;
     let reserve = limits.reserved_output(settings.max_output_tokens);
     let minimum_reply = reserve.min(4096);
-    let body = &history[1..];
-    let body_tokens = body.iter().map(message_tokens).sum::<u64>();
     let fixed = message_tokens(&history[0]) + schemas + FRAMING_TOKENS + OUTPUT_MARGIN;
     let normal_b = INDEX_MAX_TOKENS.min(window / 50);
     let normal_ceiling =
@@ -298,6 +346,12 @@ pub fn shape(
         Err(error) => {
             // The 75% operating band alone must not interrupt a request that
             // still fits the complete model window with useful reply room.
+            // A computer-use request is measured after its older frames are
+            // omitted. That shortened text is not written into the archive.
+            if computer_frames {
+                super::frame::retain_latest_computer_frame(&mut history);
+            }
+            let body_tokens = history.iter().skip(1).map(message_tokens).sum::<u64>();
             anyhow::ensure!(fixed + body_tokens + minimum_reply <= window,
                 "DRSS archive unavailable ({error}); cannot safely reduce context. Conversation preserved.");
             return Ok(ShapedRequest {
@@ -306,6 +360,25 @@ pub fn shape(
             });
         }
     };
+    let body = &history[1..];
+    // Computer-use sends one frame. Charges and the live tail use that reduced
+    // copy. Fingerprints, protection, and the archive index still see `body`.
+    let wire_charges = computer_frames.then(|| {
+        let mut copy = body.to_vec();
+        super::frame::retain_latest_computer_frame(&mut copy);
+        copy
+    });
+    let charge = |start: usize, end: usize| -> u64 {
+        (start..end)
+            .map(|i| {
+                wire_charges
+                    .as_ref()
+                    .map(|wire| message_tokens(&wire[i]))
+                    .unwrap_or_else(|| message_tokens(&body[i]))
+            })
+            .sum()
+    };
+    let body_tokens = charge(0, body.len());
     let ids = archive_ids(&index, body);
     let missing = ids.iter().any(Option::is_none);
     let recovery =
@@ -342,7 +415,7 @@ pub fn shape(
         .iter()
         .zip(&keep)
         .filter(|(_, keep)| **keep)
-        .map(|(r, _)| body[r.start..r.end].iter().map(message_tokens).sum::<u64>())
+        .map(|(round, _)| charge(round.start, round.end))
         .sum();
     if tokens > ceiling {
         for (round, retained) in rounds.iter().zip(&mut keep) {
@@ -353,12 +426,7 @@ pub fn shape(
                 continue;
             }
             *retained = false;
-            tokens = tokens.saturating_sub(
-                body[round.start..round.end]
-                    .iter()
-                    .map(message_tokens)
-                    .sum::<u64>(),
-            );
+            tokens = tokens.saturating_sub(charge(round.start, round.end));
             boundary = boundary.max(round.archived_end.unwrap_or(0));
         }
     }
@@ -403,6 +471,11 @@ pub fn shape(
             },
         )?,
     };
+    if let Some(wire) = &wire_charges {
+        for (slot, index) in tail.iter_mut().zip(&retained_indices) {
+            *slot = wire[*index].clone();
+        }
+    }
     // Recovery borrows only real free room: A, B, schemas, framing, a useful D,
     // and the safety margin still fit W. The 300k operating cap never changes.
     let recovery_room = window.saturating_sub(fixed + message_tokens(&b) + minimum_reply);
@@ -435,8 +508,9 @@ pub fn shape(
                 break;
             }
             let before = message_tokens(&tail[i]);
+            let before_content = tail[i].content.clone();
             stub(&mut tail[i], refs[retained_indices[i]].as_ref());
-            drss_active |= tail[i] != body[retained_indices[i]];
+            drss_active |= tail[i].content != before_content;
             tokens = tokens.saturating_sub(before) + message_tokens(&tail[i]);
         }
     }

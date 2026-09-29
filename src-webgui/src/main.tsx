@@ -1,4 +1,5 @@
 import React from 'react'
+import { ComputerViewer } from './components/ComputerViewer'
 import ReactDOM from 'react-dom/client'
 import { RouterProvider } from '@tanstack/react-router'
 import { router } from './router'
@@ -33,7 +34,7 @@ if (typeof window !== 'undefined') {
 function renderApp() {
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
-      <RouterProvider router={router} />
+      {window.location.hash === '#computer-preview' ? <ComputerViewer /> : <RouterProvider router={router} />}
     </React.StrictMode>
   )
 }

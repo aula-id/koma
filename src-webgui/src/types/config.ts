@@ -1,6 +1,6 @@
 // Shared config-panel types (MCP servers, providers, models). Mirrors the
 // daemon's `AppConfig` projection (providers/models/mcp_servers) — see
-// `Config` push envelope in `store/koma.ts`. Kept in one module so the panel
+// `Config` push envelope in `store/types/envelope.ts`. Kept in one module so the panel
 // components (McpPanel/ConnectorPanel + their sub-views), the store, and
 // koma.d.ts's GuiReq union all agree on shape.
 
@@ -39,7 +39,7 @@ export type McpServer = {
 // project the flag yet (and on every real provider).
 export type Provider = { id: string; name: string; endpoint: string; hasKey: boolean; isKomaFree?: boolean }
 
-// OAuth types (`OAuthConn`/`OAuthProviderEntry`) live in store/koma.ts now —
+// OAuth types (`OAuthConn`/`OAuthProviderEntry`) live in store/types/oauth.ts —
 // they're populated by the real `OAuthState` push envelope, not a local stub.
 
 export type Scope = 'global' | 'local'

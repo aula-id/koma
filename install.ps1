@@ -48,15 +48,34 @@ try {
     Write-Host "Downloading koma..."
     Invoke-WebRequest -Uri $url -OutFile $msiPath -UseBasicParsing
 
-    Write-Host "Installing koma..."
-    $proc = Start-Process msiexec.exe -ArgumentList @('/i', $msiPath) -Wait -NoNewWindow
-    if ($proc.ExitCode -ne 0) {
+    $installed = $null
+    try {
+        $installed = Get-ItemProperty `
+            'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', `
+            'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' `
+            -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -eq 'koma' }
+    } catch {
+        $installed = $null
+    }
+    if ($installed) {
+        Write-Host "Upgrading koma..."
+    } else {
+        Write-Host "Installing koma..."
+    }
+    # 3010: success, reboot requested (a file was in use and Windows will finish the replace).
+    $proc = Start-Process msiexec.exe -ArgumentList @('/i', $msiPath) -Wait -NoNewWindow -PassThru
+    if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
         Write-Error "MSI installer exited with code $($proc.ExitCode)"
         exit 1
     }
 
     Write-Host ""
-    Write-Host "koma installed successfully."
+    if ($installed) {
+        Write-Host "koma upgraded successfully."
+    } else {
+        Write-Host "koma installed successfully."
+    }
     Write-Host ""
     Write-Host "  Run 'koma' to start."
     Write-Host ""

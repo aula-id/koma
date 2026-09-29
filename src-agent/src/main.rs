@@ -63,16 +63,24 @@ mod view;
 
 fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
-    if std::env::args().nth(1).as_deref() == Some("coding-pty-gate") { return coding::pty_gate_main(); }
-    if std::env::args().nth(1).as_deref() == Some("coding-daemon") { return coding::daemon_main(); }
+    if std::env::args().nth(1).as_deref() == Some("coding-pty-gate") {
+        return coding::pty_gate_main();
+    }
+    if std::env::args().nth(1).as_deref() == Some("coding-daemon") {
+        return coding::daemon_main();
+    }
     if std::env::args().nth(1).as_deref() == Some("coding-provision") {
         return coding::provision_main();
     }
     if std::env::args().nth(1).as_deref() == Some("coding-worker") {
         return coding::worker_main();
     }
-    if std::env::args().nth(1).as_deref() == Some("coding-test-cargo") { return coding::cargo_tests_main(); }
-    if std::env::args().nth(1).as_deref()==Some("coding-test-framework"){return coding::framework_tests_main();}
+    if std::env::args().nth(1).as_deref() == Some("coding-test-cargo") {
+        return coding::cargo_tests_main();
+    }
+    if std::env::args().nth(1).as_deref() == Some("coding-test-framework") {
+        return coding::framework_tests_main();
+    }
     // Install a panic hook that logs to ~/.koma/error.log before exiting.
     // Daemon stderr goes to /dev/null, so the default hook's eprintln is invisible.
     // This makes every panic (including .expect()/.unwrap() failures) diagnosable.
@@ -103,7 +111,9 @@ fn main() -> anyhow::Result<()> {
         }));
     }
 
-    if let Some(result) = app::git_editor_helper() { return result; }
+    if let Some(result) = app::git_editor_helper() {
+        return result;
+    }
 
     // --- short-circuit: `--version`/`-V`/`--help`/`-h` (#75) ---
     // Must run BEFORE any side effect (legacy-dir migration, catalogue overlay init,

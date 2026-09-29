@@ -7,6 +7,8 @@ fn main() {
     if std::env::var("CARGO_FEATURE_GUI").is_err() {
         return;
     }
+    #[cfg(feature = "gui")]
+    build_computer_bridge();
     let webgui = concat!(env!("CARGO_MANIFEST_DIR"), "/../src-webgui");
     // Rebuild if any frontend source changes.
     println!("cargo:rerun-if-changed={webgui}/src");
@@ -32,6 +34,73 @@ fn main() {
         .expect("failed to spawn npm run build");
     if !build.success() {
         panic!("`npm run build` (vite) failed");
+    }
+}
+
+#[cfg(feature = "gui")]
+fn build_computer_bridge() {
+    println!("cargo:rerun-if-changed=native/computer/capture_limits.h");
+    println!("cargo:rerun-if-changed=native/computer/input_idle.h");
+    let target = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let mut build = cc::Build::new();
+    // cc-rs uses Cargo's TARGET for the archive architecture (Darwin arm64 or
+    // x86_64), and the shared MACOSX_DEPLOYMENT_TARGET for its OS baseline.
+    // Its rustc-link-lib output belongs to src/lib.rs; the executable imports
+    // that library's computer_native ABI so these dependencies reach the link.
+    build.cpp(true);
+    match target.as_str() {
+        "macos" => {
+            let source = "native/computer/macos.mm";
+            println!("cargo:rerun-if-changed={source}");
+            build
+                .file(source)
+                .flag("-std=c++17")
+                .flag("-fobjc-arc")
+                .flag("-fblocks");
+            build.compile("koma_computer");
+            for framework in [
+                "Foundation",
+                "AppKit",
+                "ApplicationServices",
+                "Vision",
+                "ImageIO",
+            ] {
+                println!("cargo:rustc-link-lib=framework={framework}");
+            }
+            // Older macOS releases can still run Koma; the bridge advertises
+            // capture only on macOS 14+, where the screenshot API exists.
+            println!("cargo:rustc-link-arg=-Wl,-weak_framework,ScreenCaptureKit");
+        }
+        "windows" => {
+            let source = "native/computer/windows.cpp";
+            println!("cargo:rerun-if-changed={source}");
+            assert!(std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc"),
+                "The GUI computer bridge requires the Windows MSVC SDK; use --no-default-features for GNU headless builds");
+            build
+                .file(source)
+                .flag("/std:c++17")
+                .flag("/EHsc")
+                .flag("/utf-8");
+            build
+                .define("WIN32_LEAN_AND_MEAN", None)
+                .define("NOMINMAX", None);
+            build.compile("koma_computer");
+            for library in [
+                "windowsapp",
+                "d3d11",
+                "dxgi",
+                "dwmapi",
+                "user32",
+                "ole32",
+                "oleaut32",
+                "uuid",
+                "uiautomationcore",
+                "windowscodecs",
+            ] {
+                println!("cargo:rustc-link-lib={library}");
+            }
+        }
+        _ => {}
     }
 }
 

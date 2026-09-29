@@ -325,10 +325,19 @@ pub(crate) fn connect_command(
 
 /// Independent coding channel, retained across chat/root selection changes.
 #[cfg(feature = "gui")]
-pub(crate) fn coding_worker_command(target: &RemoteTarget, auth: Option<&SshAuth>, koma_path: &str) -> Result<StdCommand> {
+pub(crate) fn coding_worker_command(
+    target: &RemoteTarget,
+    auth: Option<&SshAuth>,
+    koma_path: &str,
+) -> Result<StdCommand> {
     let mut cmd = StdCommand::new("ssh");
     apply_std_ssh_base(&mut cmd, target, auth);
-    cmd.args(["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2"]);
+    cmd.args([
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=2",
+    ]);
     cmd.arg(format!("{}@{}", target.user, target.host));
     cmd.arg(remote_command(koma_path, &["coding-worker"])?);
     Ok(cmd)

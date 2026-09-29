@@ -16,6 +16,7 @@ mod browser_inspect;
 mod browser_interact;
 mod browser_tabs;
 mod describe_screenshot;
+pub(crate) mod image_inspection;
 pub(crate) mod load_image;
 mod load_screenshot;
 mod search_screenshots;

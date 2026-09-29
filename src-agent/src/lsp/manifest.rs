@@ -102,7 +102,9 @@ impl Manifest {
 /// complete. Prefers `binary_rel` from the manifest; falls back to
 /// `bin/<binary>` and bare `<binary>` under the server dir.
 pub fn managed_binary_path(id: &str, binary: &str) -> Option<PathBuf> {
-    if let Some(path) = crate::coding::provision::component_binary(id) { return Some(path); }
+    if let Some(path) = crate::coding::provision::component_binary(id) {
+        return Some(path);
+    }
     let dir = server_dir(id).ok()?;
     if !dir.is_dir() {
         return None;

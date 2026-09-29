@@ -40,7 +40,12 @@ pub(super) struct GuiReqCtx {
 /// routing the old inline `match req { GuiReq::* }` used — pure code motion.
 pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
     match req {
-        // Page (re)booted: ask the client-thread to re-push full state.
+        GuiReq::ComputerPreview { request } => {
+            let _ = ctx.ctl.send(HostCtl::ComputerPreview(request));
+        }
+        GuiReq::Computer { action, window } => {
+            let _ = ctx.ctl.send(HostCtl::Computer { action, window });
+        } // Page (re)booted: ask the client-thread to re-push full state.
         GuiReq::Ready => {
             let _ = ctx.ctl.send(HostCtl::Ready);
         }

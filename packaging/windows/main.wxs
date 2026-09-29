@@ -8,7 +8,8 @@
     <?error Unsupported value of sys.BUILDARCH=$(sys.BUILDARCH)?>
 <?endif?>
 
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
     <Product
             Id="*"
             Name="{{product_name}}"
@@ -29,13 +30,35 @@
         <!-- reinstall all files; rewrite all registry entries; reinstall all shortcuts -->
         <Property Id="REINSTALLMODE" Value="amus" />
 
-        {{#if allow_downgrades}}
-            <MajorUpgrade Schedule="afterInstallInitialize" AllowDowngrades="yes" />
-        {{else}}
-            <MajorUpgrade Schedule="afterInstallInitialize" DowngradeErrorMessage="!(loc.DowngradeErrorMessage)" AllowSameVersionUpgrades="yes" />
-        {{/if}}
+        <!-- koma-vendored template diff (vs pristine cargo-packager v0.11.8 main.wxs):
+             replace MajorUpgrade. cargo-packager defaults allow_downgrades to true, and that
+             branch omits AllowSameVersionUpgrades. A second MSI with the same ProductVersion
+             (releases often share the Cargo.toml version) then hits error 1638 and Windows
+             tells the user to uninstall first. Product Id="*" is a new ProductCode every
+             build; this UpgradeCode match removes whatever koma is already installed
+             (older, same, or newer) before the new files are copied. -->
+        <Upgrade Id="{{upgrade_code}}">
+            <UpgradeVersion
+                Minimum="0.0.0.0"
+                IncludeMinimum="yes"
+                MigrateFeatures="yes"
+                OnlyDetect="no"
+                Property="WIX_UPGRADE_DETECTED" />
+        </Upgrade>
+
+        <!-- Close a running koma.exe so the upgrade can replace the file. WM_CLOSE, then
+             end-session, then terminate. RebootPrompt must stay no when TerminateProcess is set. -->
+        <util:CloseApplication Id="CloseKoma"
+                               Target="koma.exe"
+                               Description="Koma is open and will be closed so the upgrade can replace it."
+                               CloseMessage="yes"
+                               EndSessionMessage="yes"
+                               RebootPrompt="no"
+                               TerminateProcess="0"
+                               Timeout="15" />
 
         <InstallExecuteSequence>
+            <RemoveExistingProducts After="InstallInitialize" />
             <RemoveShortcuts>Installed AND NOT UPGRADINGPRODUCTCODE</RemoveShortcuts>
         </InstallExecuteSequence>
 

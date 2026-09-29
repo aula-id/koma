@@ -9,7 +9,7 @@ Usage:
 
 Produces:
     - icon.png: source copied verbatim if square, padded to square if not (transparent margin).
-    - icon-32.png, icon-64.png, icon-128.png, icon-256.png, icon-512.png: LANCZOS resizes.
+    - icon-32.png, icon-48.png, icon-64.png, icon-128.png, icon-256.png, icon-512.png: LANCZOS resizes.
     - icon.ico: multi-size ICO container with 16/32/48/64/128/256 entries.
     - icon.icns: Apple ICNS (skipped with warning if Pillow can't generate it on this system).
 
@@ -20,7 +20,7 @@ import sys
 from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SIZES = [32, 64, 128, 256, 512]
+SIZES = [32, 48, 64, 128, 256, 512]
 ICO_SIZES = [16, 32, 48, 64, 128, 256]
 
 

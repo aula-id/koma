@@ -25,6 +25,7 @@ pub(super) enum UserEvent {
 /// titlebar to drive these.
 #[derive(Clone, Copy)]
 pub(super) enum WinCmd {
+    ComputerViewer,
     Drag,
     Minimize,
     ToggleMax,
@@ -40,6 +41,8 @@ pub(super) enum WinCmd {
 #[derive(serde::Deserialize)]
 #[serde(tag = "t")]
 pub(super) enum ClientMsg {
+    #[serde(rename = "computer-prepared")]
+    ComputerPrepared { id: String },
     #[serde(rename = "coding")]
     Coding { request: crate::coding::Request },
     /// Custom-titlebar window command: drag / minimize / toggle-maximize / close.
@@ -86,6 +89,14 @@ pub(super) struct TutorialChatMsg {
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "r")]
 pub(super) enum GuiReq {
+    Computer {
+        action: String,
+        window: Option<String>,
+    },
+    ComputerPreview {
+        #[serde(flatten)]
+        request: crate::app::runtime::computer::PreviewRequest,
+    },
     Ready,
     Submit {
         text: String,

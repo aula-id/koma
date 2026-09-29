@@ -30,6 +30,7 @@ import {
 } from 'lucide-react'
 import { useKoma, type AttachmentEntry, type ChatMessage, type ToolCallView } from '../store/koma'
 import { ChatScrollRootContext, MessageBody } from './MessageBody'
+import { ComputerObservationCard, ComputerToolCall } from './ComputerObservationCard'
 import { Composer } from './Composer'
 import { ApprovalOverlay } from './ApprovalOverlay'
 import { fallbackSignature, truncateChars } from '../lib/toolSignature'
@@ -203,6 +204,8 @@ const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) 
       )
     }
   }
+
+  if (call.name.startsWith('computer_')) return <ComputerToolCall call={call} />
 
   // Fall through to generic tool row when plan/mission digest is absent.
   const meta = toolBoxMeta(call.name)
@@ -421,6 +424,7 @@ function Message({ m, index }: { m: ChatMessage; index: number }) {
   // even when older history is still held off-store.
   const rewindIndex = typeof m.idx === 'number' ? m.idx : index
   if (m.role === 'user') {
+    if (m.computer) return <ComputerObservationCard observation={m.computer} />
     if (m.kind === 'shell') return <ShellMessage content={m.content} />
     if (m.kind === 'bashNudge') return <BashNudgeMessage content={m.content} />
     // Edit → STAGE a rewind (does NOT truncate on click): refill the composer with
@@ -600,4 +604,3 @@ export function ChatView() {
     </div>
   )
 }
-

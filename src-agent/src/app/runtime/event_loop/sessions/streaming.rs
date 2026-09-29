@@ -19,7 +19,16 @@ pub(super) fn drain_stream(
 
     if let Some(mut rx) = state.rest.sessions[idx].active_rx.take() {
         let mut still_streaming = true;
-        while let Ok(event) = rx.try_recv() {
+        loop {
+            let event = match rx.try_recv() {
+                Ok(event) => event,
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    // A dropped/panicked producer is not an idle stream. Reuse
+                    // the error path so the turn cannot wait forever silently.
+                    StreamEvent::Error("Model stream closed without a completion event. The turn was interrupted; no pending input was replayed.".into())
+                }
+            };
             dirty = true;
             match event {
                 StreamEvent::Token(t) => {
@@ -252,6 +261,69 @@ pub(super) fn drain_stream(
 mod context_usage_tests {
     use super::*;
     use crate::app::{mode::Mode, state::SessionRuntime};
+
+    #[test]
+    fn disconnected_model_stream_ends_turn_without_executing_stashed_tools() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.sessions.push(SessionRuntime::new());
+        state.rest.sessions[0].waiting = true;
+        state.rest.sessions[0].status = "other session".into();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let rt = &mut state.rest.sessions[1];
+        rt.begin_stream();
+        rt.waiting = true;
+        rt.active_rx = Some(rx);
+        assert!(!drain_stream(&mut state, 1, &None, runtime.handle()));
+        assert!(
+            state.rest.sessions[1].waiting,
+            "an idle but open stream is healthy"
+        );
+        tx.send(StreamEvent::Token("Observing again.".into()))
+            .unwrap();
+        tx.send(StreamEvent::ToolCalls(vec![crate::dto::chat::ToolCall {
+            id: "unfinished".into(),
+            kind: "function".into(),
+            function: crate::dto::chat::FunctionCall {
+                name: "computer_act".into(),
+                arguments: "{}".into(),
+            },
+        }]))
+        .unwrap();
+        drop(tx);
+        assert!(drain_stream(&mut state, 1, &None, runtime.handle()));
+        let rt = &state.rest.sessions[1];
+        assert!(!rt.waiting);
+        assert!(rt.active_rx.is_none());
+        assert!(rt.status.contains("closed without a completion event"));
+        assert!(rt.pending_tool_calls.is_empty());
+        assert!(rt.computer.outbound.is_none());
+        assert!(state.rest.sessions[0].waiting);
+        assert_eq!(state.rest.sessions[0].status, "other session");
+        assert!(
+            !drain_stream(&mut state, 1, &None, runtime.handle()),
+            "report only once"
+        );
+    }
+
+    #[test]
+    fn terminal_model_event_is_not_a_disconnection_error() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let mut state = AppState::new(Mode::Chat);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        state.rest.fg_mut().active_rx = Some(rx);
+        state.rest.fg_mut().waiting = true;
+        tx.send(StreamEvent::Done).unwrap();
+        drop(tx);
+        assert!(drain_stream(&mut state, 0, &None, runtime.handle()));
+        assert!(!state.rest.fg().waiting);
+        assert!(!state.rest.fg().status.contains("closed without"));
+        assert!(state.rest.fg().active_rx.is_none());
+    }
 
     #[test]
     fn request_context_is_session_local_and_provider_usage_replaces_estimate() {

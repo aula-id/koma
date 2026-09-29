@@ -319,6 +319,7 @@ pub(in crate::app::runtime) fn daemon_loop(
         //    `QuitSession`, which tombstones one session). Stream AFTER the kill-all
         //    handling below so a closed-state snapshot reflects the tombstones.
         hub.drain_inbound(state, client, handle);
+        hub.drain_computer(state);
 
         // 3-bis. Reply to any async `ListModels` GET that landed since the last tick with
         //     a seq'd `ModelList` frame to the requesting client (the GUI Connector model

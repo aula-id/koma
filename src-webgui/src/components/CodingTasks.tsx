@@ -1,7 +1,8 @@
 import { taskProblems, type TaskProblem } from '../lib/coding-task-problems'
+import { luminance } from '../lib/luminance'
 import { pathToUri } from '../lib/lsp-bridge'
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { FileCog, Play, RefreshCw, Square, Terminal, X } from 'lucide-react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type SelectHTMLAttributes } from 'react'
+import { ChevronDown, FileCog, Play, RefreshCw, Square } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { codingRequest, workspaceKey, type CodingTask, type CodingTaskRun, type WorkspaceRef } from '../lib/coding-service'
 import { BrailleSpinner } from './BrailleSpinner'
@@ -13,6 +14,13 @@ type Definitions = { tasks: CodingTask[]; fingerprint: string }
 type Chunk = { seq: number; stream: string; text: string }
 type Output = { problems?: TaskProblem[]; chunks: Chunk[]; next: number; truncated: boolean; more: boolean }
 const button = 'flex h-6 items-center justify-center gap-1 rounded px-1.5 text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:opacity-40 disabled:pointer-events-none'
+function TaskSelect(props: SelectHTMLAttributes<HTMLSelectElement>) {
+  const background = useKoma(s => s.palette.bg)
+  return <div className="relative min-w-0 flex-1">
+    <select {...props} style={{ colorScheme: luminance(background) < 0.5 ? 'dark' : 'light' }} className="h-6 w-full min-w-0 appearance-none rounded border border-koma-border bg-koma-panel2 pl-2 pr-6 text-koma-fg outline-none focus:border-koma-accent" />
+    <ChevronDown size={12} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-koma-dim" />
+  </div>
+}
 const live = (run?: CodingTaskRun) => run?.status === 'queued' || run?.status === 'running' || run?.status === 'stopping'
 const message = (e: unknown) => String(e instanceof Error ? e.message : e)
 
@@ -21,9 +29,8 @@ export function showCodingTasks(group?: Group, workspace?: WorkspaceRef, runId?:
 }
 
 /** Native owns the processes. This view may close or change scope at any time. */
-export function CodingTasks() {
+export function CodingTasks({ visible: open }: { visible: boolean }) {
   const [customProblems, setCustomProblems] = useState<TaskProblem[]>([])
-  const [open, setOpen] = useState(false)
   const [workspaces, setWorkspaces] = useState<WorkspaceRef[]>([])
   const [workspace, setWorkspace] = useState<WorkspaceRef | null>(null)
   const [group, setGroup] = useState<Group>('run')
@@ -42,8 +49,6 @@ export function CodingTasks() {
   const [refresh, setRefresh] = useState(0)
   const [follow, setFollow] = useState(true)
   const output = useRef<HTMLPreElement>(null)
-  const closeButton = useRef<HTMLButtonElement>(null)
-  const previousFocus = useRef<HTMLElement | null>(null)
   const requestedRun = useRef('')
   const generation = useRef(0)
   const mutation = useRef(false)
@@ -53,20 +58,18 @@ export function CodingTasks() {
   const currentRoots = useKoma(s => s.settingsValues?.workdir)
   const rootsKey = JSON.stringify(currentRoots ?? [])
 
-  const close = () => { setOpen(false); previousFocus.current?.focus() }
   useEffect(() => {
     const onOpen = (event: Event) => {
       const state = useKoma.getState()
       const hostId = state.remoteState.hostId ?? 'local'
       const root = state.coding.activeRoot ?? state.settingsValues?.workdir?.[0]
-      previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
       const target = (event as CustomEvent<{ workspace?: WorkspaceRef; runId?: string }>).detail
       if (target?.workspace) setWorkspace(target.workspace)
       else if (root) setWorkspace({ hostId, root })
       requestedRun.current = target?.runId ?? ''
       const requested = (event as CustomEvent<{ group?: Group }>).detail?.group
       if (requested) setGroup(requested)
-      setOpen(true); setRefresh(n => n + 1)
+      state.setBottomPanelTab('tasks'); setRefresh(n => n + 1)
     }
     window.addEventListener('koma-coding-tasks', onOpen)
     return () => window.removeEventListener('koma-coding-tasks', onOpen)
@@ -78,7 +81,12 @@ export function CodingTasks() {
       ...(workspace ? [workspace] : []),
     ].map(w => [workspaceKey(w), w])).values()])
   }, [rootsKey, currentHost, scope])
-  useEffect(() => { if (open) closeButton.current?.focus() }, [open])
+  useEffect(() => {
+    if (!open || workspace) return
+    const state = useKoma.getState()
+    const root = state.coding.activeRoot ?? state.settingsValues?.workdir?.[0]
+    if (root) setWorkspace({ hostId: currentHost, root })
+  }, [open, workspace, currentHost, rootsKey])
   useEffect(() => {
     generation.current++
     setRuns([]); setRunId(''); setError(''); setPollError(''); setBusy(mutation.current)
@@ -185,28 +193,24 @@ export function CodingTasks() {
       else if (gen === generation.current) setError('Switch to this host to edit its task configuration.')
     } catch (e) { if (gen === generation.current) setError(message(e)) }
   }
-  return <section role="region" aria-label="Project tasks" className="absolute inset-x-10 bottom-6 z-40 flex h-80 max-h-[65vh] flex-col overflow-hidden rounded-md border border-koma-border bg-koma-panel shadow-xl text-[11px] text-koma-fg" onKeyDown={e => {
-    if (e.key === 'Escape') { e.stopPropagation(); close() }
-  }}>
+  return <section aria-label="Project tasks" className="flex min-h-0 flex-1 flex-col overflow-auto text-[11px] text-koma-fg">
     <div className="flex h-8 flex-none items-center gap-2 border-b border-koma-border px-2">
-      <Terminal size={12} className="text-koma-dim" /><span className="text-koma-dim">TASKS</span>
-      <select aria-label="Task workspace" value={scope} onChange={e => {
+      <TaskSelect aria-label="Task workspace" value={scope} onChange={e => {
         generation.current++
         setWorkspace(workspaces.find(w => workspaceKey(w) === e.target.value) ?? null)
-      }} className="min-w-0 flex-1 bg-koma-panel outline-none">
+      }}>
         {!workspace && <option value="">Choose a workspace</option>}
         {workspaces.map(w => <option key={workspaceKey(w)} value={workspaceKey(w)}>{w.hostId} · {w.root}</option>)}
-      </select>
+      </TaskSelect>
       <button className={button} title="Refresh tasks from disk" aria-label="Refresh tasks" onClick={() => setRefresh(n => n + 1)}><RefreshCw size={12} /></button>
       <button className={button} title="Open task configuration" aria-label="Open task configuration" disabled={!workspace || currentHost !== workspace.hostId} onClick={() => void editConfig()}><FileCog size={12} /></button>
-      <button ref={closeButton} className={button} title="Close tasks (processes keep running)" aria-label="Close tasks" onClick={close}><X size={12} /></button>
     </div>
     <div className="flex flex-none items-center gap-1 border-b border-koma-border px-2 py-1">
       {(['run', 'build', 'test'] as const).map(value => <button key={value} aria-pressed={value === group} onClick={() => setGroup(value)} className={`${button} ${value === group ? 'bg-koma-hover text-koma-fg' : ''}`}>{value[0].toUpperCase() + value.slice(1)}</button>)}
-      <select aria-label="Task" value={task?.id ?? ''} onChange={e => setTaskId(e.target.value)} className="min-w-0 flex-1 bg-koma-panel outline-none">
+      <TaskSelect aria-label="Task" value={task?.id ?? ''} onChange={e => setTaskId(e.target.value)}>
         {!task && <option value="">{definitions ? 'No tasks configured' : configError ? 'Configuration unavailable' : 'Loading tasks…'}</option>}
         {choices.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
-      </select>
+      </TaskSelect>
       <button className={button} disabled={!task || busy || runs.some(r => r.taskId === task.id && (live(r) || !r.outputComplete))} onClick={() => void act('start')} title="Run task using saved files">{busy ? <BrailleSpinner size={12} /> : <Play size={12} />}Run</button>
     </div>
     {task && <div className="flex-none truncate border-b border-koma-border px-3 py-1 font-mono text-[10px] text-koma-dim" title={JSON.stringify({ command: task.command, args: task.args, cwd: task.cwd, env: Object.keys(task.env ?? {}), timeoutMs: task.timeoutMs })}>
@@ -215,11 +219,11 @@ export function CodingTasks() {
     {(configError || error || pollError || outputError) && <div role="alert" className="max-h-16 flex-none overflow-auto border-b border-koma-border px-3 py-1 text-koma-error">{[configError, error, pollError, outputError].filter(Boolean).join(' · ')}</div>}
     {definitions && !choices.length && <div className="flex-none px-3 py-2 text-koma-dim">Add a {group} task to .koma/coding.json using the configuration button.</div>}
     <div className="flex flex-none items-center gap-2 border-b border-koma-border px-2 py-1">
-      <select aria-label="Task run output" title={run ? `${run.command} ${run.args.map(arg => JSON.stringify(arg)).join(' ')} · cwd: ${run.cwd}` : undefined} value={runId} onChange={e => setRunId(e.target.value)} className="min-w-0 flex-1 bg-koma-panel outline-none">
+      <TaskSelect aria-label="Task run output" title={run ? `${run.command} ${run.args.map(arg => JSON.stringify(arg)).join(' ')} · cwd: ${run.cwd}` : undefined} value={runId} onChange={e => setRunId(e.target.value)}>
         {!runs.length && <option value="">No runs in this workspace</option>}
         {[...runs].reverse().map(r => <option key={r.id} value={r.id}>{r.label} · {r.status}{r.exitCode !== null ? ` (${r.exitCode})` : ''} · {new Date(r.started).toLocaleTimeString()}</option>)}
-      </select>
-      {!run?.interactive && <label className="flex items-center gap-1 text-koma-dim"><input type="checkbox" checked={follow} onChange={e => setFollow(e.target.checked)} />Follow</label>}
+      </TaskSelect>
+      {!run?.interactive && <label className="flex items-center gap-1 text-koma-dim"><input type="checkbox" className="accent-koma-accent" checked={follow} onChange={e => setFollow(e.target.checked)} />Follow</label>}
       <button className={button} disabled={!live(run) || busy || run?.status === 'stopping'} title="Stop task and its subprocesses" onClick={() => void act('stop')}><Square size={11} />Stop</button>
     </div>
     {run?.error && <div className="flex-none px-3 py-1 text-koma-error">{run.error}</div>}

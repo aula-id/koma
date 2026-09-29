@@ -73,6 +73,44 @@ jobs:
         working-directory: src-extension
         run: cargo test --workspace --all-targets
 
+  macos-gui-link:
+    name: GUI release link (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon is the primary Darwin build; retain native Intel coverage.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-26-intel
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: macos-gui-link-v1
+          key: ${{ matrix.target }}
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      # cargo check and the headless test matrix cannot detect missing GUI FFI
+      # archives/frameworks. Link the real executable without opening a desktop.
+      - name: Link GUI release executable
+        run: cargo build --locked --release -p agent --bin koma --target ${{ matrix.target }}
+
   nix:
     name: nix flake check (${{ matrix.name }})
     runs-on: ${{ matrix.os }}

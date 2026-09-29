@@ -663,6 +663,12 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // Pre-session config mutation (onboarding theme/provider/model): apply it
             // directly to `~/.koma/config.json` and re-push `Config` so the panels + theme
             // repaint and `needsOnboarding` clears. Stay in the swapper (no attach).
+            #[cfg(feature = "gui")]
+            Ok(HostCtl::ComputerPrepared { .. }) => {}
+            Ok(HostCtl::ComputerPreview(_)) => {}
+            Ok(HostCtl::Computer { .. }) => {
+                push(serde_json::json!({"k":"ComputerError","message":"Attach a local GUI session first"}).to_string());
+            }
             Ok(HostCtl::ConfigMutate(req)) => {
                 apply_swapper_config_mutation(&req, push, push_state);
             }
@@ -2015,6 +2021,12 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                 if let Ok(json) = serde_json::to_string(&envelope) {
                     push(json);
                 }
+            }
+            #[cfg(feature = "gui")]
+            Ok(HostCtl::ComputerPrepared { .. }) => {}
+            Ok(HostCtl::ComputerPreview(_)) => {}
+            Ok(HostCtl::Computer { .. }) => {
+                push(serde_json::json!({"k":"ComputerError","message":"Attach a local GUI session first"}).to_string());
             }
             Ok(HostCtl::ConfigMutate(req)) => {
                 apply_swapper_config_mutation(&req, push, push_state);

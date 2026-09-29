@@ -14,11 +14,13 @@ import {
   UserCircle,
   X,
   Download,
+  Monitor,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useKoma, resolveActivityBarOrder, type PaletteInfo } from '../store/koma'
 import { ACTIVITY_BAR_ITEMS } from './ActivityBar'
 import { Field, Segmented, TextInput, Toggle } from './panels/form'
+import { ComputerSettings } from './ComputerSettings'
 import { BrailleSpinner } from './BrailleSpinner'
 
 // VSCode-style Settings page, rendered as a tab over the main content column
@@ -29,7 +31,7 @@ import { BrailleSpinner } from './BrailleSpinner'
 // credential machinery). Every colour is a theme token (var(--koma-*) via the
 // koma-* Tailwind classes) so it tracks the live palette.
 
-type SectionId = 'account' | 'appearance' | 'session' | 'activityBar' | 'lsp' | 'sshKeys'
+type SectionId = 'account' | 'appearance' | 'session' | 'activityBar' | 'lsp' | 'sshKeys' | 'computer'
 
 // Top-to-bottom order of the sections below — shared by `sectionRef` and the
 // scroll-spy so adding/reordering a section only needs a change here. Account
@@ -39,6 +41,7 @@ const SECTION_ORDER: SectionId[] = [
   'account',
   'appearance',
   'session',
+  'computer',
   'activityBar',
   'lsp',
   'sshKeys',
@@ -54,23 +57,16 @@ export default function SettingsTab() {
   const accountRef = useRef<HTMLDivElement>(null)
   const appearanceRef = useRef<HTMLDivElement>(null)
   const sessionRef = useRef<HTMLDivElement>(null)
+  const computerRef = useRef<HTMLDivElement>(null)
   const activityBarRef = useRef<HTMLDivElement>(null)
   const lspRef = useRef<HTMLDivElement>(null)
   const sshKeysRef = useRef<HTMLDivElement>(null)
   const [active, setActive] = useState<SectionId>('account')
 
-  const sectionRef = (id: SectionId) =>
-    id === 'account'
-      ? accountRef
-      : id === 'appearance'
-        ? appearanceRef
-        : id === 'session'
-          ? sessionRef
-          : id === 'activityBar'
-            ? activityBarRef
-            : id === 'lsp'
-              ? lspRef
-              : sshKeysRef
+  const sectionRef = (id: SectionId) => ({
+    account: accountRef, appearance: appearanceRef, session: sessionRef,
+    computer: computerRef, activityBar: activityBarRef, lsp: lspRef, sshKeys: sshKeysRef,
+  })[id]
 
   // Nav click → smooth-scroll the pane to the section header.
   const goto = (id: SectionId) => {
@@ -120,6 +116,7 @@ export default function SettingsTab() {
           active={active === 'session'}
           onClick={() => goto('session')}
         />
+        <NavItem icon={<Monitor size={15} />} label="Computer use" active={active === 'computer'} onClick={() => goto('computer')} />
         <NavItem
           icon={<PanelLeft size={15} />}
           label="Sidebar"
@@ -160,6 +157,11 @@ export default function SettingsTab() {
           <section ref={sessionRef} className="mt-12">
             <SectionHeader title="Session" desc="Preferences for the current session." />
             <SessionSettings />
+          </section>
+
+          <section ref={computerRef} className="mt-12">
+            <SectionHeader title="Computer use" desc="Share a screen with the model." />
+            <ComputerSettings />
           </section>
 
           <section ref={activityBarRef} className="mt-12">

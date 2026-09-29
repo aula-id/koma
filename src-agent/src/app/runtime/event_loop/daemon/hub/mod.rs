@@ -23,3 +23,5 @@ mod streaming;
 
 pub(in crate::app::runtime) use core::DaemonHub;
 pub(crate) use core::HubInbound;
+
+mod requests_computer;

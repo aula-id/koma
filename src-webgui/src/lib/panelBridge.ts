@@ -140,7 +140,7 @@ function themePush(): { koma: 'host'; v: 1; kind: 'theme'; payload: ReturnType<t
 }
 
 // Broadcasts the current theme to every registered panel. Called from the
-// store's `applyPaletteVars` choke point (store/koma.ts) right after the CSS
+// store's `applyPaletteVars` choke point (store/initial.ts) right after the CSS
 // vars are repainted, so live panels track the daemon's theme exactly like
 // the chat chrome does.
 export function broadcastThemeToPanels(palette: PaletteColors): void {

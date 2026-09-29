@@ -24,7 +24,15 @@ impl super::Tool for LoadImage {
         "Load an existing image file from a configured workspace, this session's \
          exact scratch directory, or this session's images/ attachment directory \
          into the next model message for visual inspection. Use after message_load \
-         or compact when a past [Image #N] is no longer in live context."
+         or compact when a past [Image #N] is no longer in live context. Optional crop \
+         inspects a saved region on every platform, without fresh capture or Python. \
+         Optional points samples exact RGB hex/RGBA colors; attach=false returns only \
+         numeric inspection metadata. Crop and point coordinates are integer pixels \
+         in the EXIF-oriented source image, before crop/resizing. Inspection images \
+         are bounded to 1920 pixels per edge and 2 megapixels; the result maps them \
+         back to the source. Crops are automatically attached: no second load needed. \
+         This does not refresh or authorize a computer observation. For screen color \
+         sampling, use its saved image_path or image_n and points instead of bash/PIL."
     }
 
     fn parameters(&self) -> Value {
@@ -38,16 +46,30 @@ impl super::Tool for LoadImage {
                 "image_n": {
                     "type": "integer",
                     "description": "Optional marker number N from [Image #N]. Resolves to the matching file under this session's images/ (NN-*). Prefer for a current-session image marker when no full path is available."
-                }
+                },
+                "crop": {"type":"object","description":"Saved source-image rectangle; works for screens, applications and old images on every platform. Does not recapture or restore detail.","properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"width":{"type":"integer","minimum":1},"height":{"type":"integer","minimum":1}},"required":["x","y","width","height"],"additionalProperties":false},
+                "points": {"type":"array","description":"Sample up to 64 exact pixel colors. Coordinates are relative to the full source image even when crop is provided.","maxItems":64,"items":{"type":"object","properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0}},"required":["x","y"],"additionalProperties":false}},
+                "attach": {"type":"boolean","default":true,"description":"Set false for color samples/dimensions only, without sending another image. Use true to load the image or crop into model context."}
             },
             "additionalProperties": false
         })
     }
 
     fn run(&self, ctx: &ToolCtx, args: &Value) -> Result<String> {
-        let (path, _) = read_validated_image_from_args(ctx, args)?;
+        let (path, bytes) = read_validated_image_from_args(ctx, args)?;
+        if inspection_requested(args) {
+            let mut inspection = super::image_inspection::inspect(&bytes, args)?;
+            inspection.metadata["source"]["path"] = path.to_string_lossy().to_string().into();
+            return Ok(inspection.metadata.to_string());
+        }
         Ok(format!("load_image: validated {}", path.display()))
     }
+}
+
+pub(crate) fn inspection_requested(args: &Value) -> bool {
+    ["crop", "points", "attach"]
+        .iter()
+        .any(|key| args.get(key).is_some())
 }
 
 /// Path string from args (non-empty when present).

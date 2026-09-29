@@ -59,6 +59,7 @@ pub struct FileSearchItem {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum ClientRequest {
+    Computer(crate::app::runtime::computer::Control),
     Attach {
         foreground_id: Option<String>,
         cwd: Option<String>,
@@ -714,6 +715,8 @@ pub struct DaemonFrame {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum DaemonEvent {
+    ComputerStatus(crate::app::runtime::computer::Status),
+    ComputerOperation(crate::app::runtime::computer::Request),
     /// Build-skew handshake (task #142): sent VERY FIRST on attach.
     Hello {
         version: String,

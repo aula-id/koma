@@ -105,6 +105,7 @@ pub struct ActiveSkill {
 /// Per-session execution state. Always non-empty in [`super::AppStateRest::sessions`];
 /// the foreground one is reached through `fg()` / `fg_mut()`.
 pub struct SessionRuntime {
+    pub computer: crate::app::runtime::computer::Controller,
     /// Stable, process-unique identity (UUID v4), assigned once at creation and
     /// never reused or reordered. This is how the daemon's IPC clients address a
     /// session — NEVER by its `Vec` index, which later session-lifecycle
@@ -765,6 +766,7 @@ impl SessionRuntime {
             pending_ext_prompts: Vec::new(),
             extension_scope: None,
             agent_mode: super::types::AgentMode::default(),
+            computer: Default::default(),
             plan_read_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             plan_return_mode: None,
             sdlc_return_mode: None,

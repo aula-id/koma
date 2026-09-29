@@ -519,14 +519,20 @@ fn push_snapshot_if_changed(
                             kind: "image",
                         })
                         .collect();
+                    let computer = super::push_rows::computer_observation(m, &s.id);
                     Some(PushMsg {
                         idx,
                         role,
                         kind,
-                        content,
+                        content: if computer.is_some() {
+                            String::new()
+                        } else {
+                            content
+                        },
                         reasoning,
                         tool_calls,
                         attachments,
+                        computer,
                     })
                 })
                 .collect()
