@@ -160,7 +160,7 @@ export function Select<T extends string>({
   triggerTitle,
 }: {
   value: T | ''
-  options: { value: T; label: string }[]
+  options: { value: T; label: string; icon?: ReactNode }[]
   onChange: (v: T) => void
   placeholder?: string
   disabled?: boolean
@@ -200,6 +200,8 @@ export function Select<T extends string>({
   }, [isDisabled, open])
 
   const selected = options.find((o) => o.value === value)
+  const iconic = options.some((o) => o.icon)
+  const caption = iconic ? [triggerTitle, selected?.label].filter(Boolean).join(': ') : triggerTitle
   const pick = (v: T) => {
     onChange(v)
     setOpen(false)
@@ -215,8 +217,8 @@ export function Select<T extends string>({
           setOpen((o) => !o)
         }}
         disabled={isDisabled}
-        title={triggerTitle}
-        aria-label={triggerTitle}
+        title={caption}
+        aria-label={caption}
         className={
           triggerIcon
             ? 'flex h-5 items-center gap-0.5 rounded px-1 text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100 disabled:opacity-40'
@@ -225,6 +227,8 @@ export function Select<T extends string>({
       >
         {triggerIcon ? (
           triggerIcon
+        ) : selected?.icon ? (
+          <span className="flex min-w-0 flex-1 items-center justify-center">{selected.icon}</span>
         ) : (
           <span className={`truncate ${selected ? '' : 'opacity-40'}`}>
             {selected?.label ?? placeholder ?? 'Select…'}
@@ -243,7 +247,7 @@ export function Select<T extends string>({
               position: 'fixed',
               top: rect.bottom + 4,
               left: triggerIcon ? Math.max(8, rect.right - 180) : rect.left,
-              width: triggerIcon ? 180 : rect.width,
+              width: triggerIcon ? 180 : Math.max(rect.width, iconic ? 76 : 0),
               zIndex: 80,
             }}
             className="max-h-40 overflow-y-auto rounded border border-koma-border bg-koma-panel py-1 shadow-xl"
@@ -252,6 +256,8 @@ export function Select<T extends string>({
               <button
                 key={o.value}
                 type="button"
+                title={o.label}
+                aria-label={o.label}
                 onMouseDown={(e) => {
                   e.preventDefault()
                   pick(o.value)
@@ -267,7 +273,11 @@ export function Select<T extends string>({
                 ) : (
                   <span className="w-3 flex-none" />
                 )}
-                <span className="truncate">{o.label}</span>
+                {o.icon ? (
+                  <span className="flex flex-1 items-center justify-center">{o.icon}</span>
+                ) : (
+                  <span className="truncate">{o.label}</span>
+                )}
               </button>
             ))}
           </div>,

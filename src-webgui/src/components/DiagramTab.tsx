@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { Check, Circle, Diamond, MousePointer2, PanelRightClose, PanelRightOpen, RotateCw, Shapes, Spline, Square, Type } from 'lucide-react'
 import { useKoma, type Tab } from '../store/koma'
 import { recordCodingHistory } from '../lib/coding-recovery'
@@ -68,15 +68,15 @@ const TOOLS: { id: Tool; label: string; icon: typeof Square }[] = [
   { id: 'connect', label: 'Connect', icon: Spline },
 ]
 
-const HANDLES: { id: DiagramHandle; className: string; cursor: string }[] = [
-  { id: 'nw', className: 'left-0 top-0', cursor: 'nwse-resize' },
-  { id: 'n', className: 'left-1/2 top-0', cursor: 'ns-resize' },
-  { id: 'ne', className: 'right-0 top-0', cursor: 'nesw-resize' },
-  { id: 'e', className: 'right-0 top-1/2', cursor: 'ew-resize' },
-  { id: 'se', className: 'right-0 bottom-0', cursor: 'nwse-resize' },
-  { id: 's', className: 'left-1/2 bottom-0', cursor: 'ns-resize' },
-  { id: 'sw', className: 'left-0 bottom-0', cursor: 'nesw-resize' },
-  { id: 'w', className: 'left-0 top-1/2', cursor: 'ew-resize' },
+const HANDLES: { id: DiagramHandle; x: string; y: string; cursor: string }[] = [
+  { id: 'nw', x: '0%', y: '0%', cursor: 'nwse-resize' },
+  { id: 'n', x: '50%', y: '0%', cursor: 'ns-resize' },
+  { id: 'ne', x: '100%', y: '0%', cursor: 'nesw-resize' },
+  { id: 'e', x: '100%', y: '50%', cursor: 'ew-resize' },
+  { id: 'se', x: '100%', y: '100%', cursor: 'nwse-resize' },
+  { id: 's', x: '50%', y: '100%', cursor: 'ns-resize' },
+  { id: 'sw', x: '0%', y: '100%', cursor: 'nesw-resize' },
+  { id: 'w', x: '0%', y: '50%', cursor: 'ew-resize' },
 ]
 
 function mintId(prefix: string): string {
@@ -920,7 +920,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
                     <span
                       key={port}
                       data-diagram-port=""
-                      className="absolute z-10 h-3 w-3 -translate-x-1/2 -translate-y-1/2"
+                      className="absolute z-10 h-2 w-2 -translate-x-1/2 -translate-y-1/2"
                       style={{ left: `${at.x * 100}%`, top: `${at.y * 100}%`, cursor: 'crosshair' }}
                       onPointerDown={(e) => {
                         if (e.button !== 0 || spaceRef.current) return
@@ -935,7 +935,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
                       onDoubleClick={(e) => e.stopPropagation()}
                     >
                       <svg viewBox="0 0 12 12" className="h-full w-full overflow-visible text-koma-accent" aria-hidden="true">
-                        <path d="M6 1 V11 M1 6 H11" fill="none" stroke="currentColor" strokeWidth="1.25" />
+                        <path d="M6 1.5 V10.5 M1.5 6 H10.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
                       </svg>
                     </span>
                   )
@@ -946,8 +946,8 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
                   {HANDLES.map((handle) => (
                     <span
                       key={handle.id}
-                      className={`absolute z-10 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-koma-accent bg-koma-panel ${handle.className} ${dragCursor ? 'pointer-events-none' : ''}`}
-                      style={{ cursor: handle.cursor }}
+                      className={`absolute z-10 h-2.5 w-2.5 rounded-full border border-koma-accent bg-koma-panel ${dragCursor ? 'pointer-events-none' : ''}`}
+                      style={{ left: handle.x, top: handle.y, transform: 'translate(-50%, -50%)', cursor: handle.cursor }}
                       onPointerDown={(e) => {
                         e.stopPropagation()
                         e.preventDefault()
@@ -1110,6 +1110,34 @@ function ConnectPreview({
   )
 }
 
+function LineGlyph({ children }: { children: ReactNode }) {
+  return (
+    <svg viewBox="0 0 28 14" className="h-3.5 w-7 flex-none" aria-hidden="true">
+      {children}
+    </svg>
+  )
+}
+
+function WidthGlyph({ sw }: { sw: number }) {
+  return (
+    <LineGlyph>
+      <path d="M3 7 H25" fill="none" stroke="currentColor" strokeWidth={sw} strokeLinecap="round" />
+    </LineGlyph>
+  )
+}
+
+function ArrowGlyph({ side, kind }: { side: 'start' | 'end'; kind: 'none' | 'arrow' | 'open' }) {
+  const head = side === 'end' ? 'M15.5 3 L24 7 L15.5 11' : 'M12.5 3 L4 7 L12.5 11'
+  const shaft = kind === 'none' ? 'M4 7 H24' : side === 'end' ? 'M4 7 H16' : 'M12 7 H24'
+  return (
+    <LineGlyph>
+      <path d={shaft} fill="none" stroke="currentColor" strokeWidth="1.5" />
+      {kind === 'arrow' ? <path d={`${head} Z`} fill="currentColor" /> : null}
+      {kind === 'open' ? <path d={head} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="miter" /> : null}
+    </LineGlyph>
+  )
+}
+
 function LineSettings({ edge, onChange }: { edge: DiagramEdge; onChange: (patch: Partial<DiagramEdge>) => void }) {
   const style = edgeStyle(edge)
   return (
@@ -1130,9 +1158,26 @@ function LineSettings({ edge, onChange }: { edge: DiagramEdge; onChange: (patch:
         <div className="min-w-0 flex-1">
           <Select
             value={style.corner}
+            triggerTitle="Corner"
             options={[
-              { value: 'sharp', label: 'Sharp' },
-              { value: 'rounded', label: 'Rounded' },
+              {
+                value: 'sharp',
+                label: 'Sharp',
+                icon: (
+                  <LineGlyph>
+                    <path d="M6 2 V11 H24" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                  </LineGlyph>
+                ),
+              },
+              {
+                value: 'rounded',
+                label: 'Rounded',
+                icon: (
+                  <LineGlyph>
+                    <path d="M6 2 V7 Q6 11 11 11 H24" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                  </LineGlyph>
+                ),
+              },
             ]}
             onChange={(corner) => onChange({ corner })}
           />
@@ -1152,9 +1197,9 @@ function LineSettings({ edge, onChange }: { edge: DiagramEdge; onChange: (patch:
             value={style.start}
             triggerTitle="Start"
             options={[
-              { value: 'none', label: 'No start' },
-              { value: 'arrow', label: 'Arrow start' },
-              { value: 'open', label: 'Open start' },
+              { value: 'none', label: 'No start', icon: <ArrowGlyph side="start" kind="none" /> },
+              { value: 'arrow', label: 'Arrow start', icon: <ArrowGlyph side="start" kind="arrow" /> },
+              { value: 'open', label: 'Open start', icon: <ArrowGlyph side="start" kind="open" /> },
             ]}
             onChange={(start) => onChange({ start })}
           />
@@ -1164,22 +1209,46 @@ function LineSettings({ edge, onChange }: { edge: DiagramEdge; onChange: (patch:
             value={style.dash}
             triggerTitle="Pattern"
             options={[
-              { value: 'solid', label: 'Solid' },
-              { value: 'dashed', label: 'Dashed' },
-              { value: 'dotted', label: 'Dotted' },
+              {
+                value: 'solid',
+                label: 'Solid',
+                icon: (
+                  <LineGlyph>
+                    <path d="M3 7 H25" fill="none" stroke="currentColor" strokeWidth="1.6" />
+                  </LineGlyph>
+                ),
+              },
+              {
+                value: 'dashed',
+                label: 'Dashed',
+                icon: (
+                  <LineGlyph>
+                    <path d="M3 7 H25" fill="none" stroke="currentColor" strokeWidth="1.6" strokeDasharray="5 3" />
+                  </LineGlyph>
+                ),
+              },
+              {
+                value: 'dotted',
+                label: 'Dotted',
+                icon: (
+                  <LineGlyph>
+                    <path d="M4 7 H24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeDasharray="0.1 4" />
+                  </LineGlyph>
+                ),
+              },
             ]}
             onChange={(dash) => onChange({ dash })}
           />
         </div>
-        <div className="w-16 flex-none">
+        <div className="min-w-0 flex-1">
           <Select
             value={String(style.width) as '1' | '1.5' | '2' | '3'}
             triggerTitle="Width"
             options={[
-              { value: '1', label: '1 pt' },
-              { value: '1.5', label: '1.5 pt' },
-              { value: '2', label: '2 pt' },
-              { value: '3', label: '3 pt' },
+              { value: '1', label: '1 pt', icon: <WidthGlyph sw={1} /> },
+              { value: '1.5', label: '1.5 pt', icon: <WidthGlyph sw={1.8} /> },
+              { value: '2', label: '2 pt', icon: <WidthGlyph sw={2.6} /> },
+              { value: '3', label: '3 pt', icon: <WidthGlyph sw={3.8} /> },
             ]}
             onChange={(width) => onChange({ width: Number(width) })}
           />
@@ -1191,9 +1260,9 @@ function LineSettings({ edge, onChange }: { edge: DiagramEdge; onChange: (patch:
             value={style.end}
             triggerTitle="End"
             options={[
-              { value: 'none', label: 'No end' },
-              { value: 'arrow', label: 'Arrow end' },
-              { value: 'open', label: 'Open end' },
+              { value: 'none', label: 'No end', icon: <ArrowGlyph side="end" kind="none" /> },
+              { value: 'arrow', label: 'Arrow end', icon: <ArrowGlyph side="end" kind="arrow" /> },
+              { value: 'open', label: 'Open end', icon: <ArrowGlyph side="end" kind="open" /> },
             ]}
             onChange={(end) => onChange({ end })}
           />
@@ -1203,8 +1272,24 @@ function LineSettings({ edge, onChange }: { edge: DiagramEdge; onChange: (patch:
             value={style.route}
             triggerTitle="Route"
             options={[
-              { value: 'orthogonal' satisfies DiagramRoute, label: 'Elbow' },
-              { value: 'straight', label: 'Straight' },
+              {
+                value: 'orthogonal' satisfies DiagramRoute,
+                label: 'Elbow',
+                icon: (
+                  <LineGlyph>
+                    <path d="M3 3 H14 V11 H25" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                  </LineGlyph>
+                ),
+              },
+              {
+                value: 'straight',
+                label: 'Straight',
+                icon: (
+                  <LineGlyph>
+                    <path d="M3 11 L25 3" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                  </LineGlyph>
+                ),
+              },
             ]}
             onChange={(route) => onChange({ route, bends: [] })}
           />
