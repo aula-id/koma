@@ -20,6 +20,7 @@ import { pointInDiagramRect, type DiagramRect } from '../lib/diagramMermaid'
 import {
   SHAPE_MIME,
   defaultNodeSize,
+  arrowHead,
   edgeRoute,
   edgeStyle,
   DIAGRAM_PORTS,
@@ -744,35 +745,32 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
               const selected = selection?.type === 'edge' && selection.id === edge.id
               const color = style.color || themeStroke(selected)
               const id = `${markerId}-${edge.id.replace(/[^a-zA-Z0-9_-]/g, '')}`
-              const marker = (name: string, reverse: boolean) => (
-                <marker
-                  key={name}
-                  id={`${id}-${name}`}
-                  markerWidth="8"
-                  markerHeight="8"
-                  refX={reverse ? 1 : 7}
-                  refY="3"
-                  orient={reverse ? 'auto-start-reverse' : 'auto'}
-                >
-                  <path d="M0,0 L7,3 L0,6" fill="none" stroke={color} strokeWidth="1.2" />
-                </marker>
-              )
+              const marker = (name: 'start' | 'end', kind: 'arrow' | 'open') => {
+                const head = arrowHead(name, kind === 'open')
+                return (
+                  <marker
+                    key={name}
+                    id={`${id}-${name}`}
+                    markerWidth="8"
+                    markerHeight="8"
+                    refX={head.refX}
+                    refY={head.refY}
+                    orient="auto"
+                    overflow="visible"
+                  >
+                    <path
+                      d={head.d}
+                      fill={kind === 'open' ? 'none' : color}
+                      stroke={kind === 'open' ? color : undefined}
+                      strokeWidth={kind === 'open' ? 1.2 : undefined}
+                    />
+                  </marker>
+                )
+              }
               return (
                 <g key={edge.id}>
-                  {style.end === 'arrow' ? (
-                    <marker id={`${id}-end`} markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
-                      <path d="M0,0 L7,3 L0,6 Z" fill={color} />
-                    </marker>
-                  ) : style.end === 'open' ? (
-                    marker('end', false)
-                  ) : null}
-                  {style.start === 'arrow' ? (
-                    <marker id={`${id}-start`} markerWidth="8" markerHeight="8" refX="1" refY="3" orient="auto-start-reverse">
-                      <path d="M0,0 L7,3 L0,6 Z" fill={color} />
-                    </marker>
-                  ) : style.start === 'open' ? (
-                    marker('start', true)
-                  ) : null}
+                  {style.end === 'none' ? null : marker('end', style.end)}
+                  {style.start === 'none' ? null : marker('start', style.start)}
                 </g>
               )
             })}

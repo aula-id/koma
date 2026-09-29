@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import {
   diagramFileName,
+  arrowHead,
   edgeRoute,
   emptyDiagram,
   isDiagramPath,
@@ -150,6 +151,19 @@ function aligned(points: { x: number; y: number }[]): boolean {
   assert.equal(parsed.doc.edges[0]?.fromPort, 0)
   assert.equal(parsed.doc.edges[0]?.toPort, 15)
   assert.equal(parsed.doc.edges[0]?.fromSide, undefined)
+}
+
+{
+  const end = arrowHead('end', false)
+  const start = arrowHead('start', false)
+  assert.equal(end.refX, 7)
+  assert.equal(end.refY, 3)
+  assert.equal(start.refX, 0)
+  assert.equal(start.refY, 3)
+  assert.equal(end.d.includes('L7,3'), true)
+  assert.equal(start.d.includes('L0,3'), true)
+  assert.equal(arrowHead('end', true).d.endsWith('Z'), false)
+  assert.equal(arrowHead('start', true).d.includes('L0,3'), true)
 }
 
 {

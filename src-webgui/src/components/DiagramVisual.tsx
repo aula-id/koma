@@ -1,6 +1,7 @@
 import { useId, useState } from 'react'
 import { ChevronDown, Clipboard, MessageSquarePlus, Shapes } from 'lucide-react'
 import {
+  arrowHead,
   edgeRoute,
   edgeStyle,
   nodeCenter,
@@ -53,26 +54,23 @@ export function DiagramSketch({ doc }: { doc: DiagramDoc }) {
           const style = edgeStyle(edge)
           const color = style.color || 'var(--color-koma-fg)'
           const id = `${markerBase}-${index}`
+          const marker = (name: 'start' | 'end', kind: 'arrow' | 'open') => {
+            const head = arrowHead(name, kind === 'open')
+            return (
+              <marker id={`${id}-${name}`} markerWidth="8" markerHeight="8" refX={head.refX} refY={head.refY} orient="auto" overflow="visible">
+                <path
+                  d={head.d}
+                  fill={kind === 'open' ? 'none' : color}
+                  stroke={kind === 'open' ? color : undefined}
+                  strokeWidth={kind === 'open' ? 1.2 : undefined}
+                />
+              </marker>
+            )
+          }
           return (
             <g key={edge.id}>
-              {style.end !== 'none' ? (
-                <marker id={`${id}-end`} markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
-                  {style.end === 'open' ? (
-                    <path d="M1,1 L6,3 L1,5" fill="none" stroke={color} strokeWidth="1.2" />
-                  ) : (
-                    <path d="M0,0 L7,3 L0,6 Z" fill={color} />
-                  )}
-                </marker>
-              ) : null}
-              {style.start !== 'none' ? (
-                <marker id={`${id}-start`} markerWidth="8" markerHeight="8" refX="1" refY="3" orient="auto-start-reverse">
-                  {style.start === 'open' ? (
-                    <path d="M1,1 L6,3 L1,5" fill="none" stroke={color} strokeWidth="1.2" />
-                  ) : (
-                    <path d="M0,0 L7,3 L0,6 Z" fill={color} />
-                  )}
-                </marker>
-              ) : null}
+              {style.end === 'none' ? null : marker('end', style.end)}
+              {style.start === 'none' ? null : marker('start', style.start)}
             </g>
           )
         })}

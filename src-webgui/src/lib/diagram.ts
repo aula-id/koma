@@ -305,6 +305,16 @@ export function edgeStyle(edge: DiagramEdge): DiagramEdgeStyle {
   }
 }
 
+/**
+ * Arrowhead marker. The ref point is the tip, so the tip meets the node and the
+ * body lies on the stroke. Start is the end head flipped. Both use orient "auto";
+ * auto-start-reverse on the end path parks the start head inside the card.
+ */
+export function arrowHead(at: 'start' | 'end', open: boolean): { d: string; refX: number; refY: number } {
+  if (at === 'end') return { d: open ? 'M0,0 L7,3 L0,6' : 'M0,0 L7,3 L0,6 Z', refX: 7, refY: 3 }
+  return { d: open ? 'M7,0 L0,3 L7,6' : 'M7,0 L0,3 L7,6 Z', refX: 0, refY: 3 }
+}
+
 export function nodeCenter(node: DiagramNode): DiagramPoint {
   return { x: node.x + node.w / 2, y: node.y + node.h / 2 }
 }
