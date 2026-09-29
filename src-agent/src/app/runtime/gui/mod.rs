@@ -328,16 +328,19 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
 
     // --- 1. Event loop + window (frameless, transparent) -----------------------
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
-    let mut window_builder = WindowBuilder::new()
+    let window_builder = WindowBuilder::new()
         .with_title("Koma")
         .with_inner_size(LogicalSize::new(1024.0, 680.0))
         .with_decorations(false)
         .with_resizable(true)
         .with_transparent(true);
+    // Reassigned only on Linux, where the taskbar icon is applied here. On
+    // macOS the Dock icon is set after the window exists.
     #[cfg(target_os = "linux")]
-    if let Some(icon) = crate::app::launcher::window_icon() {
-        window_builder = window_builder.with_window_icon(Some(icon));
-    }
+    let window_builder = match crate::app::launcher::window_icon() {
+        Some(icon) => window_builder.with_window_icon(Some(icon)),
+        None => window_builder,
+    };
     let window = window_builder
         .build(&event_loop)
         .context("failed to build GUI window")?;

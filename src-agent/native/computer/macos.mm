@@ -11,10 +11,23 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <stdexcept>
 #include <thread>
 #include <unistd.h>
 #include <vector>
+
+// Clang lowers `@available` to ___isPlatformVersionAtLeast. That helper lives
+// in libclang_rt.osx.a, which rustc does not link for an object built by
+// cc-rs, so `cargo build --release` fails with an undefined symbol. Weak so a
+// toolchain copy wins when one is present. Platform 1 is macOS.
+extern "C" __attribute__((weak)) int32_t __isPlatformVersionAtLeast(uint32_t platform, uint32_t major,
+                                                                    uint32_t minor, uint32_t subminor) {
+    if (platform != 1)
+        return 0;
+    NSOperatingSystemVersion required = {(NSInteger)major, (NSInteger)minor, (NSInteger)subminor};
+    return [[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:required] ? 1 : 0;
+}
 
 static std::atomic<bool> cancelled(false);
 static NSDictionary *target;
