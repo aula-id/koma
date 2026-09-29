@@ -309,6 +309,10 @@ export type KomaState = {
   putCodingPathInChat: (root: string, path: string, opts?: { isDir?: boolean }) => void
   /** Insert selection ask payload and focus chat. */
   askCodingSelectionInChat: (payload: string) => void
+  /** Queue a diagram drawing for the composer. The model receives its Mermaid. */
+  addDiagramToChat: (item: { title: string; mermaid: string; doc: DiagramDoc }) => void
+  consumeDiagramChatQueue: () => void
+  consumePasteBody: () => void
   // Composer-side ack: clears the one-shot signal after consuming it.
   consumeComposerInsert: () => void
   // Queue text to REPLACE the Composer draft (rewind refill). Called right after

@@ -407,7 +407,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     // markers to it before forwarding — otherwise the daemon's submit-time reconcile
     // (which keeps only attachments whose marker survived in the sent text) would drop
     // every staged image. Empty whenever detached.
-    let live_marks: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
+    let live_marks: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     // The webview's current Explore STREAM VIEW (which sub-agent / bash job is streaming
     // into the active stream tab). Written by the ipc thread on a `SetStreamView`, read by
     // the fold loop to fold that one target's transcript / output tail into the push.

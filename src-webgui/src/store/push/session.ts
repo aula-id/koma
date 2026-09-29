@@ -403,6 +403,9 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
       case 'SearchResults':
         set((s) => ({ session: { ...s.session, searchResults: env.items } }))
         break
+      case 'PasteBody':
+        set((s) => ({ ui: { ...s.ui, pasteBody: { markerN: env.markerN, text: env.text } } }))
+        break
     default:
       return false
   }

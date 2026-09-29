@@ -29,7 +29,7 @@ use super::proto::GuiReq;
 pub(super) struct GuiReqCtx {
     pub(super) ctl: std::sync::mpsc::Sender<HostCtl>,
     pub(super) req: Arc<Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
-    pub(super) marks: Arc<Mutex<Vec<usize>>>,
+    pub(super) marks: Arc<Mutex<Vec<String>>>,
     pub(super) view: Arc<Mutex<StreamView>>,
 }
 
@@ -55,13 +55,12 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::Submit { text } => {
             let mut text = text;
             if let Ok(marks) = ctx.marks.lock() {
-                for n in marks.iter() {
-                    let marker = format!("[Image #{n}]");
-                    if !text.contains(&marker) {
+                for marker in marks.iter() {
+                    if !text.contains(marker.as_str()) {
                         if !text.is_empty() {
                             text.push(' ');
                         }
-                        text.push_str(&marker);
+                        text.push_str(marker);
                     }
                 }
             }
@@ -142,10 +141,31 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             forward_paste(&ctx.req, path);
         }
         // Drop a staged attachment chip by its marker number.
-        GuiReq::RemoveAttachment { marker_n } => {
+        GuiReq::RemoveAttachment { marker_n, kind } => {
             if let Ok(g) = ctx.req.lock() {
                 if let Some(tx) = g.as_ref() {
-                    let _ = tx.send(ClientRequest::RemoveAttachment { marker_n });
+                    let _ = tx.send(ClientRequest::RemoveAttachment { marker_n, kind });
+                }
+            }
+        }
+        GuiReq::AttachPaste { text } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::AttachPaste { text });
+                }
+            }
+        }
+        GuiReq::UpdatePaste { marker_n, text } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::UpdatePaste { marker_n, text });
+                }
+            }
+        }
+        GuiReq::ReadPaste { marker_n } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::ReadPaste { marker_n });
                 }
             }
         }

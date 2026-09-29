@@ -164,6 +164,24 @@ pub(super) enum GuiReq {
     RemoveAttachment {
         #[serde(rename = "markerN")]
         marker_n: usize,
+        /// `"image"` or `"pasted_text"`. Absent drops every chip with this number.
+        #[serde(default)]
+        kind: Option<String>,
+    },
+    /// Long composer paste. The host forwards it as [`ClientRequest::AttachPaste`].
+    AttachPaste {
+        text: String,
+    },
+    /// Edit the body of a staged `[Pasted Text #N]` chip.
+    UpdatePaste {
+        #[serde(rename = "markerN")]
+        marker_n: usize,
+        text: String,
+    },
+    /// Load a staged paste body after the page reloads.
+    ReadPaste {
+        #[serde(rename = "markerN")]
+        marker_n: usize,
     },
     /// Omnisearch: fuzzy-search the workspace file index. Forwarded as
     /// [`ClientRequest::FileSearch`]; the daemon's one-shot reply is re-pushed to JS as a

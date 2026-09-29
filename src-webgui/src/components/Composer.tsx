@@ -13,10 +13,58 @@ import { useKoma } from '../store/koma'
 import {
   readCodingPathDragData,
 } from '../lib/codingRef'
+import { diagramViewForMermaid, mermaidTitle, splitDiagramMessage } from '../lib/diagramMermaid'
+import {
+  assignFreshPasteMarkers,
+  formatPasteFence,
+  PASTE_SOFT_MAX_BYTES,
+  pasteByteLength,
+  pasteMarker,
+  shouldCollapsePaste,
+  splitPasteMessage,
+  type PasteMarkerRow,
+  type PastedBlock,
+} from '../lib/pasteText'
+import type { DiagramDoc } from '../lib/diagram'
 import { ModelPicker } from './ModelPicker'
 import { EffortPicker } from './EffortPicker'
 import { ModeSelector } from './ModeSelector'
 import { CatMascot } from './CatMascot'
+import { DiagramSketch } from './DiagramVisual'
+
+type DiagramChip = { id: string; title: string; mermaid: string; doc: DiagramDoc }
+
+function mintDiagramChipId(): string {
+  return `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+}
+
+type LocalPaste = PastedBlock & { id: string; markerN?: number }
+
+function steerPreview(text: string): string {
+  const pasted = splitPasteMessage(text)
+  const split = splitDiagramMessage(pasted.prose)
+  return [
+    split.prose,
+    ...split.diagrams.map((item) => mermaidTitle(item.mermaid)),
+    ...pasted.pastes.map((item) => `Pasted Text #${item.n}`),
+  ]
+    .map((part) => part.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' · ')
+}
+
+function chipsFromMessage(text: string): { prose: string; chips: DiagramChip[]; pastes: LocalPaste[] } {
+  const pasted = splitPasteMessage(text)
+  const split = splitDiagramMessage(pasted.prose)
+  return {
+    prose: split.prose,
+    chips: split.diagrams.map((item) => {
+      const view = diagramViewForMermaid(item.mermaid)
+      return { id: mintDiagramChipId(), title: mermaidTitle(item.mermaid), mermaid: item.mermaid, doc: view.doc }
+    }),
+    pastes: pasted.pastes.map((item) => ({ ...item, id: mintDiagramChipId() })),
+  }
+}
 // Build-time JSON import: src-misc/ lives outside the vite root (src-webgui/)
 // but is the Rust side's single source of truth for this word list, so it's
 // imported directly rather than copied — vite/rollup inlines it into the
@@ -196,6 +244,28 @@ export function Composer() {
   const clearRewind = useKoma((s) => s.clearRewind)
   const requestScrollBottom = useKoma((s) => s.requestScrollBottom)
   const [input, setInput] = useState('')
+  const [diagramChips, setDiagramChips] = useState<DiagramChip[]>([])
+  const diagramChipsRef = useRef<DiagramChip[]>([])
+  diagramChipsRef.current = diagramChips
+  const [localPastes, setLocalPastes] = useState<LocalPaste[]>([])
+  const localPastesRef = useRef<LocalPaste[]>([])
+  localPastesRef.current = localPastes
+  // Fresh pastes wait here until the snapshot assigns `[Pasted Text #N]`.
+  // Recalled fences are not queued: they already have a body to splice back.
+  const attachQueue = useRef<PasteMarkerRow[]>([])
+  const seenPasteMarkers = useRef(new Set<number>())
+  const submitArmed = useRef(false)
+  const submitRef = useRef<() => void>(() => {})
+  const [pasteTexts, setPasteTexts] = useState<Record<number, string>>({})
+  const pasteTextsRef = useRef(pasteTexts)
+  pasteTextsRef.current = pasteTexts
+  const dirtyPastes = useRef(new Set<number>())
+  const [openPaste, setOpenPaste] = useState<number | null>(null)
+  const pasteBody = useKoma((s) => s.ui.pasteBody)
+  const consumePasteBody = useKoma((s) => s.consumePasteBody)
+  const sessionId = useKoma((s) => s.session.id)
+  const diagramChatQueue = useKoma((s) => s.ui.diagramChatQueue)
+  const consumeDiagramChatQueue = useKoma((s) => s.consumeDiagramChatQueue)
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -321,14 +391,51 @@ export function Composer() {
     consumeComposerInsert()
   }, [composerInsert, consumeComposerInsert])
 
+  // A diagram reference is a drawing chip. The Mermaid stays on the chip until
+  // send, which is the text the model actually receives.
+  useEffect(() => {
+    if (!diagramChatQueue.length) return
+    setDiagramChips((prev) => [
+      ...prev,
+      ...diagramChatQueue.map((item) => ({ id: mintDiagramChipId(), ...item })),
+    ])
+    consumeDiagramChatQueue()
+    textareaRef.current?.focus()
+  }, [diagramChatQueue, consumeDiagramChatQueue])
+
+  useEffect(() => {
+    if (!pasteBody) return
+    if (!dirtyPastes.current.has(pasteBody.markerN)) {
+      setPasteTexts((prev) => ({ ...prev, [pasteBody.markerN]: pasteBody.text }))
+    }
+    consumePasteBody()
+  }, [pasteBody, consumePasteBody])
+
   // Consume one-shot rewind refills: REPLACE the draft with the rewound
   // message's text (unlike composerInsert, which appends) so the user can edit
   // and resend it. Ack immediately so it doesn't re-fire on rerender.
   useEffect(() => {
     if (composerRefill === null) return
-    setInput(composerRefill)
+    const draft = chipsFromMessage(composerRefill)
+    setDiagramChips(draft.chips)
+    setLocalPastes(draft.pastes)
+    setInput(draft.prose)
     consumeComposerRefill()
   }, [composerRefill, consumeComposerRefill])
+
+  // Paste chips are session-local. A new session must not reuse marker #1's
+  // edited body, or bind a new paste onto the previous session's queue.
+  useEffect(() => {
+    setPasteTexts({})
+    setOpenPaste(null)
+    setLocalPastes([])
+    dirtyPastes.current.clear()
+    attachQueue.current = []
+    submitArmed.current = false
+    seenPasteMarkers.current = new Set(
+      useKoma.getState().session.attachments.filter((item) => item.kind === 'pasted_text').map((item) => item.markerN),
+    )
+  }, [sessionId])
 
   // Steer cap: the daemon queues at most 5 pending mid-turn submits; the 6th is
   // dropped host-side with a toast, so gate send at the cap.
@@ -367,6 +474,8 @@ export function Composer() {
   // recalled entry. Both reset on any user edit (onChange) or send (submit).
   const histIdxRef = useRef(-1)
   const stashRef = useRef('')
+  const stashChipsRef = useRef<DiagramChip[]>([])
+  const stashPastesRef = useRef<LocalPaste[]>([])
   // Flags the [input] auto-grow effect above to also park the caret at the end
   // of the text a recall just injected (a plain typed change never needs this).
   const caretToEndRef = useRef(false)
@@ -380,6 +489,22 @@ export function Composer() {
   const resetHistory = () => {
     histIdxRef.current = -1
     stashRef.current = ''
+    stashChipsRef.current = []
+    stashPastesRef.current = []
+  }
+
+  const showRecalled = (text: string) => {
+    const draft = chipsFromMessage(text)
+    // The recalled draft replaces chips that were still waiting for a marker.
+    // Cancel those rows so the late number is dropped instead of appearing
+    // beside the recalled message.
+    for (const row of attachQueue.current) {
+      if (row.markerN == null) row.cancelled = true
+    }
+    submitArmed.current = false
+    setDiagramChips(draft.chips)
+    setLocalPastes(draft.pastes)
+    setInput(draft.prose)
   }
 
   // Keep the chip overlay's scroll position glued to the textarea's — has to
@@ -410,9 +535,56 @@ export function Composer() {
       .getState()
       .session.messages.filter((m) => m.role === 'user' && !m.kind && m.content.trim() !== '')
 
+  const toastError = (text: string) => {
+    const id = useKoma.getState().ui.toastSeq + 1
+    useKoma.setState((s) => ({
+      ui: { ...s.ui, toastSeq: id, toast: { id, text, kind: 'error' } },
+    }))
+  }
+
   const submit = () => {
-    const text = input.trim()
-    if (!text) return
+    // The chip is editable immediately. Send waits until the snapshot has
+    // assigned `[Pasted Text #N]`, then flushes this same draft.
+    if (attachQueue.current.some((row) => !row.cancelled && row.markerN == null)) {
+      submitArmed.current = true
+      return
+    }
+    const prose = input.trim()
+    const mermaid = diagramChips.map((chip) => chip.mermaid).join('\n\n')
+    const locals = localPastesRef.current
+    const linked = new Set(locals.flatMap((item) => (item.markerN != null ? [item.markerN] : [])))
+    const recalled = locals.filter((item) => item.markerN == null)
+    const staged = attachments.filter((item) => item.kind === 'pasted_text' && !linked.has(item.markerN))
+    const fences = recalled.map((item) => formatPasteFence(item)).join('\n\n')
+    const markers = [
+      ...locals.flatMap((item) => (item.markerN != null ? [pasteMarker(item.markerN)] : [])),
+      ...staged.map((item) => pasteMarker(item.markerN)),
+    ]
+    const text = [prose, mermaid, fences, markers.join(' ')].filter(Boolean).join('\n\n')
+    const stagedPaste = staged.length > 0 || locals.some((item) => item.markerN != null)
+    if (!text && !stagedPaste) return
+    const bodies = [
+      ...locals.map((item) => item.text),
+      ...staged.flatMap((item) => {
+        const body = pasteTextsRef.current[item.markerN]
+        return body == null ? [] : [body]
+      }),
+    ]
+    if (bodies.some((body) => pasteByteLength(body) > PASTE_SOFT_MAX_BYTES)) {
+      toastError('Paste is larger than 2 MB')
+      return
+    }
+    for (const item of locals) {
+      if (item.markerN == null) continue
+      req({ r: 'UpdatePaste', markerN: item.markerN, text: item.text })
+    }
+    for (const markerN of dirtyPastes.current) {
+      const body = pasteTextsRef.current[markerN]
+      if (body == null) continue
+      if (!staged.some((item) => item.markerN === markerN)) continue
+      req({ r: 'UpdatePaste', markerN, text: body })
+    }
+    dirtyPastes.current.clear()
     // While working, a submit is QUEUED daemon-side as a steer (not a new turn);
     // block it at the cap so we don't fire a request the daemon will just drop.
     if (atSteerCap) return
@@ -433,7 +605,7 @@ export function Composer() {
     // TUI: it no-ops a `!` line while busy, but here we let it fall through to
     // a normal Submit so it queues as a steer like any other composer send,
     // rather than silently dropping the keystroke.
-    if (!working && attachments.length === 0 && text.startsWith('!')) {
+    if (!working && attachments.length === 0 && diagramChips.length === 0 && localPastesRef.current.length === 0 && text.startsWith('!')) {
       const cmd = text.slice(1).trim()
       if (cmd) {
         req({ r: 'Shell', cmd })
@@ -445,12 +617,77 @@ export function Composer() {
     }
     req({ r: 'Submit', text })
     setInput('')
+    setDiagramChips([])
+    setLocalPastes([])
+    setOpenPaste(null)
+    // Keep cancelled rows that are still waiting for a marker so the late
+    // snapshot can drop the chip the user already removed.
+    attachQueue.current = attachQueue.current.filter((row) => row.cancelled && row.markerN == null)
     // Swap the mascot to a new random cat on every send.
     setMascotSwap((t) => t + 1)
     // Force the transcript back to the bottom on send (re-engages the W4
     // scroll-stick even if the user had scrolled up).
     requestScrollBottom()
   }
+  submitRef.current = submit
+
+  // Snapshot assigned marker numbers. Bind them onto the chips that are still
+  // waiting, or drop a chip the user removed before the number came back.
+  // A send that landed during the wait flushes once every live row is bound.
+  useEffect(() => {
+    const assigned = assignFreshPasteMarkers(attachQueue.current, seenPasteMarkers.current, attachments)
+    if (!assigned.length) return
+    const removals = assigned.filter((row) => row.cancelled && row.markerN != null)
+    const keeps = assigned.filter((row) => !row.cancelled && row.markerN != null)
+    for (const row of removals) {
+      if (row.markerN == null) continue
+      req({ r: 'RemoveAttachment', markerN: row.markerN, kind: 'pasted_text' })
+    }
+    if (keeps.length) {
+      setLocalPastes((prev) => prev.map((item) => {
+        const hit = keeps.find((row) => row.id === item.id)
+        return hit && hit.markerN != null ? { ...item, markerN: hit.markerN, n: hit.markerN } : item
+      }))
+    }
+  }, [attachments, req])
+
+  // Flush a send that happened while the paste marker was still in flight.
+  // Wait until the chip state shows the marker so the body edit is what we save.
+  useEffect(() => {
+    if (!submitArmed.current) return
+    if (attachQueue.current.some((row) => !row.cancelled && row.markerN == null)) return
+    const unmarked = localPastes.some((item) => {
+      const row = attachQueue.current.find((queued) => queued.id === item.id)
+      return !!row && !row.cancelled && row.markerN != null && item.markerN == null
+    })
+    if (unmarked) return
+    submitArmed.current = false
+    submitRef.current()
+  }, [localPastes, attachments])
+
+  // If the daemon never stages the paste, stop blocking send and keep the
+  // draft text. The queue row is dropped so a later, different paste is not
+  // paired with this one.
+  useEffect(() => {
+    const waiting = localPastes.some((item) =>
+      attachQueue.current.some((row) => row.id === item.id && !row.cancelled && row.markerN == null),
+    )
+    if (!waiting) return
+    const timer = window.setTimeout(() => {
+      const stuck = new Set(
+        attachQueue.current.filter((row) => row.markerN == null && !row.cancelled).map((row) => row.id),
+      )
+      if (!stuck.size) return
+      attachQueue.current = attachQueue.current.filter((row) => !stuck.has(row.id))
+      if (!submitArmed.current) return
+      submitArmed.current = false
+      const id = useKoma.getState().ui.toastSeq + 1
+      useKoma.setState((s) => ({
+        ui: { ...s.ui, toastSeq: id, toast: { id, text: 'Pasted text stayed in the draft. Press send again.', kind: 'error' } },
+      }))
+    }, 8000)
+    return () => window.clearTimeout(timer)
+  }, [localPastes])
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Follow-ups list focus: when the queue owns keys, Enter edits, arrows move,
@@ -550,6 +787,8 @@ export function Composer() {
         if (histIdxRef.current === -1) {
           if (history.length === 0) return
           stashRef.current = input
+          stashChipsRef.current = diagramChipsRef.current
+          stashPastesRef.current = localPastesRef.current
           histIdxRef.current = history.length - 1
         } else if (histIdxRef.current > 0) {
           histIdxRef.current -= 1
@@ -558,7 +797,7 @@ export function Composer() {
         }
         e.preventDefault()
         caretToEndRef.current = true
-        setInput(history[histIdxRef.current].content)
+        showRecalled(history[histIdxRef.current].content)
       } else if (e.key === 'ArrowDown' && lastLine) {
         if (histIdxRef.current === -1) return // nothing recalled yet
         const history = recallCandidates()
@@ -566,12 +805,14 @@ export function Composer() {
           histIdxRef.current += 1
           e.preventDefault()
           caretToEndRef.current = true
-          setInput(history[histIdxRef.current].content)
+          showRecalled(history[histIdxRef.current].content)
         } else {
           // Walked past the newest recalled entry — restore the stashed draft.
           histIdxRef.current = -1
           e.preventDefault()
           caretToEndRef.current = true
+          setDiagramChips(stashChipsRef.current)
+          setLocalPastes(stashPastesRef.current)
           setInput(stashRef.current)
         }
       }
@@ -609,9 +850,25 @@ export function Composer() {
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
     const files = Array.from(e.clipboardData?.files ?? [])
-    if (files.length === 0) return
+    if (files.length > 0) {
+      e.preventDefault()
+      void attachFiles(files)
+      return
+    }
+    const raw = e.clipboardData?.getData('text/plain') ?? ''
+    if (!raw) return
+    const text = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    if (pasteByteLength(text) > PASTE_SOFT_MAX_BYTES) {
+      e.preventDefault()
+      toastError('Paste is larger than 2 MB')
+      return
+    }
+    if (!shouldCollapsePaste(text)) return
     e.preventDefault()
-    void attachFiles(files)
+    const id = mintDiagramChipId()
+    attachQueue.current.push({ id, markerN: null, cancelled: false })
+    setLocalPastes((prev) => [...prev, { id, n: 0, path: '', text }])
+    req({ r: 'AttachPaste', text })
   }
 
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
@@ -646,11 +903,26 @@ export function Composer() {
     e.target.value = ''
   }
 
-  const removeAttachment = (markerN: number) => {
-    req({ r: 'RemoveAttachment', markerN })
+  const removeAttachment = (markerN: number, kind: 'image' | 'file' | 'pasted_text') => {
+    req({ r: 'RemoveAttachment', markerN, kind })
+    if (kind === 'pasted_text') {
+      dirtyPastes.current.delete(markerN)
+      setOpenPaste((current) => (current === markerN ? null : current))
+    }
   }
 
-  const canSend = input.trim() !== '' && !atSteerCap
+  const editPaste = (markerN: number, text: string) => {
+    dirtyPastes.current.add(markerN)
+    setPasteTexts((prev) => ({ ...prev, [markerN]: text }))
+  }
+
+  const removeDiagramChip = (id: string) => {
+    const next = diagramChips.filter((chip) => chip.id !== id)
+    setDiagramChips(next)
+    if (next.length === 0 && input.trim() === '' && pendingRewindIndex !== null) clearRewind()
+  }
+
+  const canSend = (input.trim() !== '' || diagramChips.length > 0 || localPastes.length > 0 || attachments.some((item) => item.kind === 'pasted_text')) && !atSteerCap
 
   return (
     // claude.ai-style composer pinned at the bottom: a single rounded card
@@ -685,7 +957,7 @@ export function Composer() {
           <div className="flex flex-col gap-0.5">
             {pendingSteer.map((s, i) => {
               const selected = steerFocus && i === steerSel
-              const oneLine = s.replace(/\n/g, ' ').trim()
+              const oneLine = steerPreview(s) || s.replace(/\s+/g, ' ').trim()
               return (
                 <div
                   key={i}
@@ -775,23 +1047,111 @@ export function Composer() {
           </span>
         </div>
 
-        {attachments.length > 0 && (
+        {diagramChips.length > 0 && (
           <div className="flex flex-wrap gap-1">
-            {attachments.map((a) => (
+            {diagramChips.map((chip) => (
               <span
-                key={a.markerN}
-                className="flex items-center gap-1 rounded-lg border border-koma-border bg-koma-panel2 px-2 py-1 text-[11px] text-koma-fg opacity-90"
+                key={chip.id}
+                className="flex items-center gap-1.5 rounded-lg border border-koma-border bg-koma-panel2 py-1 pl-1 pr-2 text-[11px] text-koma-fg"
               >
-                <span className="max-w-[140px] truncate">{a.name}</span>
+                <span className="h-8 w-12 flex-none overflow-hidden rounded border border-koma-border bg-koma-bg">
+                  <DiagramSketch doc={chip.doc} />
+                </span>
+                <span className="max-w-[140px] truncate">{chip.title}</span>
                 <button
-                  onClick={() => removeAttachment(a.markerN)}
-                  aria-label={`Remove ${a.name}`}
+                  type="button"
+                  onClick={() => removeDiagramChip(chip.id)}
+                  aria-label={`Remove ${chip.title}`}
                   className="flex-none opacity-60 transition-opacity hover:opacity-100"
                 >
                   <X size={11} />
                 </button>
               </span>
             ))}
+          </div>
+        )}
+
+        {attachments.some((item) => item.kind !== 'pasted_text' || !localPastes.some((chip) => chip.markerN === item.markerN)) && (
+          <div className="flex flex-col gap-1">
+            <div className="flex flex-wrap gap-1">
+              {attachments.filter((item) => item.kind !== 'pasted_text' || !localPastes.some((chip) => chip.markerN === item.markerN)).map((a) => (
+                <span
+                  key={`${a.kind}:${a.markerN}`}
+                  className="flex items-center gap-1 rounded-lg border border-koma-border bg-koma-panel2 px-2 py-1 text-[11px] text-koma-fg opacity-90"
+                >
+                  {a.kind === 'pasted_text' ? (
+                    <button
+                      type="button"
+                      className="max-w-[180px] truncate text-left"
+                      onClick={() => {
+                        setOpenPaste((current) => (current === a.markerN ? null : a.markerN))
+                        if (pasteTextsRef.current[a.markerN] == null) req({ r: 'ReadPaste', markerN: a.markerN })
+                      }}
+                    >
+                      {a.name}
+                    </button>
+                  ) : (
+                    <span className="max-w-[140px] truncate">{a.name}</span>
+                  )}
+                  <button
+                    onClick={() => removeAttachment(a.markerN, a.kind)}
+                    aria-label={`Remove ${a.name}`}
+                    className="flex-none opacity-60 transition-opacity hover:opacity-100"
+                  >
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
+            </div>
+            {attachments
+              .filter((item) => item.kind === 'pasted_text' && item.markerN === openPaste && !localPastes.some((chip) => chip.markerN === item.markerN))
+              .map((item) => (
+                pasteTexts[item.markerN] == null ? (
+                  <p key={`edit-${item.markerN}`} className="px-2 py-1.5 text-[12px] text-koma-dim">Loading pasted text…</p>
+                ) : (
+                  <textarea
+                    key={`edit-${item.markerN}`}
+                    value={pasteTexts[item.markerN]}
+                    aria-label={`Edit ${item.name}`}
+                    onChange={(e) => editPaste(item.markerN, e.target.value)}
+                    className="max-h-40 min-h-16 w-full resize-y rounded-lg border border-koma-border bg-koma-bg px-2 py-1.5 text-[12px] text-koma-fg outline-none"
+                  />
+                )
+              ))}
+          </div>
+        )}
+        {localPastes.length > 0 && (
+          <div className="flex flex-col gap-1">
+            {localPastes.map((item) => {
+              const attaching = item.markerN == null && attachQueue.current.some((row) => row.id === item.id && !row.cancelled && row.markerN == null)
+              const label = item.markerN != null ? `Pasted Text #${item.markerN}` : attaching ? 'Attaching paste…' : 'Pasted text'
+              return (
+              <span key={item.id} className="rounded-lg border border-koma-border bg-koma-panel2 px-2 py-1 text-[11px] text-koma-fg">
+                <span className="flex items-center gap-1">
+                  <span className="min-w-0 flex-1 truncate">{label}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const row = attachQueue.current.find((queued) => queued.id === item.id)
+                      if (row && row.markerN == null) row.cancelled = true
+                      else if (item.markerN != null) removeAttachment(item.markerN, 'pasted_text')
+                      setLocalPastes((prev) => prev.filter((chip) => chip.id !== item.id))
+                    }}
+                    aria-label={`Remove ${label}`}
+                    className="flex-none opacity-60 hover:opacity-100"
+                  >
+                    <X size={11} />
+                  </button>
+                </span>
+                <textarea
+                  value={item.text}
+                  aria-label={`Edit ${label}`}
+                  onChange={(e) => setLocalPastes((prev) => prev.map((chip) => (chip.id === item.id ? { ...chip, text: e.target.value } : chip)))}
+                  className="mt-1 max-h-40 min-h-16 w-full resize-y rounded border border-koma-border bg-koma-bg px-2 py-1 text-[12px] outline-none"
+                />
+              </span>
+              )
+            })}
           </div>
         )}
 

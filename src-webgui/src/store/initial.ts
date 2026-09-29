@@ -117,6 +117,8 @@ export function updateBootstrap(ui: UiSlice, patch: Partial<BootstrapState>): Ui
 export const initialUi: UiSlice = {
   omnisearchOpen: false,
   composerInsert: null,
+  diagramChatQueue: [],
+  pasteBody: null,
   composerRefill: null,
   pendingRewindIndex: null,
   scrollTick: 0,

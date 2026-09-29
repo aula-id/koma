@@ -4,8 +4,10 @@ import {
   edgeRoute,
   emptyDiagram,
   isDiagramPath,
+  nearestPort,
   nearestSide,
   nextRotation,
+  portAnchor,
   parseDiagram,
   resizeNode,
   routePath,
@@ -126,4 +128,22 @@ function aligned(points: { x: number; y: number }[]): boolean {
   assert.equal(parsed.error, null)
   assert.deepEqual(parsed.doc.nodes[0]?.rotation, 15)
   assert.deepEqual(parsed.doc.edges[0], doc.edges[0])
+}
+
+{
+  const node = { id: 'a', kind: 'rect' as const, x: 0, y: 0, w: 100, h: 50, text: '' }
+  assert.deepEqual(portAnchor(node, 0), { x: 20, y: 0 })
+  assert.deepEqual(portAnchor(node, 7), { x: 100, y: 40 })
+  assert.deepEqual(portAnchor(node, 15), { x: 0, y: 40 })
+  assert.equal(nearestPort(node, { x: 100, y: 40 }), 7)
+  const other = { ...node, id: 'b', x: 200 }
+  const routed = edgeRoute(node, other, { id: 'e', from: 'a', to: 'b', fromPort: 5, toPort: 12 })
+  assert.deepEqual(routed[0], portAnchor(node, 5))
+  assert.deepEqual(routed[routed.length - 1], portAnchor(other, 12))
+  const doc = emptyDiagram()
+  doc.edges.push({ id: 'e', from: 'a', to: 'b', fromPort: 0, toPort: 15 })
+  const parsed = parseDiagram(serializeDiagram(doc))
+  assert.equal(parsed.doc.edges[0]?.fromPort, 0)
+  assert.equal(parsed.doc.edges[0]?.toPort, 15)
+  assert.equal(parsed.doc.edges[0]?.fromSide, undefined)
 }

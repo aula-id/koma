@@ -47,8 +47,15 @@ declare global {
     | { r: 'AttachPath'; path: string }
     // Omnisearch: fuzzy workspace file search (mirrors the @-palette).
     | { r: 'FileSearch'; query: string }
-    // Drop a single staged attachment by its `[Image #N]` marker number.
-    | { r: 'RemoveAttachment'; markerN: number }
+    // Drop a single staged attachment by its marker number.
+    // `kind` is `image` or `pasted_text` so the two sequences can share a number.
+    | { r: 'RemoveAttachment'; markerN: number; kind?: 'image' | 'file' | 'pasted_text' }
+    // Collapse a long paste into a `[Pasted Text #N]` chip.
+    | { r: 'AttachPaste'; text: string }
+    // Replace the saved body of a staged paste chip.
+    | { r: 'UpdatePaste'; markerN: number; text: string }
+    // Load a staged paste body after reload.
+    | { r: 'ReadPaste'; markerN: number }
     // Rename the foreground session (no id — daemon resolves current session,
     // mirrors RefreshHub/Submit's implicit-session pattern). Tag is `Rename`
     // to match the daemon's GuiReq variant.

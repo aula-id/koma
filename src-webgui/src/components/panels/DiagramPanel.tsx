@@ -7,6 +7,8 @@ import { Select } from './form'
 import { useKoma } from '../../store/koma'
 import { fileKey, type FileTreeEntry } from '../../store/coding'
 import { SHAPE_MIME, diagramFileName, isDiagramPath, type DiagramKind } from '../../lib/diagram'
+import { addDiagramFileToChat, copyDiagramFileMermaid } from '../../lib/diagramChat'
+import { DiagramRefMenuItems } from '../DiagramVisual'
 
 const EMPTY_ROOTS: string[] = []
 
@@ -337,6 +339,23 @@ export function DiagramPanel() {
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.preventDefault()}
         >
+          {activeRoot ? (
+            <>
+              <DiagramRefMenuItems
+                onAdd={() => {
+                  const path = menu.path
+                  setMenu(null)
+                  if (activeRoot) void addDiagramFileToChat(activeRoot, path)
+                }}
+                onCopy={() => {
+                  const path = menu.path
+                  setMenu(null)
+                  if (activeRoot) void copyDiagramFileMermaid(activeRoot, path)
+                }}
+              />
+              <div className="my-1 border-t border-koma-border" />
+            </>
+          ) : null}
           <button
             type="button"
             className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-90 hover:bg-koma-hover"

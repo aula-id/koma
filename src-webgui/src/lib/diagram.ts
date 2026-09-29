@@ -43,11 +43,16 @@ export type DiagramEdge = {
   route?: DiagramRoute
   fromSide?: DiagramSide
   toSide?: DiagramSide
+  /** 0..15 around the shape. Omitted keeps the side-center anchor. */
+  fromPort?: number
+  toPort?: number
   /** Interior waypoints in document coordinates. Endpoints stay on the shapes. */
   bends?: DiagramPoint[]
 }
 
 const SIDES: readonly DiagramSide[] = ['n', 'e', 's', 'w']
+/** Four inset points on each side. Corners stay free for the resize handles. */
+export const DIAGRAM_PORTS = 16
 const DASHES: readonly DiagramDash[] = ['solid', 'dashed', 'dotted']
 const ARROWS: readonly DiagramArrow[] = ['none', 'arrow', 'open']
 const CORNERS: readonly DiagramCorner[] = ['sharp', 'rounded']
@@ -131,6 +136,11 @@ function parseColor(value: unknown): string | undefined {
   return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value.toLowerCase() : undefined
 }
 
+function parsePort(value: unknown): number | undefined {
+  const port = num(value)
+  return port != null && Number.isInteger(port) && port >= 0 && port < DIAGRAM_PORTS ? port : undefined
+}
+
 function parseBends(value: unknown): DiagramPoint[] | undefined {
   if (!Array.isArray(value)) return undefined
   const bends: DiagramPoint[] = []
@@ -164,6 +174,8 @@ function parseEdges(value: unknown): DiagramEdge[] | null {
     const route = oneOf(row.route, ROUTES)
     const fromSide = oneOf(row.fromSide, SIDES)
     const toSide = oneOf(row.toSide, SIDES)
+    const fromPort = parsePort(row.fromPort)
+    const toPort = parsePort(row.toPort)
     const bends = parseBends(row.bends)
     if (color) edge.color = color
     if (width != null && width > 0 && width !== 1.5) edge.width = width
@@ -172,8 +184,10 @@ function parseEdges(value: unknown): DiagramEdge[] | null {
     if (end && end !== 'arrow') edge.end = end
     if (corner && corner !== 'sharp') edge.corner = corner
     if (route && route !== 'orthogonal') edge.route = route
-    if (fromSide) edge.fromSide = fromSide
-    if (toSide) edge.toSide = toSide
+    if (fromSide && fromPort == null) edge.fromSide = fromSide
+    if (toSide && toPort == null) edge.toSide = toSide
+    if (fromPort != null) edge.fromPort = fromPort
+    if (toPort != null) edge.toPort = toPort
     if (bends) edge.bends = bends
     edges.push(edge)
   }
@@ -225,8 +239,10 @@ export function serializeDiagram(doc: DiagramDoc): string {
       if (e.end && e.end !== 'arrow') row.end = e.end
       if (e.corner && e.corner !== 'sharp') row.corner = e.corner
       if (e.route && e.route !== 'orthogonal') row.route = e.route
-      if (e.fromSide) row.fromSide = e.fromSide
-      if (e.toSide) row.toSide = e.toSide
+      if (e.fromPort != null) row.fromPort = e.fromPort
+      else if (e.fromSide) row.fromSide = e.fromSide
+      if (e.toPort != null) row.toPort = e.toPort
+      else if (e.toSide) row.toSide = e.toSide
       if (e.bends?.length) row.bends = e.bends.map((p) => ({ x: p.x, y: p.y }))
       return row
     }),
@@ -281,6 +297,69 @@ export function sideAnchor(node: DiagramNode, side: DiagramSide): DiagramPoint {
           ? { x: node.x, y: node.y + node.h / 2 }
           : { x: node.x + node.w, y: node.y + node.h / 2 }
   return rotatePoint(local, nodeCenter(node), node.rotation ?? 0)
+}
+
+export function portSide(port: number): DiagramSide {
+  const index = ((Math.floor(port) % DIAGRAM_PORTS) + DIAGRAM_PORTS) % DIAGRAM_PORTS
+  return SIDES[Math.floor(index / 4)]
+}
+
+/** Local perimeter point, then the node's rotation. Slots sit at 20/40/60/80%. */
+export function portAnchor(node: DiagramNode, port: number): DiagramPoint {
+  const index = ((Math.floor(port) % DIAGRAM_PORTS) + DIAGRAM_PORTS) % DIAGRAM_PORTS
+  const side = Math.floor(index / 4)
+  const t = ((index % 4) + 1) / 5
+  const local =
+    side === 0
+      ? { x: node.x + node.w * t, y: node.y }
+      : side === 1
+        ? { x: node.x + node.w, y: node.y + node.h * t }
+        : side === 2
+          ? { x: node.x + node.w * t, y: node.y + node.h }
+          : { x: node.x, y: node.y + node.h * t }
+  return rotatePoint(local, nodeCenter(node), node.rotation ?? 0)
+}
+
+export function nearestPort(node: DiagramNode, point: DiagramPoint): number {
+  let best = 0
+  let dist = Infinity
+  for (let port = 0; port < DIAGRAM_PORTS; port++) {
+    const anchor = portAnchor(node, port)
+    const d = (anchor.x - point.x) ** 2 + (anchor.y - point.y) ** 2
+    if (d < dist) {
+      dist = d
+      best = port
+    }
+  }
+  return best
+}
+
+export function pointInNode(node: DiagramNode, point: DiagramPoint): boolean {
+  const local = rotatePoint(point, nodeCenter(node), -(node.rotation ?? 0))
+  return local.x >= node.x && local.x <= node.x + node.w && local.y >= node.y && local.y <= node.y + node.h
+}
+
+/** Topmost shape under the point, or a shape whose port is within 16px. */
+export function nodeAtPoint(nodes: readonly DiagramNode[], point: DiagramPoint, ignoreId?: string): DiagramNode | null {
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const node = nodes[i]
+    if (!node || node.id === ignoreId) continue
+    if (pointInNode(node, point)) return node
+  }
+  let best: DiagramNode | null = null
+  let dist = 16 * 16
+  for (const node of nodes) {
+    if (node.id === ignoreId) continue
+    for (let port = 0; port < DIAGRAM_PORTS; port++) {
+      const anchor = portAnchor(node, port)
+      const d = (anchor.x - point.x) ** 2 + (anchor.y - point.y) ** 2
+      if (d <= dist) {
+        dist = d
+        best = node
+      }
+    }
+  }
+  return best
 }
 
 export function nearestSide(node: DiagramNode, point: DiagramPoint): DiagramSide {
@@ -376,12 +455,27 @@ function dedupe(points: DiagramPoint[]): DiagramPoint[] {
   return kept
 }
 
+function routeEnd(
+  node: DiagramNode,
+  other: DiagramNode,
+  port: number | undefined,
+  side: DiagramSide | undefined,
+): { point: DiagramPoint; side: DiagramSide } {
+  if (port != null && port >= 0 && port < DIAGRAM_PORTS) {
+    return { point: portAnchor(node, port), side: portSide(port) }
+  }
+  const resolved = side ?? nearestSide(node, nodeCenter(other))
+  return { point: sideAnchor(node, resolved), side: resolved }
+}
+
 export function edgeRoute(from: DiagramNode, to: DiagramNode, edge: DiagramEdge): DiagramPoint[] {
   const style = edgeStyle(edge)
-  const fromSide = edge.fromSide ?? nearestSide(from, nodeCenter(to))
-  const toSide = edge.toSide ?? nearestSide(to, nodeCenter(from))
-  const start = sideAnchor(from, fromSide)
-  const end = sideAnchor(to, toSide)
+  const startEnd = routeEnd(from, to, edge.fromPort, edge.fromSide)
+  const endEnd = routeEnd(to, from, edge.toPort, edge.toSide)
+  const fromSide = startEnd.side
+  const toSide = endEnd.side
+  const start = startEnd.point
+  const end = endEnd.point
   if (style.route === 'straight') return [start, end]
   if (edge.bends?.length) return dedupe([start, ...edge.bends, end])
   const stub = 24

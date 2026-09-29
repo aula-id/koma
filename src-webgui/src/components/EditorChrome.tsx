@@ -17,6 +17,7 @@ export function EditorChrome({
   canRedo,
   onUndo,
   onRedo,
+  trailing,
 }: {
   path: string
   status: string
@@ -33,6 +34,7 @@ export function EditorChrome({
   canRedo?: boolean
   onUndo?: () => void
   onRedo?: () => void
+  trailing?: ReactNode
 }) {
   // Density via container query — no RO/setState. Narrow split panes hide the
   // full path (title still has it) and drop the status text so Save/Revert stay.
@@ -80,6 +82,7 @@ export function EditorChrome({
       >
         <Save size={13} />
       </button>}
+      {trailing}
     </div>
   )
 }
