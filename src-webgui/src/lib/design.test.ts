@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict'
 import {
+  addDesignToken,
   applyOverrides,
   copyTree,
   createNode,
   deleteDesignNode,
   designFileName,
+  dropDesignToken,
   layoutDesign,
   reorderDesignNode,
   emptyDesign,
@@ -21,6 +23,8 @@ import {
   resizeDesignNode,
   resolveRef,
   serializeDesign,
+  setDesignMode,
+  setDesignTokenValue,
   textStyle,
   variantKey,
 } from './design.ts'
@@ -325,4 +329,31 @@ function sample(): DesignDoc {
   assert.deepEqual(again, column)
   const moved = reorderDesignNode({ ...emptyDesign(), screens: [column] }, 'two', 0)
   assert.equal(moved.screens[0].children?.[0].id, 'two')
+}
+
+{
+  const doc = emptyDesign()
+  assert.equal(addDesignToken(doc, '1bad', 'color'), null)
+  const added = addDesignToken(doc, ' color.fg ', 'color')
+  assert.ok(added)
+  assert.equal(added.tokens[0].name, 'color.fg')
+  assert.equal(added.tokens[0].values.light, '#1a1d27')
+  assert.equal(added.tokens[0].values.dark, '#c8d3f5')
+  assert.equal(addDesignToken(added, 'color.fg', 'space'), null)
+  assert.equal(setDesignTokenValue(added, 'color.fg', 'dark', 'nope'), null)
+  const dark = setDesignTokenValue(added, 'color.fg', 'dark', '#FFFFFF')
+  assert.equal(dark?.tokens[0].values.dark, '#ffffff')
+  assert.equal(dark?.tokens[0].values.light, '#1a1d27')
+  const switched = setDesignMode(dark!, 'dark')
+  assert.equal(switched.mode, 'dark')
+  assert.equal(resolveRef(switched, 'color.fg'), '#ffffff')
+  assert.equal(setDesignMode(switched, 'missing'), switched)
+  const parsed = parseDesign(serializeDesign(switched))
+  assert.equal(parsed.error, null)
+  assert.equal(parsed.doc.mode, 'dark')
+  assert.equal(parsed.doc.tokens[0].values.dark, '#ffffff')
+  assert.equal(dropDesignToken(switched, 'color.fg').tokens.length, 0)
+  assert.equal(addDesignToken(doc, 'space.2', 'space')?.tokens[0].values.light, '8')
+  assert.equal(addDesignToken(doc, 'type.body', 'type')?.tokens[0].values.dark, '13/regular')
+  assert.equal(addDesignToken(doc, 'radius.sm', 'radius')?.tokens[0].values.light, '8')
 }

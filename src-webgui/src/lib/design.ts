@@ -182,6 +182,46 @@ export function resolveRef(doc: DesignDoc, ref: string): string {
   return token.values[doc.mode] ?? token.values[doc.modes[0] ?? ''] ?? Object.values(token.values)[0] ?? ''
 }
 
+function defaultTokenValue(kind: DesignTokenKind, mode: string): string {
+  if (kind === 'color') return mode === 'dark' ? '#c8d3f5' : '#1a1d27'
+  if (kind === 'type') return '13/regular'
+  return '8'
+}
+
+/** Switch the saved mode. Unknown modes leave the document alone. */
+export function setDesignMode(doc: DesignDoc, mode: string): DesignDoc {
+  if (!doc.modes.includes(mode) || doc.mode === mode) return doc
+  return { ...doc, mode }
+}
+
+/** Append a token with a value for every mode. A bad or duplicate name returns null. */
+export function addDesignToken(doc: DesignDoc, rawName: string, kind: DesignTokenKind): DesignDoc | null {
+  const name = rawName.trim()
+  if (!TOKEN_NAME.test(name) || doc.tokens.some((token) => token.name === name)) return null
+  const values: Record<string, string> = {}
+  for (const mode of doc.modes) values[mode] = defaultTokenValue(kind, mode)
+  return { ...doc, tokens: [...doc.tokens, { name, kind, values }] }
+}
+
+/** Write one mode's value. A bad value returns null. */
+export function setDesignTokenValue(doc: DesignDoc, name: string, mode: string, raw: string): DesignDoc | null {
+  if (!doc.modes.includes(mode)) return null
+  const index = doc.tokens.findIndex((token) => token.name === name)
+  if (index < 0) return null
+  const token = doc.tokens[index]
+  const parsed = parseTokenValue(token.kind, raw.trim())
+  if (!parsed) return null
+  if (token.values[mode] === parsed) return doc
+  const tokens = doc.tokens.slice()
+  tokens[index] = { ...token, values: { ...token.values, [mode]: parsed } }
+  return { ...doc, tokens }
+}
+
+export function dropDesignToken(doc: DesignDoc, name: string): DesignDoc {
+  if (!doc.tokens.some((token) => token.name === name)) return doc
+  return { ...doc, tokens: doc.tokens.filter((token) => token.name !== name) }
+}
+
 /** Resolved chrome. An empty fill or stroke means the theme color. `none` is off. */
 export function nodeChrome(node: DesignNode): { fill: string; stroke: string; radius: number | string; opacity: number; strokeWidth: number } {
   const shaped = node.kind === 'frame' || node.kind === 'rect'

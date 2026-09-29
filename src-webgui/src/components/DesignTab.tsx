@@ -19,6 +19,7 @@ import {
   resizeDesignNode,
   resolveRef,
   serializeDesign,
+  setDesignMode,
   snapDesign,
   textStyle,
   updateDesignNode,
@@ -128,6 +129,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     note(current)
     updateDesign(tab.root, tab.path, laid)
   }
+  const commitRef = useRef(commit)
+  commitRef.current = commit
 
   const undo = () => {
     const prev = pastRef.current.pop()
@@ -282,11 +285,19 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       if (!drag.remembered) noteRef.current(doc)
       updateRef.current(tab.root, tab.path, laid)
     }
+    const onCommit = (event: Event) => {
+      const detail = (event as CustomEvent<{ root: string; path: string; doc: DesignDoc }>).detail
+      if (!detail || detail.root !== tab.root || detail.path !== tab.path) return
+      event.preventDefault()
+      commitRef.current(detail.doc)
+    }
+    window.addEventListener('koma-design-commit', onCommit)
     window.addEventListener('koma-design-restore', onRestore)
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
     window.addEventListener('pointercancel', up)
     return () => {
+      window.removeEventListener('koma-design-commit', onCommit)
       window.removeEventListener('koma-design-restore', onRestore)
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
@@ -655,6 +666,17 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             }}>
               <Plus size={15} strokeWidth={2.25} />
             </ToolButton>
+            {doc.modes.map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                aria-pressed={doc.mode === mode}
+                onClick={() => commit(setDesignMode(doc, mode))}
+                className={`h-6 rounded px-1.5 text-[11px] capitalize ${doc.mode === mode ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
+              >
+                {mode}
+              </button>
+            ))}
             <button
               type="button"
               aria-pressed={doc.snap}
@@ -673,6 +695,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
           </div>
           {selected ? (
             <NodeSettings
+              doc={doc}
               node={selected}
               hasParent={located?.parentId != null}
               onPatch={(fn) => patchSelected(fn)}
@@ -812,6 +835,7 @@ function DesignNodeView({
 }
 
 function NodeSettings({
+  doc,
   node,
   hasParent,
   onPatch,
@@ -819,6 +843,7 @@ function NodeSettings({
   onTypeFocus,
   onTypeBlur,
 }: {
+  doc: DesignDoc
   node: DesignNode
   hasParent: boolean
   onPatch: (fn: (node: DesignNode) => DesignNode) => void
@@ -829,6 +854,8 @@ function NodeSettings({
   const chrome = nodeChrome(node)
   const style = textStyle(node)
   const shaped = node.kind === 'frame' || node.kind === 'rect'
+  const colorTokens = doc.tokens.filter((token) => token.kind === 'color')
+  const radiusTokens = doc.tokens.filter((token) => token.kind === 'radius')
   const setField = (patch: Partial<DesignNode>, clear: (keyof DesignNode)[] = []) => {
     onPatch((current) => {
       const next: DesignNode = { ...current, ...patch }
@@ -936,20 +963,39 @@ function NodeSettings({
         label="Fill"
         value={chrome.fill}
         fallback="#1a1d27"
+        resolved={resolveRef(doc, chrome.fill)}
+        tokens={colorTokens}
         onChange={(next) => paintChange('fill', next)}
       />
       <PaintRow
         label="Border"
         value={chrome.stroke}
         fallback="#8b93b8"
+        resolved={resolveRef(doc, chrome.stroke)}
+        tokens={colorTokens}
         onChange={(next) => paintChange('stroke', next)}
       />
       <label className="flex flex-col gap-1">
         <span className="text-koma-dim">Radius</span>
+        {radiusTokens.length ? (
+          <div className="flex flex-wrap gap-1">
+            {radiusTokens.map((token) => (
+              <button
+                key={token.name}
+                type="button"
+                aria-pressed={node.radius === token.name}
+                onClick={() => setField({ radius: token.name })}
+                className={`h-6 rounded px-1.5 ${node.radius === token.name ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
+              >
+                {token.name}
+              </button>
+            ))}
+          </div>
+        ) : null}
         <input
           type="number"
           min={0}
-          value={typeof node.radius === 'number' ? node.radius : 0}
+          value={typeof node.radius === 'number' ? node.radius : Number(resolveRef(doc, typeof node.radius === 'string' ? node.radius : '')) || 0}
           onChange={(event) => {
             const radius = Number(event.target.value)
             if (!Number.isFinite(radius) || radius <= 0) setField({}, ['radius'])
@@ -998,6 +1044,8 @@ function NodeSettings({
             label="Color"
             value={style.color || 'none'}
             fallback="#c8d3f5"
+            resolved={resolveRef(doc, style.color)}
+            tokens={colorTokens}
             onChange={(next) => setField(next && next !== 'none' ? { color: next } : {}, next && next !== 'none' ? [] : ['color'])}
           />
         </>
@@ -1024,9 +1072,10 @@ function NumberField({ label, value, onChange }: { label: string; value: number;
   )
 }
 
-function PaintRow({ label, value, fallback, onChange }: { label: string; value: string; fallback: string; onChange: (next: string | null) => void }) {
+function PaintRow({ label, value, fallback, resolved, tokens, onChange }: { label: string; value: string; fallback: string; resolved?: string; tokens?: { name: string }[]; onChange: (next: string | null) => void }) {
   const on = value !== 'none'
-  const hex = value.startsWith('#') ? value : fallback
+  const hex = value.startsWith('#') ? value : resolved?.startsWith('#') ? resolved : fallback
+  const swatch = value.startsWith('#') ? value : resolved?.startsWith('#') ? resolved : on ? 'var(--color-koma-panel)' : 'transparent'
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between">
@@ -1041,7 +1090,7 @@ function PaintRow({ label, value, fallback, onChange }: { label: string; value: 
         </button>
       </div>
       <label className="relative h-7 overflow-hidden rounded border border-koma-border">
-        <span className="absolute inset-0" style={{ background: value.startsWith('#') ? value : on ? 'var(--color-koma-panel)' : 'transparent' }} />
+        <span className="absolute inset-0" style={{ background: swatch }} />
         <input
           type="color"
           aria-label={`${label} color`}
@@ -1050,6 +1099,21 @@ function PaintRow({ label, value, fallback, onChange }: { label: string; value: 
           className="absolute inset-0 cursor-pointer opacity-0"
         />
       </label>
+      {tokens?.length ? (
+        <div className="flex flex-wrap gap-1">
+          {tokens.map((token) => (
+            <button
+              key={token.name}
+              type="button"
+              aria-pressed={value === token.name}
+              onClick={() => onChange(token.name)}
+              className={`h-6 rounded px-1.5 ${value === token.name ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
+            >
+              {token.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }

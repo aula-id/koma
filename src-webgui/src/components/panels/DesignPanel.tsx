@@ -6,7 +6,18 @@ import { AddBtn, Empty, IconBtn } from './helpers'
 import { Select } from './form'
 import { useKoma } from '../../store/koma'
 import { fileKey, type FileTreeEntry } from '../../store/coding'
-import { DESIGN_MIME, designFileName, isDesignPath } from '../../lib/design'
+import {
+  DESIGN_MIME,
+  addDesignToken,
+  designFileName,
+  dropDesignToken,
+  isDesignPath,
+  setDesignMode,
+  setDesignTokenValue,
+  type DesignDoc,
+  type DesignToken,
+  type DesignTokenKind,
+} from '../../lib/design'
 
 const SHAPES: { kind: 'frame' | 'rect' | 'text'; label: string }[] = [
   { kind: 'frame', label: 'Frame' },
@@ -42,6 +53,160 @@ function ShapeTile({ kind, label }: { kind: 'frame' | 'rect' | 'text'; label: st
 }
 
 const EMPTY_ROOTS: string[] = []
+const TOKEN_KINDS: { kind: DesignTokenKind; label: string }[] = [
+  { kind: 'color', label: 'Color' },
+  { kind: 'space', label: 'Space' },
+  { kind: 'type', label: 'Type' },
+  { kind: 'radius', label: 'Radius' },
+]
+
+function commitDesign(root: string, path: string, doc: DesignDoc, update: (root: string, path: string, doc: DesignDoc) => void) {
+  const event = new CustomEvent('koma-design-commit', { cancelable: true, detail: { root, path, doc } })
+  if (!window.dispatchEvent(event)) return
+  update(root, path, doc)
+}
+
+function TokenValue({ token, mode, onValue }: { token: DesignToken; mode: string; onValue: (value: string) => void }) {
+  const value = token.values[mode] ?? ''
+  if (token.kind === 'color') {
+    return (
+      <input
+        type="color"
+        aria-label={`${token.name} ${mode}`}
+        value={value.startsWith('#') ? value : '#1a1d27'}
+        onChange={(event) => onValue(event.target.value.toLowerCase())}
+        className="h-5 w-7 flex-none cursor-pointer rounded border border-koma-border bg-transparent"
+      />
+    )
+  }
+  if (token.kind === 'type') {
+    const [size, weight] = value.split('/')
+    return (
+      <span className="flex flex-none items-center gap-1">
+        <input
+          type="number"
+          min={1}
+          aria-label={`${token.name} size`}
+          value={size || '13'}
+          onChange={(event) => {
+            if (!/^\d+(\.\d+)?$/.test(event.target.value)) return
+            onValue(`${event.target.value}/${weight || 'regular'}`)
+          }}
+          className="h-5 w-12 rounded border border-koma-border bg-koma-bg px-1 text-[12px] text-koma-fg outline-none"
+        />
+        <select
+          aria-label={`${token.name} weight`}
+          value={weight || 'regular'}
+          onChange={(event) => onValue(`${size || '13'}/${event.target.value}`)}
+          className="h-5 rounded border border-koma-border bg-koma-bg text-[12px] text-koma-fg outline-none"
+        >
+          <option value="regular">Regular</option>
+          <option value="medium">Medium</option>
+          <option value="bold">Bold</option>
+        </select>
+      </span>
+    )
+  }
+  return (
+    <input
+      type="number"
+      min={0}
+      aria-label={`${token.name} ${mode}`}
+      value={value}
+      onChange={(event) => {
+        if (!/^\d+(\.\d+)?$/.test(event.target.value)) return
+        onValue(event.target.value)
+      }}
+      className="h-5 w-14 flex-none rounded border border-koma-border bg-koma-bg px-1 text-[12px] text-koma-fg outline-none"
+    />
+  )
+}
+
+function TokenEditor({ root, path, doc, onCommit }: { root: string; path: string; doc: DesignDoc; onCommit: (doc: DesignDoc) => void }) {
+  const [name, setName] = useState('')
+  const [kind, setKind] = useState<DesignTokenKind>('color')
+  const [error, setError] = useState<string | null>(null)
+  const add = () => {
+    const next = addDesignToken(doc, name, kind)
+    if (!next) {
+      setError('Use a new name like color.fg')
+      return
+    }
+    setError(null)
+    setName('')
+    onCommit(next)
+  }
+  return (
+    <div className="flex flex-col gap-1 px-2 py-1.5 text-[12px]">
+      <div className="flex flex-wrap gap-1">
+        {doc.modes.map((mode) => (
+          <button
+            key={mode}
+            type="button"
+            aria-pressed={doc.mode === mode}
+            onClick={() => onCommit(setDesignMode(doc, mode))}
+            className={`h-6 rounded px-1.5 capitalize ${doc.mode === mode ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
+          >
+            {mode}
+          </button>
+        ))}
+      </div>
+      <form
+        className="flex items-center gap-1"
+        onSubmit={(event) => {
+          event.preventDefault()
+          add()
+        }}
+      >
+        <input
+          value={name}
+          placeholder="color.fg"
+          aria-label="Token name"
+          onChange={(event) => setName(event.target.value)}
+          className="h-6 min-w-0 flex-1 rounded border border-koma-border bg-koma-bg px-1.5 text-[12px] text-koma-fg outline-none"
+        />
+        <select
+          aria-label="Token kind"
+          value={kind}
+          onChange={(event) => setKind(event.target.value as DesignTokenKind)}
+          className="h-6 rounded border border-koma-border bg-koma-bg text-[12px] text-koma-fg outline-none"
+        >
+          {TOKEN_KINDS.map((item) => (
+            <option key={item.kind} value={item.kind}>{item.label}</option>
+          ))}
+        </select>
+        <button type="submit" className="h-6 rounded px-1.5 text-koma-dim hover:bg-koma-hover hover:text-koma-fg">Add</button>
+      </form>
+      {error ? <p className="text-[11px] text-koma-error">{error}</p> : null}
+      {doc.tokens.length === 0 ? <p className="text-koma-dim">No tokens</p> : null}
+      {TOKEN_KINDS.map((group) => {
+        const tokens = doc.tokens.filter((token) => token.kind === group.kind)
+        if (!tokens.length) return null
+        return (
+          <div key={group.kind} className="flex flex-col">
+            <span className="px-0.5 pt-1 text-[11px] text-koma-dim">{group.label}</span>
+            {tokens.map((token) => (
+              <div key={`${root}:${path}:${token.name}`} className="flex h-7 min-w-0 items-center gap-1">
+                <span className="min-w-0 flex-1 truncate" title={token.name}>{token.name}</span>
+                <TokenValue
+                  token={token}
+                  mode={doc.mode}
+                  onValue={(value) => {
+                    const next = setDesignTokenValue(doc, token.name, doc.mode, value)
+                    if (next) onCommit(next)
+                  }}
+                />
+                <IconBtn label={`Delete ${token.name}`} tone="red" onClick={() => onCommit(dropDesignToken(doc, token.name))}>
+                  <Trash2 size={12} />
+                </IconBtn>
+              </div>
+            ))}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 function rootLabel(root: string): string {
   const parts = root.split('/').filter(Boolean)
@@ -123,12 +288,18 @@ export function DesignPanel() {
   const setActiveCodingRoot = useKoma((s) => s.setActiveCodingRoot)
   const refreshCodingDir = useKoma((s) => s.refreshCodingDir)
   const openDesignTab = useKoma((s) => s.openDesignTab)
+  const updateDesign = useKoma((s) => s.updateDesign)
   const createDesignFile = useKoma((s) => s.createDesignFile)
+  const designTab = useKoma((s) => {
+    const tab = s.ui.tabs.find((item) => item.id === s.ui.activeTabId)
+    return tab && tab.kind === 'design' ? tab : null
+  })
   const renameCodingItem = useKoma((s) => s.renameCodingItem)
   const deleteCodingItem = useKoma((s) => s.deleteCodingItem)
   const req = useKoma((s) => s.req)
 
   const [shapesOpen, setShapesOpen] = useState(true)
+  const [tokensOpen, setTokensOpen] = useState(true)
   const [filesOpen, setFilesOpen] = useState(true)
   const [creating, setCreating] = useState(false)
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -223,6 +394,23 @@ export function DesignPanel() {
             <ShapeTile key={shape.kind} {...shape} />
           ))}
         </div>
+      </AccordionSection>
+      <AccordionSection title="Tokens" open={tokensOpen} onToggle={() => setTokensOpen((open) => !open)} fill={false}>
+        {!designTab ? (
+          <p className="px-3 py-1.5 text-[12px] text-koma-dim">Open a design to edit its tokens</p>
+        ) : !docs[fileKey(designTab.root, designTab.path)] || docs[fileKey(designTab.root, designTab.path)]?.loading ? (
+          <div className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-koma-dim">
+            <BrailleSpinner size={13} />
+            <span>Loading…</span>
+          </div>
+        ) : (
+          <TokenEditor
+            root={designTab.root}
+            path={designTab.path}
+            doc={docs[fileKey(designTab.root, designTab.path)]!.doc}
+            onCommit={(next) => commitDesign(designTab.root, designTab.path, next, updateDesign)}
+          />
+        )}
       </AccordionSection>
       <AccordionSection
         title="Designs"
