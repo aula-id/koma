@@ -4,6 +4,7 @@ import { useKoma } from '../store/koma'
 import { emptyFileState, fileKey, type FileReadPush } from '../store/coding'
 import { codingRequest, codingWindowId, type CodingBackup, type WorkspaceRef } from '../lib/coding-service'
 import { backupCodingDocument, checkpointCodingDocument, flushCodingRecovery, forgetCodingDraft } from '../lib/coding-recovery'
+import { isDiagramPath, parseDiagram, serializeDiagram } from '../lib/diagram'
 import { BrailleSpinner } from './BrailleSpinner'
 
 type Context = { workspace: WorkspaceRef; path?: string; disk?: boolean }
@@ -87,8 +88,9 @@ export function CodingHistory() {
     void load.then(value => {
       if (controller.signal.aborted) return
       const current = useKoma.getState().coding.files[fileKey(context.workspace.root, selected.path)]
+      const diagram = isDiagramPath(selected.path) ? useKoma.getState().diagram.docs[fileKey(context.workspace.root, selected.path)] : undefined
       const backup = 'backup' in value ? value.backup as CodingBackup : undefined
-      setSnapshot({ ...value, baseline: current?.content ?? backup?.savedContent ?? '' })
+      setSnapshot({ ...value, baseline: diagram ? serializeDiagram(diagram.doc) : current?.content ?? backup?.savedContent ?? '' })
     }).catch(e => { if (!controller.signal.aborted) setError(e.message) })
       .finally(() => { if (!controller.signal.aborted) setBusy(false) })
     return () => controller.abort()
@@ -118,6 +120,30 @@ export function CodingHistory() {
     if (!context || !selected || !snapshot) return
     const { workspace } = context
     const key = fileKey(workspace.root, selected.path)
+    if (isDiagramPath(selected.path) && !context.disk) {
+      const diagram = useKoma.getState().diagram.docs[key]
+      if (!diagram) { setError('Open the diagram before restoring its history.'); return }
+      if (diagram.saving || diagram.loading) { setError('Wait for this diagram to finish loading or saving.'); return }
+      const currentText = serializeDiagram(diagram.doc)
+      if (snapshot.backup && diagram.dirty && currentText !== snapshot.content) { setError('This diagram has unsaved edits. Save or discard them before recovering another draft.'); return }
+      if (currentText !== snapshot.baseline) { setError('The diagram changed while the preview was open. Select the entry again.'); return }
+      const parsed = parseDiagram(keepEditor ? currentText : snapshot.content)
+      if (parsed.error) { setError(parsed.error); return }
+      setBusy(true); setError(null)
+      try {
+        if (currentText !== snapshot.content) await checkpointCodingDocument(workspace, selected.path, currentText, 'Before restore')
+        const state = useKoma.getState()
+        const still = state.diagram.docs[key]
+        if ((state.remoteState.hostId ?? 'local') !== workspace.hostId || !still || serializeDiagram(still.doc) !== currentText) throw new Error('The diagram changed. Reopen the preview.')
+        if (currentText !== snapshot.content) {
+          window.dispatchEvent(new CustomEvent('koma-diagram-restore', { detail: { root: workspace.root, path: selected.path } }))
+          state.updateDiagram(workspace.root, selected.path, parsed.doc)
+        }
+        setContext(null)
+      } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+      finally { setBusy(false) }
+      return
+    }
     const before = useKoma.getState().coding.files[key]
     if (before?.saving || before?.loading) { setError('Wait for this file to finish loading or saving.'); return }
     if (snapshot.backup && before?.dirty && before.content !== snapshot.content) { setError('This file has unsaved edits. Save or discard them before recovering another draft.'); return }

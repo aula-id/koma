@@ -219,9 +219,19 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
         break
       }
       case 'FileSave': {
+        const diagramKey = fileKey(env.root, env.path)
+        const diagramBefore = get().diagram.docs[diagramKey]
         const diagramSaved = claimDiagramSave(get().diagram, env)
         if (diagramSaved) {
           set({ diagram: diagramSaved })
+          if (!env.error && diagramBefore?.saveReq === env.requestId) {
+            const written = diagramBefore.pendingSaveText
+            if (written != null && written !== diagramBefore.savedText) {
+              const workspace = { hostId: get().remoteState.hostId ?? 'local', root: env.root }
+              if (diagramBefore.savedText != null) recordCodingHistory(workspace, env.path, diagramBefore.savedText, 'Before save')
+              recordCodingHistory(workspace, env.path, written, 'Saved')
+            }
+          }
           break
         }
         const key = fileKey(env.root, env.path)
