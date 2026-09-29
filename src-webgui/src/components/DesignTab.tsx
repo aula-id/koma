@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { AlignCenterHorizontal, AlignCenterVertical, AlignEndHorizontal, AlignEndVertical, AlignStartHorizontal, AlignStartVertical, Circle, Frame, Hand, Minus, MousePointer2, PenTool, Plus, Square, Type, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { AlignCenterHorizontal, AlignCenterVertical, AlignEndHorizontal, AlignEndVertical, AlignStartHorizontal, AlignStartVertical, ChevronRight, Circle, Frame, Hand, Minus, MousePointer2, PenTool, Plus, Square, Type, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { TokenEditor } from './panels/DesignPanel'
 import { DesignMenu, type DesignMenuItem } from './DesignMenu'
 import { getDesignUi, publishDesignUi, type DesignLayerOp } from '../lib/designUi'
@@ -75,7 +75,7 @@ import { EditorChrome } from './EditorChrome'
 const UNDO_CAP = 50
 const ZOOM_MIN = 0.25
 const ZOOM_MAX = 64
-const SELECTION = '#0d99ff'
+const SELECTION = 'var(--koma-accent)'
 const SHAPE_FILL = '#d9d9d9'
 const HANDLES: { id: DesignHandle; x: string; y: string; cursor: string }[] = [
   { id: 'nw', x: '0%', y: '0%', cursor: 'nwse-resize' },
@@ -448,14 +448,13 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       node = { ...node, x: snapDesign(local.x, doc.grid, doc.snap), y: snapDesign(local.y, doc.grid, doc.snap) }
       let next = doc
       if (drag.parentId) next = insertDesignNode(doc, drag.parentId, node)
-      else if (node.kind === 'frame') next = insertDesignNode(doc, null, node)
-      else {
+      else if (focusRef.current && node.kind !== 'frame' && node.kind !== 'group') {
         const screen = createNode('frame', mintId('f'), node.x, node.y)
         node.x = 16
         node.y = 16
         screen.children = [node]
         next = insertDesignNode(doc, null, screen)
-      }
+      } else next = insertDesignNode(doc, null, node)
       const laid = projectDoc(stored, focusRef.current, layoutDesign(next))
       if (serializeDesign(laid) === serializeDesign(stored)) return
       noteRef.current(stored)
@@ -636,7 +635,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             }
             next = reorderDesignNode(doc, dragId, index)
           }
-        } else if (!(target === located.parentId || (target == null && (located.parentId == null || (located.node.kind !== 'frame' && located.node.kind !== 'group'))))) {
+        } else if (target !== located.parentId && !(focus && target == null)) {
           const local = canvasToContent(doc, target, origin.x, origin.y)
           if (local) next = placeDesignNode(doc, dragId, target, snapDesign(local.x, doc.grid, doc.snap), snapDesign(local.y, doc.grid, doc.snap))
         }
@@ -788,7 +787,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     const stored = useKoma.getState().design.docs[key]?.doc
     if (!stored) return
     const doc = editingDoc(stored, focusRef.current)
-    const parent = frameAtPoint(doc, point.x, point.y, '')
+    const parent = kind === 'frame' || focusRef.current ? frameAtPoint(doc, point.x, point.y, '') : null
     const node = createNode(kind, mintId(kind[0]), 0, 0)
     let next = doc
     if (parent) {
@@ -797,16 +796,16 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       node.x = snapDesign(local.x, doc.grid, doc.snap)
       node.y = snapDesign(local.y, doc.grid, doc.snap)
       next = insertDesignNode(doc, parent, node)
-    } else if (kind === 'frame') {
-      node.x = snapDesign(point.x, doc.grid, doc.snap)
-      node.y = snapDesign(point.y, doc.grid, doc.snap)
-      next = insertDesignNode(doc, null, node)
-    } else {
+    } else if (focusRef.current && kind !== 'frame') {
       const screen = createNode('frame', mintId('f'), snapDesign(point.x, doc.grid, doc.snap), snapDesign(point.y, doc.grid, doc.snap))
       node.x = 16
       node.y = 16
       screen.children = [node]
       next = insertDesignNode(doc, null, screen)
+    } else {
+      node.x = snapDesign(point.x, doc.grid, doc.snap)
+      node.y = snapDesign(point.y, doc.grid, doc.snap)
+      next = insertDesignNode(doc, null, node)
     }
     commit(next)
     setSelection([node.id])
@@ -901,15 +900,14 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
           node.y = snapDesign(at.y, open.doc.grid, open.doc.snap)
         }
         if (parentId) next = insertDesignNode(next, parentId, node)
-        else if (node.kind === 'frame' || node.kind === 'group') next = insertDesignNode(next, null, node)
-        else if (next.screens[0]) next = insertDesignNode(next, next.screens[0].id, node)
-        else {
+        else if (focusRef.current && node.kind !== 'frame' && node.kind !== 'group' && next.screens[0]) next = insertDesignNode(next, next.screens[0].id, node)
+        else if (focusRef.current && node.kind !== 'frame' && node.kind !== 'group') {
           const screen = createNode('frame', mintId('f'), node.x, node.y)
           node.x = 16
           node.y = 16
           screen.children = [node]
           next = insertDesignNode(next, null, screen)
-        }
+        } else next = insertDesignNode(next, null, node)
         pasted.push(node)
       }
       copiedShape = { nodes: pasted, parentId }
@@ -1024,7 +1022,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       return
     }
     if (action.op === 'move') {
-      if (focusRef.current && action.parentId == null && locateDesign(open.doc, action.id)?.parentId == null) return
+      if (focusRef.current && action.parentId == null && locateDesign(open.doc, action.id)?.parentId != null) return
       commit(moveDesignNode(open.doc, action.id, action.parentId, action.index))
       return
     }
@@ -1053,7 +1051,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     }
     if (!draft) {
       penNoted.current = false
-      const parentId = frameAtPoint(open.doc, point.x, point.y, '')
+      const parentId = focusRef.current ? frameAtPoint(open.doc, point.x, point.y, '') ?? open.doc.screens.find((screen) => screen.kind === 'frame' || screen.kind === 'group')?.id ?? null : null
       const next = { id: mintId('v'), parentId, points: [{ x: point.x, y: point.y, incoming: zero, outgoing: zero }] }
       penRef.current = next
       setPen(next)
@@ -1103,7 +1101,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         y0: point.y,
         x1: point.x,
         y1: point.y,
-        parentId: doc ? frameAtPoint(doc, point.x, point.y, '') : null,
+        parentId: doc && (tool === 'frame' || focusRef.current) ? frameAtPoint(doc, point.x, point.y, '') : null,
       }
       return
     }
@@ -1126,12 +1124,16 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       node.x = snapDesign(local.x, stored.grid, stored.snap)
       node.y = snapDesign(local.y, stored.grid, stored.snap)
       next = insertDesignNode(stored, parent, node)
-    } else {
+    } else if (focusRef.current) {
       const screen = createNode('frame', mintId('f'), snapDesign(point.x, stored.grid, stored.snap), snapDesign(point.y, stored.grid, stored.snap))
       node.x = 16
       node.y = 16
       screen.children = [node]
       next = insertDesignNode(stored, null, screen)
+    } else {
+      node.x = snapDesign(point.x, stored.grid, stored.snap)
+      node.y = snapDesign(point.y, stored.grid, stored.snap)
+      next = insertDesignNode(stored, null, node)
     }
     commitStored(next)
     setSelection([node.id])
@@ -1179,16 +1181,17 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     ? { component: focusedComponent.id, variant: selectedVariant?.props }
     : selected?.kind === 'instance' && selected.component
       ? { component: selected.component, variant: selected.variant }
-      : selected?.kind === 'frame' && located?.parentId == null
+      : selected && located?.parentId == null
         ? { screen: selected.id }
         : null
   const sendChat = () => {
     if (!chatQuery) return
     const text = designChatText(storedDoc, chatQuery)
     if (!text) return
-    const state = useKoma.getState()
-    state.appendToComposer(text)
-    state.activateTab('chat')
+    const title = 'component' in chatQuery
+      ? storedDoc.components.find((item) => item.id === chatQuery.component)?.name ?? 'Design'
+      : selected ? designLayerName(selected) : 'Design'
+    useKoma.getState().addDesignToChat({ title, text })
   }
   const status = file.saving
     ? 'Saving…'
@@ -1389,7 +1392,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 top: ghost.y,
                 width: Math.max(ghost.w, 1),
                 height: Math.max(ghost.h, 1),
-                background: ghost.kind === 'marquee' ? 'rgba(13,153,255,0.12)' : ghost.shape === 'frame' ? '#ffffff' : ghost.shape === 'rect' || ghost.shape === 'ellipse' ? SHAPE_FILL : 'transparent',
+                background: ghost.kind === 'marquee' ? 'color-mix(in srgb, var(--koma-accent) 12%, transparent)' : ghost.shape === 'frame' ? '#ffffff' : ghost.shape === 'rect' || ghost.shape === 'ellipse' ? SHAPE_FILL : 'transparent',
                 border: `${1 / Math.max(view.zoom, 0.25)}px solid ${SELECTION}`,
                 borderRadius: ghost.kind === 'shape' && ghost.shape === 'ellipse' ? '50%' : undefined,
                 transform: ghost.kind === 'shape' && ghost.rotation ? `rotate(${ghost.rotation}deg)` : undefined,
@@ -2091,31 +2094,33 @@ function NodeSettings({
               <GeomField label="H" value={hField.value} mixed={hField.mixed} onChange={(h) => setField({ h: Math.max(1, h) }, ['hMode'])} />
             </>
           ) : null}
-          <GeomField label="R" suffix="°" value={rotationField.value} mixed={rotationField.mixed} onChange={(rotation) => {
-            const wrapped = ((rotation % 360) + 360) % 360
-            setField(wrapped ? { rotation: wrapped } : {}, wrapped ? [] : ['rotation'])
-          }} />
-          <div className="flex items-end gap-1">
-            <button type="button" aria-label="Flip horizontal" onClick={() => onPatch((current) => {
-              const next = { ...current }
-              if (current.flipX) delete next.flipX
-              else next.flipX = true
-              return next
-            })} className="h-7 flex-1 rounded text-koma-dim hover:bg-koma-hover">Flip H</button>
-            <button type="button" aria-label="Flip vertical" onClick={() => onPatch((current) => {
-              const next = { ...current }
-              if (current.flipY) delete next.flipY
-              else next.flipY = true
-              return next
-            })} className="h-7 flex-1 rounded text-koma-dim hover:bg-koma-hover">Flip V</button>
-            <button type="button" aria-label="Rotate 90 degrees" onClick={() => onPatch((current) => {
-              const wrapped = (((current.rotation ?? 0) + 90) % 360 + 360) % 360
-              const next = { ...current }
-              if (wrapped) next.rotation = wrapped
-              else delete next.rotation
-              return next
-            })} className="h-7 flex-1 rounded text-koma-dim hover:bg-koma-hover">90°</button>
+        </div>
+        <div className="flex items-center gap-1">
+          <div className="min-w-0 flex-1">
+            <GeomField label="R" suffix="°" value={rotationField.value} mixed={rotationField.mixed} onChange={(rotation) => {
+              const wrapped = ((rotation % 360) + 360) % 360
+              setField(wrapped ? { rotation: wrapped } : {}, wrapped ? [] : ['rotation'])
+            }} />
           </div>
+          <button type="button" aria-label="Flip horizontal" title="Flip horizontal" onClick={() => onPatch((current) => {
+            const next = { ...current }
+            if (current.flipX) delete next.flipX
+            else next.flipX = true
+            return next
+          })} className="h-7 rounded px-2 text-koma-dim hover:bg-koma-hover hover:text-koma-fg">Flip H</button>
+          <button type="button" aria-label="Flip vertical" title="Flip vertical" onClick={() => onPatch((current) => {
+            const next = { ...current }
+            if (current.flipY) delete next.flipY
+            else next.flipY = true
+            return next
+          })} className="h-7 rounded px-2 text-koma-dim hover:bg-koma-hover hover:text-koma-fg">Flip V</button>
+          <button type="button" aria-label="Rotate 90 degrees" title="Rotate 90 degrees" onClick={() => onPatch((current) => {
+            const wrapped = (((current.rotation ?? 0) + 90) % 360 + 360) % 360
+            const next = { ...current }
+            if (wrapped) next.rotation = wrapped
+            else delete next.rotation
+            return next
+          })} className="h-7 rounded px-2 text-koma-dim hover:bg-koma-hover hover:text-koma-fg">90°</button>
         </div>
       </Section>
       {!multi || allFrames ? (
@@ -2326,10 +2331,18 @@ function NodeSettings({
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
+  const [open, setOpen] = useState(true)
   return (
-    <section className="flex flex-col gap-2 border-t border-koma-border pt-2">
-      <div className="text-[11px] text-koma-dim">{title}</div>
-      {children}
+    <section className="flex flex-col border-t border-koma-border">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex h-[22px] items-center gap-1 bg-koma-head px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-koma-fg opacity-75 hover:bg-koma-hover hover:opacity-100"
+      >
+        <ChevronRight size={14} strokeWidth={2} className={`transition-transform ${open ? 'rotate-90' : ''}`} />
+        <span className="truncate">{title}</span>
+      </button>
+      {open ? <div className="flex flex-col gap-2 px-2 py-2">{children}</div> : null}
     </section>
   )
 }
@@ -2435,27 +2448,27 @@ function PaintRow({ label, value, mixed, fallback, resolved, tokens, onChange }:
   const swatch = value.startsWith('#') ? value : resolved?.startsWith('#') ? resolved : on ? 'var(--color-koma-panel)' : 'transparent'
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between">
-        <span className="text-koma-dim">{label}</span>
+      <div className="flex items-center gap-1">
+        <label className="relative h-6 w-6 flex-none overflow-hidden rounded border border-koma-border">
+          <span className="absolute inset-0" style={{ background: swatch }} />
+          <input
+            type="color"
+            aria-label={`${label} color`}
+            value={hex}
+            onChange={(event) => onChange(event.target.value.toLowerCase())}
+            className="absolute inset-0 cursor-pointer opacity-0"
+          />
+        </label>
+        <span className="min-w-0 flex-1 truncate text-[12px] text-koma-fg">{mixed ? 'Mixed' : on ? value : 'None'}</span>
         <button
           type="button"
           aria-pressed={on}
           onClick={() => onChange(mixed || on ? 'none' : null)}
-          className={`h-6 rounded px-2 ${on ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
+          className={`h-6 flex-none rounded px-2 ${on ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
         >
           {mixed ? 'Mixed' : on ? 'On' : 'Off'}
         </button>
       </div>
-      <label className="relative h-7 overflow-hidden rounded border border-koma-border">
-        <span className="absolute inset-0" style={{ background: swatch }} />
-        <input
-          type="color"
-          aria-label={`${label} color`}
-          value={hex}
-          onChange={(event) => onChange(event.target.value.toLowerCase())}
-          className="absolute inset-0 cursor-pointer opacity-0"
-        />
-      </label>
       {tokens?.length ? (
         <div className="flex flex-wrap gap-1">
           {tokens.map((token) => (

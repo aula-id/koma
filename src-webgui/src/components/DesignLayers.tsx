@@ -216,7 +216,7 @@ function LayerRow({
         const dragId = event.dataTransfer.getData(LAYER_MIME)
         if (dragId && dragId !== node.id) onDrop(dragId, next)
       }}
-      className={`group relative flex h-7 items-center gap-1 pr-1 text-[12px] ${selected ? 'bg-[#0d99ff]/20 text-koma-fg' : 'text-koma-fg/80 hover:bg-koma-hover'} ${hidden ? 'opacity-45' : ''}`}
+      className={`group relative flex h-7 items-center gap-1 pr-1 text-[12px] ${selected ? 'bg-koma-accent/20 text-koma-fg' : 'text-koma-fg/80 hover:bg-koma-hover'} ${hidden ? 'opacity-45' : ''}`}
       style={{ paddingLeft: 8 + depth * 14 }}
       onClick={(event) => onSelect(event.shiftKey)}
       onContextMenu={(event) => {
@@ -229,9 +229,9 @@ function LayerRow({
         onEdit()
       }}
     >
-      {place === 'before' ? <span className="absolute inset-x-1 top-0 h-px bg-[#0d99ff]" /> : null}
-      {place === 'after' ? <span className="absolute inset-x-1 bottom-0 h-px bg-[#0d99ff]" /> : null}
-      {place === 'inside' ? <span className="absolute inset-x-1 inset-y-0.5 rounded ring-1 ring-inset ring-[#0d99ff]" /> : null}
+      {place === 'before' ? <span className="absolute inset-x-1 top-0 h-px bg-koma-accent" /> : null}
+      {place === 'after' ? <span className="absolute inset-x-1 bottom-0 h-px bg-koma-accent" /> : null}
+      {place === 'inside' ? <span className="absolute inset-x-1 inset-y-0.5 rounded ring-1 ring-inset ring-koma-accent" /> : null}
       <button
         type="button"
         aria-label={open ? 'Collapse' : 'Expand'}

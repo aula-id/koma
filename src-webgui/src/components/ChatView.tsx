@@ -16,6 +16,7 @@ import {
   Cog,
   FileText,
   Files,
+  Frame,
   Folder,
   GitBranch,
   Globe,
@@ -33,6 +34,7 @@ import { ChatScrollRootContext, MessageBody } from './MessageBody'
 import { ComputerObservationCard, ComputerToolCall } from './ComputerObservationCard'
 import { DiagramObservationCard } from './DiagramVisual'
 import { diagramMessageParts, splitDiagramMessage } from '../lib/diagramMermaid'
+import { splitDesignMessage } from '../lib/design'
 import { splitPasteMessage } from '../lib/pasteText'
 import { Composer } from './Composer'
 import { ApprovalOverlay } from './ApprovalOverlay'
@@ -348,21 +350,28 @@ function UserMessage({
 }) {
   const pasted = splitPasteMessage(content)
   const split = splitDiagramMessage(pasted.prose)
-  // A diagram reference stays a drawing here. A long paste stays a text chip.
-  // The fence body is what the model already received.
-  const showBand = split.prose.length > 0 || (split.diagrams.length === 0 && pasted.pastes.length === 0)
+  const designed = splitDesignMessage(split.prose)
+  // A diagram reference stays a drawing here. A design reference stays a chip.
+  // A long paste stays a text chip. The fence body is what the model already received.
+  const showBand = designed.prose.length > 0 || (split.diagrams.length === 0 && designed.designs.length === 0 && pasted.pastes.length === 0)
   return (
     <div className="group relative space-y-2">
       {showBand ? (
         <div className="flex overflow-hidden bg-koma-band">
           <div className="w-[3px] flex-none bg-koma-accent" />
           <div className="min-w-0 flex-1 whitespace-pre-wrap px-3 py-2 text-[13px] text-koma-accent">
-            {split.prose || content}
+            {designed.prose || content}
           </div>
         </div>
       ) : null}
       {pasted.pastes.map((item) => (
         <PasteTextCard key={`paste-${item.n}-${item.text.length}`} n={item.n} text={item.text} />
+      ))}
+      {designed.designs.map((item, index) => (
+        <div key={`design-${index}:${item.title}`} className="flex items-center gap-2 rounded-lg border border-koma-border bg-koma-panel px-3 py-2 text-[12px] text-koma-fg">
+          <Frame size={14} className="flex-none text-koma-accent" />
+          <span className="min-w-0 flex-1 truncate">{item.title}</span>
+        </div>
       ))}
       {split.diagrams.map((item, index) => (
         <DiagramObservationCard key={`${index}:${item.mermaid.length}`} mermaid={item.mermaid} />

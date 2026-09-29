@@ -10,6 +10,8 @@ import {
   createNode,
   deleteDesignNode,
   designChatText,
+  designFenceTitle,
+  splitDesignMessage,
   designFileName,
   designLayerName,
   flipDesignNode,
@@ -606,4 +608,25 @@ function sample(): DesignDoc {
   const centered = alignDesignNodes(doc, ['left', 'right'], 'vertical', 'center')
   assert.equal(centered.screens[0].children?.[0].y, 5)
   assert.equal(centered.screens[0].children?.[1].y, 5)
+}
+
+{
+  const loose = createNode('rect', 'loose', 12, 18)
+  const saved = parseDesign(serializeDesign({ ...emptyDesign(), screens: [loose] }))
+  assert.equal(saved.error, null)
+  assert.equal(saved.doc.screens[0].kind, 'rect')
+  assert.equal(saved.doc.screens[0].x, 12)
+  const frame = createNode('frame', 'board', 100, 40)
+  frame.children = [createNode('rect', 'inner', 10, 20)]
+  const lifted = placeDesignNode({ ...emptyDesign(), screens: [frame] }, 'inner', null, 110, 60)
+  assert.equal(lifted.screens.map((screen) => screen.id).join(','), 'board,inner')
+  assert.equal(lifted.screens[1].x, 110)
+  assert.equal(lifted.screens[1].y, 60)
+  assert.equal(lifted.screens[0].children?.some((child) => child.id === 'inner') ?? false, false)
+  const fence = designChatText(saved.doc, { screen: 'loose' })
+  assert.equal(designFenceTitle(fence ?? ''), 'Rectangle')
+  const split = splitDesignMessage(`look\n\n${fence}`)
+  assert.equal(split.prose, 'look')
+  assert.equal(split.designs.length, 1)
+  assert.equal(split.designs[0].title, 'Rectangle')
 }

@@ -14,7 +14,7 @@ function mintAgentTabId(): string {
   return `agent-${agentTabSeq}`
 }
 
-export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openExternal' | 'openOmniSearch' | 'closeOmniSearch' | 'insertToComposer' | 'appendToComposer' | 'consumeComposerAppend' | 'putCodingPathInChat' | 'askCodingSelectionInChat' | 'addDiagramToChat' | 'consumeDiagramChatQueue' | 'consumePasteBody' | 'consumeComposerInsert' | 'refillComposer' | 'consumeComposerRefill' | 'stageRewind' | 'clearRewind' | 'requestHistoryPage' | 'requestScrollBottom' | 'startSwitching' | 'cancelSwitching' | 'skipBootstrapRemaining' | 'dismissLoading' | 'dismissToast' | 'openSettingsTab' | 'openHelpTab' | 'openTutorialTab' | 'sendTutorialChat' | 'clearTutorialPendingTour' | 'clearTutorialError' | 'setActivityBarOrder' | 'setActivityBarHidden' | 'openAgentTab' | 'renameAgentTab' | 'openStreamTab' | 'syncStreamView' | 'focusPlanSection' | 'setUsageScope' | 'refreshUsagePreview' | 'refreshMcpStatus' | 'markDying' | 'detachSession' | 'setAgentSaving' | 'clearAgentSaving'> {
+export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openExternal' | 'openOmniSearch' | 'closeOmniSearch' | 'insertToComposer' | 'putCodingPathInChat' | 'askCodingSelectionInChat' | 'addDiagramToChat' | 'consumeDiagramChatQueue' | 'addDesignToChat' | 'consumeDesignChatQueue' | 'consumePasteBody' | 'consumeComposerInsert' | 'refillComposer' | 'consumeComposerRefill' | 'stageRewind' | 'clearRewind' | 'requestHistoryPage' | 'requestScrollBottom' | 'startSwitching' | 'cancelSwitching' | 'skipBootstrapRemaining' | 'dismissLoading' | 'dismissToast' | 'openSettingsTab' | 'openHelpTab' | 'openTutorialTab' | 'sendTutorialChat' | 'clearTutorialPendingTour' | 'clearTutorialError' | 'setActivityBarOrder' | 'setActivityBarHidden' | 'openAgentTab' | 'renameAgentTab' | 'openStreamTab' | 'syncStreamView' | 'focusPlanSection' | 'setUsageScope' | 'refreshUsagePreview' | 'refreshMcpStatus' | 'markDying' | 'detachSession' | 'setAgentSaving' | 'clearAgentSaving'> {
   return {
   openExternal: (url) => {
     get().req({ r: 'OpenExternal', url })
@@ -23,8 +23,6 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
   openOmniSearch: () => set((s) => ({ ui: { ...s.ui, omnisearchOpen: true } })),
   closeOmniSearch: () => set((s) => ({ ui: { ...s.ui, omnisearchOpen: false } })),
   insertToComposer: (path) => set((s) => ({ ui: { ...s.ui, composerInsert: path } })),
-  appendToComposer: (text) => set((s) => ({ ui: { ...s.ui, composerAppend: text } })),
-  consumeComposerAppend: () => set((s) => ({ ui: { ...s.ui, composerAppend: null } })),
   putCodingPathInChat: (root, path, opts) => {
     const workdirs = (get().settingsValues?.workdir ?? []).filter(Boolean)
     const token = codingRefToken(root, path, workdirs, { isDir: !!opts?.isDir })
@@ -52,6 +50,11 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
     get().activateTab('chat')
   },
   consumeDiagramChatQueue: () => set((s) => ({ ui: { ...s.ui, diagramChatQueue: [] } })),
+  addDesignToChat: (item) => {
+    set((s) => ({ ui: { ...s.ui, designChatQueue: [...s.ui.designChatQueue, item] } }))
+    get().activateTab('chat')
+  },
+  consumeDesignChatQueue: () => set((s) => ({ ui: { ...s.ui, designChatQueue: [] } })),
   consumePasteBody: () => set((s) => ({ ui: { ...s.ui, pasteBody: null } })),
 
   consumeComposerInsert: () => set((s) => ({ ui: { ...s.ui, composerInsert: null } })),

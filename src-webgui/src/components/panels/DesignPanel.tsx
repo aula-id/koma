@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { Check, Component, File, MessageSquare, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { AccordionSection } from '../AccordionSection'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { DesignLayers } from '../DesignLayers'
 import { Empty, IconBtn } from './helpers'
@@ -264,6 +265,8 @@ export function DesignPanel() {
   const req = useKoma((s) => s.req)
 
   const [panel, setPanel] = useState<'file' | 'assets'>('file')
+  const [filesOpen, setFilesOpen] = useState(true)
+  const [layersOpen, setLayersOpen] = useState(true)
   const [assetQuery, setAssetQuery] = useState('')
   const [creating, setCreating] = useState(false)
   const ui = useSyncExternalStore(subscribeDesignUi, getDesignUi, getDesignUi)
@@ -381,61 +384,68 @@ export function DesignPanel() {
       </div>
       {panel === 'file' ? (
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex h-7 flex-none items-center justify-between px-3">
-            <span className="text-[11px] text-koma-dim">Files</span>
-            <button
-              type="button"
-              aria-label="New design"
-              title="New design"
-              onClick={() => { setCreating(true); setRenaming(null); setDeleting(null) }}
-              className="flex h-5 w-5 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
-            >
-              <Plus size={13} />
-            </button>
-          </div>
-          <div className="max-h-[38%] flex-none overflow-y-auto">
-            <FileList
-              activeRoot={activeRoot}
-              files={files}
-              creating={creating}
-              renaming={renaming}
-              deleting={deleting}
-              currentPath={designTab && designTab.root === activeRoot ? designTab.path : null}
-              loading={!!dir?.loading && !dir.entries.length && !creating}
-              error={dir?.error && !gone ? dir.error : null}
-              dirty={(path) => !!activeRoot && !!docs[fileKey(activeRoot, path)]?.dirty}
-              onOpen={(path) => activeRoot && openDesignTab(activeRoot, path)}
-              onCreate={submitCreate}
-              onCancelCreate={() => setCreating(false)}
-              onRename={submitRename}
-              onCancelRename={() => setRenaming(null)}
-              onAskRename={(path) => { setRenaming(path); setCreating(false); setDeleting(null) }}
-              onAskDelete={(path) => { setDeleting(path); setCreating(false); setRenaming(null) }}
-              onCancelDelete={() => setDeleting(null)}
-              onConfirmDelete={confirmDelete}
-              onMenu={(path, x, y) => setMenu({ x, y, path })}
-            />
-          </div>
-          <div className="flex h-7 flex-none items-center border-t border-koma-border px-3 text-[11px] text-koma-dim">Layers</div>
-          {open?.loading ? (
-            <div className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-koma-dim">
-              <BrailleSpinner size={13} />
-              <span>Loading…</span>
+          <AccordionSection
+            title="Files"
+            open={filesOpen}
+            onToggle={() => setFilesOpen((value) => !value)}
+            fill={false}
+            action={(
+              <button
+                type="button"
+                aria-label="New design"
+                title="New design"
+                onClick={() => { setCreating(true); setRenaming(null); setDeleting(null) }}
+                className="flex h-5 w-5 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+              >
+                <Plus size={13} />
+              </button>
+            )}
+          >
+            <div className="max-h-40 overflow-y-auto">
+              <FileList
+                activeRoot={activeRoot}
+                files={files}
+                creating={creating}
+                renaming={renaming}
+                deleting={deleting}
+                currentPath={designTab && designTab.root === activeRoot ? designTab.path : null}
+                loading={!!dir?.loading && !dir.entries.length && !creating}
+                error={dir?.error && !gone ? dir.error : null}
+                dirty={(path) => !!activeRoot && !!docs[fileKey(activeRoot, path)]?.dirty}
+                onOpen={(path) => activeRoot && openDesignTab(activeRoot, path)}
+                onCreate={submitCreate}
+                onCancelCreate={() => setCreating(false)}
+                onRename={submitRename}
+                onCancelRename={() => setRenaming(null)}
+                onAskRename={(path) => { setRenaming(path); setCreating(false); setDeleting(null) }}
+                onAskDelete={(path) => { setDeleting(path); setCreating(false); setRenaming(null) }}
+                onCancelDelete={() => setDeleting(null)}
+                onConfirmDelete={confirmDelete}
+                onMenu={(path, x, y) => setMenu({ x, y, path })}
+              />
             </div>
-          ) : viewDoc && designTab ? (
-            <DesignLayers
-              doc={viewDoc}
-              selection={selection}
-              onSelect={(id, shift) => emitDesignLayer(designTab.root, designTab.path, { op: 'select', id, shift })}
-              onRename={(id, name) => emitDesignLayer(designTab.root, designTab.path, { op: 'rename', id, name })}
-              onVisible={(id, visible) => emitDesignLayer(designTab.root, designTab.path, { op: 'visible', id, visible })}
-              onLocked={(id, locked) => emitDesignLayer(designTab.root, designTab.path, { op: 'locked', id, locked })}
-              onMove={(id, parentId, index) => emitDesignLayer(designTab.root, designTab.path, { op: 'move', id, parentId, index })}
-              onMenu={(id, x, y) => emitDesignLayer(designTab.root, designTab.path, { op: 'menu', id, x, y })}
-            />
-          ) : (
-            <p className="px-3 text-[12px] text-koma-dim">Open a design to see its layers</p>
-          )}
+          </AccordionSection>
+          <AccordionSection title="Layers" open={layersOpen} onToggle={() => setLayersOpen((value) => !value)}>
+            {open?.loading ? (
+              <div className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-koma-dim">
+                <BrailleSpinner size={13} />
+                <span>Loading…</span>
+              </div>
+            ) : viewDoc && designTab ? (
+              <DesignLayers
+                doc={viewDoc}
+                selection={selection}
+                onSelect={(id, shift) => emitDesignLayer(designTab.root, designTab.path, { op: 'select', id, shift })}
+                onRename={(id, name) => emitDesignLayer(designTab.root, designTab.path, { op: 'rename', id, name })}
+                onVisible={(id, visible) => emitDesignLayer(designTab.root, designTab.path, { op: 'visible', id, visible })}
+                onLocked={(id, locked) => emitDesignLayer(designTab.root, designTab.path, { op: 'locked', id, locked })}
+                onMove={(id, parentId, index) => emitDesignLayer(designTab.root, designTab.path, { op: 'move', id, parentId, index })}
+                onMenu={(id, x, y) => emitDesignLayer(designTab.root, designTab.path, { op: 'menu', id, x, y })}
+              />
+            ) : (
+              <p className="px-3 text-[12px] text-koma-dim">Open a design to see its layers</p>
+            )}
+          </AccordionSection>
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
@@ -478,9 +488,7 @@ export function DesignPanel() {
                       onChat={() => {
                         const text = designChatText(open.doc, { component: component.id })
                         if (!text) return
-                        const state = useKoma.getState()
-                        state.appendToComposer(text)
-                        state.activateTab('chat')
+                        useKoma.getState().addDesignToChat({ title: component.name, text })
                       }}
                     />
                   ))}
@@ -602,7 +610,7 @@ function FileList({
         return (
           <div
             key={entry.path}
-            className={`group flex h-7 min-w-0 items-center gap-1 px-2 text-[12px] text-koma-fg ${current ? 'bg-[#0d99ff]/15' : 'hover:bg-koma-hover'}`}
+            className={`group flex h-7 min-w-0 items-center gap-1 px-2 text-[12px] text-koma-fg ${current ? 'bg-koma-accent/15' : 'hover:bg-koma-hover'}`}
             onContextMenu={(event: ReactMouseEvent) => {
               event.preventDefault()
               onMenu(entry.path, event.clientX, event.clientY)
@@ -623,7 +631,7 @@ function FileList({
                   <IconBtn label="Rename" onClick={() => onAskRename(entry.path)}><Pencil size={12} /></IconBtn>
                   <IconBtn label="Delete" tone="red" onClick={() => onAskDelete(entry.path)}><Trash2 size={12} /></IconBtn>
                 </div>
-                {dirty(entry.path) ? <span className="h-1.5 w-1.5 flex-none rounded-full bg-[#0d99ff]" title="Unsaved" /> : null}
+                {dirty(entry.path) ? <span className="h-1.5 w-1.5 flex-none rounded-full bg-koma-accent" title="Unsaved" /> : null}
               </>
             )}
           </div>

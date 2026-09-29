@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react'
-import { ArrowUp, Layers, Paperclip, Search, Square, X } from 'lucide-react'
+import { ArrowUp, Frame, Layers, Paperclip, Search, Square, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import {
   readCodingPathDragData,
@@ -26,6 +26,7 @@ import {
   type PastedBlock,
 } from '../lib/pasteText'
 import type { DiagramDoc } from '../lib/diagram'
+import { splitDesignMessage } from '../lib/design'
 import { ModelPicker } from './ModelPicker'
 import { EffortPicker } from './EffortPicker'
 import { ModeSelector } from './ModeSelector'
@@ -33,6 +34,7 @@ import { CatMascot } from './CatMascot'
 import { DiagramSketch } from './DiagramVisual'
 
 type DiagramChip = { id: string; title: string; mermaid: string; doc: DiagramDoc }
+type DesignChip = { id: string; title: string; text: string }
 
 function mintDiagramChipId(): string {
   return `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
@@ -43,9 +45,11 @@ type LocalPaste = PastedBlock & { id: string; markerN?: number }
 function steerPreview(text: string): string {
   const pasted = splitPasteMessage(text)
   const split = splitDiagramMessage(pasted.prose)
+  const designed = splitDesignMessage(split.prose)
   return [
-    split.prose,
+    designed.prose,
     ...split.diagrams.map((item) => mermaidTitle(item.mermaid)),
+    ...designed.designs.map((item) => item.title),
     ...pasted.pastes.map((item) => `Pasted Text #${item.n}`),
   ]
     .map((part) => part.replace(/\s+/g, ' ').trim())
@@ -53,15 +57,17 @@ function steerPreview(text: string): string {
     .join(' · ')
 }
 
-function chipsFromMessage(text: string): { prose: string; chips: DiagramChip[]; pastes: LocalPaste[] } {
+function chipsFromMessage(text: string): { prose: string; chips: DiagramChip[]; designs: DesignChip[]; pastes: LocalPaste[] } {
   const pasted = splitPasteMessage(text)
   const split = splitDiagramMessage(pasted.prose)
+  const designed = splitDesignMessage(split.prose)
   return {
-    prose: split.prose,
+    prose: designed.prose,
     chips: split.diagrams.map((item) => {
       const view = diagramViewForMermaid(item.mermaid)
       return { id: mintDiagramChipId(), title: mermaidTitle(item.mermaid), mermaid: item.mermaid, doc: view.doc }
     }),
+    designs: designed.designs.map((item) => ({ id: mintDiagramChipId(), title: item.title, text: item.text })),
     pastes: pasted.pastes.map((item) => ({ ...item, id: mintDiagramChipId() })),
   }
 }
@@ -238,8 +244,6 @@ export function Composer() {
   const omnisearchOpen = useKoma((s) => s.ui.omnisearchOpen)
   const composerInsert = useKoma((s) => s.ui.composerInsert)
   const consumeComposerInsert = useKoma((s) => s.consumeComposerInsert)
-  const composerAppend = useKoma((s) => s.ui.composerAppend)
-  const consumeComposerAppend = useKoma((s) => s.consumeComposerAppend)
   const composerRefill = useKoma((s) => s.ui.composerRefill)
   const consumeComposerRefill = useKoma((s) => s.consumeComposerRefill)
   const pendingRewindIndex = useKoma((s) => s.ui.pendingRewindIndex)
@@ -249,6 +253,9 @@ export function Composer() {
   const [diagramChips, setDiagramChips] = useState<DiagramChip[]>([])
   const diagramChipsRef = useRef<DiagramChip[]>([])
   diagramChipsRef.current = diagramChips
+  const [designChips, setDesignChips] = useState<DesignChip[]>([])
+  const designChipsRef = useRef<DesignChip[]>([])
+  designChipsRef.current = designChips
   const [localPastes, setLocalPastes] = useState<LocalPaste[]>([])
   const localPastesRef = useRef<LocalPaste[]>([])
   localPastesRef.current = localPastes
@@ -268,6 +275,8 @@ export function Composer() {
   const sessionId = useKoma((s) => s.session.id)
   const diagramChatQueue = useKoma((s) => s.ui.diagramChatQueue)
   const consumeDiagramChatQueue = useKoma((s) => s.consumeDiagramChatQueue)
+  const designChatQueue = useKoma((s) => s.ui.designChatQueue)
+  const consumeDesignChatQueue = useKoma((s) => s.consumeDesignChatQueue)
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -393,17 +402,6 @@ export function Composer() {
     consumeComposerInsert()
   }, [composerInsert, consumeComposerInsert])
 
-  // A design query is plain fence text. It is not an omnisearch path chip.
-  useEffect(() => {
-    if (composerAppend == null) return
-    setInput((prev) => {
-      if (!prev) return composerAppend
-      return prev.endsWith('\n') ? `${prev}\n${composerAppend}` : `${prev}\n\n${composerAppend}`
-    })
-    consumeComposerAppend()
-    textareaRef.current?.focus()
-  }, [composerAppend, consumeComposerAppend])
-
   // A diagram reference is a drawing chip. The Mermaid stays on the chip until
   // send, which is the text the model actually receives.
   useEffect(() => {
@@ -415,6 +413,17 @@ export function Composer() {
     consumeDiagramChatQueue()
     textareaRef.current?.focus()
   }, [diagramChatQueue, consumeDiagramChatQueue])
+
+  // A design reference is a chip. The kdsgn fence stays on the chip until send.
+  useEffect(() => {
+    if (!designChatQueue.length) return
+    setDesignChips((prev) => [
+      ...prev,
+      ...designChatQueue.map((item) => ({ id: mintDiagramChipId(), ...item })),
+    ])
+    consumeDesignChatQueue()
+    textareaRef.current?.focus()
+  }, [designChatQueue, consumeDesignChatQueue])
 
   useEffect(() => {
     if (!pasteBody) return
@@ -431,6 +440,7 @@ export function Composer() {
     if (composerRefill === null) return
     const draft = chipsFromMessage(composerRefill)
     setDiagramChips(draft.chips)
+    setDesignChips(draft.designs)
     setLocalPastes(draft.pastes)
     setInput(draft.prose)
     consumeComposerRefill()
@@ -488,6 +498,7 @@ export function Composer() {
   const histIdxRef = useRef(-1)
   const stashRef = useRef('')
   const stashChipsRef = useRef<DiagramChip[]>([])
+  const stashDesignsRef = useRef<DesignChip[]>([])
   const stashPastesRef = useRef<LocalPaste[]>([])
   // Flags the [input] auto-grow effect above to also park the caret at the end
   // of the text a recall just injected (a plain typed change never needs this).
@@ -503,6 +514,7 @@ export function Composer() {
     histIdxRef.current = -1
     stashRef.current = ''
     stashChipsRef.current = []
+    stashDesignsRef.current = []
     stashPastesRef.current = []
   }
 
@@ -516,6 +528,7 @@ export function Composer() {
     }
     submitArmed.current = false
     setDiagramChips(draft.chips)
+    setDesignChips(draft.designs)
     setLocalPastes(draft.pastes)
     setInput(draft.prose)
   }
@@ -564,6 +577,7 @@ export function Composer() {
     }
     const prose = input.trim()
     const mermaid = diagramChips.map((chip) => chip.mermaid).join('\n\n')
+    const designs = designChips.map((chip) => chip.text).join('\n\n')
     const locals = localPastesRef.current
     const linked = new Set(locals.flatMap((item) => (item.markerN != null ? [item.markerN] : [])))
     const recalled = locals.filter((item) => item.markerN == null)
@@ -573,7 +587,7 @@ export function Composer() {
       ...locals.flatMap((item) => (item.markerN != null ? [pasteMarker(item.markerN)] : [])),
       ...staged.map((item) => pasteMarker(item.markerN)),
     ]
-    const text = [prose, mermaid, fences, markers.join(' ')].filter(Boolean).join('\n\n')
+    const text = [prose, mermaid, designs, fences, markers.join(' ')].filter(Boolean).join('\n\n')
     const stagedPaste = staged.length > 0 || locals.some((item) => item.markerN != null)
     if (!text && !stagedPaste) return
     const bodies = [
@@ -618,7 +632,7 @@ export function Composer() {
     // TUI: it no-ops a `!` line while busy, but here we let it fall through to
     // a normal Submit so it queues as a steer like any other composer send,
     // rather than silently dropping the keystroke.
-    if (!working && attachments.length === 0 && diagramChips.length === 0 && localPastesRef.current.length === 0 && text.startsWith('!')) {
+    if (!working && attachments.length === 0 && diagramChips.length === 0 && designChips.length === 0 && localPastesRef.current.length === 0 && text.startsWith('!')) {
       const cmd = text.slice(1).trim()
       if (cmd) {
         req({ r: 'Shell', cmd })
@@ -631,6 +645,7 @@ export function Composer() {
     req({ r: 'Submit', text })
     setInput('')
     setDiagramChips([])
+    setDesignChips([])
     setLocalPastes([])
     setOpenPaste(null)
     // Keep cancelled rows that are still waiting for a marker so the late
@@ -801,6 +816,7 @@ export function Composer() {
           if (history.length === 0) return
           stashRef.current = input
           stashChipsRef.current = diagramChipsRef.current
+          stashDesignsRef.current = designChipsRef.current
           stashPastesRef.current = localPastesRef.current
           histIdxRef.current = history.length - 1
         } else if (histIdxRef.current > 0) {
@@ -825,6 +841,7 @@ export function Composer() {
           e.preventDefault()
           caretToEndRef.current = true
           setDiagramChips(stashChipsRef.current)
+          setDesignChips(stashDesignsRef.current)
           setLocalPastes(stashPastesRef.current)
           setInput(stashRef.current)
         }
@@ -932,10 +949,16 @@ export function Composer() {
   const removeDiagramChip = (id: string) => {
     const next = diagramChips.filter((chip) => chip.id !== id)
     setDiagramChips(next)
-    if (next.length === 0 && input.trim() === '' && pendingRewindIndex !== null) clearRewind()
+    if (next.length === 0 && designChips.length === 0 && input.trim() === '' && pendingRewindIndex !== null) clearRewind()
   }
 
-  const canSend = (input.trim() !== '' || diagramChips.length > 0 || localPastes.length > 0 || attachments.some((item) => item.kind === 'pasted_text')) && !atSteerCap
+  const removeDesignChip = (id: string) => {
+    const next = designChips.filter((chip) => chip.id !== id)
+    setDesignChips(next)
+    if (next.length === 0 && diagramChips.length === 0 && input.trim() === '' && pendingRewindIndex !== null) clearRewind()
+  }
+
+  const canSend = (input.trim() !== '' || diagramChips.length > 0 || designChips.length > 0 || localPastes.length > 0 || attachments.some((item) => item.kind === 'pasted_text')) && !atSteerCap
 
   return (
     // claude.ai-style composer pinned at the bottom: a single rounded card
@@ -1059,6 +1082,28 @@ export function Composer() {
             {thinkingWord.toLowerCase()}…
           </span>
         </div>
+
+        {designChips.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {designChips.map((chip) => (
+              <span
+                key={chip.id}
+                className="flex items-center gap-1.5 rounded-lg border border-koma-border bg-koma-panel2 py-1 pl-2 pr-2 text-[11px] text-koma-fg"
+              >
+                <Frame size={14} className="flex-none text-koma-accent" />
+                <span className="max-w-[140px] truncate">{chip.title}</span>
+                <button
+                  type="button"
+                  onClick={() => removeDesignChip(chip.id)}
+                  aria-label={`Remove ${chip.title}`}
+                  className="flex-none opacity-60 transition-opacity hover:opacity-100"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
 
         {diagramChips.length > 0 && (
           <div className="flex flex-wrap gap-1">

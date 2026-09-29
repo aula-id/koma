@@ -307,9 +307,6 @@ export type KomaState = {
   closeOmniSearch: () => void
   // Queue a workspace path for the Composer to insert into its draft text.
   insertToComposer: (path: string) => void
-  /** Append plain text to the composer draft and leave path chips alone. */
-  appendToComposer: (text: string) => void
-  consumeComposerAppend: () => void
   /** Insert a coding path/dir `@` token and focus the chat tab + composer. */
   putCodingPathInChat: (root: string, path: string, opts?: { isDir?: boolean }) => void
   /** Insert selection ask payload and focus chat. */
@@ -317,6 +314,9 @@ export type KomaState = {
   /** Queue a diagram drawing for the composer. The model receives its Mermaid. */
   addDiagramToChat: (item: { title: string; mermaid: string; doc: DiagramDoc }) => void
   consumeDiagramChatQueue: () => void
+  /** Queue a design slice as a chat chip. The model receives its kdsgn fence. */
+  addDesignToChat: (item: { title: string; text: string }) => void
+  consumeDesignChatQueue: () => void
   consumePasteBody: () => void
   // Composer-side ack: clears the one-shot signal after consuming it.
   consumeComposerInsert: () => void

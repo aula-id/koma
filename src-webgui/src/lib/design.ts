@@ -510,7 +510,6 @@ export function insertDesignNode(doc: DesignDoc, parentId: string | null, node: 
 
 export function insertDesignNodeAt(doc: DesignDoc, parentId: string | null, node: DesignNode, index: number): DesignDoc {
   if (parentId == null) {
-    if (!isDesignContainer(node.kind)) return doc
     const screens = doc.screens.slice()
     screens.splice(Math.max(0, Math.min(index, screens.length)), 0, node)
     return { ...doc, screens }
@@ -524,14 +523,13 @@ export function insertDesignNodeAt(doc: DesignDoc, parentId: string | null, node
   return changed ? { ...doc, screens } : doc
 }
 
-/** Move a node under a new parent. A null parent promotes a frame to a screen. */
+/** Move a node under a new parent. A null parent promotes it to a screen. */
 export function placeDesignNode(doc: DesignDoc, id: string, parentId: string | null, x: number, y: number): DesignDoc {
   const located = locateDesign(doc, id)
   if (!located) return doc
   if (parentId === located.parentId && located.node.x === x && located.node.y === y) return doc
   if (parentId === id) return doc
   if (parentId && containsNode(located.node, parentId)) return doc
-  if (parentId == null && !isDesignContainer(located.node.kind)) return doc
   if (parentId != null && !findDesignNode(doc, parentId)) return doc
   const removed = deleteDesignNode(doc, id)
   return insertDesignNode(removed, parentId, { ...located.node, x, y })
@@ -871,7 +869,6 @@ export function moveDesignNode(doc: DesignDoc, id: string, parentId: string | nu
   const located = locateDesign(doc, id)
   if (!located) return doc
   if (parentId === id || (parentId && containsNode(located.node, parentId))) return doc
-  if (parentId == null && !isDesignContainer(located.node.kind)) return doc
   if (parentId != null) {
     const parent = findDesignNode(doc, parentId)
     if (!parent || !isDesignContainer(parent.kind)) return doc
@@ -1657,7 +1654,7 @@ export function parseDesign(text: string): { doc: DesignDoc; error: string | nul
     if (!Array.isArray(raw.screens)) return { doc: emptyDesign(), error: 'This file is not a design' }
     for (const item of raw.screens) {
       const screen = parseNode(item)
-      if (!screen || !isDesignContainer(screen.kind)) return { doc: emptyDesign(), error: 'This file is not a design' }
+      if (!screen) return { doc: emptyDesign(), error: 'This file is not a design' }
       screens.push(screen)
     }
   }
@@ -1903,9 +1900,33 @@ export function queryDesign(doc: DesignDoc, query: DesignQuery): DesignQuerySlic
   }
 }
 
-/** One fenced slice for the composer. The fence is the model payload. */
+/** One fenced slice for chat. The fence is the model payload. */
 export function designChatText(doc: DesignDoc, query: DesignQuery): string | null {
   const slice = queryDesign(doc, query)
   if (!slice) return null
   return '```kdsgn\n' + JSON.stringify(slice) + '\n```'
+}
+
+const KDSGN_FENCE = /```[ \t]*kdsgn[ \t]*\r?\n[\s\S]*?```/gi
+
+/** Title shown on a design chip. The fence body is one query slice. */
+export function designFenceTitle(fence: string): string {
+  const body = fence.replace(/^```[ \t]*kdsgn[ \t]*\r?\n/, '').replace(/```\s*$/, '')
+  try {
+    const value = JSON.parse(body) as { screen?: { name?: string }; component?: { name?: string } }
+    const title = value.screen?.name || value.component?.name
+    return title || 'Design'
+  } catch {
+    return 'Design'
+  }
+}
+
+/** Pull fenced design slices out of a user message. The fence is what the model read. */
+export function splitDesignMessage(content: string): { prose: string; designs: { text: string; title: string }[] } {
+  const designs: { text: string; title: string }[] = []
+  const prose = content.replace(new RegExp(KDSGN_FENCE.source, 'gi'), (fence) => {
+    designs.push({ text: fence, title: designFenceTitle(fence) })
+    return ''
+  })
+  return { prose: prose.replace(/\n{3,}/g, '\n\n').trim(), designs }
 }
