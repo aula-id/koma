@@ -20,9 +20,8 @@ export function ComputerObservationCard({ observation: o }: { observation: Compu
       <ChevronDown size={14} className={`shrink-0 text-koma-dim transition-transform ${expanded ? 'rotate-180' : ''}`} />
     </button>
     {expanded && <div className="border-t border-koma-border">
-      {missing ? <p className="p-4 text-xs text-koma-dim">This saved frame is no longer available.</p> : <img src={computerImageUrl(o.image_path)} alt={`Exact frame sent to the model: ${o.title || o.application}`} loading="lazy" onError={() => setMissing(true)} className="max-h-[65vh] w-full object-contain" />}
-      <div className="space-y-1.5 border-t border-koma-border px-3 py-2 text-[11px] leading-relaxed text-koma-dim">
-        <p>Exact frame sent to the model. The live preview may show a newer frame.</p>
+      {missing ? <p className="p-4 text-xs text-koma-dim">This saved frame is no longer available.</p> : <img src={computerImageUrl(o.image_path)} alt={o.title || o.application} loading="lazy" onError={() => setMissing(true)} className="max-h-[65vh] w-full object-contain" />}
+      <div className="border-t border-koma-border px-3 py-2 text-[11px] leading-relaxed text-koma-dim">
         <details><summary className="cursor-pointer">Observation details</summary><p className="mt-2 break-words">Accessibility: {o.accessibility_status}</p><p className="mt-1 break-words">Text recognition: {o.ocr_status}</p><p className="mt-1 break-all">Observation: {o.id}</p></details>
       </div>
     </div>}

@@ -319,7 +319,6 @@ function PasteTextCard({ n, text }: { n: number; text: string }) {
             <span>Pasted Text #{n}</span>
           </div>
           <p className="mt-1 truncate text-[12.5px]">{preview}</p>
-          <p className="mt-0.5 truncate text-[10px] text-koma-dim">The model reads this pasted text.</p>
         </div>
         <ChevronDown size={14} className={`shrink-0 text-koma-dim transition-transform ${expanded ? 'rotate-180' : ''}`} />
       </button>

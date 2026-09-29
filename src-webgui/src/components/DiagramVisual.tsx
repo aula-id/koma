@@ -160,21 +160,13 @@ export function DiagramObservationCard({ mermaid }: { mermaid: string }) {
             <span>Diagram</span>
           </div>
           <p className="mt-1 truncate text-[12.5px]">{title}</p>
-          <p className="mt-0.5 truncate text-[10px] text-koma-dim">The model reads the Mermaid for this drawing.</p>
         </div>
         <ChevronDown size={14} className={`shrink-0 text-koma-dim transition-transform ${expanded ? 'rotate-180' : ''}`} />
       </button>
       {expanded ? (
         <div className="border-t border-koma-border">
           <div className="h-52 bg-koma-bg">{view.doc.nodes.length ? <DiagramSketch doc={view.doc} /> : null}</div>
-          <div className="space-y-2 border-t border-koma-border px-3 py-2 text-[11px] leading-relaxed text-koma-dim">
-            <p>
-              {view.captured
-                ? 'This drawing is the canvas from when it was added. The model received the Mermaid below.'
-                : 'This drawing is rebuilt from the Mermaid the model received.'}
-            </p>
-            <pre className="whitespace-pre-wrap break-words text-koma-fg">{mermaid}</pre>
-          </div>
+          <pre className="whitespace-pre-wrap break-words border-t border-koma-border px-3 py-2 text-[11px] text-koma-fg">{mermaid}</pre>
         </div>
       ) : null}
     </article>

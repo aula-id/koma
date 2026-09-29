@@ -30,6 +30,7 @@ import {
   parseDiagram,
   pointerAngle,
   portAnchor,
+  portOffset,
   resizeNode,
   routePath,
   serializeDiagram,
@@ -128,15 +129,6 @@ function tidyEdge(edge: DiagramEdge): DiagramEdge {
   return next
 }
 
-function portStyle(port: number): { left: string; top: string } {
-  const side = Math.floor(port / 4)
-  const t = `${(((port % 4) + 1) / 5) * 100}%`
-  if (side === 0) return { left: t, top: '0%' }
-  if (side === 1) return { left: '100%', top: t }
-  if (side === 2) return { left: t, top: '100%' }
-  return { left: '0%', top: t }
-}
-
 export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) {
   const key = fileKey(tab.root, tab.path)
   const file = useKoma((s) => s.diagram.docs[key])
@@ -165,6 +157,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
   const [connectDrag, setConnectDrag] = useState<{ fromId: string; port: number } | null>(null)
   const [lineOpen, setLineOpen] = useState(false)
   const [spaceDown, setSpaceDown] = useState(false)
+  const [dragCursor, setDragCursor] = useState<string | null>(null)
   const spaceRef = useRef(false)
   const markerId = useId().replace(/:/g, '')
 
@@ -175,6 +168,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
     setChatMenu(null)
     setHoverId(null)
     setConnectDrag(null)
+    setDragCursor(null)
     setRev((value) => value + 1)
   }, [key])
 
@@ -212,6 +206,15 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
     setEditing(null)
     updateDiagram(tab.root, tab.path, next)
   }
+  useEffect(() => {
+    if (!dragCursor) return
+    const previous = document.body.style.cursor
+    document.body.style.cursor = dragCursor
+    return () => {
+      document.body.style.cursor = previous
+    }
+  }, [dragCursor])
+
   const undoRef = useRef(undo)
   const redoRef = useRef(redo)
   undoRef.current = undo
@@ -326,6 +329,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
       }, doc)
     }
     const up = (e: PointerEvent) => {
+      setDragCursor(null)
       const drag = dragRef.current
       dragRef.current = null
       if (drag?.kind === 'marquee') {
@@ -365,12 +369,22 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
       setSelection(null)
       setConnectFrom(null)
     }
+    const cancel = () => {
+      setDragCursor(null)
+      if (dragRef.current?.kind === 'connect') {
+        setConnectDrag(null)
+        setCursor(null)
+      }
+      dragRef.current = null
+    }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', cancel)
     window.addEventListener('koma-diagram-restore', onRestore)
     return () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', cancel)
       window.removeEventListener('koma-diagram-restore', onRestore)
     }
   }, [key, tab.path, tab.root])
@@ -484,6 +498,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
       if ((e.target as HTMLElement).closest('input, textarea')) return
       e.preventDefault()
       dragRef.current = { kind: 'pan', sx: e.clientX, sy: e.clientY, px: panRef.current.x, py: panRef.current.y }
+      setDragCursor('grabbing')
       return
     }
     if (e.button !== 0) return
@@ -529,6 +544,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
     setSelection({ type: 'node', id: node.id })
     setConnectFrom(null)
     dragRef.current = { kind: 'move', id: node.id, sx: e.clientX, sy: e.clientY, ox: node.x, oy: node.y, moved: false, remembered: false }
+    setDragCursor('grabbing')
   }
 
   const onEdgePointerDown = (e: ReactPointerEvent, edge: DiagramEdge) => {
@@ -629,17 +645,18 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
       <div className="flex min-h-0 min-w-0 flex-1">
       <div
         ref={canvasRef}
-        className={`relative min-h-0 min-w-0 flex-1 overflow-hidden ${spaceDown ? 'cursor-grab' : 'cursor-crosshair'}`}
-        style={
-          doc.snap
+        className={`relative min-h-0 min-w-0 flex-1 overflow-hidden ${dragCursor ? '' : spaceDown ? 'cursor-grab' : 'cursor-crosshair'}`}
+        style={{
+          ...(doc.snap
             ? {
                 backgroundImage:
                   'radial-gradient(circle, color-mix(in srgb, var(--koma-fg, #c8d3f5) 28%, transparent) 1px, transparent 1px)',
                 backgroundSize: `${grid}px ${grid}px`,
                 backgroundPosition: `${pan.x}px ${pan.y}px`,
               }
-            : undefined
-        }
+            : {}),
+          ...(dragCursor ? { cursor: dragCursor } : {}),
+        }}
         onPointerDown={onCanvasPointerDown}
         onContextMenu={(e) => {
           if ((e.target as HTMLElement).closest('input, textarea')) return
@@ -813,25 +830,25 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
         </svg>
         {doc.nodes.map((node) => {
           const selected = selection?.type === 'node' && selection.id === node.id
-          const shape =
-            node.kind === 'ellipse'
-              ? 'rounded-full border border-koma-border bg-koma-panel'
-              : node.kind === 'text'
-                ? ''
-                : node.kind === 'diamond'
-                  ? ''
-                  : 'rounded border border-koma-border bg-koma-panel'
+          const shape = node.kind === 'rect' ? 'rounded bg-koma-panel' : ''
+          const nodeCursor = dragCursor || editing === node.id || tool === 'connect' ? '' : 'cursor-grab'
           return (
             <div
               key={node.id}
               data-diagram-node=""
-              className={`absolute flex items-center justify-center ${shape} ${connectFrom === node.id ? 'ring-1 ring-koma-accent' : ''}`}
+              className={`absolute flex items-center justify-center ${shape} ${nodeCursor} ${connectFrom === node.id && node.kind === 'text' ? 'ring-1 ring-koma-accent' : ''}`}
               style={{
                 left: pan.x + node.x,
                 top: pan.y + node.y,
                 width: node.w,
                 height: node.h,
                 transform: node.rotation ? `rotate(${node.rotation}deg)` : undefined,
+                ...(node.kind === 'rect'
+                  ? {
+                      outline: `1px solid ${connectFrom === node.id ? 'var(--color-koma-accent)' : 'var(--color-koma-border)'}`,
+                      outlineOffset: '-0.5px',
+                    }
+                  : {}),
               }}
               onPointerEnter={() => setHoverId(node.id)}
               onPointerLeave={() => setHoverId((current) => (current === node.id ? null : current))}
@@ -844,13 +861,26 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
                 setSelection({ type: 'node', id: node.id })
               }}
             >
-              {node.kind === 'diamond' ? (
-                <svg className="absolute inset-0 h-full w-full overflow-visible">
-                  <polygon
-                    points={`${node.w / 2},1 ${node.w - 1},${node.h / 2} ${node.w / 2},${node.h - 1} 1,${node.h / 2}`}
-                    fill="var(--color-koma-panel)"
-                    stroke={connectFrom === node.id ? 'var(--color-koma-accent)' : 'var(--color-koma-border)'}
-                  />
+              {node.kind === 'diamond' || node.kind === 'ellipse' ? (
+                <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
+                  {node.kind === 'diamond' ? (
+                    <polygon
+                      points={`${node.w / 2},0 ${node.w},${node.h / 2} ${node.w / 2},${node.h} 0,${node.h / 2}`}
+                      fill="var(--color-koma-panel)"
+                      stroke={connectFrom === node.id ? 'var(--color-koma-accent)' : 'var(--color-koma-border)'}
+                      strokeWidth={1}
+                    />
+                  ) : (
+                    <ellipse
+                      cx={node.w / 2}
+                      cy={node.h / 2}
+                      rx={node.w / 2}
+                      ry={node.h / 2}
+                      fill="var(--color-koma-panel)"
+                      stroke={connectFrom === node.id ? 'var(--color-koma-accent)' : 'var(--color-koma-border)'}
+                      strokeWidth={1}
+                    />
+                  )}
                 </svg>
               ) : null}
               {editing === node.id ? (
@@ -884,36 +914,45 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
                 <span className="pointer-events-none z-10 truncate px-2 text-center text-[12px]">{node.text || ' '}</span>
               )}
               {tool === 'select' && editing !== node.id && (connectDrag?.fromId === node.id || (hoverId === node.id && (!selected || connectDrag))) ? (
-                Array.from({ length: DIAGRAM_PORTS }, (_, port) => (
-                  <span
-                    key={port}
-                    data-diagram-port=""
-                    className="absolute z-10 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-koma-bg bg-koma-accent"
-                    style={{ ...portStyle(port), cursor: 'crosshair' }}
-                    onPointerDown={(e) => {
-                      if (e.button !== 0 || spaceRef.current) return
-                      e.stopPropagation()
-                      e.preventDefault()
-                      dragRef.current = { kind: 'connect', fromId: node.id, port }
-                      setConnectDrag({ fromId: node.id, port })
-                      setCursor(toDoc(e))
-                      setConnectFrom(null)
-                    }}
-                    onDoubleClick={(e) => e.stopPropagation()}
-                  />
-                ))
+                Array.from({ length: DIAGRAM_PORTS }, (_, port) => {
+                  const at = portOffset(node, port)
+                  return (
+                    <span
+                      key={port}
+                      data-diagram-port=""
+                      className="absolute z-10 h-3 w-3 -translate-x-1/2 -translate-y-1/2"
+                      style={{ left: `${at.x * 100}%`, top: `${at.y * 100}%`, cursor: 'crosshair' }}
+                      onPointerDown={(e) => {
+                        if (e.button !== 0 || spaceRef.current) return
+                        e.stopPropagation()
+                        e.preventDefault()
+                        dragRef.current = { kind: 'connect', fromId: node.id, port }
+                        setConnectDrag({ fromId: node.id, port })
+                        setDragCursor('crosshair')
+                        setCursor(toDoc(e))
+                        setConnectFrom(null)
+                      }}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                    >
+                      <svg viewBox="0 0 12 12" className="h-full w-full overflow-visible text-koma-accent" aria-hidden="true">
+                        <path d="M6 1 V11 M1 6 H11" fill="none" stroke="currentColor" strokeWidth="1.25" />
+                      </svg>
+                    </span>
+                  )
+                })
               ) : null}
               {selected && tool === 'select' && editing !== node.id && !connectDrag ? (
                 <>
                   {HANDLES.map((handle) => (
                     <span
                       key={handle.id}
-                      className={`absolute z-10 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-koma-bg bg-koma-accent ${handle.className}`}
+                      className={`absolute z-10 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-koma-accent bg-koma-panel ${handle.className} ${dragCursor ? 'pointer-events-none' : ''}`}
                       style={{ cursor: handle.cursor }}
                       onPointerDown={(e) => {
                         e.stopPropagation()
                         e.preventDefault()
                         dragRef.current = { kind: 'resize', id: node.id, handle: handle.id, sx: e.clientX, sy: e.clientY, node, remembered: false }
+                        setDragCursor(handle.cursor)
                       }}
                       onDoubleClick={(e) => e.stopPropagation()}
                     />
@@ -922,12 +961,13 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
                     type="button"
                     title="Rotate"
                     aria-label="Rotate"
-                    className="absolute -right-3 -top-3 z-10 flex h-4 w-4 items-center justify-center rounded-full border border-koma-border bg-koma-panel text-koma-accent"
+                    className={`absolute -right-3 -top-3 z-10 flex h-4 w-4 items-center justify-center rounded-full border border-koma-border bg-koma-panel text-koma-accent ${dragCursor ? 'pointer-events-none' : ''}`}
                     onPointerDown={(e) => {
                       e.stopPropagation()
                       e.preventDefault()
                       const point = toDoc(e)
                       if (!point) return
+                      setDragCursor('crosshair')
                       dragRef.current = {
                         kind: 'rotate',
                         id: node.id,

@@ -132,10 +132,13 @@ function aligned(points: { x: number; y: number }[]): boolean {
 
 {
   const node = { id: 'a', kind: 'rect' as const, x: 0, y: 0, w: 100, h: 50, text: '' }
-  assert.deepEqual(portAnchor(node, 0), { x: 20, y: 0 })
-  assert.deepEqual(portAnchor(node, 7), { x: 100, y: 40 })
-  assert.deepEqual(portAnchor(node, 15), { x: 0, y: 40 })
+  assert.deepEqual(portAnchor(node, 0), { x: 0, y: 0 })
+  assert.deepEqual(portAnchor(node, 2), { x: 50, y: 0 })
+  assert.deepEqual(portAnchor(node, 7), { x: 100, y: 37.5 })
+  assert.deepEqual(portAnchor(node, 15), { x: 0, y: 12.5 })
   assert.equal(nearestPort(node, { x: 100, y: 40 }), 7)
+  const ell = portAnchor({ ...node, kind: 'ellipse' }, 0)
+  assert.ok(Math.abs((ell.x - 50) ** 2 / 50 ** 2 + (ell.y - 25) ** 2 / 25 ** 2 - 1) < 1e-6)
   const other = { ...node, id: 'b', x: 200 }
   const routed = edgeRoute(node, other, { id: 'e', from: 'a', to: 'b', fromPort: 5, toPort: 12 })
   assert.deepEqual(routed[0], portAnchor(node, 5))

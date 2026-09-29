@@ -51,7 +51,7 @@ export type DiagramEdge = {
 }
 
 const SIDES: readonly DiagramSide[] = ['n', 'e', 's', 'w']
-/** Four inset points on each side. Corners stay free for the resize handles. */
+/** Sixteen points clockwise from the top-left: each side's corner, then 25%, 50%, 75%. */
 export const DIAGRAM_PORTS = 16
 const DASHES: readonly DiagramDash[] = ['solid', 'dashed', 'dotted']
 const ARROWS: readonly DiagramArrow[] = ['none', 'arrow', 'open']
@@ -304,19 +304,39 @@ export function portSide(port: number): DiagramSide {
   return SIDES[Math.floor(index / 4)]
 }
 
-/** Local perimeter point, then the node's rotation. Slots sit at 20/40/60/80%. */
-export function portAnchor(node: DiagramNode, port: number): DiagramPoint {
+/** Box fraction clockwise from the top-left. Slot 0 is a corner, 2 is an edge center. */
+export function portLocal(port: number): { x: number; y: number } {
   const index = ((Math.floor(port) % DIAGRAM_PORTS) + DIAGRAM_PORTS) % DIAGRAM_PORTS
   const side = Math.floor(index / 4)
-  const t = ((index % 4) + 1) / 5
-  const local =
-    side === 0
-      ? { x: node.x + node.w * t, y: node.y }
-      : side === 1
-        ? { x: node.x + node.w, y: node.y + node.h * t }
-        : side === 2
-          ? { x: node.x + node.w * t, y: node.y + node.h }
-          : { x: node.x, y: node.y + node.h * t }
+  const t = (index % 4) / 4
+  if (side === 0) return { x: t, y: 0 }
+  if (side === 1) return { x: 1, y: t }
+  if (side === 2) return { x: 1 - t, y: 1 }
+  return { x: 0, y: 1 - t }
+}
+
+/** Pull a box-perimeter fraction onto the ellipse or diamond outline. Rects stay put. */
+function onOutline(kind: DiagramNode['kind'], local: { x: number; y: number }): { x: number; y: number } {
+  if (kind !== 'ellipse' && kind !== 'diamond') return local
+  const dx = local.x - 0.5
+  const dy = local.y - 0.5
+  if (dx === 0 && dy === 0) return local
+  const scale =
+    kind === 'ellipse'
+      ? 1 / Math.sqrt((dx / 0.5) ** 2 + (dy / 0.5) ** 2)
+      : 1 / (Math.abs(dx) / 0.5 + Math.abs(dy) / 0.5)
+  return { x: 0.5 + dx * scale, y: 0.5 + dy * scale }
+}
+
+/** Where a connector plus sits, as a fraction of the node box (before rotation). */
+export function portOffset(node: DiagramNode, port: number): { x: number; y: number } {
+  return onOutline(node.kind, portLocal(port))
+}
+
+/** Outline point, then the node's rotation. */
+export function portAnchor(node: DiagramNode, port: number): DiagramPoint {
+  const offset = portOffset(node, port)
+  const local = { x: node.x + node.w * offset.x, y: node.y + node.h * offset.y }
   return rotatePoint(local, nodeCenter(node), node.rotation ?? 0)
 }
 
