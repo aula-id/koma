@@ -28,6 +28,7 @@ pub mod bgbash;
 pub mod cascade;
 pub mod ext;
 pub mod harness;
+pub mod launcher;
 pub mod mcp;
 pub mod mode;
 pub mod resolve;
@@ -35,7 +36,6 @@ pub mod runtime;
 pub mod sec;
 pub mod state;
 pub mod subagent;
-pub mod launcher;
 pub mod update;
 pub mod version;
 

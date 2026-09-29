@@ -318,6 +318,13 @@ fn bare_koma_has_no_unknown_command() {
 }
 
 #[test]
+fn launcher_install_is_a_known_verb() {
+    let opts = parse(["koma", "launcher-install"].into_iter().map(String::from));
+    assert!(opts.launcher_install);
+    assert!(opts.unknown_command.is_none());
+}
+
+#[test]
 fn known_doctor_not_unknown() {
     let opts = parse(["koma", "doctor"].into_iter().map(String::from));
     assert!(opts.doctor);

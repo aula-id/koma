@@ -253,6 +253,9 @@ pub struct Opts {
     /// When `true`, stop the running daemon then run the installer to fetch the
     /// latest release binary, then exit (`koma update` positional verb).
     pub update: bool,
+    /// When `true`, write the Linux desktop entry or the macOS app bundle and
+    /// exit (`koma launcher-install`). Hidden plumbing for `install.sh`.
+    pub launcher_install: bool,
     /// The session UUID this invocation is bound to (`--session <id>`).
     ///
     /// Daemon-per-session: a fresh `koma` MINTS this on the CLIENT side, then spawns its
@@ -354,7 +357,7 @@ pub fn print_help() -> i32 {
          \x20 agents                         open the session hub (alias for --resume)\n\
          \x20 alone                          standalone no-daemon TUI (alias for --local)\n\
          \x20 gui                            launch the desktop GUI client\n\
-         \x20 update                         stop the daemon, fetch the latest release, then exit\n\
+         \x20 update                         stop the daemon, install the latest release and app-list entry, then exit\n\
          \x20 daemon <status|kill|restart|clean|delete>  daemon management CLI\n\
          \x20 ext install --dev <zip|dir>    sideload an unsigned local extension (dev-only)\n\
          \x20 doctor [-v|--verbose]          readiness report (config/daemons/models/gui/…)\n\
@@ -530,6 +533,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
         Some("agents") => opts.resume = true,
         Some("alone") => opts.local = true,
         Some("update") => opts.update = true,
+        Some("launcher-install") => opts.launcher_install = true,
         Some("gui") => {
             opts.gui = true;
             // `gui remote user@host` — second-window remote attach (with --session).

@@ -42,9 +42,25 @@ pub fn install() -> Result<Installed> {
     install_at(&home, &exe, true)
 }
 
-/// True when Finder/Launchpad started this process as `Koma.app` with no
-/// subcommand. macOS cannot pass `gui` through Info.plist, so the bundle
-/// executable opens the desktop client itself.
+/// Finder launches `Koma.app` with no subcommand. Info.plist cannot append
+/// `gui`, so the bundle executable opens the desktop client itself.
+pub fn args_for_launch(args: Vec<String>) -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut args = args;
+        if should_launch_gui(&args) {
+            args.insert(1, "gui".to_string());
+        }
+        return args;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        args
+    }
+}
+
+/// True when this process was started as `Koma.app` with no subcommand.
+#[cfg(target_os = "macos")]
 pub fn should_launch_gui(args: &[String]) -> bool {
     let Ok(exe) = std::env::current_exe() else {
         return false;
@@ -60,6 +76,7 @@ pub fn exe_should_launch_gui(exe: &Path, args: &[String]) -> bool {
 }
 
 /// PNG path written for the macOS Dock, once [`install`] has run.
+#[cfg(target_os = "macos")]
 pub fn dock_icon_path() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     let path = home.join("Applications/Koma.app/Contents/Resources/icon-256.png");
@@ -88,7 +105,10 @@ fn installed_exe() -> Option<PathBuf> {
     if let Some(path) = candidates.into_iter().find(|path| path.is_file()) {
         return Some(linux_launch_exe(&path));
     }
-    std::env::current_exe().ok().filter(|path| path.is_file()).map(|path| linux_launch_exe(&path))
+    std::env::current_exe()
+        .ok()
+        .filter(|path| path.is_file())
+        .map(|path| linux_launch_exe(&path))
 }
 
 /// The curl installer's `koma` is a shell wrapper around `koma.bin`. The
@@ -142,11 +162,7 @@ fn install_linux(home: &Path, data_home: &Path, exe: &Path, register: bool) -> R
     let body = linux_desktop(exe, &icon_file, wm_class(exe));
     write_bytes(&desktop, body.as_bytes())?;
     if register {
-        let _ = Command::new("update-desktop-database").arg(&apps).status();
-        let _ = Command::new("gtk-update-icon-cache")
-            .args(["-f", "-t"])
-            .arg(&icons)
-            .status();
+        register_linux(&apps, &icons, &desktop);
     }
     Ok(Installed { location: desktop })
 }
@@ -193,12 +209,7 @@ fn install_macos(home: &Path, exe: &Path, register: bool) -> Result<Installed> {
     let plist = macos_plist();
     write_bytes(&app.join("Contents/Info.plist"), plist.as_bytes())?;
     if register {
-        let _ = Command::new("xattr")
-            .args(["-dr", "com.apple.quarantine"])
-            .arg(&app)
-            .status();
-        let lsregister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
-        let _ = Command::new(lsregister).args(["-f"]).arg(&app).status();
+        register_macos(&app);
     }
     Ok(Installed { location: app })
 }
@@ -295,10 +306,39 @@ fn is_app_bundle_exe(exe: &Path) -> bool {
     saw_app && saw_macos
 }
 
+/// Rebuild the running desktop's app index. Same idea as copying an app out
+/// of a DMG: touch the bundle, force Launch Services to rescan it, and import
+/// it into Spotlight. No Dock restart and no logout.
+fn register_macos(app: &Path) {
+    let _ = Command::new("xattr")
+        .args(["-dr", "com.apple.quarantine"])
+        .arg(app)
+        .status();
+    let _ = Command::new("touch").arg(app).status();
+    let lsregister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+    let _ = Command::new(lsregister)
+        .args(["-f", "-R", "-trusted"])
+        .arg(app)
+        .status();
+    let _ = Command::new("mdimport").arg(app).status();
+}
+
+/// Tell the running session the new desktop file and icon are there. GNOME and
+/// KDE watch the applications directory; these commands rebuild the caches a
+/// file-manager install would refresh.
+fn register_linux(apps: &Path, icons: &Path, desktop: &Path) {
+    let _ = Command::new("touch").arg(desktop).status();
+    let _ = Command::new("update-desktop-database").arg(apps).status();
+    let _ = Command::new("gtk-update-icon-cache")
+        .args(["-f", "-t"])
+        .arg(icons)
+        .status();
+    let _ = Command::new("xdg-desktop-menu").arg("forceupdate").status();
+}
+
 fn write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     fs::write(path, bytes).with_context(|| format!("write {}", path.display()))?;
     Ok(())
@@ -342,10 +382,7 @@ mod tests {
         let exe = Path::new("/Users/a/Applications/Koma.app/Contents/MacOS/koma");
         let args = vec!["/Users/a/Applications/Koma.app/Contents/MacOS/koma".to_string()];
         assert!(exe_should_launch_gui(exe, &args));
-        let launched = vec![
-            args[0].clone(),
-            "-psn_0_123".to_string(),
-        ];
+        let launched = vec![args[0].clone(), "-psn_0_123".to_string()];
         assert!(exe_should_launch_gui(exe, &launched));
     }
 
@@ -354,7 +391,10 @@ mod tests {
         let exe = Path::new("/Users/a/Applications/Koma.app/Contents/MacOS/koma");
         let args = vec![exe.display().to_string(), "--daemon".to_string()];
         assert!(!exe_should_launch_gui(exe, &args));
-        assert!(!exe_should_launch_gui(Path::new("/usr/local/bin/koma"), &args));
+        assert!(!exe_should_launch_gui(
+            Path::new("/usr/local/bin/koma"),
+            &args
+        ));
     }
 
     #[test]
@@ -431,6 +471,7 @@ mod tests {
                 .unwrap_or(0)
         ));
         let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
         let home = root.join("home");
         let exe = root.join("koma");
         fs::write(&exe, vec![0u8; 8192]).unwrap();

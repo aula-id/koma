@@ -445,14 +445,28 @@ if [ "$WITH_LSP" = "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Linux: user-level desktop entry + icons (app drawer / Activities).
-# Best-effort — never fails the install. Helps curl|sh users on GNOME and on
-# immutable/atomic distros (Bluefin, Silverblue, …) where .deb is awkward and
-# .AppImage is a separate download path. Absolute Exec path avoids PATH
-# shadowing in GUI sessions (same concern as packaging/linux/koma.desktop.hbs).
-# Override icon CDN with KOMA_ICON_BASE=... (defaults to assets on main).
+# App list + icon (Linux desktop entry, macOS ~/Applications/Koma.app).
+# The binary embeds the icon and writes the entry (`koma launcher-install`).
+# Older binaries fall back to the shell placement below. Best-effort — never
+# fails the install. Absolute Exec path avoids PATH shadowing in GUI sessions.
 # ---------------------------------------------------------------------------
-if [ "$os" = "linux" ] && [ -n "${HOME:-}" ]; then
+_launcher_ok=0
+if [ -x "$INSTALL_DIR/koma" ]; then
+    _launcher_log=$(mktemp)
+    if "$INSTALL_DIR/koma" launcher-install >"$_launcher_log" 2>&1; then
+        _launcher_ok=1
+        cat "$_launcher_log"
+    fi
+    rm -f "$_launcher_log"
+fi
+
+# ---------------------------------------------------------------------------
+# Linux fallback: user-level desktop entry + icons (app drawer / Activities).
+# Helps curl|sh users on GNOME and on immutable/atomic distros (Bluefin,
+# Silverblue, …) where .deb is awkward. Override icon CDN with
+# KOMA_ICON_BASE=... (defaults to assets on main).
+# ---------------------------------------------------------------------------
+if [ "$_launcher_ok" != 1 ] && [ "$os" = "linux" ] && [ -n "${HOME:-}" ]; then
     _koma_bin="$INSTALL_DIR/koma"
     # Resolve to an absolute path for Exec= (required by the FreeDesktop spec
     # when the binary is not guaranteed to be on the desktop session PATH).
@@ -514,23 +528,52 @@ if [ "$os" = "linux" ] && [ -n "${HOME:-}" ]; then
                 printf '%s\n' 'Name=Koma'
                 printf '%s\n' 'Comment=Agentic coding desktop client'
                 printf '%s\n' "Exec=${_koma_bin} gui"
-                if [ -n "$_icon_key" ]; then
+                # Prefer the file we just wrote. A bare theme name stays invisible
+                # when the user hicolor tree has no icon cache.
+                _icon_file=""
+                for _cand in \
+                    "$_icons_base/256x256/apps/koma.png" \
+                    "$_icons_base/128x128/apps/koma.png" \
+                    "$_icons_base/512x512/apps/koma.png" \
+                    "$_icons_base/64x64/apps/koma.png" \
+                    "$_icons_base/48x48/apps/koma.png" \
+                    "$_icons_base/32x32/apps/koma.png"
+                do
+                    if [ -s "$_cand" ]; then
+                        _icon_file="$_cand"
+                        break
+                    fi
+                done
+                if [ -n "$_icon_file" ]; then
+                    printf '%s\n' "Icon=${_icon_file}"
+                elif [ -n "$_icon_key" ]; then
                     printf '%s\n' "Icon=${_icon_key}"
+                fi
+                # The wrapper execs koma.bin, so the window class is koma.bin.
+                # A raw ELF named koma (the .deb) uses class koma.
+                _wm_class="koma"
+                if [ -x "$INSTALL_DIR/koma.bin" ]; then
+                    _wm_class="koma.bin"
                 fi
                 printf '%s\n' 'Terminal=false'
                 printf '%s\n' 'Categories=Development;'
                 printf '%s\n' 'StartupNotify=true'
+                printf '%s\n' "StartupWMClass=${_wm_class}"
                 printf '%s\n' 'Keywords=ai;agent;coding;'
             } > "$_desktop" 2>/dev/null || true
 
             if [ -f "$_desktop" ]; then
                 chmod 644 "$_desktop" 2>/dev/null || true
                 # Refresh desktop/icon caches when the tools exist (GNOME etc.).
+                touch "$_desktop" 2>/dev/null || true
                 if command -v update-desktop-database > /dev/null 2>&1; then
                     update-desktop-database "$_apps_dir" 2>/dev/null || true
                 fi
                 if command -v gtk-update-icon-cache > /dev/null 2>&1 && [ -d "$_icons_base" ]; then
                     gtk-update-icon-cache -f -t "$_icons_base" 2>/dev/null || true
+                fi
+                if command -v xdg-desktop-menu > /dev/null 2>&1; then
+                    xdg-desktop-menu forceupdate 2>/dev/null || true
                 fi
                 # Stash path for the success banner below.
                 KOMA_DESKTOP_ENTRY="$_desktop"
@@ -540,13 +583,12 @@ if [ "$os" = "linux" ] && [ -n "${HOME:-}" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# macOS: user-level ~/Applications/Koma.app (Finder, Launchpad, Spotlight).
-# Best-effort — never fails the install. The bundle is a thin launcher that
-# execs the installed binary with `gui`, same idea as the Linux desktop entry.
-# An absolute path avoids PATH shadowing. Override the icon CDN with
+# macOS fallback: user-level ~/Applications/Koma.app (Finder, Launchpad,
+# Spotlight). Used when the installed binary has no `launcher-install`.
+# The trampoline execs that binary with `gui`. Override the icon CDN with
 # KOMA_ICON_BASE=... (defaults to assets on main).
 # ---------------------------------------------------------------------------
-if [ "$os" = "darwin" ] && [ -n "${HOME:-}" ]; then
+if [ "$_launcher_ok" != 1 ] && [ "$os" = "darwin" ] && [ -n "${HOME:-}" ]; then
     _koma_bin="$INSTALL_DIR/$bin_name"
     case "$_koma_bin" in
         /*) ;;
@@ -557,7 +599,9 @@ if [ "$os" = "darwin" ] && [ -n "${HOME:-}" ]; then
     if [ -x "$_koma_bin" ] && { [ ! -e "$_app" ] || [ -d "$_app" ]; }; then
         mkdir -p "$_app/Contents/MacOS" "$_app/Contents/Resources" 2>/dev/null || true
         if [ -d "$_app/Contents/MacOS" ] && [ -w "$_app/Contents/MacOS" ]; then
-            # Embed the binary path as a single-quoted shell word.
+            # This fallback only runs for a binary that does not implement
+            # `launcher-install`, so it does not know to open the GUI when
+            # launched as Koma.app. A shell trampoline passes `gui` explicitly.
             _bin_escaped=$(printf '%s' "$_koma_bin" | sed "s/'/'\\\\''/g")
             {
                 printf '%s\n' '#!/bin/sh'
@@ -618,9 +662,15 @@ if [ "$os" = "darwin" ] && [ -n "${HOME:-}" ]; then
             if command -v xattr > /dev/null 2>&1; then
                 xattr -dr com.apple.quarantine "$_app" 2>/dev/null || true
             fi
+            # Same refresh a DMG copy relies on: bump the bundle mtime, force
+            # Launch Services to rescan it, then import it into Spotlight.
+            touch "$_app" 2>/dev/null || true
             _lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
             if [ -x "$_lsregister" ]; then
-                "$_lsregister" -f "$_app" 2>/dev/null || true
+                "$_lsregister" -f -R -trusted "$_app" 2>/dev/null || true
+            fi
+            if command -v mdimport > /dev/null 2>&1; then
+                mdimport "$_app" 2>/dev/null || true
             fi
             if [ -x "$_app/Contents/MacOS/koma" ] && [ -f "$_app/Contents/Info.plist" ]; then
                 KOMA_APP_BUNDLE="$_app"
@@ -636,13 +686,16 @@ echo ""
 echo "koma installed to $INSTALL_DIR/$bin_name"
 echo ""
 echo "  Run 'koma' to start the TUI, or 'koma gui' for the desktop client."
+if [ "$_launcher_ok" = 1 ]; then
+    echo "  App list: search for Koma."
+fi
 if [ -n "${KOMA_DESKTOP_ENTRY:-}" ]; then
     echo "  Desktop entry: $KOMA_DESKTOP_ENTRY"
-    echo "  Open your app grid and search for Koma (log out/in if it is missing)."
+    echo "  Open your app grid and search for Koma."
 fi
 if [ -n "${KOMA_APP_BUNDLE:-}" ]; then
     echo "  App: $KOMA_APP_BUNDLE"
-    echo "  Open it from Finder or Launchpad (log out/in if it is missing)."
+    echo "  Open it from Finder, Launchpad, or Spotlight."
 fi
 echo "  Re-run this installer with --with-research (or run"
 echo "  'koma --internet-fullmode-install') to enable full internet mode."

@@ -315,16 +315,40 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
     }
 
+    // The terminal launch has no desktop entry of its own. Write one so the
+    // app grid / Launchpad can open this same binary. Best-effort: a failure
+    // here must not stop the window.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if let Err(e) = crate::app::launcher::install() {
+        crate::model::store::append_global_error_log(
+            "gui",
+            &format!("app list entry was not installed: {e:#}"),
+        );
+    }
+
     // --- 1. Event loop + window (frameless, transparent) -----------------------
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
-    let window = WindowBuilder::new()
-        .with_title("koma")
+    let mut window_builder = WindowBuilder::new()
+        .with_title("Koma")
         .with_inner_size(LogicalSize::new(1024.0, 680.0))
         .with_decorations(false)
         .with_resizable(true)
-        .with_transparent(true)
+        .with_transparent(true);
+    #[cfg(target_os = "linux")]
+    if let Some(icon) = crate::app::launcher::window_icon() {
+        window_builder = window_builder.with_window_icon(Some(icon));
+    }
+    let window = window_builder
         .build(&event_loop)
         .context("failed to build GUI window")?;
+    #[cfg(target_os = "macos")]
+    if let Some(path) = crate::app::launcher::dock_icon_path() {
+        if let Ok(path) = std::ffi::CString::new(path.to_string_lossy().as_bytes()) {
+            // Safety: `path` is a live NUL-terminated path. The window build
+            // above has created NSApplication on this thread.
+            unsafe { agent::computer_native::koma_set_app_icon(path.as_ptr()) };
+        }
+    }
     let proxy = event_loop.create_proxy();
 
     // --- 1b. macOS: minimal native menu bar (Cmd+V/C/X/A fix) -------------------
