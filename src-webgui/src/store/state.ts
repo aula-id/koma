@@ -307,6 +307,9 @@ export type KomaState = {
   closeOmniSearch: () => void
   // Queue a workspace path for the Composer to insert into its draft text.
   insertToComposer: (path: string) => void
+  /** Append plain text to the composer draft and leave path chips alone. */
+  appendToComposer: (text: string) => void
+  consumeComposerAppend: () => void
   /** Insert a coding path/dir `@` token and focus the chat tab + composer. */
   putCodingPathInChat: (root: string, path: string, opts?: { isDir?: boolean }) => void
   /** Insert selection ask payload and focus chat. */

@@ -10,6 +10,7 @@ import {
   COMPONENT_MIME,
   DESIGN_MIME,
   addDesignToken,
+  designChatText,
   designFileName,
   dropDesignToken,
   isDesignPath,
@@ -454,6 +455,23 @@ export function DesignPanel() {
                 }}
               >
                 {component.name}
+              </button>
+              <button
+                type="button"
+                title="Add to chat"
+                className="flex-none rounded px-1 text-[11px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  const open = docs[fileKey(designTab.root, designTab.path)]
+                  if (!open) return
+                  const text = designChatText(open.doc, { component: component.id })
+                  if (!text) return
+                  const state = useKoma.getState()
+                  state.appendToComposer(text)
+                  state.activateTab('chat')
+                }}
+              >
+                Chat
               </button>
             </div>
           ))

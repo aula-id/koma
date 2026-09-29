@@ -8,6 +8,7 @@ import {
   copyTree,
   createComponentFromFrame,
   createNode,
+  designChatText,
   deleteDesignNode,
   frameAtPoint,
   findDesignNode,
@@ -37,6 +38,7 @@ import {
   writeComponentView,
   type DesignDoc,
   type DesignHandle,
+  type DesignQuery,
   type DesignNode,
   type DesignWeight,
 } from '../lib/design'
@@ -593,6 +595,21 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const selectedVariant = focusedComponent && located?.parentId == null
     ? focusedComponent.variants.find((variant) => variant.node.id === selected?.id) ?? null
     : null
+  const chatQuery: DesignQuery | null = focusedComponent
+    ? { component: focusedComponent.id, variant: selectedVariant?.props }
+    : selected?.kind === 'instance' && selected.component
+      ? { component: selected.component, variant: selected.variant }
+      : selected?.kind === 'frame' && located?.parentId == null
+        ? { screen: selected.id }
+        : null
+  const sendChat = () => {
+    if (!chatQuery) return
+    const text = designChatText(storedDoc, chatQuery)
+    if (!text) return
+    const state = useKoma.getState()
+    state.appendToComposer(text)
+    state.activateTab('chat')
+  }
   const status = file.saving
     ? 'Saving…'
     : file.loading && file.savedText == null
@@ -783,6 +800,15 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             </button>
           ) : null}
           {focusedComponent ? <span className="max-w-32 truncate text-[12px] text-koma-fg">{focusedComponent.name}</span> : null}
+          {chatQuery ? (
+            <button
+              type="button"
+              onClick={sendChat}
+              className="h-6 rounded px-2 text-[12px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+            >
+              Add to chat
+            </button>
+          ) : null}
           <div className="ml-auto flex items-center gap-1">
             <ToolButton label="Zoom out" selected={false} onClick={() => {
               const rect = canvasRef.current?.getBoundingClientRect()
@@ -869,6 +895,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 const next = setInstanceVariant(stored, selected.id, props)
                 if (next) commitStored(next)
               } : undefined}
+              onAddToChat={chatQuery ? sendChat : undefined}
               onResetInstance={selected.kind === 'instance' && (selected.text || selected.fill) ? () => {
                 const stored = useKoma.getState().design.docs[key]?.doc
                 if (!stored) return
@@ -1031,6 +1058,7 @@ function NodeSettings({
   onRenameComponent,
   onInstanceVariant,
   onResetInstance,
+  onAddToChat,
   onPatch,
   onType,
   onTypeFocus,
@@ -1048,6 +1076,7 @@ function NodeSettings({
   onRenameComponent?: (name: string) => void
   onInstanceVariant?: (props: Record<string, string>) => void
   onResetInstance?: () => void
+  onAddToChat?: () => void
   onPatch: (fn: (node: DesignNode) => DesignNode) => void
   onType: (fn: (node: DesignNode) => DesignNode) => void
   onTypeFocus: () => void
@@ -1080,6 +1109,11 @@ function NodeSettings({
       {onMakeComponent ? (
         <button type="button" onClick={onMakeComponent} className="h-7 rounded bg-koma-accent/20 text-koma-accent">
           Create component
+        </button>
+      ) : null}
+      {onAddToChat ? (
+        <button type="button" onClick={onAddToChat} className="h-7 rounded text-koma-dim hover:bg-koma-hover">
+          Add to chat
         </button>
       ) : null}
       {componentName != null ? (

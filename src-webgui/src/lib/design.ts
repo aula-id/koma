@@ -1232,3 +1232,10 @@ export function queryDesign(doc: DesignDoc, query: DesignQuery): DesignQuerySlic
     components: used,
   }
 }
+
+/** One fenced slice for the composer. The fence is the model payload. */
+export function designChatText(doc: DesignDoc, query: DesignQuery): string | null {
+  const slice = queryDesign(doc, query)
+  if (!slice) return null
+  return '```kdsgn\n' + JSON.stringify(slice) + '\n```'
+}

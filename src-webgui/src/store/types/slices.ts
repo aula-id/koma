@@ -179,6 +179,9 @@ export type UiSlice = {
   // than routed through AttachPath. Composer consumes this via useEffect and
   // clears it with consumeComposerInsert so it doesn't re-fire on rerender.
   composerInsert: string | null
+  // One-shot plain text appended to the composer draft. Used for a design
+  // query fence. It is not registered as an omnisearch path chip.
+  composerAppend: string | null
   // Diagrams queued for the composer. Each one renders as a drawing chip.
   // Submit sends the Mermaid, which is what the model reads.
   diagramChatQueue: { title: string; mermaid: string; doc: DiagramDoc }[]

@@ -238,6 +238,8 @@ export function Composer() {
   const omnisearchOpen = useKoma((s) => s.ui.omnisearchOpen)
   const composerInsert = useKoma((s) => s.ui.composerInsert)
   const consumeComposerInsert = useKoma((s) => s.consumeComposerInsert)
+  const composerAppend = useKoma((s) => s.ui.composerAppend)
+  const consumeComposerAppend = useKoma((s) => s.consumeComposerAppend)
   const composerRefill = useKoma((s) => s.ui.composerRefill)
   const consumeComposerRefill = useKoma((s) => s.consumeComposerRefill)
   const pendingRewindIndex = useKoma((s) => s.ui.pendingRewindIndex)
@@ -390,6 +392,17 @@ export function Composer() {
     setInput((prev) => (prev.length > 0 ? `${prev} ${composerInsert}` : composerInsert))
     consumeComposerInsert()
   }, [composerInsert, consumeComposerInsert])
+
+  // A design query is plain fence text. It is not an omnisearch path chip.
+  useEffect(() => {
+    if (composerAppend == null) return
+    setInput((prev) => {
+      if (!prev) return composerAppend
+      return prev.endsWith('\n') ? `${prev}\n${composerAppend}` : `${prev}\n\n${composerAppend}`
+    })
+    consumeComposerAppend()
+    textareaRef.current?.focus()
+  }, [composerAppend, consumeComposerAppend])
 
   // A diagram reference is a drawing chip. The Mermaid stays on the chip until
   // send, which is the text the model actually receives.

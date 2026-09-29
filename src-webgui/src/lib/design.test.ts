@@ -8,6 +8,7 @@ import {
   createComponentFromFrame,
   createNode,
   deleteDesignNode,
+  designChatText,
   designFileName,
   dropDesignToken,
   layoutDesign,
@@ -422,4 +423,20 @@ function sample(): DesignDoc {
   const kept = createComponentFromFrame(doc, 'screen', 'screen-1', mint)
   assert.equal(kept?.screens[0].kind, 'frame')
   assert.equal(kept?.components[0].id, 'screen-1')
+}
+
+{
+  const doc = sample()
+  const component = designChatText(doc, { component: 'button', variant: { tone: 'primary' } })
+  assert.ok(component?.startsWith('```kdsgn\n'))
+  assert.ok(component?.endsWith('\n```'))
+  assert.equal(component?.includes('@'), false)
+  assert.ok(component?.includes('color.accent'))
+  assert.equal(component?.includes('color.unused'), false)
+  assert.equal(component?.includes('Field'), false)
+  const screen = designChatText(doc, { screen: 'login' })
+  assert.ok(screen?.includes('Continue'))
+  assert.ok(screen?.includes('"kind":"instance"'))
+  assert.equal(designChatText(doc, { component: 'missing' }), null)
+  assert.equal(designChatText(doc, { screen: 'missing' }), null)
 }
