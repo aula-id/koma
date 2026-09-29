@@ -9,6 +9,7 @@ import { showCodingHistory } from './CodingHistory'
 import { EditorChrome } from './EditorChrome'
 import { Toggle } from './panels/form'
 import { DiagramMarker, DiagramRefMenuItems } from './DiagramVisual'
+import { MarkdownNote } from './MarkdownNote'
 import {
   addDiagramAreaToChat,
   addDiagramDocToChat,
@@ -17,6 +18,7 @@ import {
   diagramChatTitle,
 } from '../lib/diagramChat'
 import { pointInDiagramRect, type DiagramRect } from '../lib/diagramMermaid'
+import { diagramFolder, publishDiagramNotes } from '../lib/diagramNotes'
 import {
   SHAPE_MIME,
   copyNode,
@@ -34,6 +36,7 @@ import {
   portAnchor,
   portOffset,
   resizeNode,
+  routeMidpoint,
   routePath,
   serializeDiagram,
   sideAnchor,
@@ -126,6 +129,7 @@ function tidyNode(node: DiagramNode): DiagramNode {
   if (!next.fillColor) delete next.fillColor
   if (!next.strokeColor) delete next.strokeColor
   if (!next.rotation) delete next.rotation
+  if (!next.detail?.trim()) delete next.detail
   return next
 }
 
@@ -144,6 +148,8 @@ function tidyEdge(edge: DiagramEdge): DiagramEdge {
   if (next.toPort != null && (!Number.isInteger(next.toPort) || next.toPort < 0 || next.toPort >= DIAGRAM_PORTS)) delete next.toPort
   if (next.fromPort != null) delete next.fromSide
   if (next.toPort != null) delete next.toSide
+  if (!next.text?.trim()) delete next.text
+  if (!next.detail?.trim()) delete next.detail
   return next
 }
 
@@ -381,8 +387,12 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
     const onRestore = (event: Event) => {
       const detail = (event as CustomEvent<{ root?: string; path?: string }>).detail
       if (detail?.root !== tab.root || detail.path !== tab.path) return
-      const current = useKoma.getState().diagram.docs[key]?.doc
-      if (current) noteRef.current(current)
+      const previous = useKoma.getState().diagram.docs[key]?.doc ?? null
+      if (previous) noteRef.current(previous)
+      queueMicrotask(() => {
+        const restored = useKoma.getState().diagram.docs[key]?.doc
+        if (restored) publishDiagramNotes(useKoma.getState().req, tab.root, tab.path, restored, { previous })
+      })
       setEditing(null)
       setSelection(null)
       setConnectFrom(null)
@@ -641,6 +651,35 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
     })
   }
 
+  const editEdgeText = (id: string, text: string) => {
+    const current = useKoma.getState().diagram.docs[key]?.doc
+    if (!current) return
+    if (!labelNoted.current) {
+      note(current)
+      labelNoted.current = true
+    }
+    updateDiagram(tab.root, tab.path, {
+      ...current,
+      edges: current.edges.map((edge) => (edge.id === id ? { ...edge, text } : edge)),
+    })
+  }
+
+  const editDetail = (kind: 'node' | 'edge', id: string, detail: string) => {
+    const current = useKoma.getState().diagram.docs[key]?.doc
+    if (!current) return
+    if (!labelNoted.current) {
+      note(current)
+      labelNoted.current = true
+    }
+    updateDiagram(
+      tab.root,
+      tab.path,
+      kind === 'node'
+        ? { ...current, nodes: current.nodes.map((node) => (node.id === id ? { ...node, detail } : node)) }
+        : { ...current, edges: current.edges.map((edge) => (edge.id === id ? { ...edge, detail } : edge)) },
+    )
+  }
+
   const revert = () => {
     if (!file?.savedText || file.saving || file.loading) return
     const parsed = parseDiagram(file.savedText)
@@ -658,6 +697,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
     futureRef.current = []
     setRev((value) => value + 1)
     setEditing(null)
+    publishDiagramNotes(useKoma.getState().req, tab.root, tab.path, parsed.doc, { previous: file.doc })
     updateDiagram(tab.root, tab.path, parsed.doc)
   }
 
@@ -880,6 +920,23 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
             <ConnectPreview nodes={doc.nodes} pan={pan} fromId={connectDrag.fromId} port={connectDrag.port} cursor={cursor} />
           ) : null}
         </svg>
+        {doc.edges.map((edge) => {
+          const text = edge.text?.trim()
+          if (!text) return null
+          const from = byId.get(edge.from)
+          const to = byId.get(edge.to)
+          if (!from || !to) return null
+          const at = routeMidpoint(edgeRoute(from, to, edge))
+          return (
+            <div
+              key={`label-${edge.id}`}
+              className="pointer-events-none absolute z-10 max-w-[140px] -translate-x-1/2 -translate-y-full truncate rounded border border-koma-border bg-koma-panel px-1.5 text-[11px] leading-5 text-koma-fg"
+              style={{ left: pan.x + at.x, top: pan.y + at.y - 4 }}
+            >
+              {text}
+            </div>
+          )
+        })}
         {doc.nodes.map((node) => {
           const selected = selection?.type === 'node' && selection.id === node.id
           const paint = nodeStyle(node)
@@ -1061,7 +1118,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
       {propsOpen ? (
         <aside
           data-diagram-ui=""
-          className="flex w-[260px] min-h-0 flex-none flex-col overflow-y-auto border-l border-koma-border bg-koma-panel"
+          className="flex w-[260px] min-h-0 flex-none flex-col overflow-hidden border-l border-koma-border bg-koma-panel"
           onPointerDown={(e) => e.stopPropagation()}
           onContextMenu={(e) => {
             e.preventDefault()
@@ -1070,10 +1127,14 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
         >
           <Properties
             doc={doc}
+            root={tab.root}
+            assetDir={diagramFolder(tab.path) ?? ''}
             selection={selection}
             onEdge={(id, patch) => patchEdge(id, patch)}
             onNode={(id, patch) => patchNode(id, patch)}
             onText={(id, text) => editNodeText(id, text)}
+            onEdgeText={(id, text) => editEdgeText(id, text)}
+            onDetail={(kind, id, detail) => editDetail(kind, id, detail)}
             onTextDone={() => {
               labelNoted.current = false
             }}
@@ -1094,14 +1155,16 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
             onAdd={() => {
               const target = chatMenu.area
               setChatMenu(null)
-              if (target) addDiagramAreaToChat(doc, target, diagramChatTitle(tab.path))
-              else addDiagramDocToChat(doc, diagramChatTitle(tab.path))
+              const source = { root: tab.root, path: tab.path }
+              if (target) addDiagramAreaToChat(doc, target, diagramChatTitle(tab.path), source)
+              else addDiagramDocToChat(doc, diagramChatTitle(tab.path), 'This diagram is empty.', source)
             }}
             onCopy={() => {
               const target = chatMenu.area
               setChatMenu(null)
-              if (target) void copyDiagramArea(doc, target, diagramChatTitle(tab.path))
-              else void copyDiagramMermaid(doc, diagramChatTitle(tab.path))
+              const source = { root: tab.root, path: tab.path }
+              if (target) void copyDiagramArea(doc, target, diagramChatTitle(tab.path), source)
+              else void copyDiagramMermaid(doc, diagramChatTitle(tab.path), 'This diagram is empty.', source)
             }}
           />
         </div>
@@ -1306,34 +1369,78 @@ function PaintRow({
 
 function Properties({
   doc,
+  root,
+  assetDir,
   selection,
   onEdge,
   onNode,
   onText,
+  onEdgeText,
+  onDetail,
   onTextDone,
 }: {
   doc: DiagramDoc
+  root: string
+  assetDir: string
   selection: Selection | null
   onEdge: (id: string, patch: Partial<DiagramEdge>) => void
   onNode: (id: string, patch: Partial<DiagramNode>) => void
   onText: (id: string, text: string) => void
+  onEdgeText: (id: string, text: string) => void
+  onDetail: (kind: 'node' | 'edge', id: string, detail: string) => void
   onTextDone: () => void
 }) {
+  const [tab, setTab] = useState<'style' | 'detail'>('style')
   const node = selection?.type === 'node' ? doc.nodes.find((item) => item.id === selection.id) : undefined
   const edge = selection?.type === 'edge' ? doc.edges.find((item) => item.id === selection.id) : undefined
+  const target = node ?? edge
+  const selected = node ? 'node' : edge ? 'edge' : null
   return (
-    <>
-      <div className="flex h-8 flex-none items-center border-b border-koma-border px-3 text-[12px] text-koma-fg">
-        {node ? 'Card' : edge ? 'Line' : 'Properties'}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex h-8 flex-none items-center gap-1 border-b border-koma-border px-2">
+        {selected ? (
+          <>
+            <PanelTab label={node ? 'Card' : 'Line'} on={tab === 'style'} onClick={() => setTab('style')} />
+            <PanelTab label="Detail" on={tab === 'detail'} onClick={() => setTab('detail')} />
+          </>
+        ) : (
+          <span className="px-1 text-[12px] text-koma-fg">Properties</span>
+        )}
       </div>
-      {node ? (
-        <CardSettings node={node} onChange={(patch) => onNode(node.id, patch)} onText={(text) => onText(node.id, text)} onTextDone={onTextDone} />
+      {selected && tab === 'detail' && target ? (
+        <MarkdownNote
+          key={target.id}
+          value={target.detail ?? ''}
+          root={root}
+          assetDir={assetDir}
+          onChange={(detail) => onDetail(selected, target.id, detail)}
+          onDone={onTextDone}
+        />
+      ) : node ? (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <CardSettings node={node} onChange={(patch) => onNode(node.id, patch)} onText={(text) => onText(node.id, text)} onTextDone={onTextDone} />
+        </div>
       ) : edge ? (
-        <LineSettings edge={edge} onChange={(patch) => onEdge(edge.id, patch)} />
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <LineSettings edge={edge} onChange={(patch) => onEdge(edge.id, patch)} onText={(text) => onEdgeText(edge.id, text)} onTextDone={onTextDone} />
+        </div>
       ) : (
         <p className="px-3 py-2 text-[12px] text-koma-dim">Select a card or a line</p>
       )}
-    </>
+    </div>
+  )
+}
+
+function PanelTab({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={onClick}
+      className={`h-6 rounded px-2 text-[12px] ${on ? 'bg-koma-bg text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}
+    >
+      {label}
+    </button>
   )
 }
 
@@ -1385,10 +1492,33 @@ function CardSettings({
   )
 }
 
-function LineSettings({ edge, onChange }: { edge: DiagramEdge; onChange: (patch: Partial<DiagramEdge>) => void }) {
+function LineSettings({
+  edge,
+  onChange,
+  onText,
+  onTextDone,
+}: {
+  edge: DiagramEdge
+  onChange: (patch: Partial<DiagramEdge>) => void
+  onText: (text: string) => void
+  onTextDone: () => void
+}) {
   const style = edgeStyle(edge)
   return (
     <div className="flex flex-col gap-3 p-3">
+      <label className="flex flex-col gap-1">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-koma-dim">Label</span>
+        <input
+          key={edge.id}
+          value={edge.text ?? ''}
+          placeholder="Label"
+          aria-label="Label"
+          onFocus={onTextDone}
+          onChange={(e) => onText(e.target.value)}
+          onBlur={onTextDone}
+          className="h-7 w-full rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none focus:border-koma-fg/40"
+        />
+      </label>
       <PaintRow
         label="Stroke"
         on={style.stroke}

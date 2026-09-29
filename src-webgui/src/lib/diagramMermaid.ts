@@ -12,6 +12,7 @@ import {
   type DiagramNode,
   type DiagramPoint,
 } from './diagram'
+import { diagramHasDetails } from './diagramNotes'
 
 export type DiagramRect = { x: number; y: number; w: number; h: number }
 
@@ -153,7 +154,7 @@ function linkToken(edge: DiagramEdge): string | null {
 }
 
 /** Fenced Mermaid for one diagram. Empty when there is nothing to send. */
-export function diagramToMermaid(doc: DiagramDoc, title?: string): string {
+export function diagramToMermaid(doc: DiagramDoc, title?: string, notes?: { path: string; doc?: DiagramDoc }): string {
   const visible = doc.edges.filter((edge) => edge.stroke !== false)
   if (!doc.nodes.length && !visible.length) return ''
   const used = new Set<string>()
@@ -168,7 +169,11 @@ export function diagramToMermaid(doc: DiagramDoc, title?: string): string {
   const nodes = [...doc.nodes].sort((a, b) => a.y - b.y || a.x - b.x || a.id.localeCompare(b.id))
   const lines: string[] = ['flowchart TD']
   const heading = title?.replace(/[\r\n]/g, ' ').trim()
+  const notesDoc = notes?.doc ?? doc
+  const notesPath = notes && diagramHasDetails(notesDoc) ? notes.path.replace(/[\r\n]/g, ' ').trim() : ''
   if (heading) lines.push(`  %% ${heading}`)
+  else if (notesPath) lines.push('  %% Diagram')
+  if (notesPath) lines.push(`  %% notes: ${notesPath}`)
   for (const node of nodes) {
     const id = alias(node.id)
     if (node.kind === 'text') lines.push(`  %% koma-text ${id}`)
@@ -180,13 +185,15 @@ export function diagramToMermaid(doc: DiagramDoc, title?: string): string {
     const from = byId.get(edge.from)
     const to = byId.get(edge.to)
     if (!token || !from || !to) continue
-    lines.push(`  ${alias(edge.from)} ${token} ${alias(edge.to)}`)
+    const label = edge.text?.replace(/[\r\n|]/g, ' ').replace(/"/g, '#quot;').trim()
+    const marked = label ? `${token}|${label}|` : token
+    lines.push(`  ${alias(edge.from)} ${marked} ${alias(edge.to)}`)
   }
   return `\`\`\`mermaid\n${lines.join('\n')}\n\`\`\``
 }
 
 const NODE_LINE = /^([A-Za-z_][A-Za-z0-9_]*)(?:\(\("(.*)"\)\)|\{"(.*)"\}|\["(.*)"\])$/
-const EDGE_LINE = /^([A-Za-z_][A-Za-z0-9_]*)\s+(<-\.->|-\.->|<-.-|-\.-|<-->|<--|-->|---)\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/
+const EDGE_LINE = /^([A-Za-z_][A-Za-z0-9_]*)\s+(<-\.->|-\.->|<-.-|-\.-|<-->|<--|-->|---)(?:\|([^|\n]*)\|)?\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/
 
 function kindFor(match: RegExpMatchArray): DiagramKind {
   if (match[2] != null) return 'ellipse'
@@ -233,10 +240,17 @@ export function parseMermaidDiagram(mermaid: string): { doc: DiagramDoc; title: 
       continue
     }
     const edge = line.match(EDGE_LINE)
-    if (edge) {
+    if (edge?.[1] && edge[2] && edge[4]) {
       ensure(edge[1])
-      ensure(edge[3])
-      doc.edges.push({ id: `e${doc.edges.length + 1}`, from: edge[1], to: edge[3], ...edgeFromToken(edge[2]) })
+      ensure(edge[4])
+      const label = edge[3]?.trim() ? unquote(edge[3].trim()) : ''
+      doc.edges.push({
+        id: `e${doc.edges.length + 1}`,
+        from: edge[1],
+        to: edge[4],
+        ...(label ? { text: label } : {}),
+        ...edgeFromToken(edge[2]),
+      })
       continue
     }
     const node = line.match(NODE_LINE)

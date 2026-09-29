@@ -4,12 +4,13 @@ import { codingRequest, codingWindowId, resolveCodingReply } from '../../lib/cod
 import { resolveFilePreviewBytes } from '../../lib/filePreview'
 import { resolveLspCompletion, resolveLspCompletionResolve, resolveLspDefinition, resolveLspDocumentSymbol, resolveLspFileText, resolveLspHover, resolveLspReferences } from '../../lib/lsp-bridge'
 import { designTabId } from '../../lib/design'
-import { diagramTabId } from '../../lib/diagram'
+import { diagramTabId, isDiagramPath } from '../../lib/diagram'
+import { consumeQuietMiss, diagramFolder, expectMissingFileOp } from '../../lib/diagramNotes'
 import { codingTabId } from '../../lib/markdownPreview'
 import { beginDesignSeed } from '../actions/design'
 import { beginDiagramSeed } from '../actions/diagram'
 import type { StoreGet, StoreSet } from '../api'
-import { baseName as codingBaseName, isPathOrDescendant as codingIsPathOrDescendant, remapPath as codingRemapPath, fileKey, reduceFileContentReplace, reduceFileContentSearch, reduceFileCreate, reduceFileDelete, reduceFileRead, reduceFileRename, reduceFileSave, reduceFileTree, reduceFileWriteBytes } from '../coding'
+import { baseName as codingBaseName, isPathOrDescendant as codingIsPathOrDescendant, remapPath as codingRemapPath, fileKey, mintRequestId, reduceFileContentReplace, reduceFileContentSearch, reduceFileCreate, reduceFileDelete, reduceFileRead, reduceFileRename, reduceFileSave, reduceFileTree, reduceFileWriteBytes } from '../coding'
 import { claimDesignRead, claimDesignSave, dropDesignDocs, remapDesignDocs } from '../design'
 import { claimDiagramRead, claimDiagramSave, dropDiagramDocs, remapDiagramDocs } from '../diagram'
 import { normalizeGroups } from '../editorGroups'
@@ -376,7 +377,18 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
       case 'FileRename':
         set((s) => {
           const coding = reduceFileRename(s.coding, env)
+          const quietMiss = consumeQuietMiss(env.requestId, env.error)
+          if (!env.error && isDiagramPath(env.oldPath) && isDiagramPath(env.newPath)) {
+            const from = diagramFolder(env.oldPath)
+            const to = diagramFolder(env.newPath)
+            if (from && to && from !== to) {
+              const requestId = mintRequestId()
+              expectMissingFileOp(requestId)
+              queueMicrotask(() => get().req({ r: 'FileRename', root: env.root, oldPath: from, newPath: to, requestId }))
+            }
+          }
           if (env.error) {
+            if (quietMiss) return { coding }
             const seq = s.ui.toastSeq + 1
             return {
               coding,
@@ -433,7 +445,17 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
       case 'FileDelete':
         set((s) => {
           const coding = reduceFileDelete(s.coding, env)
+          const quietMiss = consumeQuietMiss(env.requestId, env.error)
+          if (!env.error && isDiagramPath(env.path)) {
+            const folder = diagramFolder(env.path)
+            if (folder) {
+              const requestId = mintRequestId()
+              expectMissingFileOp(requestId)
+              queueMicrotask(() => get().req({ r: 'FileDelete', root: env.root, path: folder, requestId }))
+            }
+          }
           if (env.error) {
+            if (quietMiss) return { coding }
             const seq = s.ui.toastSeq + 1
             return {
               coding,

@@ -13,6 +13,7 @@ import {
   portAnchor,
   parseDiagram,
   resizeNode,
+  routeMidpoint,
   routePath,
   serializeDiagram,
   slideSegment,
@@ -207,6 +208,29 @@ function aligned(points: { x: number; y: number }[]): boolean {
   assert.equal(shaped.fill, false)
   assert.equal(shaped.fillColor, '#112233')
   assert.equal(shaped.stroke, undefined)
+  const noted = copyNode({ ...shaped, detail: 'The login card' }, 'r3', 0, 0)
+  assert.equal(noted.detail, 'The login card')
+}
+
+{
+  const doc = emptyDiagram()
+  doc.nodes.push({ id: 'n', kind: 'rect', x: 0, y: 0, w: 160, h: 64, text: 'Login', detail: 'The login screen' })
+  doc.edges.push({ id: 'e', from: 'n', to: 'n', text: 'submits', detail: 'Posts the form' })
+  const parsed = parseDiagram(serializeDiagram(doc))
+  assert.equal(parsed.error, null)
+  assert.equal(parsed.doc.nodes[0]?.detail, 'The login screen')
+  assert.equal(parsed.doc.edges[0]?.text, 'submits')
+  assert.equal(parsed.doc.edges[0]?.detail, 'Posts the form')
+  const blank = parseDiagram(serializeDiagram({ ...doc, nodes: [{ ...doc.nodes[0], detail: '  ' }], edges: [{ ...doc.edges[0], text: ' ', detail: '' }] }))
+  assert.equal(blank.doc.nodes[0]?.detail, undefined)
+  assert.equal(blank.doc.edges[0]?.text, undefined)
+  assert.equal(blank.doc.edges[0]?.detail, undefined)
+}
+
+{
+  assert.deepEqual(routeMidpoint([{ x: 0, y: 0 }, { x: 100, y: 0 }]), { x: 50, y: 0 })
+  assert.deepEqual(routeMidpoint([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }]), { x: 100, y: 0 })
+  assert.deepEqual(routeMidpoint([]), { x: 0, y: 0 })
 }
 
 {
