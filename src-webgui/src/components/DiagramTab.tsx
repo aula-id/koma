@@ -8,7 +8,7 @@ import { BrailleSpinner } from './BrailleSpinner'
 import { showCodingHistory } from './CodingHistory'
 import { EditorChrome } from './EditorChrome'
 import { Toggle } from './panels/form'
-import { DiagramRefMenuItems } from './DiagramVisual'
+import { DiagramMarker, DiagramRefMenuItems } from './DiagramVisual'
 import {
   addDiagramAreaToChat,
   addDiagramDocToChat,
@@ -19,7 +19,6 @@ import {
 import { pointInDiagramRect, type DiagramRect } from '../lib/diagramMermaid'
 import {
   SHAPE_MIME,
-  arrowHead,
   copyNode,
   defaultNodeSize,
   edgeRoute,
@@ -40,6 +39,7 @@ import {
   sideAnchor,
   slideSegment,
   snap,
+  type DiagramArrow,
   type DiagramDash,
   type DiagramDoc,
   type DiagramEdge,
@@ -771,32 +771,10 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
               const selected = selection?.type === 'edge' && selection.id === edge.id
               const color = style.color || themeStroke(selected)
               const id = `${markerId}-${edge.id.replace(/[^a-zA-Z0-9_-]/g, '')}`
-              const marker = (name: 'start' | 'end', kind: 'arrow' | 'open') => {
-                const head = arrowHead(name, kind === 'open')
-                return (
-                  <marker
-                    key={name}
-                    id={`${id}-${name}`}
-                    markerWidth="8"
-                    markerHeight="8"
-                    refX={head.refX}
-                    refY={head.refY}
-                    orient="auto"
-                    overflow="visible"
-                  >
-                    <path
-                      d={head.d}
-                      fill={kind === 'open' ? 'none' : color}
-                      stroke={kind === 'open' ? color : undefined}
-                      strokeWidth={kind === 'open' ? 1.2 : undefined}
-                    />
-                  </marker>
-                )
-              }
               return (
                 <g key={edge.id}>
-                  {style.end === 'none' ? null : marker('end', style.end)}
-                  {style.start === 'none' ? null : marker('start', style.start)}
+                  {style.end === 'none' ? null : <DiagramMarker key="end" id={`${id}-end`} at="end" kind={style.end} color={color} />}
+                  {style.start === 'none' ? null : <DiagramMarker key="start" id={`${id}-start`} at="start" kind={style.start} color={color} />}
                 </g>
               )
             })}
@@ -1203,14 +1181,33 @@ function LineGlyph({ children }: { children: ReactNode }) {
   )
 }
 
-function ArrowGlyph({ side, kind }: { side: 'start' | 'end'; kind: 'none' | 'arrow' | 'open' }) {
-  const head = side === 'end' ? 'M15.5 3 L24 7 L15.5 11' : 'M12.5 3 L4 7 L12.5 11'
-  const shaft = kind === 'none' ? 'M4 7 H24' : side === 'end' ? 'M4 7 H16' : 'M12 7 H24'
+const LINE_HEADS: { value: DiagramArrow; name: string }[] = [
+  { value: 'none', name: 'No' },
+  { value: 'arrow', name: 'Arrow' },
+  { value: 'open', name: 'Open arrow' },
+  { value: 'diamond', name: 'Diamond' },
+  { value: 'diamondOpen', name: 'Open diamond' },
+  { value: 'dot', name: 'Dot' },
+  { value: 'circle', name: 'Circle' },
+  { value: 'bar', name: 'Bar' },
+]
+
+function ArrowGlyph({ side, kind }: { side: 'start' | 'end'; kind: DiagramArrow }) {
+  const p = (x: number) => (side === 'end' ? x : 28 - x)
+  const reach = kind === 'none' ? 24 : kind === 'arrow' || kind === 'open' ? 16 : kind === 'diamond' || kind === 'diamondOpen' ? 14 : kind === 'bar' ? 23 : 18
+  const shaft = `M${p(4)} 7 H${p(reach)}`
+  const triangle = `M${p(15.5)} 3 L${p(24)} 7 L${p(15.5)} 11`
+  const diamond = `M${p(24)} 7 L${p(19)} 3 L${p(14)} 7 L${p(19)} 11 Z`
   return (
     <LineGlyph>
       <path d={shaft} fill="none" stroke="currentColor" strokeWidth="1.5" />
-      {kind === 'arrow' ? <path d={`${head} Z`} fill="currentColor" /> : null}
-      {kind === 'open' ? <path d={head} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="miter" /> : null}
+      {kind === 'arrow' ? <path d={`${triangle} Z`} fill="currentColor" /> : null}
+      {kind === 'open' ? <path d={triangle} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="miter" /> : null}
+      {kind === 'diamond' ? <path d={diamond} fill="currentColor" /> : null}
+      {kind === 'diamondOpen' ? <path d={diamond} fill="none" stroke="currentColor" strokeWidth="1.5" /> : null}
+      {kind === 'dot' ? <circle cx={p(21)} cy="7" r="3" fill="currentColor" /> : null}
+      {kind === 'circle' ? <circle cx={p(21)} cy="7" r="3" fill="none" stroke="currentColor" strokeWidth="1.5" /> : null}
+      {kind === 'bar' ? <path d={`M${p(23)} 3 V11`} fill="none" stroke="currentColor" strokeWidth="1.5" /> : null}
     </LineGlyph>
   )
 }
@@ -1226,10 +1223,11 @@ function Choices<T extends string>({
   options: { value: T; label: string; icon?: ReactNode }[]
   onChange: (value: T) => void
 }) {
+  const grid = options.length > 4
   return (
     <div className="flex flex-col gap-1">
       <span className="text-[10px] font-semibold uppercase tracking-wider text-koma-dim">{label}</span>
-      <div className="flex rounded border border-koma-border p-0.5">
+      <div className={grid ? 'grid grid-cols-4 gap-0.5 rounded border border-koma-border p-0.5' : 'flex rounded border border-koma-border p-0.5'}>
         {options.map((option) => {
           const on = value === option.value
           return (
@@ -1240,7 +1238,7 @@ function Choices<T extends string>({
               aria-label={option.label}
               aria-pressed={on}
               onClick={() => onChange(option.value)}
-              className={`flex h-7 min-w-0 flex-1 items-center justify-center rounded px-1 ${
+              className={`flex h-7 items-center justify-center rounded ${grid ? '' : 'min-w-0 flex-1 px-1'} ${
                 on ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'
               }`}
             >
@@ -1403,21 +1401,21 @@ function LineSettings({ edge, onChange }: { edge: DiagramEdge; onChange: (patch:
       <Choices
         label="Start"
         value={style.start}
-        options={[
-          { value: 'none', label: 'No start', icon: <ArrowGlyph side="start" kind="none" /> },
-          { value: 'arrow', label: 'Arrow start', icon: <ArrowGlyph side="start" kind="arrow" /> },
-          { value: 'open', label: 'Open start', icon: <ArrowGlyph side="start" kind="open" /> },
-        ]}
+        options={LINE_HEADS.map((head) => ({
+          value: head.value,
+          label: `${head.name} start`,
+          icon: <ArrowGlyph side="start" kind={head.value} />,
+        }))}
         onChange={(start) => onChange({ start })}
       />
       <Choices
         label="End"
         value={style.end}
-        options={[
-          { value: 'none', label: 'No end', icon: <ArrowGlyph side="end" kind="none" /> },
-          { value: 'arrow', label: 'Arrow end', icon: <ArrowGlyph side="end" kind="arrow" /> },
-          { value: 'open', label: 'Open end', icon: <ArrowGlyph side="end" kind="open" /> },
-        ]}
+        options={LINE_HEADS.map((head) => ({
+          value: head.value,
+          label: `${head.name} end`,
+          icon: <ArrowGlyph side="end" kind={head.value} />,
+        }))}
         onChange={(end) => onChange({ end })}
       />
       <Choices

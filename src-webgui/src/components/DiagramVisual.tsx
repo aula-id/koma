@@ -6,6 +6,7 @@ import {
   edgeStyle,
   nodeCenter,
   nodeStyle,
+  type DiagramArrow,
   type DiagramDoc,
   type DiagramNode,
 } from '../lib/diagram'
@@ -15,6 +16,32 @@ function dashArray(dash: string, width: number): string | undefined {
   if (dash === 'dashed') return `${Math.max(4, width * 4)} ${Math.max(3, width * 2.5)}`
   if (dash === 'dotted') return `${Math.max(1, width)} ${Math.max(2, width * 1.8)}`
   return undefined
+}
+
+export function DiagramMarker({
+  id,
+  at,
+  kind,
+  color,
+}: {
+  id: string
+  at: 'start' | 'end'
+  kind: Exclude<DiagramArrow, 'none'>
+  color: string
+}) {
+  const head = arrowHead(at, kind)
+  if (!head) return null
+  const stroke = head.fill ? undefined : color
+  const strokeWidth = head.fill ? undefined : 1.2
+  return (
+    <marker id={id} markerWidth="8" markerHeight="8" refX={head.refX} refY={head.refY} orient="auto" overflow="visible">
+      {head.circle ? (
+        <circle cx={head.circle.cx} cy={head.circle.cy} r={head.circle.r} fill={head.fill ? color : 'none'} stroke={stroke} strokeWidth={strokeWidth} />
+      ) : (
+        <path d={head.d} fill={head.fill ? color : 'none'} stroke={stroke} strokeWidth={strokeWidth} strokeLinejoin="miter" />
+      )}
+    </marker>
+  )
 }
 
 /** The drawing people see. The model receives Mermaid, not this picture. */
@@ -54,23 +81,10 @@ export function DiagramSketch({ doc }: { doc: DiagramDoc }) {
           const style = edgeStyle(edge)
           const color = style.color || 'var(--color-koma-fg)'
           const id = `${markerBase}-${index}`
-          const marker = (name: 'start' | 'end', kind: 'arrow' | 'open') => {
-            const head = arrowHead(name, kind === 'open')
-            return (
-              <marker id={`${id}-${name}`} markerWidth="8" markerHeight="8" refX={head.refX} refY={head.refY} orient="auto" overflow="visible">
-                <path
-                  d={head.d}
-                  fill={kind === 'open' ? 'none' : color}
-                  stroke={kind === 'open' ? color : undefined}
-                  strokeWidth={kind === 'open' ? 1.2 : undefined}
-                />
-              </marker>
-            )
-          }
           return (
             <g key={edge.id}>
-              {style.end === 'none' ? null : marker('end', style.end)}
-              {style.start === 'none' ? null : marker('start', style.start)}
+              {style.end === 'none' ? null : <DiagramMarker id={`${id}-end`} at="end" kind={style.end} color={color} />}
+              {style.start === 'none' ? null : <DiagramMarker id={`${id}-start`} at="start" kind={style.start} color={color} />}
             </g>
           )
         })}

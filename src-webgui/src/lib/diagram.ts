@@ -8,7 +8,7 @@ export type DiagramKind = 'rect' | 'ellipse' | 'diamond' | 'text'
 export type DiagramSide = 'n' | 'e' | 's' | 'w'
 export type DiagramHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
 export type DiagramDash = 'solid' | 'dashed' | 'dotted'
-export type DiagramArrow = 'none' | 'arrow' | 'open'
+export type DiagramArrow = 'none' | 'arrow' | 'open' | 'diamond' | 'diamondOpen' | 'dot' | 'circle' | 'bar'
 export type DiagramCorner = 'sharp' | 'rounded'
 export type DiagramRoute = 'orthogonal' | 'straight'
 export type DiagramPoint = { x: number; y: number }
@@ -63,7 +63,7 @@ const SIDES: readonly DiagramSide[] = ['n', 'e', 's', 'w']
 /** Sixteen points clockwise from the top-left: each side's corner, then 25%, 50%, 75%. */
 export const DIAGRAM_PORTS = 16
 const DASHES: readonly DiagramDash[] = ['solid', 'dashed', 'dotted']
-const ARROWS: readonly DiagramArrow[] = ['none', 'arrow', 'open']
+const ARROWS: readonly DiagramArrow[] = ['none', 'arrow', 'open', 'diamond', 'diamondOpen', 'dot', 'circle', 'bar']
 const CORNERS: readonly DiagramCorner[] = ['sharp', 'rounded']
 const ROUTES: readonly DiagramRoute[] = ['orthogonal', 'straight']
 const MIN_W = 32
@@ -324,14 +324,43 @@ export function edgeStyle(edge: DiagramEdge): DiagramEdgeStyle {
   }
 }
 
+export type ArrowHead = {
+  refX: number
+  refY: number
+  d?: string
+  circle?: { cx: number; cy: number; r: number }
+  fill: boolean
+}
+
+const END_HEAD: Record<Exclude<DiagramArrow, 'none'>, ArrowHead> = {
+  arrow: { d: 'M0,0 L7,3 L0,6 Z', refX: 7, refY: 3, fill: true },
+  open: { d: 'M0,0 L7,3 L0,6', refX: 7, refY: 3, fill: false },
+  diamond: { d: 'M7,3 L3.5,0 L0,3 L3.5,6 Z', refX: 7, refY: 3, fill: true },
+  diamondOpen: { d: 'M7,3 L3.5,0 L0,3 L3.5,6 Z', refX: 7, refY: 3, fill: false },
+  dot: { circle: { cx: 4.5, cy: 3, r: 2.5 }, refX: 7, refY: 3, fill: true },
+  circle: { circle: { cx: 4.5, cy: 3, r: 2.5 }, refX: 7, refY: 3, fill: false },
+  bar: { d: 'M7,0.5 V5.5', refX: 7, refY: 3, fill: false },
+}
+
+function mirrorPath(d: string): string {
+  return d.replace(/([ML])(-?\d*\.?\d+),(-?\d*\.?\d+)/g, (_, cmd: string, x: string, y: string) => `${cmd}${7 - Number(x)},${y}`)
+}
+
 /**
- * Arrowhead marker. The ref point is the tip, so the tip meets the node and the
- * body lies on the stroke. Start is the end head flipped. Both use orient "auto";
- * auto-start-reverse on the end path parks the start head inside the card.
+ * Line head in marker space. The ref point meets the node and the body lies on
+ * the stroke. Start is the end head mirrored. Both use orient "auto".
  */
-export function arrowHead(at: 'start' | 'end', open: boolean): { d: string; refX: number; refY: number } {
-  if (at === 'end') return { d: open ? 'M0,0 L7,3 L0,6' : 'M0,0 L7,3 L0,6 Z', refX: 7, refY: 3 }
-  return { d: open ? 'M7,0 L0,3 L7,6' : 'M7,0 L0,3 L7,6 Z', refX: 0, refY: 3 }
+export function arrowHead(at: 'start' | 'end', kind: DiagramArrow): ArrowHead | null {
+  if (kind === 'none') return null
+  const head = END_HEAD[kind]
+  if (at === 'end') return head
+  return {
+    refX: 7 - head.refX,
+    refY: head.refY,
+    fill: head.fill,
+    d: head.d ? mirrorPath(head.d) : undefined,
+    circle: head.circle ? { cx: 7 - head.circle.cx, cy: head.circle.cy, r: head.circle.r } : undefined,
+  }
 }
 
 export function nodeCenter(node: DiagramNode): DiagramPoint {
