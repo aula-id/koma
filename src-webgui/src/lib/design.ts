@@ -90,6 +90,10 @@ export type DesignNode = {
   fontSize?: number
   weight?: DesignWeight
   textAlign?: DesignTextAlign
+  /** Pixels. Omitted means the font’s own line height. */
+  lineHeight?: number
+  /** Pixels. Omitted means 0. Negative values tighten. */
+  letterSpacing?: number
   color?: DesignRef
   /** Degrees clockwise around the center. Omitted means 0. */
   rotation?: number
@@ -169,13 +173,14 @@ export function designFileName(raw: string): string | null {
 export function createNode(kind: DesignDrawKind, id: string, x: number, y: number): DesignNode {
   if (kind === 'frame') return { id, kind, name: 'Frame', x, y, w: 360, h: 240, fill: '#ffffff' }
   if (kind === 'group') return { id, kind, name: 'Group', x, y, w: 8, h: 8, fill: 'none', stroke: 'none' }
-  if (kind === 'text') return { id, kind, name: 'Text', x, y, w: 120, h: 24, text: 'Text' }
-  if (kind === 'ellipse') return { id, kind, name: 'Ellipse', x, y, w: 160, h: 64, fill: '#d0d5dd' }
+  if (kind === 'text') return { id, kind, name: 'Text', x, y, w: 200, h: 24, text: 'Text', fontSize: 14 }
+  if (kind === 'ellipse') return { id, kind, name: 'Ellipse', x, y, w: 100, h: 100, fill: '#d9d9d9', stroke: 'none' }
   if (kind === 'line') return { id, kind, name: 'Line', x, y, w: 160, h: 2, stroke: '#1c1c1c', strokeWidth: 2 }
   if (kind === 'vector') {
     return { id, kind, name: 'Vector', x, y, w: 1, h: 1, fill: 'none', stroke: '#1c1c1c', strokeWidth: 2, vector: { vertices: [{ x: 0, y: 0 }], segments: [], regions: [] } }
   }
-  return { id, kind, name: 'Rectangle', x, y, w: 160, h: 64, fill: '#d0d5dd' }
+  // Click-create matches Figma: a sharp 100×100 gray square with no stroke.
+  return { id, kind, name: 'Rectangle', x, y, w: 100, h: 100, fill: '#d9d9d9', stroke: 'none' }
 }
 
 export function isDesignContainer(kind: DesignKind): boolean {
@@ -299,14 +304,24 @@ export function nodeChrome(node: DesignNode): { fill: string; stroke: string; ra
   }
 }
 
-export function textStyle(node: DesignNode): { text: string; fontSize: number; weight: DesignWeight; align: DesignTextAlign; color: string } {
+export function textStyle(node: DesignNode): { text: string; fontSize: number; weight: DesignWeight; align: DesignTextAlign; color: string; lineHeight: number; letterSpacing: number } {
   return {
     text: node.text ?? '',
     fontSize: node.fontSize && node.fontSize > 0 ? node.fontSize : 13,
     weight: node.weight ?? 'regular',
     align: node.textAlign ?? 'left',
     color: node.color ?? '',
+    lineHeight: node.lineHeight && node.lineHeight > 0 ? node.lineHeight : 0,
+    letterSpacing: node.letterSpacing ?? 0,
   }
+}
+
+/** The one value every entry shares. An empty list, or any difference, is null. */
+export function sharedValue<T>(values: readonly T[]): T | null {
+  if (!values.length) return null
+  const first = values[0]
+  for (let index = 1; index < values.length; index++) if (!Object.is(values[index], first)) return null
+  return first
 }
 
 /** Deep copy. The root moves by dx/dy. Children stay parent-relative. */
@@ -337,6 +352,8 @@ function cloneNode(node: DesignNode, mint: () => string): DesignNode {
   if (node.fontSize != null) next.fontSize = node.fontSize
   if (node.weight) next.weight = node.weight
   if (node.textAlign) next.textAlign = node.textAlign
+  if (node.lineHeight != null) next.lineHeight = node.lineHeight
+  if (node.letterSpacing) next.letterSpacing = node.letterSpacing
   if (node.color) next.color = node.color
   if (node.rotation) next.rotation = node.rotation
   if (node.flipX) next.flipX = true
@@ -903,7 +920,7 @@ export function nodeFromPen(id: string, points: DesignPenPoint[], closed: boolea
     y: 0,
     w: 1,
     h: 1,
-    fill: closed ? '#d0d5dd' : 'none',
+    fill: closed ? '#d9d9d9' : 'none',
     stroke: '#1c1c1c',
     strokeWidth: 2,
     vector: {
@@ -1007,7 +1024,6 @@ export function canvasToContent(doc: DesignDoc, nodeId: string | null, canvasX: 
   return { x, y }
 }
 
-/** Screen delta into the content space of a node. A null id keeps the screen delta. */
 /** Screen angle into the content space of a parent, so a new line stays visually aligned. */
 export function contentAngle(doc: DesignDoc, parentId: string | null, degrees: number): number {
   if (!parentId) return degrees
@@ -1022,6 +1038,59 @@ export function contentAngle(doc: DesignDoc, parentId: string | null, degrees: n
   return angle
 }
 
+export type DesignAlignAxis = 'horizontal' | 'vertical'
+export type DesignAlignEdge = 'min' | 'center' | 'max'
+
+/** Move nodes so one edge of each canvas box meets the selection’s box. Positions stay parent-relative. */
+export function alignDesignNodes(doc: DesignDoc, ids: readonly string[], axis: DesignAlignAxis, edge: DesignAlignEdge): DesignDoc {
+  const boxes: { id: string; parentId: string | null; box: { x: number; y: number; w: number; h: number }; stick: boolean }[] = []
+  for (const id of ids) {
+    const path = pathToNode(doc, id)
+    const located = locateDesign(doc, id)
+    if (!path || !located) continue
+    let toCanvas = (x: number, y: number) => ({ x, y })
+    for (let index = 0; index < path.length - 1; index++) {
+      const node = path[index]
+      const outer = toCanvas
+      toCanvas = (x, y) => {
+        const parent = spinToParent(node, x, y)
+        return outer(parent.x, parent.y)
+      }
+    }
+    const parent = located.parentId ? findDesignNode(doc, located.parentId) : null
+    boxes.push({
+      id,
+      parentId: located.parentId,
+      box: canvasBox(located.node, toCanvas),
+      stick: !!parent?.layout && !located.node.absolute,
+    })
+  }
+  if (boxes.length < 2) return doc
+  const minX = Math.min(...boxes.map((item) => item.box.x))
+  const minY = Math.min(...boxes.map((item) => item.box.y))
+  const maxX = Math.max(...boxes.map((item) => item.box.x + item.box.w))
+  const maxY = Math.max(...boxes.map((item) => item.box.y + item.box.h))
+  const moves: { id: string; x: number; y: number; stick: boolean }[] = []
+  for (const item of boxes) {
+    const dx = axis === 'horizontal' ? (edge === 'min' ? minX : edge === 'max' ? maxX - item.box.w : (minX + maxX) / 2 - item.box.w / 2) - item.box.x : 0
+    const dy = axis === 'vertical' ? (edge === 'min' ? minY : edge === 'max' ? maxY - item.box.h : (minY + maxY) / 2 - item.box.h / 2) - item.box.y : 0
+    const delta = canvasDeltaToSpace(doc, item.parentId, dx, dy)
+    const node = locateDesign(doc, item.id)?.node
+    if (!node) continue
+    moves.push({ id: item.id, x: node.x + delta.x, y: node.y + delta.y, stick: item.stick })
+  }
+  let next = doc
+  for (const move of moves) {
+    next = updateDesignNode(next, move.id, (node) => {
+      const moved: DesignNode = { ...node, x: move.x, y: move.y }
+      if (move.stick) moved.absolute = true
+      return moved
+    })
+  }
+  return next
+}
+
+/** Screen delta into the content space of a node. A null id keeps the screen delta. */
 export function canvasDeltaToSpace(doc: DesignDoc, nodeId: string | null, dx: number, dy: number): DesignVectorPoint {
   if (!nodeId) return { x: dx, y: dy }
   const path = pathToNode(doc, nodeId)
@@ -1468,6 +1537,10 @@ function parseNode(value: unknown): DesignNode | null {
     if (weight && weight !== 'regular') node.weight = weight
     const textAlign = oneOf(row.textAlign, TEXT_ALIGNS)
     if (textAlign && textAlign !== 'left') node.textAlign = textAlign
+    const lineHeight = num(row.lineHeight)
+    if (lineHeight != null && lineHeight > 0) node.lineHeight = lineHeight
+    const letterSpacing = num(row.letterSpacing)
+    if (letterSpacing != null && letterSpacing !== 0) node.letterSpacing = letterSpacing
     const color = parsePaint(row.color)
     if (color && color !== 'none') node.color = color
   }
@@ -1626,6 +1699,8 @@ function writeNode(node: DesignNode): DesignNode {
   if (node.fontSize != null && node.fontSize > 0 && node.fontSize !== 13) row.fontSize = node.fontSize
   if (node.weight && node.weight !== 'regular') row.weight = node.weight
   if (node.textAlign && node.textAlign !== 'left') row.textAlign = node.textAlign
+  if (node.lineHeight != null && node.lineHeight > 0) row.lineHeight = node.lineHeight
+  if (node.letterSpacing) row.letterSpacing = node.letterSpacing
   if (node.color && node.color !== 'none') row.color = node.color
   if (node.rotation) row.rotation = node.rotation
   if (node.flipX) row.flipX = true

@@ -1,5 +1,5 @@
 import { useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { ChevronRight, Circle, Eye, EyeOff, Frame, Group, Lock, LockOpen, Minus, Spline, Square, Type } from 'lucide-react'
+import { ChevronRight, Circle, Component, Eye, EyeOff, Frame, Group, Lock, LockOpen, Minus, Spline, Square, Type } from 'lucide-react'
 import { designLayerName, isDesignContainer, type DesignDoc, type DesignNode } from '../lib/design'
 
 const LAYER_MIME = 'application/x-koma-layer'
@@ -27,8 +27,7 @@ export function DesignLayers({
   const [editing, setEditing] = useState<string | null>(null)
   const screens = doc.screens.slice().reverse()
   return (
-    <aside className="flex w-[220px] flex-none flex-col border-r border-koma-border bg-koma-panel" onContextMenu={(event) => event.preventDefault()}>
-      <div className="flex h-8 flex-none items-center px-3 text-[12px] text-koma-fg">Layers</div>
+    <aside className="flex min-h-0 flex-1 flex-col" onContextMenu={(event) => event.preventDefault()}>
       <div className="min-h-0 flex-1 overflow-y-auto pb-2">
         {screens.length === 0 ? <p className="px-3 text-[12px] text-koma-dim">No layers</p> : null}
         <LayerList
@@ -217,7 +216,7 @@ function LayerRow({
         const dragId = event.dataTransfer.getData(LAYER_MIME)
         if (dragId && dragId !== node.id) onDrop(dragId, next)
       }}
-      className={`group relative flex h-7 items-center gap-1 pr-1 text-[12px] ${selected ? 'bg-koma-accent/20 text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'} ${hidden ? 'opacity-50' : ''}`}
+      className={`group relative flex h-7 items-center gap-1 pr-1 text-[12px] ${selected ? 'bg-[#0d99ff]/20 text-koma-fg' : 'text-koma-fg/80 hover:bg-koma-hover'} ${hidden ? 'opacity-45' : ''}`}
       style={{ paddingLeft: 8 + depth * 14 }}
       onClick={(event) => onSelect(event.shiftKey)}
       onContextMenu={(event) => {
@@ -230,9 +229,9 @@ function LayerRow({
         onEdit()
       }}
     >
-      {place === 'before' ? <span className="absolute inset-x-1 top-0 h-px bg-koma-accent" /> : null}
-      {place === 'after' ? <span className="absolute inset-x-1 bottom-0 h-px bg-koma-accent" /> : null}
-      {place === 'inside' ? <span className="absolute inset-x-1 inset-y-0.5 rounded ring-1 ring-inset ring-koma-accent" /> : null}
+      {place === 'before' ? <span className="absolute inset-x-1 top-0 h-px bg-[#0d99ff]" /> : null}
+      {place === 'after' ? <span className="absolute inset-x-1 bottom-0 h-px bg-[#0d99ff]" /> : null}
+      {place === 'inside' ? <span className="absolute inset-x-1 inset-y-0.5 rounded ring-1 ring-inset ring-[#0d99ff]" /> : null}
       <button
         type="button"
         aria-label={open ? 'Collapse' : 'Expand'}
@@ -298,6 +297,6 @@ function LayerIcon({ kind }: { kind: DesignNode['kind'] }) {
   if (kind === 'line') return <Minus {...props} />
   if (kind === 'vector') return <Spline {...props} />
   if (kind === 'text') return <Type {...props} />
-  if (kind === 'instance') return <Frame {...props} />
+  if (kind === 'instance') return <Component {...props} className="text-[#9747ff]" />
   return <Square {...props} />
 }

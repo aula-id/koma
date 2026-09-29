@@ -1,71 +1,28 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { Check, File, Pencil, Trash2, X } from 'lucide-react'
-import { AccordionSection } from '../AccordionSection'
+import { useEffect, useRef, useState, useSyncExternalStore, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { Check, Component, File, MessageSquare, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { BrailleSpinner } from '../BrailleSpinner'
-import { AddBtn, Empty, IconBtn } from './helpers'
+import { DesignLayers } from '../DesignLayers'
+import { Empty, IconBtn } from './helpers'
 import { Select } from './form'
 import { useKoma } from '../../store/koma'
 import { fileKey, type FileTreeEntry } from '../../store/coding'
 import {
   COMPONENT_MIME,
-  DESIGN_MIME,
   addDesignToken,
+  componentView,
   designChatText,
   designFileName,
   dropDesignToken,
   isDesignPath,
+  resolveRef,
   setDesignMode,
   setDesignTokenValue,
   type DesignDoc,
+  type DesignNode,
   type DesignToken,
   type DesignTokenKind,
 } from '../../lib/design'
-
-const SHAPES: { kind: 'frame' | 'rect' | 'ellipse' | 'line' | 'text'; label: string }[] = [
-  { kind: 'frame', label: 'Frame' },
-  { kind: 'rect', label: 'Rect' },
-  { kind: 'ellipse', label: 'Ellipse' },
-  { kind: 'line', label: 'Line' },
-  { kind: 'text', label: 'Text' },
-]
-
-function ShapeTile({ kind, label }: { kind: 'frame' | 'rect' | 'ellipse' | 'line' | 'text'; label: string }) {
-  const dragged = useRef(false)
-  return (
-    <div
-      draggable
-      onClick={() => {
-        if (dragged.current) return
-        window.dispatchEvent(new CustomEvent('koma-design-tool', { detail: kind }))
-      }}
-      onDragStart={(e) => {
-        dragged.current = true
-        e.dataTransfer.setData(DESIGN_MIME, kind)
-        e.dataTransfer.setData('text/plain', kind)
-        try {
-          e.dataTransfer.effectAllowed = 'copy'
-        } catch {
-          /* ignore */
-        }
-      }}
-      onDragEnd={() => {
-        setTimeout(() => {
-          dragged.current = false
-        }, 0)
-      }}
-      className="flex cursor-grab items-center justify-center rounded p-0.5 text-koma-dim hover:bg-koma-hover hover:text-koma-fg active:cursor-grabbing"
-      title={`Drag ${label} onto the canvas`}
-    >
-      {kind === 'text' ? (
-        <span className="flex h-8 items-center px-1 text-[13px] leading-none text-koma-fg/80">Text</span>
-      ) : (
-        <span className={`flex h-8 items-center justify-center rounded border border-current bg-koma-bg text-[11px] leading-none text-koma-fg/80 ${kind === 'frame' ? 'w-14' : kind === 'ellipse' ? 'w-10 rounded-full' : 'w-10'}`}>
-          {label}
-        </span>
-      )}
-    </div>
-  )
-}
+import { emitDesignLayer, getDesignUi, subscribeDesignUi } from '../../lib/designUi'
 
 const EMPTY_ROOTS: string[] = []
 const TOKEN_KINDS: { kind: DesignTokenKind; label: string }[] = [
@@ -74,12 +31,6 @@ const TOKEN_KINDS: { kind: DesignTokenKind; label: string }[] = [
   { kind: 'type', label: 'Type' },
   { kind: 'radius', label: 'Radius' },
 ]
-
-function commitDesign(root: string, path: string, doc: DesignDoc, update: (root: string, path: string, doc: DesignDoc) => void) {
-  const event = new CustomEvent('koma-design-commit', { cancelable: true, detail: { root, path, doc } })
-  if (!window.dispatchEvent(event)) return
-  update(root, path, doc)
-}
 
 function TokenValue({ token, mode, onValue }: { token: DesignToken; mode: string; onValue: (value: string) => void }) {
   const value = token.values[mode] ?? ''
@@ -137,7 +88,7 @@ function TokenValue({ token, mode, onValue }: { token: DesignToken; mode: string
   )
 }
 
-function TokenEditor({ root, path, doc, onCommit }: { root: string; path: string; doc: DesignDoc; onCommit: (doc: DesignDoc) => void }) {
+export function TokenEditor({ root, path, doc, query = '', onCommit }: { root: string; path: string; doc: DesignDoc; query?: string; onCommit: (doc: DesignDoc) => void }) {
   const [name, setName] = useState('')
   const [kind, setKind] = useState<DesignTokenKind>('color')
   const [error, setError] = useState<string | null>(null)
@@ -195,7 +146,7 @@ function TokenEditor({ root, path, doc, onCommit }: { root: string; path: string
       {error ? <p className="text-[11px] text-koma-error">{error}</p> : null}
       {doc.tokens.length === 0 ? <p className="text-koma-dim">No tokens</p> : null}
       {TOKEN_KINDS.map((group) => {
-        const tokens = doc.tokens.filter((token) => token.kind === group.kind)
+        const tokens = doc.tokens.filter((token) => token.kind === group.kind && (!query || token.name.toLowerCase().includes(query)))
         if (!tokens.length) return null
         return (
           <div key={group.kind} className="flex flex-col">
@@ -303,7 +254,6 @@ export function DesignPanel() {
   const setActiveCodingRoot = useKoma((s) => s.setActiveCodingRoot)
   const refreshCodingDir = useKoma((s) => s.refreshCodingDir)
   const openDesignTab = useKoma((s) => s.openDesignTab)
-  const updateDesign = useKoma((s) => s.updateDesign)
   const createDesignFile = useKoma((s) => s.createDesignFile)
   const designTab = useKoma((s) => {
     const tab = s.ui.tabs.find((item) => item.id === s.ui.activeTabId)
@@ -313,11 +263,10 @@ export function DesignPanel() {
   const deleteCodingItem = useKoma((s) => s.deleteCodingItem)
   const req = useKoma((s) => s.req)
 
-  const [shapesOpen, setShapesOpen] = useState(true)
-  const [tokensOpen, setTokensOpen] = useState(true)
-  const [componentsOpen, setComponentsOpen] = useState(true)
-  const [filesOpen, setFilesOpen] = useState(true)
+  const [panel, setPanel] = useState<'file' | 'assets'>('file')
+  const [assetQuery, setAssetQuery] = useState('')
   const [creating, setCreating] = useState(false)
+  const ui = useSyncExternalStore(subscribeDesignUi, getDesignUi, getDesignUi)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [menu, setMenu] = useState<null | { x: number; y: number; path: string }>(null)
@@ -392,8 +341,16 @@ export function DesignPanel() {
     setDeleting(null)
   }
 
+  const open = designTab ? docs[fileKey(designTab.root, designTab.path)] : undefined
+  const sameFile = !!(ui && designTab && ui.root === designTab.root && ui.path === designTab.path)
+  const focusId = sameFile && ui ? ui.focusId : null
+  const selection = sameFile && ui ? ui.selection : []
+  const viewDoc = open && !open.loading ? (focusId ? componentView(open.doc, focusId) ?? open.doc : open.doc) : null
+  const query = assetQuery.trim().toLowerCase()
+  const components = (open?.doc.components ?? []).filter((component) => !query || component.name.toLowerCase().includes(query))
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col" onContextMenu={(event) => event.preventDefault()}>
       <div className="flex flex-none items-center gap-1 px-2 py-1.5">
         <div className="min-w-0 flex-1" title={activeRoot ?? ''}>
           <Select
@@ -404,184 +361,135 @@ export function DesignPanel() {
           />
         </div>
       </div>
-      <AccordionSection title="Shapes" open={shapesOpen} onToggle={() => setShapesOpen((open) => !open)} fill={false}>
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-2 py-1.5">
-          {SHAPES.map((shape) => (
-            <ShapeTile key={shape.kind} {...shape} />
-          ))}
-        </div>
-      </AccordionSection>
-      <AccordionSection title="Tokens" open={tokensOpen} onToggle={() => setTokensOpen((open) => !open)} fill={false}>
-        {!designTab ? (
-          <p className="px-3 py-1.5 text-[12px] text-koma-dim">Open a design to edit its tokens</p>
-        ) : !docs[fileKey(designTab.root, designTab.path)] || docs[fileKey(designTab.root, designTab.path)]?.loading ? (
-          <div className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-koma-dim">
-            <BrailleSpinner size={13} />
-            <span>Loading…</span>
-          </div>
-        ) : (
-          <TokenEditor
-            root={designTab.root}
-            path={designTab.path}
-            doc={docs[fileKey(designTab.root, designTab.path)]!.doc}
-            onCommit={(next) => commitDesign(designTab.root, designTab.path, next, updateDesign)}
-          />
-        )}
-      </AccordionSection>
-      <AccordionSection title="Components" open={componentsOpen} onToggle={() => setComponentsOpen((open) => !open)} fill={false}>
-        {!designTab ? (
-          <p className="px-3 py-1.5 text-[12px] text-koma-dim">Open a design to use its components</p>
-        ) : !docs[fileKey(designTab.root, designTab.path)] || docs[fileKey(designTab.root, designTab.path)]?.loading ? (
-          <div className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-koma-dim">
-            <BrailleSpinner size={13} />
-            <span>Loading…</span>
-          </div>
-        ) : docs[fileKey(designTab.root, designTab.path)]!.doc.components.length === 0 ? (
-          <p className="px-3 py-1.5 text-[12px] text-koma-dim">No components</p>
-        ) : (
-          docs[fileKey(designTab.root, designTab.path)]!.doc.components.map((component) => (
-            <div
-              key={component.id}
-              draggable
-              title="Drag onto a screen"
-              onDragStart={(event) => {
-                event.dataTransfer.setData(COMPONENT_MIME, component.id)
-                event.dataTransfer.setData('text/plain', component.id)
-                try {
-                  event.dataTransfer.effectAllowed = 'copy'
-                } catch {
-                  /* ignore */
-                }
-              }}
-              className="flex h-7 cursor-grab items-center px-2 text-[12px] text-koma-fg hover:bg-koma-hover active:cursor-grabbing"
+      <div className="mx-2 mb-1 flex h-7 flex-none rounded-md bg-koma-bg p-0.5">
+        <button
+          type="button"
+          aria-pressed={panel === 'file'}
+          onClick={() => setPanel('file')}
+          className={`flex-1 rounded text-[12px] ${panel === 'file' ? 'bg-koma-panel text-koma-fg shadow-sm' : 'text-koma-dim hover:text-koma-fg'}`}
+        >
+          File
+        </button>
+        <button
+          type="button"
+          aria-pressed={panel === 'assets'}
+          onClick={() => setPanel('assets')}
+          className={`flex-1 rounded text-[12px] ${panel === 'assets' ? 'bg-koma-panel text-koma-fg shadow-sm' : 'text-koma-dim hover:text-koma-fg'}`}
+        >
+          Assets
+        </button>
+      </div>
+      {panel === 'file' ? (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex h-7 flex-none items-center justify-between px-3">
+            <span className="text-[11px] text-koma-dim">Files</span>
+            <button
+              type="button"
+              aria-label="New design"
+              title="New design"
+              onClick={() => { setCreating(true); setRenaming(null); setDeleting(null) }}
+              className="flex h-5 w-5 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
             >
-              <button
-                type="button"
-                className="min-w-0 flex-1 truncate text-left"
-                onClick={() => {
-                  if (!designTab) return
-                  openDesignTab(designTab.root, designTab.path)
-                  const detail = { root: designTab.root, path: designTab.path, componentId: component.id }
-                  window.setTimeout(() => {
-                    window.dispatchEvent(new CustomEvent('koma-design-focus', { detail }))
-                  }, 0)
-                }}
-              >
-                {component.name}
-              </button>
-              <button
-                type="button"
-                title="Add to chat"
-                className="flex-none rounded px-1 text-[11px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  const open = docs[fileKey(designTab.root, designTab.path)]
-                  if (!open) return
-                  const text = designChatText(open.doc, { component: component.id })
-                  if (!text) return
-                  const state = useKoma.getState()
-                  state.appendToComposer(text)
-                  state.activateTab('chat')
-                }}
-              >
-                Chat
-              </button>
-            </div>
-          ))
-        )}
-      </AccordionSection>
-      <AccordionSection
-        title="Designs"
-        open={filesOpen}
-        onToggle={() => setFilesOpen((open) => !open)}
-        action={<AddBtn label="New design" onClick={() => { setCreating(true); setRenaming(null); setDeleting(null) }} />}
-      >
-        {!activeRoot ? (
-          <Empty>Select a workspace root</Empty>
-        ) : dir?.loading && !dir.entries.length && !creating ? (
-          <div className="flex items-center gap-2 px-3 py-2 text-[12px] text-koma-dim">
-            <BrailleSpinner size={13} />
-            <span>Loading…</span>
+              <Plus size={13} />
+            </button>
           </div>
-        ) : dir?.error && !gone ? (
-          <div className="px-3 py-2 text-[12px] text-koma-error">{dir.error}</div>
-        ) : (
-          <>
-            {creating ? (
-              <div className="flex h-7 min-w-0 items-center gap-1 px-2 text-[12px] text-koma-fg">
-                <File size={13} className="flex-none opacity-70" />
-                <InlineNameInput initial="" placeholder="name.kdsgn" onSubmit={submitCreate} onCancel={() => setCreating(false)} />
-              </div>
-            ) : null}
-            {files.length ? (
-              files.map((entry) => {
-                const dirty = activeRoot ? !!docs[fileKey(activeRoot, entry.path)]?.dirty : false
-                if (deleting === entry.path) {
-                  return (
-                    <div
-                      key={entry.path}
-                      className="flex min-h-[28px] w-full items-center gap-2 bg-koma-error/15 px-2 text-[12px] font-medium text-koma-error"
-                    >
-                      <span className="min-w-0 flex-1 truncate">delete file?</span>
-                      <button type="button" className="rounded px-1.5 py-0.5 text-koma-success hover:bg-koma-success/15" onClick={() => confirmDelete(entry.path)}>
-                        yes
-                      </button>
-                      <button type="button" className="rounded px-1.5 py-0.5 text-koma-error hover:bg-koma-error/15" onClick={() => setDeleting(null)}>
-                        no
-                      </button>
-                    </div>
-                  )
-                }
-                return (
-                  <div
-                    key={entry.path}
-                    className="group flex h-7 min-w-0 items-center gap-1 px-2 text-[12px] text-koma-fg hover:bg-koma-hover"
-                    onContextMenu={(e: ReactMouseEvent) => {
-                      e.preventDefault()
-                      setMenu({ x: e.clientX, y: e.clientY, path: entry.path })
-                    }}
-                  >
-                    {renaming === entry.path ? (
-                      <>
-                        <File size={13} className="flex-none opacity-70" />
-                        <InlineNameInput
-                          initial={entry.name}
-                          placeholder="new name"
-                          onSubmit={(name) => submitRename(entry.path, name)}
-                          onCancel={() => setRenaming(null)}
-                        />
-                      </>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left"
-                          title={entry.path}
-                          onClick={() => activeRoot && openDesignTab(activeRoot, entry.path)}
-                        >
-                          <File size={13} className="flex-none opacity-70" />
-                          <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-                        </button>
-                        <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[56px] group-hover:opacity-100">
-                          <IconBtn label="Rename" onClick={() => { setRenaming(entry.path); setCreating(false); setDeleting(null) }}>
-                            <Pencil size={12} />
-                          </IconBtn>
-                          <IconBtn label="Delete" tone="red" onClick={() => { setDeleting(entry.path); setCreating(false); setRenaming(null) }}>
-                            <Trash2 size={12} />
-                          </IconBtn>
-                        </div>
-                        {dirty ? <span className="flex-none font-mono text-[11px] font-semibold text-koma-accent">M</span> : null}
-                      </>
-                    )}
-                  </div>
-                )
-              })
-            ) : !creating ? (
-              <Empty>No designs</Empty>
-            ) : null}
-          </>
-        )}
-      </AccordionSection>
+          <div className="max-h-[38%] flex-none overflow-y-auto">
+            <FileList
+              activeRoot={activeRoot}
+              files={files}
+              creating={creating}
+              renaming={renaming}
+              deleting={deleting}
+              currentPath={designTab && designTab.root === activeRoot ? designTab.path : null}
+              loading={!!dir?.loading && !dir.entries.length && !creating}
+              error={dir?.error && !gone ? dir.error : null}
+              dirty={(path) => !!activeRoot && !!docs[fileKey(activeRoot, path)]?.dirty}
+              onOpen={(path) => activeRoot && openDesignTab(activeRoot, path)}
+              onCreate={submitCreate}
+              onCancelCreate={() => setCreating(false)}
+              onRename={submitRename}
+              onCancelRename={() => setRenaming(null)}
+              onAskRename={(path) => { setRenaming(path); setCreating(false); setDeleting(null) }}
+              onAskDelete={(path) => { setDeleting(path); setCreating(false); setRenaming(null) }}
+              onCancelDelete={() => setDeleting(null)}
+              onConfirmDelete={confirmDelete}
+              onMenu={(path, x, y) => setMenu({ x, y, path })}
+            />
+          </div>
+          <div className="flex h-7 flex-none items-center border-t border-koma-border px-3 text-[11px] text-koma-dim">Layers</div>
+          {open?.loading ? (
+            <div className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-koma-dim">
+              <BrailleSpinner size={13} />
+              <span>Loading…</span>
+            </div>
+          ) : viewDoc && designTab ? (
+            <DesignLayers
+              doc={viewDoc}
+              selection={selection}
+              onSelect={(id, shift) => emitDesignLayer(designTab.root, designTab.path, { op: 'select', id, shift })}
+              onRename={(id, name) => emitDesignLayer(designTab.root, designTab.path, { op: 'rename', id, name })}
+              onVisible={(id, visible) => emitDesignLayer(designTab.root, designTab.path, { op: 'visible', id, visible })}
+              onLocked={(id, locked) => emitDesignLayer(designTab.root, designTab.path, { op: 'locked', id, locked })}
+              onMove={(id, parentId, index) => emitDesignLayer(designTab.root, designTab.path, { op: 'move', id, parentId, index })}
+              onMenu={(id, x, y) => emitDesignLayer(designTab.root, designTab.path, { op: 'menu', id, x, y })}
+            />
+          ) : (
+            <p className="px-3 text-[12px] text-koma-dim">Open a design to see its layers</p>
+          )}
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <input
+            value={assetQuery}
+            onChange={(event) => setAssetQuery(event.target.value)}
+            placeholder="Search"
+            aria-label="Search assets"
+            className="mx-2 mt-2 h-7 flex-none rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+          />
+          {!designTab || !open || open.loading ? (
+            <p className="px-3 py-2 text-[12px] text-koma-dim">{designTab ? 'Loading…' : 'Open a design to use its assets'}</p>
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto pb-3">
+              <div className="px-3 pb-1 pt-3 text-[11px] text-koma-dim">Components</div>
+              {components.length === 0 ? <p className="px-3 text-[12px] text-koma-dim">No components</p> : (
+                <div className="grid grid-cols-2 gap-1.5 px-2">
+                  {components.map((component) => (
+                    <AssetTile
+                      key={component.id}
+                      name={component.name}
+                      doc={open.doc}
+                      node={component.variants[0]?.node}
+                      onOpen={() => {
+                        openDesignTab(designTab.root, designTab.path)
+                        const detail = { root: designTab.root, path: designTab.path, componentId: component.id }
+                        window.setTimeout(() => {
+                          window.dispatchEvent(new CustomEvent('koma-design-focus', { detail }))
+                        }, 0)
+                      }}
+                      onDragStart={(event) => {
+                        event.dataTransfer.setData(COMPONENT_MIME, component.id)
+                        event.dataTransfer.setData('text/plain', component.id)
+                        try {
+                          event.dataTransfer.effectAllowed = 'copy'
+                        } catch {
+                          /* ignore */
+                        }
+                      }}
+                      onChat={() => {
+                        const text = designChatText(open.doc, { component: component.id })
+                        if (!text) return
+                        const state = useKoma.getState()
+                        state.appendToComposer(text)
+                        state.activateTab('chat')
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       {menu ? (
         <div
           className="fixed z-[80] min-w-[140px] rounded border border-koma-border bg-koma-panel py-1 shadow-lg"
@@ -617,6 +525,206 @@ export function DesignPanel() {
           </button>
         </div>
       ) : null}
+    </div>
+  )
+}
+
+function FileList({
+  activeRoot,
+  files,
+  creating,
+  renaming,
+  deleting,
+  currentPath,
+  loading,
+  error,
+  dirty,
+  onOpen,
+  onCreate,
+  onCancelCreate,
+  onRename,
+  onCancelRename,
+  onAskRename,
+  onAskDelete,
+  onCancelDelete,
+  onConfirmDelete,
+  onMenu,
+}: {
+  activeRoot: string | null
+  files: FileTreeEntry[]
+  creating: boolean
+  renaming: string | null
+  deleting: string | null
+  currentPath: string | null
+  loading: boolean
+  error: string | null
+  dirty: (path: string) => boolean
+  onOpen: (path: string) => void
+  onCreate: (name: string) => void
+  onCancelCreate: () => void
+  onRename: (path: string, name: string) => void
+  onCancelRename: () => void
+  onAskRename: (path: string) => void
+  onAskDelete: (path: string) => void
+  onCancelDelete: () => void
+  onConfirmDelete: (path: string) => void
+  onMenu: (path: string, x: number, y: number) => void
+}) {
+  if (!activeRoot) return <Empty>Select a workspace root</Empty>
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 text-[12px] text-koma-dim">
+        <BrailleSpinner size={13} />
+        <span>Loading…</span>
+      </div>
+    )
+  }
+  if (error) return <div className="px-3 py-2 text-[12px] text-koma-error">{error}</div>
+  return (
+    <>
+      {creating ? (
+        <div className="flex h-7 min-w-0 items-center gap-1 px-2 text-[12px] text-koma-fg">
+          <File size={13} className="flex-none opacity-70" />
+          <InlineNameInput initial="" placeholder="name.kdsgn" onSubmit={onCreate} onCancel={onCancelCreate} />
+        </div>
+      ) : null}
+      {files.length ? files.map((entry) => {
+        if (deleting === entry.path) {
+          return (
+            <div key={entry.path} className="flex min-h-[28px] w-full items-center gap-2 bg-koma-error/15 px-2 text-[12px] font-medium text-koma-error">
+              <span className="min-w-0 flex-1 truncate">delete file?</span>
+              <button type="button" className="rounded px-1.5 py-0.5 text-koma-success hover:bg-koma-success/15" onClick={() => onConfirmDelete(entry.path)}>yes</button>
+              <button type="button" className="rounded px-1.5 py-0.5 text-koma-error hover:bg-koma-error/15" onClick={onCancelDelete}>no</button>
+            </div>
+          )
+        }
+        const current = entry.path === currentPath
+        return (
+          <div
+            key={entry.path}
+            className={`group flex h-7 min-w-0 items-center gap-1 px-2 text-[12px] text-koma-fg ${current ? 'bg-[#0d99ff]/15' : 'hover:bg-koma-hover'}`}
+            onContextMenu={(event: ReactMouseEvent) => {
+              event.preventDefault()
+              onMenu(entry.path, event.clientX, event.clientY)
+            }}
+          >
+            {renaming === entry.path ? (
+              <>
+                <File size={13} className="flex-none opacity-70" />
+                <InlineNameInput initial={entry.name} placeholder="new name" onSubmit={(name) => onRename(entry.path, name)} onCancel={onCancelRename} />
+              </>
+            ) : (
+              <>
+                <button type="button" className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left" title={entry.path} onClick={() => onOpen(entry.path)}>
+                  <File size={13} className="flex-none opacity-70" />
+                  <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                </button>
+                <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[56px] group-hover:opacity-100">
+                  <IconBtn label="Rename" onClick={() => onAskRename(entry.path)}><Pencil size={12} /></IconBtn>
+                  <IconBtn label="Delete" tone="red" onClick={() => onAskDelete(entry.path)}><Trash2 size={12} /></IconBtn>
+                </div>
+                {dirty(entry.path) ? <span className="h-1.5 w-1.5 flex-none rounded-full bg-[#0d99ff]" title="Unsaved" /> : null}
+              </>
+            )}
+          </div>
+        )
+      }) : !creating ? <Empty>No designs</Empty> : null}
+    </>
+  )
+}
+
+function AssetTile({
+  name,
+  doc,
+  node,
+  onOpen,
+  onDragStart,
+  onChat,
+}: {
+  name: string
+  doc: DesignDoc
+  node?: DesignNode
+  onOpen: () => void
+  onDragStart: (event: ReactDragEvent<HTMLButtonElement>) => void
+  onChat: () => void
+}) {
+  const dragged = useRef(false)
+  return (
+    <div className="group relative">
+      <button
+        type="button"
+        draggable
+        title={name}
+        onClick={() => {
+          if (dragged.current) return
+          onOpen()
+        }}
+        onDragStart={(event) => {
+          dragged.current = true
+          onDragStart(event)
+        }}
+        onDragEnd={() => {
+          setTimeout(() => {
+            dragged.current = false
+          }, 0)
+        }}
+        className="flex w-full cursor-grab flex-col items-stretch gap-1 rounded p-1 text-left hover:bg-koma-hover active:cursor-grabbing"
+      >
+        {node ? <AssetThumb doc={doc} node={node} /> : (
+          <span className="flex h-[72px] w-full items-center justify-center rounded bg-[#e6e8ed] text-[#9747ff]">
+            <Component size={16} />
+          </span>
+        )}
+        <span className="flex items-center gap-1 px-0.5 text-[11px] text-koma-fg">
+          <Component size={11} className="flex-none text-[#9747ff]" />
+          <span className="min-w-0 flex-1 truncate">{name}</span>
+        </span>
+      </button>
+      <button
+        type="button"
+        title="Add to chat"
+        aria-label={`Add ${name} to chat`}
+        onClick={onChat}
+        className="absolute right-1.5 top-1.5 hidden h-5 w-5 items-center justify-center rounded bg-white text-koma-dim shadow-sm hover:text-koma-fg group-hover:flex"
+      >
+        <MessageSquare size={12} />
+      </button>
+    </div>
+  )
+}
+
+function AssetThumb({ doc, node }: { doc: DesignDoc; node: DesignNode }) {
+  const scale = Math.min(64 / Math.max(node.w, 1), 48 / Math.max(node.h, 1))
+  return (
+    <div className="flex h-[72px] w-full items-center justify-center overflow-hidden rounded bg-[#e6e8ed]">
+      <div style={{ width: node.w * scale, height: node.h * scale }}>
+        <div style={{ width: node.w, height: node.h, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
+          <ThumbNode doc={doc} node={{ ...node, x: 0, y: 0 }} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ThumbNode({ doc, node }: { doc: DesignDoc; node: DesignNode }) {
+  if (node.visible === false) return null
+  const painted = !node.fill || node.fill === 'none' ? '' : node.fill.startsWith('#') ? node.fill : resolveRef(doc, node.fill)
+  const fill = node.fill === 'none' ? 'transparent' : painted || (node.kind === 'frame' ? '#ffffff' : node.kind === 'rect' || node.kind === 'ellipse' ? '#d9d9d9' : 'transparent')
+  const radius = node.kind === 'ellipse' ? '50%' : typeof node.radius === 'number' ? node.radius : 0
+  return (
+    <div
+      className="absolute overflow-hidden"
+      style={{
+        left: node.x,
+        top: node.y,
+        width: node.w,
+        height: node.h,
+        background: node.kind === 'line' || node.kind === 'vector' || node.kind === 'text' ? 'transparent' : fill,
+        borderRadius: radius,
+      }}
+    >
+      {node.kind === 'text' ? <span className="block truncate px-1 text-[13px] text-[#1c1c1c]">{node.text || 'Text'}</span> : null}
+      {node.children?.map((child) => <ThumbNode key={child.id} doc={doc} node={child} />)}
     </div>
   )
 }

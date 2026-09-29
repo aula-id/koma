@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import {
+  alignDesignNodes,
   addComponentVariant,
   addDesignToken,
   applyOverrides,
@@ -41,6 +42,7 @@ import {
   resolveInstanceTree,
   resolveRef,
   serializeDesign,
+  sharedValue,
   setDesignMode,
   setDesignTokenValue,
   setInstanceVariant,
@@ -289,7 +291,7 @@ function sample(): DesignDoc {
   assert.equal(hitDesign(doc, 20, 36)?.id, 'label')
   assert.equal(hitDesign(doc, 0, 0), null)
   assert.deepEqual(nodeOrigin(doc, 'label'), { x: 18, y: 32 })
-  const grown = resizeDesignNode(label, 'e', 20, 0, 8, true)
+  const grown = resizeDesignNode({ ...label, w: 120 }, 'e', 20, 0, 8, true)
   assert.equal(grown.x, 8)
   assert.equal(grown.w, 144)
   const other = createNode('frame', 'other', 400, 0)
@@ -542,4 +544,66 @@ function sample(): DesignDoc {
   assert.equal(snapDesign(12.4, 8, true), 16)
   const parsed = parseDesign('{"version":1,"screens":[{"id":"s","kind":"frame","x":0,"y":0,"w":10,"h":10}]}')
   assert.equal(parsed.doc.snap, false)
+}
+
+{
+  const rect = createNode('rect', 'r', 4, 6)
+  assert.equal(rect.w, 100)
+  assert.equal(rect.h, 100)
+  assert.equal(rect.fill, '#d9d9d9')
+  assert.equal(rect.stroke, 'none')
+  assert.equal(rect.radius, undefined)
+  const ellipse = createNode('ellipse', 'e', 0, 0)
+  assert.equal(ellipse.w, 100)
+  assert.equal(ellipse.h, 100)
+  assert.equal(ellipse.fill, '#d9d9d9')
+  assert.equal(ellipse.stroke, 'none')
+}
+
+{
+  const text = createNode('text', 'copy', 0, 0)
+  assert.equal(text.w, 200)
+  assert.equal(text.h, 24)
+  assert.equal(text.fontSize, 14)
+  text.lineHeight = 20
+  text.letterSpacing = -0.5
+  const frame = createNode('frame', 'f', 0, 0)
+  frame.children = [text]
+  const doc = { ...emptyDesign(), screens: [frame] }
+  const parsed = parseDesign(serializeDesign(doc))
+  const child = parsed.doc.screens[0].children?.[0]
+  assert.equal(child?.fontSize, 14)
+  assert.equal(child?.lineHeight, 20)
+  assert.equal(child?.letterSpacing, -0.5)
+  const slice = queryDesign(parsed.doc, { screen: 'f' })
+  assert.equal(slice?.screen?.tree.children?.[0].lineHeight, 20)
+  assert.equal(slice?.screen?.tree.children?.[0].letterSpacing, -0.5)
+  if (child) {
+    child.lineHeight = 0
+    child.letterSpacing = 0
+  }
+  const omitted = parseDesign(serializeDesign({ ...emptyDesign(), screens: [{ ...frame, children: [child!] }] }))
+  assert.equal(omitted.doc.screens[0].children?.[0].lineHeight, undefined)
+  assert.equal(omitted.doc.screens[0].children?.[0].letterSpacing, undefined)
+  assert.equal(sharedValue([1, 1, 1]), 1)
+  assert.equal(sharedValue([1, 2]), null)
+  assert.equal(sharedValue<string>([]), null)
+}
+
+{
+  const frame = createNode('frame', 'board', 0, 0)
+  frame.w = 400
+  frame.h = 400
+  const left = createNode('rect', 'left', 0, 10)
+  const right = createNode('rect', 'right', 40, 0)
+  frame.children = [left, right]
+  const doc = { ...emptyDesign(), screens: [frame] }
+  const aligned = alignDesignNodes(doc, ['left', 'right'], 'horizontal', 'min')
+  assert.equal(aligned.screens[0].children?.[0].x, 0)
+  assert.equal(aligned.screens[0].children?.[0].y, 10)
+  assert.equal(aligned.screens[0].children?.[1].x, 0)
+  assert.equal(aligned.screens[0].children?.[1].y, 0)
+  const centered = alignDesignNodes(doc, ['left', 'right'], 'vertical', 'center')
+  assert.equal(centered.screens[0].children?.[0].y, 5)
+  assert.equal(centered.screens[0].children?.[1].y, 5)
 }

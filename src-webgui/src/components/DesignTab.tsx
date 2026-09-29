@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { Circle, Frame, Hand, Minus, MousePointer2, PenTool, Plus, Square, Type, PanelRightClose, PanelRightOpen } from 'lucide-react'
-import { DesignLayers } from './DesignLayers'
+import { AlignCenterHorizontal, AlignCenterVertical, AlignEndHorizontal, AlignEndVertical, AlignStartHorizontal, AlignStartVertical, Circle, Frame, Hand, Minus, MousePointer2, PenTool, Plus, Square, Type, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { TokenEditor } from './panels/DesignPanel'
 import { DesignMenu, type DesignMenuItem } from './DesignMenu'
+import { getDesignUi, publishDesignUi, type DesignLayerOp } from '../lib/designUi'
 import {
   COMPONENT_MIME,
   DESIGN_MIME,
+  alignDesignNodes,
   addComponentVariant,
   autoLayoutDesign,
   canvasDeltaToSpace,
@@ -39,6 +41,7 @@ import {
   resolveInstanceTree,
   resolveRef,
   selectDesignRect,
+  sharedValue,
   serializeDesign,
   setDesignLocked,
   setDesignMode,
@@ -52,6 +55,8 @@ import {
   vectorSvgPath,
   writeComponentView,
   wrapDesignNodes,
+  type DesignAlignAxis,
+  type DesignAlignEdge,
   type DesignDoc,
   type DesignHandle,
   type DesignOrder,
@@ -70,6 +75,8 @@ import { EditorChrome } from './EditorChrome'
 const UNDO_CAP = 50
 const ZOOM_MIN = 0.25
 const ZOOM_MAX = 64
+const SELECTION = '#0d99ff'
+const SHAPE_FILL = '#d9d9d9'
 const HANDLES: { id: DesignHandle; x: string; y: string; cursor: string }[] = [
   { id: 'nw', x: '0%', y: '0%', cursor: 'nwse-resize' },
   { id: 'n', x: '50%', y: '0%', cursor: 'ns-resize' },
@@ -101,12 +108,14 @@ type DesignCommands = {
   component: () => void
   select: (id: string) => void
 }
+type RadiusCorner = 'tl' | 'tr' | 'bl' | 'br'
 type Drag =
   | { kind: 'move'; ids: string[]; startX: number; startY: number; origins: Record<string, { x: number; y: number }>; remembered: boolean }
   | { kind: 'resize'; id: string; handle: DesignHandle; startX: number; startY: number; node: DesignNode; remembered: boolean }
+  | { kind: 'radius'; id: string; corner: RadiusCorner; startX: number; startY: number; radius: number; node: DesignNode; remembered: boolean }
   | { kind: 'pan'; lastX: number; lastY: number }
   | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number }
-  | { kind: 'draw'; shape: DrawShape; x0: number; y0: number; x1: number; y1: number; parentId: string | null }
+  | { kind: 'draw'; shape: DrawShape; cx: number; cy: number; x0: number; y0: number; x1: number; y1: number; parentId: string | null }
   | { kind: 'pen'; index: number; space: boolean }
 
 let copiedShape: { nodes: DesignNode[]; parentId: string | null } | null = null
@@ -126,6 +135,33 @@ function lineBox(x0: number, y0: number, x1: number, y1: number) {
   const length = Math.max(1, Math.hypot(dx, dy))
   const rotation = (Math.atan2(dy, dx) * 180) / Math.PI
   return { x: (x0 + x1) / 2 - length / 2, y: (y0 + y1) / 2 - 1, w: length, h: 2, rotation }
+}
+
+/** Shift keeps a square. Alt draws the opposite corner around the press point. */
+function shapeCorners(cx: number, cy: number, x: number, y: number, shift: boolean, alt: boolean) {
+  let dx = x - cx
+  let dy = y - cy
+  if (shift) {
+    const side = Math.max(Math.abs(dx), Math.abs(dy))
+    dx = Math.sign(dx || 1) * side
+    dy = Math.sign(dy || 1) * side
+  }
+  if (alt) return { x0: cx - dx, y0: cy - dy, x1: cx + dx, y1: cy + dy }
+  return { x0: cx, y0: cy, x1: cx + dx, y1: cy + dy }
+}
+
+/** Shift snaps a line to 45 degrees. Alt extends it through the press point. */
+function lineEnds(cx: number, cy: number, x: number, y: number, shift: boolean, alt: boolean) {
+  let dx = x - cx
+  let dy = y - cy
+  if (shift) {
+    const length = Math.hypot(dx, dy)
+    const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4)
+    dx = Math.cos(angle) * length
+    dy = Math.sin(angle) * length
+  }
+  if (alt) return { x0: cx - dx, y0: cy - dy, x1: cx + dx, y1: cy + dy }
+  return { x0: cx, y0: cy, x1: cx + dx, y1: cy + dy }
 }
 
 function mintId(prefix: string): string {
@@ -193,6 +229,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const [penHandle, setPenHandle] = useState<number | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; canvasX: number; canvasY: number } | null>(null)
   const commandsRef = useRef<DesignCommands | null>(null)
+  const layerOpsRef = useRef<(action: DesignLayerOp) => void>(() => {})
   const penApplyRef = useRef<(draft: PenDraft, closed?: boolean) => void>(() => {})
   const penRef = useRef<PenDraft | null>(null)
   const penNoted = useRef(false)
@@ -239,17 +276,39 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   }, [tab.path, tab.root])
 
   useEffect(() => {
-    const onTool = (event: Event) => {
-      const kind = (event as CustomEvent<DrawShape>).detail
-      if (!active || (kind !== 'frame' && kind !== 'rect' && kind !== 'ellipse' && kind !== 'line' && kind !== 'text')) return
-      setTool(kind)
-      setPen(null)
-      setPenHover(null)
-      setPenHandle(null)
+    if (!active) {
+      const current = getDesignUi()
+      if (current && current.root === tab.root && current.path === tab.path) publishDesignUi(null)
+      return
     }
-    window.addEventListener('koma-design-tool', onTool)
-    return () => window.removeEventListener('koma-design-tool', onTool)
-  }, [active])
+    publishDesignUi({ root: tab.root, path: tab.path, selection, focusId })
+  }, [active, focusId, selection, tab.path, tab.root])
+
+  useEffect(() => {
+    return () => {
+      const current = getDesignUi()
+      if (current && current.root === tab.root && current.path === tab.path) publishDesignUi(null)
+    }
+  }, [tab.path, tab.root])
+
+  useEffect(() => {
+    const onLayer = (event: Event) => {
+      const detail = (event as CustomEvent<{ root: string; path: string; action: DesignLayerOp }>).detail
+      if (!detail || detail.root !== tab.root || detail.path !== tab.path) return
+      layerOpsRef.current(detail.action)
+    }
+    window.addEventListener('koma-design-layer', onLayer)
+    return () => window.removeEventListener('koma-design-layer', onLayer)
+  }, [tab.path, tab.root])
+
+  useEffect(() => {
+    if (tool === 'pen') return
+    penRef.current = null
+    penNoted.current = false
+    setPen(null)
+    setPenHover(null)
+    setPenHandle(null)
+  }, [tool])
 
   useEffect(() => {
     if (!focusId || !file) return
@@ -430,12 +489,20 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         return
       }
       if (drag.kind === 'draw' && point) {
-        drag.x1 = point.x
-        drag.y1 = point.y
         if (drag.shape === 'line') {
+          const ends = lineEnds(drag.cx, drag.cy, point.x, point.y, event.shiftKey, event.altKey)
+          drag.x0 = ends.x0
+          drag.y0 = ends.y0
+          drag.x1 = ends.x1
+          drag.y1 = ends.y1
           const line = lineBox(drag.x0, drag.y0, drag.x1, drag.y1)
           setGhost({ kind: 'shape', shape: 'line', ...line })
         } else {
+          const corners = shapeCorners(drag.cx, drag.cy, point.x, point.y, event.shiftKey, event.altKey)
+          drag.x0 = corners.x0
+          drag.y0 = corners.y0
+          drag.x1 = corners.x1
+          drag.y1 = corners.y1
           const stored = useKoma.getState().design.docs[key]?.doc
           const doc = stored ? editingDoc(stored, focusRef.current) : null
           const box = drawnBox(drag.x0, drag.y0, drag.x1, drag.y1, doc?.grid ?? 8, !!doc?.snap)
@@ -462,7 +529,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         penApplyRef.current(next)
         return
       }
-      if (drag.kind !== 'move' && drag.kind !== 'resize') return
+      if (drag.kind !== 'move' && drag.kind !== 'resize' && drag.kind !== 'radius') return
       const stored = useKoma.getState().design.docs[key]?.doc
       if (!stored) return
       const focus = focusRef.current
@@ -470,6 +537,25 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       const zoom = viewRef.current.zoom || 1
       const screenDx = (event.clientX - drag.startX) / zoom
       const screenDy = (event.clientY - drag.startY) / zoom
+      if (drag.kind === 'radius') {
+        const located = locateDesign(doc, drag.id)
+        if (!located) return
+        const delta = canvasDeltaToSpace(doc, drag.id, screenDx, screenDy)
+        const inward = drag.corner === 'tl' ? delta.x + delta.y : drag.corner === 'tr' ? -delta.x + delta.y : drag.corner === 'bl' ? delta.x - delta.y : -delta.x - delta.y
+        const limit = Math.min(drag.node.w, drag.node.h) / 2
+        const radius = Math.round(Math.min(limit, Math.max(0, drag.radius + inward / 2)))
+        const nextNode = { ...drag.node }
+        if (radius <= 0) delete nextNode.radius
+        else nextNode.radius = radius
+        const next = projectDoc(stored, focus, layoutDesign(updateDesignNode(doc, drag.id, () => nextNode)))
+        if (serializeDesign(next) === serializeDesign(stored)) return
+        if (!drag.remembered) {
+          noteRef.current(stored)
+          drag.remembered = true
+        }
+        updateRef.current(tab.root, tab.path, next)
+        return
+      }
       if (drag.kind === 'resize') {
         const located = locateDesign(doc, drag.id)
         if (!located) return
@@ -671,6 +757,15 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         commandsRef.current?.remove()
         return
       }
+      if (!meta && !event.shiftKey && !event.altKey) {
+        const tools: Partial<Record<string, Tool>> = { v: 'select', r: 'rect', o: 'ellipse', l: 'line', f: 'frame', t: 'text', p: 'pen', h: 'pan' }
+        const next = tools[event.key.toLowerCase()]
+        if (next) {
+          event.preventDefault()
+          setTool(next)
+          return
+        }
+      }
       if (event.key === 'Escape') {
         setEditing(null)
         setPen(null)
@@ -745,7 +840,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
           w: node.w,
           h: node.h,
           vector: node.vector,
-          fill: closed ? (current.fill && current.fill !== 'none' ? current.fill : '#d0d5dd') : 'none',
+          fill: closed ? (current.fill && current.fill !== 'none' ? current.fill : '#d9d9d9') : 'none',
           stroke: current.stroke && current.stroke !== 'none' ? current.stroke : '#1c1c1c',
           strokeWidth: current.strokeWidth ?? 2,
         }))
@@ -900,6 +995,44 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     },
   }
 
+  layerOpsRef.current = (action) => {
+    const open = viewDoc()
+    if (!open) return
+    if (action.op === 'select') {
+      const ids = selectionRef.current
+      setSelection(action.shift ? (ids.includes(action.id) ? ids.filter((item) => item !== action.id) : [...ids, action.id]) : [action.id])
+      setPropsOpen(true)
+      setEditing(null)
+      return
+    }
+    if (action.op === 'rename') {
+      const trimmed = action.name.trim()
+      commit(updateDesignNode(open.doc, action.id, (node) => {
+        const next = { ...node }
+        if (trimmed) next.name = trimmed
+        else delete next.name
+        return next
+      }))
+      return
+    }
+    if (action.op === 'visible') {
+      commit(setDesignVisible(open.doc, action.id, action.visible))
+      return
+    }
+    if (action.op === 'locked') {
+      commit(setDesignLocked(open.doc, action.id, action.locked))
+      return
+    }
+    if (action.op === 'move') {
+      if (focusRef.current && action.parentId == null && locateDesign(open.doc, action.id)?.parentId == null) return
+      commit(moveDesignNode(open.doc, action.id, action.parentId, action.index))
+      return
+    }
+    if (!selectionRef.current.includes(action.id)) setSelection([action.id])
+    const origin = nodeOrigin(open.doc, action.id)
+    setMenu({ x: action.x, y: action.y, canvasX: origin?.x ?? 0, canvasY: origin?.y ?? 0 })
+  }
+
   const beginPen = (point: { x: number; y: number }) => {
     const open = viewDoc()
     if (!open) return
@@ -964,6 +1097,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       dragRef.current = {
         kind: 'draw',
         shape: tool,
+        cx: point.x,
+        cy: point.y,
         x0: point.x,
         y0: point.y,
         x1: point.x,
@@ -1025,9 +1160,17 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
 
   const storedDoc = file.doc
   const doc = editingDoc(storedDoc, focusId)
-  const selectedId = selection[selection.length - 1] ?? null
+  const selectedNodes = selection.flatMap((id) => {
+    const hit = locateDesign(doc, id)
+    return hit ? [hit.node] : []
+  })
+  const selectedId = selectedNodes[selectedNodes.length - 1]?.id ?? null
   const located = selectedId ? locateDesign(doc, selectedId) : null
   const selected = located?.node ?? null
+  const multi = selectedNodes.length > 1
+  const parentNode = located?.parentId ? findDesignNode(doc, located.parentId) : null
+  const sizeModes = !multi && (parentNode?.layout === 'row' || parentNode?.layout === 'column')
+  const everyParent = selectedNodes.length > 0 && selectedNodes.every((node) => locateDesign(doc, node.id)?.parentId != null)
   const focusedComponent = focusId ? storedDoc.components.find((component) => component.id === focusId) ?? null : null
   const selectedVariant = focusedComponent && located?.parentId == null
     ? focusedComponent.variants.find((variant) => variant.node.id === selected?.id) ?? null
@@ -1062,10 +1205,11 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   void rev
 
   const patchSelected = (fn: (node: DesignNode) => DesignNode, noteOnce = false) => {
-    if (!selectedId) return
+    if (!selection.length) return
     const stored = useKoma.getState().design.docs[key]?.doc
     if (!stored) return
-    const view = updateDesignNode(editingDoc(stored, focusRef.current), selectedId, fn)
+    let view = editingDoc(stored, focusRef.current)
+    for (const id of selection) view = updateDesignNode(view, id, fn)
     const next = projectDoc(stored, focusRef.current, layoutDesign(view))
     if (serializeDesign(next) === serializeDesign(stored)) return
     if (noteOnce) {
@@ -1111,34 +1255,6 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         />
         {file.error ? <div className="flex-none border-b border-koma-border px-3 py-1 text-[12px] text-koma-error">{file.error}</div> : null}
         <div className="flex min-h-0 flex-1">
-        <DesignLayers
-          doc={doc}
-          selection={selection}
-          onSelect={(id, shift) => {
-            setSelection(shift ? selection.includes(id) ? selection.filter((item) => item !== id) : [...selection, id] : [id])
-            setPropsOpen(true)
-          }}
-          onRename={(id, name) => {
-            const trimmed = name.trim()
-            commit(updateDesignNode(doc, id, (node) => {
-              const next = { ...node }
-              if (trimmed) next.name = trimmed
-              else delete next.name
-              return next
-            }))
-          }}
-          onVisible={(id, visible) => commit(setDesignVisible(doc, id, visible))}
-          onLocked={(id, locked) => commit(setDesignLocked(doc, id, locked))}
-          onMove={(id, parentId, index) => {
-            if (focusId && parentId == null && locateDesign(doc, id)?.parentId == null) return
-            commit(moveDesignNode(doc, id, parentId, index))
-          }}
-          onMenu={(id, clientX, clientY) => {
-            if (!selection.includes(id)) setSelection([id])
-            const origin = nodeOrigin(doc, id)
-            setMenu({ x: clientX, y: clientY, canvasX: origin?.x ?? 0, canvasY: origin?.y ?? 0 })
-          }}
-        />
         <div
           ref={canvasRef}
           className={`relative min-h-0 min-w-0 flex-1 overflow-hidden ${spaceDown || tool === 'pan' ? 'cursor-grab' : ''}`}
@@ -1160,9 +1276,30 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 key={screen.id}
                 doc={doc}
                 node={screen}
+                zoom={view.zoom}
                 selectedIds={selection}
                 editing={editing}
                 dragCursor={dragCursor}
+                onCorner={(id, corner, event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setSelection([id])
+                  const storedNow = useKoma.getState().design.docs[key]?.doc
+                  const locatedNow = locateDesign(storedNow ? editingDoc(storedNow, focusRef.current) : doc, id)
+                  if (!locatedNow) return
+                  const raw = locatedNow.node.radius
+                  const radius = typeof raw === 'number' ? raw : Number(resolveRef(doc, typeof raw === 'string' ? raw : '')) || 0
+                  dragRef.current = {
+                    kind: 'radius',
+                    id,
+                    corner,
+                    startX: event.clientX,
+                    startY: event.clientY,
+                    radius,
+                    node: { ...locatedNow.node },
+                    remembered: false,
+                  }
+                }}
                 onMenu={(id, clientX, clientY) => {
                   const point = toDoc(clientX, clientY)
                   if (!selection.includes(id)) setSelection([id])
@@ -1246,17 +1383,24 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             ))}
           {ghost ? (
             <div
-              className="pointer-events-none absolute border border-koma-accent"
+              className="pointer-events-none absolute"
               style={{
                 left: ghost.x,
                 top: ghost.y,
                 width: Math.max(ghost.w, 1),
                 height: Math.max(ghost.h, 1),
-                background: ghost.kind === 'shape' && ghost.shape === 'frame' ? '#ffffff' : ghost.kind === 'shape' && (ghost.shape === 'rect' || ghost.shape === 'ellipse') ? '#d0d5dd' : 'color-mix(in srgb, var(--color-koma-accent) 16%, transparent)',
+                background: ghost.kind === 'marquee' ? 'rgba(13,153,255,0.12)' : ghost.shape === 'frame' ? '#ffffff' : ghost.shape === 'rect' || ghost.shape === 'ellipse' ? SHAPE_FILL : 'transparent',
+                border: `${1 / Math.max(view.zoom, 0.25)}px solid ${SELECTION}`,
                 borderRadius: ghost.kind === 'shape' && ghost.shape === 'ellipse' ? '50%' : undefined,
                 transform: ghost.kind === 'shape' && ghost.rotation ? `rotate(${ghost.rotation}deg)` : undefined,
               }}
-            />
+            >
+              {ghost.kind === 'shape' ? (
+                <span className="absolute left-0 whitespace-nowrap" style={{ top: '100%', marginTop: 6 / Math.max(view.zoom, 0.25), fontSize: 11 / Math.max(view.zoom, 0.25), color: SELECTION }}>
+                  {ghost.shape === 'line' ? Math.round(ghost.w) : `${Math.round(ghost.w)} × ${Math.round(ghost.h)}`}
+                </span>
+              ) : null}
+            </div>
           ) : null}
           {pen ? <PenOverlay draft={pen} hover={penHandle == null ? penHover : null} zoom={view.zoom} /> : null}
           </div>
@@ -1268,28 +1412,28 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         </div>
         </div>
         <div className="flex h-8 flex-none items-center gap-1 border-t border-koma-border bg-koma-panel px-2">
-          <ToolButton label="Select" selected={tool === 'select'} onClick={() => setTool('select')}>
+          <ToolButton label="Move (V)" selected={tool === 'select'} onClick={() => setTool('select')}>
             <MousePointer2 size={15} strokeWidth={2.25} />
           </ToolButton>
-          <ToolButton label="Frame" selected={tool === 'frame'} onClick={() => setTool('frame')}>
+          <ToolButton label="Frame (F)" selected={tool === 'frame'} onClick={() => setTool('frame')}>
             <Frame size={15} strokeWidth={2.25} />
           </ToolButton>
-          <ToolButton label="Rectangle" selected={tool === 'rect'} onClick={() => setTool('rect')}>
+          <ToolButton label="Rectangle (R)" selected={tool === 'rect'} onClick={() => setTool('rect')}>
             <Square size={15} strokeWidth={2.25} />
           </ToolButton>
-          <ToolButton label="Ellipse" selected={tool === 'ellipse'} onClick={() => setTool('ellipse')}>
+          <ToolButton label="Ellipse (O)" selected={tool === 'ellipse'} onClick={() => setTool('ellipse')}>
             <Circle size={15} strokeWidth={2.25} />
           </ToolButton>
-          <ToolButton label="Line" selected={tool === 'line'} onClick={() => setTool('line')}>
+          <ToolButton label="Line (L)" selected={tool === 'line'} onClick={() => setTool('line')}>
             <Minus size={15} strokeWidth={2.25} />
           </ToolButton>
-          <ToolButton label="Pen" selected={tool === 'pen'} onClick={() => setTool('pen')}>
+          <ToolButton label="Pen (P)" selected={tool === 'pen'} onClick={() => setTool('pen')}>
             <PenTool size={15} strokeWidth={2.25} />
           </ToolButton>
-          <ToolButton label="Text" selected={tool === 'text'} onClick={() => setTool('text')}>
+          <ToolButton label="Text (T)" selected={tool === 'text'} onClick={() => setTool('text')}>
             <Type size={15} strokeWidth={2.25} />
           </ToolButton>
-          <ToolButton label="Move canvas" selected={tool === 'pan'} onClick={() => setTool('pan')}>
+          <ToolButton label="Hand (H)" selected={tool === 'pan'} onClick={() => setTool('pan')}>
             <Hand size={15} strokeWidth={2.25} />
           </ToolButton>
           {focusedComponent ? (
@@ -1355,44 +1499,50 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       {propsOpen ? (
         <aside className="flex w-[260px] flex-none flex-col overflow-y-auto border-l border-koma-border bg-koma-panel">
           <div className="flex h-8 flex-none items-center px-3 text-[12px] text-koma-fg">
-            {selection.length > 1 ? `${selection.length} selected` : selected ? designLayerName(selected) : 'Properties'}
+            {multi ? `${selectedNodes.length} selected` : selected ? designLayerName(selected) : 'Styles'}
           </div>
-          {selected ? (
+          {selectedNodes.length ? (
             <NodeSettings
               doc={doc}
-              node={selected}
-              hasParent={located?.parentId != null}
-              componentName={selectedVariant ? focusedComponent?.name ?? null : null}
-              variantProps={selectedVariant ? selectedVariant.props : null}
-              axes={selected.kind === 'instance' ? instanceAxes(storedDoc, selected) : null}
-              onMakeComponent={!focusId && selected.kind === 'frame' ? () => commandsRef.current?.component() : undefined}
-              onAddVariant={focusId ? () => {
+              nodes={selectedNodes}
+              hasParent={everyParent}
+              sizeModes={sizeModes}
+              componentName={!multi && selectedVariant ? focusedComponent?.name ?? null : null}
+              variantProps={!multi && selectedVariant ? selectedVariant.props : null}
+              axes={!multi && selected?.kind === 'instance' ? instanceAxes(storedDoc, selected) : null}
+              onMakeComponent={!multi && !focusId && selected?.kind === 'frame' ? () => commandsRef.current?.component() : undefined}
+              onAddVariant={!multi && focusId ? () => {
                 const stored = useKoma.getState().design.docs[key]?.doc
                 const component = stored?.components.find((item) => item.id === focusId)
                 if (!stored || !component) return
                 const next = addComponentVariant(stored, focusId, nextVariantProps(component.variants), () => mintId('n'))
                 if (next) commitStored(next)
               } : undefined}
-              onVariantProps={focusId && selectedVariant ? (props) => {
+              onVariantProps={!multi && focusId && selectedVariant ? (props) => {
                 const stored = useKoma.getState().design.docs[key]?.doc
                 if (!stored || !selectedId) return
                 const next = setVariantProps(stored, focusId, selectedId, props)
                 if (next) commitStored(next, true)
               } : undefined}
-              onRenameComponent={focusId ? (name) => {
+              onRenameComponent={!multi && focusId ? (name) => {
                 const stored = useKoma.getState().design.docs[key]?.doc
                 if (!stored) return
                 const next = renameComponent(stored, focusId, name)
                 if (next) commitStored(next, true)
               } : undefined}
-              onInstanceVariant={selected.kind === 'instance' ? (props) => {
+              onInstanceVariant={!multi && selected?.kind === 'instance' ? (props) => {
                 const stored = useKoma.getState().design.docs[key]?.doc
                 if (!stored) return
                 const next = setInstanceVariant(stored, selected.id, props)
                 if (next) commitStored(next)
               } : undefined}
-              onAddToChat={chatQuery ? sendChat : undefined}
-              onResetInstance={selected.kind === 'instance' && (selected.text || selected.fill) ? () => {
+              onAddToChat={!multi && chatQuery ? sendChat : undefined}
+              onAlign={multi ? (axis, edge) => {
+                const stored = useKoma.getState().design.docs[key]?.doc
+                if (!stored) return
+                commit(alignDesignNodes(editingDoc(stored, focusRef.current), selection, axis, edge))
+              } : undefined}
+              onResetInstance={!multi && selected?.kind === 'instance' && (selected.text || selected.fill) ? () => {
                 const stored = useKoma.getState().design.docs[key]?.doc
                 if (!stored) return
                 commitStored(resetInstanceOverrides(stored, selected.id))
@@ -1407,7 +1557,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
               }}
             />
           ) : (
-            <p className="px-3 text-[12px] text-koma-dim">Select a layer</p>
+            <TokenEditor root={tab.root} path={tab.path} doc={storedDoc} onCommit={(next) => commitStored(next)} />
           )}
         </aside>
       ) : null}
@@ -1537,12 +1687,14 @@ function ToolButton({ label, selected, onClick, children }: { label: string; sel
 function DesignNodeView({
   doc,
   node,
+  zoom,
   selectedIds,
   editing,
   dragCursor,
   locked = false,
   onSelect,
   onResize,
+  onCorner,
   onEdit,
   onText,
   onTextBlur,
@@ -1550,12 +1702,14 @@ function DesignNodeView({
 }: {
   doc: DesignDoc
   node: DesignNode
+  zoom: number
   selectedIds: string[]
   editing: string | null
   dragCursor: string | null
   locked?: boolean
   onSelect: (id: string, event: ReactPointerEvent<HTMLDivElement>) => void
   onResize: (id: string, handle: DesignHandle, event: ReactPointerEvent<HTMLButtonElement>) => void
+  onCorner: (id: string, corner: RadiusCorner, event: ReactPointerEvent<HTMLButtonElement>) => void
   onEdit: (id: string) => void
   onText: (id: string, text: string) => void
   onTextBlur: () => void
@@ -1569,10 +1723,16 @@ function DesignNodeView({
   const container = node.kind === 'frame' || node.kind === 'group'
   const bareFill = node.fill === 'none' || chrome.fill === 'none'
   const bareStroke = (node.kind === 'frame' || node.kind === 'group') && (!node.stroke || node.stroke === 'none')
-  const fillFallback = node.kind === 'frame' ? '#ffffff' : node.kind === 'rect' || node.kind === 'ellipse' || node.kind === 'vector' ? '#d0d5dd' : 'var(--color-koma-panel)'
+  const strokeOff = chrome.stroke === 'none' || ((node.kind === 'rect' || node.kind === 'ellipse') && node.stroke == null)
+  const fillFallback = node.kind === 'frame' ? '#ffffff' : node.kind === 'rect' || node.kind === 'ellipse' || node.kind === 'vector' ? SHAPE_FILL : 'var(--color-koma-panel)'
   const fill = bareFill ? 'transparent' : paintCss(doc, chrome.fill, fillFallback)
   const stroke = paintCss(doc, chrome.stroke, node.kind === 'line' || node.kind === 'vector' ? '#1c1c1c' : 'var(--color-koma-border)')
-  const radius = node.kind === 'ellipse' ? '50%' : typeof chrome.radius === 'number' ? chrome.radius : Number(resolveRef(doc, chrome.radius)) || 0
+  const radius = node.kind === 'ellipse' ? '50%' : typeof chrome.radius === 'number' ? chrome.radius : Number(resolveRef(doc, String(chrome.radius))) || 0
+  const unit = 1 / Math.max(zoom, 0.25)
+  const radiusNumber = typeof radius === 'number' ? radius : 0
+  const inset = radiusNumber > 0 ? radiusNumber : 14 * unit
+  const insetX = Math.min(node.w / 2, Math.max(8 * unit, inset))
+  const insetY = Math.min(node.h / 2, Math.max(8 * unit, inset))
   const children = visual?.children ?? (node.kind === 'instance' ? undefined : node.children)
   const rotation = node.rotation ?? 0
   const flipX = node.flipX ? -1 : 1
@@ -1589,8 +1749,7 @@ function DesignNodeView({
         height: node.h,
         opacity: chrome.opacity,
         transform,
-        outline: selected ? '1px solid var(--color-koma-accent)' : undefined,
-        outlineOffset: -0.5,
+        outline: selected ? `${unit}px solid ${SELECTION}` : undefined,
         cursor: locked || node.locked || dragCursor ? undefined : 'grab',
       }}
       onPointerDown={locked || node.locked ? undefined : (event) => onSelect(node.id, event)}
@@ -1614,7 +1773,7 @@ function DesignNodeView({
         className="absolute inset-0"
         style={{
           background: node.kind === 'line' || node.kind === 'vector' ? 'transparent' : fill,
-          border: bareStroke || chrome.stroke === 'none' || node.kind === 'line' || node.kind === 'vector' ? undefined : `${chrome.strokeWidth}px solid ${stroke}`,
+          border: bareStroke || strokeOff || node.kind === 'line' || node.kind === 'vector' ? undefined : `${chrome.strokeWidth}px solid ${stroke}`,
           borderRadius: radius,
           overflow: node.kind === 'frame' || node.kind === 'instance' ? 'hidden' : undefined,
         }}
@@ -1637,12 +1796,12 @@ function DesignNodeView({
             onBlur={onTextBlur}
             onPointerDown={(event) => event.stopPropagation()}
             className="z-10 h-full w-full border-0 bg-transparent px-1 text-koma-fg shadow-none outline-none"
-            style={{ fontSize: style.fontSize, fontWeight: weightCss(style.weight), textAlign: style.align, color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
+            style={{ fontSize: style.fontSize, fontWeight: weightCss(style.weight), textAlign: style.align, lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined, letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined, color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
           />
         ) : node.kind === 'text' ? (
           <div
             className="flex h-full w-full items-center px-1"
-            style={{ fontSize: style.fontSize, fontWeight: weightCss(style.weight), justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : 'flex-start', color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
+            style={{ fontSize: style.fontSize, fontWeight: weightCss(style.weight), justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : 'flex-start', lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined, letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined, color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
           >
             <span className="truncate">{node.text || 'Text'}</span>
           </div>
@@ -1654,12 +1813,14 @@ function DesignNodeView({
             key={child.id}
             doc={doc}
             node={child}
+            zoom={zoom}
             selectedIds={childIds}
             editing={editing}
             dragCursor={dragCursor}
             locked={locked || node.kind === 'instance'}
             onSelect={onSelect}
             onResize={onResize}
+            onCorner={onCorner}
             onEdit={onEdit}
             onText={onText}
             onTextBlur={onTextBlur}
@@ -1673,9 +1834,26 @@ function DesignNodeView({
             key={handle.id}
             type="button"
             aria-label={`Resize ${handle.id}`}
-            className="absolute z-10 h-2 w-2 rounded-full border border-koma-accent bg-koma-bg"
-            style={{ left: handle.x, top: handle.y, transform: 'translate(-50%, -50%)', cursor: handle.cursor }}
+            className="absolute z-10 border-0 p-0"
+            style={{ left: handle.x, top: handle.y, width: 7 * unit, height: 7 * unit, background: '#ffffff', border: `${unit}px solid ${SELECTION}`, transform: 'translate(-50%, -50%)', cursor: handle.cursor }}
             onPointerDown={(event) => onResize(node.id, handle.id, event)}
+          />
+        ))
+      ) : null}
+      {selected && !locked && !node.locked && !dragCursor && (node.kind === 'rect' || node.kind === 'frame') ? (
+        ([
+          { id: 'tl' as const, x: insetX, y: insetY, cursor: 'nwse-resize' },
+          { id: 'tr' as const, x: node.w - insetX, y: insetY, cursor: 'nesw-resize' },
+          { id: 'bl' as const, x: insetX, y: node.h - insetY, cursor: 'nesw-resize' },
+          { id: 'br' as const, x: node.w - insetX, y: node.h - insetY, cursor: 'nwse-resize' },
+        ]).map((corner) => (
+          <button
+            key={corner.id}
+            type="button"
+            aria-label={`Corner radius ${corner.id}`}
+            className="absolute z-10 rounded-full border-0 p-0"
+            style={{ left: corner.x, top: corner.y, width: 8 * unit, height: 8 * unit, background: '#ffffff', border: `${unit}px solid ${SELECTION}`, transform: 'translate(-50%, -50%)', cursor: corner.cursor }}
+            onPointerDown={(event) => onCorner(node.id, corner.id, event)}
           />
         ))
       ) : null}
@@ -1685,8 +1863,9 @@ function DesignNodeView({
 
 function NodeSettings({
   doc,
-  node,
+  nodes,
   hasParent,
+  sizeModes,
   componentName,
   variantProps,
   axes,
@@ -1697,14 +1876,16 @@ function NodeSettings({
   onInstanceVariant,
   onResetInstance,
   onAddToChat,
+  onAlign,
   onPatch,
   onType,
   onTypeFocus,
   onTypeBlur,
 }: {
   doc: DesignDoc
-  node: DesignNode
+  nodes: DesignNode[]
   hasParent: boolean
+  sizeModes: boolean
   componentName?: string | null
   variantProps?: Record<string, string> | null
   axes?: { name: string; values: string[]; current: string }[] | null
@@ -1715,6 +1896,7 @@ function NodeSettings({
   onInstanceVariant?: (props: Record<string, string>) => void
   onResetInstance?: () => void
   onAddToChat?: () => void
+  onAlign?: (axis: DesignAlignAxis, edge: DesignAlignEdge) => void
   onPatch: (fn: (node: DesignNode) => DesignNode) => void
   onType: (fn: (node: DesignNode) => DesignNode) => void
   onTypeFocus: () => void
@@ -1722,10 +1904,23 @@ function NodeSettings({
 }) {
   const [propName, setPropName] = useState('variant')
   const [propValue, setPropValue] = useState('')
+  const node = nodes[0]
+  const multi = nodes.length > 1
+  const allFrames = nodes.every((item) => item.kind === 'frame')
+  const allText = nodes.every((item) => item.kind === 'text')
+  const showRadius = nodes.every((item) => item.kind === 'rect' || item.kind === 'frame')
   const chrome = nodeChrome(node)
   const style = textStyle(node)
   const colorTokens = doc.tokens.filter((token) => token.kind === 'color')
   const radiusTokens = doc.tokens.filter((token) => token.kind === 'radius')
+  const numberOf = (pick: (item: DesignNode) => number) => {
+    const value = sharedValue(nodes.map(pick))
+    return { value: value ?? pick(node), mixed: value == null }
+  }
+  const textOf = <T extends string>(pick: (item: DesignNode) => T) => {
+    const value = sharedValue(nodes.map(pick))
+    return { value: value ?? pick(node), mixed: value == null }
+  }
   const setField = (patch: Partial<DesignNode>, clear: (keyof DesignNode)[] = []) => {
     onPatch((current) => {
       const next: DesignNode = { ...current, ...patch }
@@ -1734,16 +1929,43 @@ function NodeSettings({
     })
   }
   const paintChange = (field: 'fill' | 'stroke', next: string | null) => {
-    const fallback = field === 'fill' ? (node.kind === 'frame' ? '#ffffff' : '#d0d5dd') : '#1c1c1c'
-    const container = node.kind === 'frame' || node.kind === 'group'
-    const themed = node.kind === 'rect' || node.kind === 'ellipse' || (node.kind === 'vector' && !!node.vector?.regions.length)
-    if (next === 'none') setField({ [field]: 'none' })
-    else if (next == null) {
-      if (container) setField({ [field]: fallback })
-      else if (themed) setField({}, [field])
-      else setField({ [field]: fallback })
-    } else setField({ [field]: next })
+    onPatch((current) => {
+      const fallback = field === 'fill' ? (current.kind === 'frame' ? '#ffffff' : SHAPE_FILL) : '#1c1c1c'
+      const themedFill = field === 'fill' && (current.kind === 'rect' || current.kind === 'ellipse' || (current.kind === 'vector' && !!current.vector?.regions.length))
+      const copy: DesignNode = { ...current }
+      if (next === 'none') copy[field] = 'none'
+      else if (next == null) {
+        if (themedFill) delete copy[field]
+        else copy[field] = fallback
+      } else copy[field] = next
+      return copy
+    })
   }
+  const xField = numberOf((item) => item.x)
+  const yField = numberOf((item) => item.y)
+  const wField = numberOf((item) => item.w)
+  const hField = numberOf((item) => item.h)
+  const rotationField = numberOf((item) => item.rotation ?? 0)
+  const opacityField = numberOf((item) => Math.round((item.opacity ?? 1) * 100))
+  const strokeWidthField = numberOf((item) => nodeChrome(item).strokeWidth)
+  const radiusField = textOf((item) => (typeof item.radius === 'number' ? (item.radius > 0 ? String(item.radius) : '0') : item.radius || '0'))
+  const fillField = textOf((item) => containerPaint(item, 'fill', nodeChrome(item).fill))
+  const strokeField = textOf((item) => containerPaint(item, 'stroke', nodeChrome(item).stroke))
+  const layoutField = textOf((item) => item.layout ?? 'free')
+  const gapField = numberOf((item) => item.gap ?? 0)
+  const padField = numberOf((item) => item.pad ?? 0)
+  const justifyField = textOf((item) => item.justify ?? 'start')
+  const alignField = textOf((item) => item.align ?? 'start')
+  const wModeField = textOf((item) => item.wMode ?? 'fixed')
+  const hModeField = textOf((item) => item.hMode ?? 'fixed')
+  const weightField = textOf((item) => textStyle(item).weight)
+  const textAlignField = textOf((item) => textStyle(item).align)
+  const fontSizeField = numberOf((item) => textStyle(item).fontSize)
+  const lineField = numberOf((item) => textStyle(item).lineHeight)
+  const trackingField = numberOf((item) => textStyle(item).letterSpacing)
+  const colorField = textOf((item) => textStyle(item).color || 'none')
+  const absoluteField = textOf((item) => (item.absolute ? 'on' : 'off'))
+  const flows = nodes.every((item) => item.layout === 'row' || item.layout === 'column')
   return (
     <div className="flex flex-col gap-3 px-3 pb-3 text-[12px]">
       {onMakeComponent ? (
@@ -1820,7 +2042,8 @@ function NodeSettings({
           Reset overrides
         </button>
       ) : null}
-      <label className="flex flex-col gap-1">
+      {multi ? null : (
+        <label className="flex flex-col gap-1">
           <span className="text-koma-dim">{node.kind === 'text' || node.kind === 'instance' ? 'Text' : 'Name'}</span>
           <input
             value={node.kind === 'text' || node.kind === 'instance' ? node.text ?? '' : node.name ?? ''}
@@ -1843,26 +2066,71 @@ function NodeSettings({
             className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
           />
         </label>
+      )}
       <Section title="Position">
+        {multi && onAlign ? (
+          <div className="flex items-center justify-between gap-1">
+            <div className="flex gap-0.5">
+              <AlignButton label="Align left" onClick={() => onAlign('horizontal', 'min')}><AlignStartVertical size={14} /></AlignButton>
+              <AlignButton label="Align center" onClick={() => onAlign('horizontal', 'center')}><AlignCenterVertical size={14} /></AlignButton>
+              <AlignButton label="Align right" onClick={() => onAlign('horizontal', 'max')}><AlignEndVertical size={14} /></AlignButton>
+            </div>
+            <div className="flex gap-0.5">
+              <AlignButton label="Align top" onClick={() => onAlign('vertical', 'min')}><AlignStartHorizontal size={14} /></AlignButton>
+              <AlignButton label="Align middle" onClick={() => onAlign('vertical', 'center')}><AlignCenterHorizontal size={14} /></AlignButton>
+              <AlignButton label="Align bottom" onClick={() => onAlign('vertical', 'max')}><AlignEndHorizontal size={14} /></AlignButton>
+            </div>
+          </div>
+        ) : null}
         <div className="grid grid-cols-2 gap-1">
-          <GeomField label="X" value={node.x} onChange={(x) => setField({ x })} />
-          <GeomField label="Y" value={node.y} onChange={(y) => setField({ y })} />
-          <GeomField label="Rotation" value={node.rotation ?? 0} onChange={(rotation) => setField(rotation ? { rotation } : {}, rotation ? [] : ['rotation'])} />
+          <GeomField label="X" value={xField.value} mixed={xField.mixed} onChange={(x) => setField({ x })} />
+          <GeomField label="Y" value={yField.value} mixed={yField.mixed} onChange={(y) => setField({ y })} />
+          {multi ? (
+            <>
+              <GeomField label="W" value={wField.value} mixed={wField.mixed} onChange={(w) => setField({ w: Math.max(1, w) }, ['wMode'])} />
+              <GeomField label="H" value={hField.value} mixed={hField.mixed} onChange={(h) => setField({ h: Math.max(1, h) }, ['hMode'])} />
+            </>
+          ) : null}
+          <GeomField label="R" suffix="°" value={rotationField.value} mixed={rotationField.mixed} onChange={(rotation) => {
+            const wrapped = ((rotation % 360) + 360) % 360
+            setField(wrapped ? { rotation: wrapped } : {}, wrapped ? [] : ['rotation'])
+          }} />
           <div className="flex items-end gap-1">
-            <button type="button" aria-pressed={!!node.flipX} onClick={() => setField(node.flipX ? {} : { flipX: true }, node.flipX ? ['flipX'] : [])} className={`h-7 flex-1 rounded ${node.flipX ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}>Flip H</button>
-            <button type="button" aria-pressed={!!node.flipY} onClick={() => setField(node.flipY ? {} : { flipY: true }, node.flipY ? ['flipY'] : [])} className={`h-7 flex-1 rounded ${node.flipY ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}>Flip V</button>
+            <button type="button" aria-label="Flip horizontal" onClick={() => onPatch((current) => {
+              const next = { ...current }
+              if (current.flipX) delete next.flipX
+              else next.flipX = true
+              return next
+            })} className="h-7 flex-1 rounded text-koma-dim hover:bg-koma-hover">Flip H</button>
+            <button type="button" aria-label="Flip vertical" onClick={() => onPatch((current) => {
+              const next = { ...current }
+              if (current.flipY) delete next.flipY
+              else next.flipY = true
+              return next
+            })} className="h-7 flex-1 rounded text-koma-dim hover:bg-koma-hover">Flip V</button>
+            <button type="button" aria-label="Rotate 90 degrees" onClick={() => onPatch((current) => {
+              const wrapped = (((current.rotation ?? 0) + 90) % 360 + 360) % 360
+              const next = { ...current }
+              if (wrapped) next.rotation = wrapped
+              else delete next.rotation
+              return next
+            })} className="h-7 flex-1 rounded text-koma-dim hover:bg-koma-hover">90°</button>
           </div>
         </div>
       </Section>
+      {!multi || allFrames ? (
       <Section title="Layout">
-        <div className="grid grid-cols-2 gap-1">
-          <GeomField label="W" value={node.w} onChange={(w) => setField({ w: Math.max(1, w) }, ['wMode'])} />
-          <GeomField label="H" value={node.h} onChange={(h) => setField({ h: Math.max(1, h) }, ['hMode'])} />
-        </div>
-      {node.kind === 'frame' ? (
+        {multi ? null : (
+          <div className="grid grid-cols-2 gap-1">
+            <GeomField label="W" value={node.w} onChange={(w) => setField({ w: Math.max(1, w) }, ['wMode'])} />
+            <GeomField label="H" value={node.h} onChange={(h) => setField({ h: Math.max(1, h) }, ['hMode'])} />
+          </div>
+        )}
+      {allFrames ? (
         <Choices
           label="Layout"
-          value={node.layout ?? 'free'}
+          mixed={layoutField.mixed}
+          value={layoutField.value}
           options={[
             { value: 'free', label: 'Free' },
             { value: 'row', label: 'Row' },
@@ -1871,13 +2139,14 @@ function NodeSettings({
           onChange={(layout) => setField(layout === 'free' ? {} : { layout }, layout === 'free' ? ['layout'] : [])}
         />
       ) : null}
-      {node.layout ? (
+      {flows ? (
         <>
-          <NumberField label="Gap" value={node.gap ?? 0} onChange={(gap) => setField(gap > 0 ? { gap } : {}, gap > 0 ? [] : ['gap'])} />
-          <NumberField label="Padding" value={node.pad ?? 0} onChange={(pad) => setField(pad > 0 ? { pad } : {}, pad > 0 ? [] : ['pad'])} />
+          <GeomField label="Gap" value={gapField.value} mixed={gapField.mixed} onChange={(gap) => setField(gap > 0 ? { gap } : {}, gap > 0 ? [] : ['gap'])} />
+          <GeomField label="Pad" value={padField.value} mixed={padField.mixed} onChange={(pad) => setField(pad > 0 ? { pad } : {}, pad > 0 ? [] : ['pad'])} />
           <Choices
             label="Align"
-            value={node.justify ?? 'start'}
+            mixed={justifyField.mixed}
+            value={justifyField.value}
             options={[
               { value: 'start', label: 'Start' },
               { value: 'center', label: 'Center' },
@@ -1887,7 +2156,8 @@ function NodeSettings({
           />
           <Choices
             label="Cross"
-            value={node.align ?? 'start'}
+            mixed={alignField.mixed}
+            value={alignField.value}
             options={[
               { value: 'start', label: 'Start' },
               { value: 'center', label: 'Center' },
@@ -1897,58 +2167,69 @@ function NodeSettings({
           />
         </>
       ) : null}
-      <Choices
-        label="Width"
-        value={node.wMode ?? 'fixed'}
-        options={[
-          { value: 'fixed', label: 'Fixed' },
-          { value: 'hug', label: 'Hug' },
-          { value: 'fill', label: 'Fill' },
-        ]}
-        onChange={(mode) => setField(mode === 'fixed' ? {} : { wMode: mode }, mode === 'fixed' ? ['wMode'] : [])}
-      />
-      <Choices
-        label="Height"
-        value={node.hMode ?? 'fixed'}
-        options={[
-          { value: 'fixed', label: 'Fixed' },
-          { value: 'hug', label: 'Hug' },
-          { value: 'fill', label: 'Fill' },
-        ]}
-        onChange={(mode) => setField(mode === 'fixed' ? {} : { hMode: mode }, mode === 'fixed' ? ['hMode'] : [])}
-      />
+      {sizeModes ? (
+        <>
+          <Choices
+            label="Width"
+            mixed={wModeField.mixed}
+            value={wModeField.value}
+            options={[
+              { value: 'fixed', label: 'Fixed' },
+              { value: 'hug', label: 'Hug' },
+              { value: 'fill', label: 'Fill' },
+            ]}
+            onChange={(mode) => setField(mode === 'fixed' ? {} : { wMode: mode }, mode === 'fixed' ? ['wMode'] : [])}
+          />
+          <Choices
+            label="Height"
+            mixed={hModeField.mixed}
+            value={hModeField.value}
+            options={[
+              { value: 'fixed', label: 'Fixed' },
+              { value: 'hug', label: 'Hug' },
+              { value: 'fill', label: 'Fill' },
+            ]}
+            onChange={(mode) => setField(mode === 'fixed' ? {} : { hMode: mode }, mode === 'fixed' ? ['hMode'] : [])}
+          />
+        </>
+      ) : null}
       {hasParent ? (
         <div className="flex items-center justify-between">
-          <span className="text-koma-dim">Absolute</span>
+          <span className="text-koma-dim">Absolute{absoluteField.mixed ? ' · Mixed' : ''}</span>
           <button
             type="button"
-            aria-pressed={!!node.absolute}
-            onClick={() => setField(node.absolute ? {} : { absolute: true }, node.absolute ? ['absolute'] : [])}
-            className={`h-6 rounded px-2 ${node.absolute ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
+            aria-pressed={absoluteField.value === 'on' && !absoluteField.mixed}
+            onClick={() => onPatch((current) => {
+              const next = { ...current }
+              if (current.absolute) delete next.absolute
+              else next.absolute = true
+              return next
+            })}
+            className={`h-6 rounded px-2 ${absoluteField.value === 'on' && !absoluteField.mixed ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
           >
-            {node.absolute ? 'On' : 'Off'}
+            {absoluteField.mixed ? 'Mixed' : absoluteField.value === 'on' ? 'On' : 'Off'}
           </button>
         </div>
       ) : null}
       </Section>
+      ) : null}
       <Section title="Appearance">
-        <GeomField label="Opacity %" value={Math.round((node.opacity ?? 1) * 100)} onChange={(value) => {
+        <GeomField label="Opacity" suffix="%" value={opacityField.value} mixed={opacityField.mixed} onChange={(value) => {
           const opacity = Math.min(100, Math.max(0, value)) / 100
           setField(opacity < 1 ? { opacity } : {}, opacity < 1 ? [] : ['opacity'])
         }} />
-        <GeomField label="Stroke" value={chrome.strokeWidth} onChange={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])} />
-        {node.kind === 'line' || node.kind === 'vector' ? null : (
+        {showRadius ? (
           <label className="flex flex-col gap-1">
-            <span className="text-koma-dim">Corner radius</span>
+            <span className="text-koma-dim">Corner radius{radiusField.mixed ? ' · Mixed' : ''}</span>
             {radiusTokens.length ? (
               <div className="flex flex-wrap gap-1">
                 {radiusTokens.map((token) => (
                   <button
                     key={token.name}
                     type="button"
-                    aria-pressed={node.radius === token.name}
+                    aria-pressed={!radiusField.mixed && node.radius === token.name}
                     onClick={() => setField({ radius: token.name })}
-                    className={`h-6 rounded px-1.5 ${node.radius === token.name ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
+                    className={`h-6 rounded px-1.5 ${!radiusField.mixed && node.radius === token.name ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
                   >
                     {token.name}
                   </button>
@@ -1958,7 +2239,8 @@ function NodeSettings({
             <input
               type="number"
               min={0}
-              value={typeof node.radius === 'number' ? node.radius : Number(resolveRef(doc, typeof node.radius === 'string' ? node.radius : '')) || 0}
+              value={radiusField.mixed ? '' : typeof node.radius === 'number' ? node.radius : Number(resolveRef(doc, typeof node.radius === 'string' ? node.radius : '')) || 0}
+              placeholder={radiusField.mixed ? 'Mixed' : undefined}
               onChange={(event) => {
                 const radius = Number(event.target.value)
                 if (!Number.isFinite(radius) || radius <= 0) setField({}, ['radius'])
@@ -1967,12 +2249,13 @@ function NodeSettings({
               className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
             />
           </label>
-        )}
+        ) : null}
       </Section>
       <Section title="Fill">
         <PaintRow
           label="Fill"
-          value={containerPaint(node, 'fill', chrome.fill)}
+          mixed={fillField.mixed}
+          value={fillField.value}
           fallback="#1a1d27"
           resolved={resolveRef(doc, chrome.fill)}
           tokens={colorTokens}
@@ -1982,32 +2265,33 @@ function NodeSettings({
       <Section title="Stroke">
         <PaintRow
           label="Stroke"
-          value={containerPaint(node, 'stroke', chrome.stroke)}
+          mixed={strokeField.mixed}
+          value={strokeField.value}
           fallback="#8b93b8"
           resolved={resolveRef(doc, chrome.stroke)}
           tokens={colorTokens}
           onChange={(next) => paintChange('stroke', next)}
         />
+        <GeomField label="Weight" value={strokeWidthField.value} mixed={strokeWidthField.mixed} onChange={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])} />
       </Section>
-      {node.kind === 'text' ? (
+      {allText ? (
         <Section title="Text">
-          <label className="flex flex-col gap-1">
-            <span className="text-koma-dim">Size</span>
-            <input
-              type="number"
-              min={8}
-              value={style.fontSize}
-              onChange={(event) => {
-                const fontSize = Number(event.target.value)
-                if (!Number.isFinite(fontSize) || fontSize <= 0 || fontSize === 13) setField({}, ['fontSize'])
-                else setField({ fontSize })
-              }}
-              className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
-            />
-          </label>
+          <GeomField label="Size" value={fontSizeField.value} mixed={fontSizeField.mixed} onChange={(fontSize) => {
+            if (!Number.isFinite(fontSize) || fontSize <= 0 || fontSize === 13) setField({}, ['fontSize'])
+            else setField({ fontSize })
+          }} />
+          <GeomField label="Line" value={lineField.value} mixed={lineField.mixed} onChange={(lineHeight) => {
+            if (!Number.isFinite(lineHeight) || lineHeight <= 0) setField({}, ['lineHeight'])
+            else setField({ lineHeight })
+          }} />
+          <GeomField label="Spacing" value={trackingField.value} mixed={trackingField.mixed} onChange={(letterSpacing) => {
+            if (!Number.isFinite(letterSpacing) || letterSpacing === 0) setField({}, ['letterSpacing'])
+            else setField({ letterSpacing })
+          }} />
           <Choices
             label="Weight"
-            value={style.weight}
+            mixed={weightField.mixed}
+            value={weightField.value}
             options={[
               { value: 'regular', label: 'Regular' },
               { value: 'medium', label: 'Medium' },
@@ -2017,7 +2301,8 @@ function NodeSettings({
           />
           <Choices
             label="Align"
-            value={style.align}
+            mixed={textAlignField.mixed}
+            value={textAlignField.value}
             options={[
               { value: 'left', label: 'Left' },
               { value: 'center', label: 'Center' },
@@ -2027,7 +2312,8 @@ function NodeSettings({
           />
           <PaintRow
             label="Color"
-            value={style.color || 'none'}
+            mixed={colorField.mixed}
+            value={colorField.value}
             fallback="#c8d3f5"
             resolved={resolveRef(doc, style.color)}
             tokens={colorTokens}
@@ -2048,13 +2334,14 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-function GeomField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+function GeomField({ label, value, mixed, suffix, onChange }: { label: string; value: number; mixed?: boolean; suffix?: string; onChange: (value: number) => void }) {
   return (
     <label className="flex h-7 items-center gap-1 rounded border border-koma-border bg-koma-bg px-1.5">
       <span className="flex-none text-[11px] text-koma-dim">{label}</span>
       <input
         type="number"
-        value={Number.isFinite(value) ? Math.round(value * 100) / 100 : 0}
+        value={mixed ? '' : Number.isFinite(value) ? Math.round(value * 100) / 100 : 0}
+        placeholder={mixed ? 'Mixed' : undefined}
         aria-label={label}
         onChange={(event) => {
           const next = Number(event.target.value)
@@ -2062,7 +2349,16 @@ function GeomField({ label, value, onChange }: { label: string; value: number; o
         }}
         className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
       />
+      {suffix ? <span className="flex-none text-[11px] text-koma-dim">{suffix}</span> : null}
     </label>
+  )
+}
+
+function AlignButton({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
+  return (
+    <button type="button" aria-label={label} title={label} onClick={onClick} className="flex h-7 w-7 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg">
+      {children}
+    </button>
   )
 }
 
@@ -2070,7 +2366,8 @@ function containerPaint(node: DesignNode, field: 'fill' | 'stroke', chrome: stri
   if (node.kind === 'group' && node[field] == null) return 'none'
   if (node.kind === 'frame' && field === 'fill' && node.fill == null) return '#ffffff'
   if (node.kind === 'frame' && field === 'stroke' && node.stroke == null) return 'none'
-  if ((node.kind === 'rect' || node.kind === 'ellipse') && field === 'fill' && node.fill == null) return '#d0d5dd'
+  if ((node.kind === 'rect' || node.kind === 'ellipse') && field === 'fill' && node.fill == null) return SHAPE_FILL
+  if ((node.kind === 'rect' || node.kind === 'ellipse') && field === 'stroke' && node.stroke == null) return 'none'
   if ((node.kind === 'line' || node.kind === 'vector') && field === 'stroke' && node.stroke == null) return '#1c1c1c'
   return chrome
 }
@@ -2096,17 +2393,17 @@ function PenOverlay({ draft, hover, zoom }: { draft: PenDraft; hover: { x: numbe
   return (
     <svg className="pointer-events-none absolute overflow-visible" width={1} height={1}>
       <path d={penCurve(points, false)} fill="none" stroke="#1c1c1c" strokeWidth={2} />
-      {rubber ? <path d={rubber} fill="none" stroke="var(--color-koma-accent)" strokeWidth={1.25 * unit} /> : null}
+      {rubber ? <path d={rubber} fill="none" stroke={SELECTION} strokeWidth={1.25 * unit} /> : null}
       {points.map((point, index) => {
         const showOut = point.outgoing.x !== 0 || point.outgoing.y !== 0
         const showIn = point.incoming.x !== 0 || point.incoming.y !== 0
         return (
           <g key={`${draft.id}-${index}`}>
-            {showOut ? <line x1={point.x} y1={point.y} x2={point.x + point.outgoing.x} y2={point.y + point.outgoing.y} stroke="var(--color-koma-accent)" strokeWidth={unit} /> : null}
-            {showIn ? <line x1={point.x} y1={point.y} x2={point.x + point.incoming.x} y2={point.y + point.incoming.y} stroke="var(--color-koma-accent)" strokeWidth={unit} /> : null}
-            {showOut ? <circle cx={point.x + point.outgoing.x} cy={point.y + point.outgoing.y} r={3 * unit} fill="#ffffff" stroke="var(--color-koma-accent)" strokeWidth={unit} /> : null}
-            {showIn ? <circle cx={point.x + point.incoming.x} cy={point.y + point.incoming.y} r={3 * unit} fill="#ffffff" stroke="var(--color-koma-accent)" strokeWidth={unit} /> : null}
-            <rect x={point.x - 3.5 * unit} y={point.y - 3.5 * unit} width={7 * unit} height={7 * unit} fill="#ffffff" stroke="var(--color-koma-accent)" strokeWidth={unit} />
+            {showOut ? <line x1={point.x} y1={point.y} x2={point.x + point.outgoing.x} y2={point.y + point.outgoing.y} stroke={SELECTION} strokeWidth={unit} /> : null}
+            {showIn ? <line x1={point.x} y1={point.y} x2={point.x + point.incoming.x} y2={point.y + point.incoming.y} stroke={SELECTION} strokeWidth={unit} /> : null}
+            {showOut ? <circle cx={point.x + point.outgoing.x} cy={point.y + point.outgoing.y} r={3 * unit} fill="#ffffff" stroke={SELECTION} strokeWidth={unit} /> : null}
+            {showIn ? <circle cx={point.x + point.incoming.x} cy={point.y + point.incoming.y} r={3 * unit} fill="#ffffff" stroke={SELECTION} strokeWidth={unit} /> : null}
+            <rect x={point.x - 3.5 * unit} y={point.y - 3.5 * unit} width={7 * unit} height={7 * unit} fill="#ffffff" stroke={SELECTION} strokeWidth={unit} />
           </g>
         )
       })}
@@ -2132,8 +2429,8 @@ function NumberField({ label, value, onChange }: { label: string; value: number;
   )
 }
 
-function PaintRow({ label, value, fallback, resolved, tokens, onChange }: { label: string; value: string; fallback: string; resolved?: string; tokens?: { name: string }[]; onChange: (next: string | null) => void }) {
-  const on = value !== 'none'
+function PaintRow({ label, value, mixed, fallback, resolved, tokens, onChange }: { label: string; value: string; mixed?: boolean; fallback: string; resolved?: string; tokens?: { name: string }[]; onChange: (next: string | null) => void }) {
+  const on = !mixed && value !== 'none'
   const hex = value.startsWith('#') ? value : resolved?.startsWith('#') ? resolved : fallback
   const swatch = value.startsWith('#') ? value : resolved?.startsWith('#') ? resolved : on ? 'var(--color-koma-panel)' : 'transparent'
   return (
@@ -2143,10 +2440,10 @@ function PaintRow({ label, value, fallback, resolved, tokens, onChange }: { labe
         <button
           type="button"
           aria-pressed={on}
-          onClick={() => onChange(on ? 'none' : null)}
+          onClick={() => onChange(mixed || on ? 'none' : null)}
           className={`h-6 rounded px-2 ${on ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
         >
-          {on ? 'On' : 'Off'}
+          {mixed ? 'Mixed' : on ? 'On' : 'Off'}
         </button>
       </div>
       <label className="relative h-7 overflow-hidden rounded border border-koma-border">
@@ -2178,18 +2475,18 @@ function PaintRow({ label, value, fallback, resolved, tokens, onChange }: { labe
   )
 }
 
-function Choices<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: { value: T; label: string }[]; onChange: (value: T) => void }) {
+function Choices<T extends string>({ label, value, mixed, options, onChange }: { label: string; value: T; mixed?: boolean; options: { value: T; label: string }[]; onChange: (value: T) => void }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-koma-dim">{label}</span>
+      <span className="text-koma-dim">{label}{mixed ? ' · Mixed' : ''}</span>
       <div className="flex gap-0.5">
         {options.map((option) => (
           <button
             key={option.value}
             type="button"
-            aria-pressed={option.value === value}
+            aria-pressed={!mixed && option.value === value}
             onClick={() => onChange(option.value)}
-            className={`h-7 flex-1 rounded text-[12px] ${option.value === value ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
+            className={`h-7 flex-1 rounded text-[12px] ${!mixed && option.value === value ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
           >
             {option.label}
           </button>
