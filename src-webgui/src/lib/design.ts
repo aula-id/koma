@@ -239,6 +239,240 @@ function cloneNode(node: DesignNode, mint: () => string): DesignNode {
   return next
 }
 
+export type DesignHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
+
+export function snapDesign(n: number, grid: number, enabled: boolean): number {
+  if (!enabled || !Number.isFinite(grid) || grid <= 0) return n
+  return Math.round(n / grid) * grid
+}
+
+export function resizeDesignNode(
+  node: DesignNode,
+  handle: DesignHandle,
+  dx: number,
+  dy: number,
+  grid: number,
+  enabled: boolean,
+): DesignNode {
+  const right = node.x + node.w
+  const bottom = node.y + node.h
+  let x = node.x
+  let y = node.y
+  let w = node.w
+  let h = node.h
+  if (handle.includes('w')) {
+    x = snapDesign(node.x + dx, grid, enabled)
+    w = right - x
+  } else if (handle.includes('e')) {
+    w = snapDesign(right + dx, grid, enabled) - x
+  }
+  if (handle.includes('n')) {
+    y = snapDesign(node.y + dy, grid, enabled)
+    h = bottom - y
+  } else if (handle.includes('s')) {
+    h = snapDesign(bottom + dy, grid, enabled) - y
+  }
+  if (w < DESIGN_MIN_W) {
+    if (handle.includes('w')) x = right - DESIGN_MIN_W
+    w = DESIGN_MIN_W
+  }
+  if (h < DESIGN_MIN_H) {
+    if (handle.includes('n')) y = bottom - DESIGN_MIN_H
+    h = DESIGN_MIN_H
+  }
+  return { ...node, x, y, w, h }
+}
+
+export function findDesignNode(doc: DesignDoc, id: string): DesignNode | null {
+  for (const screen of doc.screens) {
+    const found = findInNode(screen, id)
+    if (found) return found
+  }
+  return null
+}
+
+export function locateDesign(doc: DesignDoc, id: string): { node: DesignNode; parentId: string | null } | null {
+  for (const screen of doc.screens) {
+    if (screen.id === id) return { node: screen, parentId: null }
+    const found = locateIn(screen, id)
+    if (found) return found
+  }
+  return null
+}
+
+/** Top-left of a node in canvas coordinates. */
+export function nodeOrigin(doc: DesignDoc, id: string): { x: number; y: number } | null {
+  for (const screen of doc.screens) {
+    const found = originIn(screen, id, 0, 0)
+    if (found) return found
+  }
+  return null
+}
+
+/** Topmost node under a canvas point. */
+export function hitDesign(doc: DesignDoc, x: number, y: number): DesignNode | null {
+  for (let i = doc.screens.length - 1; i >= 0; i--) {
+    const found = hitIn(doc.screens[i], x, y)
+    if (found) return found
+  }
+  return null
+}
+
+/** Deepest frame under a canvas point, skipping a node and its descendants. */
+export function frameAtPoint(doc: DesignDoc, x: number, y: number, ignoreId: string): string | null {
+  for (let i = doc.screens.length - 1; i >= 0; i--) {
+    const found = frameIn(doc.screens[i], x, y, ignoreId)
+    if (found) return found
+  }
+  return null
+}
+
+export function updateDesignNode(doc: DesignDoc, id: string, fn: (node: DesignNode) => DesignNode): DesignDoc {
+  let changed = false
+  const screens = doc.screens.map((screen) => {
+    const next = replaceNode(screen, id, fn)
+    if (next !== screen) changed = true
+    return next
+  })
+  return changed ? { ...doc, screens } : doc
+}
+
+export function deleteDesignNode(doc: DesignDoc, id: string): DesignDoc {
+  let changed = false
+  const screens: DesignNode[] = []
+  for (const screen of doc.screens) {
+    const next = withoutNode(screen, id)
+    if (next !== screen) changed = true
+    if (next) screens.push(next)
+  }
+  return changed ? { ...doc, screens } : doc
+}
+
+export function insertDesignNode(doc: DesignDoc, parentId: string | null, node: DesignNode): DesignDoc {
+  if (parentId == null) {
+    if (node.kind !== 'frame') return doc
+    return { ...doc, screens: [...doc.screens, node] }
+  }
+  let changed = false
+  const screens = doc.screens.map((screen) => {
+    const next = addChild(screen, parentId, node)
+    if (next !== screen) changed = true
+    return next
+  })
+  return changed ? { ...doc, screens } : doc
+}
+
+/** Move a node under a new parent. A null parent promotes a frame to a screen. */
+export function placeDesignNode(doc: DesignDoc, id: string, parentId: string | null, x: number, y: number): DesignDoc {
+  const located = locateDesign(doc, id)
+  if (!located) return doc
+  if (parentId === located.parentId && located.node.x === x && located.node.y === y) return doc
+  if (parentId === id) return doc
+  if (parentId && containsNode(located.node, parentId)) return doc
+  if (parentId == null && located.node.kind !== 'frame') return doc
+  if (parentId != null && !findDesignNode(doc, parentId)) return doc
+  const removed = deleteDesignNode(doc, id)
+  return insertDesignNode(removed, parentId, { ...located.node, x, y })
+}
+
+function findInNode(node: DesignNode, id: string): DesignNode | null {
+  if (node.id === id) return node
+  for (const child of node.children ?? []) {
+    const found = findInNode(child, id)
+    if (found) return found
+  }
+  return null
+}
+
+function locateIn(node: DesignNode, id: string): { node: DesignNode; parentId: string } | null {
+  for (const child of node.children ?? []) {
+    if (child.id === id) return { node: child, parentId: node.id }
+    const found = locateIn(child, id)
+    if (found) return found
+  }
+  return null
+}
+
+function originIn(node: DesignNode, id: string, ax: number, ay: number): { x: number; y: number } | null {
+  if (node.id === id) return { x: ax + node.x, y: ay + node.y }
+  for (const child of node.children ?? []) {
+    const found = originIn(child, id, ax + node.x, ay + node.y)
+    if (found) return found
+  }
+  return null
+}
+
+function hitIn(node: DesignNode, x: number, y: number): DesignNode | null {
+  if (x < node.x || y < node.y || x > node.x + node.w || y > node.y + node.h) return null
+  const localX = x - node.x
+  const localY = y - node.y
+  const children = node.children ?? []
+  for (let i = children.length - 1; i >= 0; i--) {
+    const found = hitIn(children[i], localX, localY)
+    if (found) return found
+  }
+  return node
+}
+
+function frameIn(node: DesignNode, x: number, y: number, ignoreId: string): string | null {
+  if (node.id === ignoreId) return null
+  if (x < node.x || y < node.y || x > node.x + node.w || y > node.y + node.h) return null
+  const localX = x - node.x
+  const localY = y - node.y
+  if (node.kind === 'frame') {
+    const children = node.children ?? []
+    for (let i = children.length - 1; i >= 0; i--) {
+      const found = frameIn(children[i], localX, localY, ignoreId)
+      if (found) return found
+    }
+    return node.id
+  }
+  return null
+}
+
+function containsNode(node: DesignNode, id: string): boolean {
+  if (node.id === id) return true
+  return (node.children ?? []).some((child) => containsNode(child, id))
+}
+
+function replaceNode(node: DesignNode, id: string, fn: (node: DesignNode) => DesignNode): DesignNode {
+  if (node.id === id) return fn(node)
+  if (!node.children?.length) return node
+  let changed = false
+  const children = node.children.map((child) => {
+    const next = replaceNode(child, id, fn)
+    if (next !== child) changed = true
+    return next
+  })
+  return changed ? { ...node, children } : node
+}
+
+function withoutNode(node: DesignNode, id: string): DesignNode | null {
+  if (node.id === id) return null
+  if (!node.children?.length) return node
+  let changed = false
+  const children: DesignNode[] = []
+  for (const child of node.children) {
+    const next = withoutNode(child, id)
+    if (next !== child) changed = true
+    if (next) children.push(next)
+  }
+  if (!changed) return node
+  return { ...node, children: children.length ? children : undefined }
+}
+
+function addChild(node: DesignNode, parentId: string, child: DesignNode): DesignNode {
+  if (node.id === parentId && node.kind === 'frame') return { ...node, children: [...(node.children ?? []), child] }
+  if (!node.children?.length) return node
+  let changed = false
+  const children = node.children.map((item) => {
+    const next = addChild(item, parentId, child)
+    if (next !== item) changed = true
+    return next
+  })
+  return changed ? { ...node, children } : node
+}
+
 function num(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }

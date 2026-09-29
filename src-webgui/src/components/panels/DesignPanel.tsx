@@ -6,7 +6,40 @@ import { AddBtn, Empty, IconBtn } from './helpers'
 import { Select } from './form'
 import { useKoma } from '../../store/koma'
 import { fileKey, type FileTreeEntry } from '../../store/coding'
-import { designFileName, isDesignPath } from '../../lib/design'
+import { DESIGN_MIME, designFileName, isDesignPath } from '../../lib/design'
+
+const SHAPES: { kind: 'frame' | 'rect' | 'text'; label: string }[] = [
+  { kind: 'frame', label: 'Frame' },
+  { kind: 'rect', label: 'Rectangle' },
+  { kind: 'text', label: 'Text' },
+]
+
+function ShapeTile({ kind, label }: { kind: 'frame' | 'rect' | 'text'; label: string }) {
+  return (
+    <div
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData(DESIGN_MIME, kind)
+        e.dataTransfer.setData('text/plain', kind)
+        try {
+          e.dataTransfer.effectAllowed = 'copy'
+        } catch {
+          /* ignore */
+        }
+      }}
+      className="flex cursor-grab items-center justify-center rounded p-0.5 text-koma-dim hover:bg-koma-hover hover:text-koma-fg active:cursor-grabbing"
+      title={`Drag ${label} onto the canvas`}
+    >
+      {kind === 'text' ? (
+        <span className="flex h-8 items-center px-1 text-[13px] leading-none text-koma-fg/80">Text</span>
+      ) : (
+        <span className={`flex h-8 items-center justify-center rounded border border-current bg-koma-bg text-[11px] leading-none text-koma-fg/80 ${kind === 'frame' ? 'w-16' : 'w-10'}`}>
+          {kind === 'frame' ? 'Frame' : 'Rect'}
+        </span>
+      )}
+    </div>
+  )
+}
 
 const EMPTY_ROOTS: string[] = []
 
@@ -95,6 +128,7 @@ export function DesignPanel() {
   const deleteCodingItem = useKoma((s) => s.deleteCodingItem)
   const req = useKoma((s) => s.req)
 
+  const [shapesOpen, setShapesOpen] = useState(true)
   const [filesOpen, setFilesOpen] = useState(true)
   const [creating, setCreating] = useState(false)
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -183,6 +217,13 @@ export function DesignPanel() {
           />
         </div>
       </div>
+      <AccordionSection title="Shapes" open={shapesOpen} onToggle={() => setShapesOpen((open) => !open)} fill={false}>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-2 py-1.5">
+          {SHAPES.map((shape) => (
+            <ShapeTile key={shape.kind} {...shape} />
+          ))}
+        </div>
+      </AccordionSection>
       <AccordionSection
         title="Designs"
         open={filesOpen}

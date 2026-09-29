@@ -3,13 +3,20 @@ import {
   applyOverrides,
   copyTree,
   createNode,
+  deleteDesignNode,
   designFileName,
   emptyDesign,
+  frameAtPoint,
+  hitDesign,
+  insertDesignNode,
   isDesignPath,
   nodeChrome,
+  nodeOrigin,
   parseDesign,
   pickVariant,
+  placeDesignNode,
   queryDesign,
+  resizeDesignNode,
   resolveRef,
   serializeDesign,
   textStyle,
@@ -242,4 +249,28 @@ function sample(): DesignDoc {
 {
   const parsed = parseDesign('{"version":1,"tokens":[{"name":"nope","kind":"color","values":{"light":"red"}}]}')
   assert.equal(parsed.error, 'This file is not a design')
+}
+
+{
+  const doc = emptyDesign()
+  const screen = createNode('frame', 'screen', 10, 20)
+  const label = createNode('text', 'label', 8, 12)
+  screen.children = [label]
+  doc.screens = [screen]
+  assert.equal(hitDesign(doc, 12, 22)?.id, 'screen')
+  assert.equal(hitDesign(doc, 20, 36)?.id, 'label')
+  assert.equal(hitDesign(doc, 0, 0), null)
+  assert.deepEqual(nodeOrigin(doc, 'label'), { x: 18, y: 32 })
+  const grown = resizeDesignNode(label, 'e', 20, 0, 8, true)
+  assert.equal(grown.x, 8)
+  assert.equal(grown.w, 144)
+  const other = createNode('frame', 'other', 400, 0)
+  const nested = placeDesignNode({ ...doc, screens: [screen, other] }, 'label', 'other', 4, 6)
+  assert.equal(nodeOrigin(nested, 'label')?.x, 404)
+  assert.equal(frameAtPoint(nested, 20, 36, 'label'), 'screen')
+  assert.equal(placeDesignNode(nested, 'other', 'other', 0, 0).screens.length, 2)
+  const removed = deleteDesignNode(nested, 'label')
+  assert.equal(hitDesign(removed, 410, 10)?.id, 'other')
+  const added = insertDesignNode(removed, 'screen', createNode('rect', 'box', 0, 0))
+  assert.equal(hitDesign(added, 12, 22)?.id, 'box')
 }
