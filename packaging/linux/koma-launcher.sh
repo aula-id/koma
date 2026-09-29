@@ -134,7 +134,7 @@ if [ -n "$missing_libs" ]; then
         echo "" >&2
 
         if command -v apt-get >/dev/null 2>&1; then
-            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
+            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libxtst6" >&2
         elif command -v dnf >/dev/null 2>&1; then
             echo "  sudo dnf install webkit2gtk4.1 gtk3" >&2
         elif command -v pacman >/dev/null 2>&1; then
@@ -143,7 +143,7 @@ if [ -n "$missing_libs" ]; then
             echo "  sudo zypper install libwebkit2gtk-4_1-0 libgtk-3-0" >&2
         else
             echo "  # Debian/Ubuntu:" >&2
-            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
+            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libxtst6" >&2
             echo "  # Fedora:" >&2
             echo "  sudo dnf install webkit2gtk4.1 gtk3" >&2
             echo "  # Arch:" >&2

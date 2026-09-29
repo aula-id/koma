@@ -23,6 +23,7 @@ serde_json = "1"
 serde_yaml_ng = "0.9"
 anyhow = "1"
 include_dir = "0.7"
+png = { version = "0.17", optional = true }
 uuid = { version = "1", features = ["v4", "v5"] }
 dirs = "5"
 futures-util = "0.3"
@@ -99,7 +100,7 @@ muda = { version = "0.19", optional = true, default-features = false }
 
 [features]
 default = ["gui", "linker"]
-gui = ["dep:cc", "dep:zbus", "dep:x11-dl", "dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd", "dep:muda"]
+gui = ["dep:cc", "dep:zbus", "dep:x11-dl", "dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd", "dep:muda", "dep:png"]
 linker = [
     "dep:tree-sitter",
     "dep:tree-sitter-rust",

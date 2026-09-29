@@ -118,6 +118,7 @@ export type PushEnvelope =
       history: HubHistoryEntry[]
     }
   | { k: 'SearchResults'; query: string; items: SearchResultEntry[] }
+  | { k: 'PasteBody'; markerN: number; text: string }
   // Authoritative config projection (mcp/providers/models) — global, not
   // per-session. REPLACES the whole config slice, pushed on config change and
   // on (re)attach. Also carries the active palette (theme) — Config is pushed

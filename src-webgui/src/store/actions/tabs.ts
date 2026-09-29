@@ -1,6 +1,7 @@
 import { forgetCodingDraft } from '../../lib/coding-recovery'
 import type { StoreGet, StoreSet } from '../api'
 import { emptyFileState, fileKey } from '../coding'
+import { dropDiagramDocs } from '../diagram'
 import { setSplitDir as applySplitDir, toggleSplitDir as flipSplitDir, insertGroup, neighbourInGroup, normalizeGroups, reorderTab, resizeGroups } from '../editorGroups'
 import { tabBaseName } from '../initial'
 import type { KomaState } from '../state'
@@ -45,6 +46,15 @@ export function tabActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openD
     if (closingCoding && !opts?.force) {
       const f = get().coding.files[fileKey(closingCoding.root, closingCoding.path)]
       if (f?.dirty) return
+    }
+    const closingDiagram = (() => {
+      const closing = get().ui.tabs.find((t) => t.id === id)
+      return closing && closing.kind === 'diagram' ? closing : null
+    })()
+    if (closingDiagram) {
+      const doc = get().diagram.docs[fileKey(closingDiagram.root, closingDiagram.path)]
+      if (doc?.saving) return
+      if (doc?.dirty && !opts?.force) return
     }
     if (closingCoding) {
       if (opts?.force) forgetCodingDraft({ hostId: get().remoteState.hostId ?? 'local', root: closingCoding.root }, closingCoding.path)
@@ -93,9 +103,14 @@ export function tabActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openD
         coding = { ...coding, files, _readReq }
       }
 
+      const diagram =
+        closingDiagram && opts?.force
+          ? { ...s.diagram, docs: dropDiagramDocs(s.diagram.docs, closingDiagram.root, closingDiagram.path) }
+          : s.diagram
       return {
         ui: normalizeGroups({ ...normalized, tabs, activeTabId }),
         coding,
+        diagram,
         // Closing the Analytics tab drops its in-flight state so a later reopen
         // starts clean (filters preserved as user preference; data cleared so a
         // stale session-scoped payload can't reappear).

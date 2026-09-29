@@ -217,7 +217,7 @@ if [ -n "$missing_libs" ]; then
         echo "Install them with your package manager:" >&2
         echo "" >&2
         if command -v apt-get >/dev/null 2>&1; then
-            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
+            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libxtst6" >&2
         elif command -v dnf >/dev/null 2>&1; then
             echo "  sudo dnf install webkit2gtk4.1 gtk3" >&2
         elif command -v pacman >/dev/null 2>&1; then
@@ -226,7 +226,7 @@ if [ -n "$missing_libs" ]; then
             echo "  sudo zypper install libwebkit2gtk-4_1-0 libgtk-3-0" >&2
         else
             echo "  # Debian/Ubuntu:" >&2
-            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
+            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libxtst6" >&2
             echo "  # Fedora:" >&2
             echo "  sudo dnf install webkit2gtk4.1 gtk3" >&2
             echo "  # Arch:" >&2
@@ -279,6 +279,7 @@ DIR="$(resolve_dir)"
 BIN="$DIR/koma.bin"
 if [ ! -f "$BIN" ]; then
     echo "koma: $BIN not found." >&2
+    echo "The koma launcher expects the real binary alongside itself as koma.bin." >&2
     exit 1
 fi
 if [ ! -x "$BIN" ]; then
@@ -340,7 +341,7 @@ if [ -n "$missing_libs" ]; then
         echo "Install them with your package manager:" >&2
         echo "" >&2
         if command -v apt-get >/dev/null 2>&1; then
-            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
+            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libxtst6" >&2
         elif command -v dnf >/dev/null 2>&1; then
             echo "  sudo dnf install webkit2gtk4.1 gtk3" >&2
         elif command -v pacman >/dev/null 2>&1; then
@@ -349,7 +350,7 @@ if [ -n "$missing_libs" ]; then
             echo "  sudo zypper install libwebkit2gtk-4_1-0 libgtk-3-0" >&2
         else
             echo "  # Debian/Ubuntu:" >&2
-            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
+            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libxtst6" >&2
             echo "  # Fedora:" >&2
             echo "  sudo dnf install webkit2gtk4.1 gtk3" >&2
             echo "  # Arch:" >&2
@@ -403,24 +404,174 @@ if [ "$os" = "darwin" ] && command -v xattr > /dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
-# Linux: non-fatal preflight warning (after install, before success banner).
-# Tells the user right away if their system is missing webkit/gtk, instead of
-# waiting for them to run `koma` and hit the error.
+# Debian/Ubuntu: install GUI shared libraries before anything execs koma.
+# The dynamic linker reports one missing .so at a time. On a clean server
+# that is libwebkit2gtk-4.1.so.0, then libgtk-3.so.0, then libsoup-3.0.so.0.
+# ldd lists all of them. libwebkit2gtk-4.1-0 depends on gtk, soup, and
+# JavaScriptCore. Debian 13 / Ubuntu 24.04 renamed libgtk-3-0 to
+# libgtk-3-0t64, so a hard-coded libgtk-3-0 makes apt abort the whole
+# transaction. Ask apt which name exists. libXtst is dlopen'd (not NEEDED).
+# Other distros still get a printed hint. A failed install does not abort.
 # ---------------------------------------------------------------------------
-if [ "$os" = "linux" ] && command -v ldd >/dev/null 2>&1; then
-    _ldd_check="$(ldd "$INSTALL_DIR/koma.bin" 2>&1)" || true
+_apt_cache_refreshed=0
+_run_apt() {
+    if [ "$(id -u)" = "0" ]; then
+        DEBIAN_FRONTEND=noninteractive apt-get "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo DEBIAN_FRONTEND=noninteractive apt-get "$@"
+    else
+        echo "koma: need root or sudo to install shared libraries." >&2
+        return 1
+    fi
+}
+_apt_known() {
+    apt-cache show "$1" 2>/dev/null | grep -q '^Package:'
+}
+_apt_refresh_lists() {
+    if [ "$_apt_cache_refreshed" = "1" ]; then
+        return 0
+    fi
+    echo "  Refreshing package lists..." >&2
+    _apt_cache_refreshed=1
+    _run_apt update || return 1
+}
+# Print the first package name apt knows. Refresh the lists once if none match.
+_apt_pick() {
+    _pick_name=""
+    for _pick_name in "$@"; do
+        if _apt_known "$_pick_name"; then
+            printf '%s\n' "$_pick_name"
+            return 0
+        fi
+    done
+    if _apt_refresh_lists; then
+        for _pick_name in "$@"; do
+            if _apt_known "$_pick_name"; then
+                printf '%s\n' "$_pick_name"
+                return 0
+            fi
+        done
+    fi
+    return 1
+}
+_apt_add() {
+    _added=$(_apt_pick "$@") || return 0
+    case " $_apt_pkgs " in
+        *" $_added "*) ;;
+        *) _apt_pkgs="${_apt_pkgs:+$_apt_pkgs }$_added" ;;
+    esac
+}
+_soname_pkg() {
+    case "$1" in
+        libwebkit2gtk-4.1.so.*)
+            _apt_add libwebkit2gtk-4.1-0 libwebkit2gtk-4.1-0t64 ;;
+        libgtk-3.so.*|libgdk-3.so.*)
+            _apt_add libgtk-3-0t64 libgtk-3-0 ;;
+        libjavascriptcoregtk-4.1.so.*)
+            _apt_add libjavascriptcoregtk-4.1-0 libjavascriptcoregtk-4.1-0t64 ;;
+        libsoup-3.0.so.*)
+            _apt_add libsoup-3.0-0 libsoup-3.0-0t64 ;;
+        libwayland-client.so.*)
+            _apt_add libwayland-client0 ;;
+        libgdk_pixbuf-2.0.so.*)
+            _apt_add libgdk-pixbuf-2.0-0 libgdk-pixbuf-2.0-0t64 ;;
+        libcairo.so.*)
+            _apt_add libcairo2 libcairo2t64 ;;
+        libglib-2.0.so.*|libgobject-2.0.so.*|libgio-2.0.so.*)
+            _apt_add libglib2.0-0t64 libglib2.0-0 ;;
+        libdbus-1.so.*)
+            _apt_add libdbus-1-3 libdbus-1-3t64 ;;
+        libXtst.so.*)
+            _apt_add libxtst6 libxtst6t64 ;;
+        *)
+            return 1 ;;
+    esac
+}
+_install_linux_shared_libs() {
+    _elf="$INSTALL_DIR/koma.bin"
+    if [ ! -f "$_elf" ]; then
+        _elf="$INSTALL_DIR/koma"
+    fi
+    if [ ! -f "$_elf" ]; then
+        return 0
+    fi
+    _ldd_check=""
+    if command -v ldd >/dev/null 2>&1; then
+        _ldd_check="$(ldd "$_elf" 2>&1)" || true
+    fi
     if echo "$_ldd_check" | grep -qE 'GLIBC_[0-9]'; then
-        _glibc_needed="$(echo "$_ldd_check" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -uV | tr '\n' ' ')"
+        _glibc_needed="$(echo "$_ldd_check" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sed 's/GLIBC_//' | sort -uV | tr '\n' ' ')"
         echo ""
         echo "WARNING: this binary requires glibc $_glibc_needed" >&2
         echo "  If koma fails to start, build from source: ./build.sh" >&2
-    elif echo "$_ldd_check" | grep -q "not found"; then
+        return 0
+    fi
+    _missing=""
+    if [ -n "$_ldd_check" ]; then
+        _missing="$(echo "$_ldd_check" | grep 'not found' | awk '{print $1}' | sort -u || true)"
+    fi
+    _need_xtst=0
+    if command -v ldconfig >/dev/null 2>&1; then
+        if ! ldconfig -p 2>/dev/null | grep -q 'libXtst\.so\.6'; then
+            _need_xtst=1
+        fi
+    fi
+    if [ -z "$_missing" ] && [ "$_need_xtst" = "0" ]; then
+        return 0
+    fi
+    if ! command -v apt-get >/dev/null 2>&1; then
         echo ""
         echo "WARNING: some shared libraries are missing — koma may not start." >&2
-        echo "  Debian/Ubuntu: sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
-        echo "  Fedora:        sudo dnf install webkit2gtk4.1 gtk3" >&2
-        echo "  Arch:          sudo pacman -S webkit2gtk-4.1 gtk3" >&2
+        if [ -n "$_missing" ]; then
+            echo "$_missing" | sed 's/^/  /' >&2
+        fi
+        echo "  Fedora: sudo dnf install webkit2gtk4.1 gtk3 libXtst" >&2
+        echo "  Arch:   sudo pacman -S webkit2gtk-4.1 gtk3 libxtst" >&2
+        return 0
     fi
+    _apt_pkgs=""
+    if [ -z "$_ldd_check" ]; then
+        # No ldd: install the GUI stack anyway so a clean server can load koma.
+        _soname_pkg libwebkit2gtk-4.1.so.0 || true
+        _soname_pkg libgtk-3.so.0 || true
+        _soname_pkg libsoup-3.0.so.0 || true
+        _need_xtst=1
+    else
+        _son=""
+        for _son in $_missing; do
+            _soname_pkg "$_son" || true
+        done
+    fi
+    if [ "$_need_xtst" = "1" ]; then
+        _soname_pkg libXtst.so.6 || true
+    fi
+    if [ -z "$_apt_pkgs" ]; then
+        echo ""
+        echo "WARNING: shared libraries are missing and apt has no matching packages." >&2
+        echo "  sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-0 libxtst6" >&2
+        if [ -n "$_missing" ]; then
+            echo "$_missing" | sed 's/^/  /' >&2
+        fi
+        return 0
+    fi
+    echo ""
+    echo "Installing shared libraries: $_apt_pkgs"
+    if _run_apt install -y $_apt_pkgs; then
+        if command -v ldd >/dev/null 2>&1; then
+            _ldd_after="$(ldd "$_elf" 2>&1)" || true
+            _still="$(echo "$_ldd_after" | grep 'not found' | awk '{print $1}' | sort -u || true)"
+            if [ -n "$_still" ]; then
+                echo "WARNING: koma still needs:" >&2
+                echo "$_still" | sed 's/^/  /' >&2
+            fi
+        fi
+    else
+        echo "WARNING: could not install shared libraries. koma will not start until they are installed." >&2
+        echo "  sudo apt-get install -y $_apt_pkgs" >&2
+    fi
+}
+if [ "$os" = "linux" ]; then
+    _install_linux_shared_libs || true
 fi
 
 # ---------------------------------------------------------------------------
@@ -445,14 +596,28 @@ if [ "$WITH_LSP" = "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Linux: user-level desktop entry + icons (app drawer / Activities).
-# Best-effort — never fails the install. Helps curl|sh users on GNOME and on
-# immutable/atomic distros (Bluefin, Silverblue, …) where .deb is awkward and
-# .AppImage is a separate download path. Absolute Exec path avoids PATH
-# shadowing in GUI sessions (same concern as packaging/linux/koma.desktop.hbs).
-# Override icon CDN with KOMA_ICON_BASE=... (defaults to assets on main).
+# App list + icon (Linux desktop entry, macOS ~/Applications/Koma.app).
+# The binary embeds the icon and writes the entry (`koma launcher-install`).
+# Older binaries fall back to the shell placement below. Best-effort — never
+# fails the install. Absolute Exec path avoids PATH shadowing in GUI sessions.
 # ---------------------------------------------------------------------------
-if [ "$os" = "linux" ] && [ -n "${HOME:-}" ]; then
+_launcher_ok=0
+if [ -x "$INSTALL_DIR/koma" ]; then
+    _launcher_log=$(mktemp)
+    if "$INSTALL_DIR/koma" launcher-install >"$_launcher_log" 2>&1; then
+        _launcher_ok=1
+        cat "$_launcher_log"
+    fi
+    rm -f "$_launcher_log"
+fi
+
+# ---------------------------------------------------------------------------
+# Linux fallback: user-level desktop entry + icons (app drawer / Activities).
+# Helps curl|sh users on GNOME and on immutable/atomic distros (Bluefin,
+# Silverblue, …) where .deb is awkward. Override icon CDN with
+# KOMA_ICON_BASE=... (defaults to assets on main).
+# ---------------------------------------------------------------------------
+if [ "$_launcher_ok" != 1 ] && [ "$os" = "linux" ] && [ -n "${HOME:-}" ]; then
     _koma_bin="$INSTALL_DIR/koma"
     # Resolve to an absolute path for Exec= (required by the FreeDesktop spec
     # when the binary is not guaranteed to be on the desktop session PATH).
@@ -514,23 +679,52 @@ if [ "$os" = "linux" ] && [ -n "${HOME:-}" ]; then
                 printf '%s\n' 'Name=Koma'
                 printf '%s\n' 'Comment=Agentic coding desktop client'
                 printf '%s\n' "Exec=${_koma_bin} gui"
-                if [ -n "$_icon_key" ]; then
+                # Prefer the file we just wrote. A bare theme name stays invisible
+                # when the user hicolor tree has no icon cache.
+                _icon_file=""
+                for _cand in \
+                    "$_icons_base/256x256/apps/koma.png" \
+                    "$_icons_base/128x128/apps/koma.png" \
+                    "$_icons_base/512x512/apps/koma.png" \
+                    "$_icons_base/64x64/apps/koma.png" \
+                    "$_icons_base/48x48/apps/koma.png" \
+                    "$_icons_base/32x32/apps/koma.png"
+                do
+                    if [ -s "$_cand" ]; then
+                        _icon_file="$_cand"
+                        break
+                    fi
+                done
+                if [ -n "$_icon_file" ]; then
+                    printf '%s\n' "Icon=${_icon_file}"
+                elif [ -n "$_icon_key" ]; then
                     printf '%s\n' "Icon=${_icon_key}"
+                fi
+                # The wrapper execs koma.bin, so the window class is koma.bin.
+                # A raw ELF named koma (the .deb) uses class koma.
+                _wm_class="koma"
+                if [ -x "$INSTALL_DIR/koma.bin" ]; then
+                    _wm_class="koma.bin"
                 fi
                 printf '%s\n' 'Terminal=false'
                 printf '%s\n' 'Categories=Development;'
                 printf '%s\n' 'StartupNotify=true'
+                printf '%s\n' "StartupWMClass=${_wm_class}"
                 printf '%s\n' 'Keywords=ai;agent;coding;'
             } > "$_desktop" 2>/dev/null || true
 
             if [ -f "$_desktop" ]; then
                 chmod 644 "$_desktop" 2>/dev/null || true
                 # Refresh desktop/icon caches when the tools exist (GNOME etc.).
+                touch "$_desktop" 2>/dev/null || true
                 if command -v update-desktop-database > /dev/null 2>&1; then
                     update-desktop-database "$_apps_dir" 2>/dev/null || true
                 fi
                 if command -v gtk-update-icon-cache > /dev/null 2>&1 && [ -d "$_icons_base" ]; then
                     gtk-update-icon-cache -f -t "$_icons_base" 2>/dev/null || true
+                fi
+                if command -v xdg-desktop-menu > /dev/null 2>&1; then
+                    xdg-desktop-menu forceupdate 2>/dev/null || true
                 fi
                 # Stash path for the success banner below.
                 KOMA_DESKTOP_ENTRY="$_desktop"
@@ -540,13 +734,12 @@ if [ "$os" = "linux" ] && [ -n "${HOME:-}" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# macOS: user-level ~/Applications/Koma.app (Finder, Launchpad, Spotlight).
-# Best-effort — never fails the install. The bundle is a thin launcher that
-# execs the installed binary with `gui`, same idea as the Linux desktop entry.
-# An absolute path avoids PATH shadowing. Override the icon CDN with
+# macOS fallback: user-level ~/Applications/Koma.app (Finder, Launchpad,
+# Spotlight). Used when the installed binary has no `launcher-install`.
+# The trampoline execs that binary with `gui`. Override the icon CDN with
 # KOMA_ICON_BASE=... (defaults to assets on main).
 # ---------------------------------------------------------------------------
-if [ "$os" = "darwin" ] && [ -n "${HOME:-}" ]; then
+if [ "$_launcher_ok" != 1 ] && [ "$os" = "darwin" ] && [ -n "${HOME:-}" ]; then
     _koma_bin="$INSTALL_DIR/$bin_name"
     case "$_koma_bin" in
         /*) ;;
@@ -557,7 +750,9 @@ if [ "$os" = "darwin" ] && [ -n "${HOME:-}" ]; then
     if [ -x "$_koma_bin" ] && { [ ! -e "$_app" ] || [ -d "$_app" ]; }; then
         mkdir -p "$_app/Contents/MacOS" "$_app/Contents/Resources" 2>/dev/null || true
         if [ -d "$_app/Contents/MacOS" ] && [ -w "$_app/Contents/MacOS" ]; then
-            # Embed the binary path as a single-quoted shell word.
+            # This fallback only runs for a binary that does not implement
+            # `launcher-install`, so it does not know to open the GUI when
+            # launched as Koma.app. A shell trampoline passes `gui` explicitly.
             _bin_escaped=$(printf '%s' "$_koma_bin" | sed "s/'/'\\\\''/g")
             {
                 printf '%s\n' '#!/bin/sh'
@@ -618,9 +813,15 @@ if [ "$os" = "darwin" ] && [ -n "${HOME:-}" ]; then
             if command -v xattr > /dev/null 2>&1; then
                 xattr -dr com.apple.quarantine "$_app" 2>/dev/null || true
             fi
+            # Same refresh a DMG copy relies on: bump the bundle mtime, force
+            # Launch Services to rescan it, then import it into Spotlight.
+            touch "$_app" 2>/dev/null || true
             _lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
             if [ -x "$_lsregister" ]; then
-                "$_lsregister" -f "$_app" 2>/dev/null || true
+                "$_lsregister" -f -R -trusted "$_app" 2>/dev/null || true
+            fi
+            if command -v mdimport > /dev/null 2>&1; then
+                mdimport "$_app" 2>/dev/null || true
             fi
             if [ -x "$_app/Contents/MacOS/koma" ] && [ -f "$_app/Contents/Info.plist" ]; then
                 KOMA_APP_BUNDLE="$_app"
@@ -636,13 +837,16 @@ echo ""
 echo "koma installed to $INSTALL_DIR/$bin_name"
 echo ""
 echo "  Run 'koma' to start the TUI, or 'koma gui' for the desktop client."
+if [ "$_launcher_ok" = 1 ]; then
+    echo "  App list: search for Koma."
+fi
 if [ -n "${KOMA_DESKTOP_ENTRY:-}" ]; then
     echo "  Desktop entry: $KOMA_DESKTOP_ENTRY"
-    echo "  Open your app grid and search for Koma (log out/in if it is missing)."
+    echo "  Open your app grid and search for Koma."
 fi
 if [ -n "${KOMA_APP_BUNDLE:-}" ]; then
     echo "  App: $KOMA_APP_BUNDLE"
-    echo "  Open it from Finder or Launchpad (log out/in if it is missing)."
+    echo "  Open it from Finder, Launchpad, or Spotlight."
 fi
 echo "  Re-run this installer with --with-research (or run"
 echo "  'koma --internet-fullmode-install') to enable full internet mode."

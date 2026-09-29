@@ -176,7 +176,7 @@ pub(super) fn push_loop(
     ctl_rx: &Receiver<super::HostCtl>,
     last: &mut PushState,
     current_session: Option<&str>,
-    live_marks: &std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+    live_marks: &std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     live_view: &std::sync::Arc<std::sync::Mutex<super::StreamView>>,
     terminal_manager: &std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
     lsp_manager: &std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
@@ -1889,14 +1889,15 @@ pub(super) fn push_loop(
         // submit-time reconcile keeps the staged images (React's text carries no markers).
         if let Ok(mut marks) = live_marks.lock() {
             marks.clear();
-            marks.extend(
-                shadow
-                    .rest
-                    .fg()
-                    .pending_attachments
-                    .iter()
-                    .map(|a| a.marker_n),
-            );
+            marks.extend(shadow.rest.fg().pending_attachments.iter().filter_map(|a| {
+                if a.is_image() {
+                    Some(format!("[Image #{}]", a.marker_n))
+                } else if a.is_pasted_text() {
+                    Some(crate::model::attachment::paste_marker(a.marker_n))
+                } else {
+                    None
+                }
+            }));
         }
 
         // --- (c) serialise + push whatever changed (the draw seam) ---

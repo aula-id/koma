@@ -17,6 +17,9 @@ pub(super) enum UserEvent {
     /// heavy attach envelopes (Snapshot/Loading/Config/…) one frame at a time —
     /// stream/chat traffic is never queued behind them.
     Push(String),
+    /// Background app-list install finished. The Dock icon is applied on this
+    /// thread; `NSApplication` calls are main-thread only.
+    LauncherReady,
 }
 
 /// Window-management commands the HTML titlebar (drag region, minimize /
@@ -162,6 +165,24 @@ pub(super) enum GuiReq {
     /// Forwarded as [`ClientRequest::RemoveAttachment`], which unstages it daemon-side;
     /// the resulting `pending_attachments` change re-emits the Snapshot (chips update).
     RemoveAttachment {
+        #[serde(rename = "markerN")]
+        marker_n: usize,
+        /// `"image"` or `"pasted_text"`. Absent drops every chip with this number.
+        #[serde(default)]
+        kind: Option<String>,
+    },
+    /// Long composer paste. The host forwards it as [`ClientRequest::AttachPaste`].
+    AttachPaste {
+        text: String,
+    },
+    /// Edit the body of a staged `[Pasted Text #N]` chip.
+    UpdatePaste {
+        #[serde(rename = "markerN")]
+        marker_n: usize,
+        text: String,
+    },
+    /// Load a staged paste body after the page reloads.
+    ReadPaste {
         #[serde(rename = "markerN")]
         marker_n: usize,
     },

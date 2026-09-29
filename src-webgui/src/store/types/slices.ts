@@ -1,3 +1,4 @@
+import type { DiagramDoc } from '../../lib/diagram'
 import type { EditorGroupId, SplitDir } from '../editorGroups'
 import type { AnalyticsData, AnalyticsMetric, AnalyticsRange, AnalyticsScope } from './analytics'
 import type { ChatMessage, PaletteInfo } from './chat'
@@ -178,6 +179,12 @@ export type UiSlice = {
   // than routed through AttachPath. Composer consumes this via useEffect and
   // clears it with consumeComposerInsert so it doesn't re-fire on rerender.
   composerInsert: string | null
+  // Diagrams queued for the composer. Each one renders as a drawing chip.
+  // Submit sends the Mermaid, which is what the model reads.
+  diagramChatQueue: { title: string; mermaid: string; doc: DiagramDoc }[]
+  // One-shot body for a staged `[Pasted Text #N]` chip. The composer copies it
+  // into the editable chip and clears it.
+  pasteBody: { markerN: number; text: string } | null
   // One-shot signal: text to REPLACE the Composer's draft with, queued by a
   // rewind (the hover-edit pencil on a user bubble). Distinct from
   // `composerInsert` (which APPENDS an omnisearch path) — rewind refills the

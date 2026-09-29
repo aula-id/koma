@@ -137,7 +137,8 @@ fn main() -> anyhow::Result<()> {
     // (which execs a bare `koma` client) hit it exactly once at startup.
     service::catalogue_overlay::init();
 
-    let opts = cli::parse(std::env::args());
+    let args = app::launcher::args_for_launch(std::env::args().collect());
+    let opts = cli::parse(args);
 
     // --- short-circuit: unknown positional verb (typo) → help, no TUI ---
     // e.g. `koma docker` instead of `doctor`. Must not mint a session / spawn a daemon.
@@ -214,6 +215,23 @@ fn main() -> anyhow::Result<()> {
     if opts.sessions {
         let code = run_sessions_json();
         std::process::exit(code);
+    }
+
+    // --- short-circuit: `koma launcher-install` — desktop entry / app bundle ---
+    // install.sh calls this after the binary is on disk. Icons are embedded, so
+    // the app list does not depend on a second download. Before daemon migration
+    // so placing a shortcut does not signal a running daemon.
+    if opts.launcher_install {
+        return match app::launcher::install() {
+            Ok(installed) => {
+                println!("Koma is in the app list: {}", installed.location.display());
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("koma launcher-install failed: {e:#}");
+                std::process::exit(1);
+            }
+        };
     }
 
     // --- upgrade migration: reap any pre-0.2.0 global daemon on first 0.2.0 launch ---

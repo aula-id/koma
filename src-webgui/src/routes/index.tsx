@@ -544,6 +544,8 @@ const MarkdownPreviewTab = lazy(() => import('../components/MarkdownPreviewTab')
 // first terminal is opened from the Titlebar.
 const TerminalTab = lazy(() => import('../components/TerminalTab').then(m => ({ default: m.TerminalTab })))
 
+const DiagramTab = lazy(() => import('../components/DiagramTab').then((m) => ({ default: m.DiagramTab })))
+
 function DiffFallback() {
   return (
     <div className="flex h-full w-full items-center justify-center text-koma-dim">
@@ -585,6 +587,8 @@ function TabBody({ tab }: { tab: Exclude<Tab, { kind: 'chat' }> }) {
         tab.preview ? <MarkdownPreviewTab tab={tab} /> : <CodeEditorTab tab={tab} />
       ) : tab.kind === 'terminal' ? (
         <TerminalTab tab={tab} />
+      ) : tab.kind === 'diagram' ? (
+        <DiagramTab tab={tab} />
       ) : null}
     </Suspense>
   )

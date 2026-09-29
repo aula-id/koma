@@ -6,7 +6,8 @@ Comment={{comment}}
 # Absolute path: a curl-installed TUI-only ~/.local/bin/koma can shadow bare 'koma' in the desktop session PATH (deb installs to /usr/bin).
 Exec=/usr/bin/{{exec}} gui
 Icon={{icon}}
-Name={{name}}
+Name=Koma
+StartupWMClass=koma
 Terminal=false
 Type=Application
 {{#if mime_type}}

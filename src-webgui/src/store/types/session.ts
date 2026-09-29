@@ -122,7 +122,7 @@ export function visiblePlanTodos(todos: PlanTodoEntry[]): PlanTodoEntry[] {
 export type AttachmentEntry = {
   markerN: number
   name: string
-  kind: 'image' | 'file'
+  kind: 'image' | 'file' | 'pasted_text'
 }
 
 export type SearchResultEntry = {

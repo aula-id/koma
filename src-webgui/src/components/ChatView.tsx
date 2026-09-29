@@ -31,6 +31,9 @@ import {
 import { useKoma, type AttachmentEntry, type ChatMessage, type ToolCallView } from '../store/koma'
 import { ChatScrollRootContext, MessageBody } from './MessageBody'
 import { ComputerObservationCard, ComputerToolCall } from './ComputerObservationCard'
+import { DiagramObservationCard } from './DiagramVisual'
+import { diagramMessageParts, splitDiagramMessage } from '../lib/diagramMermaid'
+import { splitPasteMessage } from '../lib/pasteText'
 import { Composer } from './Composer'
 import { ApprovalOverlay } from './ApprovalOverlay'
 import { fallbackSignature, truncateChars } from '../lib/toolSignature'
@@ -301,6 +304,31 @@ function AttachmentCard({ attachments }: { attachments: AttachmentEntry[] }) {
   )
 }
 
+function PasteTextCard({ n, text }: { n: number; text: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const preview = text.trim().split('\n')[0] || 'Pasted text'
+  return (
+    <article className="overflow-hidden rounded-lg border border-koma-border bg-koma-panel/40 text-koma-fg">
+      <button type="button" aria-expanded={expanded} onClick={() => setExpanded((open) => !open)} className="flex w-full items-center gap-3 p-3 text-left hover:bg-koma-hover">
+        <div className="flex h-12 w-20 shrink-0 items-center justify-center rounded border border-koma-border bg-koma-bg text-koma-dim">
+          <FileText size={18} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 text-[10px] text-koma-dim">
+            <FileText size={12} />
+            <span>Pasted Text #{n}</span>
+          </div>
+          <p className="mt-1 truncate text-[12.5px]">{preview}</p>
+        </div>
+        <ChevronDown size={14} className={`shrink-0 text-koma-dim transition-transform ${expanded ? 'rotate-180' : ''}`} />
+      </button>
+      {expanded ? (
+        <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-koma-border px-3 py-2 text-[12px] text-koma-fg">{text}</pre>
+      ) : null}
+    </article>
+  )
+}
+
 // ---- USER message: the full-width BAND (transcript.rs `render_user_message`).
 // `▌` left rail (fg=accent) → a solid accent left bar; text = accent on the
 // panel-tinted band; runs edge-to-edge. When the message carries image
@@ -318,14 +346,27 @@ function UserMessage({
   // → no pencil (e.g. the live view, where the index isn't a committed message).
   onEdit?: () => void
 }) {
+  const pasted = splitPasteMessage(content)
+  const split = splitDiagramMessage(pasted.prose)
+  // A diagram reference stays a drawing here. A long paste stays a text chip.
+  // The fence body is what the model already received.
+  const showBand = split.prose.length > 0 || (split.diagrams.length === 0 && pasted.pastes.length === 0)
   return (
-    <div className="group relative">
-      <div className="flex overflow-hidden bg-koma-band">
-        <div className="w-[3px] flex-none bg-koma-accent" />
-        <div className="min-w-0 flex-1 whitespace-pre-wrap px-3 py-2 text-[13px] text-koma-accent">
-          {content}
+    <div className="group relative space-y-2">
+      {showBand ? (
+        <div className="flex overflow-hidden bg-koma-band">
+          <div className="w-[3px] flex-none bg-koma-accent" />
+          <div className="min-w-0 flex-1 whitespace-pre-wrap px-3 py-2 text-[13px] text-koma-accent">
+            {split.prose || content}
+          </div>
         </div>
-      </div>
+      ) : null}
+      {pasted.pastes.map((item) => (
+        <PasteTextCard key={`paste-${item.n}-${item.text.length}`} n={item.n} text={item.text} />
+      ))}
+      {split.diagrams.map((item, index) => (
+        <DiagramObservationCard key={`${index}:${item.mermaid.length}`} mermaid={item.mermaid} />
+      ))}
       {onEdit && (
         <button
           onClick={onEdit}
@@ -396,12 +437,22 @@ const AssistantMessage = memo(function AssistantMessage({
   const hasBody = content.trim() !== ''
   const hasReasoning = reasoning != null && reasoning.trim() !== ''
   const hasTools = toolCalls != null && toolCalls.length > 0
+  const parts = diagramMessageParts(content).filter((part) => part.type === 'diagram' || part.text.trim() !== '')
   return (
     <div className="flex gap-2">
       <Circle size={9} className="mt-[5px] flex-none fill-koma-fg text-koma-fg" />
       <div className="min-w-0 flex-1">
         {hasReasoning && <ReasoningBlock text={reasoning as string} defaultOpen={streaming} />}
-        {hasBody && <MessageBody text={content} streaming={streaming} />}
+        {hasBody &&
+          parts.map((part, index) =>
+            part.type === 'diagram' ? (
+              <div key={`diagram-${index}`} className="my-2">
+                <DiagramObservationCard mermaid={part.mermaid} />
+              </div>
+            ) : (
+              <MessageBody key={`text-${index}`} text={part.text} streaming={streaming && index === parts.length - 1} />
+            ),
+          )}
         {hasTools && (
           <div className="mt-1 space-y-1">
             {(toolCalls as ToolCallView[]).map((c) => (

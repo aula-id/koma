@@ -90,8 +90,8 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
                 ? {
                     ...(switched
                       ? {
-                          tabs: [makeChatTab(), ...s.ui.tabs.filter((t) => t.kind === 'terminal' || t.kind === 'codingFile')],
-                          activeTabId: s.ui.tabs.some(t => t.id === s.ui.activeTabId && t.kind === 'codingFile') ? s.ui.activeTabId : 'chat',
+                          tabs: [makeChatTab(), ...s.ui.tabs.filter((t) => t.kind === 'terminal' || t.kind === 'codingFile' || t.kind === 'diagram')],
+                          activeTabId: s.ui.tabs.some(t => t.id === s.ui.activeTabId && (t.kind === 'codingFile' || t.kind === 'diagram')) ? s.ui.activeTabId : 'chat',
                         }
                       : {}),
                     // Keep a real host Loading envelope; never synthesize pending.
@@ -402,6 +402,9 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
         break
       case 'SearchResults':
         set((s) => ({ session: { ...s.session, searchResults: env.items } }))
+        break
+      case 'PasteBody':
+        set((s) => ({ ui: { ...s.ui, pasteBody: { markerN: env.markerN, text: env.text } } }))
         break
     default:
       return false

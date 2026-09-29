@@ -196,6 +196,7 @@ pub(super) fn apply_frame(
         | DaemonEvent::RunState { .. }
         | DaemonEvent::AttachSession { .. }
         | DaemonEvent::FileSearchResults { .. }
+        | DaemonEvent::PasteBody { .. }
         | DaemonEvent::ModelList { .. }
         | DaemonEvent::ModelRoutes { .. }
         | DaemonEvent::SettingsValues { .. }

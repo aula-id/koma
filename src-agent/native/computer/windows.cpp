@@ -4,6 +4,14 @@
 #include "capture_limits.h"
 #include "frame_poll.h"
 #include "input_idle.h"
+// WIN32_LEAN_AND_MEAN omits ole2.h, so the COM `interface` macro is unset.
+// SDK 10.0.26100 UIAutomationCore.h forward-typedefs with that macro before
+// it includes rpcndr.h (C4430 on every IRawElementProvider* name).
+#include <ole2.h>
+#ifdef interface
+#undef interface
+#endif
+#define interface struct
 #include <UIAutomation.h>
 #include <algorithm>
 #include <atomic>

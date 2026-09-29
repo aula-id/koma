@@ -1,4 +1,5 @@
-import { Code2, Eye, History, RotateCcw, Save } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { Code2, Eye, History, Redo2, RotateCcw, Save, Undo2 } from 'lucide-react'
 
 export function EditorChrome({
   path,
@@ -11,6 +12,12 @@ export function EditorChrome({
   preview = false,
   onTogglePreview,
   onHistory,
+  icon,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
+  trailing,
 }: {
   path: string
   status: string
@@ -22,12 +29,18 @@ export function EditorChrome({
   preview?: boolean
   onTogglePreview?: () => void
   onHistory?: () => void
+  icon?: ReactNode
+  canUndo?: boolean
+  canRedo?: boolean
+  onUndo?: () => void
+  onRedo?: () => void
+  trailing?: ReactNode
 }) {
   // Density via container query — no RO/setState. Narrow split panes hide the
   // full path (title still has it) and drop the status text so Save/Revert stay.
   return (
     <div className="@container/pathbar flex h-8 min-w-0 flex-none items-center gap-2 border-b border-koma-border bg-koma-panel px-3 text-[12px] @max-xs/pathbar:gap-1.5 @max-xs/pathbar:px-2 @max-[12rem]/pathbar:px-1.5">
-      {preview ? <Eye size={13} className="flex-none text-koma-dim" /> : <Code2 size={13} className="flex-none text-koma-dim" />}
+      {icon ?? (preview ? <Eye size={13} className="flex-none text-koma-dim" /> : <Code2 size={13} className="flex-none text-koma-dim" />)}
       <span
         className="min-w-0 flex-1 truncate font-mono text-koma-fg @max-[12rem]/pathbar:hidden"
         title={path}
@@ -49,6 +62,8 @@ export function EditorChrome({
         </button>
       )}
       {onHistory && <button type="button" onClick={onHistory} title="Local History" aria-label="Local History" className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"><History size={13}/></button>}
+      {onUndo && <button type="button" onClick={onUndo} disabled={!canUndo || saving} title="Undo" aria-label="Undo" className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:opacity-30"><Undo2 size={13}/></button>}
+      {onRedo && <button type="button" onClick={onRedo} disabled={!canRedo || saving} title="Redo" aria-label="Redo" className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:opacity-30"><Redo2 size={13}/></button>}
       {onRevert && <button
         type="button"
         onClick={onRevert}
@@ -67,6 +82,7 @@ export function EditorChrome({
       >
         <Save size={13} />
       </button>}
+      {trailing}
     </div>
   )
 }

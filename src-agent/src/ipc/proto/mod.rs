@@ -125,6 +125,22 @@ pub enum ClientRequest {
     /// the composer); this is the GUI's explicit remove path.
     RemoveAttachment {
         marker_n: usize,
+        /// `"image"` or `"pasted_text"`. Absent drops every attachment with this number.
+        #[serde(default)]
+        kind: Option<String>,
+    },
+    /// Collapse a long GUI paste into `pastes/NN-paste.txt` and stage `[Pasted Text #N]`.
+    AttachPaste {
+        text: String,
+    },
+    /// Replace the body of a staged pasted-text chip. Disk stays the source of truth.
+    UpdatePaste {
+        marker_n: usize,
+        text: String,
+    },
+    /// Read a staged pasted-text body so the GUI can edit it after a reload.
+    ReadPaste {
+        marker_n: usize,
     },
     /// Fuzzy-search the foreground session's workspace file index (the `@`-palette engine)
     /// for the GUI omnisearch overlay. Read-only: the daemon runs `DirCache::search` and
@@ -795,6 +811,11 @@ pub enum DaemonEvent {
     FileSearchResults {
         query: String,
         items: Vec<FileSearchItem>,
+    },
+    /// Body of a staged `[Pasted Text #N]` chip. Sent after attach, update, or read.
+    PasteBody {
+        marker_n: usize,
+        text: String,
     },
     /// One-shot reply to a [`ClientRequest::UsagePreview`]: LAST-7-DAYS ledger
     /// totals + sparkline + top models, computed on the daemon host so a remote

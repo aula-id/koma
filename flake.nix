@@ -24,10 +24,12 @@
           # a path dependency of `agent`, so it must ship in the build sandbox. `src-misc`,
           # `src-internet`, `src-security` and `models.json` are pulled in unconditionally
           # at compile time via `include_dir!`/`include_str!`, independent of any feature flag.
+          # `assets/` is embedded by `include_bytes!` in launcher.rs (PNG sizes and icon.icns).
           commonFileset = lib.fileset.unions [
             ./Cargo.toml
             ./Cargo.lock
             ./models.json
+            ./assets
             ./src-agent
             ./src-extension
             ./src-misc

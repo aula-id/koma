@@ -93,6 +93,13 @@ pub fn run_update() -> Result<()> {
     // while the daemon is still running from its in-memory image.
     let _ = super::run_daemon_subcommand(DaemonSub::Kill, None);
 
+    // Place the app-list entry from this binary before the installer swaps it.
+    // install.sh then runs `koma launcher-install` on the binary it just wrote,
+    // which refreshes the same entry if that binary is newer.
+    if let Err(e) = super::launcher::install() {
+        eprintln!("koma update: could not add the app list entry: {e:#}");
+    }
+
     // 2. Fetch + run the installer.
     println!("koma update: fetching latest installer…");
 

@@ -223,8 +223,8 @@ impl DaemonHub {
                 self.list_routes(idx, state, handle, provider, model_id);
             }
 
-            ClientRequest::RemoveAttachment { marker_n } => {
-                self.remove_attachment(idx, state, marker_n);
+            ClientRequest::RemoveAttachment { marker_n, kind } => {
+                self.remove_attachment(idx, state, marker_n, kind);
             }
 
             // --- mutating: each client drives its OWN foreground (C2) ---
@@ -303,6 +303,16 @@ impl DaemonHub {
             // Enter-on-composer path (`Action::Submit` carries the text directly).
             ClientRequest::SubmitInput { text } => {
                 self.submit_input(idx, state, client, handle, text);
+            }
+
+            ClientRequest::AttachPaste { text } => {
+                self.attach_paste(idx, state, text);
+            }
+            ClientRequest::UpdatePaste { marker_n, text } => {
+                self.update_paste(idx, state, marker_n, text);
+            }
+            ClientRequest::ReadPaste { marker_n } => {
+                self.read_paste(idx, state, marker_n);
             }
 
             // Run a `!` shell command in the foreground session's cwd, no model

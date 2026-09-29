@@ -7,14 +7,69 @@
 #import <Vision/Vision.h>
 #include "capture_limits.h"
 #include "input_idle.h"
+#include <sys/sysctl.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <stdexcept>
 #include <thread>
 #include <unistd.h>
 #include <vector>
+
+// One dotted decimal component. Stops at the first non-digit.
+static bool parse_os_component(const char *&p, unsigned &out) {
+    if (*p < '0' || *p > '9')
+        return false;
+    unsigned value = 0;
+    while (*p >= '0' && *p <= '9') {
+        value = value * 10u + static_cast<unsigned>(*p - '0');
+        ++p;
+    }
+    out = value;
+    return true;
+}
+
+// Clang lowers `@available` to ___isPlatformVersionAtLeast. That helper lives
+// in libclang_rt.osx.a, which rustc does not link for an object built by
+// cc-rs, so `cargo build --release` fails with an undefined symbol. Weak so a
+// toolchain copy wins when one is present. Platform 1 is macOS.
+//
+// Do not call NSProcessInfo here. isOperatingSystemAtLeastVersion: is itself
+// implemented with @available, which calls this function and overflows the
+// stack the first time computer use checks macOS 14.
+extern "C" __attribute__((weak)) int32_t __isPlatformVersionAtLeast(uint32_t platform, uint32_t major,
+                                                                    uint32_t minor, uint32_t subminor) {
+    if (platform != 1)
+        return 0;
+    char buf[64];
+    std::memset(buf, 0, sizeof(buf));
+    size_t len = sizeof(buf);
+    if (sysctlbyname("kern.osproductversion", buf, &len, nullptr, 0) != 0)
+        return 0;
+    buf[sizeof(buf) - 1] = '\0';
+    const char *p = buf;
+    unsigned have_maj = 0, have_min = 0, have_sub = 0;
+    if (!parse_os_component(p, have_maj))
+        return 0;
+    if (*p == '.') {
+        ++p;
+        if (!parse_os_component(p, have_min))
+            return 0;
+    }
+    if (*p == '.') {
+        ++p;
+        if (!parse_os_component(p, have_sub))
+            return 0;
+    }
+    if (have_maj != major)
+        return have_maj > major ? 1 : 0;
+    if (have_min != minor)
+        return have_min > minor ? 1 : 0;
+    return have_sub >= subminor ? 1 : 0;
+}
 
 static std::atomic<bool> cancelled(false);
 static NSDictionary *target;
@@ -1038,3 +1093,36 @@ extern "C" char *koma_computer_call(const char *json) {
 }
 extern "C" void koma_computer_free(char *reply) { free(reply); }
 extern "C" void koma_computer_cancel() { cancelled = true; }
+
+// The bundle icon only applies when Launch Services starts this process as
+// Koma.app. `koma gui` from a terminal is a bare executable, so the Dock and
+// menu bar stay on the generic icon until the image is set explicitly.
+extern "C" void koma_set_app_icon(const char *path) {
+    if (path == nullptr || path[0] == '\0') {
+        return;
+    }
+    @autoreleasepool {
+        NSString *file = [NSString stringWithUTF8String:path];
+        if (file == nil) {
+            return;
+        }
+        NSImage *image = [[NSImage alloc] initWithContentsOfFile:file];
+        if (image != nil) {
+            [[NSApplication sharedApplication] setApplicationIconImage:image];
+        }
+    }
+}
+
+// A frameless window can stay behind whatever macOS put up during launch.
+// Both calls predate macOS 11. activateIgnoringOtherApps: is deprecated in
+// the 14 SDK; its replacement is not on the 11.0 deployment target.
+extern "C" void koma_activate_app(void) {
+    @autoreleasepool {
+        NSApplication *app = [NSApplication sharedApplication];
+        [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        [app activateIgnoringOtherApps:YES];
+#pragma clang diagnostic pop
+    }
+}

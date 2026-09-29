@@ -28,6 +28,7 @@ pub mod bgbash;
 pub mod cascade;
 pub mod ext;
 pub mod harness;
+pub mod launcher;
 pub mod mcp;
 pub mod mode;
 pub mod resolve;

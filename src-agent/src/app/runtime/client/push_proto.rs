@@ -235,6 +235,12 @@ pub(super) enum PushEnvelope {
         query: String,
         items: Vec<crate::ipc::proto::FileSearchItem>,
     },
+    /// Staged pasted-text body. The composer fills the editable chip from this.
+    PasteBody {
+        #[serde(rename = "markerN")]
+        marker_n: usize,
+        text: String,
+    },
     /// The authoritative GLOBAL config catalogue for the Connector + MCP panels. React
     /// REPLACES its config slices on each push. Emitted whenever the projected config
     /// changes (a full snapshot carries it) and re-emitted on `Ready` (page reload) so a

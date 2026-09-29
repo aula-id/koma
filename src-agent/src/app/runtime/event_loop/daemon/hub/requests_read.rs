@@ -470,15 +470,126 @@ impl DaemonHub {
     // points the cursor at this client's view), and strip its marker from the
     // daemon composer input so the daemon's own reconcile stays consistent. No
     // model round-trip — the staged bytes are simply dropped from the next submit.
-    pub(super) fn remove_attachment(&mut self, idx: usize, state: &mut AppState, marker_n: usize) {
+    pub(super) fn remove_attachment(
+        &mut self,
+        idx: usize,
+        state: &mut AppState,
+        marker_n: usize,
+        kind: Option<String>,
+    ) {
         let fg = state.rest.fg_mut();
-        fg.pending_attachments.retain(|a| a.marker_n != marker_n);
-        let marker = format!("[Image #{marker_n}]");
-        if fg.input.contains(&marker) {
-            fg.input = fg.input.replace(&marker, "");
-            fg.cursor = fg.cursor.min(fg.input.chars().count());
+        let want_paste = kind.as_deref() == Some("pasted_text");
+        let want_image = matches!(kind.as_deref(), Some("image" | "file"));
+        fg.pending_attachments.retain(|a| {
+            if a.marker_n != marker_n {
+                return true;
+            }
+            if kind.is_none() {
+                return false;
+            }
+            if want_paste {
+                return !a.is_pasted_text();
+            }
+            if want_image {
+                return !a.is_image();
+            }
+            true
+        });
+        let markers: Vec<String> = if want_paste {
+            vec![crate::model::attachment::paste_marker(marker_n)]
+        } else if want_image {
+            vec![format!("[Image #{marker_n}]")]
+        } else {
+            vec![
+                format!("[Image #{marker_n}]"),
+                crate::model::attachment::paste_marker(marker_n),
+            ]
+        };
+        for marker in markers {
+            if fg.input.contains(&marker) {
+                fg.input = fg.input.replace(&marker, "");
+            }
         }
+        fg.cursor = fg.cursor.min(fg.input.chars().count());
         self.send_to(idx, DaemonEvent::Ack);
+    }
+
+    fn staged_paste_path(state: &AppState, marker_n: usize) -> Option<std::path::PathBuf> {
+        let fg = state.rest.fg();
+        let att = fg
+            .pending_attachments
+            .iter()
+            .find(|a| a.is_pasted_text() && a.marker_n == marker_n)?;
+        Some(fg.session.as_ref()?.path.join(&att.rel_path))
+    }
+
+    pub(super) fn attach_paste(&mut self, idx: usize, state: &mut AppState, text: String) {
+        if !crate::model::attachment::should_collapse_paste(&text) {
+            self.send_to(
+                idx,
+                DaemonEvent::Error("paste is short enough to stay inline".into()),
+            );
+            return;
+        }
+        if !state.rest.try_attach_paste_text(&text) {
+            self.send_to(
+                idx,
+                DaemonEvent::Error("paste too large or no session".into()),
+            );
+            return;
+        }
+        let marker_n = state
+            .rest
+            .fg()
+            .pending_attachments
+            .iter()
+            .rev()
+            .find(|a| a.is_pasted_text())
+            .map(|a| a.marker_n);
+        if let Some(marker_n) = marker_n {
+            self.send_to(idx, DaemonEvent::PasteBody { marker_n, text });
+        } else {
+            self.send_to(idx, DaemonEvent::Ack);
+        }
+    }
+
+    pub(super) fn update_paste(
+        &mut self,
+        idx: usize,
+        state: &mut AppState,
+        marker_n: usize,
+        text: String,
+    ) {
+        if text.len() > crate::model::attachment::PASTE_SOFT_MAX_BYTES {
+            self.send_to(idx, DaemonEvent::Error("pasted text exceeds 2 MiB".into()));
+            return;
+        }
+        let Some(path) = Self::staged_paste_path(state, marker_n) else {
+            self.send_to(
+                idx,
+                DaemonEvent::Error("pasted text is no longer attached".into()),
+            );
+            return;
+        };
+        if let Err(err) = std::fs::write(&path, &text) {
+            self.send_to(idx, DaemonEvent::Error(err.to_string()));
+            return;
+        }
+        self.send_to(idx, DaemonEvent::PasteBody { marker_n, text });
+    }
+
+    pub(super) fn read_paste(&mut self, idx: usize, state: &AppState, marker_n: usize) {
+        let Some(path) = Self::staged_paste_path(state, marker_n) else {
+            self.send_to(
+                idx,
+                DaemonEvent::Error("pasted text is no longer attached".into()),
+            );
+            return;
+        };
+        match std::fs::read_to_string(&path) {
+            Ok(text) => self.send_to(idx, DaemonEvent::PasteBody { marker_n, text }),
+            Err(err) => self.send_to(idx, DaemonEvent::Error(err.to_string())),
+        }
     }
 
     // The single-writer gate is RELAXED: any client may now submit / send keys /

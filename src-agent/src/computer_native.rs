@@ -24,4 +24,18 @@ unsafe extern "C" {
     /// The caller must own the current controller generation. This may run
     /// concurrently with its worker's request, but not cancel a later controller.
     pub fn koma_computer_cancel();
+
+    /// Set the Dock and menu-bar icon from a PNG or icns file.
+    ///
+    /// # Safety
+    /// `path` must be null or a live, NUL-terminated UTF-8 filesystem path.
+    /// The call must run on the main thread after `NSApplication` exists.
+    pub fn koma_set_app_icon(path: *const c_char);
+
+    /// Bring this process forward as a regular foreground app.
+    ///
+    /// # Safety
+    /// Must run on the main thread after `NSApplication` exists.
+    #[cfg(target_os = "macos")]
+    pub fn koma_activate_app();
 }

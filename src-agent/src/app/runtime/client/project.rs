@@ -630,17 +630,21 @@ fn push_snapshot_if_changed(
         })
         .collect();
 
-    // Staged composer attachments: the foreground session's `pending_attachments`
-    // (not yet sent). GUI chips are image-only — PastedText stays TUI markers in
-    // `input` + pending list for Ctrl+P, but is not pushed as a React chip.
+    // Staged composer chips. Images stay image chips. Long pastes are
+    // `[Pasted Text #N]` chips the GUI can edit; the body itself arrives
+    // separately as `PasteBody`.
     let attachments: Vec<PushAttachment> = fg
         .pending_attachments
         .iter()
-        .filter(|a| a.is_image())
+        .filter(|a| a.is_image() || a.is_pasted_text())
         .map(|a| PushAttachment {
             marker_n: a.marker_n,
-            name: a.file_name().to_string(),
-            kind: "image",
+            name: if a.is_pasted_text() {
+                format!("Pasted Text #{}", a.marker_n)
+            } else {
+                a.file_name().to_string()
+            },
+            kind: if a.is_pasted_text() { "pasted_text" } else { "image" },
         })
         .collect();
 

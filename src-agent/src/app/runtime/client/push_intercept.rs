@@ -26,6 +26,15 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
     // Omnisearch reply: intercept the one-shot `FileSearchResults` and re-push it to JS as
     // a `SearchResults` envelope BEFORE folding (the fold treats it as a non-visual no-op,
     // keeping the seq gap-free).
+    if let DaemonEvent::PasteBody { marker_n, text } = &frame.event {
+        let env = PushEnvelope::PasteBody {
+            marker_n: *marker_n,
+            text: text.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
     if let DaemonEvent::FileSearchResults { query, items } = &frame.event {
         let env = PushEnvelope::SearchResults {
             query: query.clone(),
