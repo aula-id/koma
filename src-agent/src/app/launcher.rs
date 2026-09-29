@@ -68,6 +68,7 @@ pub fn should_launch_gui(args: &[String]) -> bool {
     exe_should_launch_gui(&exe, args)
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub fn exe_should_launch_gui(exe: &Path, args: &[String]) -> bool {
     if !is_app_bundle_exe(exe) {
         return false;
@@ -287,6 +288,7 @@ fn bundle_exe_current(src: &Path, dest: &Path) -> bool {
     dest_meta.len() > 4096
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn is_app_bundle_exe(exe: &Path) -> bool {
     let mut saw_app = false;
     let mut saw_contents = false;
@@ -430,6 +432,15 @@ mod tests {
     }
 
     #[test]
+    fn desktop_exec_escapes_backslashes() {
+        assert_eq!(
+            desktop_exec(Path::new(r"C:\Users\a\koma")),
+            "\"C:\\\\Users\\\\a\\\\koma\" gui"
+        );
+        assert_eq!(desktop_exec(Path::new("/usr/local/bin/koma")), "/usr/local/bin/koma gui");
+    }
+
+    #[test]
     fn linux_install_writes_desktop_entry_and_icon() {
         let root = std::env::temp_dir().join(format!(
             "koma-desktop-{}-{}",
@@ -449,7 +460,11 @@ mod tests {
         let desktop = fs::read_to_string(&installed.location).unwrap();
         let icon = home.join(".local/share/icons/hicolor/256x256/apps/koma.png");
         assert!(desktop.contains("Name=Koma\n"));
-        assert!(desktop.contains(&format!("Exec={} gui\n", exe.display())));
+        // Windows temp paths contain `\`, which a desktop Exec line must quote
+        // and escape. `desktop_exec` is that line, including the `gui` argument.
+        let exec = desktop_exec(&exe);
+        assert!(exec.ends_with(" gui"));
+        assert!(desktop.contains(&format!("Exec={exec}\n")));
         assert!(desktop.contains(&format!("Icon={}\n", icon.display())));
         assert!(desktop.contains("StartupWMClass=koma\n"));
         assert_eq!(fs::read(&icon).unwrap(), ICON_256);
