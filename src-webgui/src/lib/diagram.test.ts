@@ -7,6 +7,7 @@ import {
   nearestPort,
   nearestSide,
   nextRotation,
+  nodeStyle,
   portAnchor,
   parseDiagram,
   resizeNode,
@@ -149,4 +150,20 @@ function aligned(points: { x: number; y: number }[]): boolean {
   assert.equal(parsed.doc.edges[0]?.fromPort, 0)
   assert.equal(parsed.doc.edges[0]?.toPort, 15)
   assert.equal(parsed.doc.edges[0]?.fromSide, undefined)
+}
+
+{
+  const plain = { id: 't', kind: 'text' as const, x: 0, y: 0, w: 120, h: 36, text: 'Text' }
+  const labeled = { ...plain, id: 't2', fill: true, stroke: true, fillColor: '#aabbcc', strokeColor: '#ddeeff' }
+  const shaped = { id: 'r', kind: 'rect' as const, x: 0, y: 0, w: 80, h: 40, text: 'Card', fill: false, fillColor: '#112233', stroke: false, strokeColor: '#445566' }
+  assert.equal(nodeStyle(plain).fill, false)
+  assert.equal(nodeStyle(plain).stroke, false)
+  assert.equal(nodeStyle({ ...plain, kind: 'rect' }).fill, true)
+  assert.equal(nodeStyle({ ...plain, kind: 'rect' }).stroke, true)
+  const doc = emptyDiagram()
+  doc.nodes.push(plain, labeled, shaped)
+  const parsed = parseDiagram(serializeDiagram(doc))
+  assert.deepEqual(parsed.doc.nodes[0], plain)
+  assert.deepEqual(parsed.doc.nodes[1], labeled)
+  assert.deepEqual(parsed.doc.nodes[2], shaped)
 }

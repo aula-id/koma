@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { Check, Circle, Diamond, HandGrab, MousePointer2, PanelRightClose, PanelRightOpen, RotateCw, Shapes, Spline, Square, Type } from 'lucide-react'
+import { Circle, Diamond, HandGrab, MousePointer2, PanelRightClose, PanelRightOpen, RotateCw, Shapes, Spline, Square, Type } from 'lucide-react'
 import { useKoma, type Tab } from '../store/koma'
 import { recordCodingHistory } from '../lib/coding-recovery'
 import { fileKey } from '../store/coding'
@@ -7,7 +7,7 @@ import { isTabVisible } from '../store/editorGroups'
 import { BrailleSpinner } from './BrailleSpinner'
 import { showCodingHistory } from './CodingHistory'
 import { EditorChrome } from './EditorChrome'
-import { Select, Toggle } from './panels/form'
+import { Toggle } from './panels/form'
 import { DiagramRefMenuItems } from './DiagramVisual'
 import {
   addDiagramAreaToChat,
@@ -27,6 +27,7 @@ import {
   nearestSide,
   nextRotation,
   nodeAtPoint,
+  nodeStyle,
   parseDiagram,
   pointerAngle,
   portAnchor,
@@ -112,6 +113,17 @@ function themeStroke(selected: boolean): string {
     : 'color-mix(in srgb, var(--koma-fg, #c8d3f5) 45%, transparent)'
 }
 
+function tidyNode(node: DiagramNode): DiagramNode {
+  const next: DiagramNode = { ...node }
+  const painted = next.kind !== 'text'
+  if ((next.fill ?? painted) === painted) delete next.fill
+  if ((next.stroke ?? painted) === painted) delete next.stroke
+  if (!next.fillColor) delete next.fillColor
+  if (!next.strokeColor) delete next.strokeColor
+  if (!next.rotation) delete next.rotation
+  return next
+}
+
 function tidyEdge(edge: DiagramEdge): DiagramEdge {
   const next = { ...edge }
   if (next.width === 1.5) delete next.width
@@ -156,7 +168,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
   const [chatMenu, setChatMenu] = useState<{ x: number; y: number; area: DiagramRect | null } | null>(null)
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [connectDrag, setConnectDrag] = useState<{ fromId: string; port: number } | null>(null)
-  const [lineOpen, setLineOpen] = useState(false)
+  const [propsOpen, setPropsOpen] = useState(false)
   const [spaceDown, setSpaceDown] = useState(false)
   const [dragCursor, setDragCursor] = useState<string | null>(null)
   const spaceRef = useRef(false)
@@ -349,7 +361,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
       const existing = current.edges.find((edge) => edge.from === drag.fromId && edge.to === target.id && edge.fromPort === drag.port && edge.toPort === toPort)
       if (existing) {
         setSelection({ type: 'edge', id: existing.id })
-        setLineOpen(true)
+        setPropsOpen(true)
         return
       }
       const id = mintId('e')
@@ -359,7 +371,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
         edges: [...current.edges, tidyEdge({ id, from: drag.fromId, to: target.id, fromPort: drag.port, toPort })],
       })
       setSelection({ type: 'edge', id })
-      setLineOpen(true)
+      setPropsOpen(true)
     }
     const onRestore = (event: Event) => {
       const detail = (event as CustomEvent<{ root?: string; path?: string }>).detail
@@ -489,7 +501,10 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
     const next = placeNode(file.doc, kind, x, y)
     commit(next)
     const id = next.nodes[next.nodes.length - 1]?.id
-    if (id) setSelection({ type: 'node', id })
+    if (id) {
+      setSelection({ type: 'node', id })
+      setPropsOpen(true)
+    }
     setTool('select')
     setConnectFrom(null)
   }
@@ -539,6 +554,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
       if (!connectFrom) {
         setConnectFrom(node.id)
         setSelection({ type: 'node', id: node.id })
+        setPropsOpen(true)
         return
       }
       if (connectFrom !== node.id) {
@@ -549,9 +565,11 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
       }
       setConnectFrom(null)
       setSelection({ type: 'node', id: node.id })
+      setPropsOpen(true)
       return
     }
     setSelection({ type: 'node', id: node.id })
+    setPropsOpen(true)
     setConnectFrom(null)
     dragRef.current = { kind: 'move', id: node.id, sx: e.clientX, sy: e.clientY, ox: node.x, oy: node.y, moved: false, remembered: false }
     setDragCursor('grabbing')
@@ -561,7 +579,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
     if (e.button !== 0) return
     e.stopPropagation()
     setArea(null)
-    setLineOpen(true)
+    setPropsOpen(true)
     setTool('select')
     setConnectFrom(null)
     setSelection({ type: 'edge', id: edge.id })
@@ -572,6 +590,27 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
     commit({
       ...file.doc,
       edges: file.doc.edges.map((edge) => (edge.id === id ? tidyEdge({ ...edge, ...patch }) : edge)),
+    })
+  }
+
+  const patchNode = (id: string, patch: Partial<DiagramNode>) => {
+    if (!file) return
+    commit({
+      ...file.doc,
+      nodes: file.doc.nodes.map((node) => (node.id === id ? tidyNode({ ...node, ...patch }) : node)),
+    })
+  }
+
+  const editNodeText = (id: string, text: string) => {
+    const current = useKoma.getState().diagram.docs[key]?.doc
+    if (!current) return
+    if (!labelNoted.current) {
+      note(current)
+      labelNoted.current = true
+    }
+    updateDiagram(tab.root, tab.path, {
+      ...current,
+      nodes: current.nodes.map((node) => (node.id === id ? { ...node, text } : node)),
     })
   }
 
@@ -639,13 +678,13 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
         trailing={
           <button
             type="button"
-            title={lineOpen ? 'Hide line settings' : 'Line settings'}
-            aria-label={lineOpen ? 'Hide line settings' : 'Line settings'}
-            aria-pressed={lineOpen}
-            onClick={() => setLineOpen((open) => !open)}
-            className={`flex h-6 w-6 flex-none items-center justify-center rounded hover:bg-koma-hover hover:text-koma-fg ${lineOpen ? 'text-koma-fg' : 'text-koma-dim'}`}
+            title={propsOpen ? 'Hide properties' : 'Properties'}
+            aria-label={propsOpen ? 'Hide properties' : 'Properties'}
+            aria-pressed={propsOpen}
+            onClick={() => setPropsOpen((open) => !open)}
+            className={`flex h-6 w-6 flex-none items-center justify-center rounded hover:bg-koma-hover hover:text-koma-fg ${propsOpen ? 'text-koma-fg' : 'text-koma-dim'}`}
           >
-            {lineOpen ? <PanelRightClose size={13} /> : <PanelRightOpen size={13} />}
+            {propsOpen ? <PanelRightClose size={13} /> : <PanelRightOpen size={13} />}
           </button>
         }
       />
@@ -841,22 +880,28 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
         </svg>
         {doc.nodes.map((node) => {
           const selected = selection?.type === 'node' && selection.id === node.id
-          const shape = node.kind === 'rect' ? 'rounded bg-koma-panel' : ''
+          const paint = nodeStyle(node)
+          const connect = connectFrom === node.id
+          const boxed = node.kind === 'rect' || node.kind === 'text'
           const nodeCursor = dragCursor || editing === node.id || tool === 'connect' ? '' : 'cursor-grab'
           return (
             <div
               key={node.id}
               data-diagram-node=""
-              className={`absolute flex items-center justify-center ${shape} ${nodeCursor} ${connectFrom === node.id && node.kind === 'text' ? 'ring-1 ring-koma-accent' : ''}`}
+              className={`absolute flex items-center justify-center ${nodeCursor}`}
               style={{
                 left: pan.x + node.x,
                 top: pan.y + node.y,
                 width: node.w,
                 height: node.h,
                 transform: node.rotation ? `rotate(${node.rotation}deg)` : undefined,
-                ...(node.kind === 'rect'
+                ...(boxed
                   ? {
-                      outline: `1px solid ${connectFrom === node.id ? 'var(--color-koma-accent)' : 'var(--color-koma-border)'}`,
+                      background: paint.fill ? paint.fillColor || 'var(--color-koma-panel)' : 'transparent',
+                      borderRadius: node.kind === 'rect' ? 4 : 0,
+                      outline: connect || paint.stroke
+                        ? `1px solid ${connect ? 'var(--color-koma-accent)' : paint.strokeColor || 'var(--color-koma-border)'}`
+                        : 'none',
                       outlineOffset: '-0.5px',
                     }
                   : {}),
@@ -871,6 +916,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
                 labelNoted.current = false
                 setEditing(node.id)
                 setSelection({ type: 'node', id: node.id })
+                setPropsOpen(true)
               }}
             >
               {node.kind === 'diamond' || node.kind === 'ellipse' ? (
@@ -878,9 +924,9 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
                   {node.kind === 'diamond' ? (
                     <polygon
                       points={`${node.w / 2},0 ${node.w},${node.h / 2} ${node.w / 2},${node.h} 0,${node.h / 2}`}
-                      fill="var(--color-koma-panel)"
-                      stroke={connectFrom === node.id ? 'var(--color-koma-accent)' : 'var(--color-koma-border)'}
-                      strokeWidth={1}
+                      fill={paint.fill ? paint.fillColor || 'var(--color-koma-panel)' : 'none'}
+                      stroke={connect ? 'var(--color-koma-accent)' : paint.stroke ? paint.strokeColor || 'var(--color-koma-border)' : 'none'}
+                      strokeWidth={connect || paint.stroke ? 1 : 0}
                     />
                   ) : (
                     <ellipse
@@ -888,9 +934,9 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
                       cy={node.h / 2}
                       rx={node.w / 2}
                       ry={node.h / 2}
-                      fill="var(--color-koma-panel)"
-                      stroke={connectFrom === node.id ? 'var(--color-koma-accent)' : 'var(--color-koma-border)'}
-                      strokeWidth={1}
+                      fill={paint.fill ? paint.fillColor || 'var(--color-koma-panel)' : 'none'}
+                      stroke={connect ? 'var(--color-koma-accent)' : paint.stroke ? paint.strokeColor || 'var(--color-koma-border)' : 'none'}
+                      strokeWidth={connect || paint.stroke ? 1 : 0}
                     />
                   )}
                 </svg>
@@ -1010,25 +1056,26 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
           </div>
         ) : null}
       </div>
-      {lineOpen ? (
+      {propsOpen ? (
         <aside
           data-diagram-ui=""
-          className="flex w-[232px] min-h-0 flex-none flex-col overflow-y-auto border-l border-koma-border bg-koma-panel"
+          className="flex w-[260px] min-h-0 flex-none flex-col overflow-y-auto border-l border-koma-border bg-koma-panel"
           onPointerDown={(e) => e.stopPropagation()}
           onContextMenu={(e) => {
             e.preventDefault()
             e.stopPropagation()
           }}
         >
-          <div className="flex h-8 flex-none items-center border-b border-koma-border px-2 text-[11px] text-koma-dim">Line</div>
-          {selection?.type === 'edge' && doc.edges.some((edge) => edge.id === selection.id) ? (
-            <LineSettings
-              edge={doc.edges.find((edge) => edge.id === selection.id) as DiagramEdge}
-              onChange={(patch) => patchEdge(selection.id, patch)}
-            />
-          ) : (
-            <p className="px-3 py-2 text-[12px] text-koma-dim">Select a line</p>
-          )}
+          <Properties
+            doc={doc}
+            selection={selection}
+            onEdge={(id, patch) => patchEdge(id, patch)}
+            onNode={(id, patch) => patchNode(id, patch)}
+            onText={(id, text) => editNodeText(id, text)}
+            onTextDone={() => {
+              labelNoted.current = false
+            }}
+          />
         </aside>
       ) : null}
       </div>
@@ -1132,14 +1179,6 @@ function LineGlyph({ children }: { children: ReactNode }) {
   )
 }
 
-function WidthGlyph({ sw }: { sw: number }) {
-  return (
-    <LineGlyph>
-      <path d="M3 7 H25" fill="none" stroke="currentColor" strokeWidth={sw} strokeLinecap="round" />
-    </LineGlyph>
-  )
-}
-
 function ArrowGlyph({ side, kind }: { side: 'start' | 'end'; kind: 'none' | 'arrow' | 'open' }) {
   const head = side === 'end' ? 'M15.5 3 L24 7 L15.5 11' : 'M12.5 3 L4 7 L12.5 11'
   const shaft = kind === 'none' ? 'M4 7 H24' : side === 'end' ? 'M4 7 H16' : 'M12 7 H24'
@@ -1152,163 +1191,274 @@ function ArrowGlyph({ side, kind }: { side: 'start' | 'end'; kind: 'none' | 'arr
   )
 }
 
+function Choices<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: T
+  options: { value: T; label: string; icon?: ReactNode }[]
+  onChange: (value: T) => void
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-koma-dim">{label}</span>
+      <div className="flex rounded border border-koma-border p-0.5">
+        {options.map((option) => {
+          const on = value === option.value
+          return (
+            <button
+              key={option.value}
+              type="button"
+              title={option.label}
+              aria-label={option.label}
+              aria-pressed={on}
+              onClick={() => onChange(option.value)}
+              className={`flex h-7 min-w-0 flex-1 items-center justify-center rounded px-1 ${
+                on ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'
+              }`}
+            >
+              {option.icon ?? <span className="truncate text-[11px]">{option.label}</span>}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function ColorWell({
+  label,
+  value,
+  fallback,
+  picker,
+  onChange,
+}: {
+  label: string
+  value: string
+  fallback: string
+  picker: string
+  onChange: (hex: string) => void
+}) {
+  return (
+    <label className="relative h-7 w-7 flex-none cursor-pointer overflow-hidden rounded border border-koma-border" title={label}>
+      <span className="absolute inset-0" style={{ background: value || fallback }} />
+      <input
+        type="color"
+        aria-label={label}
+        value={/^#[0-9a-fA-F]{6}$/.test(value) ? value : picker}
+        className="absolute inset-0 cursor-pointer opacity-0"
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  )
+}
+
+function PaintRow({
+  label,
+  on,
+  color,
+  fallback,
+  picker,
+  onToggle,
+  onColor,
+}: {
+  label: string
+  on: boolean
+  color: string
+  fallback: string
+  picker: string
+  onToggle: (on: boolean) => void
+  onColor: (hex: string) => void
+}) {
+  return (
+    <div className="flex h-8 items-center gap-2">
+      <span className="min-w-0 flex-1 text-[12px] text-koma-fg">{label}</span>
+      <Toggle on={on} onChange={onToggle} />
+      <ColorWell label={`${label} color`} value={color} fallback={fallback} picker={picker} onChange={onColor} />
+    </div>
+  )
+}
+
+function Properties({
+  doc,
+  selection,
+  onEdge,
+  onNode,
+  onText,
+  onTextDone,
+}: {
+  doc: DiagramDoc
+  selection: Selection | null
+  onEdge: (id: string, patch: Partial<DiagramEdge>) => void
+  onNode: (id: string, patch: Partial<DiagramNode>) => void
+  onText: (id: string, text: string) => void
+  onTextDone: () => void
+}) {
+  const node = selection?.type === 'node' ? doc.nodes.find((item) => item.id === selection.id) : undefined
+  const edge = selection?.type === 'edge' ? doc.edges.find((item) => item.id === selection.id) : undefined
+  return (
+    <>
+      <div className="flex h-8 flex-none items-center border-b border-koma-border px-3 text-[12px] text-koma-fg">
+        {node ? 'Card' : edge ? 'Line' : 'Properties'}
+      </div>
+      {node ? (
+        <CardSettings node={node} onChange={(patch) => onNode(node.id, patch)} onText={(text) => onText(node.id, text)} onTextDone={onTextDone} />
+      ) : edge ? (
+        <LineSettings edge={edge} onChange={(patch) => onEdge(edge.id, patch)} />
+      ) : (
+        <p className="px-3 py-2 text-[12px] text-koma-dim">Select a card or a line</p>
+      )}
+    </>
+  )
+}
+
+function CardSettings({
+  node,
+  onChange,
+  onText,
+  onTextDone,
+}: {
+  node: DiagramNode
+  onChange: (patch: Partial<DiagramNode>) => void
+  onText: (text: string) => void
+  onTextDone: () => void
+}) {
+  const style = nodeStyle(node)
+  return (
+    <div className="flex flex-col gap-3 p-3">
+      <label className="flex flex-col gap-1">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-koma-dim">Label</span>
+        <input
+          key={node.id}
+          value={node.text}
+          aria-label="Label"
+          onFocus={onTextDone}
+          onChange={(e) => onText(e.target.value)}
+          onBlur={onTextDone}
+          className="h-7 w-full rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none focus:border-koma-fg/40"
+        />
+      </label>
+      <PaintRow
+        label="Fill"
+        on={style.fill}
+        color={style.fillColor}
+        fallback="var(--color-koma-panel)"
+        picker="#1a1d27"
+        onToggle={(fill) => onChange({ fill })}
+        onColor={(fillColor) => onChange({ fillColor, fill: true })}
+      />
+      <PaintRow
+        label="Border"
+        on={style.stroke}
+        color={style.strokeColor}
+        fallback="var(--color-koma-border)"
+        picker="#8b93b8"
+        onToggle={(stroke) => onChange({ stroke })}
+        onColor={(strokeColor) => onChange({ strokeColor, stroke: true })}
+      />
+    </div>
+  )
+}
+
 function LineSettings({ edge, onChange }: { edge: DiagramEdge; onChange: (patch: Partial<DiagramEdge>) => void }) {
   const style = edgeStyle(edge)
   return (
-    <div className="flex flex-col gap-1.5 p-2">
-      <div className="flex items-center gap-1">
-        <button
-          type="button"
-          aria-pressed={style.stroke}
-          title="Line"
-          onClick={() => onChange({ stroke: style.stroke ? false : undefined })}
-          className={`flex h-5 flex-none items-center gap-1 rounded px-1.5 text-[11px] ${
-            style.stroke ? 'bg-koma-hover text-koma-fg' : 'text-koma-fg opacity-45 hover:bg-koma-hover hover:opacity-80'
-          }`}
-        >
-          {style.stroke ? <Check size={11} className="text-koma-accent" /> : <span className="h-[11px] w-[11px] rounded-sm border border-koma-border" />}
-          Line
-        </button>
-        <div className="min-w-0 flex-1">
-          <Select
-            value={style.corner}
-            triggerTitle="Corner"
-            options={[
-              {
-                value: 'sharp',
-                label: 'Sharp',
-                icon: (
-                  <LineGlyph>
-                    <path d="M6 2 V11 H24" fill="none" stroke="currentColor" strokeWidth="1.5" />
-                  </LineGlyph>
-                ),
-              },
-              {
-                value: 'rounded',
-                label: 'Rounded',
-                icon: (
-                  <LineGlyph>
-                    <path d="M6 2 V7 Q6 11 11 11 H24" fill="none" stroke="currentColor" strokeWidth="1.5" />
-                  </LineGlyph>
-                ),
-              },
-            ]}
-            onChange={(corner) => onChange({ corner })}
-          />
-        </div>
-        <input
-          type="color"
-          aria-label="Line color"
-          title="Line color"
-          value={style.color || '#c8d3f5'}
-          className="h-5 w-5 flex-none cursor-pointer rounded border border-koma-border bg-transparent p-0"
-          onChange={(e) => onChange({ color: e.target.value })}
-        />
-      </div>
-      <div className="flex items-center gap-1">
-        <div className="min-w-0 flex-1">
-          <Select
-            value={style.start}
-            triggerTitle="Start"
-            options={[
-              { value: 'none', label: 'No start', icon: <ArrowGlyph side="start" kind="none" /> },
-              { value: 'arrow', label: 'Arrow start', icon: <ArrowGlyph side="start" kind="arrow" /> },
-              { value: 'open', label: 'Open start', icon: <ArrowGlyph side="start" kind="open" /> },
-            ]}
-            onChange={(start) => onChange({ start })}
-          />
-        </div>
-        <div className="min-w-0 flex-1">
-          <Select
-            value={style.dash}
-            triggerTitle="Pattern"
-            options={[
-              {
-                value: 'solid',
-                label: 'Solid',
-                icon: (
-                  <LineGlyph>
-                    <path d="M3 7 H25" fill="none" stroke="currentColor" strokeWidth="1.6" />
-                  </LineGlyph>
-                ),
-              },
-              {
-                value: 'dashed',
-                label: 'Dashed',
-                icon: (
-                  <LineGlyph>
-                    <path d="M3 7 H25" fill="none" stroke="currentColor" strokeWidth="1.6" strokeDasharray="5 3" />
-                  </LineGlyph>
-                ),
-              },
-              {
-                value: 'dotted',
-                label: 'Dotted',
-                icon: (
-                  <LineGlyph>
-                    <path d="M4 7 H24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeDasharray="0.1 4" />
-                  </LineGlyph>
-                ),
-              },
-            ]}
-            onChange={(dash) => onChange({ dash })}
-          />
-        </div>
-        <div className="min-w-0 flex-1">
-          <Select
-            value={String(style.width) as '1' | '1.5' | '2' | '3'}
-            triggerTitle="Width"
-            options={[
-              { value: '1', label: '1 pt', icon: <WidthGlyph sw={1} /> },
-              { value: '1.5', label: '1.5 pt', icon: <WidthGlyph sw={1.8} /> },
-              { value: '2', label: '2 pt', icon: <WidthGlyph sw={2.6} /> },
-              { value: '3', label: '3 pt', icon: <WidthGlyph sw={3.8} /> },
-            ]}
-            onChange={(width) => onChange({ width: Number(width) })}
-          />
-        </div>
-      </div>
-      <div className="flex items-center gap-1">
-        <div className="min-w-0 flex-1">
-          <Select
-            value={style.end}
-            triggerTitle="End"
-            options={[
-              { value: 'none', label: 'No end', icon: <ArrowGlyph side="end" kind="none" /> },
-              { value: 'arrow', label: 'Arrow end', icon: <ArrowGlyph side="end" kind="arrow" /> },
-              { value: 'open', label: 'Open end', icon: <ArrowGlyph side="end" kind="open" /> },
-            ]}
-            onChange={(end) => onChange({ end })}
-          />
-        </div>
-        <div className="min-w-0 flex-1">
-          <Select
-            value={style.route}
-            triggerTitle="Route"
-            options={[
-              {
-                value: 'orthogonal' satisfies DiagramRoute,
-                label: 'Elbow',
-                icon: (
-                  <LineGlyph>
-                    <path d="M3 3 H14 V11 H25" fill="none" stroke="currentColor" strokeWidth="1.5" />
-                  </LineGlyph>
-                ),
-              },
-              {
-                value: 'straight',
-                label: 'Straight',
-                icon: (
-                  <LineGlyph>
-                    <path d="M3 11 L25 3" fill="none" stroke="currentColor" strokeWidth="1.5" />
-                  </LineGlyph>
-                ),
-              },
-            ]}
-            onChange={(route) => onChange({ route, bends: [] })}
-          />
-        </div>
-      </div>
+    <div className="flex flex-col gap-3 p-3">
+      <PaintRow
+        label="Stroke"
+        on={style.stroke}
+        color={style.color}
+        fallback="var(--color-koma-fg)"
+        picker="#c8d3f5"
+        onToggle={(stroke) => onChange({ stroke: stroke ? undefined : false })}
+        onColor={(color) => onChange({ color, stroke: undefined })}
+      />
+      <Choices
+        label="Start"
+        value={style.start}
+        options={[
+          { value: 'none', label: 'No start', icon: <ArrowGlyph side="start" kind="none" /> },
+          { value: 'arrow', label: 'Arrow start', icon: <ArrowGlyph side="start" kind="arrow" /> },
+          { value: 'open', label: 'Open start', icon: <ArrowGlyph side="start" kind="open" /> },
+        ]}
+        onChange={(start) => onChange({ start })}
+      />
+      <Choices
+        label="End"
+        value={style.end}
+        options={[
+          { value: 'none', label: 'No end', icon: <ArrowGlyph side="end" kind="none" /> },
+          { value: 'arrow', label: 'Arrow end', icon: <ArrowGlyph side="end" kind="arrow" /> },
+          { value: 'open', label: 'Open end', icon: <ArrowGlyph side="end" kind="open" /> },
+        ]}
+        onChange={(end) => onChange({ end })}
+      />
+      <Choices
+        label="Pattern"
+        value={style.dash}
+        options={[
+          {
+            value: 'solid',
+            label: 'Solid',
+            icon: (
+              <LineGlyph>
+                <path d="M3 7 H25" fill="none" stroke="currentColor" strokeWidth="1.6" />
+              </LineGlyph>
+            ),
+          },
+          {
+            value: 'dashed',
+            label: 'Dashed',
+            icon: (
+              <LineGlyph>
+                <path d="M3 7 H25" fill="none" stroke="currentColor" strokeWidth="1.6" strokeDasharray="5 3" />
+              </LineGlyph>
+            ),
+          },
+          {
+            value: 'dotted',
+            label: 'Dotted',
+            icon: (
+              <LineGlyph>
+                <path d="M4 7 H24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeDasharray="0.1 4" />
+              </LineGlyph>
+            ),
+          },
+        ]}
+        onChange={(dash) => onChange({ dash })}
+      />
+      <Choices
+        label="Width"
+        value={String(style.width)}
+        options={[
+          { value: '1', label: '1' },
+          { value: '1.5', label: '1.5' },
+          { value: '2', label: '2' },
+          { value: '3', label: '3' },
+        ]}
+        onChange={(width) => onChange({ width: Number(width) })}
+      />
+      <Choices
+        label="Corner"
+        value={style.corner}
+        options={[
+          { value: 'sharp', label: 'Sharp' },
+          { value: 'rounded', label: 'Round' },
+        ]}
+        onChange={(corner) => onChange({ corner })}
+      />
+      <Choices
+        label="Route"
+        value={style.route}
+        options={[
+          { value: 'orthogonal' satisfies DiagramRoute, label: 'Elbow' },
+          { value: 'straight', label: 'Straight' },
+        ]}
+        onChange={(route) => onChange({ route, bends: [] })}
+      />
     </div>
   )
 }

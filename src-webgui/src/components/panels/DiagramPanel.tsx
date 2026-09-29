@@ -126,9 +126,12 @@ function ShapePreview({ kind }: { kind: DiagramKind }) {
       </svg>
     )
   }
+  if (kind === 'text') {
+    return <span className="flex h-8 items-center px-1 text-[13px] leading-none text-koma-fg/80">Text</span>
+  }
   return (
     <span className="flex h-8 items-center justify-center rounded border border-current bg-koma-bg px-2 text-[11px] leading-none text-koma-fg/80">
-      {kind === 'text' ? 'Text' : 'Heading'}
+      Heading
     </span>
   )
 }

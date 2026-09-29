@@ -23,6 +23,15 @@ export type DiagramNode = {
   text: string
   /** Degrees clockwise. Omitted when the shape is unrotated. */
   rotation?: number
+  /**
+   * Omitted fill follows the kind: shapes are filled, text is not.
+   * A color is a `#rrggbb`. Omitted uses the theme panel color.
+   */
+  fill?: boolean
+  fillColor?: string
+  /** Omitted border follows the kind: shapes are stroked, text is not. */
+  stroke?: boolean
+  strokeColor?: string
 }
 
 export type DiagramEdge = {
@@ -123,6 +132,13 @@ function parseNodes(value: unknown): DiagramNode[] | null {
     const node: DiagramNode = { id: row.id, kind: row.kind, x, y, w, h, text: row.text }
     const rotation = num(row.rotation)
     if (rotation != null && rotation !== 0) node.rotation = ((rotation % 360) + 360) % 360
+    const painted = row.kind !== 'text'
+    if (typeof row.fill === 'boolean' && row.fill !== painted) node.fill = row.fill
+    const fillColor = parseColor(row.fillColor)
+    if (fillColor) node.fillColor = fillColor
+    if (typeof row.stroke === 'boolean' && row.stroke !== painted) node.stroke = row.stroke
+    const strokeColor = parseColor(row.strokeColor)
+    if (strokeColor) node.strokeColor = strokeColor
     nodes.push(node)
   }
   return nodes
@@ -226,7 +242,12 @@ export function serializeDiagram(doc: DiagramDoc): string {
     grid: doc.grid,
     nodes: doc.nodes.map((n) => {
       const row: DiagramNode = { id: n.id, kind: n.kind, x: n.x, y: n.y, w: n.w, h: n.h, text: n.text }
+      const painted = n.kind !== 'text'
       if (n.rotation) row.rotation = n.rotation
+      if (typeof n.fill === 'boolean' && n.fill !== painted) row.fill = n.fill
+      if (n.fillColor) row.fillColor = n.fillColor
+      if (typeof n.stroke === 'boolean' && n.stroke !== painted) row.stroke = n.stroke
+      if (n.strokeColor) row.strokeColor = n.strokeColor
       return row
     }),
     edges: doc.edges.map((e) => {
@@ -258,6 +279,17 @@ export type DiagramEdgeStyle = {
   end: DiagramArrow
   corner: DiagramCorner
   route: DiagramRoute
+}
+
+/** Resolved fill and border. Text is bare unless a file says otherwise. */
+export function nodeStyle(node: DiagramNode): { fill: boolean; fillColor: string; stroke: boolean; strokeColor: string } {
+  const painted = node.kind !== 'text'
+  return {
+    fill: node.fill ?? painted,
+    fillColor: node.fillColor ?? '',
+    stroke: node.stroke ?? painted,
+    strokeColor: node.strokeColor ?? '',
+  }
 }
 
 export function edgeStyle(edge: DiagramEdge): DiagramEdgeStyle {

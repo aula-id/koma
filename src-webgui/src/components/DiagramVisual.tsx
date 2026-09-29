@@ -4,6 +4,7 @@ import {
   edgeRoute,
   edgeStyle,
   nodeCenter,
+  nodeStyle,
   type DiagramDoc,
   type DiagramNode,
 } from '../lib/diagram'
@@ -101,9 +102,19 @@ export function DiagramSketch({ doc }: { doc: DiagramDoc }) {
   )
 }
 
+function shapePaint(node: DiagramNode): { fill: string; stroke: string; strokeWidth: number } {
+  const style = nodeStyle(node)
+  return {
+    fill: style.fill ? style.fillColor || 'var(--color-koma-panel)' : 'none',
+    stroke: style.stroke ? style.strokeColor || 'var(--color-koma-border)' : 'none',
+    strokeWidth: style.stroke ? 1 : 0,
+  }
+}
+
 function DiagramShape({ node }: { node: DiagramNode }) {
   const center = nodeCenter(node)
   const transform = node.rotation ? `rotate(${node.rotation} ${center.x} ${center.y})` : undefined
+  const paint = shapePaint(node)
   const label = (
     <text
       x={center.x}
@@ -117,12 +128,20 @@ function DiagramShape({ node }: { node: DiagramNode }) {
     </text>
   )
   if (node.kind === 'text') {
-    return <g transform={transform}>{label}</g>
+    const style = nodeStyle(node)
+    return (
+      <g transform={transform}>
+        {style.fill || style.stroke ? (
+          <rect x={node.x} y={node.y} width={node.w} height={node.h} fill={paint.fill} stroke={paint.stroke} strokeWidth={paint.strokeWidth} />
+        ) : null}
+        {label}
+      </g>
+    )
   }
   if (node.kind === 'ellipse') {
     return (
       <g transform={transform}>
-        <ellipse cx={center.x} cy={center.y} rx={node.w / 2} ry={node.h / 2} fill="var(--color-koma-panel)" stroke="var(--color-koma-border)" />
+        <ellipse cx={center.x} cy={center.y} rx={node.w / 2} ry={node.h / 2} fill={paint.fill} stroke={paint.stroke} strokeWidth={paint.strokeWidth} />
         {label}
       </g>
     )
@@ -131,14 +150,14 @@ function DiagramShape({ node }: { node: DiagramNode }) {
     const points = `${center.x},${node.y} ${node.x + node.w},${center.y} ${center.x},${node.y + node.h} ${node.x},${center.y}`
     return (
       <g transform={transform}>
-        <polygon points={points} fill="var(--color-koma-panel)" stroke="var(--color-koma-border)" />
+        <polygon points={points} fill={paint.fill} stroke={paint.stroke} strokeWidth={paint.strokeWidth} />
         {label}
       </g>
     )
   }
   return (
     <g transform={transform}>
-      <rect x={node.x} y={node.y} width={node.w} height={node.h} rx="4" fill="var(--color-koma-panel)" stroke="var(--color-koma-border)" />
+      <rect x={node.x} y={node.y} width={node.w} height={node.h} rx="4" fill={paint.fill} stroke={paint.stroke} strokeWidth={paint.strokeWidth} />
       {label}
     </g>
   )
