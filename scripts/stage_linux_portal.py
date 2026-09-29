@@ -39,6 +39,20 @@ def libraries(binary: Path) -> None:
 def package_files(package: str) -> list[Path]:
     return [Path(p) for p in subprocess.check_output(['dpkg-query', '-L', package], text=True).splitlines()]
 
+def plugin_directory() -> Path:
+    # pluginsdir is published by libgstreamer1.0-dev's .pc file. The packaging
+    # runners install the runtime packages only, so read the directory from
+    # the package that actually ships libgstcoreelements.so.
+    for package in ('libgstreamer1.0-0', 'gstreamer1.0-plugins-base'):
+        try:
+            files = package_files(package)
+        except subprocess.CalledProcessError:
+            continue
+        found = next((path for path in files if path.name == 'libgstcoreelements.so'), None)
+        if found is not None:
+            return found.parent
+    raise RuntimeError('GStreamer plugin directory not found; install libgstreamer1.0-0')
+
 def pipewire_runtime() -> None:
     # PipeWire loads these modules with dlopen, so ldd on pipewiresrc is insufficient.
     config = next((p for p in [Path('/usr/share/pipewire/client.conf'), Path('/etc/pipewire/client.conf')] if p.is_file()), None)
@@ -67,7 +81,7 @@ def main() -> None:
     launch = shutil.which('gst-launch-1.0')
     if not launch:
         raise RuntimeError('gstreamer1.0-tools is required')
-    plugin_dir = Path(subprocess.check_output(['pkg-config', '--variable=pluginsdir', 'gstreamer-1.0'], text=True).strip())
+    plugin_dir = plugin_directory()
     for choices in [('libgstcoreelements.so',), ('libgstpipewire.so',), ('libgstpng.so',), ('libgstvideoconvertscale.so', 'libgstvideoconvert.so'), ('libgstvideoconvertscale.so', 'libgstvideoscale.so')]:
         plugin = next((plugin_dir / name for name in choices if (plugin_dir / name).is_file()), None)
         if plugin is None:

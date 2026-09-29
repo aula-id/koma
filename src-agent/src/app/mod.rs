@@ -35,6 +35,7 @@ pub mod runtime;
 pub mod sec;
 pub mod state;
 pub mod subagent;
+pub mod launcher;
 pub mod update;
 pub mod version;
 

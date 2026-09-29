@@ -1038,3 +1038,22 @@ extern "C" char *koma_computer_call(const char *json) {
 }
 extern "C" void koma_computer_free(char *reply) { free(reply); }
 extern "C" void koma_computer_cancel() { cancelled = true; }
+
+// The bundle icon only applies when Launch Services starts this process as
+// Koma.app. `koma gui` from a terminal is a bare executable, so the Dock and
+// menu bar stay on the generic icon until the image is set explicitly.
+extern "C" void koma_set_app_icon(const char *path) {
+    if (path == nullptr || path[0] == '\0') {
+        return;
+    }
+    @autoreleasepool {
+        NSString *file = [NSString stringWithUTF8String:path];
+        if (file == nil) {
+            return;
+        }
+        NSImage *image = [[NSImage alloc] initWithContentsOfFile:file];
+        if (image != nil) {
+            [[NSApplication sharedApplication] setApplicationIconImage:image];
+        }
+    }
+}
