@@ -1,70 +1,93 @@
 #!/usr/bin/env python3
 """Generate the koma app icon.
 
-A free typewriter "K" (Cousine Bold, falling back to other free mono faces)
-centered in a dark circle. Writes the PNG sizes the Debian hicolor install
-and the shell installer use, plus icon.ico and icon.icns for Windows and macOS.
+A black circle with a winking face (curved stem, a corner that bends
+down-right, and a small smile) centered in a rounded white square.
+No outline and no shadow. Outside the rounded square is transparent.
+
+Writes the PNG sizes the Debian hicolor install and the shell installer
+use, plus icon.ico and icon.icns for Windows and macOS.
 
 Usage:
     python3 assets/gen-placeholder-icons.py
 
 Requires Pillow (PIL). If Pillow is not installed, falls back to hand-rolled
-solid-color PNG/ICO generation (no circle, no glyph) via zlib/struct.
+solid-color PNG/ICO generation via zlib/struct.
 """
+import math
 import os
 import struct
 import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BG_COLOR = (0x1A, 0x1A, 0x2E, 0xFF)  # #1a1a2e, fully opaque
-GLYPH_COLOR = (0xF4, 0xF4, 0xF6, 0xFF)  # light near-white glyph
+BG_COLOR = (0xFF, 0xFF, 0xFF, 0xFF)
 
 SIZES = [32, 48, 64, 128, 256, 512]
 ICO_SIZES = [16, 32, 48, 64, 128, 256]
-# Free typewriter faces, most specific first. Cousine is metric-compatible
-# with Courier New and licensed Apache-2.0.
-FONT_CANDIDATES = [
-    "/usr/share/fonts/truetype/croscore/Cousine-Bold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
-    "/usr/share/fonts/truetype/freefont/FreeMonoBold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-]
 
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw
 
     HAVE_PIL = True
 except ImportError:
     HAVE_PIL = False
 
 
-def _font(size):
-    for path in FONT_CANDIDATES:
-        if os.path.isfile(path):
-            return ImageFont.truetype(path, size), path
-    return None, None
+def _quad(p0, p1, p2, n=72):
+    pts = []
+    for i in range(n + 1):
+        t = i / n
+        u = 1 - t
+        pts.append((
+            u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0],
+            u * u * p0[1] + 2 * u * t * p1[1] + t * t * p2[1],
+        ))
+    return pts
+
+
+def _stroke(draw, pts, width, scale):
+    """Solid rounded stroke. A single wide line leaves stripes when scaled down."""
+    radius = width / 2.0
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        dist = math.hypot(x1 - x0, y1 - y0)
+        steps = max(1, int(dist / (width / 8)))
+        for i in range(steps + 1):
+            t = i / steps
+            px = (x0 + (x1 - x0) * t) * scale
+            py = (y0 + (y1 - y0) * t) * scale
+            r = radius * scale
+            draw.ellipse((px - r, py - r, px + r, py + r), fill=(255, 255, 255, 255))
 
 
 def build_master_pil(size=1024):
-    """Dark circle with a free typewriter 'K' centered on the ink."""
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    """Wink circle, centered in a rounded white square. No outline, no shadow."""
+    scale = 4
+    canvas = size * scale
+    img = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    margin = int(size * 0.04)
-    draw.ellipse([margin, margin, size - margin - 1, size - margin - 1], fill=BG_COLOR)
+    radius = int(canvas * 0.22)
+    draw.rounded_rectangle((0, 0, canvas - 1, canvas - 1), radius=radius, fill=(255, 255, 255, 255))
 
-    font, font_path = _font(int(size * 0.62))
-    if font is None:
-        raise RuntimeError("no free font found; install fonts-croscore or fonts-dejavu")
+    # The approved circle, inset so the white rounded square frames it.
+    diameter = canvas * 0.76
+    left = (canvas - diameter) / 2
+    draw.ellipse((left, left, left + diameter, left + diameter), fill=(0, 0, 0, 255))
 
-    bbox = font.getbbox("K")
-    ink_w = bbox[2] - bbox[0]
-    ink_h = bbox[3] - bbox[1]
-    x = (size - ink_w) / 2 - bbox[0]
-    y = (size - ink_h) / 2 - bbox[1]
-    draw.text((x, y), "K", font=font, fill=GLYPH_COLOR)
-    print(f"glyph font: {font_path}")
-    return img
+    def at(nx, ny):
+        return (left + nx * diameter, left + ny * diameter)
+
+    def stroke(p0, p1, p2, width):
+        _stroke(draw, [at(*p) for p in _quad(p0, p1, p2)], width * diameter, 1)
+
+    # Curved stem, wink bending down-right, small smile under the wink.
+    stroke((0.33, 0.24), (0.50, 0.36), (0.46, 0.55), 0.091)
+    stroke((0.645, 0.09), (0.64, 0.18), (0.65, 0.26), 0.084)
+    # Fold the lower arm flatter so the corner reads as a blink.
+    stroke((0.65, 0.26), (0.74, 0.285), (0.82, 0.30), 0.084)
+    stroke((0.55, 0.66), (0.66, 0.73), (0.78, 0.63), 0.067)
+
+    return img.resize((size, size), Image.Resampling.LANCZOS)
 
 
 def gen_with_pil():
@@ -172,7 +195,7 @@ def gen_without_pil():
 
 def main():
     if HAVE_PIL:
-        print("Pillow detected: generating circle + typewriter 'K' icons")
+        print("Pillow detected: generating wink icon on a rounded white square")
         gen_with_pil()
     else:
         print("Pillow NOT found: generating solid-color fallback icons")
