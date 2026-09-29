@@ -261,14 +261,31 @@ export type DiagramMessagePart =
   | { type: 'text'; text: string }
   | { type: 'diagram'; mermaid: string }
 
+const MERMAID_FENCE = /```[ \t]*mermaid[ \t]*\r?\n[\s\S]*?```/gi
+
 /** Pull fenced Mermaid out of a user message. The fence is what the model read. */
 export function splitDiagramMessage(content: string): { prose: string; diagrams: { mermaid: string }[] } {
   const diagrams: { mermaid: string }[] = []
-  const prose = content.replace(/```[ \t]*mermaid[ \t]*\r?\n[\s\S]*?```/gi, (fence) => {
+  const prose = content.replace(new RegExp(MERMAID_FENCE.source, 'gi'), (fence) => {
     diagrams.push({ mermaid: fence })
     return ''
   })
   return { prose: prose.replace(/\n{3,}/g, '\n\n').trim(), diagrams }
+}
+
+/** Mermaid fences in the order they appear, with the prose between them kept. */
+export function diagramMessageParts(content: string): DiagramMessagePart[] {
+  const parts: DiagramMessagePart[] = []
+  const re = new RegExp(MERMAID_FENCE.source, 'gi')
+  let last = 0
+  for (const match of content.matchAll(re)) {
+    const index = match.index ?? 0
+    if (index > last) parts.push({ type: 'text', text: content.slice(last, index) })
+    parts.push({ type: 'diagram', mermaid: match[0] })
+    last = index + match[0].length
+  }
+  if (last < content.length) parts.push({ type: 'text', text: content.slice(last) })
+  return parts
 }
 
 export function pointInDiagramRect(point: DiagramPoint, rect: DiagramRect): boolean {

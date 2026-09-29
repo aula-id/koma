@@ -163,10 +163,9 @@ export function DiagramObservationCard({ mermaid }: { mermaid: string }) {
         </div>
         <ChevronDown size={14} className={`shrink-0 text-koma-dim transition-transform ${expanded ? 'rotate-180' : ''}`} />
       </button>
-      {expanded ? (
-        <div className="border-t border-koma-border">
-          <div className="h-52 bg-koma-bg">{view.doc.nodes.length ? <DiagramSketch doc={view.doc} /> : null}</div>
-          <pre className="whitespace-pre-wrap break-words border-t border-koma-border px-3 py-2 text-[11px] text-koma-fg">{mermaid}</pre>
+      {expanded && view.doc.nodes.length ? (
+        <div className="h-52 border-t border-koma-border bg-koma-bg">
+          <DiagramSketch doc={view.doc} />
         </div>
       ) : null}
     </article>

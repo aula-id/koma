@@ -32,7 +32,7 @@ import { useKoma, type AttachmentEntry, type ChatMessage, type ToolCallView } fr
 import { ChatScrollRootContext, MessageBody } from './MessageBody'
 import { ComputerObservationCard, ComputerToolCall } from './ComputerObservationCard'
 import { DiagramObservationCard } from './DiagramVisual'
-import { splitDiagramMessage } from '../lib/diagramMermaid'
+import { diagramMessageParts, splitDiagramMessage } from '../lib/diagramMermaid'
 import { splitPasteMessage } from '../lib/pasteText'
 import { Composer } from './Composer'
 import { ApprovalOverlay } from './ApprovalOverlay'
@@ -437,12 +437,22 @@ const AssistantMessage = memo(function AssistantMessage({
   const hasBody = content.trim() !== ''
   const hasReasoning = reasoning != null && reasoning.trim() !== ''
   const hasTools = toolCalls != null && toolCalls.length > 0
+  const parts = diagramMessageParts(content).filter((part) => part.type === 'diagram' || part.text.trim() !== '')
   return (
     <div className="flex gap-2">
       <Circle size={9} className="mt-[5px] flex-none fill-koma-fg text-koma-fg" />
       <div className="min-w-0 flex-1">
         {hasReasoning && <ReasoningBlock text={reasoning as string} defaultOpen={streaming} />}
-        {hasBody && <MessageBody text={content} streaming={streaming} />}
+        {hasBody &&
+          parts.map((part, index) =>
+            part.type === 'diagram' ? (
+              <div key={`diagram-${index}`} className="my-2">
+                <DiagramObservationCard mermaid={part.mermaid} />
+              </div>
+            ) : (
+              <MessageBody key={`text-${index}`} text={part.text} streaming={streaming && index === parts.length - 1} />
+            ),
+          )}
         {hasTools && (
           <div className="mt-1 space-y-1">
             {(toolCalls as ToolCallView[]).map((c) => (

@@ -4,6 +4,7 @@ import {
   captureDiagram,
   diagramToMermaid,
   parseMermaidDiagram,
+  diagramMessageParts,
   splitDiagramMessage,
 } from './diagramMermaid.ts'
 
@@ -84,6 +85,14 @@ import {
   assert.equal(split.prose, 'look\n\nthanks')
   assert.equal(split.diagrams.length, 1)
   assert.equal(split.diagrams[0].mermaid.includes('a["A"]'), true)
+  const parts = diagramMessageParts('look\n\n```mermaid\nflowchart TD\n  a["A"]\n```\n\nthanks')
+  assert.deepEqual(
+    parts.map((part) => part.type),
+    ['text', 'diagram', 'text'],
+  )
+  assert.equal(parts[0].type === 'text' && parts[0].text.startsWith('look'), true)
+  assert.equal(parts[1].type === 'diagram' && parts[1].mermaid.includes('a["A"]'), true)
+  assert.equal(parts[2].type === 'text' && parts[2].text.includes('thanks'), true)
 }
 
 assert.equal(diagramToMermaid(emptyDiagram(), 'empty'), '')

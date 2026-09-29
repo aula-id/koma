@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { Check, Circle, Diamond, MousePointer2, PanelRightClose, PanelRightOpen, RotateCw, Shapes, Spline, Square, Type } from 'lucide-react'
+import { Check, Circle, Diamond, HandGrab, MousePointer2, PanelRightClose, PanelRightOpen, RotateCw, Shapes, Spline, Square, Type } from 'lucide-react'
 import { useKoma, type Tab } from '../store/koma'
 import { recordCodingHistory } from '../lib/coding-recovery'
 import { fileKey } from '../store/coding'
@@ -47,7 +47,7 @@ import {
   type DiagramRoute,
 } from '../lib/diagram'
 
-type Tool = 'select' | 'connect' | DiagramKind
+type Tool = 'select' | 'pan' | 'connect' | DiagramKind
 type Selection = { type: 'node' | 'edge'; id: string }
 type Drag =
   | { kind: 'move'; id: string; sx: number; sy: number; ox: number; oy: number; moved: boolean; remembered: boolean }
@@ -61,6 +61,7 @@ type Drag =
 
 const TOOLS: { id: Tool; label: string; icon: typeof Square }[] = [
   { id: 'select', label: 'Select', icon: MousePointer2 },
+  { id: 'pan', label: 'Move canvas', icon: HandGrab },
   { id: 'rect', label: 'Rectangle', icon: Square },
   { id: 'ellipse', label: 'Ellipse', icon: Circle },
   { id: 'diamond', label: 'Diamond', icon: Diamond },
@@ -493,6 +494,15 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
     setConnectFrom(null)
   }
 
+  const onCanvasPointerDownCapture = (e: ReactPointerEvent) => {
+    if (tool !== 'pan' || e.button !== 0) return
+    if ((e.target as HTMLElement).closest('input, textarea')) return
+    e.preventDefault()
+    e.stopPropagation()
+    dragRef.current = { kind: 'pan', sx: e.clientX, sy: e.clientY, px: panRef.current.x, py: panRef.current.y }
+    setDragCursor('grabbing')
+  }
+
   const onCanvasPointerDown = (e: ReactPointerEvent) => {
     if (e.button === 1 || (e.button === 0 && spaceRef.current)) {
       if ((e.target as HTMLElement).closest('input, textarea')) return
@@ -507,7 +517,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
     setEditing(null)
     const p = toDoc(e)
     if (!p || !file || file.loading) return
-    if (tool !== 'select' && tool !== 'connect') {
+    if (tool !== 'select' && tool !== 'connect' && tool !== 'pan') {
       addAt(tool, p.x, p.y)
       return
     }
@@ -645,7 +655,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
       <div className="flex min-h-0 min-w-0 flex-1">
       <div
         ref={canvasRef}
-        className={`relative min-h-0 min-w-0 flex-1 overflow-hidden ${dragCursor ? '' : spaceDown ? 'cursor-grab' : 'cursor-crosshair'}`}
+        className={`relative min-h-0 min-w-0 flex-1 overflow-hidden ${dragCursor ? '' : tool === 'pan' || spaceDown ? 'cursor-grab' : 'cursor-crosshair'}`}
         style={{
           ...(doc.snap
             ? {
@@ -657,6 +667,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
             : {}),
           ...(dragCursor ? { cursor: dragCursor } : {}),
         }}
+        onPointerDownCapture={onCanvasPointerDownCapture}
         onPointerDown={onCanvasPointerDown}
         onContextMenu={(e) => {
           if ((e.target as HTMLElement).closest('input, textarea')) return
@@ -854,6 +865,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
               onPointerLeave={() => setHoverId((current) => (current === node.id ? null : current))}
               onPointerDown={(e) => onNodePointerDown(e, node)}
               onDoubleClick={(e) => {
+                if (tool === 'pan') return
                 e.stopPropagation()
                 dragRef.current = null
                 labelNoted.current = false
@@ -1057,11 +1069,13 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
               setTool(id)
               if (id !== 'connect') setConnectFrom(null)
             }}
-            className={`flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg transition ${
-              tool === id ? 'bg-koma-hover opacity-100' : 'opacity-70 hover:bg-koma-hover hover:opacity-100'
+            className={`flex h-6 w-6 flex-none items-center justify-center rounded transition ${
+              tool === id
+                ? 'bg-koma-accent/20 text-koma-accent ring-1 ring-inset ring-koma-accent'
+                : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'
             }`}
           >
-            <Icon size={14} strokeWidth={1.6} />
+            <Icon size={15} strokeWidth={tool === id ? 2.25 : 1.6} />
           </button>
         ))}
         <div className="ml-auto flex items-center gap-1.5">

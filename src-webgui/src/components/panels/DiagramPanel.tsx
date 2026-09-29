@@ -103,7 +103,7 @@ function ShapeRow({ kind, label, icon: Icon }: { kind: DiagramKind; label: strin
           /* ignore */
         }
       }}
-      className="flex h-7 min-w-0 cursor-grab items-center gap-1 pr-1 text-[12px] text-koma-fg hover:bg-koma-hover active:cursor-grabbing"
+      className="flex h-[22px] min-w-0 cursor-grab items-center gap-1 pr-1 text-[12px] text-koma-fg hover:bg-koma-hover active:cursor-grabbing"
       style={{ paddingLeft: 8 }}
       title={`Drag ${label} onto the canvas`}
     >
@@ -240,7 +240,7 @@ export function DiagramPanel() {
         ) : (
           <>
             {creating ? (
-              <div className="flex h-7 min-w-0 items-center gap-1 pr-1 text-[12px] text-koma-fg" style={{ paddingLeft: 8 }}>
+              <div className="flex h-[22px] min-w-0 items-center gap-1 pr-1 text-[12px] text-koma-fg" style={{ paddingLeft: 8 }}>
                 <span className="w-5 flex-none" />
                 <File size={13} className="flex-none opacity-70" />
                 <InlineNameInput
@@ -258,7 +258,7 @@ export function DiagramPanel() {
                   return (
                     <div
                       key={entry.path}
-                      className="flex h-7 w-full items-center gap-2 bg-koma-error/15 px-2 text-[12px] font-medium text-koma-error"
+                      className="flex h-[22px] w-full items-center gap-2 bg-koma-error/15 px-2 text-[12px] font-medium text-koma-error"
                     >
                       <span className="min-w-0 flex-1 truncate">delete file?</span>
                       <button
@@ -281,7 +281,7 @@ export function DiagramPanel() {
                 return (
                   <div
                     key={entry.path}
-                    className="group flex h-7 min-w-0 items-center gap-1 pr-1 text-[12px] text-koma-fg hover:bg-koma-hover"
+                    className="group flex h-[22px] min-w-0 items-center gap-1 pr-1 text-[12px] text-koma-fg hover:bg-koma-hover"
                     style={{ paddingLeft: 8 }}
                     onContextMenu={(e: ReactMouseEvent) => {
                       e.preventDefault()
