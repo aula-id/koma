@@ -5,6 +5,7 @@
 
 export const DESIGN_GRID = 8
 export const DESIGN_MIME = 'application/x-koma-design'
+export const COMPONENT_MIME = 'application/x-koma-component'
 export const DESIGN_MIN_W = 8
 export const DESIGN_MIN_H = 8
 
@@ -436,6 +437,208 @@ export function layoutDesign(doc: DesignDoc, frozenId?: string): DesignDoc {
     return { ...component, variants }
   })
   return changed ? { ...doc, screens, components } : doc
+}
+
+const BOARD_GAP = 80
+
+function syncAxes(component: DesignComponent): DesignComponent {
+  const axes: Record<string, string[]> = {}
+  for (const variant of component.variants) {
+    for (const [key, value] of Object.entries(variant.props)) {
+      const name = key.trim()
+      const next = value.trim()
+      if (!name || !next) continue
+      const list = axes[name] ?? []
+      if (!list.includes(next)) list.push(next)
+      axes[name] = list
+    }
+  }
+  const synced: DesignComponent = { ...component, variants: component.variants }
+  if (Object.keys(axes).length) synced.axes = axes
+  else delete synced.axes
+  return synced
+}
+
+function cleanProps(props: Record<string, string>): Record<string, string> {
+  const clean: Record<string, string> = {}
+  for (const [key, value] of Object.entries(props)) {
+    const name = key.trim()
+    const next = value.trim()
+    if (name && next) clean[name] = next
+  }
+  return clean
+}
+
+function zeroRoot(node: DesignNode): DesignNode {
+  return node.x === 0 && node.y === 0 ? node : { ...node, x: 0, y: 0 }
+}
+
+/** A prop set that does not collide with the variants already present. */
+export function nextVariantProps(variants: { props: Record<string, string> }[]): Record<string, string> {
+  const names = new Set<string>()
+  for (const variant of variants) {
+    for (const key of Object.keys(variant.props)) names.add(key)
+  }
+  const name = [...names][0] ?? 'variant'
+  const seen = new Set(variants.map((variant) => variantKey(variant.props)))
+  let i = variants.length + 1
+  let props = { [name]: `v${i}` }
+  while (seen.has(variantKey(props))) {
+    i += 1
+    props = { [name]: `v${i}` }
+  }
+  return props
+}
+
+/** Copy a frame into the component list. A nested frame is replaced by an instance. */
+export function createComponentFromFrame(doc: DesignDoc, frameId: string, componentId: string, mint: () => string): DesignDoc | null {
+  const located = locateDesign(doc, frameId)
+  if (!located || located.node.kind !== 'frame') return null
+  if (doc.components.some((component) => component.id === componentId)) return null
+  const source = copyTree(located.node, mint)
+  source.x = 0
+  source.y = 0
+  const component: DesignComponent = {
+    id: componentId,
+    name: located.node.name?.trim() || 'Component',
+    variants: [{ props: {}, node: source }],
+  }
+  const next: DesignDoc = { ...doc, components: [...doc.components, component] }
+  if (!located.parentId) return next
+  const instance: DesignNode = {
+    id: mint(),
+    kind: 'instance',
+    x: located.node.x,
+    y: located.node.y,
+    w: located.node.w,
+    h: located.node.h,
+    component: componentId,
+  }
+  return updateDesignNode(next, located.parentId, (parent) => ({
+    ...parent,
+    children: (parent.children ?? []).map((child) => (child.id === frameId ? instance : child)),
+  }))
+}
+
+export function addComponentVariant(doc: DesignDoc, componentId: string, props: Record<string, string>, mint: () => string): DesignDoc | null {
+  const index = doc.components.findIndex((component) => component.id === componentId)
+  if (index < 0) return null
+  const component = doc.components[index]
+  const source = component.variants[component.variants.length - 1]
+  if (!source) return null
+  const clean = cleanProps(props)
+  if (component.variants.some((variant) => variantKey(variant.props) === variantKey(clean))) return null
+  const node = copyTree(source.node, mint)
+  node.x = 0
+  node.y = 0
+  const variants = [...component.variants, { props: clean, node }]
+  const components = doc.components.slice()
+  components[index] = syncAxes({ ...component, variants })
+  return { ...doc, components }
+}
+
+export function setVariantProps(doc: DesignDoc, componentId: string, rootId: string, props: Record<string, string>): DesignDoc | null {
+  const index = doc.components.findIndex((component) => component.id === componentId)
+  if (index < 0) return null
+  const component = doc.components[index]
+  const at = component.variants.findIndex((variant) => variant.node.id === rootId)
+  if (at < 0) return null
+  const clean = cleanProps(props)
+  if (component.variants.some((variant, i) => i !== at && variantKey(variant.props) === variantKey(clean))) return null
+  const variants = component.variants.slice()
+  variants[at] = { ...variants[at], props: clean }
+  const components = doc.components.slice()
+  components[index] = syncAxes({ ...component, variants })
+  return { ...doc, components }
+}
+
+export function renameComponent(doc: DesignDoc, componentId: string, raw: string): DesignDoc | null {
+  const name = raw.trim()
+  if (!name) return null
+  const index = doc.components.findIndex((component) => component.id === componentId)
+  if (index < 0) return null
+  if (doc.components[index].name === name) return doc
+  const components = doc.components.slice()
+  components[index] = { ...components[index], name }
+  return { ...doc, components }
+}
+
+export function makeInstance(doc: DesignDoc, componentId: string, id: string, x: number, y: number): DesignNode | null {
+  const component = doc.components.find((item) => item.id === componentId)
+  if (!component) return null
+  const variant = pickVariant(component)
+  if (!variant) return null
+  return { id, kind: 'instance', x, y, w: variant.node.w, h: variant.node.h, component: componentId }
+}
+
+export function setInstanceVariant(doc: DesignDoc, id: string, props: Record<string, string>): DesignDoc | null {
+  const located = locateDesign(doc, id)
+  if (!located || located.node.kind !== 'instance' || !located.node.component) return null
+  const component = doc.components.find((item) => item.id === located.node.component)
+  if (!component) return null
+  const clean = cleanProps(props)
+  const picked = pickVariant(component, clean)
+  if (!picked) return null
+  return updateDesignNode(doc, id, (node) => {
+    const next: DesignNode = { ...node, w: picked.node.w, h: picked.node.h }
+    if (Object.keys(clean).length) next.variant = clean
+    else delete next.variant
+    return next
+  })
+}
+
+export function resetInstanceOverrides(doc: DesignDoc, id: string): DesignDoc {
+  return updateDesignNode(doc, id, (node) => {
+    if (node.kind !== 'instance') return node
+    const next: DesignNode = { ...node }
+    delete next.text
+    delete next.fill
+    return next
+  })
+}
+
+/** Lay out the chosen variant and paint this instance's text and fill overrides. */
+export function resolveInstanceTree(doc: DesignDoc, node: DesignNode): DesignNode | null {
+  if (node.kind !== 'instance' || !node.component) return null
+  const component = doc.components.find((item) => item.id === node.component)
+  if (!component) return null
+  const variant = pickVariant(component, node.variant)
+  if (!variant) return null
+  const overridden = applyOverrides(variant.node, { text: node.text, fill: node.fill })
+  return layoutDesign({ ...doc, screens: [zeroRoot(overridden)] }).screens[0] ?? null
+}
+
+/** Variant frames placed side by side so the canvas can edit them like screens. */
+export function componentView(doc: DesignDoc, componentId: string): DesignDoc | null {
+  const component = doc.components.find((item) => item.id === componentId)
+  if (!component?.variants.length) return null
+  let x = 0
+  const screens = component.variants.map((variant) => {
+    const screen = { ...variant.node, x, y: 0 }
+    x += Math.max(variant.node.w, DESIGN_MIN_W) + BOARD_GAP
+    return screen
+  })
+  return { ...doc, screens }
+}
+
+/** Write canvas edits back onto one component. Real screens stay put. An empty board deletes the component. */
+export function writeComponentView(doc: DesignDoc, componentId: string, view: DesignDoc): DesignDoc | null {
+  const index = doc.components.findIndex((item) => item.id === componentId)
+  if (index < 0) return null
+  const component = doc.components[index]
+  const known = new Map(component.variants.map((variant) => [variant.node.id, variant]))
+  const variants: DesignVariant[] = []
+  for (const screen of view.screens) {
+    if (screen.kind !== 'frame') continue
+    const node = zeroRoot(screen)
+    const prev = known.get(screen.id)
+    if (prev) variants.push({ ...prev, node })
+    else variants.push({ props: nextVariantProps([...component.variants, ...variants]), node })
+  }
+  const components = view.components.slice()
+  if (!variants.length) components.splice(index, 1)
+  else components[index] = syncAxes({ ...component, name: view.components[index]?.name ?? component.name, variants })
+  return { ...view, screens: doc.screens, components }
 }
 
 /** Move a flow child to a new index among its non-absolute siblings. */

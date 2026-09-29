@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
 import {
+  addComponentVariant,
   addDesignToken,
   applyOverrides,
+  componentView,
   copyTree,
+  createComponentFromFrame,
   createNode,
   deleteDesignNode,
   designFileName,
@@ -21,10 +24,16 @@ import {
   placeDesignNode,
   queryDesign,
   resizeDesignNode,
+  resetInstanceOverrides,
+  resolveInstanceTree,
   resolveRef,
   serializeDesign,
   setDesignMode,
   setDesignTokenValue,
+  setInstanceVariant,
+  setVariantProps,
+  updateDesignNode,
+  writeComponentView,
   textStyle,
   variantKey,
 } from './design.ts'
@@ -356,4 +365,61 @@ function sample(): DesignDoc {
   assert.equal(addDesignToken(doc, 'space.2', 'space')?.tokens[0].values.light, '8')
   assert.equal(addDesignToken(doc, 'type.body', 'type')?.tokens[0].values.dark, '13/regular')
   assert.equal(addDesignToken(doc, 'radius.sm', 'radius')?.tokens[0].values.light, '8')
+}
+
+{
+  const doc = emptyDesign()
+  const screen = createNode('frame', 'screen', 0, 0)
+  const card = createNode('frame', 'card', 16, 24)
+  card.name = 'Card'
+  const label = createNode('text', 'label', 4, 4)
+  label.text = 'Hi'
+  card.children = [label]
+  screen.children = [card]
+  doc.screens = [screen]
+  let n = 0
+  const mint = () => `m${n++}`
+  const made = createComponentFromFrame(doc, 'card', 'card-1', mint)
+  assert.ok(made)
+  assert.equal(made.components[0].name, 'Card')
+  assert.equal(made.components[0].variants[0].node.x, 0)
+  assert.equal(made.components[0].variants[0].node.children?.[0].text, 'Hi')
+  assert.equal(made.screens[0].children?.[0].kind, 'instance')
+  assert.equal(made.screens[0].children?.[0].component, 'card-1')
+  assert.equal(made.screens[0].children?.[0].x, 16)
+  assert.equal(createComponentFromFrame(made, 'missing', 'nope', mint), null)
+  const added = addComponentVariant(made, 'card-1', { tone: 'quiet' }, mint)
+  assert.ok(added)
+  assert.deepEqual(added.components[0].axes, { tone: ['quiet'] })
+  assert.equal(addComponentVariant(added, 'card-1', { tone: 'quiet' }, mint), null)
+  const rootId = added.components[0].variants[0].node.id
+  const propped = setVariantProps(added, 'card-1', rootId, { tone: 'primary' })
+  assert.deepEqual(propped?.components[0].axes?.tone, ['primary', 'quiet'])
+  const view = componentView(propped!, 'card-1')
+  assert.ok(view)
+  assert.equal(view.screens.length, 2)
+  assert.equal(view.screens[1].x > view.screens[0].x, true)
+  const childId = view.screens[0].children?.[0].id
+  assert.ok(childId)
+  const moved = updateDesignNode(view, childId, (node) => ({ ...node, x: 12 }))
+  const written = writeComponentView(propped!, 'card-1', moved)
+  assert.equal(written?.screens[0].children?.[0].kind, 'instance')
+  assert.equal(written?.components[0].variants[0].node.x, 0)
+  assert.equal(written?.components[0].variants[0].node.children?.[0].x, 12)
+  const instance = written!.screens[0].children![0]
+  const tree = resolveInstanceTree(written!, { ...instance, text: 'Go', fill: '#112233' })
+  assert.equal(tree?.fill, '#112233')
+  assert.equal(tree?.children?.[0].text, 'Go')
+  const varied = setInstanceVariant(written!, instance.id, { tone: 'quiet' })
+  assert.equal(varied?.screens[0].children?.[0].variant?.tone, 'quiet')
+  const painted = updateDesignNode(varied!, instance.id, (node) => ({ ...node, text: 'Go', fill: '#112233' }))
+  const reset = resetInstanceOverrides(painted, instance.id)
+  assert.equal(reset.screens[0].children?.[0].text, undefined)
+  assert.equal(reset.screens[0].children?.[0].fill, undefined)
+  const cleared = writeComponentView(propped!, 'card-1', { ...view!, screens: [] })
+  assert.equal(cleared?.components.some((component) => component.id === 'card-1'), false)
+  assert.equal(cleared?.screens[0].id, 'screen')
+  const kept = createComponentFromFrame(doc, 'screen', 'screen-1', mint)
+  assert.equal(kept?.screens[0].kind, 'frame')
+  assert.equal(kept?.components[0].id, 'screen-1')
 }

@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { Frame, Hand, Minus, MousePointer2, Plus, Square, Type, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import {
+  COMPONENT_MIME,
   DESIGN_MIME,
+  addComponentVariant,
+  componentView,
   copyTree,
+  createComponentFromFrame,
   createNode,
   deleteDesignNode,
   frameAtPoint,
@@ -11,18 +15,26 @@ import {
   insertDesignNode,
   layoutDesign,
   locateDesign,
+  makeInstance,
+  nextVariantProps,
   nodeChrome,
   nodeOrigin,
   parseDesign,
   placeDesignNode,
+  renameComponent,
   reorderDesignNode,
+  resetInstanceOverrides,
   resizeDesignNode,
+  resolveInstanceTree,
   resolveRef,
   serializeDesign,
   setDesignMode,
+  setInstanceVariant,
+  setVariantProps,
   snapDesign,
   textStyle,
   updateDesignNode,
+  writeComponentView,
   type DesignDoc,
   type DesignHandle,
   type DesignNode,
@@ -64,6 +76,27 @@ function mintId(prefix: string): string {
   return `${prefix}${Date.now().toString(36)}${mintSeq}`
 }
 
+function instanceAxes(doc: DesignDoc, node: DesignNode): { name: string; values: string[]; current: string }[] | null {
+  if (node.kind !== 'instance' || !node.component) return null
+  const component = doc.components.find((item) => item.id === node.component)
+  if (!component?.axes) return []
+  return Object.entries(component.axes).map(([name, values]) => ({
+    name,
+    values,
+    current: node.variant?.[name] ?? values[0] ?? '',
+  }))
+}
+
+function editingDoc(stored: DesignDoc, focusId: string | null): DesignDoc {
+  if (!focusId) return stored
+  return componentView(stored, focusId) ?? stored
+}
+
+function projectDoc(stored: DesignDoc, focusId: string | null, view: DesignDoc): DesignDoc {
+  if (!focusId) return view
+  return writeComponentView(stored, focusId, view) ?? stored
+}
+
 function paintCss(doc: DesignDoc, ref: string, fallback: string): string {
   if (ref === 'none') return 'transparent'
   if (!ref) return fallback
@@ -100,18 +133,39 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const [spaceDown, setSpaceDown] = useState(false)
   const [dragCursor, setDragCursor] = useState<string | null>(null)
   const [rev, setRev] = useState(0)
+  const [focusId, setFocusId] = useState<string | null>(null)
+  const focusRef = useRef<string | null>(null)
   toolRef.current = tool
+  focusRef.current = focusId
 
   useEffect(() => {
     pastRef.current = []
     futureRef.current = []
     setSelection(null)
     setEditing(null)
+    setFocusId(null)
     const next = { panX: 40, panY: 40, zoom: 1 }
     viewRef.current = next
     setView(next)
     setRev((value) => value + 1)
   }, [key])
+
+  useEffect(() => {
+    const onFocus = (event: Event) => {
+      const detail = (event as CustomEvent<{ root: string; path: string; componentId: string | null }>).detail
+      if (!detail || detail.root !== tab.root || detail.path !== tab.path) return
+      setFocusId(detail.componentId)
+      setSelection(null)
+      setEditing(null)
+    }
+    window.addEventListener('koma-design-focus', onFocus)
+    return () => window.removeEventListener('koma-design-focus', onFocus)
+  }, [tab.path, tab.root])
+
+  useEffect(() => {
+    if (!focusId || !file) return
+    if (!file.doc.components.some((component) => component.id === focusId)) setFocusId(null)
+  }, [file, focusId])
 
   const note = (doc: DesignDoc) => {
     pastRef.current.push(doc)
@@ -122,11 +176,25 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const noteRef = useRef(note)
   noteRef.current = note
 
-  const commit = (next: DesignDoc) => {
+  const commit = (view: DesignDoc) => {
+    const stored = useKoma.getState().design.docs[key]?.doc
+    if (!stored) return
+    const next = projectDoc(stored, focusRef.current, layoutDesign(view))
+    if (serializeDesign(stored) === serializeDesign(next)) return
+    note(stored)
+    updateDesign(tab.root, tab.path, next)
+  }
+  const commitStored = (next: DesignDoc, noteOnce = false) => {
+    const stored = useKoma.getState().design.docs[key]?.doc
+    if (!stored) return
     const laid = layoutDesign(next)
-    const current = useKoma.getState().design.docs[key]?.doc
-    if (!current || serializeDesign(current) === serializeDesign(laid)) return
-    note(current)
+    if (serializeDesign(stored) === serializeDesign(laid)) return
+    if (noteOnce) {
+      if (!labelNoted.current) {
+        note(stored)
+        labelNoted.current = true
+      }
+    } else note(stored)
     updateDesign(tab.root, tab.path, laid)
   }
   const commitRef = useRef(commit)
@@ -224,8 +292,10 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         applyView({ ...current, panX: current.panX + dx, panY: current.panY + dy })
         return
       }
-      const doc = useKoma.getState().design.docs[key]?.doc
-      if (!doc) return
+      const stored = useKoma.getState().design.docs[key]?.doc
+      if (!stored) return
+      const focus = focusRef.current
+      const doc = editingDoc(stored, focus)
       const zoom = viewRef.current.zoom || 1
       const dx = (event.clientX - drag.startX) / zoom
       const dy = (event.clientY - drag.startY) / zoom
@@ -236,10 +306,10 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       const nextNode = drag.kind === 'move'
         ? { ...located.node, x: snapDesign(drag.originX + dx, doc.grid, doc.snap), y: snapDesign(drag.originY + dy, doc.grid, doc.snap) }
         : resizeDesignNode(drag.node, drag.handle, dx, dy, doc.grid, doc.snap)
-      const next = layoutDesign(updateDesignNode(doc, drag.id, () => nextNode), inFlow ? drag.id : undefined)
-      if (serializeDesign(next) === serializeDesign(doc)) return
+      const next = projectDoc(stored, focus, layoutDesign(updateDesignNode(doc, drag.id, () => nextNode), inFlow ? drag.id : undefined))
+      if (serializeDesign(next) === serializeDesign(stored)) return
       if (!drag.remembered) {
-        noteRef.current(doc)
+        noteRef.current(stored)
         drag.remembered = true
       }
       updateRef.current(tab.root, tab.path, next)
@@ -248,14 +318,16 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       const drag = dragRef.current
       dragRef.current = null
       setDragCursor(null)
-      const doc = useKoma.getState().design.docs[key]?.doc
-      if (!doc || !drag || drag.kind === 'pan') return
+      const stored = useKoma.getState().design.docs[key]?.doc
+      if (!stored || !drag || drag.kind === 'pan') return
+      const focus = focusRef.current
+      const doc = editingDoc(stored, focus)
       let next = doc
       if (drag.kind === 'move') {
         const point = toDoc(event.clientX, event.clientY)
         const located = locateDesign(doc, drag.id)
         const origin = nodeOrigin(doc, drag.id)
-        if (point && located && origin) {
+        if (point && located && origin && !(focus && located.parentId == null)) {
           const target = frameAtPoint(doc, point.x, point.y, drag.id)
           const parent = located.parentId ? findDesignNode(doc, located.parentId) : null
           if (parent?.layout && !located.node.absolute && target === located.parentId) {
@@ -280,16 +352,19 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
           }
         }
       }
-      const laid = layoutDesign(next)
-      if (serializeDesign(laid) === serializeDesign(doc)) return
-      if (!drag.remembered) noteRef.current(doc)
+      const laid = projectDoc(stored, focus, layoutDesign(next))
+      if (serializeDesign(laid) === serializeDesign(stored)) return
+      if (!drag.remembered) noteRef.current(stored)
       updateRef.current(tab.root, tab.path, laid)
     }
     const onCommit = (event: Event) => {
       const detail = (event as CustomEvent<{ root: string; path: string; doc: DesignDoc }>).detail
       if (!detail || detail.root !== tab.root || detail.path !== tab.path) return
       event.preventDefault()
-      commitRef.current(detail.doc)
+      const stored = useKoma.getState().design.docs[key]?.doc
+      if (!stored || serializeDesign(stored) === serializeDesign(detail.doc)) return
+      noteRef.current(stored)
+      updateRef.current(tab.root, tab.path, detail.doc)
     }
     window.addEventListener('koma-design-commit', onCommit)
     window.addEventListener('koma-design-restore', onRestore)
@@ -353,10 +428,10 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         return
       }
       if (meta && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'c') {
-        const doc = useKoma.getState().design.docs[key]?.doc
-        if (!doc || !selection) return
-        const located = locateDesign(doc, selection)
-        if (!located || located.node.kind === 'instance') return
+        const stored = useKoma.getState().design.docs[key]?.doc
+        if (!stored || !selection) return
+        const located = locateDesign(editingDoc(stored, focusRef.current), selection)
+        if (!located) return
         copiedShape = { node: located.node, parentId: located.parentId }
         event.preventDefault()
         return
@@ -364,8 +439,9 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       if (meta && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'v') {
         if (!copiedShape) return
         event.preventDefault()
-        const doc = useKoma.getState().design.docs[key]?.doc
-        if (!doc || file?.loading) return
+        const stored = useKoma.getState().design.docs[key]?.doc
+        if (!stored || file?.loading) return
+        const doc = editingDoc(stored, focusRef.current)
         const step = doc.snap && doc.grid > 0 ? doc.grid : 16
         const pasted = copyTree(copiedShape.node, () => mintId('n'), step, step)
         const parentId = copiedShape.parentId && locateDesign(doc, copiedShape.parentId) ? copiedShape.parentId : null
@@ -394,9 +470,9 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       if (event.key === 'Delete' || event.key === 'Backspace') {
         if (!selection) return
         event.preventDefault()
-        const doc = useKoma.getState().design.docs[key]?.doc
-        if (!doc) return
-        commit(deleteDesignNode(doc, selection))
+        const stored = useKoma.getState().design.docs[key]?.doc
+        if (!stored) return
+        commit(deleteDesignNode(editingDoc(stored, focusRef.current), selection))
         setSelection(null)
         setEditing(null)
       }
@@ -411,8 +487,9 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   }, [active, file?.loading, key, saveDesign, selection, tab.path, tab.root])
 
   const placeAt = (kind: 'frame' | 'rect' | 'text', point: { x: number; y: number }) => {
-    const doc = useKoma.getState().design.docs[key]?.doc
-    if (!doc) return
+    const stored = useKoma.getState().design.docs[key]?.doc
+    if (!stored) return
+    const doc = editingDoc(stored, focusRef.current)
     const parent = frameAtPoint(doc, point.x, point.y, '')
     const node = createNode(kind, mintId(kind[0]), 0, 0)
     let next = doc
@@ -461,12 +538,46 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     setSelection(null)
   }
 
+  const placeInstance = (componentId: string, point: { x: number; y: number }) => {
+    focusRef.current = null
+    setFocusId(null)
+    const stored = useKoma.getState().design.docs[key]?.doc
+    if (!stored) return
+    const node = makeInstance(stored, componentId, mintId('i'), 0, 0)
+    if (!node) return
+    const parent = frameAtPoint(stored, point.x, point.y, '')
+    let next = stored
+    if (parent) {
+      const origin = nodeOrigin(stored, parent)
+      if (!origin) return
+      node.x = snapDesign(point.x - origin.x, stored.grid, stored.snap)
+      node.y = snapDesign(point.y - origin.y, stored.grid, stored.snap)
+      next = insertDesignNode(stored, parent, node)
+    } else {
+      const screen = createNode('frame', mintId('f'), snapDesign(point.x, stored.grid, stored.snap), snapDesign(point.y, stored.grid, stored.snap))
+      node.x = 16
+      node.y = 16
+      screen.children = [node]
+      next = insertDesignNode(stored, null, screen)
+    }
+    commitStored(next)
+    setSelection(node.id)
+    setEditing(null)
+    setPropsOpen(true)
+    setTool('select')
+  }
+
   const onDrop = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault()
-    const kind = event.dataTransfer.getData(DESIGN_MIME)
-    if (kind !== 'frame' && kind !== 'rect' && kind !== 'text') return
+    const componentId = event.dataTransfer.getData(COMPONENT_MIME)
     const point = toDoc(event.clientX, event.clientY)
     if (!point) return
+    if (componentId) {
+      placeInstance(componentId, point)
+      return
+    }
+    const kind = event.dataTransfer.getData(DESIGN_MIME)
+    if (kind !== 'frame' && kind !== 'rect' && kind !== 'text') return
     placeAt(kind, point)
   }
 
@@ -474,9 +585,14 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     return <div className="flex h-full items-center justify-center text-[12px] text-koma-dim">Loading…</div>
   }
 
-  const doc = file.doc
+  const storedDoc = file.doc
+  const doc = editingDoc(storedDoc, focusId)
   const located = selection ? locateDesign(doc, selection) : null
   const selected = located?.node ?? null
+  const focusedComponent = focusId ? storedDoc.components.find((component) => component.id === focusId) ?? null : null
+  const selectedVariant = focusedComponent && located?.parentId == null
+    ? focusedComponent.variants.find((variant) => variant.node.id === selected?.id) ?? null
+    : null
   const status = file.saving
     ? 'Saving…'
     : file.loading && file.savedText == null
@@ -493,19 +609,20 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
 
   const patchSelected = (fn: (node: DesignNode) => DesignNode, noteOnce = false) => {
     if (!selection) return
-    const current = useKoma.getState().design.docs[key]?.doc
-    if (!current) return
-    const next = updateDesignNode(current, selection, fn)
-    if (serializeDesign(next) === serializeDesign(current)) return
+    const stored = useKoma.getState().design.docs[key]?.doc
+    if (!stored) return
+    const view = updateDesignNode(editingDoc(stored, focusRef.current), selection, fn)
+    const next = projectDoc(stored, focusRef.current, layoutDesign(view))
+    if (serializeDesign(next) === serializeDesign(stored)) return
     if (noteOnce) {
       if (!labelNoted.current) {
-        note(current)
+        note(stored)
         labelNoted.current = true
       }
       updateDesign(tab.root, tab.path, next)
       return
     }
-    commit(next)
+    commit(view)
   }
 
   return (
@@ -572,7 +689,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   event.stopPropagation()
                   setSelection(id)
                   setPropsOpen(true)
-                  const located = locateDesign(useKoma.getState().design.docs[key]?.doc ?? doc, id)
+                  const storedNow = useKoma.getState().design.docs[key]?.doc
+                  const located = locateDesign(storedNow ? editingDoc(storedNow, focusRef.current) : doc, id)
                   dragRef.current = {
                     kind: 'move',
                     id,
@@ -588,7 +706,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   event.preventDefault()
                   event.stopPropagation()
                   setSelection(id)
-                  const located = locateDesign(useKoma.getState().design.docs[key]?.doc ?? doc, id)
+                  const storedNow = useKoma.getState().design.docs[key]?.doc
+                  const located = locateDesign(storedNow ? editingDoc(storedNow, focusRef.current) : doc, id)
                   if (!located) return
                   const node = { ...located.node }
                   if (handle.includes('w') || handle.includes('e')) delete node.wMode
@@ -611,12 +730,13 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   labelNoted.current = false
                 }}
                 onText={(id, text) => {
-                  const current = useKoma.getState().design.docs[key]?.doc
-                  if (!current) return
-                  const next = layoutDesign(updateDesignNode(current, id, (node) => ({ ...node, text })))
-                  if (serializeDesign(next) === serializeDesign(current)) return
+                  const stored = useKoma.getState().design.docs[key]?.doc
+                  if (!stored) return
+                  const view = updateDesignNode(editingDoc(stored, focusRef.current), id, (node) => ({ ...node, text }))
+                  const next = projectDoc(stored, focusRef.current, layoutDesign(view))
+                  if (serializeDesign(next) === serializeDesign(stored)) return
                   if (!labelNoted.current) {
-                    note(current)
+                    note(stored)
                     labelNoted.current = true
                   }
                   updateDesign(tab.root, tab.path, next)
@@ -650,6 +770,19 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
           <ToolButton label="Move canvas" selected={tool === 'pan'} onClick={() => setTool('pan')}>
             <Hand size={15} strokeWidth={2.25} />
           </ToolButton>
+          {focusedComponent ? (
+            <button
+              type="button"
+              onClick={() => {
+                setFocusId(null)
+                setSelection(null)
+              }}
+              className="h-6 rounded px-2 text-[12px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+            >
+              Screens
+            </button>
+          ) : null}
+          {focusedComponent ? <span className="max-w-32 truncate text-[12px] text-koma-fg">{focusedComponent.name}</span> : null}
           <div className="ml-auto flex items-center gap-1">
             <ToolButton label="Zoom out" selected={false} onClick={() => {
               const rect = canvasRef.current?.getBoundingClientRect()
@@ -698,6 +831,49 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
               doc={doc}
               node={selected}
               hasParent={located?.parentId != null}
+              componentName={selectedVariant ? focusedComponent?.name ?? null : null}
+              variantProps={selectedVariant ? selectedVariant.props : null}
+              axes={selected.kind === 'instance' ? instanceAxes(storedDoc, selected) : null}
+              onMakeComponent={!focusId && selected.kind === 'frame' ? () => {
+                const stored = useKoma.getState().design.docs[key]?.doc
+                if (!stored || !selection) return
+                const componentId = mintId('c')
+                const next = createComponentFromFrame(stored, selection, componentId, () => mintId('n'))
+                if (!next) return
+                commitStored(next)
+                setFocusId(componentId)
+                setSelection(null)
+              } : undefined}
+              onAddVariant={focusId ? () => {
+                const stored = useKoma.getState().design.docs[key]?.doc
+                const component = stored?.components.find((item) => item.id === focusId)
+                if (!stored || !component) return
+                const next = addComponentVariant(stored, focusId, nextVariantProps(component.variants), () => mintId('n'))
+                if (next) commitStored(next)
+              } : undefined}
+              onVariantProps={focusId && selectedVariant ? (props) => {
+                const stored = useKoma.getState().design.docs[key]?.doc
+                if (!stored || !selection) return
+                const next = setVariantProps(stored, focusId, selection, props)
+                if (next) commitStored(next, true)
+              } : undefined}
+              onRenameComponent={focusId ? (name) => {
+                const stored = useKoma.getState().design.docs[key]?.doc
+                if (!stored) return
+                const next = renameComponent(stored, focusId, name)
+                if (next) commitStored(next, true)
+              } : undefined}
+              onInstanceVariant={selected.kind === 'instance' ? (props) => {
+                const stored = useKoma.getState().design.docs[key]?.doc
+                if (!stored) return
+                const next = setInstanceVariant(stored, selected.id, props)
+                if (next) commitStored(next)
+              } : undefined}
+              onResetInstance={selected.kind === 'instance' && (selected.text || selected.fill) ? () => {
+                const stored = useKoma.getState().design.docs[key]?.doc
+                if (!stored) return
+                commitStored(resetInstanceOverrides(stored, selected.id))
+              } : undefined}
               onPatch={(fn) => patchSelected(fn)}
               onType={(fn) => patchSelected(fn, true)}
               onTypeFocus={() => {
@@ -737,6 +913,7 @@ function DesignNodeView({
   selectedId,
   editing,
   dragCursor,
+  locked = false,
   onSelect,
   onResize,
   onEdit,
@@ -748,21 +925,24 @@ function DesignNodeView({
   selectedId: string | null
   editing: string | null
   dragCursor: string | null
+  locked?: boolean
   onSelect: (id: string, event: ReactPointerEvent<HTMLDivElement>) => void
   onResize: (id: string, handle: DesignHandle, event: ReactPointerEvent<HTMLButtonElement>) => void
   onEdit: (id: string) => void
   onText: (id: string, text: string) => void
   onTextBlur: () => void
 }) {
-  const chrome = nodeChrome(node)
-  const style = textStyle(node)
+  const visual = node.kind === 'instance' ? resolveInstanceTree(doc, node) : null
+  const chrome = nodeChrome(visual ?? node)
+  const style = textStyle(visual && node.kind !== 'instance' ? visual : node)
   const selected = node.id === selectedId
   const fill = paintCss(doc, chrome.fill, 'var(--color-koma-panel)')
   const stroke = paintCss(doc, chrome.stroke, 'var(--color-koma-border)')
   const radius = typeof chrome.radius === 'number' ? chrome.radius : Number(resolveRef(doc, chrome.radius)) || 0
+  const children = visual?.children ?? (node.kind === 'instance' ? undefined : node.children)
   return (
     <div
-      className="pointer-events-auto absolute"
+      className={`absolute ${locked ? 'pointer-events-none' : 'pointer-events-auto'}`}
       style={{
         left: node.x,
         top: node.y,
@@ -774,11 +954,12 @@ function DesignNodeView({
         borderRadius: radius,
         outline: selected ? '1px solid var(--color-koma-accent)' : undefined,
         outlineOffset: -0.5,
-        cursor: dragCursor ? undefined : 'grab',
+        cursor: locked || dragCursor ? undefined : 'grab',
+        overflow: node.kind === 'instance' ? 'hidden' : undefined,
       }}
-      onPointerDown={(event) => onSelect(node.id, event)}
+      onPointerDown={locked ? undefined : (event) => onSelect(node.id, event)}
       onDoubleClick={(event) => {
-        if (node.kind !== 'text') return
+        if (locked || node.kind !== 'text') return
         event.stopPropagation()
         onEdit(node.id)
       }}
@@ -800,17 +981,20 @@ function DesignNodeView({
         >
           <span className="truncate">{node.text || 'Text'}</span>
         </div>
+      ) : node.kind === 'instance' && !visual ? (
+        <span className="pointer-events-none absolute left-2 top-1 truncate text-[11px] text-koma-dim">Missing component</span>
       ) : node.name ? (
         <span className="pointer-events-none absolute left-2 top-1 truncate text-[11px] text-koma-dim">{node.name}</span>
       ) : null}
-      {node.children?.map((child) => (
+      {children?.map((child) => (
         <DesignNodeView
           key={child.id}
           doc={doc}
           node={child}
-          selectedId={selectedId}
+          selectedId={locked || node.kind === 'instance' ? null : selectedId}
           editing={editing}
           dragCursor={dragCursor}
+          locked={locked || node.kind === 'instance'}
           onSelect={onSelect}
           onResize={onResize}
           onEdit={onEdit}
@@ -818,7 +1002,7 @@ function DesignNodeView({
           onTextBlur={onTextBlur}
         />
       ))}
-      {selected && !dragCursor ? (
+      {selected && !locked && !dragCursor ? (
         HANDLES.map((handle) => (
           <button
             key={handle.id}
@@ -838,6 +1022,15 @@ function NodeSettings({
   doc,
   node,
   hasParent,
+  componentName,
+  variantProps,
+  axes,
+  onMakeComponent,
+  onAddVariant,
+  onVariantProps,
+  onRenameComponent,
+  onInstanceVariant,
+  onResetInstance,
   onPatch,
   onType,
   onTypeFocus,
@@ -846,11 +1039,22 @@ function NodeSettings({
   doc: DesignDoc
   node: DesignNode
   hasParent: boolean
+  componentName?: string | null
+  variantProps?: Record<string, string> | null
+  axes?: { name: string; values: string[]; current: string }[] | null
+  onMakeComponent?: () => void
+  onAddVariant?: () => void
+  onVariantProps?: (props: Record<string, string>) => void
+  onRenameComponent?: (name: string) => void
+  onInstanceVariant?: (props: Record<string, string>) => void
+  onResetInstance?: () => void
   onPatch: (fn: (node: DesignNode) => DesignNode) => void
   onType: (fn: (node: DesignNode) => DesignNode) => void
   onTypeFocus: () => void
   onTypeBlur: () => void
 }) {
+  const [propName, setPropName] = useState('variant')
+  const [propValue, setPropValue] = useState('')
   const chrome = nodeChrome(node)
   const style = textStyle(node)
   const shaped = node.kind === 'frame' || node.kind === 'rect'
@@ -873,16 +1077,95 @@ function NodeSettings({
   }
   return (
     <div className="flex flex-col gap-3 px-3 pb-3 text-[12px]">
+      {onMakeComponent ? (
+        <button type="button" onClick={onMakeComponent} className="h-7 rounded bg-koma-accent/20 text-koma-accent">
+          Create component
+        </button>
+      ) : null}
+      {componentName != null ? (
+        <label className="flex flex-col gap-1">
+          <span className="text-koma-dim">Component</span>
+          <input
+            value={componentName}
+            onFocus={onTypeFocus}
+            onBlur={onTypeBlur}
+            onChange={(event) => onRenameComponent?.(event.target.value)}
+            className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+          />
+        </label>
+      ) : null}
+      {variantProps ? (
+        <div className="flex flex-col gap-1">
+          <span className="text-koma-dim">Variant</span>
+          {Object.entries(variantProps).map(([key, value]) => (
+            <label key={key} className="flex items-center gap-1">
+              <span className="w-16 flex-none truncate text-koma-dim">{key}</span>
+              <input
+                value={value}
+                aria-label={`${key} value`}
+                onFocus={onTypeFocus}
+                onBlur={onTypeBlur}
+                onChange={(event) => onVariantProps?.({ ...variantProps, [key]: event.target.value })}
+                className="h-7 min-w-0 flex-1 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+              />
+            </label>
+          ))}
+          <form
+            className="flex items-center gap-1"
+            onSubmit={(event) => {
+              event.preventDefault()
+              const name = propName.trim()
+              const value = propValue.trim()
+              if (!name || !value) return
+              onVariantProps?.({ ...variantProps, [name]: value })
+              setPropValue('')
+            }}
+          >
+            <input value={propName} aria-label="Property name" onChange={(event) => setPropName(event.target.value)} className="h-7 w-16 flex-none rounded border border-koma-border bg-koma-bg px-1 text-[12px] text-koma-fg outline-none" />
+            <input value={propValue} aria-label="Property value" onChange={(event) => setPropValue(event.target.value)} className="h-7 min-w-0 flex-1 rounded border border-koma-border bg-koma-bg px-1 text-[12px] text-koma-fg outline-none" />
+            <button type="submit" className="h-7 rounded px-1 text-koma-dim hover:bg-koma-hover">Add</button>
+          </form>
+          {onAddVariant ? (
+            <button type="button" onClick={onAddVariant} className="h-7 rounded text-koma-dim hover:bg-koma-hover">
+              Add variant
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {axes?.map((axis) => (
+        <Choices
+          key={axis.name}
+          label={axis.name}
+          value={axis.current}
+          options={axis.values.map((value) => ({ value, label: value }))}
+          onChange={(value) => onInstanceVariant?.({ ...(node.variant ?? {}), [axis.name]: value })}
+        />
+      ))}
+      {onResetInstance ? (
+        <button type="button" onClick={onResetInstance} className="h-7 rounded text-koma-dim hover:bg-koma-hover">
+          Reset overrides
+        </button>
+      ) : null}
       {node.kind !== 'rect' ? (
         <label className="flex flex-col gap-1">
-          <span className="text-koma-dim">{node.kind === 'text' ? 'Text' : 'Label'}</span>
+          <span className="text-koma-dim">{node.kind === 'text' || node.kind === 'instance' ? 'Text' : 'Label'}</span>
           <input
-            value={node.kind === 'text' ? node.text ?? '' : node.name ?? ''}
+            value={node.kind === 'text' || node.kind === 'instance' ? node.text ?? '' : node.name ?? ''}
+            placeholder={node.kind === 'instance' ? 'Override' : undefined}
             onFocus={onTypeFocus}
             onBlur={onTypeBlur}
             onChange={(event) => {
               const value = event.target.value
-              onType((current) => (current.kind === 'text' ? { ...current, text: value } : { ...current, name: value || undefined }))
+              onType((current) => {
+                if (current.kind === 'text') return { ...current, text: value }
+                if (current.kind === 'instance') {
+                  const next = { ...current }
+                  if (value) next.text = value
+                  else delete next.text
+                  return next
+                }
+                return { ...current, name: value || undefined }
+              })
             }}
             className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
           />

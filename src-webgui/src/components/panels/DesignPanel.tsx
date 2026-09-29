@@ -7,6 +7,7 @@ import { Select } from './form'
 import { useKoma } from '../../store/koma'
 import { fileKey, type FileTreeEntry } from '../../store/coding'
 import {
+  COMPONENT_MIME,
   DESIGN_MIME,
   addDesignToken,
   designFileName,
@@ -300,6 +301,7 @@ export function DesignPanel() {
 
   const [shapesOpen, setShapesOpen] = useState(true)
   const [tokensOpen, setTokensOpen] = useState(true)
+  const [componentsOpen, setComponentsOpen] = useState(true)
   const [filesOpen, setFilesOpen] = useState(true)
   const [creating, setCreating] = useState(false)
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -410,6 +412,51 @@ export function DesignPanel() {
             doc={docs[fileKey(designTab.root, designTab.path)]!.doc}
             onCommit={(next) => commitDesign(designTab.root, designTab.path, next, updateDesign)}
           />
+        )}
+      </AccordionSection>
+      <AccordionSection title="Components" open={componentsOpen} onToggle={() => setComponentsOpen((open) => !open)} fill={false}>
+        {!designTab ? (
+          <p className="px-3 py-1.5 text-[12px] text-koma-dim">Open a design to use its components</p>
+        ) : !docs[fileKey(designTab.root, designTab.path)] || docs[fileKey(designTab.root, designTab.path)]?.loading ? (
+          <div className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-koma-dim">
+            <BrailleSpinner size={13} />
+            <span>Loading…</span>
+          </div>
+        ) : docs[fileKey(designTab.root, designTab.path)]!.doc.components.length === 0 ? (
+          <p className="px-3 py-1.5 text-[12px] text-koma-dim">No components</p>
+        ) : (
+          docs[fileKey(designTab.root, designTab.path)]!.doc.components.map((component) => (
+            <div
+              key={component.id}
+              draggable
+              title="Drag onto a screen"
+              onDragStart={(event) => {
+                event.dataTransfer.setData(COMPONENT_MIME, component.id)
+                event.dataTransfer.setData('text/plain', component.id)
+                try {
+                  event.dataTransfer.effectAllowed = 'copy'
+                } catch {
+                  /* ignore */
+                }
+              }}
+              className="flex h-7 cursor-grab items-center px-2 text-[12px] text-koma-fg hover:bg-koma-hover active:cursor-grabbing"
+            >
+              <button
+                type="button"
+                className="min-w-0 flex-1 truncate text-left"
+                onClick={() => {
+                  if (!designTab) return
+                  openDesignTab(designTab.root, designTab.path)
+                  const detail = { root: designTab.root, path: designTab.path, componentId: component.id }
+                  window.setTimeout(() => {
+                    window.dispatchEvent(new CustomEvent('koma-design-focus', { detail }))
+                  }, 0)
+                }}
+              >
+                {component.name}
+              </button>
+            </div>
+          ))
         )}
       </AccordionSection>
       <AccordionSection
