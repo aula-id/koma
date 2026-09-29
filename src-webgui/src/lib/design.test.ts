@@ -5,6 +5,8 @@ import {
   createNode,
   deleteDesignNode,
   designFileName,
+  layoutDesign,
+  reorderDesignNode,
   emptyDesign,
   frameAtPoint,
   hitDesign,
@@ -273,4 +275,54 @@ function sample(): DesignDoc {
   assert.equal(hitDesign(removed, 410, 10)?.id, 'other')
   const added = insertDesignNode(removed, 'screen', createNode('rect', 'box', 0, 0))
   assert.equal(hitDesign(added, 12, 22)?.id, 'box')
+}
+
+{
+  const row = createNode('frame', 'row', 0, 0)
+  row.layout = 'row'
+  row.pad = 4
+  row.gap = 8
+  row.w = 200
+  row.h = 40
+  const a = createNode('rect', 'a', 0, 0)
+  a.w = 20
+  a.h = 10
+  const b = createNode('rect', 'b', 0, 0)
+  b.w = 30
+  b.h = 12
+  b.wMode = 'fill'
+  const pinned = createNode('rect', 'pin', 3, 5)
+  pinned.absolute = true
+  pinned.w = 10
+  pinned.h = 10
+  row.children = [a, b, pinned]
+  const laid = layoutDesign({ ...emptyDesign(), screens: [row] }).screens[0]
+  assert.equal(laid.children?.[0].x, 4)
+  assert.equal(laid.children?.[0].y, 4)
+  assert.equal(laid.children?.[0].w, 20)
+  assert.equal(laid.children?.[1].x, 32)
+  assert.equal(laid.children?.[1].w, 200 - 8 - 20 - 8)
+  assert.equal(laid.children?.[2].x, 3)
+  assert.equal(laid.children?.[2].y, 5)
+  const hugged = createNode('frame', 'hug', 0, 0)
+  hugged.layout = 'column'
+  hugged.wMode = 'hug'
+  hugged.hMode = 'hug'
+  hugged.pad = 2
+  hugged.gap = 2
+  const one = createNode('rect', 'one', 9, 9)
+  one.w = 40
+  one.h = 14
+  const two = createNode('rect', 'two', 9, 9)
+  two.w = 16
+  two.h = 10
+  hugged.children = [one, two]
+  const column = layoutDesign({ ...emptyDesign(), screens: [hugged] }).screens[0]
+  assert.equal(column.w, 44)
+  assert.equal(column.h, 30)
+  assert.equal(column.children?.[1].y, 18)
+  const again = layoutDesign({ ...emptyDesign(), screens: [column] }).screens[0]
+  assert.deepEqual(again, column)
+  const moved = reorderDesignNode({ ...emptyDesign(), screens: [column] }, 'two', 0)
+  assert.equal(moved.screens[0].children?.[0].id, 'two')
 }

@@ -6,13 +6,16 @@ import {
   createNode,
   deleteDesignNode,
   frameAtPoint,
+  findDesignNode,
   hitDesign,
   insertDesignNode,
+  layoutDesign,
   locateDesign,
   nodeChrome,
   nodeOrigin,
   parseDesign,
   placeDesignNode,
+  reorderDesignNode,
   resizeDesignNode,
   resolveRef,
   serializeDesign,
@@ -119,10 +122,11 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   noteRef.current = note
 
   const commit = (next: DesignDoc) => {
+    const laid = layoutDesign(next)
     const current = useKoma.getState().design.docs[key]?.doc
-    if (!current || serializeDesign(current) === serializeDesign(next)) return
+    if (!current || serializeDesign(current) === serializeDesign(laid)) return
     note(current)
-    updateDesign(tab.root, tab.path, next)
+    updateDesign(tab.root, tab.path, laid)
   }
 
   const undo = () => {
@@ -224,10 +228,12 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       const dy = (event.clientY - drag.startY) / zoom
       const located = locateDesign(doc, drag.id)
       if (!located) return
+      const parent = located.parentId ? findDesignNode(doc, located.parentId) : null
+      const inFlow = drag.kind === 'move' && !!parent?.layout && !located.node.absolute
       const nextNode = drag.kind === 'move'
         ? { ...located.node, x: snapDesign(drag.originX + dx, doc.grid, doc.snap), y: snapDesign(drag.originY + dy, doc.grid, doc.snap) }
         : resizeDesignNode(drag.node, drag.handle, dx, dy, doc.grid, doc.snap)
-      const next = updateDesignNode(doc, drag.id, () => nextNode)
+      const next = layoutDesign(updateDesignNode(doc, drag.id, () => nextNode), inFlow ? drag.id : undefined)
       if (serializeDesign(next) === serializeDesign(doc)) return
       if (!drag.remembered) {
         noteRef.current(doc)
@@ -241,21 +247,40 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       setDragCursor(null)
       const doc = useKoma.getState().design.docs[key]?.doc
       if (!doc || !drag || drag.kind === 'pan') return
-      if (drag.kind !== 'move') return
-      const point = toDoc(event.clientX, event.clientY)
-      const located = locateDesign(doc, drag.id)
-      const origin = nodeOrigin(doc, drag.id)
-      if (!point || !located || !origin) return
-      const target = frameAtPoint(doc, point.x, point.y, drag.id)
-      if (target === located.parentId || (target == null && (located.parentId == null || located.node.kind !== 'frame'))) return
-      const parentOrigin = target ? nodeOrigin(doc, target) : { x: 0, y: 0 }
-      if (!parentOrigin) return
-      const x = snapDesign(origin.x - parentOrigin.x, doc.grid, doc.snap)
-      const y = snapDesign(origin.y - parentOrigin.y, doc.grid, doc.snap)
-      const next = placeDesignNode(doc, drag.id, target, x, y)
-      if (serializeDesign(next) === serializeDesign(doc)) return
+      let next = doc
+      if (drag.kind === 'move') {
+        const point = toDoc(event.clientX, event.clientY)
+        const located = locateDesign(doc, drag.id)
+        const origin = nodeOrigin(doc, drag.id)
+        if (point && located && origin) {
+          const target = frameAtPoint(doc, point.x, point.y, drag.id)
+          const parent = located.parentId ? findDesignNode(doc, located.parentId) : null
+          if (parent?.layout && !located.node.absolute && target === located.parentId) {
+            const parentOrigin = nodeOrigin(doc, parent.id)
+            if (parentOrigin) {
+              const local = parent.layout === 'row' ? origin.x - parentOrigin.x : origin.y - parentOrigin.y
+              let index = 0
+              for (const sibling of parent.children ?? []) {
+                if (sibling.absolute || sibling.id === drag.id) continue
+                const center = parent.layout === 'row' ? sibling.x + sibling.w / 2 : sibling.y + sibling.h / 2
+                if (local > center) index += 1
+              }
+              next = reorderDesignNode(doc, drag.id, index)
+            }
+          } else if (!(target === located.parentId || (target == null && (located.parentId == null || located.node.kind !== 'frame')))) {
+            const parentOrigin = target ? nodeOrigin(doc, target) : { x: 0, y: 0 }
+            if (parentOrigin) {
+              const x = snapDesign(origin.x - parentOrigin.x, doc.grid, doc.snap)
+              const y = snapDesign(origin.y - parentOrigin.y, doc.grid, doc.snap)
+              next = placeDesignNode(doc, drag.id, target, x, y)
+            }
+          }
+        }
+      }
+      const laid = layoutDesign(next)
+      if (serializeDesign(laid) === serializeDesign(doc)) return
       if (!drag.remembered) noteRef.current(doc)
-      updateRef.current(tab.root, tab.path, next)
+      updateRef.current(tab.root, tab.path, laid)
     }
     window.addEventListener('koma-design-restore', onRestore)
     window.addEventListener('pointermove', move)
@@ -554,13 +579,16 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   setSelection(id)
                   const located = locateDesign(useKoma.getState().design.docs[key]?.doc ?? doc, id)
                   if (!located) return
+                  const node = { ...located.node }
+                  if (handle.includes('w') || handle.includes('e')) delete node.wMode
+                  if (handle.includes('n') || handle.includes('s')) delete node.hMode
                   dragRef.current = {
                     kind: 'resize',
                     id,
                     handle,
                     startX: event.clientX,
                     startY: event.clientY,
-                    node: { ...located.node },
+                    node,
                     remembered: false,
                   }
                   setDragCursor(HANDLES.find((item) => item.id === handle)?.cursor ?? 'grabbing')
@@ -574,7 +602,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 onText={(id, text) => {
                   const current = useKoma.getState().design.docs[key]?.doc
                   if (!current) return
-                  const next = updateDesignNode(current, id, (node) => ({ ...node, text }))
+                  const next = layoutDesign(updateDesignNode(current, id, (node) => ({ ...node, text })))
                   if (serializeDesign(next) === serializeDesign(current)) return
                   if (!labelNoted.current) {
                     note(current)
@@ -646,6 +674,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
           {selected ? (
             <NodeSettings
               node={selected}
+              hasParent={located?.parentId != null}
               onPatch={(fn) => patchSelected(fn)}
               onType={(fn) => patchSelected(fn, true)}
               onTypeFocus={() => {
@@ -784,12 +813,14 @@ function DesignNodeView({
 
 function NodeSettings({
   node,
+  hasParent,
   onPatch,
   onType,
   onTypeFocus,
   onTypeBlur,
 }: {
   node: DesignNode
+  hasParent: boolean
   onPatch: (fn: (node: DesignNode) => DesignNode) => void
   onType: (fn: (node: DesignNode) => DesignNode) => void
   onTypeFocus: () => void
@@ -829,6 +860,77 @@ function NodeSettings({
             className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
           />
         </label>
+      ) : null}
+      {node.kind === 'frame' ? (
+        <Choices
+          label="Layout"
+          value={node.layout ?? 'free'}
+          options={[
+            { value: 'free', label: 'Free' },
+            { value: 'row', label: 'Row' },
+            { value: 'column', label: 'Column' },
+          ]}
+          onChange={(layout) => setField(layout === 'free' ? {} : { layout }, layout === 'free' ? ['layout'] : [])}
+        />
+      ) : null}
+      {node.layout ? (
+        <>
+          <NumberField label="Gap" value={node.gap ?? 0} onChange={(gap) => setField(gap > 0 ? { gap } : {}, gap > 0 ? [] : ['gap'])} />
+          <NumberField label="Padding" value={node.pad ?? 0} onChange={(pad) => setField(pad > 0 ? { pad } : {}, pad > 0 ? [] : ['pad'])} />
+          <Choices
+            label="Align"
+            value={node.justify ?? 'start'}
+            options={[
+              { value: 'start', label: 'Start' },
+              { value: 'center', label: 'Center' },
+              { value: 'end', label: 'End' },
+            ]}
+            onChange={(justify) => setField(justify === 'start' ? {} : { justify }, justify === 'start' ? ['justify'] : [])}
+          />
+          <Choices
+            label="Cross"
+            value={node.align ?? 'start'}
+            options={[
+              { value: 'start', label: 'Start' },
+              { value: 'center', label: 'Center' },
+              { value: 'end', label: 'End' },
+            ]}
+            onChange={(align) => setField(align === 'start' ? {} : { align }, align === 'start' ? ['align'] : [])}
+          />
+        </>
+      ) : null}
+      <Choices
+        label="Width"
+        value={node.wMode ?? 'fixed'}
+        options={[
+          { value: 'fixed', label: 'Fixed' },
+          { value: 'hug', label: 'Hug' },
+          { value: 'fill', label: 'Fill' },
+        ]}
+        onChange={(mode) => setField(mode === 'fixed' ? {} : { wMode: mode }, mode === 'fixed' ? ['wMode'] : [])}
+      />
+      <Choices
+        label="Height"
+        value={node.hMode ?? 'fixed'}
+        options={[
+          { value: 'fixed', label: 'Fixed' },
+          { value: 'hug', label: 'Hug' },
+          { value: 'fill', label: 'Fill' },
+        ]}
+        onChange={(mode) => setField(mode === 'fixed' ? {} : { hMode: mode }, mode === 'fixed' ? ['hMode'] : [])}
+      />
+      {hasParent ? (
+        <div className="flex items-center justify-between">
+          <span className="text-koma-dim">Absolute</span>
+          <button
+            type="button"
+            aria-pressed={!!node.absolute}
+            onClick={() => setField(node.absolute ? {} : { absolute: true }, node.absolute ? ['absolute'] : [])}
+            className={`h-6 rounded px-2 ${node.absolute ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
+          >
+            {node.absolute ? 'On' : 'Off'}
+          </button>
+        </div>
       ) : null}
       <PaintRow
         label="Fill"
@@ -901,6 +1003,24 @@ function NodeSettings({
         </>
       ) : null}
     </div>
+  )
+}
+
+function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-koma-dim">{label}</span>
+      <input
+        type="number"
+        min={0}
+        value={value}
+        onChange={(event) => {
+          const next = Number(event.target.value)
+          onChange(Number.isFinite(next) && next > 0 ? next : 0)
+        }}
+        className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+      />
+    </label>
   )
 }
 

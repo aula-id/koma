@@ -375,6 +375,118 @@ export function placeDesignNode(doc: DesignDoc, id: string, parentId: string | n
   return insertDesignNode(removed, parentId, { ...located.node, x, y })
 }
 
+/** Place auto-layout children. A frozen id keeps the position a drag is previewing. */
+export function layoutDesign(doc: DesignDoc, frozenId?: string): DesignDoc {
+  let changed = false
+  const screens = doc.screens.map((screen) => {
+    const next = layoutNode(screen, frozenId)
+    if (next !== screen) changed = true
+    return next
+  })
+  const components = doc.components.map((component) => {
+    let variantChanged = false
+    const variants = component.variants.map((variant) => {
+      const node = layoutNode(variant.node, frozenId)
+      if (node === variant.node) return variant
+      variantChanged = true
+      return { ...variant, node }
+    })
+    if (!variantChanged) return component
+    changed = true
+    return { ...component, variants }
+  })
+  return changed ? { ...doc, screens, components } : doc
+}
+
+/** Move a flow child to a new index among its non-absolute siblings. */
+export function reorderDesignNode(doc: DesignDoc, id: string, index: number): DesignDoc {
+  const located = locateDesign(doc, id)
+  if (!located?.parentId || located.node.absolute) return doc
+  return updateDesignNode(doc, located.parentId, (parent) => {
+    const children = parent.children ?? []
+    const item = children.find((child) => child.id === id)
+    if (!item) return parent
+    const absolute = children.filter((child) => child.absolute && child.id !== id)
+    const flow = children.filter((child) => !child.absolute && child.id !== id)
+    const at = Math.max(0, Math.min(index, flow.length))
+    flow.splice(at, 0, item)
+    return { ...parent, children: [...flow, ...absolute] }
+  })
+}
+
+function layoutNode(node: DesignNode, frozenId?: string): DesignNode {
+  let next = node
+  if (node.children?.length) {
+    let changed = false
+    const children = node.children.map((child) => {
+      const laid = layoutNode(child, frozenId)
+      if (laid !== child) changed = true
+      return laid
+    })
+    if (changed) next = { ...node, children }
+  }
+  if (next.kind !== 'frame' || !next.layout) return next
+  return placeFlow(next, frozenId)
+}
+
+function placeFlow(frame: DesignNode, frozenId?: string): DesignNode {
+  const pad = frame.pad ?? 0
+  const gap = frame.gap ?? 0
+  const horizontal = frame.layout === 'row'
+  const children = frame.children ?? []
+  const flow = children.filter((child) => !child.absolute && child.id !== frozenId)
+  const mainSize = (child: DesignNode) => (horizontal ? child.w : child.h)
+  const crossSize = (child: DesignNode) => (horizontal ? child.h : child.w)
+  const mainMode = (child: DesignNode) => (horizontal ? child.wMode : child.hMode)
+  const crossMode = (child: DesignNode) => (horizontal ? child.hMode : child.wMode)
+  const hugsMain = horizontal ? frame.wMode === 'hug' : frame.hMode === 'hug'
+  const hugsCross = horizontal ? frame.hMode === 'hug' : frame.wMode === 'hug'
+  const gaps = Math.max(0, flow.length - 1) * gap
+  const contentMain = flow.reduce((sum, child) => sum + (mainMode(child) === 'fill' && !hugsMain ? 0 : mainSize(child)), 0) + gaps
+  const contentCross = flow.reduce((max, child) => Math.max(max, crossSize(child)), 0)
+  let width = frame.w
+  let height = frame.h
+  if (hugsMain) {
+    const size = Math.max(horizontal ? DESIGN_MIN_W : DESIGN_MIN_H, pad * 2 + contentMain)
+    if (horizontal) width = size
+    else height = size
+  }
+  if (hugsCross) {
+    const size = Math.max(horizontal ? DESIGN_MIN_H : DESIGN_MIN_W, pad * 2 + contentCross)
+    if (horizontal) height = size
+    else width = size
+  }
+  const innerMain = Math.max(0, (horizontal ? width : height) - pad * 2)
+  const innerCross = Math.max(0, (horizontal ? height : width) - pad * 2)
+  const fills = hugsMain ? [] : flow.filter((child) => mainMode(child) === 'fill')
+  const usedFixed = flow.reduce((sum, child) => sum + (fills.includes(child) ? 0 : mainSize(child)), 0)
+  const fillMain = fills.length ? Math.max(8, (innerMain - usedFixed - gaps) / fills.length) : 0
+  const justify = frame.justify ?? 'start'
+  const align = frame.align ?? 'start'
+  const measured = flow.map((child) => {
+    const main = fills.includes(child) ? fillMain : mainSize(child)
+    const cross = crossMode(child) === 'fill' && !hugsCross ? innerCross : crossSize(child)
+    return { child, main: Math.max(8, main), cross: Math.max(8, cross) }
+  })
+  const used = measured.reduce((sum, item) => sum + item.main, 0) + gaps
+  let cursor = pad
+  if (justify === 'center') cursor = pad + Math.max(0, innerMain - used) / 2
+  if (justify === 'end') cursor = pad + Math.max(0, innerMain - used)
+  const placed = new Map<string, DesignNode>()
+  for (const item of measured) {
+    const crossPos = align === 'center' ? pad + (innerCross - item.cross) / 2 : align === 'end' ? pad + innerCross - item.cross : pad
+    const x = horizontal ? cursor : crossPos
+    const y = horizontal ? crossPos : cursor
+    const w = horizontal ? item.main : item.cross
+    const h = horizontal ? item.cross : item.main
+    placed.set(item.child.id, item.child.x === x && item.child.y === y && item.child.w === w && item.child.h === h ? item.child : { ...item.child, x, y, w, h })
+    cursor += item.main + gap
+  }
+  const nextChildren = children.map((child) => placed.get(child.id) ?? child)
+  if (width === frame.w && height === frame.h && nextChildren.every((child, index) => child === children[index])) return frame
+  return { ...frame, w: width, h: height, children: nextChildren }
+}
+
 function findInNode(node: DesignNode, id: string): DesignNode | null {
   if (node.id === id) return node
   for (const child of node.children ?? []) {
