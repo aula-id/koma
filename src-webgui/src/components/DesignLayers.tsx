@@ -3,6 +3,7 @@ import { ChevronRight, Circle, Component, Eye, EyeOff, Frame, Group, Lock, LockO
 import { designLayerName, isDesignContainer, type DesignDoc, type DesignNode } from '../lib/design'
 
 const LAYER_MIME = 'application/x-koma-layer'
+let layerDrag: { x: number; y: number } | null = null
 
 export function DesignLayers({
   doc,
@@ -197,6 +198,7 @@ function LayerRow({
     <div
       draggable={!editing}
       onDragStart={(event) => {
+        layerDrag = { x: event.clientX, y: event.clientY }
         event.dataTransfer.setData(LAYER_MIME, node.id)
         event.dataTransfer.setData('text/plain', node.id)
         event.dataTransfer.effectAllowed = 'move'
@@ -213,6 +215,9 @@ function LayerRow({
         event.stopPropagation()
         const next = place ?? dropAt(event)
         setPlace(null)
+        const start = layerDrag
+        layerDrag = null
+        if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) < 8) return
         const dragId = event.dataTransfer.getData(LAYER_MIME)
         if (dragId && dragId !== node.id) onDrop(dragId, next)
       }}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { AlignCenterHorizontal, AlignCenterVertical, AlignEndHorizontal, AlignEndVertical, AlignStartHorizontal, AlignStartVertical, ChevronRight, Circle, Frame, Hand, Minus, MousePointer2, PenTool, Plus, Square, Type, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { AlignCenterHorizontal, AlignCenterVertical, AlignEndHorizontal, AlignEndVertical, AlignStartHorizontal, AlignStartVertical, ChevronRight, Circle, Frame, Hand, Minus, MousePointer2, PenTool, Plus, Square, Type, PanelRightClose, PanelRightOpen, X } from 'lucide-react'
 import { TokenEditor } from './panels/DesignPanel'
 import { DesignMenu, type DesignMenuItem } from './DesignMenu'
 import { getDesignUi, publishDesignUi, type DesignLayerOp } from '../lib/designUi'
@@ -16,8 +16,12 @@ import {
   copyTree,
   createComponentFromFrame,
   createNode,
-  designChatText,
+  designChatNote,
+  designChatTitle,
+  designDrop,
   designLayerName,
+  designPath,
+  designQueryNode,
   deleteDesignNode,
   flipDesignNode,
   frameAtPoint,
@@ -65,6 +69,7 @@ import {
   type DesignNode,
   type DesignWeight,
 } from '../lib/design'
+import { designPngBase64 } from '../lib/designRender'
 import { fileKey } from '../store/coding'
 import { isTabVisible } from '../store/editorGroups'
 import { useKoma } from '../store/koma'
@@ -110,7 +115,7 @@ type DesignCommands = {
 }
 type RadiusCorner = 'tl' | 'tr' | 'bl' | 'br'
 type Drag =
-  | { kind: 'move'; ids: string[]; startX: number; startY: number; origins: Record<string, { x: number; y: number }>; remembered: boolean }
+  | { kind: 'move'; ids: string[]; startX: number; startY: number; origins: Record<string, { x: number; y: number }>; remembered: boolean; moved: boolean }
   | { kind: 'resize'; id: string; handle: DesignHandle; startX: number; startY: number; node: DesignNode; remembered: boolean }
   | { kind: 'radius'; id: string; corner: RadiusCorner; startX: number; startY: number; radius: number; node: DesignNode; remembered: boolean }
   | { kind: 'pan'; lastX: number; lastY: number }
@@ -229,6 +234,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const [penHandle, setPenHandle] = useState<number | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; canvasX: number; canvasY: number } | null>(null)
   const commandsRef = useRef<DesignCommands | null>(null)
+  const stepOutRef = useRef<() => void>(() => {})
   const layerOpsRef = useRef<(action: DesignLayerOp) => void>(() => {})
   const penApplyRef = useRef<(draft: PenDraft, closed?: boolean) => void>(() => {})
   const penRef = useRef<PenDraft | null>(null)
@@ -569,6 +575,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         updateRef.current(tab.root, tab.path, next)
         return
       }
+      if (Math.hypot(screenDx, screenDy) < 4) return
+      drag.moved = true
       let view = doc
       let frozen: string | undefined
       for (const id of drag.ids) {
@@ -614,16 +622,17 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         if (drag.kind === 'resize' && drag.remembered) return
         return
       }
+      if (!drag.moved) return
       const point = toDoc(event.clientX, event.clientY)
       const dragId = drag.ids[0]
-      if (!dragId) return
+      if (!dragId || !point) return
       const located = locateDesign(doc, dragId)
       const origin = nodeOrigin(doc, dragId)
       let next = doc
-      if (point && located && origin && drag.ids.length === 1 && !(focus && located.parentId == null)) {
-        const target = frameAtPoint(doc, point.x, point.y, dragId)
+      if (located && origin && drag.ids.length === 1 && !(focus && located.parentId == null)) {
+        const drop = designDrop(doc, dragId, point.x, point.y)
         const parent = located.parentId ? findDesignNode(doc, located.parentId) : null
-        if (parent?.layout && !located.node.absolute && target === located.parentId) {
+        if (drop.kind === 'stay' && parent?.layout && !located.node.absolute && frameAtPoint(doc, point.x, point.y, dragId) === located.parentId) {
           const parentOrigin = nodeOrigin(doc, parent.id)
           if (parentOrigin) {
             const local = parent.layout === 'row' ? origin.x - parentOrigin.x : origin.y - parentOrigin.y
@@ -635,9 +644,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             }
             next = reorderDesignNode(doc, dragId, index)
           }
-        } else if (target !== located.parentId && !(focus && target == null)) {
-          const local = canvasToContent(doc, target, origin.x, origin.y)
-          if (local) next = placeDesignNode(doc, dragId, target, snapDesign(local.x, doc.grid, doc.snap), snapDesign(local.y, doc.grid, doc.snap))
+        } else if (drop.kind === 'move' && !(focus && drop.parentId == null)) {
+          next = placeDesignNode(doc, dragId, drop.parentId, snapDesign(drop.x, doc.grid, doc.snap), snapDesign(drop.y, doc.grid, doc.snap))
         }
       }
       const laid = projectDoc(stored, focus, layoutDesign(next))
@@ -773,6 +781,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         penRef.current = null
         penNoted.current = false
         if (toolRef.current === 'pen') setTool('select')
+        else stepOutRef.current()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -1184,13 +1193,35 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       : selected && located?.parentId == null
         ? { screen: selected.id }
         : null
+  const chain = selectedId ? designPath(doc, selectedId) ?? [] : []
+  const stepOut = () => {
+    if (selection.length) {
+      const id = selection[selection.length - 1]
+      const row = id ? locateDesign(doc, id) : null
+      if (row?.parentId) {
+        setSelection([row.parentId])
+        return
+      }
+      setSelection([])
+      return
+    }
+    if (focusId) {
+      setFocusId(null)
+      setSelection([])
+    }
+  }
+  stepOutRef.current = stepOut
   const sendChat = () => {
     if (!chatQuery) return
-    const text = designChatText(storedDoc, chatQuery)
-    if (!text) return
-    const title = 'component' in chatQuery
-      ? storedDoc.components.find((item) => item.id === chatQuery.component)?.name ?? 'Design'
-      : selected ? designLayerName(selected) : 'Design'
+    const text = designChatNote(storedDoc, chatQuery)
+    const node = designQueryNode(storedDoc, chatQuery)
+    if (!text || !node) return
+    const png = designPngBase64(storedDoc, node)
+    const title = designChatTitle(storedDoc, chatQuery)
+    if (png) {
+      const stem = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'design'
+      useKoma.getState().req({ r: 'AttachFile', name: `${stem}.png`, bytesB64: png, mime: 'image/png' })
+    }
     useKoma.getState().addDesignToChat({ title, text })
   }
   const status = file.saving
@@ -1336,6 +1367,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                     startY: event.clientY,
                     origins,
                     remembered: false,
+                    moved: false,
                   }
                   setDragCursor('grabbing')
                 }}
@@ -1439,19 +1471,43 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
           <ToolButton label="Hand (H)" selected={tool === 'pan'} onClick={() => setTool('pan')}>
             <Hand size={15} strokeWidth={2.25} />
           </ToolButton>
-          {focusedComponent ? (
-            <button
-              type="button"
-              onClick={() => {
-                setFocusId(null)
-                setSelection([])
-              }}
-              className="h-6 rounded px-2 text-[12px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
-            >
-              Screens
-            </button>
+          {focusedComponent || chain.length ? (
+            <div className="flex min-w-0 items-center gap-0.5 overflow-hidden">
+              {focusedComponent ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFocusId(null)
+                    setSelection([])
+                  }}
+                  className="h-6 flex-none rounded px-1.5 text-[12px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+                >
+                  Screens
+                </button>
+              ) : null}
+              {chain.map((node, index) => (
+                <span key={node.id} className="flex min-w-0 items-center">
+                  {focusedComponent || index > 0 ? <span className="px-0.5 text-[12px] text-koma-dim">/</span> : null}
+                  <button
+                    type="button"
+                    onClick={() => setSelection([node.id])}
+                    className="h-6 max-w-24 truncate rounded px-1.5 text-[12px] text-koma-fg hover:bg-koma-hover"
+                  >
+                    {designLayerName(node)}
+                  </button>
+                </span>
+              ))}
+              <button
+                type="button"
+                aria-label="Clear"
+                title="Clear"
+                onClick={stepOut}
+                className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+              >
+                <X size={13} />
+              </button>
+            </div>
           ) : null}
-          {focusedComponent ? <span className="max-w-32 truncate text-[12px] text-koma-fg">{focusedComponent.name}</span> : null}
           {chatQuery ? (
             <button
               type="button"
@@ -1501,8 +1557,19 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       </div>
       {propsOpen ? (
         <aside className="flex w-[260px] flex-none flex-col overflow-y-auto border-l border-koma-border bg-koma-panel">
-          <div className="flex h-8 flex-none items-center px-3 text-[12px] text-koma-fg">
-            {multi ? `${selectedNodes.length} selected` : selected ? designLayerName(selected) : 'Styles'}
+          <div className="flex h-8 flex-none items-center gap-1 px-3 text-[12px] text-koma-fg">
+            <span className="min-w-0 flex-1 truncate">{multi ? `${selectedNodes.length} selected` : selected ? designLayerName(selected) : 'Styles'}</span>
+            {selection.length || focusId ? (
+              <button
+                type="button"
+                aria-label="Clear"
+                title="Clear"
+                onClick={stepOut}
+                className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+              >
+                <X size={13} />
+              </button>
+            ) : null}
           </div>
           {selectedNodes.length ? (
             <NodeSettings

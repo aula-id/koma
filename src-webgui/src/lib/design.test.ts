@@ -8,8 +8,15 @@ import {
   copyTree,
   createComponentFromFrame,
   createNode,
+  deleteDesignComponent,
   deleteDesignNode,
+  designChatNote,
   designChatText,
+  designCoordinateText,
+  designDrop,
+  designPath,
+  designQueryNode,
+  nodeBoxOrigin,
   designFenceTitle,
   splitDesignMessage,
   designFileName,
@@ -629,4 +636,47 @@ function sample(): DesignDoc {
   assert.equal(split.prose, 'look')
   assert.equal(split.designs.length, 1)
   assert.equal(split.designs[0].title, 'Rectangle')
+  const note = designChatNote(saved.doc, { screen: 'loose' })
+  assert.ok(note?.includes('Attached image is the render'))
+  assert.ok(note?.includes('Rectangle 100×100 at (12, 18)'))
+  assert.ok(note?.includes('```kdsgn'))
+  assert.equal(designQueryNode(saved.doc, { screen: 'loose' })?.id, 'loose')
+}
+
+{
+  const frame = createNode('frame', 'board', 0, 0)
+  frame.w = 400
+  frame.h = 300
+  const rect = createNode('rect', 'r', 40, 50)
+  rect.flipX = true
+  const group = createNode('group', 'g', 30, 40)
+  group.w = 160
+  group.h = 140
+  group.children = [rect]
+  frame.children = [group]
+  const doc = { ...emptyDesign(), screens: [frame] }
+  assert.deepEqual(designPath(doc, 'r')?.map((node) => node.id), ['board', 'g', 'r'])
+  assert.deepEqual(nodeBoxOrigin(doc, 'r'), { x: 70, y: 90 })
+  assert.equal(nodeOrigin(doc, 'r')?.x, 170)
+  assert.equal(designDrop(doc, 'r', 120, 140).kind, 'stay')
+  const outside = designDrop(doc, 'r', 900, 900)
+  assert.equal(outside.kind, 'move')
+  if (outside.kind === 'move') {
+    assert.equal(outside.parentId, null)
+    assert.equal(outside.x, 70)
+    assert.equal(outside.y, 90)
+  }
+  const nested = createNode('frame', 'inner', 20, 20)
+  nested.w = 200
+  nested.h = 160
+  nested.children = [group]
+  frame.children = [nested]
+  const nestedDoc = { ...emptyDesign(), screens: [frame] }
+  const into = designDrop(nestedDoc, 'r', 120, 140)
+  assert.equal(into.kind, 'stay')
+  const removed = deleteDesignComponent({ ...doc, components: [{ id: 'button', name: 'Button', variants: [{ props: {}, node: createNode('frame', 'root', 0, 0) }] }] }, 'button')
+  assert.equal(removed?.components.length, 0)
+  assert.equal(deleteDesignComponent(doc, 'missing'), null)
+  assert.ok(designCoordinateText(doc, frame).includes('Rectangle 100×100 at (40, 50)'))
+  assert.ok(designCoordinateText(doc, frame).includes('flipX'))
 }

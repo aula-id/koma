@@ -11,8 +11,11 @@ import {
   COMPONENT_MIME,
   addDesignToken,
   componentView,
-  designChatText,
+  deleteDesignComponent,
+  designChatNote,
+  designChatTitle,
   designFileName,
+  designQueryNode,
   dropDesignToken,
   isDesignPath,
   resolveRef,
@@ -24,6 +27,7 @@ import {
   type DesignTokenKind,
 } from '../../lib/design'
 import { emitDesignLayer, getDesignUi, subscribeDesignUi } from '../../lib/designUi'
+import { designPngBase64 } from '../../lib/designRender'
 
 const EMPTY_ROOTS: string[] = []
 const TOKEN_KINDS: { kind: DesignTokenKind; label: string }[] = [
@@ -268,6 +272,7 @@ export function DesignPanel() {
   const [filesOpen, setFilesOpen] = useState(true)
   const [layersOpen, setLayersOpen] = useState(true)
   const [assetQuery, setAssetQuery] = useState('')
+  const [deletingAsset, setDeletingAsset] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const ui = useSyncExternalStore(subscribeDesignUi, getDesignUi, getDesignUi)
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -469,6 +474,18 @@ export function DesignPanel() {
                       name={component.name}
                       doc={open.doc}
                       node={component.variants[0]?.node}
+                      deleting={deletingAsset === component.id}
+                      onAskDelete={() => setDeletingAsset(component.id)}
+                      onCancelDelete={() => setDeletingAsset(null)}
+                      onDelete={() => {
+                        const next = deleteDesignComponent(open.doc, component.id)
+                        if (!next || !designTab) return
+                        window.dispatchEvent(new CustomEvent('koma-design-commit', {
+                          cancelable: true,
+                          detail: { root: designTab.root, path: designTab.path, doc: next },
+                        }))
+                        setDeletingAsset(null)
+                      }}
                       onOpen={() => {
                         openDesignTab(designTab.root, designTab.path)
                         const detail = { root: designTab.root, path: designTab.path, componentId: component.id }
@@ -486,9 +503,17 @@ export function DesignPanel() {
                         }
                       }}
                       onChat={() => {
-                        const text = designChatText(open.doc, { component: component.id })
-                        if (!text) return
-                        useKoma.getState().addDesignToChat({ title: component.name, text })
+                        const query = { component: component.id }
+                        const text = designChatNote(open.doc, query)
+                        const node = designQueryNode(open.doc, query)
+                        if (!text || !node) return
+                        const png = designPngBase64(open.doc, node)
+                        const title = designChatTitle(open.doc, query)
+                        if (png) {
+                          const stem = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'design'
+                          req({ r: 'AttachFile', name: `${stem}.png`, bytesB64: png, mime: 'image/png' })
+                        }
+                        useKoma.getState().addDesignToChat({ title, text })
                       }}
                     />
                   ))}
@@ -645,6 +670,10 @@ function AssetTile({
   name,
   doc,
   node,
+  deleting,
+  onAskDelete,
+  onCancelDelete,
+  onDelete,
   onOpen,
   onDragStart,
   onChat,
@@ -652,6 +681,10 @@ function AssetTile({
   name: string
   doc: DesignDoc
   node?: DesignNode
+  deleting: boolean
+  onAskDelete: () => void
+  onCancelDelete: () => void
+  onDelete: () => void
   onOpen: () => void
   onDragStart: (event: ReactDragEvent<HTMLButtonElement>) => void
   onChat: () => void
@@ -688,6 +721,23 @@ function AssetTile({
           <span className="min-w-0 flex-1 truncate">{name}</span>
         </span>
       </button>
+      {deleting ? (
+        <div className="absolute inset-x-1 top-1.5 flex items-center justify-center gap-1 rounded bg-koma-panel px-1 py-0.5 text-[11px] text-koma-error shadow-sm">
+          <span>Delete?</span>
+          <button type="button" className="rounded px-1 text-koma-success hover:bg-koma-success/15" onClick={onDelete}>yes</button>
+          <button type="button" className="rounded px-1 hover:bg-koma-hover" onClick={onCancelDelete}>no</button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          title="Delete"
+          aria-label={`Delete ${name}`}
+          onClick={onAskDelete}
+          className="absolute left-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded bg-white text-koma-dim shadow-sm hover:text-koma-error"
+        >
+          <Trash2 size={12} />
+        </button>
+      )}
       <button
         type="button"
         title="Add to chat"

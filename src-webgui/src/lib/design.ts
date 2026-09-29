@@ -465,6 +465,61 @@ export function nodeOrigin(doc: DesignDoc, id: string): { x: number; y: number }
   return toCanvas(anchor.x, anchor.y)
 }
 
+/** Canvas position of the border box. Flip and rotation stay on the node, so the box does not jump when it changes parent. */
+export function nodeBoxOrigin(doc: DesignDoc, id: string): { x: number; y: number } | null {
+  const path = pathToNode(doc, id)
+  if (!path) return null
+  const node = path[path.length - 1]
+  let x = node.x
+  let y = node.y
+  for (let i = path.length - 2; i >= 0; i--) {
+    const spun = spinToParent(path[i], x, y)
+    x = spun.x
+    y = spun.y
+  }
+  return { x, y }
+}
+
+/** Ancestors, then the node. */
+export function designPath(doc: DesignDoc, id: string): DesignNode[] | null {
+  return pathToNode(doc, id)
+}
+
+export function pointInDesign(doc: DesignDoc, id: string, x: number, y: number): boolean {
+  const path = pathToNode(doc, id)
+  if (!path) return false
+  let px = x
+  let py = y
+  for (const node of path) {
+    const local = parentPointToContent(node, px, py)
+    px = local.x
+    py = local.y
+  }
+  return insideNode(path[path.length - 1], { x: px, y: py }, 0)
+}
+
+export type DesignDrop = { kind: 'stay' } | { kind: 'move'; parentId: string | null; x: number; y: number }
+
+/**
+ * Where a dragged node lands. A click inside the current parent stays there.
+ * A release outside joins the frame under the pointer, or the canvas when there is none.
+ * x/y are the border box in the new parent's space.
+ */
+export function designDrop(doc: DesignDoc, id: string, pointerX: number, pointerY: number): DesignDrop {
+  const located = locateDesign(doc, id)
+  if (!located) return { kind: 'stay' }
+  const target = frameAtPoint(doc, pointerX, pointerY, id)
+  const path = target ? pathToNode(doc, target) : null
+  const nested = !!(located.parentId && path?.some((node, index) => node.id === located.parentId && index < path.length - 1))
+  const inside = located.parentId ? pointInDesign(doc, located.parentId, pointerX, pointerY) : false
+  if (target === located.parentId || (inside && !nested)) return { kind: 'stay' }
+  const origin = nodeBoxOrigin(doc, id)
+  if (!origin) return { kind: 'stay' }
+  const local = canvasToContent(doc, target, origin.x, origin.y)
+  if (!local) return { kind: 'stay' }
+  return { kind: 'move', parentId: target, x: local.x, y: local.y }
+}
+
 /** Topmost node under a canvas point. */
 export function hitDesign(doc: DesignDoc, x: number, y: number): DesignNode | null {
   for (let i = doc.screens.length - 1; i >= 0; i--) {
@@ -669,6 +724,11 @@ export function setVariantProps(doc: DesignDoc, componentId: string, rootId: str
   const components = doc.components.slice()
   components[index] = syncAxes({ ...component, variants })
   return { ...doc, components }
+}
+
+export function deleteDesignComponent(doc: DesignDoc, componentId: string): DesignDoc | null {
+  if (!doc.components.some((component) => component.id === componentId)) return null
+  return { ...doc, components: doc.components.filter((component) => component.id !== componentId) }
 }
 
 export function renameComponent(doc: DesignDoc, componentId: string, raw: string): DesignDoc | null {
@@ -886,7 +946,7 @@ export function moveDesignNode(doc: DesignDoc, id: string, parentId: string | nu
     if (parentId == null) return { ...doc, screens: next }
     return updateDesignNode(doc, parentId, (parent) => ({ ...parent, children: next }))
   }
-  const anchor = nodeOrigin(doc, id)
+  const anchor = nodeBoxOrigin(doc, id)
   const local = anchor ? canvasToContent(doc, parentId, anchor.x, anchor.y) : null
   if (!local) return doc
   const removed = deleteDesignNode(doc, id)
@@ -1905,6 +1965,50 @@ export function designChatText(doc: DesignDoc, query: DesignQuery): string | nul
   const slice = queryDesign(doc, query)
   if (!slice) return null
   return '```kdsgn\n' + JSON.stringify(slice) + '\n```'
+}
+
+/** The screen or component tree a chat query names. */
+export function designQueryNode(doc: DesignDoc, query: DesignQuery): DesignNode | null {
+  if ('tokens' in query) return null
+  if ('component' in query) {
+    const component = doc.components.find((item) => item.id === query.component)
+    if (!component) return null
+    return pickVariant(component, query.variant)?.node ?? null
+  }
+  return doc.screens.find((item) => item.id === query.screen || item.name === query.screen) ?? null
+}
+
+/** Parent-relative box for each node, so a picture can be read against positions. */
+export function designCoordinateText(doc: DesignDoc, node: DesignNode): string {
+  const lines: string[] = []
+  const walk = (item: DesignNode, depth: number) => {
+    if (lines.length >= 80) return
+    const detail = [
+      item.kind === 'text' && item.text ? JSON.stringify(item.text) : '',
+      item.kind === 'instance' ? doc.components.find((component) => component.id === item.component)?.name ?? item.component ?? '' : '',
+      item.fill && item.fill !== 'none' ? item.fill : '',
+      item.flipX ? 'flipX' : '',
+      item.flipY ? 'flipY' : '',
+    ].filter(Boolean).join(' ')
+    lines.push(`${'  '.repeat(depth)}${designLayerName(item)} ${Math.round(item.w)}×${Math.round(item.h)} at (${Math.round(item.x)}, ${Math.round(item.y)})${detail ? ` ${detail}` : ''}`)
+    for (const child of item.children ?? []) walk(child, depth + 1)
+  }
+  walk(node, 0)
+  return lines.join('\n')
+}
+
+/** Coordinate list plus the fenced slice. The picture is attached separately. */
+export function designChatNote(doc: DesignDoc, query: DesignQuery): string | null {
+  const fence = designChatText(doc, query)
+  const node = designQueryNode(doc, query)
+  if (!fence || !node) return null
+  return `Attached image is the render. Coordinates are parent-relative pixels.\n${designCoordinateText(doc, node)}\n\n${fence}`
+}
+
+export function designChatTitle(doc: DesignDoc, query: DesignQuery): string {
+  if ('component' in query) return doc.components.find((item) => item.id === query.component)?.name ?? 'Component'
+  const node = designQueryNode(doc, query)
+  return node ? designLayerName(node) : 'Design'
 }
 
 const KDSGN_FENCE = /```[ \t]*kdsgn[ \t]*\r?\n[\s\S]*?```/gi
