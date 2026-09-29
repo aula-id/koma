@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { Check, Circle, Diamond, File, Pencil, Square, Trash2, Type, X } from 'lucide-react'
+import { Check, File, Pencil, Trash2, X } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { AddBtn, Empty, IconBtn } from './helpers'
@@ -12,11 +12,11 @@ import { DiagramRefMenuItems } from '../DiagramVisual'
 
 const EMPTY_ROOTS: string[] = []
 
-const SHAPES: { kind: DiagramKind; label: string; icon: typeof Square }[] = [
-  { kind: 'rect', label: 'Rectangle', icon: Square },
-  { kind: 'ellipse', label: 'Ellipse', icon: Circle },
-  { kind: 'diamond', label: 'Diamond', icon: Diamond },
-  { kind: 'text', label: 'Text', icon: Type },
+const SHAPES: { kind: DiagramKind; label: string }[] = [
+  { kind: 'rect', label: 'Rectangle' },
+  { kind: 'text', label: 'Text' },
+  { kind: 'ellipse', label: 'Ellipse' },
+  { kind: 'diamond', label: 'Diamond' },
 ]
 
 function rootLabel(root: string): string {
@@ -90,7 +90,7 @@ function InlineNameInput({
   )
 }
 
-function ShapeRow({ kind, label, icon: Icon }: { kind: DiagramKind; label: string; icon: typeof Square }) {
+function ShapeTile({ kind, label }: { kind: DiagramKind; label: string }) {
   return (
     <div
       draggable
@@ -103,14 +103,33 @@ function ShapeRow({ kind, label, icon: Icon }: { kind: DiagramKind; label: strin
           /* ignore */
         }
       }}
-      className="flex h-[22px] min-w-0 cursor-grab items-center gap-1 pr-1 text-[12px] text-koma-fg hover:bg-koma-hover active:cursor-grabbing"
-      style={{ paddingLeft: 8 }}
+      className="flex cursor-grab items-center justify-center rounded p-0.5 text-koma-dim hover:bg-koma-hover hover:text-koma-fg active:cursor-grabbing"
       title={`Drag ${label} onto the canvas`}
     >
-      <span className="w-5 flex-none" />
-      <Icon size={13} className="flex-none opacity-70" />
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <ShapePreview kind={kind} />
     </div>
+  )
+}
+
+function ShapePreview({ kind }: { kind: DiagramKind }) {
+  if (kind === 'ellipse') {
+    return (
+      <svg viewBox="0 0 64 36" className="h-8 w-16" aria-hidden="true">
+        <ellipse cx="32" cy="18" rx="30" ry="15" fill="var(--color-koma-bg)" stroke="currentColor" strokeWidth="1.25" />
+      </svg>
+    )
+  }
+  if (kind === 'diamond') {
+    return (
+      <svg viewBox="0 0 40 36" className="h-8 w-10" aria-hidden="true">
+        <polygon points="20,1.5 38.5,18 20,34.5 1.5,18" fill="var(--color-koma-bg)" stroke="currentColor" strokeWidth="1.25" />
+      </svg>
+    )
+  }
+  return (
+    <span className="flex h-8 items-center justify-center rounded border border-current bg-koma-bg px-2 text-[11px] leading-none text-koma-fg/80">
+      {kind === 'text' ? 'Text' : 'Heading'}
+    </span>
   )
 }
 
@@ -218,9 +237,11 @@ export function DiagramPanel() {
         </div>
       </div>
       <AccordionSection title="Shapes" open={shapesOpen} onToggle={() => setShapesOpen((v) => !v)} fill={false}>
-        {SHAPES.map((shape) => (
-          <ShapeRow key={shape.kind} {...shape} />
-        ))}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-2 py-1.5">
+          {SHAPES.map((shape) => (
+            <ShapeTile key={shape.kind} {...shape} />
+          ))}
+        </div>
       </AccordionSection>
       <AccordionSection
         title="Diagrams"
@@ -240,8 +261,7 @@ export function DiagramPanel() {
         ) : (
           <>
             {creating ? (
-              <div className="flex h-[22px] min-w-0 items-center gap-1 pr-1 text-[12px] text-koma-fg" style={{ paddingLeft: 8 }}>
-                <span className="w-5 flex-none" />
+              <div className="flex h-7 min-w-0 items-center gap-1 px-2 text-[12px] text-koma-fg">
                 <File size={13} className="flex-none opacity-70" />
                 <InlineNameInput
                   initial=""
@@ -258,7 +278,7 @@ export function DiagramPanel() {
                   return (
                     <div
                       key={entry.path}
-                      className="flex h-[22px] w-full items-center gap-2 bg-koma-error/15 px-2 text-[12px] font-medium text-koma-error"
+                      className="flex min-h-[28px] w-full items-center gap-2 bg-koma-error/15 px-2 text-[12px] font-medium text-koma-error"
                     >
                       <span className="min-w-0 flex-1 truncate">delete file?</span>
                       <button
@@ -281,14 +301,12 @@ export function DiagramPanel() {
                 return (
                   <div
                     key={entry.path}
-                    className="group flex h-[22px] min-w-0 items-center gap-1 pr-1 text-[12px] text-koma-fg hover:bg-koma-hover"
-                    style={{ paddingLeft: 8 }}
+                    className="group flex h-7 min-w-0 items-center gap-1 px-2 text-[12px] text-koma-fg hover:bg-koma-hover"
                     onContextMenu={(e: ReactMouseEvent) => {
                       e.preventDefault()
                       setMenu({ x: e.clientX, y: e.clientY, path: entry.path })
                     }}
                   >
-                    <span className="w-5 flex-none" />
                     {renaming === entry.path ? (
                       <>
                         <File size={13} className="flex-none opacity-70" />
