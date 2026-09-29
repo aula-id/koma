@@ -217,7 +217,7 @@ if [ -n "$missing_libs" ]; then
         echo "Install them with your package manager:" >&2
         echo "" >&2
         if command -v apt-get >/dev/null 2>&1; then
-            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
+            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libxtst6" >&2
         elif command -v dnf >/dev/null 2>&1; then
             echo "  sudo dnf install webkit2gtk4.1 gtk3" >&2
         elif command -v pacman >/dev/null 2>&1; then
@@ -226,7 +226,7 @@ if [ -n "$missing_libs" ]; then
             echo "  sudo zypper install libwebkit2gtk-4_1-0 libgtk-3-0" >&2
         else
             echo "  # Debian/Ubuntu:" >&2
-            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
+            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libxtst6" >&2
             echo "  # Fedora:" >&2
             echo "  sudo dnf install webkit2gtk4.1 gtk3" >&2
             echo "  # Arch:" >&2
@@ -279,6 +279,7 @@ DIR="$(resolve_dir)"
 BIN="$DIR/koma.bin"
 if [ ! -f "$BIN" ]; then
     echo "koma: $BIN not found." >&2
+    echo "The koma launcher expects the real binary alongside itself as koma.bin." >&2
     exit 1
 fi
 if [ ! -x "$BIN" ]; then
@@ -340,7 +341,7 @@ if [ -n "$missing_libs" ]; then
         echo "Install them with your package manager:" >&2
         echo "" >&2
         if command -v apt-get >/dev/null 2>&1; then
-            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
+            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libxtst6" >&2
         elif command -v dnf >/dev/null 2>&1; then
             echo "  sudo dnf install webkit2gtk4.1 gtk3" >&2
         elif command -v pacman >/dev/null 2>&1; then
@@ -349,7 +350,7 @@ if [ -n "$missing_libs" ]; then
             echo "  sudo zypper install libwebkit2gtk-4_1-0 libgtk-3-0" >&2
         else
             echo "  # Debian/Ubuntu:" >&2
-            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
+            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libxtst6" >&2
             echo "  # Fedora:" >&2
             echo "  sudo dnf install webkit2gtk4.1 gtk3" >&2
             echo "  # Arch:" >&2
@@ -403,24 +404,174 @@ if [ "$os" = "darwin" ] && command -v xattr > /dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
-# Linux: non-fatal preflight warning (after install, before success banner).
-# Tells the user right away if their system is missing webkit/gtk, instead of
-# waiting for them to run `koma` and hit the error.
+# Debian/Ubuntu: install GUI shared libraries before anything execs koma.
+# The dynamic linker reports one missing .so at a time. On a clean server
+# that is libwebkit2gtk-4.1.so.0, then libgtk-3.so.0, then libsoup-3.0.so.0.
+# ldd lists all of them. libwebkit2gtk-4.1-0 depends on gtk, soup, and
+# JavaScriptCore. Debian 13 / Ubuntu 24.04 renamed libgtk-3-0 to
+# libgtk-3-0t64, so a hard-coded libgtk-3-0 makes apt abort the whole
+# transaction. Ask apt which name exists. libXtst is dlopen'd (not NEEDED).
+# Other distros still get a printed hint. A failed install does not abort.
 # ---------------------------------------------------------------------------
-if [ "$os" = "linux" ] && command -v ldd >/dev/null 2>&1; then
-    _ldd_check="$(ldd "$INSTALL_DIR/koma.bin" 2>&1)" || true
+_apt_cache_refreshed=0
+_run_apt() {
+    if [ "$(id -u)" = "0" ]; then
+        DEBIAN_FRONTEND=noninteractive apt-get "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo DEBIAN_FRONTEND=noninteractive apt-get "$@"
+    else
+        echo "koma: need root or sudo to install shared libraries." >&2
+        return 1
+    fi
+}
+_apt_known() {
+    apt-cache show "$1" 2>/dev/null | grep -q '^Package:'
+}
+_apt_refresh_lists() {
+    if [ "$_apt_cache_refreshed" = "1" ]; then
+        return 0
+    fi
+    echo "  Refreshing package lists..." >&2
+    _apt_cache_refreshed=1
+    _run_apt update || return 1
+}
+# Print the first package name apt knows. Refresh the lists once if none match.
+_apt_pick() {
+    _pick_name=""
+    for _pick_name in "$@"; do
+        if _apt_known "$_pick_name"; then
+            printf '%s\n' "$_pick_name"
+            return 0
+        fi
+    done
+    if _apt_refresh_lists; then
+        for _pick_name in "$@"; do
+            if _apt_known "$_pick_name"; then
+                printf '%s\n' "$_pick_name"
+                return 0
+            fi
+        done
+    fi
+    return 1
+}
+_apt_add() {
+    _added=$(_apt_pick "$@") || return 0
+    case " $_apt_pkgs " in
+        *" $_added "*) ;;
+        *) _apt_pkgs="${_apt_pkgs:+$_apt_pkgs }$_added" ;;
+    esac
+}
+_soname_pkg() {
+    case "$1" in
+        libwebkit2gtk-4.1.so.*)
+            _apt_add libwebkit2gtk-4.1-0 libwebkit2gtk-4.1-0t64 ;;
+        libgtk-3.so.*|libgdk-3.so.*)
+            _apt_add libgtk-3-0t64 libgtk-3-0 ;;
+        libjavascriptcoregtk-4.1.so.*)
+            _apt_add libjavascriptcoregtk-4.1-0 libjavascriptcoregtk-4.1-0t64 ;;
+        libsoup-3.0.so.*)
+            _apt_add libsoup-3.0-0 libsoup-3.0-0t64 ;;
+        libwayland-client.so.*)
+            _apt_add libwayland-client0 ;;
+        libgdk_pixbuf-2.0.so.*)
+            _apt_add libgdk-pixbuf-2.0-0 libgdk-pixbuf-2.0-0t64 ;;
+        libcairo.so.*)
+            _apt_add libcairo2 libcairo2t64 ;;
+        libglib-2.0.so.*|libgobject-2.0.so.*|libgio-2.0.so.*)
+            _apt_add libglib2.0-0t64 libglib2.0-0 ;;
+        libdbus-1.so.*)
+            _apt_add libdbus-1-3 libdbus-1-3t64 ;;
+        libXtst.so.*)
+            _apt_add libxtst6 libxtst6t64 ;;
+        *)
+            return 1 ;;
+    esac
+}
+_install_linux_shared_libs() {
+    _elf="$INSTALL_DIR/koma.bin"
+    if [ ! -f "$_elf" ]; then
+        _elf="$INSTALL_DIR/koma"
+    fi
+    if [ ! -f "$_elf" ]; then
+        return 0
+    fi
+    _ldd_check=""
+    if command -v ldd >/dev/null 2>&1; then
+        _ldd_check="$(ldd "$_elf" 2>&1)" || true
+    fi
     if echo "$_ldd_check" | grep -qE 'GLIBC_[0-9]'; then
-        _glibc_needed="$(echo "$_ldd_check" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -uV | tr '\n' ' ')"
+        _glibc_needed="$(echo "$_ldd_check" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sed 's/GLIBC_//' | sort -uV | tr '\n' ' ')"
         echo ""
         echo "WARNING: this binary requires glibc $_glibc_needed" >&2
         echo "  If koma fails to start, build from source: ./build.sh" >&2
-    elif echo "$_ldd_check" | grep -q "not found"; then
+        return 0
+    fi
+    _missing=""
+    if [ -n "$_ldd_check" ]; then
+        _missing="$(echo "$_ldd_check" | grep 'not found' | awk '{print $1}' | sort -u || true)"
+    fi
+    _need_xtst=0
+    if command -v ldconfig >/dev/null 2>&1; then
+        if ! ldconfig -p 2>/dev/null | grep -q 'libXtst\.so\.6'; then
+            _need_xtst=1
+        fi
+    fi
+    if [ -z "$_missing" ] && [ "$_need_xtst" = "0" ]; then
+        return 0
+    fi
+    if ! command -v apt-get >/dev/null 2>&1; then
         echo ""
         echo "WARNING: some shared libraries are missing — koma may not start." >&2
-        echo "  Debian/Ubuntu: sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
-        echo "  Fedora:        sudo dnf install webkit2gtk4.1 gtk3" >&2
-        echo "  Arch:          sudo pacman -S webkit2gtk-4.1 gtk3" >&2
+        if [ -n "$_missing" ]; then
+            echo "$_missing" | sed 's/^/  /' >&2
+        fi
+        echo "  Fedora: sudo dnf install webkit2gtk4.1 gtk3 libXtst" >&2
+        echo "  Arch:   sudo pacman -S webkit2gtk-4.1 gtk3 libxtst" >&2
+        return 0
     fi
+    _apt_pkgs=""
+    if [ -z "$_ldd_check" ]; then
+        # No ldd: install the GUI stack anyway so a clean server can load koma.
+        _soname_pkg libwebkit2gtk-4.1.so.0 || true
+        _soname_pkg libgtk-3.so.0 || true
+        _soname_pkg libsoup-3.0.so.0 || true
+        _need_xtst=1
+    else
+        _son=""
+        for _son in $_missing; do
+            _soname_pkg "$_son" || true
+        done
+    fi
+    if [ "$_need_xtst" = "1" ]; then
+        _soname_pkg libXtst.so.6 || true
+    fi
+    if [ -z "$_apt_pkgs" ]; then
+        echo ""
+        echo "WARNING: shared libraries are missing and apt has no matching packages." >&2
+        echo "  sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-0 libxtst6" >&2
+        if [ -n "$_missing" ]; then
+            echo "$_missing" | sed 's/^/  /' >&2
+        fi
+        return 0
+    fi
+    echo ""
+    echo "Installing shared libraries: $_apt_pkgs"
+    if _run_apt install -y $_apt_pkgs; then
+        if command -v ldd >/dev/null 2>&1; then
+            _ldd_after="$(ldd "$_elf" 2>&1)" || true
+            _still="$(echo "$_ldd_after" | grep 'not found' | awk '{print $1}' | sort -u || true)"
+            if [ -n "$_still" ]; then
+                echo "WARNING: koma still needs:" >&2
+                echo "$_still" | sed 's/^/  /' >&2
+            fi
+        fi
+    else
+        echo "WARNING: could not install shared libraries. koma will not start until they are installed." >&2
+        echo "  sudo apt-get install -y $_apt_pkgs" >&2
+    fi
+}
+if [ "$os" = "linux" ]; then
+    _install_linux_shared_libs || true
 fi
 
 # ---------------------------------------------------------------------------
