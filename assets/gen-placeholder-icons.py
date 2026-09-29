@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
-"""Generate placeholder app icons for koma.
+"""Generate the koma app icon.
 
-Produces a solid dark-navy (#1a1a2e) rounded square with a simple light "K"
-glyph, plus every size cargo-packager's deb/hicolor path and Windows .ico
-format want. This is throwaway placeholder art — replace assets/icon.png
-(and re-run this script) with final branding when it's ready.
+A free typewriter "K" (Cousine Bold, falling back to other free mono faces)
+centered in a dark circle. Writes the PNG sizes the Debian hicolor install
+and the shell installer use, plus icon.ico and icon.icns for Windows and macOS.
 
 Usage:
     python3 assets/gen-placeholder-icons.py
 
 Requires Pillow (PIL). If Pillow is not installed, falls back to hand-rolled
-solid-color PNG/ICO generation (no rounded corners, no glyph) via zlib/struct
-so the pipeline never has a hard PIL dependency.
+solid-color PNG/ICO generation (no circle, no glyph) via zlib/struct.
 """
 import os
 import struct
@@ -19,65 +17,53 @@ import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BG_COLOR = (0x1A, 0x1A, 0x2E, 0xFF)  # #1a1a2e, fully opaque
-GLYPH_COLOR = (0xEA, 0xEA, 0xF5, 0xFF)  # light near-white glyph
+GLYPH_COLOR = (0xF4, 0xF4, 0xF6, 0xFF)  # light near-white glyph
 
-SIZES = [32, 64, 128, 256, 512]
+SIZES = [32, 48, 64, 128, 256, 512]
 ICO_SIZES = [16, 32, 48, 64, 128, 256]
+# Free typewriter faces, most specific first. Cousine is metric-compatible
+# with Courier New and licensed Apache-2.0.
+FONT_CANDIDATES = [
+    "/usr/share/fonts/truetype/croscore/Cousine-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeMonoBold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+]
 
 try:
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageFont
 
     HAVE_PIL = True
 except ImportError:
     HAVE_PIL = False
 
 
+def _font(size):
+    for path in FONT_CANDIDATES:
+        if os.path.isfile(path):
+            return ImageFont.truetype(path, size), path
+    return None, None
+
+
 def build_master_pil(size=1024):
-    """Rounded dark-navy square with a simple light 'K' glyph."""
+    """Dark circle with a free typewriter 'K' centered on the ink."""
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
     margin = int(size * 0.04)
-    radius = int(size * 0.18)
-    draw.rounded_rectangle(
-        [margin, margin, size - margin, size - margin],
-        radius=radius,
-        fill=BG_COLOR,
-    )
+    draw.ellipse([margin, margin, size - margin - 1, size - margin - 1], fill=BG_COLOR)
 
-    # Hand-drawn "K" glyph using thick polygon strokes so we don't depend on
-    # any particular font being installed.
-    stroke = int(size * 0.09)
-    cx = size * 0.5
-    top = size * 0.28
-    bottom = size * 0.72
-    left = size * 0.34
+    font, font_path = _font(int(size * 0.62))
+    if font is None:
+        raise RuntimeError("no free font found; install fonts-croscore or fonts-dejavu")
 
-    # Vertical bar of the K.
-    draw.rectangle([left, top, left + stroke, bottom], fill=GLYPH_COLOR)
-
-    # Upper diagonal stroke.
-    draw.polygon(
-        [
-            (left + stroke, top + (bottom - top) * 0.42),
-            (left + stroke + size * 0.05, top + (bottom - top) * 0.42),
-            (cx + size * 0.20, top),
-            (cx + size * 0.20 - stroke * 0.9, top),
-        ],
-        fill=GLYPH_COLOR,
-    )
-
-    # Lower diagonal stroke.
-    draw.polygon(
-        [
-            (left + stroke, top + (bottom - top) * 0.5),
-            (left + stroke + size * 0.05, top + (bottom - top) * 0.5),
-            (cx + size * 0.22, bottom),
-            (cx + size * 0.22 - stroke * 0.9, bottom),
-        ],
-        fill=GLYPH_COLOR,
-    )
-
+    bbox = font.getbbox("K")
+    ink_w = bbox[2] - bbox[0]
+    ink_h = bbox[3] - bbox[1]
+    x = (size - ink_w) / 2 - bbox[0]
+    y = (size - ink_h) / 2 - bbox[1]
+    draw.text((x, y), "K", font=font, fill=GLYPH_COLOR)
+    print(f"glyph font: {font_path}")
     return img
 
 
@@ -99,6 +85,15 @@ def gen_with_pil():
         sizes=[(s, s) for s in ICO_SIZES],
     )
     print(f"wrote icon.ico ({', '.join(str(s) for s in ICO_SIZES)})")
+
+    icns_path = os.path.join(HERE, "icon.icns")
+    try:
+        master.save(icns_path, format="ICNS")
+        print(f"wrote icon.icns ({master.width}x{master.height})")
+    except Exception as exc:
+        print(f"warning: Pillow could not write icon.icns: {exc}")
+        if os.path.exists(icns_path):
+            os.remove(icns_path)
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +172,7 @@ def gen_without_pil():
 
 def main():
     if HAVE_PIL:
-        print("Pillow detected: generating rounded square + 'K' glyph icons")
+        print("Pillow detected: generating circle + typewriter 'K' icons")
         gen_with_pil()
     else:
         print("Pillow NOT found: generating solid-color fallback icons")
