@@ -17,6 +17,9 @@ pub(super) enum UserEvent {
     /// heavy attach envelopes (Snapshot/Loading/Config/…) one frame at a time —
     /// stream/chat traffic is never queued behind them.
     Push(String),
+    /// Background app-list install finished. The Dock icon is applied on this
+    /// thread; `NSApplication` calls are main-thread only.
+    LauncherReady,
 }
 
 /// Window-management commands the HTML titlebar (drag region, minimize /

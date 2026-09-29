@@ -24,6 +24,21 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use wry::http::{Request, Response, StatusCode};
 
+/// Dock icon from the bundle written by [`crate::app::launcher::install_for_launch`].
+/// Missing on the first open, until that install finishes.
+#[cfg(target_os = "macos")]
+fn apply_dock_icon() {
+    let Some(path) = crate::app::launcher::dock_icon_path() else {
+        return;
+    };
+    let Ok(path) = std::ffi::CString::new(path.to_string_lossy().as_bytes()) else {
+        return;
+    };
+    // Safety: `path` is a live NUL-terminated path. Callers run on the main
+    // thread after the window build has created NSApplication.
+    unsafe { agent::computer_native::koma_set_app_icon(path.as_ptr()) };
+}
+
 // The ipc-bridge wire types (`UserEvent`/`WinCmd`/`ClientMsg`/`GuiReq`) and the
 // `GuiReq` dispatcher (`handle_gui_req` + its `GuiReqCtx`) live in the sibling
 // `proto`/`dispatch` modules (file size); re-imported here so `run_gui` keeps
@@ -315,18 +330,10 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
     }
 
-    // The terminal launch has no desktop entry of its own. Write one so the
-    // app grid / Launchpad can open this same binary. Best-effort: a failure
-    // here must not stop the window.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    if let Err(e) = crate::app::launcher::install() {
-        crate::model::store::append_global_error_log(
-            "gui",
-            &format!("app list entry was not installed: {e:#}"),
-        );
-    }
-
     // --- 1. Event loop + window (frameless, transparent) -----------------------
+    // The app-list entry is installed later, off this thread. Doing it here
+    // stats the launch binary before any window exists. On macOS that stat is
+    // the Documents / Desktop / Downloads dialog, so the app never appears.
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let window_builder = WindowBuilder::new()
         .with_title("Koma")
@@ -345,12 +352,10 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         .build(&event_loop)
         .context("failed to build GUI window")?;
     #[cfg(target_os = "macos")]
-    if let Some(path) = crate::app::launcher::dock_icon_path() {
-        if let Ok(path) = std::ffi::CString::new(path.to_string_lossy().as_bytes()) {
-            // Safety: `path` is a live NUL-terminated path. The window build
-            // above has created NSApplication on this thread.
-            unsafe { agent::computer_native::koma_set_app_icon(path.as_ptr()) };
-        }
+    {
+        // Safety: the window build above created NSApplication on this thread.
+        unsafe { agent::computer_native::koma_activate_app() };
+        apply_dock_icon();
     }
     let proxy = event_loop.create_proxy();
 
@@ -612,7 +617,32 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     let mut computer_status: Option<crate::app::runtime::computer::Status> = None;
     let computer_ctl = ctl_tx.clone();
     let mut computer_palette = serde_json::Value::Null;
+    // Taken on the first loop turn. The install must not run before `run`,
+    // and it must not stay on this thread: a folder dialog here is the only
+    // thing the user sees.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let mut launcher_install = Some(proxy.clone());
     event_loop.run(move |event, target, control_flow| {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(install_proxy) = launcher_install.take() {
+            if let Err(e) = std::thread::Builder::new()
+                .name("koma-launcher".into())
+                .spawn(move || {
+                    if let Err(e) = crate::app::launcher::install_for_launch() {
+                        crate::model::store::append_global_error_log(
+                            "gui",
+                            &format!("app list entry was not installed: {e:#}"),
+                        );
+                    }
+                    let _ = install_proxy.send_event(UserEvent::LauncherReady);
+                })
+            {
+                crate::model::store::append_global_error_log(
+                    "gui",
+                    &format!("app list install did not start: {e}"),
+                );
+            }
+        }
         *control_flow = next_push_at
             .map(ControlFlow::WaitUntil)
             .unwrap_or(ControlFlow::Wait);
@@ -825,6 +855,11 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 if computer_viewer.as_ref().is_some_and(|v| v.window.id() == window_id) => {
                     if let Some(viewer) = &computer_viewer { viewer.save(); }
                 }
+            Event::UserEvent(UserEvent::LauncherReady) => {
+                // The background install may have just written icon-256.png.
+                #[cfg(target_os = "macos")]
+                apply_dock_icon();
+            }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..

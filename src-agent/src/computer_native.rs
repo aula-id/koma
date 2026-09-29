@@ -31,4 +31,11 @@ unsafe extern "C" {
     /// `path` must be null or a live, NUL-terminated UTF-8 filesystem path.
     /// The call must run on the main thread after `NSApplication` exists.
     pub fn koma_set_app_icon(path: *const c_char);
+
+    /// Bring this process forward as a regular foreground app.
+    ///
+    /// # Safety
+    /// Must run on the main thread after `NSApplication` exists.
+    #[cfg(target_os = "macos")]
+    pub fn koma_activate_app();
 }

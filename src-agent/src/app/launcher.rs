@@ -36,10 +36,34 @@ pub struct Installed {
 }
 
 /// Write the current platform's app-list entry and icon.
+///
+/// Replaces the bundle executable when it is not the image this process is
+/// running from. `koma update` and `koma launcher-install` use this.
 pub fn install() -> Result<Installed> {
     let home = dirs::home_dir().context("HOME is not set")?;
     let exe = installed_exe().context("could not find the koma binary to launch")?;
-    install_at(&home, &exe, true)
+    install_at(&home, &exe, true, true)
+}
+
+/// Refresh the app-list entry while a GUI is opening.
+///
+/// On macOS, a bundle that already holds a real binary is refreshed from that
+/// path. The launch checkout is not stat'd, so a tree under Documents, Desktop,
+/// or Downloads does not raise a folder-access dialog on later opens.
+#[cfg(feature = "gui")]
+pub fn install_for_launch() -> Result<Installed> {
+    let home = dirs::home_dir().context("HOME is not set")?;
+    #[cfg(target_os = "macos")]
+    {
+        let bundled = home.join("Applications/Koma.app/Contents/MacOS/koma");
+        if let Ok(meta) = fs::metadata(&bundled) {
+            if meta.is_file() && meta.len() > 4096 {
+                return install_macos(&home, &bundled, true, false);
+            }
+        }
+    }
+    let exe = installed_exe().context("could not find the koma binary to launch")?;
+    install_at(&home, &exe, true, false)
 }
 
 /// Finder launches `Koma.app` with no subcommand. Info.plist cannot append
@@ -84,12 +108,16 @@ pub fn dock_icon_path() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-fn install_at(home: &Path, exe: &Path, register: bool) -> Result<Installed> {
+fn install_at(home: &Path, exe: &Path, register: bool, replace_binary: bool) -> Result<Installed> {
+    // `if cfg!` (not `#[cfg]`) so a Linux build still typechecks the macOS
+    // bundle path. `cargo check` denies dead code.
     if cfg!(target_os = "macos") {
-        install_macos(home, exe, register)
+        install_macos(home, exe, register, replace_binary)
     } else if cfg!(target_os = "linux") {
+        let _ = replace_binary;
         install_linux(home, &data_home(home), exe, register)
     } else {
+        let _ = replace_binary;
         anyhow::bail!("app list placement supports Linux and macOS")
     }
 }
@@ -150,9 +178,10 @@ fn install_linux(home: &Path, data_home: &Path, exe: &Path, register: bool) -> R
     let _ = home;
     let icons = data_home.join("icons/hicolor");
     let mut icon_file = None;
+    let mut changed = false;
     for (size, bytes) in LINUX_SIZES {
         let dest = icons.join(format!("{size}x{size}/apps/koma.png"));
-        write_bytes(&dest, bytes)?;
+        changed |= write_bytes(&dest, bytes)?;
         if *size == 256 {
             icon_file = Some(dest);
         }
@@ -161,8 +190,8 @@ fn install_linux(home: &Path, data_home: &Path, exe: &Path, register: bool) -> R
     let apps = data_home.join("applications");
     let desktop = apps.join("koma.desktop");
     let body = linux_desktop(exe, &icon_file, wm_class(exe));
-    write_bytes(&desktop, body.as_bytes())?;
-    if register {
+    changed |= write_bytes(&desktop, body.as_bytes())?;
+    if register && changed {
         register_linux(&apps, &icons, &desktop);
     }
     Ok(Installed { location: desktop })
@@ -196,20 +225,28 @@ fn desktop_exec(exe: &Path) -> String {
     }
 }
 
-fn install_macos(home: &Path, exe: &Path, register: bool) -> Result<Installed> {
+fn install_macos(
+    home: &Path,
+    exe: &Path,
+    register: bool,
+    replace_binary: bool,
+) -> Result<Installed> {
     let app = home.join("Applications/Koma.app");
     let macos = app.join("Contents/MacOS");
     let resources = app.join("Contents/Resources");
     fs::create_dir_all(&macos)?;
     fs::create_dir_all(&resources)?;
-    write_bytes(&resources.join("AppIcon.icns"), ICON_ICNS)?;
+    let mut changed = false;
+    changed |= write_bytes(&resources.join("AppIcon.icns"), ICON_ICNS)?;
     let png = resources.join("icon-256.png");
-    write_bytes(&png, ICON_256)?;
+    changed |= write_bytes(&png, ICON_256)?;
     let bundled = macos.join("koma");
-    place_bundle_executable(&bundled, exe)?;
+    changed |= place_bundle_executable(&bundled, exe, replace_binary)?;
     let plist = macos_plist();
-    write_bytes(&app.join("Contents/Info.plist"), plist.as_bytes())?;
-    if register {
+    changed |= write_bytes(&app.join("Contents/Info.plist"), plist.as_bytes())?;
+    // lsregister on every open changes the ad-hoc identity, so a folder grant
+    // does not stick and macOS asks again.
+    if register && changed {
         register_macos(&app);
     }
     Ok(Installed { location: app })
@@ -253,17 +290,32 @@ fn macos_plist() -> String {
     .to_string()
 }
 
-/// Copy `exe` into the bundle. Skip when the running image already is that
-/// file, and replace it via a temp name so a running bundle executable is not
-/// truncated in place.
-fn place_bundle_executable(dest: &Path, exe: &Path) -> Result<()> {
+/// Copy `exe` into the bundle. Returns whether the bundle executable changed.
+///
+/// A GUI open passes `replace = false` so an existing binary is left in place
+/// and `exe` is not stat'd. That stat is the macOS Documents / Desktop /
+/// Downloads prompt when the checkout lives in one of those folders. `koma
+/// update` passes `replace = true`. The running image is never replaced:
+/// overwriting the mapped Mach-O kills the process, and the next open asks
+/// for the folder again.
+fn place_bundle_executable(dest: &Path, exe: &Path, replace: bool) -> Result<bool> {
+    if running_image_is(dest) {
+        return Ok(false);
+    }
+    if !replace {
+        if let Ok(meta) = fs::metadata(dest) {
+            if meta.is_file() && meta.len() > 4096 {
+                return Ok(false);
+            }
+        }
+    }
     if let (Ok(src), Ok(current)) = (exe.canonicalize(), dest.canonicalize()) {
         if src == current {
-            return Ok(());
+            return Ok(false);
         }
     }
     if bundle_exe_current(exe, dest) {
-        return Ok(());
+        return Ok(false);
     }
     if dest.exists() {
         // An older shell trampoline is not the Mach-O Launchpad expects.
@@ -273,7 +325,39 @@ fn place_bundle_executable(dest: &Path, exe: &Path) -> Result<()> {
     fs::copy(exe, &tmp).with_context(|| format!("copy {} into the app bundle", exe.display()))?;
     set_executable(&tmp)?;
     fs::rename(&tmp, dest).with_context(|| format!("install {}", dest.display()))?;
-    Ok(())
+    Ok(true)
+}
+
+/// True when `dest` is the Mach-O this process is mapped from.
+///
+/// Canonicalize the destination only. Canonicalizing `current_exe` prompts
+/// when that path is under Documents, Desktop, or Downloads.
+fn running_image_is(dest: &Path) -> bool {
+    let Ok(current) = std::env::current_exe() else {
+        return false;
+    };
+    if current == dest {
+        return true;
+    }
+    let Ok(placed) = dest.canonicalize() else {
+        return false;
+    };
+    if current == placed {
+        return true;
+    }
+    if in_protected_folder(&current) {
+        return false;
+    }
+    std::fs::canonicalize(&current).ok().as_deref() == Some(placed.as_path())
+}
+
+fn in_protected_folder(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component.as_os_str().to_str(),
+            Some("Desktop" | "Documents" | "Downloads")
+        )
+    })
 }
 
 fn bundle_exe_current(src: &Path, dest: &Path) -> bool {
@@ -338,12 +422,19 @@ fn register_linux(apps: &Path, icons: &Path, desktop: &Path) {
     let _ = Command::new("xdg-desktop-menu").arg("forceupdate").status();
 }
 
-fn write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
+/// Write `bytes` when the file is missing or different. `false` means the
+/// bytes were already there, so the caller can skip Launch Services.
+fn write_bytes(path: &Path, bytes: &[u8]) -> Result<bool> {
+    if let Ok(existing) = fs::read(path) {
+        if existing == bytes {
+            return Ok(false);
+        }
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     fs::write(path, bytes).with_context(|| format!("write {}", path.display()))?;
-    Ok(())
+    Ok(true)
 }
 
 fn set_executable(path: &Path) -> Result<()> {
@@ -437,7 +528,10 @@ mod tests {
             desktop_exec(Path::new(r"C:\Users\a\koma")),
             "\"C:\\\\Users\\\\a\\\\koma\" gui"
         );
-        assert_eq!(desktop_exec(Path::new("/usr/local/bin/koma")), "/usr/local/bin/koma gui");
+        assert_eq!(
+            desktop_exec(Path::new("/usr/local/bin/koma")),
+            "/usr/local/bin/koma gui"
+        );
     }
 
     #[test]
@@ -490,7 +584,7 @@ mod tests {
         let home = root.join("home");
         let exe = root.join("koma");
         fs::write(&exe, vec![0u8; 8192]).unwrap();
-        let installed = install_macos(&home, &exe, false).unwrap();
+        let installed = install_macos(&home, &exe, false, true).unwrap();
         assert_eq!(installed.location, home.join("Applications/Koma.app"));
         let plist = fs::read_to_string(installed.location.join("Contents/Info.plist")).unwrap();
         assert!(plist.contains("<string>Koma</string>"));
@@ -505,5 +599,124 @@ mod tests {
             vec![0u8; 8192]
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn write_bytes_leaves_matching_files_untouched() {
+        let root = std::env::temp_dir().join(format!(
+            "koma-bytes-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let path = root.join("nested/icon.png");
+        assert!(write_bytes(&path, b"png").unwrap());
+        assert!(!write_bytes(&path, b"png").unwrap());
+        assert_eq!(fs::read(&path).unwrap(), b"png");
+        assert!(write_bytes(&path, b"png2").unwrap());
+        assert_eq!(fs::read(&path).unwrap(), b"png2");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn macos_launch_keeps_a_real_bundle_binary_when_the_source_is_missing() {
+        let root = std::env::temp_dir().join(format!(
+            "koma-app-keep-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let home = root.join("home");
+        let source = root.join("koma");
+        fs::write(&source, vec![7u8; 8192]).unwrap();
+        install_macos(&home, &source, false, true).unwrap();
+        fs::remove_file(&source).unwrap();
+        install_macos(&home, &source, false, false).unwrap();
+        assert_eq!(
+            fs::read(home.join("Applications/Koma.app/Contents/MacOS/koma")).unwrap(),
+            vec![7u8; 8192]
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn macos_launch_does_not_replace_an_existing_bundle_binary() {
+        let root = std::env::temp_dir().join(format!(
+            "koma-app-norepl-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let home = root.join("home");
+        let source = root.join("koma");
+        fs::write(&source, vec![0u8; 8192]).unwrap();
+        install_macos(&home, &source, false, true).unwrap();
+        let other = root.join("other");
+        fs::write(&other, vec![9u8; 9000]).unwrap();
+        install_macos(&home, &other, false, false).unwrap();
+        assert_eq!(
+            fs::read(home.join("Applications/Koma.app/Contents/MacOS/koma")).unwrap(),
+            vec![0u8; 8192]
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn macos_launch_replaces_a_shell_trampoline() {
+        let root = std::env::temp_dir().join(format!(
+            "koma-app-tramp-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let home = root.join("home");
+        let source = root.join("koma");
+        fs::write(&source, vec![0u8; 8192]).unwrap();
+        install_macos(&home, &source, false, true).unwrap();
+        let bundled = home.join("Applications/Koma.app/Contents/MacOS/koma");
+        fs::write(&bundled, b"#!/bin/sh\nexec koma gui\n").unwrap();
+        let fresh = root.join("fresh");
+        fs::write(&fresh, vec![3u8; 8192]).unwrap();
+        install_macos(&home, &fresh, false, false).unwrap();
+        assert_eq!(fs::read(&bundled).unwrap(), vec![3u8; 8192]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn protected_folder_is_documents_desktop_or_downloads() {
+        assert!(in_protected_folder(Path::new(
+            "/Users/a/Documents/koma/target/release/koma"
+        )));
+        assert!(in_protected_folder(Path::new("/Users/a/Desktop/koma")));
+        assert!(in_protected_folder(Path::new("/Users/a/Downloads/koma")));
+        assert!(!in_protected_folder(Path::new(
+            "/Users/a/Applications/Koma.app/Contents/MacOS/koma"
+        )));
+        assert!(!in_protected_folder(Path::new("/Users/a/.local/bin/koma")));
+        assert!(!in_protected_folder(Path::new(
+            "/Users/a/Projects/koma/target/release/koma"
+        )));
+    }
+
+    #[test]
+    fn running_image_is_this_process() {
+        let exe = std::env::current_exe().unwrap();
+        assert!(running_image_is(&exe));
+        assert!(!running_image_is(Path::new("/no/such/koma-binary")));
     }
 }
