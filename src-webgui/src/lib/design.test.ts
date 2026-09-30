@@ -43,6 +43,8 @@ import {
   hitGroupChild,
   dropDesignToken,
   layoutDesign,
+  measureTextBox,
+  mergeDesignOverride,
   reorderDesignNode,
   duplicateDesignNodes,
   emptyDesign,
@@ -911,4 +913,113 @@ function sample(): DesignDoc {
   assert.equal(framed?.zoom, 1.52)
   assert.equal(framed?.panX, 16)
   assert.equal(framed?.panY, 16)
+}
+
+{
+  const text = createNode('text', 'hi', 0, 0)
+  text.text = 'Hi'
+  text.textHug = 'width'
+  const hugged = layoutDesign({ ...emptyDesign(), screens: [text] }).screens[0]
+  const box = measureTextBox(text)
+  assert.equal(hugged.w, box.w)
+  assert.equal(hugged.h, box.h)
+  const block = createNode('text', 'block', 0, 0)
+  block.text = 'HelloHello'
+  block.w = 20
+  block.textHug = 'height'
+  const wrapped = layoutDesign({ ...emptyDesign(), screens: [block] }).screens[0]
+  assert.equal(wrapped.w, 20)
+  assert.equal(wrapped.h > box.h, true)
+  const family = createNode('text', 'face', 0, 0)
+  family.fontFamily = 'Times New Roman'
+  family.textVertical = 'top'
+  const saved = parseDesign(serializeDesign({ ...emptyDesign(), screens: [family] })).doc
+  assert.equal(saved.screens[0].fontFamily, 'Times New Roman')
+  assert.equal(saved.screens[0].textVertical, 'top')
+  const row = createNode('frame', 'row', 0, 0)
+  row.layout = 'row'
+  row.w = 200
+  row.h = 100
+  row.padTop = 10
+  row.padBottom = 10
+  row.padLeft = 4
+  row.align = 'stretch'
+  const body = createNode('rect', 'body', 0, 0)
+  body.w = 20
+  body.h = 20
+  const stay = createNode('rect', 'stay', 0, 0)
+  stay.w = 20
+  stay.h = 20
+  stay.hMode = 'hug'
+  row.children = [body, stay]
+  const stretched = layoutDesign({ ...emptyDesign(), screens: [row] }).screens[0]
+  assert.equal(stretched.children?.[0].x, 4)
+  assert.equal(stretched.children?.[0].y, 10)
+  assert.equal(stretched.children?.[0].h, 80)
+  assert.equal(stretched.children?.[1].h, 20)
+  const fixed = createNode('rect', 'fixed', 0, 0)
+  fixed.w = 40
+  fixed.minW = 70
+  const minFrame = createNode('frame', 'min', 0, 0)
+  minFrame.layout = 'row'
+  minFrame.w = 200
+  minFrame.h = 40
+  minFrame.children = [fixed]
+  assert.equal(layoutDesign({ ...emptyDesign(), screens: [minFrame] }).screens[0].children?.[0].w, 70)
+  const wrap = createNode('frame', 'wrap', 0, 0)
+  wrap.layout = 'row'
+  wrap.wrap = true
+  wrap.w = 200
+  wrap.h = 200
+  const cells = ['a', 'b', 'c'].map((id) => {
+    const cell = createNode('rect', id, 0, 0)
+    cell.w = 80
+    cell.h = 40
+    return cell
+  })
+  wrap.children = cells
+  const flowed = layoutDesign({ ...emptyDesign(), screens: [wrap] }).screens[0]
+  assert.equal(flowed.children?.[1].x, 80)
+  assert.equal(flowed.children?.[2].x, 0)
+  assert.equal(flowed.children?.[2].y, 40)
+  const open = createNode('frame', 'open', 0, 0)
+  open.w = 100
+  open.h = 100
+  open.clip = false
+  const outside = createNode('rect', 'out', -40, 10)
+  outside.w = 30
+  outside.h = 30
+  open.children = [outside]
+  const openDoc = { ...emptyDesign(), screens: [open] }
+  assert.equal(hitDesign(openDoc, -20, 20)?.id, 'out')
+  assert.equal(hitDesign({ ...openDoc, screens: [{ ...open, clip: undefined }] }, -20, 20), null)
+  const card = createNode('frame', 'card', 0, 0)
+  card.layout = 'row'
+  const label = createNode('text', 'label', 0, 0)
+  label.text = 'Save'
+  const icon = createNode('rect', 'icon', 0, 0)
+  card.children = [label, icon]
+  const component: DesignComponent = { id: 'card', name: 'Card', variants: [{ props: {}, node: card }] }
+  const instance = createNode('frame', 'host', 0, 0)
+  const placed: DesignNode = { id: 'inst', kind: 'instance', x: 0, y: 0, w: 80, h: 40, component: 'card', overrides: [{ id: 'label', text: 'Bye' }, { id: 'icon', fill: '#ff00aa', visible: false }] }
+  instance.children = [placed]
+  const instDoc = { ...emptyDesign(), components: [component], screens: [instance] }
+  const resolved = resolveInstanceTree(instDoc, placed)
+  assert.equal(resolved?.children?.[0].text, 'Bye')
+  assert.equal(resolved?.children?.[1].fill, '#ff00aa')
+  assert.equal(resolved?.children?.[1].visible, false)
+  const merged = mergeDesignOverride(placed, 'label', { text: null })
+  assert.equal(merged.overrides?.some((item) => item.id === 'label'), false)
+  const round = parseDesign(serializeDesign(instDoc)).doc
+  assert.equal(round.screens[0].children?.[0].overrides?.[1].fill, '#ff00aa')
+  const slice = queryDesign(instDoc, { screen: 'host' })
+  assert.equal(slice?.screen?.tree.children?.[0].overrides?.[0].text, 'Bye')
+  const corners = createNode('rect', 'corners', 0, 0)
+  corners.radius = 8
+  corners.radiusTL = 0
+  corners.radiusTR = 20
+  const cornerDoc = parseDesign(serializeDesign({ ...emptyDesign(), screens: [corners] })).doc
+  assert.equal(cornerDoc.screens[0].radiusTL, 0)
+  assert.equal(cornerDoc.screens[0].radiusTR, 20)
+  assert.equal(cornerDoc.screens[0].radius, 8)
 }

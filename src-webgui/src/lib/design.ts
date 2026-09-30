@@ -11,10 +11,13 @@ export const DESIGN_MIN_H = 8
 
 export type DesignKind = 'frame' | 'group' | 'rect' | 'ellipse' | 'line' | 'vector' | 'text' | 'instance'
 export type DesignLayout = 'row' | 'column'
-export type DesignAlign = 'start' | 'center' | 'end' | 'space'
-export type DesignSize = 'hug' | 'fill'
+export type DesignAlign = 'start' | 'center' | 'end' | 'space' | 'stretch'
+export type DesignSize = 'hug' | 'fill' | 'fixed'
 export type DesignWeight = 'regular' | 'medium' | 'bold'
 export type DesignTextAlign = 'left' | 'center' | 'right'
+export type DesignTextVertical = 'top' | 'center' | 'bottom'
+/** `height` hugs the block height. `width` hugs both axes. */
+export type DesignTextHug = 'height' | 'width'
 export type DesignTokenKind = 'color' | 'space' | 'type' | 'radius'
 export type DesignOrder = 'front' | 'forward' | 'backward' | 'back'
 export type DesignDrawKind = 'frame' | 'group' | 'rect' | 'ellipse' | 'line' | 'vector' | 'text'
@@ -50,11 +53,14 @@ export type DesignPenPoint = {
 
 const KINDS: readonly DesignKind[] = ['frame', 'group', 'rect', 'ellipse', 'line', 'vector', 'text', 'instance']
 const LAYOUTS: readonly DesignLayout[] = ['row', 'column']
-const ALIGNS: readonly DesignAlign[] = ['start', 'center', 'end']
+const ALIGNS: readonly DesignAlign[] = ['start', 'center', 'end', 'stretch']
 const JUSTIFIES: readonly DesignAlign[] = ['start', 'center', 'end', 'space']
-const SIZES: readonly DesignSize[] = ['hug', 'fill']
+const SIZES: readonly DesignSize[] = ['hug', 'fill', 'fixed']
 const WEIGHTS: readonly DesignWeight[] = ['regular', 'medium', 'bold']
 const TEXT_ALIGNS: readonly DesignTextAlign[] = ['left', 'center', 'right']
+const TEXT_VERTICAL: readonly DesignTextVertical[] = ['top', 'center', 'bottom']
+const TEXT_HUGS: readonly DesignTextHug[] = ['height', 'width']
+const FONT_FAMILY = /^[\w][\w\s,-]{0,80}$/
 const TOKEN_KINDS: readonly DesignTokenKind[] = ['color', 'space', 'type', 'radius']
 const TOKEN_NAME = /^[a-zA-Z][a-zA-Z0-9._-]*$/
 
@@ -78,19 +84,42 @@ export type DesignNode = {
   layout?: DesignLayout
   gap?: number
   pad?: number
-  /** Cross-axis alignment. Omitted means start. */
+  /** Cross-axis alignment. `stretch` sizes non-hug, non-fixed children to the inner cross size. Omitted means start. */
   align?: DesignAlign
   /** Main-axis alignment. Omitted means start. */
   justify?: DesignAlign
+  /** Extra inset on one side. Omitted sides use `pad`. */
+  padTop?: number
+  padRight?: number
+  padBottom?: number
+  padLeft?: number
+  /** Flow onto the next line once the main axis is full. Omitted means one line. A hugging main axis stays one line. */
+  wrap?: boolean
+  minW?: number
+  maxW?: number
+  minH?: number
+  maxH?: number
+  /** Frames and instances clip. `false` shows overflow. Omitted means clip. */
+  clip?: boolean
   fill?: DesignRef
   stroke?: DesignRef
   strokeWidth?: number
   radius?: number | string
+  /** One corner. Omitted uses `radius`. `0` is a square corner. */
+  radiusTL?: number | string
+  radiusTR?: number | string
+  radiusBR?: number | string
+  radiusBL?: number | string
   opacity?: number
   text?: string
   fontSize?: number
+  /** CSS family. Omitted uses the UI font. */
+  fontFamily?: string
   weight?: DesignWeight
   textAlign?: DesignTextAlign
+  /** Omitted means centered in the text box, matching the canvas. */
+  textVertical?: DesignTextVertical
+  textHug?: DesignTextHug
   /** Pixels. Omitted means the font’s own line height. */
   lineHeight?: number
   /** Pixels. Omitted means 0. Negative values tighten. */
@@ -109,7 +138,16 @@ export type DesignNode = {
   /** Instance target. Required when kind is instance. */
   component?: string
   variant?: Record<string, string>
+  /** Per-child instance overrides, keyed by the component node's id. */
+  overrides?: DesignOverride[]
   children?: DesignNode[]
+}
+
+export type DesignOverride = {
+  id: string
+  text?: string
+  fill?: DesignRef
+  visible?: boolean
 }
 
 export type DesignVariant = {
@@ -229,13 +267,25 @@ export function pickVariant(component: DesignComponent, props?: Record<string, s
   return best
 }
 
-/** Paint the root and write the text onto the first text node. */
-export function applyOverrides(root: DesignNode, override: { text?: string; fill?: string }): DesignNode {
+/** Paint the root fill, the first text node, and any per-child override. */
+export function applyOverrides(root: DesignNode, override: { text?: string; fill?: string; overrides?: DesignOverride[] }): DesignNode {
+  const byId = new Map((override.overrides ?? []).map((item) => [item.id, item]))
   let textUsed = override.text == null
   const walk = (node: DesignNode, isRoot: boolean): DesignNode => {
     let next = node
+    const row = byId.get(node.id)
     if (isRoot && override.fill) next = { ...next, fill: override.fill }
-    if (!textUsed && node.kind === 'text') {
+    if (row?.fill) next = { ...next, fill: row.fill }
+    if (row?.visible === false) next = { ...next, visible: false }
+    else if (row?.visible === true) {
+      const shown = { ...next }
+      delete shown.visible
+      next = shown
+    }
+    if (row?.text != null && node.kind === 'text') {
+      textUsed = true
+      next = { ...next, text: row.text }
+    } else if (!textUsed && node.kind === 'text') {
       textUsed = true
       next = { ...next, text: override.text }
     }
@@ -243,6 +293,33 @@ export function applyOverrides(root: DesignNode, override: { text?: string; fill
     return next
   }
   return walk(root, true)
+}
+
+/** Write one child override on an instance. A null field clears that key. An empty row drops the override. */
+export function mergeDesignOverride(
+  node: DesignNode,
+  targetId: string,
+  patch: { text?: string | null; fill?: string | null; visible?: boolean | null },
+): DesignNode {
+  if (node.kind !== 'instance' || !targetId) return node
+  const current = (node.overrides ?? []).map((item) => ({ ...item }))
+  const index = current.findIndex((item) => item.id === targetId)
+  const row: DesignOverride = index >= 0 ? { ...current[index] } : { id: targetId }
+  if (patch.text === null) delete row.text
+  else if (patch.text != null) row.text = patch.text
+  if (patch.fill === null) delete row.fill
+  else if (patch.fill != null) row.fill = patch.fill
+  if (patch.visible === null) delete row.visible
+  else if (patch.visible != null) row.visible = patch.visible
+  const empty = row.text == null && (row.fill == null || row.fill === '') && row.visible == null
+  if (empty && index >= 0) current.splice(index, 1)
+  else if (empty) return node
+  else if (index >= 0) current[index] = row
+  else current.push(row)
+  const next: DesignNode = { ...node }
+  if (current.length) next.overrides = current
+  else delete next.overrides
+  return next
 }
 
 export function resolveRef(doc: DesignDoc, ref: string): string {
@@ -305,7 +382,7 @@ export function nodeChrome(node: DesignNode): { fill: string; stroke: string; ra
   }
 }
 
-export function textStyle(node: DesignNode): { text: string; fontSize: number; weight: DesignWeight; align: DesignTextAlign; color: string; lineHeight: number; letterSpacing: number } {
+export function textStyle(node: DesignNode): { text: string; fontSize: number; weight: DesignWeight; align: DesignTextAlign; color: string; lineHeight: number; letterSpacing: number; fontFamily: string; vertical: DesignTextVertical; hug: DesignTextHug | 'fixed' } {
   return {
     text: node.text ?? '',
     fontSize: node.fontSize && node.fontSize > 0 ? node.fontSize : 13,
@@ -314,7 +391,51 @@ export function textStyle(node: DesignNode): { text: string; fontSize: number; w
     color: node.color ?? '',
     lineHeight: node.lineHeight && node.lineHeight > 0 ? node.lineHeight : 0,
     letterSpacing: node.letterSpacing ?? 0,
+    fontFamily: fontFamilyCss(node),
+    vertical: node.textVertical ?? 'center',
+    hug: node.textHug ?? 'fixed',
   }
+}
+
+/** A safe CSS family, or empty when the node uses the UI font. */
+export function fontFamilyCss(node: DesignNode): string {
+  const raw = node.fontFamily?.trim()
+  if (!raw || !FONT_FAMILY.test(raw)) return ''
+  return raw
+}
+
+/**
+ * Text box from a half-em estimate. Layout stays the same in the browser and in tests.
+ * `width` hug uses this box. `height` hug wraps that width into the node's width.
+ */
+export function measureTextBox(node: DesignNode): { w: number; h: number } {
+  const style = textStyle(node)
+  const lineH = style.lineHeight > 0 ? style.lineHeight : Math.round(style.fontSize * 1.2)
+  const lines = style.text.split('\n')
+  const charW = style.fontSize * 0.5
+  let width = style.fontSize
+  for (const line of lines) {
+    const next = Math.ceil(line.length * charW + style.letterSpacing * Math.max(0, line.length - 1))
+    if (next > width) width = next
+  }
+  return { w: Math.max(1, width), h: Math.max(lineH, Math.max(1, lines.length) * lineH) }
+}
+
+/** Resolved corner radii in pixels. An omitted corner uses `radius`. */
+export function cornerPixels(doc: DesignDoc, node: DesignNode): { tl: number; tr: number; br: number; bl: number } {
+  const base = node.radius
+  const px = (value: number | string | undefined): number => {
+    const raw = value !== undefined ? value : base
+    if (raw == null) return 0
+    const n = typeof raw === 'number' ? raw : Number(resolveRef(doc, raw))
+    return Number.isFinite(n) && n > 0 ? n : 0
+  }
+  return { tl: px(node.radiusTL), tr: px(node.radiusTR), br: px(node.radiusBR), bl: px(node.radiusBL) }
+}
+
+/** Frames and instances clip unless `clip` is false. */
+export function designClips(node: DesignNode): boolean {
+  return (node.kind === 'frame' || node.kind === 'instance') && node.clip !== false
 }
 
 /** The one value every entry shares. An empty list, or any difference, is null. */
@@ -342,17 +463,34 @@ function cloneNode(node: DesignNode, mint: () => string): DesignNode {
   if (node.layout) next.layout = node.layout
   if (node.gap) next.gap = node.gap
   if (node.pad) next.pad = node.pad
+  if (node.padTop != null) next.padTop = node.padTop
+  if (node.padRight != null) next.padRight = node.padRight
+  if (node.padBottom != null) next.padBottom = node.padBottom
+  if (node.padLeft != null) next.padLeft = node.padLeft
+  if (node.wrap) next.wrap = true
+  if (node.minW != null) next.minW = node.minW
+  if (node.maxW != null) next.maxW = node.maxW
+  if (node.minH != null) next.minH = node.minH
+  if (node.maxH != null) next.maxH = node.maxH
+  if (node.clip === false) next.clip = false
   if (node.align) next.align = node.align
   if (node.justify) next.justify = node.justify
   if (node.fill) next.fill = node.fill
   if (node.stroke) next.stroke = node.stroke
   if (node.strokeWidth != null) next.strokeWidth = node.strokeWidth
   if (node.radius != null) next.radius = node.radius
+  if (node.radiusTL != null) next.radiusTL = node.radiusTL
+  if (node.radiusTR != null) next.radiusTR = node.radiusTR
+  if (node.radiusBR != null) next.radiusBR = node.radiusBR
+  if (node.radiusBL != null) next.radiusBL = node.radiusBL
   if (node.opacity != null) next.opacity = node.opacity
   if (node.text != null) next.text = node.text
   if (node.fontSize != null) next.fontSize = node.fontSize
+  if (node.fontFamily) next.fontFamily = node.fontFamily
   if (node.weight) next.weight = node.weight
   if (node.textAlign) next.textAlign = node.textAlign
+  if (node.textVertical) next.textVertical = node.textVertical
+  if (node.textHug) next.textHug = node.textHug
   if (node.lineHeight != null) next.lineHeight = node.lineHeight
   if (node.letterSpacing) next.letterSpacing = node.letterSpacing
   if (node.color) next.color = node.color
@@ -364,6 +502,7 @@ function cloneNode(node: DesignNode, mint: () => string): DesignNode {
   if (node.vector) next.vector = cloneVector(node.vector)
   if (node.component) next.component = node.component
   if (node.variant) next.variant = { ...node.variant }
+  if (node.overrides?.length) next.overrides = node.overrides.map((item) => ({ ...item }))
   if (node.children?.length) next.children = node.children.map((child) => cloneNode(child, mint))
   return next
 }
@@ -577,7 +716,7 @@ function outsideParent(doc: DesignDoc, located: { node: DesignNode; parentId: st
 /**
  * Topmost node under a canvas point.
  * A group or instance hit returns that node. Pass deep to step one level into it.
- * A frame hit returns the child under the pointer. Clipped frames ignore points outside the frame.
+ * A frame hit returns the child under the pointer. A clipping frame ignores points outside itself.
  * A locked node that contains the point returns itself.
  */
 export function hitDesign(doc: DesignDoc, x: number, y: number, deep = false): DesignNode | null {
@@ -927,6 +1066,7 @@ export function resetInstanceOverrides(doc: DesignDoc, id: string): DesignDoc {
     const next: DesignNode = { ...node }
     delete next.text
     delete next.fill
+    delete next.overrides
     return next
   })
 }
@@ -938,7 +1078,7 @@ export function resolveInstanceTree(doc: DesignDoc, node: DesignNode): DesignNod
   if (!component) return null
   const variant = pickVariant(component, node.variant)
   if (!variant) return null
-  const overridden = applyOverrides(variant.node, { text: node.text, fill: node.fill })
+  const overridden = applyOverrides(variant.node, { text: node.text, fill: node.fill, overrides: node.overrides })
   return layoutDesign({ ...doc, screens: [zeroRoot(overridden)] }).screens[0] ?? null
 }
 
@@ -1539,10 +1679,17 @@ export type DesignStyle = {
   stroke?: string
   strokeWidth?: number
   radius?: number | string
+  radiusTL?: number | string
+  radiusTR?: number | string
+  radiusBR?: number | string
+  radiusBL?: number | string
   opacity?: number
   fontSize?: number
+  fontFamily?: string
   weight?: DesignWeight
   textAlign?: DesignTextAlign
+  textVertical?: DesignTextVertical
+  textHug?: DesignTextHug
   lineHeight?: number
   letterSpacing?: number
   color?: string
@@ -1738,10 +1885,17 @@ export function designStyle(node: DesignNode): DesignStyle {
   if (node.stroke !== undefined) style.stroke = node.stroke
   if (node.strokeWidth !== undefined) style.strokeWidth = node.strokeWidth
   if (node.radius !== undefined) style.radius = node.radius
+  if (node.radiusTL !== undefined) style.radiusTL = node.radiusTL
+  if (node.radiusTR !== undefined) style.radiusTR = node.radiusTR
+  if (node.radiusBR !== undefined) style.radiusBR = node.radiusBR
+  if (node.radiusBL !== undefined) style.radiusBL = node.radiusBL
   if (node.opacity !== undefined) style.opacity = node.opacity
   if (node.fontSize !== undefined) style.fontSize = node.fontSize
+  if (node.fontFamily !== undefined) style.fontFamily = node.fontFamily
   if (node.weight !== undefined) style.weight = node.weight
   if (node.textAlign !== undefined) style.textAlign = node.textAlign
+  if (node.textVertical !== undefined) style.textVertical = node.textVertical
+  if (node.textHug !== undefined) style.textHug = node.textHug
   if (node.lineHeight !== undefined) style.lineHeight = node.lineHeight
   if (node.letterSpacing !== undefined) style.letterSpacing = node.letterSpacing
   if (node.color !== undefined) style.color = node.color
@@ -1759,11 +1913,18 @@ export function applyDesignStyle(doc: DesignDoc, ids: string[], style: DesignSty
       if (style.stroke !== undefined) copy.stroke = style.stroke
       if (style.strokeWidth !== undefined) copy.strokeWidth = style.strokeWidth
       if (style.radius !== undefined) copy.radius = style.radius
+      if (style.radiusTL !== undefined) copy.radiusTL = style.radiusTL
+      if (style.radiusTR !== undefined) copy.radiusTR = style.radiusTR
+      if (style.radiusBR !== undefined) copy.radiusBR = style.radiusBR
+      if (style.radiusBL !== undefined) copy.radiusBL = style.radiusBL
       if (style.opacity !== undefined) copy.opacity = style.opacity
       if (node.kind !== 'text') return copy
       if (style.fontSize !== undefined) copy.fontSize = style.fontSize
+      if (style.fontFamily !== undefined) copy.fontFamily = style.fontFamily
       if (style.weight !== undefined) copy.weight = style.weight
       if (style.textAlign !== undefined) copy.textAlign = style.textAlign
+      if (style.textVertical !== undefined) copy.textVertical = style.textVertical
+      if (style.textHug !== undefined) copy.textHug = style.textHug
       if (style.lineHeight !== undefined) copy.lineHeight = style.lineHeight
       if (style.letterSpacing !== undefined) copy.letterSpacing = style.letterSpacing
       if (style.color !== undefined) copy.color = style.color
@@ -1944,9 +2105,38 @@ function layoutNode(node: DesignNode, frozenId?: string): DesignNode {
     })
     if (changed) next = { ...node, children }
   }
+  if (next.kind === 'text') next = hugText(next)
   if (next.kind === 'group') next = fitGroup(next)
-  if (next.kind !== 'frame' || !next.layout) return next
-  return placeFlow(next, frozenId)
+  if (next.kind === 'frame' && next.layout) next = placeFlow(next, frozenId)
+  return clampNodeBox(next)
+}
+
+/** Hug a text node to the half-em estimate. Width hug sets both axes. Height hug wraps into the current width. */
+function hugText(node: DesignNode): DesignNode {
+  if (!node.textHug) return node
+  const box = measureTextBox(node)
+  const style = textStyle(node)
+  const lineH = style.lineHeight > 0 ? style.lineHeight : Math.round(style.fontSize * 1.2)
+  let w = node.w
+  let h = node.h
+  if (node.textHug === 'width') {
+    w = box.w
+    h = box.h
+  } else {
+    const rows = Math.max(style.text.split('\n').length, Math.ceil(box.w / Math.max(1, node.w)))
+    h = Math.max(lineH, rows * lineH)
+  }
+  w = Math.max(1, limitSize(w, node.minW, node.maxW))
+  h = Math.max(1, limitSize(h, node.minH, node.maxH))
+  if (w === node.w && h === node.h) return node
+  return { ...node, w, h }
+}
+
+function clampNodeBox(node: DesignNode): DesignNode {
+  const w = limitSize(node.w, node.minW, node.maxW)
+  const h = limitSize(node.h, node.minH, node.maxH)
+  if (w === node.w && h === node.h) return node
+  return { ...node, w: Math.max(1, w), h: Math.max(1, h) }
 }
 
 /** Pull a group's box onto the union of its children without moving them on the canvas. */
@@ -1984,60 +2174,151 @@ function groupOrigin(group: DesignNode, minX: number, minY: number, w: number, h
   }
 }
 
-function placeFlow(frame: DesignNode, frozenId?: string): DesignNode {
+function framePad(frame: DesignNode): { top: number; right: number; bottom: number; left: number } {
   const pad = frame.pad ?? 0
+  return {
+    top: frame.padTop ?? pad,
+    right: frame.padRight ?? pad,
+    bottom: frame.padBottom ?? pad,
+    left: frame.padLeft ?? pad,
+  }
+}
+
+function limitSize(size: number, min?: number, max?: number): number {
+  let next = size
+  if (min != null && min > 0) next = Math.max(next, min)
+  if (max != null && max > 0) next = Math.min(next, max)
+  return next
+}
+
+function placeFlow(frame: DesignNode, frozenId?: string): DesignNode {
+  const pad = framePad(frame)
   const gap = frame.gap ?? 0
   const horizontal = frame.layout === 'row'
+  const mainStart = horizontal ? pad.left : pad.top
+  const mainEnd = horizontal ? pad.right : pad.bottom
+  const crossStart = horizontal ? pad.top : pad.left
+  const crossEnd = horizontal ? pad.bottom : pad.right
   const children = frame.children ?? []
   const flow = children.filter((child) => !child.absolute && child.id !== frozenId)
   const mainSize = (child: DesignNode) => (horizontal ? child.w : child.h)
   const crossSize = (child: DesignNode) => (horizontal ? child.h : child.w)
   const mainMode = (child: DesignNode) => (horizontal ? child.wMode : child.hMode)
   const crossMode = (child: DesignNode) => (horizontal ? child.hMode : child.wMode)
+  const mainMin = (child: DesignNode) => (horizontal ? child.minW : child.minH)
+  const mainMax = (child: DesignNode) => (horizontal ? child.maxW : child.maxH)
+  const crossMin = (child: DesignNode) => (horizontal ? child.minH : child.minW)
+  const crossMax = (child: DesignNode) => (horizontal ? child.maxH : child.maxW)
   const hugsMain = horizontal ? frame.wMode === 'hug' : frame.hMode === 'hug'
   const hugsCross = horizontal ? frame.hMode === 'hug' : frame.wMode === 'hug'
+  const justify = frame.justify ?? 'start'
+  const align = frame.align ?? 'start'
+  const wrapping = frame.wrap === true && !hugsMain
+  const sizedMain = (child: DesignNode) => limitSize(mainSize(child), mainMin(child), mainMax(child))
   const gaps = Math.max(0, flow.length - 1) * gap
-  const contentMain = flow.reduce((sum, child) => sum + (mainMode(child) === 'fill' && !hugsMain ? 0 : mainSize(child)), 0) + gaps
-  const contentCross = flow.reduce((max, child) => Math.max(max, crossSize(child)), 0)
+  const contentMain = flow.reduce((sum, child) => sum + (mainMode(child) === 'fill' && !hugsMain ? 0 : sizedMain(child)), 0) + gaps
+  const contentCross = flow.reduce((max, child) => Math.max(max, limitSize(crossSize(child), crossMin(child), crossMax(child))), 0)
   let width = frame.w
   let height = frame.h
-  if (hugsMain) {
-    const size = Math.max(horizontal ? DESIGN_MIN_W : DESIGN_MIN_H, pad * 2 + contentMain)
+  if (hugsMain && !wrapping) {
+    const size = limitSize(Math.max(horizontal ? DESIGN_MIN_W : DESIGN_MIN_H, mainStart + mainEnd + contentMain), horizontal ? frame.minW : frame.minH, horizontal ? frame.maxW : frame.maxH)
     if (horizontal) width = size
     else height = size
   }
-  if (hugsCross) {
-    const size = Math.max(horizontal ? DESIGN_MIN_H : DESIGN_MIN_W, pad * 2 + contentCross)
+  if (hugsCross && !wrapping) {
+    const size = limitSize(Math.max(horizontal ? DESIGN_MIN_H : DESIGN_MIN_W, crossStart + crossEnd + contentCross), horizontal ? frame.minH : frame.minW, horizontal ? frame.maxH : frame.maxW)
     if (horizontal) height = size
     else width = size
   }
-  const innerMain = Math.max(0, (horizontal ? width : height) - pad * 2)
-  const innerCross = Math.max(0, (horizontal ? height : width) - pad * 2)
-  const fills = hugsMain ? [] : flow.filter((child) => mainMode(child) === 'fill')
-  const usedFixed = flow.reduce((sum, child) => sum + (fills.includes(child) ? 0 : mainSize(child)), 0)
-  const fillMain = fills.length ? Math.max(8, (innerMain - usedFixed - gaps) / fills.length) : 0
-  const justify = frame.justify ?? 'start'
-  const align = frame.align ?? 'start'
-  const measured = flow.map((child) => {
-    const main = fills.includes(child) ? fillMain : mainSize(child)
-    const cross = crossMode(child) === 'fill' && !hugsCross ? innerCross : crossSize(child)
-    return { child, main: Math.max(8, main), cross: Math.max(8, cross) }
-  })
-  const used = measured.reduce((sum, item) => sum + item.main, 0) + gaps
-  const space = justify === 'space' && measured.length > 1
-  const between = space ? Math.max(0, (innerMain - measured.reduce((sum, item) => sum + item.main, 0)) / (measured.length - 1)) : gap
-  let cursor = pad
-  if (!space && justify === 'center') cursor = pad + Math.max(0, innerMain - used) / 2
-  if (!space && justify === 'end') cursor = pad + Math.max(0, innerMain - used)
+  width = Math.max(1, limitSize(width, frame.minW, frame.maxW))
+  height = Math.max(1, limitSize(height, frame.minH, frame.maxH))
+  const innerMain = Math.max(0, (horizontal ? width : height) - mainStart - mainEnd)
+  const innerCross = Math.max(0, (horizontal ? height : width) - crossStart - crossEnd)
+  const stretches = (child: DesignNode) => {
+    const mode = crossMode(child)
+    return mode !== 'hug' && mode !== 'fixed' && (mode === 'fill' || align === 'stretch') && !hugsCross
+  }
+  const finish = (size: number, min?: number, max?: number) => {
+    const limited = limitSize(Math.max(min == null && max == null ? 8 : 1, size), min, max)
+    return limited
+  }
+  if (!wrapping) {
+    const fills = hugsMain ? [] : flow.filter((child) => mainMode(child) === 'fill')
+    const usedFixed = flow.reduce((sum, child) => sum + (fills.includes(child) ? 0 : sizedMain(child)), 0)
+    const fillMain = fills.length ? Math.max(8, (innerMain - usedFixed - gaps) / fills.length) : 0
+    const measured = flow.map((child) => {
+      const main = fills.includes(child) ? fillMain : sizedMain(child)
+      const cross = stretches(child) ? innerCross : crossSize(child)
+      return { child, main: finish(main, mainMin(child), mainMax(child)), cross: finish(cross, crossMin(child), crossMax(child)) }
+    })
+    const used = measured.reduce((sum, item) => sum + item.main, 0) + gaps
+    const space = justify === 'space' && measured.length > 1
+    const between = space ? Math.max(0, (innerMain - measured.reduce((sum, item) => sum + item.main, 0)) / (measured.length - 1)) : gap
+    let cursor = mainStart
+    if (!space && justify === 'center') cursor = mainStart + Math.max(0, innerMain - used) / 2
+    if (!space && justify === 'end') cursor = mainStart + Math.max(0, innerMain - used)
+    const placed = new Map<string, DesignNode>()
+    for (const item of measured) {
+      const crossPos = align === 'center' ? crossStart + (innerCross - item.cross) / 2 : align === 'end' ? crossStart + innerCross - item.cross : crossStart
+      const x = horizontal ? cursor : crossPos
+      const y = horizontal ? crossPos : cursor
+      const w = horizontal ? item.main : item.cross
+      const h = horizontal ? item.cross : item.main
+      placed.set(item.child.id, item.child.x === x && item.child.y === y && item.child.w === w && item.child.h === h ? item.child : { ...item.child, x, y, w, h })
+      cursor += item.main + between
+    }
+    const nextChildren = children.map((child) => placed.get(child.id) ?? child)
+    if (width === frame.w && height === frame.h && nextChildren.every((child, index) => child === children[index])) return frame
+    return { ...frame, w: width, h: height, children: nextChildren }
+  }
+  const items = flow.map((child) => ({
+    child,
+    main: finish(sizedMain(child), mainMin(child), mainMax(child)),
+    cross: finish(crossSize(child), crossMin(child), crossMax(child)),
+  }))
+  const lines: { child: DesignNode; main: number; cross: number }[][] = []
+  let line: { child: DesignNode; main: number; cross: number }[] = []
+  let usedLine = 0
+  for (const item of items) {
+    const nextUsed = line.length ? usedLine + gap + item.main : item.main
+    if (line.length && nextUsed > innerMain) {
+      lines.push(line)
+      line = [item]
+      usedLine = item.main
+    } else {
+      line.push(item)
+      usedLine = nextUsed
+    }
+  }
+  if (line.length) lines.push(line)
   const placed = new Map<string, DesignNode>()
-  for (const item of measured) {
-    const crossPos = align === 'center' ? pad + (innerCross - item.cross) / 2 : align === 'end' ? pad + innerCross - item.cross : pad
-    const x = horizontal ? cursor : crossPos
-    const y = horizontal ? crossPos : cursor
-    const w = horizontal ? item.main : item.cross
-    const h = horizontal ? item.cross : item.main
-    placed.set(item.child.id, item.child.x === x && item.child.y === y && item.child.w === w && item.child.h === h ? item.child : { ...item.child, x, y, w, h })
-    cursor += item.main + between
+  let crossCursor = crossStart
+  for (const row of lines) {
+    const lineCross = row.reduce((max, item) => Math.max(max, item.cross), 0)
+    const rowMain = row.reduce((sum, item) => sum + item.main, 0)
+    const space = justify === 'space' && row.length > 1
+    const between = space ? Math.max(0, (innerMain - rowMain) / (row.length - 1)) : gap
+    const used = rowMain + (space ? 0 : Math.max(0, row.length - 1) * gap)
+    let cursor = mainStart
+    if (!space && justify === 'center') cursor = mainStart + Math.max(0, innerMain - used) / 2
+    if (!space && justify === 'end') cursor = mainStart + Math.max(0, innerMain - used)
+    for (const item of row) {
+      const cross = stretches(item.child) ? Math.max(item.cross, lineCross) : item.cross
+      const crossPos = align === 'center' ? crossCursor + (lineCross - cross) / 2 : align === 'end' ? crossCursor + lineCross - cross : crossCursor
+      const x = horizontal ? cursor : crossPos
+      const y = horizontal ? crossPos : cursor
+      const w = horizontal ? item.main : cross
+      const h = horizontal ? cross : item.main
+      placed.set(item.child.id, item.child.x === x && item.child.y === y && item.child.w === w && item.child.h === h ? item.child : { ...item.child, x, y, w, h })
+      cursor += item.main + between
+    }
+    crossCursor += lineCross + gap
+  }
+  if (hugsCross && lines.length) {
+    const size = Math.max(horizontal ? DESIGN_MIN_H : DESIGN_MIN_W, crossCursor - gap + crossEnd)
+    const limited = Math.max(1, limitSize(size, horizontal ? frame.minH : frame.minW, horizontal ? frame.maxH : frame.maxW))
+    if (horizontal) height = limited
+    else width = limited
   }
   const nextChildren = children.map((child) => placed.get(child.id) ?? child)
   if (width === frame.w && height === frame.h && nextChildren.every((child, index) => child === children[index])) return frame
@@ -2078,7 +2359,7 @@ function hitIn(node: DesignNode, x: number, y: number, deep: boolean): DesignNod
     }
     return node
   }
-  if (node.kind === 'frame' && !inside) return null
+  if (node.kind === 'frame' && node.clip !== false && !inside) return null
   const children = node.children ?? []
   for (let i = children.length - 1; i >= 0; i--) {
     const found = hitIn(children[i], local.x, local.y, deep)
@@ -2247,7 +2528,33 @@ function parseNode(value: unknown): DesignNode | null {
     const justify = oneOf(row.justify, JUSTIFIES)
     if (align && align !== 'start') node.align = align
     if (justify && justify !== 'start') node.justify = justify
+    const padTop = num(row.padTop)
+    const padRight = num(row.padRight)
+    const padBottom = num(row.padBottom)
+    const padLeft = num(row.padLeft)
+    if (padTop != null && padTop >= 0) node.padTop = padTop
+    if (padRight != null && padRight >= 0) node.padRight = padRight
+    if (padBottom != null && padBottom >= 0) node.padBottom = padBottom
+    if (padLeft != null && padLeft >= 0) node.padLeft = padLeft
+    if (row.wrap === true) node.wrap = true
   }
+  if ((kind === 'frame' || kind === 'instance') && row.clip === false) node.clip = false
+  const minW = num(row.minW)
+  const maxW = num(row.maxW)
+  const minH = num(row.minH)
+  const maxH = num(row.maxH)
+  if (minW != null && minW > 0) node.minW = minW
+  if (maxW != null && maxW > 0) node.maxW = maxW
+  if (minH != null && minH > 0) node.minH = minH
+  if (maxH != null && maxH > 0) node.maxH = maxH
+  const radiusTL = parseRadius(row.radiusTL)
+  const radiusTR = parseRadius(row.radiusTR)
+  const radiusBR = parseRadius(row.radiusBR)
+  const radiusBL = parseRadius(row.radiusBL)
+  if (radiusTL != null) node.radiusTL = radiusTL
+  if (radiusTR != null) node.radiusTR = radiusTR
+  if (radiusBR != null) node.radiusBR = radiusBR
+  if (radiusBL != null) node.radiusBL = radiusBL
   if (kind === 'vector') {
     const vector = parseVector(row.vector)
     if (!vector) return null
@@ -2276,14 +2583,42 @@ function parseNode(value: unknown): DesignNode | null {
     if (letterSpacing != null && letterSpacing !== 0) node.letterSpacing = letterSpacing
     const color = parsePaint(row.color)
     if (color && color !== 'none') node.color = color
+    if (typeof row.fontFamily === 'string' && FONT_FAMILY.test(row.fontFamily.trim())) node.fontFamily = row.fontFamily.trim()
+    const textVertical = oneOf(row.textVertical, TEXT_VERTICAL)
+    if (textVertical && textVertical !== 'center') node.textVertical = textVertical
+    const textHug = oneOf(row.textHug, TEXT_HUGS)
+    if (textHug) node.textHug = textHug
   }
   if (kind === 'instance') {
     if (typeof row.component !== 'string' || !row.component) return null
     node.component = row.component
     const variant = parseProps(row.variant)
     if (variant && Object.keys(variant).length) node.variant = variant
+    if (row.overrides !== undefined) {
+      const overrides = parseOverrides(row.overrides)
+      if (!overrides) return null
+      if (overrides.length) node.overrides = overrides
+    }
   }
   return node
+}
+
+function parseOverrides(value: unknown): DesignOverride[] | null {
+  if (!Array.isArray(value)) return null
+  const rows: DesignOverride[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null
+    const row = item as Record<string, unknown>
+    if (typeof row.id !== 'string' || !row.id) return null
+    const next: DesignOverride = { id: row.id }
+    if (typeof row.text === 'string') next.text = row.text
+    const fill = parsePaint(row.fill)
+    if (fill) next.fill = fill
+    if (row.visible === false || row.visible === true) next.visible = row.visible
+    if (next.text == null && next.fill == null && next.visible == null) continue
+    rows.push(next)
+  }
+  return rows
 }
 
 function parseTokenValue(kind: DesignTokenKind, value: unknown): string | undefined {
@@ -2421,17 +2756,34 @@ function writeNode(node: DesignNode): DesignNode {
   if (node.layout) row.layout = node.layout
   if (node.gap) row.gap = node.gap
   if (node.pad) row.pad = node.pad
+  if (node.padTop != null) row.padTop = node.padTop
+  if (node.padRight != null) row.padRight = node.padRight
+  if (node.padBottom != null) row.padBottom = node.padBottom
+  if (node.padLeft != null) row.padLeft = node.padLeft
+  if (node.wrap) row.wrap = true
+  if (node.minW != null) row.minW = node.minW
+  if (node.maxW != null) row.maxW = node.maxW
+  if (node.minH != null) row.minH = node.minH
+  if (node.maxH != null) row.maxH = node.maxH
+  if (node.clip === false) row.clip = false
   if (node.align && node.align !== 'start') row.align = node.align
   if (node.justify && node.justify !== 'start') row.justify = node.justify
   if (node.fill) row.fill = node.fill
   if (node.stroke) row.stroke = node.stroke
   if (node.strokeWidth != null && node.strokeWidth !== 1) row.strokeWidth = node.strokeWidth
   if (typeof node.radius === 'number' ? node.radius > 0 : node.radius) row.radius = node.radius
+  if (node.radiusTL != null) row.radiusTL = node.radiusTL
+  if (node.radiusTR != null) row.radiusTR = node.radiusTR
+  if (node.radiusBR != null) row.radiusBR = node.radiusBR
+  if (node.radiusBL != null) row.radiusBL = node.radiusBL
   if (node.opacity != null && node.opacity < 1) row.opacity = node.opacity
   if (node.text) row.text = node.text
   if (node.fontSize != null && node.fontSize > 0 && node.fontSize !== 13) row.fontSize = node.fontSize
+  if (node.fontFamily) row.fontFamily = node.fontFamily
   if (node.weight && node.weight !== 'regular') row.weight = node.weight
   if (node.textAlign && node.textAlign !== 'left') row.textAlign = node.textAlign
+  if (node.textVertical && node.textVertical !== 'center') row.textVertical = node.textVertical
+  if (node.textHug) row.textHug = node.textHug
   if (node.lineHeight != null && node.lineHeight > 0) row.lineHeight = node.lineHeight
   if (node.letterSpacing) row.letterSpacing = node.letterSpacing
   if (node.color && node.color !== 'none') row.color = node.color
@@ -2443,6 +2795,15 @@ function writeNode(node: DesignNode): DesignNode {
   if (node.kind === 'vector' && node.vector) row.vector = cloneVector(node.vector)
   if (node.component) row.component = node.component
   if (node.variant && Object.keys(node.variant).length) row.variant = { ...node.variant }
+  if (node.overrides?.length) {
+    row.overrides = node.overrides.map((item) => {
+      const copy: DesignOverride = { id: item.id }
+      if (item.text != null) copy.text = item.text
+      if (item.fill) copy.fill = item.fill
+      if (item.visible != null) copy.visible = item.visible
+      return copy
+    })
+  }
   if (isDesignContainer(node.kind) && node.children?.length) row.children = node.children.map(writeNode)
   return row
 }
@@ -2567,6 +2928,12 @@ function tokenRefs(node: DesignNode, into: Set<string>) {
     if (field && field !== 'none' && !field.startsWith('#')) into.add(field)
   }
   if (typeof node.radius === 'string') into.add(node.radius)
+  for (const corner of [node.radiusTL, node.radiusTR, node.radiusBR, node.radiusBL]) {
+    if (typeof corner === 'string') into.add(corner)
+  }
+  for (const row of node.overrides ?? []) {
+    if (row.fill && row.fill !== 'none' && !row.fill.startsWith('#')) into.add(row.fill)
+  }
   for (const child of node.children ?? []) tokenRefs(child, into)
 }
 

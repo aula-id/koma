@@ -1,5 +1,7 @@
 // Raster of a design node for chat. The model sees this picture next to the coordinate list.
 import {
+  cornerPixels,
+  fontFamilyCss,
   nodeChrome,
   resolveInstanceTree,
   resolveRef,
@@ -29,23 +31,27 @@ function paintStroke(doc: DesignDoc, node: DesignNode): string {
   return resolved.startsWith('#') ? resolved : ''
 }
 
-function radiusOf(doc: DesignDoc, node: DesignNode): number {
-  if (node.kind === 'ellipse') return Math.min(node.w, node.h) / 2
-  const raw = nodeChrome(node).radius
-  const value = typeof raw === 'number' ? raw : Number(resolveRef(doc, raw))
-  if (!Number.isFinite(value) || value <= 0) return 0
-  return Math.min(value, node.w / 2, node.h / 2)
+function traceRound(ctx: CanvasRenderingContext2D, w: number, h: number, radius: { tl: number; tr: number; br: number; bl: number }) {
+  const clamp = (value: number) => Math.max(0, Math.min(value, w / 2, h / 2))
+  const tl = clamp(radius.tl)
+  const tr = clamp(radius.tr)
+  const br = clamp(radius.br)
+  const bl = clamp(radius.bl)
+  ctx.beginPath()
+  ctx.moveTo(tl, 0)
+  ctx.arcTo(w, 0, w, h, tr)
+  ctx.arcTo(w, h, 0, h, br)
+  ctx.arcTo(0, h, 0, 0, bl)
+  ctx.arcTo(0, 0, w, 0, tl)
+  ctx.closePath()
 }
 
-function traceRound(ctx: CanvasRenderingContext2D, w: number, h: number, radius: number) {
-  const r = Math.max(0, Math.min(radius, w / 2, h / 2))
-  ctx.beginPath()
-  ctx.moveTo(r, 0)
-  ctx.arcTo(w, 0, w, h, r)
-  ctx.arcTo(w, h, 0, h, r)
-  ctx.arcTo(0, h, 0, 0, r)
-  ctx.arcTo(0, 0, w, 0, r)
-  ctx.closePath()
+function radiiOf(doc: DesignDoc, node: DesignNode): { tl: number; tr: number; br: number; bl: number } {
+  if (node.kind === 'ellipse') {
+    const radius = Math.min(node.w, node.h) / 2
+    return { tl: radius, tr: radius, br: radius, bl: radius }
+  }
+  return cornerPixels(doc, node)
 }
 
 function drawNode(ctx: CanvasRenderingContext2D, doc: DesignDoc, node: DesignNode) {
@@ -53,7 +59,7 @@ function drawNode(ctx: CanvasRenderingContext2D, doc: DesignDoc, node: DesignNod
   if (node.kind === 'instance') {
     const visual = resolveInstanceTree(doc, node)
     if (!visual) return
-    drawNode(ctx, doc, { ...visual, x: node.x, y: node.y, rotation: node.rotation ?? visual.rotation, flipX: node.flipX ?? visual.flipX, flipY: node.flipY ?? visual.flipY })
+    drawNode(ctx, doc, { ...visual, x: node.x, y: node.y, rotation: node.rotation ?? visual.rotation, flipX: node.flipX ?? visual.flipX, flipY: node.flipY ?? visual.flipY, clip: node.clip ?? visual.clip })
     return
   }
   ctx.save()
@@ -65,7 +71,7 @@ function drawNode(ctx: CanvasRenderingContext2D, doc: DesignDoc, node: DesignNod
   ctx.globalAlpha *= nodeChrome(node).opacity
   const fill = paintFill(doc, node)
   const stroke = paintStroke(doc, node)
-  const radius = radiusOf(doc, node)
+  const radius = radiiOf(doc, node)
   if (node.kind !== 'line' && node.kind !== 'vector' && node.kind !== 'text' && (fill || stroke)) {
     traceRound(ctx, node.w, node.h, radius)
     if (fill) {
@@ -102,13 +108,22 @@ function drawNode(ctx: CanvasRenderingContext2D, doc: DesignDoc, node: DesignNod
     const style = textStyle(node)
     const weight = style.weight === 'bold' ? 700 : style.weight === 'medium' ? 500 : 400
     ctx.fillStyle = paintOfColor(doc, style.color)
-    ctx.font = `${weight} ${style.fontSize}px sans-serif`
-    ctx.textBaseline = 'middle'
+    const family = fontFamilyCss(node)
+    ctx.font = `${weight} ${style.fontSize}px ${family || 'sans-serif'}`
     ctx.textAlign = style.align === 'center' ? 'center' : style.align === 'right' ? 'right' : 'left'
     const x = style.align === 'center' ? node.w / 2 : style.align === 'right' ? node.w - 4 : 4
-    ctx.fillText(style.text || 'Text', x, node.h / 2)
+    if (node.textVertical === 'top') {
+      ctx.textBaseline = 'top'
+      ctx.fillText(style.text || 'Text', x, 0)
+    } else if (node.textVertical === 'bottom') {
+      ctx.textBaseline = 'bottom'
+      ctx.fillText(style.text || 'Text', x, node.h)
+    } else {
+      ctx.textBaseline = 'middle'
+      ctx.fillText(style.text || 'Text', x, node.h / 2)
+    }
   }
-  if (node.kind === 'frame') {
+  if (node.kind === 'frame' && node.clip !== false) {
     traceRound(ctx, node.w, node.h, radius)
     ctx.clip()
   }

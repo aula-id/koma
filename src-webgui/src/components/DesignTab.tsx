@@ -12,6 +12,7 @@ import {
   canLeaveParent,
   canvasDeltaToSpace,
   canvasToContent,
+  cornerPixels,
   componentView,
   contentAngle,
   copyTree,
@@ -41,6 +42,7 @@ import {
   layoutDesign,
   locateDesign,
   makeInstance,
+  mergeDesignOverride,
   moveDesignNode,
   nextVariantProps,
   nodeChrome,
@@ -608,8 +610,10 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         const limit = Math.min(drag.node.w, drag.node.h) / 2
         const radius = Math.round(Math.min(limit, Math.max(0, drag.radius + inward / 2)))
         const nextNode = { ...drag.node }
-        if (radius <= 0) delete nextNode.radius
-        else nextNode.radius = radius
+        const cornerKey = drag.corner === 'tl' ? 'radiusTL' : drag.corner === 'tr' ? 'radiusTR' : drag.corner === 'bl' ? 'radiusBL' : 'radiusBR'
+        const uniform = typeof drag.node.radius === 'number' ? drag.node.radius : 0
+        if (radius === uniform) delete nextNode[cornerKey]
+        else nextNode[cornerKey] = radius
         const next = projectDoc(stored, focus, layoutDesign(updateDesignNode(doc, drag.id, () => nextNode)))
         if (serializeDesign(next) === serializeDesign(stored)) return
         if (!drag.remembered) {
@@ -1874,7 +1878,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 if (!stored) return
                 commit(alignDesignNodes(editingDoc(stored, focusRef.current), selection, axis, edge))
               } : undefined}
-              onResetInstance={!multi && selected?.kind === 'instance' && (selected.text || selected.fill) ? () => {
+              onResetInstance={!multi && selected?.kind === 'instance' && (selected.text || selected.fill || selected.overrides?.length) ? () => {
                 const stored = useKoma.getState().design.docs[key]?.doc
                 if (!stored) return
                 commitStored(resetInstanceOverrides(stored, selected.id))
@@ -2068,12 +2072,12 @@ function DesignNodeView({
   const fillFallback = node.kind === 'frame' ? '#ffffff' : node.kind === 'rect' || node.kind === 'ellipse' || node.kind === 'vector' ? SHAPE_FILL : 'var(--color-koma-panel)'
   const fill = bareFill ? 'transparent' : paintCss(doc, chrome.fill, fillFallback)
   const stroke = paintCss(doc, chrome.stroke, node.kind === 'line' || node.kind === 'vector' ? '#1c1c1c' : 'var(--color-koma-border)')
-  const radius = node.kind === 'ellipse' ? '50%' : typeof chrome.radius === 'number' ? chrome.radius : Number(resolveRef(doc, String(chrome.radius))) || 0
+  const corners = cornerPixels(doc, node)
+  const radius = node.kind === 'ellipse' ? '50%' : `${corners.tl}px ${corners.tr}px ${corners.br}px ${corners.bl}px`
   const unit = 1 / Math.max(zoom, 0.25)
-  const radiusNumber = typeof radius === 'number' ? radius : 0
-  const inset = radiusNumber > 0 ? radiusNumber : 14 * unit
-  const insetX = Math.min(node.w / 2, Math.max(8 * unit, inset))
-  const insetY = Math.min(node.h / 2, Math.max(8 * unit, inset))
+  const insetAt = (value: number, span: number) => Math.min(span / 2, Math.max(8 * unit, value > 0 ? value : 14 * unit))
+  const clipValue = node.kind === 'instance' ? node.clip ?? visual?.clip : node.clip
+  const clips = (node.kind === 'frame' || node.kind === 'instance') && clipValue !== false
   const children = visual?.children ?? (node.kind === 'instance' ? undefined : node.children)
   const rotation = node.rotation ?? 0
   const flipX = node.flipX ? -1 : 1
@@ -2117,7 +2121,7 @@ function DesignNodeView({
           background: node.kind === 'line' || node.kind === 'vector' ? 'transparent' : fill,
           border: bareStroke || strokeOff || node.kind === 'line' || node.kind === 'vector' ? undefined : `${chrome.strokeWidth}px solid ${stroke}`,
           borderRadius: radius,
-          overflow: node.kind === 'frame' || node.kind === 'instance' ? 'hidden' : undefined,
+          overflow: clips ? 'hidden' : undefined,
         }}
       >
         {node.kind === 'line' ? (
@@ -2138,12 +2142,12 @@ function DesignNodeView({
             onBlur={onTextBlur}
             onPointerDown={(event) => event.stopPropagation()}
             className="z-10 h-full w-full border-0 bg-transparent px-1 text-koma-fg shadow-none outline-none"
-            style={{ fontSize: style.fontSize, fontWeight: weightCss(style.weight), textAlign: style.align, lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined, letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined, color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
+            style={{ fontSize: style.fontSize, fontFamily: style.fontFamily || undefined, fontWeight: weightCss(style.weight), textAlign: style.align, lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined, letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined, color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
           />
         ) : node.kind === 'text' ? (
           <div
-            className="flex h-full w-full items-center px-1"
-            style={{ fontSize: style.fontSize, fontWeight: weightCss(style.weight), justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : 'flex-start', lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined, letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined, color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
+            className="flex h-full w-full px-1"
+            style={{ fontSize: style.fontSize, fontFamily: style.fontFamily || undefined, fontWeight: weightCss(style.weight), justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : 'flex-start', alignItems: style.vertical === 'top' ? 'flex-start' : style.vertical === 'bottom' ? 'flex-end' : 'center', lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined, letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined, color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
           >
             <span className="truncate">{node.text || 'Text'}</span>
           </div>
@@ -2184,10 +2188,10 @@ function DesignNodeView({
       ) : null}
       {selected && !locked && !node.locked && !dragCursor && (node.kind === 'rect' || node.kind === 'frame') ? (
         ([
-          { id: 'tl' as const, x: insetX, y: insetY, cursor: 'nwse-resize' },
-          { id: 'tr' as const, x: node.w - insetX, y: insetY, cursor: 'nesw-resize' },
-          { id: 'bl' as const, x: insetX, y: node.h - insetY, cursor: 'nesw-resize' },
-          { id: 'br' as const, x: node.w - insetX, y: node.h - insetY, cursor: 'nwse-resize' },
+          { id: 'tl' as const, x: insetAt(corners.tl, node.w), y: insetAt(corners.tl, node.h), cursor: 'nwse-resize' },
+          { id: 'tr' as const, x: node.w - insetAt(corners.tr, node.w), y: insetAt(corners.tr, node.h), cursor: 'nesw-resize' },
+          { id: 'bl' as const, x: insetAt(corners.bl, node.w), y: node.h - insetAt(corners.bl, node.h), cursor: 'nesw-resize' },
+          { id: 'br' as const, x: node.w - insetAt(corners.br, node.w), y: node.h - insetAt(corners.br, node.h), cursor: 'nwse-resize' },
         ]).map((corner) => (
           <button
             key={corner.id}
@@ -2314,9 +2318,29 @@ function NodeSettings({
   const setJustify = (justify: 'start' | 'center' | 'end' | 'space') => {
     setField(justify === 'start' ? {} : { justify }, justify === 'start' ? ['justify'] : [])
   }
-  const setCross = (align: 'start' | 'center' | 'end') => {
+  const setCross = (align: 'start' | 'center' | 'end' | 'stretch') => {
     setField(align === 'start' ? {} : { align }, align === 'start' ? ['align'] : [])
   }
+  const setSide = (key: 'padTop' | 'padRight' | 'padBottom' | 'padLeft', value: number) => {
+    const pad = node.pad ?? 0
+    if (!Number.isFinite(value) || value < 0 || value === pad) setField({}, [key])
+    else setField({ [key]: value })
+  }
+  const setCorner = (key: 'radiusTL' | 'radiusTR' | 'radiusBR' | 'radiusBL', value: number) => {
+    const uniform = typeof node.radius === 'number' ? node.radius : 0
+    if (!Number.isFinite(value) || value < 0 || value === uniform) setField({}, [key])
+    else setField({ [key]: value })
+  }
+  const padTopField = numberOf((item) => item.padTop ?? item.pad ?? 0)
+  const padRightField = numberOf((item) => item.padRight ?? item.pad ?? 0)
+  const padBottomField = numberOf((item) => item.padBottom ?? item.pad ?? 0)
+  const padLeftField = numberOf((item) => item.padLeft ?? item.pad ?? 0)
+  const minWField = numberOf((item) => item.minW ?? 0)
+  const maxWField = numberOf((item) => item.maxW ?? 0)
+  const minHField = numberOf((item) => item.minH ?? 0)
+  const maxHField = numberOf((item) => item.maxH ?? 0)
+  const cornerField = (pick: (item: DesignNode) => number) => numberOf(pick)
+  const resolvedCorner = (value: number | string | undefined) => (typeof value === 'number' ? value : Number(resolveRef(doc, value ?? '')) || 0)
   return (
     <div className="flex flex-col gap-3 px-3 pb-3 text-[12px]">
       {onMakeComponent ? (
@@ -2450,7 +2474,7 @@ function NodeSettings({
               <GeomField label="W" value={wField.value} mixed={wField.mixed} onChange={(w) => setField({ w: Math.max(1, w) }, ['wMode'])} />
             </div>
             {sizeModes ? (
-              <SizeMode label="Width sizing" value={wModeField.value} mixed={wModeField.mixed} onChange={(mode) => setField(mode === 'fixed' ? {} : { wMode: mode }, mode === 'fixed' ? ['wMode'] : [])} />
+              <SizeMode label="Width sizing" value={wModeField.value} mixed={wModeField.mixed} onChange={(mode) => setField({ wMode: mode })} />
             ) : null}
           </div>
           <div className="flex min-w-0 gap-1">
@@ -2458,7 +2482,7 @@ function NodeSettings({
               <GeomField label="H" value={hField.value} mixed={hField.mixed} onChange={(h) => setField({ h: Math.max(1, h) }, ['hMode'])} />
             </div>
             {sizeModes ? (
-              <SizeMode label="Height sizing" value={hModeField.value} mixed={hModeField.mixed} onChange={(mode) => setField(mode === 'fixed' ? {} : { hMode: mode }, mode === 'fixed' ? ['hMode'] : [])} />
+              <SizeMode label="Height sizing" value={hModeField.value} mixed={hModeField.mixed} onChange={(mode) => setField({ hMode: mode })} />
             ) : null}
           </div>
         </div>
@@ -2489,6 +2513,14 @@ function NodeSettings({
             return next
           })}><RotateCw size={14} /></AlignButton>
         </div>
+        {sizeModes || allFrames ? (
+          <div className="grid grid-cols-2 gap-1">
+            <GeomField label="Min" ariaLabel="Minimum width" value={minWField.value} mixed={minWField.mixed} onChange={(minW) => setField(minW > 0 ? { minW } : {}, minW > 0 ? [] : ['minW'])} />
+            <GeomField label="Max" ariaLabel="Maximum width" value={maxWField.value} mixed={maxWField.mixed} onChange={(maxW) => setField(maxW > 0 ? { maxW } : {}, maxW > 0 ? [] : ['maxW'])} />
+            <GeomField label="Min" ariaLabel="Minimum height" value={minHField.value} mixed={minHField.mixed} onChange={(minH) => setField(minH > 0 ? { minH } : {}, minH > 0 ? [] : ['minH'])} />
+            <GeomField label="Max" ariaLabel="Maximum height" value={maxHField.value} mixed={maxHField.mixed} onChange={(maxH) => setField(maxH > 0 ? { maxH } : {}, maxH > 0 ? [] : ['maxH'])} />
+          </div>
+        ) : null}
       </Section>
       {allFrames || hasParent ? (
       <Section title="Layout">
@@ -2503,7 +2535,13 @@ function NodeSettings({
         <>
           <div className="grid grid-cols-2 gap-1">
             <GeomField label="Gap" value={gapField.value} mixed={gapField.mixed} onChange={(gap) => setField(gap > 0 ? { gap } : {}, gap > 0 ? [] : ['gap'])} />
-            <GeomField label="Pad" value={padField.value} mixed={padField.mixed} onChange={(pad) => setField(pad > 0 ? { pad } : {}, pad > 0 ? [] : ['pad'])} />
+            <GeomField label="Pad" value={padField.value} mixed={padField.mixed} onChange={(pad) => setField(pad > 0 ? { pad } : {}, pad > 0 ? ['padTop', 'padRight', 'padBottom', 'padLeft'] : ['pad', 'padTop', 'padRight', 'padBottom', 'padLeft'])} />
+          </div>
+          <div className="grid grid-cols-4 gap-1">
+            <GeomField label="T" ariaLabel="Padding top" value={padTopField.value} mixed={padTopField.mixed} onChange={(value) => setSide('padTop', value)} />
+            <GeomField label="R" ariaLabel="Padding right" value={padRightField.value} mixed={padRightField.mixed} onChange={(value) => setSide('padRight', value)} />
+            <GeomField label="B" ariaLabel="Padding bottom" value={padBottomField.value} mixed={padBottomField.mixed} onChange={(value) => setSide('padBottom', value)} />
+            <GeomField label="L" ariaLabel="Padding left" value={padLeftField.value} mixed={padLeftField.mixed} onChange={(value) => setSide('padLeft', value)} />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex gap-0.5">
@@ -2529,17 +2567,53 @@ function NodeSettings({
                   <AlignButton label="Align left" pressed={!alignField.mixed && alignField.value === 'start'} onClick={() => setCross('start')}><AlignStartVertical size={14} /></AlignButton>
                   <AlignButton label="Align center" pressed={!alignField.mixed && alignField.value === 'center'} onClick={() => setCross('center')}><AlignCenterVertical size={14} /></AlignButton>
                   <AlignButton label="Align right" pressed={!alignField.mixed && alignField.value === 'end'} onClick={() => setCross('end')}><AlignEndVertical size={14} /></AlignButton>
+                  <AlignButton label="Stretch" pressed={!alignField.mixed && alignField.value === 'stretch'} onClick={() => setCross('stretch')}><span className="text-[11px] font-semibold">↔</span></AlignButton>
                 </>
               ) : (
                 <>
                   <AlignButton label="Align top" pressed={!alignField.mixed && alignField.value === 'start'} onClick={() => setCross('start')}><AlignStartHorizontal size={14} /></AlignButton>
                   <AlignButton label="Align middle" pressed={!alignField.mixed && alignField.value === 'center'} onClick={() => setCross('center')}><AlignCenterHorizontal size={14} /></AlignButton>
                   <AlignButton label="Align bottom" pressed={!alignField.mixed && alignField.value === 'end'} onClick={() => setCross('end')}><AlignEndHorizontal size={14} /></AlignButton>
+                  <AlignButton label="Stretch" pressed={!alignField.mixed && alignField.value === 'stretch'} onClick={() => setCross('stretch')}><span className="text-[11px] font-semibold">↕</span></AlignButton>
                 </>
               )}
             </div>
           </div>
+          <div className="flex items-center justify-between">
+            <span className="text-koma-dim">Wrap{textOf((item) => (item.wrap ? 'on' : 'off')).mixed ? ' · Mixed' : ''}</span>
+            <button
+              type="button"
+              aria-pressed={nodes.every((item) => item.wrap === true)}
+              onClick={() => onPatch((current) => {
+                const next = { ...current }
+                if (current.wrap) delete next.wrap
+                else next.wrap = true
+                return next
+              })}
+              className={`h-6 rounded px-2 ${nodes.every((item) => item.wrap) ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
+            >
+              {nodes.every((item) => item.wrap) ? 'On' : 'Off'}
+            </button>
+          </div>
         </>
+      ) : null}
+      {nodes.every((item) => item.kind === 'frame' || item.kind === 'instance') ? (
+        <div className="flex items-center justify-between">
+          <span className="text-koma-dim">Clip</span>
+          <button
+            type="button"
+            aria-pressed={nodes.every((item) => item.clip !== false)}
+            onClick={() => onPatch((current) => {
+              const next = { ...current }
+              if (current.clip === false) delete next.clip
+              else next.clip = false
+              return next
+            })}
+            className={`h-6 rounded px-2 ${nodes.every((item) => item.clip !== false) ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
+          >
+            {nodes.every((item) => item.clip !== false) ? 'On' : 'Off'}
+          </button>
+        </div>
       ) : null}
       {hasParent ? (
         <div className="flex items-center justify-between">
@@ -2580,6 +2654,14 @@ function NodeSettings({
             />
           ) : null}
         </div>
+        {showRadius ? (
+          <div className="grid grid-cols-4 gap-1">
+            <GeomField label="TL" ariaLabel="Top left radius" value={cornerField((item) => resolvedCorner(item.radiusTL ?? item.radius)).value} mixed={cornerField((item) => resolvedCorner(item.radiusTL ?? item.radius)).mixed} onChange={(value) => setCorner('radiusTL', value)} />
+            <GeomField label="TR" ariaLabel="Top right radius" value={cornerField((item) => resolvedCorner(item.radiusTR ?? item.radius)).value} mixed={cornerField((item) => resolvedCorner(item.radiusTR ?? item.radius)).mixed} onChange={(value) => setCorner('radiusTR', value)} />
+            <GeomField label="BR" ariaLabel="Bottom right radius" value={cornerField((item) => resolvedCorner(item.radiusBR ?? item.radius)).value} mixed={cornerField((item) => resolvedCorner(item.radiusBR ?? item.radius)).mixed} onChange={(value) => setCorner('radiusBR', value)} />
+            <GeomField label="BL" ariaLabel="Bottom left radius" value={cornerField((item) => resolvedCorner(item.radiusBL ?? item.radius)).value} mixed={cornerField((item) => resolvedCorner(item.radiusBL ?? item.radius)).mixed} onChange={(value) => setCorner('radiusBL', value)} />
+          </div>
+        ) : null}
       </Section>
       <Section title="Fill">
         <PaintRow
@@ -2630,10 +2712,32 @@ function NodeSettings({
               <option value="bold">Bold</option>
             </select>
           </div>
+          <label className="flex h-7 items-center gap-1 rounded border border-koma-border bg-koma-bg px-1.5">
+            <span className="flex-none text-[11px] text-koma-dim">Font</span>
+            <input
+              aria-label="Font family"
+              value={multi ? '' : node.fontFamily ?? ''}
+              placeholder={textOf((item) => item.fontFamily ?? '').mixed ? 'Mixed' : 'UI font'}
+              onChange={(event) => {
+                const family = event.target.value
+                if (!family.trim()) setField({}, ['fontFamily'])
+                else if (/^[\w][\w\s,-]{0,80}$/.test(family)) setField({ fontFamily: family })
+              }}
+              className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
+            />
+          </label>
           <div className="flex gap-0.5">
             <AlignButton label="Align left" pressed={!textAlignField.mixed && textAlignField.value === 'left'} onClick={() => setField({}, ['textAlign'])}><TextAlignStart size={14} /></AlignButton>
             <AlignButton label="Align center" pressed={!textAlignField.mixed && textAlignField.value === 'center'} onClick={() => setField({ textAlign: 'center' })}><TextAlignCenter size={14} /></AlignButton>
             <AlignButton label="Align right" pressed={!textAlignField.mixed && textAlignField.value === 'right'} onClick={() => setField({ textAlign: 'right' })}><TextAlignEnd size={14} /></AlignButton>
+            <AlignButton label="Align top" pressed={!textOf((item) => item.textVertical ?? 'center').mixed && (node.textVertical ?? 'center') === 'top'} onClick={() => setField({ textVertical: 'top' })}><span className="text-[10px]">T</span></AlignButton>
+            <AlignButton label="Align middle" pressed={!textOf((item) => item.textVertical ?? 'center').mixed && (node.textVertical ?? 'center') === 'center'} onClick={() => setField({}, ['textVertical'])}><span className="text-[10px]">M</span></AlignButton>
+            <AlignButton label="Align bottom" pressed={!textOf((item) => item.textVertical ?? 'center').mixed && (node.textVertical ?? 'center') === 'bottom'} onClick={() => setField({ textVertical: 'bottom' })}><span className="text-[10px]">B</span></AlignButton>
+          </div>
+          <div className="flex gap-0.5">
+            <AlignButton label="Fixed text box" pressed={!textOf((item) => item.textHug ?? 'fixed').mixed && !node.textHug} onClick={() => setField({}, ['textHug'])}><span className="text-[10px]">Fix</span></AlignButton>
+            <AlignButton label="Hug height" pressed={!textOf((item) => item.textHug ?? 'fixed').mixed && node.textHug === 'height'} onClick={() => setField({ textHug: 'height' })}><span className="text-[10px]">H</span></AlignButton>
+            <AlignButton label="Hug width" pressed={!textOf((item) => item.textHug ?? 'fixed').mixed && node.textHug === 'width'} onClick={() => setField({ textHug: 'width' })}><span className="text-[10px]">W</span></AlignButton>
           </div>
           <PaintRow
             label="Color"
@@ -2656,7 +2760,70 @@ function NodeSettings({
           </div>
         </Section>
       ) : null}
+      {!multi && node.kind === 'instance' ? (
+        <InstanceOverrides doc={doc} node={node} onPatch={onPatch} onTypeFocus={onTypeFocus} onTypeBlur={onTypeBlur} />
+      ) : null}
     </div>
+  )
+}
+
+function instanceDescendants(node: DesignNode, into: DesignNode[]) {
+  for (const child of node.children ?? []) {
+    into.push(child)
+    instanceDescendants(child, into)
+  }
+}
+
+function InstanceOverrides({ doc, node, onPatch, onTypeFocus, onTypeBlur }: { doc: DesignDoc; node: DesignNode; onPatch: (fn: (node: DesignNode) => DesignNode) => void; onTypeFocus: () => void; onTypeBlur: () => void }) {
+  const visual = resolveInstanceTree(doc, node)
+  const rows: DesignNode[] = []
+  if (visual) instanceDescendants(visual, rows)
+  if (!rows.length) return null
+  const commitFill = (id: string, raw: string) => {
+    const value = raw.trim()
+    if (!value) onPatch((current) => mergeDesignOverride(current, id, { fill: null }))
+    else if (value === 'none' || /^#[0-9a-fA-F]{6}$/.test(value) || /^[a-zA-Z][\w.-]*$/.test(value)) onPatch((current) => mergeDesignOverride(current, id, { fill: value }))
+  }
+  return (
+    <Section title="Overrides">
+      {rows.map((child) => {
+        const hidden = child.visible === false
+        const name = designLayerName(child)
+        return (
+          <div key={child.id} className="flex flex-col gap-1">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-label={hidden ? `Show ${name}` : `Hide ${name}`}
+                onClick={() => onPatch((current) => mergeDesignOverride(current, child.id, { visible: !hidden }))}
+                className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover"
+              >
+                {hidden ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+              <span className="min-w-0 flex-1 truncate text-koma-fg">{name}</span>
+            </div>
+            {child.kind === 'text' ? (
+              <input
+                aria-label={`${name} text`}
+                value={child.text ?? ''}
+                onFocus={onTypeFocus}
+                onBlur={onTypeBlur}
+                onChange={(event) => onPatch((current) => mergeDesignOverride(current, child.id, { text: event.target.value }))}
+                className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+              />
+            ) : null}
+            <input
+              key={`${child.id}:${child.fill ?? ''}`}
+              aria-label={`${name} fill`}
+              defaultValue={child.fill && child.fill !== 'none' ? child.fill : ''}
+              placeholder="Fill"
+              onBlur={(event) => commitFill(child.id, event.target.value)}
+              className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+            />
+          </div>
+        )
+      })}
+    </Section>
   )
 }
 
