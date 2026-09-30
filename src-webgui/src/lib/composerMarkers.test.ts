@@ -81,6 +81,11 @@ import { pasteMarker } from './pasteText.ts'
     { kind: 'image', markerN: 1 },
     { kind: 'pasted_text', markerN: 2 },
   ], []), [])
+
+  assert.deepEqual(trailingAttachmentMarkers('', [
+    { kind: 'image', markerN: 5 },
+    { kind: 'pasted_text', markerN: 2 },
+  ], [], new Set(['image:5', 'pasted_text:2'])), [])
 }
 
 console.log('composerMarkers.test.ts ok')

@@ -123,22 +123,24 @@ export function trailingAttachmentMarkers(
   prose: string,
   attachments: Array<{ kind: string; markerN: number }>,
   localPastes: Array<{ markerN?: number }>,
+  consumed?: ReadonlySet<string>,
 ): string[] {
   const markers: string[] = []
   const seen = new Set<string>()
-  const add = (marker: string) => {
-    if (seen.has(marker) || prose.includes(marker)) return
+  const add = (kind: string, markerN: number, marker: string) => {
+    const key = `${kind}:${markerN}`
+    if (consumed?.has(key) || seen.has(marker) || prose.includes(marker)) return
     seen.add(marker)
     markers.push(marker)
   }
   for (const item of localPastes) {
-    if (item.markerN != null) add(pasteMarker(item.markerN))
+    if (item.markerN != null) add('pasted_text', item.markerN, pasteMarker(item.markerN))
   }
   for (const item of attachments) {
-    if (item.kind === 'pasted_text') add(pasteMarker(item.markerN))
+    if (item.kind === 'pasted_text') add(item.kind, item.markerN, pasteMarker(item.markerN))
   }
   for (const item of attachments) {
-    if (item.kind === 'image') add(imageMarker(item.markerN))
+    if (item.kind === 'image') add(item.kind, item.markerN, imageMarker(item.markerN))
   }
   return markers
 }

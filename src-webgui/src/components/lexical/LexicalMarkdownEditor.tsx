@@ -771,12 +771,15 @@ function EditorPlugins({
       KEY_ENTER_COMMAND,
       (event) => {
         if (event && (event.ctrlKey || event.metaKey) && !event.shiftKey) {
-          onKeyDownRef.current?.(event as unknown as ReactKeyboardEvent<HTMLElement>)
+          event.preventDefault()
+          event.stopImmediatePropagation()
+          if (onSubmitRef.current) onSubmitRef.current()
+          else onKeyDownRef.current?.(event as unknown as ReactKeyboardEvent<HTMLElement>)
           return true
         }
         return false
       },
-      COMMAND_PRIORITY_HIGH,
+      COMMAND_PRIORITY_CRITICAL,
     )
   }, [editor, profile])
 

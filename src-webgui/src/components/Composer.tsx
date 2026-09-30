@@ -173,6 +173,8 @@ export function Composer() {
   const markerInsertQueue = useRef<MarkerInsertRow[]>([])
   const seenAttachmentMarkers = useRef(new Set<string>())
   const submitArmed = useRef(false)
+  const submitLock = useRef(false)
+  const consumedAttachKeys = useRef(new Set<string>())
   const submitRef = useRef<() => void>(() => {})
   const [pasteTexts, setPasteTexts] = useState<Record<number, string>>({})
   const pasteTextsRef = useRef(pasteTexts)
@@ -347,6 +349,8 @@ export function Composer() {
     dirtyPastes.current.clear()
     markerInsertQueue.current = []
     submitArmed.current = false
+    submitLock.current = false
+    consumedAttachKeys.current = new Set()
     consumePendingComposerAttachmentInserts()
     seenAttachmentMarkers.current = new Set()
   }, [sessionId, consumePendingComposerAttachmentInserts])
@@ -433,6 +437,7 @@ export function Composer() {
   }
 
   const submit = () => {
+    if (submitLock.current) return
     // Wait only for attaches that are actually in flight. Orphan queue rows
     // (failed diagram image reads, session leftovers) must not swallow send.
     if (markerInsertQueue.current.some((row) => !row.cancelled && row.markerN == null)) {
@@ -447,7 +452,7 @@ export function Composer() {
     const recalled = locals.filter((item) => item.markerN == null)
     const staged = attachments.filter((item) => item.kind === 'pasted_text' && !linked.has(item.markerN))
     const fences = recalled.map((item) => formatPasteFence(item)).join('\n\n')
-    const trailingMarkers = trailingAttachmentMarkers(prose, attachments, locals)
+    const trailingMarkers = trailingAttachmentMarkers(prose, attachments, locals, consumedAttachKeys.current)
     const text = [prose.trim() ? prose : '', mermaid, designs, fences, trailingMarkers.join(' ')].filter(Boolean).join('\n\n')
     const stagedPaste = staged.length > 0 || locals.some((item) => item.markerN != null)
     if (!text && !stagedPaste) return
@@ -503,11 +508,21 @@ export function Composer() {
         return
       }
     }
+    submitLock.current = true
+    submitArmed.current = false
+    for (const item of attachments) consumedAttachKeys.current.add(`${item.kind}:${item.markerN}`)
+    for (const item of locals) {
+      if (item.markerN != null) consumedAttachKeys.current.add(`pasted_text:${item.markerN}`)
+    }
     req({ r: 'Submit', text })
+    editorApi.current?.setMarkdown('')
     setInput('')
     setDiagramChips([])
     setDesignChips([])
     setLocalPastes([])
+    window.setTimeout(() => {
+      submitLock.current = false
+    }, 300)
     // Keep cancelled rows that are still waiting for a marker so the late
     // snapshot can drop the chip the user already removed.
     markerInsertQueue.current = markerInsertQueue.current.filter((row) => row.cancelled && row.markerN == null)
@@ -528,7 +543,14 @@ export function Composer() {
   // Flush a send that happened while the paste marker was still in flight.
   // Wait until the chip state shows the marker so the body edit is what we save.
   useEffect(() => {
-    if (!submitArmed.current) return
+    const live = new Set(attachments.map((item) => `${item.kind}:${item.markerN}`))
+    for (const key of [...consumedAttachKeys.current]) {
+      if (!live.has(key)) consumedAttachKeys.current.delete(key)
+    }
+  }, [attachments])
+
+  useEffect(() => {
+    if (!submitArmed.current || submitLock.current) return
     if (markerInsertQueue.current.some((row) => !row.cancelled && row.markerN == null)) return
     const unmarked = localPastes.some((item) => {
       const row = markerInsertQueue.current.find((queued) => queued.id === item.id)
@@ -548,7 +570,7 @@ export function Composer() {
       const stuck = markerInsertQueue.current.filter((row) => row.markerN == null && !row.cancelled)
       if (!stuck.length) return
       markerInsertQueue.current = markerInsertQueue.current.filter((row) => !stuck.some((item) => item.id === row.id))
-      if (submitArmed.current) {
+      if (submitArmed.current && !submitLock.current) {
         submitArmed.current = false
         submitRef.current()
         return
@@ -598,6 +620,7 @@ export function Composer() {
 
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
       e.preventDefault()
+      e.stopPropagation()
       submit()
       return
     }
@@ -1219,6 +1242,7 @@ export function Composer() {
           ariaLabel="Message"
           apiRef={editorApi}
           onKeyDown={onKeyDown}
+          onSubmit={submit}
           onPaste={onPaste}
           onPasteFiles={(files) => {
             void attachFiles(files)
