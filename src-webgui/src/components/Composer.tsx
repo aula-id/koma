@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react'
-import { ArrowUp, Frame, Layers, Paperclip, Search, Square, X } from 'lucide-react'
+import { ArrowUp, Bold, Code, Eye, EyeOff, Frame, Italic, Layers, Paperclip, Search, Square, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import {
   readCodingPathDragData,
@@ -38,6 +38,14 @@ import { EffortPicker } from './EffortPicker'
 import { ModeSelector } from './ModeSelector'
 import { CatMascot } from './CatMascot'
 import { DiagramSketch } from './DiagramVisual'
+import { ComposerPileBar } from './ComposerPileBar'
+import { MessageBody } from './MessageBody'
+import {
+  composerPreviewMarkdown,
+  listComposerTokens,
+  moveComposerToken,
+  wrapSelection,
+} from '../lib/composerSegments'
 
 type DiagramChip = { id: string; title: string; mermaid: string; doc: DiagramDoc }
 type DesignChip = { id: string; title: string; text: string }
@@ -281,6 +289,8 @@ export function Composer() {
   const clearRewind = useKoma((s) => s.clearRewind)
   const requestScrollBottom = useKoma((s) => s.requestScrollBottom)
   const [input, setInput] = useState('')
+  const [previewOpen, setPreviewOpen] = useState(true)
+  const [previewMd, setPreviewMd] = useState('')
   const [diagramChips, setDiagramChips] = useState<DiagramChip[]>([])
   const diagramChipsRef = useRef<DiagramChip[]>([])
   diagramChipsRef.current = diagramChips
@@ -364,6 +374,11 @@ export function Composer() {
     // Height just changed (auto-grow above); keep the chip overlay's scroll
     // glued to the textarea (rAF catches post-keystroke caret auto-scroll).
     syncOverlayScrollSoon()
+  }, [input])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setPreviewMd(composerPreviewMarkdown(input)), 120)
+    return () => window.clearTimeout(timer)
   }, [input])
 
   // Keep the composer correct across REFLOWS — not just keystrokes (the
@@ -1055,6 +1070,37 @@ export function Composer() {
   }
 
   const canSend = (input.trim() !== '' || diagramChips.length > 0 || designChips.length > 0 || localPastes.length > 0 || attachments.some((item) => item.kind === 'pasted_text')) && !atSteerCap
+  const pileTokens = listComposerTokens(input, pickedTokensRef.current)
+
+  const applyMarkdownWrap = (before: string, after: string) => {
+    const ta = textareaRef.current
+    if (!ta) return
+    const start = ta.selectionStart ?? 0
+    const end = ta.selectionEnd ?? 0
+    const wrapped = wrapSelection(input, start, end, before, after)
+    setInput(wrapped.text)
+    requestAnimationFrame(() => {
+      ta.focus()
+      ta.setSelectionRange(wrapped.caretStart, wrapped.caretEnd)
+    })
+  }
+
+  const movePileToken = (fromStart: number, fromEnd: number, toIndex: number) => {
+    const at = Math.min(toIndex, input.length)
+    const { text, caret } = moveComposerToken(input, fromStart, fromEnd, at)
+    skipAttachmentReconcile.current = true
+    setInput(text)
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus()
+      ta.setSelectionRange(caret, caret)
+      skipAttachmentReconcile.current = false
+    })
+  }
+
+  const formatButton =
+    'flex h-7 w-7 flex-none items-center justify-center rounded-md text-koma-dim hover:bg-koma-hover hover:text-koma-fg'
 
   return (
     // claude.ai-style composer pinned at the bottom: a single rounded card
@@ -1274,6 +1320,36 @@ export function Composer() {
               ))}
           </div>
         )}
+        <ComposerPileBar tokens={pileTokens} draftLength={input.length} onMove={movePileToken} />
+
+        <div className="flex items-center gap-0.5">
+          <button type="button" className={formatButton} title="Bold" aria-label="Bold" onClick={() => applyMarkdownWrap('**', '**')}>
+            <Bold size={14} />
+          </button>
+          <button type="button" className={formatButton} title="Italic" aria-label="Italic" onClick={() => applyMarkdownWrap('_', '_')}>
+            <Italic size={14} />
+          </button>
+          <button type="button" className={formatButton} title="Inline code" aria-label="Inline code" onClick={() => applyMarkdownWrap('`', '`')}>
+            <Code size={14} />
+          </button>
+          <button
+            type="button"
+            className={formatButton}
+            title={previewOpen ? 'Hide markdown preview' : 'Show markdown preview'}
+            aria-label={previewOpen ? 'Hide markdown preview' : 'Show markdown preview'}
+            aria-pressed={previewOpen}
+            onClick={() => setPreviewOpen((open) => !open)}
+          >
+            {previewOpen ? <EyeOff size={14} /> : <Eye size={14} />}
+          </button>
+        </div>
+
+        {previewOpen && previewMd.trim() ? (
+          <div className="max-h-36 overflow-y-auto rounded-lg border border-koma-border/80 bg-koma-bg/40 px-2 py-1.5">
+            <MessageBody text={previewMd} streaming />
+          </div>
+        ) : null}
+
         {/* Wraps ONLY the textarea: a `relative z-0` positioning root for the
             chip overlay (absolute inset-0 behind it) — isolated as its own
             z-stacking context (explicit z-0 on a positioned element) so the
