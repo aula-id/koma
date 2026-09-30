@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { Check, Component, File, MessageSquare, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { Check, Component, File, MessageSquare, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { KomaSelect } from '../KomaSelect'
@@ -268,7 +268,9 @@ export function DesignPanel() {
   const req = useKoma((s) => s.req)
 
   const [panel, setPanel] = useState<'file' | 'assets'>('file')
-  const [filesOpen, setFilesOpen] = useState(true)
+  const [filesOpen, setFilesOpen] = useState(false)
+  const [fileSearchOpen, setFileSearchOpen] = useState(false)
+  const [fileQuery, setFileQuery] = useState('')
   const [layersOpen, setLayersOpen] = useState(true)
   const [assetQuery, setAssetQuery] = useState('')
   const [deletingAsset, setDeletingAsset] = useState<string | null>(null)
@@ -360,10 +362,11 @@ export function DesignPanel() {
     setDesignPanelTab(designTab.id)
   }, [designTab, setDesignPanelTab])
 
-  useEffect(() => {
-    if (designTab) setFilesOpen(false)
-  }, [designTab?.id])
   const query = assetQuery.trim().toLowerCase()
+  const fileNeedle = fileQuery.trim().toLowerCase()
+  const listedFiles = fileNeedle
+    ? files.filter((entry) => entry.name.toLowerCase().includes(fileNeedle) || entry.path.toLowerCase().includes(fileNeedle))
+    : files
   const components = (open?.doc.components ?? []).filter((component) => !query || component.name.toLowerCase().includes(query))
 
   return (
@@ -404,21 +407,63 @@ export function DesignPanel() {
             onToggle={() => setFilesOpen((value) => !value)}
             fill={false}
             action={(
-              <button
-                type="button"
-                aria-label="New design"
-                title="New design"
-                onClick={() => { setCreating(true); setRenaming(null); setDeleting(null) }}
-                className="flex h-5 w-5 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
-              >
-                <Plus size={13} />
-              </button>
+              <div className="flex items-center">
+                <button
+                  type="button"
+                  aria-label="Search files"
+                  aria-pressed={fileSearchOpen}
+                  title="Search files"
+                  onClick={() => {
+                    const wasOpen = filesOpen
+                    setFilesOpen(true)
+                    if (!wasOpen) {
+                      setFileSearchOpen(true)
+                      return
+                    }
+                    setFileSearchOpen((open) => {
+                      const next = !open
+                      if (!next) setFileQuery('')
+                      return next
+                    })
+                  }}
+                  className={`flex h-5 w-5 items-center justify-center rounded hover:bg-koma-hover hover:text-koma-fg ${
+                    fileSearchOpen ? 'text-koma-fg' : 'text-koma-dim'
+                  }`}
+                >
+                  <Search size={13} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="New design"
+                  title="New design"
+                  onClick={() => {
+                    setFilesOpen(true)
+                    setCreating(true)
+                    setRenaming(null)
+                    setDeleting(null)
+                  }}
+                  className="flex h-5 w-5 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+                >
+                  <Plus size={13} />
+                </button>
+              </div>
             )}
           >
-            <div className="max-h-28 overflow-y-auto">
+            {fileSearchOpen ? (
+              <input
+                value={fileQuery}
+                onChange={(event) => setFileQuery(event.target.value)}
+                placeholder="Search files"
+                aria-label="Search files"
+                autoFocus
+                className="mx-2 mb-1 mt-1 h-7 w-[calc(100%-1rem)] rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+              />
+            ) : null}
+            <div className="max-h-[8.75rem] overflow-y-auto">
               <FileList
                 activeRoot={activeRoot}
-                files={files}
+                files={listedFiles}
+                emptyLabel={fileNeedle ? 'No matches' : 'No designs'}
                 creating={creating}
                 renaming={renaming}
                 deleting={deleting}
@@ -575,6 +620,7 @@ export function DesignPanel() {
 function FileList({
   activeRoot,
   files,
+  emptyLabel = 'No designs',
   creating,
   renaming,
   deleting,
@@ -595,6 +641,7 @@ function FileList({
 }: {
   activeRoot: string | null
   files: FileTreeEntry[]
+  emptyLabel?: string
   creating: boolean
   renaming: string | null
   deleting: string | null
@@ -671,7 +718,7 @@ function FileList({
             )}
           </div>
         )
-      }) : !creating ? <Empty>No designs</Empty> : null}
+      }) : !creating ? <Empty>{emptyLabel}</Empty> : null}
     </>
   )
 }
