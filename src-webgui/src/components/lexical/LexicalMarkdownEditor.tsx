@@ -557,14 +557,15 @@ function EditorPlugins({
   }, [controlled, markdown])
 
   useEffect(() => {
+    if (profile !== 'composer') return
     return editor.registerCommand(
       KEY_ENTER_COMMAND,
       (event) => {
-        if (event?.shiftKey) return false
-        if (profile !== 'composer') return false
-        if (event) onKeyDownRef.current?.(event as unknown as ReactKeyboardEvent<HTMLElement>)
-        else onSubmitRef.current?.()
-        return true
+        if (event && (event.ctrlKey || event.metaKey) && !event.shiftKey) {
+          onKeyDownRef.current?.(event as unknown as ReactKeyboardEvent<HTMLElement>)
+          return true
+        }
+        return false
       },
       COMMAND_PRIORITY_HIGH,
     )
@@ -723,7 +724,6 @@ function EditorPlugins({
             aria-label={undefined}
             className="outline-none"
             onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey && profile === 'composer') return
               onKeyDown?.(event)
             }}
           />
@@ -806,8 +806,8 @@ export function LexicalMarkdownEditor({
             ul: 'my-1 list-disc pl-4',
             ol: 'my-1 list-decimal pl-4',
             listitem: 'my-0.5',
-            listitemChecked: 'my-0.5 line-through opacity-70',
-            listitemUnchecked: 'my-0.5',
+            listitemChecked: 'koma-checklist-item koma-checklist-checked',
+            listitemUnchecked: 'koma-checklist-item koma-checklist-unchecked',
           },
           text: {
             bold: 'font-semibold',
@@ -832,6 +832,7 @@ export function LexicalMarkdownEditor({
           className={`relative ${className ?? ''}`}
           style={style}
           aria-label={ariaLabel}
+          data-composer-editor={profile === 'composer' ? '' : undefined}
           onFocus={onFocus}
           onBlur={onBlur}
         >

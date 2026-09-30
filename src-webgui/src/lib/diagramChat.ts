@@ -8,7 +8,8 @@ import {
   rememberDiagramView,
   type DiagramRect,
 } from './diagramMermaid'
-import { diagramNotesPath, publishDiagramNotes } from './diagramNotes'
+import { attachDiagramDetailImages, attachDiagramNotesFile } from './diagramNoteAttach'
+import { diagramNotesPath } from './diagramNotes'
 
 function toast(text: string, kind: 'info' | 'error' = 'info') {
   useKoma.setState((s) => {
@@ -43,9 +44,7 @@ function notesFor(doc: DiagramDoc, source?: DiagramSource): { path: string; doc:
   if (!source) return undefined
   const path = diagramNotesPath(source.path)
   if (!path) return undefined
-  const notes = source.notes ?? doc
-  publishDiagramNotes(useKoma.getState().req, source.root, source.path, notes)
-  return { path, doc: notes }
+  return { path, doc: source.notes ?? doc }
 }
 
 function publish(doc: DiagramDoc, title: string, empty: string, source?: DiagramSource): string | null {
@@ -56,6 +55,12 @@ function publish(doc: DiagramDoc, title: string, empty: string, source?: Diagram
   }
   rememberDiagramView(mermaid, doc)
   useKoma.getState().addDiagramToChat({ title, mermaid, doc })
+  if (source) {
+    const notesDoc = source.notes ?? doc
+    const preferWorkspaceFile = source.notes == null
+    void attachDiagramNotesFile(source.root, source.path, notesDoc, { preferWorkspaceFile })
+    void attachDiagramDetailImages(source.root, source.path, notesDoc)
+  }
   return mermaid
 }
 
@@ -96,7 +101,13 @@ export async function copyDiagramFileMermaid(root: string, path: string) {
 }
 
 export function addDiagramAreaToChat(doc: DiagramDoc, area: DiagramRect, title: string, source?: DiagramSource) {
-  addDiagramDocToChat(captureDiagram(doc, area), `${title} selection`, 'Nothing in that area.', source ? { ...source, notes: doc } : undefined)
+  const captured = captureDiagram(doc, area)
+  addDiagramDocToChat(
+    captured,
+    `${title} selection`,
+    'Nothing in that area.',
+    source ? { ...source, notes: captured } : undefined,
+  )
 }
 
 export function copyDiagramArea(doc: DiagramDoc, area: DiagramRect, title: string, source?: DiagramSource) {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { emptyDiagram } from './diagram.ts'
+import { diagramDetailImageNames, orphanDiagramNoteImages } from './diagramNoteAttach.ts'
 import { diagramFolder, diagramNotesPath, renderDiagramNotes } from './diagramNotes.ts'
 
 assert.equal(diagramNotesPath('.koma/auth.diag'), '.koma/auth/notes.md')
@@ -26,4 +27,15 @@ assert.equal(renderDiagramNotes(emptyDiagram(), '.koma/auth.diag'), '')
   assert.equal(notes.includes('from: Login (`n1`)'), true)
   assert.equal(notes.includes('to: Home (`n2`)'), true)
   assert.equal(notes.includes('## Home'), false)
+  assert.deepEqual(diagramDetailImageNames(doc, '.koma/auth.diag').sort(), ['img-1.png'])
+}
+
+{
+  const entries = [
+    { name: 'notes.md', path: '.koma/auth/notes.md', isDir: false },
+    { name: 'img-1.png', path: '.koma/auth/img-1.png', isDir: false },
+    { name: 'old.png', path: '.koma/auth/old.png', isDir: false },
+    { name: 'subdir', path: '.koma/auth/subdir', isDir: true },
+  ]
+  assert.deepEqual(orphanDiagramNoteImages(entries, new Set(['img-1.png'])), ['.koma/auth/old.png'])
 }

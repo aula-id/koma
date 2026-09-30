@@ -617,7 +617,7 @@ export function Composer() {
       }
     }
 
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
       e.preventDefault()
       submit()
       return
@@ -1272,7 +1272,8 @@ export function Composer() {
             <button
               onClick={submit}
               disabled={!canSend}
-              aria-label={working ? 'Queue message' : 'Send'}
+              aria-label={working ? 'Queue message (Ctrl+Enter)' : 'Send (Ctrl+Enter)'}
+              title="Ctrl+Enter to send"
               title={
                 atSteerCap
                   ? '5 pending steers max'

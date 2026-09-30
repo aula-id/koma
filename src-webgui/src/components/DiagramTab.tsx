@@ -19,6 +19,7 @@ import {
   diagramChatTitle,
 } from '../lib/diagramChat'
 import { pointInDiagramRect, type DiagramRect } from '../lib/diagramMermaid'
+import { syncDiagramNoteAssets } from '../lib/diagramNoteAttach'
 import { diagramFolder, publishDiagramNotes } from '../lib/diagramNotes'
 import {
   SHAPE_MIME,
@@ -392,7 +393,11 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
       if (previous) noteRef.current(previous)
       queueMicrotask(() => {
         const restored = useKoma.getState().diagram.docs[key]?.doc
-        if (restored) publishDiagramNotes(useKoma.getState().req, tab.root, tab.path, restored, { previous })
+        if (restored) {
+          const st = useKoma.getState()
+          publishDiagramNotes(st.req, tab.root, tab.path, restored, { previous })
+          void syncDiagramNoteAssets({ hostId: st.remoteState.hostId ?? 'local', root: tab.root }, tab.path, restored)
+        }
       })
       setEditing(null)
       setSelection(null)
@@ -698,7 +703,9 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
     futureRef.current = []
     setRev((value) => value + 1)
     setEditing(null)
-    publishDiagramNotes(useKoma.getState().req, tab.root, tab.path, parsed.doc, { previous: file.doc })
+    const st = useKoma.getState()
+    publishDiagramNotes(st.req, tab.root, tab.path, parsed.doc, { previous: file.doc })
+    void syncDiagramNoteAssets({ hostId: st.remoteState.hostId ?? 'local', root: tab.root }, tab.path, parsed.doc)
     updateDiagram(tab.root, tab.path, parsed.doc)
   }
 
