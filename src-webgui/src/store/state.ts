@@ -314,6 +314,9 @@ export type KomaState = {
   /** Queue a diagram drawing for the composer. The model receives its Mermaid. */
   addDiagramToChat: (item: { title: string; mermaid: string; doc: DiagramDoc }) => void
   consumeDiagramChatQueue: () => void
+  /** Register a marker-insert row before AttachFile / AttachPaste from diagram → chat. */
+  stageComposerAttachmentInsert: (kind: 'image' | 'pasted_text') => string
+  consumePendingComposerAttachmentInserts: () => void
   /** Queue a design slice as a chat chip. The model receives its kdsgn fence. */
   addDesignToChat: (item: { title: string; text: string }) => void
   consumeDesignChatQueue: () => void

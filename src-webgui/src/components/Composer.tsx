@@ -198,6 +198,8 @@ export function Composer() {
   const sessionId = useKoma((s) => s.session.id)
   const diagramChatQueue = useKoma((s) => s.ui.diagramChatQueue)
   const consumeDiagramChatQueue = useKoma((s) => s.consumeDiagramChatQueue)
+  const pendingComposerAttachmentInserts = useKoma((s) => s.ui.pendingComposerAttachmentInserts)
+  const consumePendingComposerAttachmentInserts = useKoma((s) => s.consumePendingComposerAttachmentInserts)
   const designChatQueue = useKoma((s) => s.ui.designChatQueue)
   const consumeDesignChatQueue = useKoma((s) => s.consumeDesignChatQueue)
   const [dragOver, setDragOver] = useState(false)
@@ -282,6 +284,14 @@ export function Composer() {
     consumeDiagramChatQueue()
     editorApi.current?.focus()
   }, [diagramChatQueue, consumeDiagramChatQueue])
+
+  useEffect(() => {
+    if (!pendingComposerAttachmentInserts.length) return
+    for (const row of pendingComposerAttachmentInserts) {
+      markerInsertQueue.current.push({ id: row.id, kind: row.kind, markerN: null, cancelled: false })
+    }
+    consumePendingComposerAttachmentInserts()
+  }, [pendingComposerAttachmentInserts, consumePendingComposerAttachmentInserts])
 
   // A design reference is a chip. The kdsgn fence stays on the chip until send.
   useEffect(() => {
@@ -1119,11 +1129,11 @@ export function Composer() {
                   {(a.kind === 'image' || a.kind === 'pasted_text') && (
                     <button
                       type="button"
-                      title="Insert into message"
+                      title="Add attachment marker to the message body"
                       className="rounded px-1 text-[10px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
                       onClick={() => insertAttachmentIntoDraft(a.kind, a.markerN)}
                     >
-                      Insert
+                      Add
                     </button>
                   )}
                   <button

@@ -118,6 +118,7 @@ export const initialUi: UiSlice = {
   omnisearchOpen: false,
   composerInsert: null,
   diagramChatQueue: [],
+  pendingComposerAttachmentInserts: [],
   designChatQueue: [],
   pasteBody: null,
   composerRefill: null,

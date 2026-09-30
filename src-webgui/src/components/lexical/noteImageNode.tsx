@@ -14,6 +14,7 @@ import { mimeForPath } from '../../lib/viewerKind'
 export type NoteAssets = {
   root: string
   assetDir: string
+  legacyAssetDir?: string
   previews: Record<string, string>
 }
 
@@ -37,7 +38,9 @@ function NoteImageView({ alt, src }: { alt: string; src: string }) {
     let objectUrl: string | null = null
     setUrl(null)
     setFailed(false)
-    void requestFileBytes(req, assets.root, `${assets.assetDir}/${src}`)
+    const load = (dir: string) => requestFileBytes(req, assets.root, `${dir}/${src}`)
+    void load(assets.assetDir)
+      .catch(() => (assets.legacyAssetDir ? load(assets.legacyAssetDir) : Promise.reject(new Error('missing'))))
       .then((bytes) => {
         if (cancelled) return
         objectUrl = bytesToObjectUrl(bytes, mimeForPath(src))
@@ -50,7 +53,7 @@ function NoteImageView({ alt, src }: { alt: string; src: string }) {
       cancelled = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [assets.assetDir, assets.root, preview, req, src])
+  }, [assets.assetDir, assets.legacyAssetDir, assets.root, preview, req, src])
   if (safeNoteUrl(src) && /^https?:\/\//i.test(src)) return <img src={src} alt={alt} className="max-w-full rounded" />
   if (failed) return <span className="text-[11px] text-koma-dim">{alt || src}</span>
   if (!url) return <span className="text-[11px] text-koma-dim">{alt || 'Image'}</span>

@@ -1,6 +1,6 @@
 import { diagramTabId, parseDiagram, serializeDiagram, type DiagramDoc } from '../../lib/diagram'
-import { syncDiagramNoteAssets } from '../../lib/diagramNoteAttach'
-import { publishDiagramNotes } from '../../lib/diagramNotes'
+import { syncDiagramShapeNotes } from '../../lib/diagramNoteAttach'
+import { publishDiagramShapeNotes } from '../../lib/diagramNotes'
 import type { StoreGet, StoreSet } from '../api'
 import { baseName, fileKey, mintRequestId } from '../coding'
 import { emptyDiagramFile } from '../diagram'
@@ -68,8 +68,13 @@ export function diagramActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
       })
       if (get().diagram.docs[key]?.saveReq !== requestId) return
       const previous = file.savedText ? parseDiagram(file.savedText).doc : null
-      publishDiagramNotes(get().req, root, path, file.doc, { previous })
-      void syncDiagramNoteAssets({ hostId: get().remoteState.hostId ?? 'local', root }, path, file.doc)
+      publishDiagramShapeNotes(get().req, root, path, file.doc, { previous })
+      void syncDiagramShapeNotes(
+        { hostId: get().remoteState.hostId ?? 'local', root },
+        path,
+        file.doc,
+        { previous },
+      )
       get().req({ r: 'FileSave', root, path, content, expectedFingerprint: file.fingerprint, requestId })
     },
     updateDiagram: (root, path, doc: DiagramDoc) => {

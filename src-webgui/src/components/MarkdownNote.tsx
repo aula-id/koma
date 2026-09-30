@@ -165,12 +165,14 @@ export function MarkdownNote({
   value,
   root,
   assetDir,
+  legacyAssetDir,
   onChange,
   onDone,
 }: {
   value: string
   root: string
   assetDir: string
+  legacyAssetDir?: string
   onChange: (markdown: string) => void
   onDone: () => void
 }) {
@@ -192,13 +194,13 @@ export function MarkdownNote({
 
   useEffect(() => {
     let cancelled = false
-    void prepareDiagramNoteMarkdown({ hostId, root }, assetDir, value).then((md) => {
+    void prepareDiagramNoteMarkdown({ hostId, root }, assetDir, value, legacyAssetDir ?? null).then((md) => {
       if (!cancelled) setEditorMarkdown(md)
     })
     return () => {
       cancelled = true
     }
-  }, [assetDir, hostId, root, value])
+  }, [assetDir, hostId, legacyAssetDir, root, value])
 
   const upload = async (file: File) => {
     const ext = imageExt(file)
@@ -295,7 +297,7 @@ export function MarkdownNote({
         controlled
         placeholder="What this is for"
         apiRef={apiRef}
-        noteAssets={{ root, assetDir, previews: local }}
+        noteAssets={{ root, assetDir, legacyAssetDir, previews: local }}
         className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-[12px] text-koma-fg"
         onPaste={(event) => {
           const file = [...event.clipboardData.files].find((item) => item.type.startsWith('image/'))

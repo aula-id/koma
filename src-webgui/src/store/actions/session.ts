@@ -14,7 +14,7 @@ function mintAgentTabId(): string {
   return `agent-${agentTabSeq}`
 }
 
-export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openExternal' | 'openOmniSearch' | 'closeOmniSearch' | 'insertToComposer' | 'putCodingPathInChat' | 'askCodingSelectionInChat' | 'addDiagramToChat' | 'consumeDiagramChatQueue' | 'addDesignToChat' | 'consumeDesignChatQueue' | 'consumePasteBody' | 'consumeComposerInsert' | 'refillComposer' | 'consumeComposerRefill' | 'stageRewind' | 'clearRewind' | 'requestHistoryPage' | 'requestScrollBottom' | 'startSwitching' | 'cancelSwitching' | 'skipBootstrapRemaining' | 'dismissLoading' | 'dismissToast' | 'openSettingsTab' | 'openHelpTab' | 'openTutorialTab' | 'sendTutorialChat' | 'clearTutorialPendingTour' | 'clearTutorialError' | 'setActivityBarOrder' | 'setActivityBarHidden' | 'openAgentTab' | 'renameAgentTab' | 'openStreamTab' | 'syncStreamView' | 'focusPlanSection' | 'setUsageScope' | 'refreshUsagePreview' | 'refreshMcpStatus' | 'markDying' | 'detachSession' | 'setAgentSaving' | 'clearAgentSaving'> {
+export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openExternal' | 'openOmniSearch' | 'closeOmniSearch' | 'insertToComposer' | 'putCodingPathInChat' | 'askCodingSelectionInChat' | 'addDiagramToChat' | 'consumeDiagramChatQueue' | 'stageComposerAttachmentInsert' | 'consumePendingComposerAttachmentInserts' | 'addDesignToChat' | 'consumeDesignChatQueue' | 'consumePasteBody' | 'consumeComposerInsert' | 'refillComposer' | 'consumeComposerRefill' | 'stageRewind' | 'clearRewind' | 'requestHistoryPage' | 'requestScrollBottom' | 'startSwitching' | 'cancelSwitching' | 'skipBootstrapRemaining' | 'dismissLoading' | 'dismissToast' | 'openSettingsTab' | 'openHelpTab' | 'openTutorialTab' | 'sendTutorialChat' | 'clearTutorialPendingTour' | 'clearTutorialError' | 'setActivityBarOrder' | 'setActivityBarHidden' | 'openAgentTab' | 'renameAgentTab' | 'openStreamTab' | 'syncStreamView' | 'focusPlanSection' | 'setUsageScope' | 'refreshUsagePreview' | 'refreshMcpStatus' | 'markDying' | 'detachSession' | 'setAgentSaving' | 'clearAgentSaving'> {
   return {
   openExternal: (url) => {
     get().req({ r: 'OpenExternal', url })
@@ -50,6 +50,18 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
     get().activateTab('chat')
   },
   consumeDiagramChatQueue: () => set((s) => ({ ui: { ...s.ui, diagramChatQueue: [] } })),
+  stageComposerAttachmentInsert: (kind) => {
+    const id = `a${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+    set((s) => ({
+      ui: {
+        ...s.ui,
+        pendingComposerAttachmentInserts: [...s.ui.pendingComposerAttachmentInserts, { id, kind }],
+      },
+    }))
+    return id
+  },
+  consumePendingComposerAttachmentInserts: () =>
+    set((s) => ({ ui: { ...s.ui, pendingComposerAttachmentInserts: [] } })),
   addDesignToChat: (item) => {
     set((s) => ({ ui: { ...s.ui, designChatQueue: [...s.ui.designChatQueue, item] } }))
     get().activateTab('chat')

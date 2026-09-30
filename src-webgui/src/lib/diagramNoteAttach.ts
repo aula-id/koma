@@ -1,7 +1,21 @@
-// When a diagram is sent to chat, stage notes + detail images as composer attachments.
+// When a diagram is sent to chat, stage per-shape notes + images as composer attachments.
 
 import type { DiagramDoc } from './diagram'
-import { bytesToBase64, diagramFolder, diagramStem, renderDiagramNotes, utf8ToBase64 } from './diagramNotes'
+import {
+  bytesToBase64,
+  diagramFolder,
+  diagramShapeFolder,
+  diagramShapeNotesPath,
+  renderShapeNote,
+  shapeDetailImageNames,
+  shapeDetailText,
+  shapeNoteAttachName,
+  shapesWithDetail,
+  utf8ToBase64,
+  writeWorkspaceBytes,
+  type DiagramShapeKind,
+  type DiagramShapeRef,
+} from './diagramNotes'
 import {
   normalizeDiagramNoteMarkdown,
   noteImageFile,
@@ -20,31 +34,7 @@ function basename(path: string): string {
   return norm.split('/').pop() ?? norm
 }
 
-function collectImageNamesFromText(text: string, names: Set<string>) {
-  for (const m of text.matchAll(/!\[[^\]]*]\(([^)]+)\)/g)) {
-    const base = basename(m[1] ?? '')
-    if (IMAGE_EXT.test(base)) names.add(base)
-  }
-  for (const m of text.matchAll(/\b([A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp|bmp|svg))\b/gi)) {
-    names.add(m[1] ?? '')
-  }
-}
-
-/** Image filenames referenced in diagram detail / generated notes markdown. */
-export function diagramDetailImageNames(doc: DiagramDoc, diagPath: string): string[] {
-  const names = new Set<string>()
-  for (const node of doc.nodes) {
-    if (node.detail) collectImageNamesFromText(node.detail, names)
-  }
-  for (const edge of doc.edges) {
-    if (edge.detail) collectImageNamesFromText(edge.detail, names)
-  }
-  const notesBody = renderDiagramNotes(doc, diagPath)
-  if (notesBody) collectImageNamesFromText(notesBody, names)
-  return [...names]
-}
-
-/** Workspace image paths under `.koma/<stem>/` that are no longer referenced in notes. */
+/** Workspace image paths in a folder that are no longer referenced. */
 export function orphanDiagramNoteImages(entries: FileTreeEntry[], referenced: Set<string>): string[] {
   const orphans: string[] = []
   for (const entry of entries) {
@@ -77,68 +67,112 @@ type FileReq = (body: {
 
 type DeleteReq = (body: { r: 'FileDelete'; root: string; path: string; requestId: string }) => void
 
-/** Stage generated notes as a session file attachment (composer pile). */
-export async function attachDiagramNotesFile(
-  root: string,
-  diagPath: string,
-  doc: DiagramDoc,
-  options?: { preferWorkspaceFile?: boolean },
-): Promise<void> {
-  const body = renderDiagramNotes(doc, diagPath)
-  if (!body.trim()) return
-  const stem = diagramStem(diagPath) ?? 'diagram'
-  const attachName = `${stem}-notes.md`
-  const req = useKoma.getState().req as FileReq & Parameters<typeof requestFileBytes>[0]
-  const folder = diagramFolder(diagPath)
-  if (options?.preferWorkspaceFile && folder) {
-    try {
-      const bytes = await requestFileBytes(req, root, `${folder}/notes.md`)
-      if (bytes.length) {
-        req({ r: 'AttachFile', name: attachName, bytesB64: bytesToBase64(bytes), mime: 'text/markdown' })
-        return
-      }
-    } catch {
-      /* fall back to rendered bytes */
-    }
+type WriteReq = (body: {
+  r: 'FileWriteBytes'
+  root: string
+  path: string
+  bytesB64: string
+  overwrite?: boolean
+  requestId: string
+}) => void
+
+async function listFolder(workspace: WorkspaceRef, path: string): Promise<FileTreeEntry[]> {
+  const requestId = mintRequestId()
+  try {
+    const result = await codingRequest<{ entries?: FileTreeEntry[] }>(workspace, {
+      op: 'file',
+      body: { r: 'FileTree', root: workspace.root, path, requestId },
+    })
+    return result.entries ?? []
+  } catch {
+    return []
   }
-  req({ r: 'AttachFile', name: attachName, bytesB64: utf8ToBase64(body), mime: 'text/markdown' })
 }
 
-/** Stage detail images as session attachments (`[Image #N]` piles in the composer). */
-export async function attachDiagramDetailImages(root: string, diagPath: string, doc: DiagramDoc): Promise<void> {
-  const folder = diagramFolder(diagPath)
-  if (!folder) return
-  const names = diagramDetailImageNames(doc, diagPath)
-  if (!names.length) return
-  const req = useKoma.getState().req as FileReq & Parameters<typeof requestFileBytes>[0]
-  for (const name of names) {
-    const path = `${folder}/${name}`
-    try {
-      const bytes = await requestFileBytes(req, root, path)
+async function readBytes(
+  req: Parameters<typeof requestFileBytes>[0],
+  root: string,
+  path: string,
+): Promise<Uint8Array | null> {
+  try {
+    return await requestFileBytes(req, root, path)
+  } catch {
+    return null
+  }
+}
+
+/** Copy legacy flat `.koma/<stem>/img.png` into a shape folder when referenced only there. */
+export async function migrateLegacyShapeImages(
+  workspace: WorkspaceRef,
+  diagPath: string,
+  doc: DiagramDoc,
+  req: WriteReq,
+): Promise<void> {
+  const legacy = diagramFolder(diagPath)
+  if (!legacy) return
+  const legacyEntries = await listFolder(workspace, legacy)
+  const legacyImages = new Set(
+    legacyEntries.filter((e) => !e.isDir && noteImageFile(basename(e.path))).map((e) => basename(e.path)),
+  )
+  if (!legacyImages.size) return
+  const download = useKoma.getState().req as Parameters<typeof requestFileBytes>[0]
+  for (const { kind, id } of shapesWithDetail(doc)) {
+    const folder = diagramShapeFolder(diagPath, kind, id)
+    if (!folder) continue
+    const detail = shapeDetailText(doc, kind, id) ?? ''
+    for (const name of shapeDetailImageNames(detail)) {
+      if (!legacyImages.has(name)) continue
+      const dest = `${folder}/${name}`
+      const existing = await readBytes(download, workspace.root, dest)
+      if (existing?.length) continue
+      const bytes = await readBytes(download, workspace.root, `${legacy}/${name}`)
+      if (!bytes?.length) continue
+      writeWorkspaceBytes(req, workspace.root, dest, bytes)
+    }
+  }
+}
+
+/** Stage each shape's notes + images as session attachment piles. */
+export async function attachDiagramShapesToComposer(root: string, diagPath: string, doc: DiagramDoc): Promise<void> {
+  const st = useKoma.getState()
+  const req = st.req as FileReq & Parameters<typeof requestFileBytes>[0]
+  for (const { kind, id } of shapesWithDetail(doc)) {
+    const attachName = shapeNoteAttachName(doc, kind, id)
+    const folder = diagramShapeFolder(diagPath, kind, id)
+    const body = renderShapeNote(doc, kind, id)
+    if (body.trim()) {
+      st.stageComposerAttachmentInsert('pasted_text')
+      let attached = false
+      if (folder) {
+        const notesPath = diagramShapeNotesPath(diagPath, kind, id)
+        if (notesPath) {
+          const bytes = await readBytes(req, root, notesPath)
+          if (bytes?.length) {
+            req({ r: 'AttachFile', name: attachName, bytesB64: bytesToBase64(bytes), mime: 'text/markdown' })
+            attached = true
+          }
+        }
+      }
+      if (!attached) {
+        req({ r: 'AttachFile', name: attachName, bytesB64: utf8ToBase64(body), mime: 'text/markdown' })
+      }
+    }
+    const detail = shapeDetailText(doc, kind, id)
+    const names = shapeDetailImageNames(detail)
+    if (!folder || !names.length) continue
+    const legacy = diagramFolder(diagPath)
+    for (const name of names) {
+      st.stageComposerAttachmentInsert('image')
+      let bytes = await readBytes(req, root, `${folder}/${name}`)
+      if (!bytes?.length && legacy) bytes = await readBytes(req, root, `${legacy}/${name}`)
+      if (!bytes?.length) continue
       req({
         r: 'AttachFile',
         name,
         bytesB64: bytesToBase64(bytes),
         mime: mimeFor(name),
       })
-    } catch {
-      /* missing or unreadable — skip */
     }
-  }
-}
-
-async function listDiagramAssetFiles(workspace: WorkspaceRef, assetDir: string): Promise<string[]> {
-  const requestId = mintRequestId()
-  try {
-    const result = await codingRequest<{ entries?: FileTreeEntry[] }>(workspace, {
-      op: 'file',
-      body: { r: 'FileTree', root: workspace.root, path: assetDir, requestId },
-    })
-    return (result.entries ?? [])
-      .filter((entry) => !entry.isDir && noteImageFile(basename(entry.path)))
-      .map((entry) => basename(entry.path))
-  } catch {
-    return []
   }
 }
 
@@ -147,36 +181,93 @@ export async function prepareDiagramNoteMarkdown(
   workspace: WorkspaceRef,
   assetDir: string,
   markdown: string,
+  legacyAssetDir?: string | null,
 ): Promise<string> {
   let md = markdown
-  if (/\[Image #\d+\]/.test(md) && assetDir) {
-    const files = await listDiagramAssetFiles(workspace, assetDir)
-    const spare = files.filter((name) => !referencedNoteImageNames(md).has(name))
+  const dirs = [assetDir, legacyAssetDir].filter((d): d is string => !!d)
+  if (/\[Image #\d+\]/.test(md)) {
+    const files = new Set<string>()
+    for (const dir of dirs) {
+      const listed = await listFolder(workspace, dir)
+      for (const entry of listed) {
+        if (!entry.isDir && noteImageFile(basename(entry.path))) files.add(basename(entry.path))
+      }
+    }
+    const spare = [...files].filter((name) => !referencedNoteImageNames(md).has(name))
     md = repairComposerImageMarkers(md, spare)
   }
   return normalizeDiagramNoteMarkdown(md)
 }
 
-/** Delete images in `.koma/<stem>/` that are no longer referenced in diagram notes. */
-export async function syncDiagramNoteAssets(workspace: WorkspaceRef, diagPath: string, doc: DiagramDoc): Promise<void> {
-  const folder = diagramFolder(diagPath)
+async function syncOneShapeFolder(
+  workspace: WorkspaceRef,
+  diagPath: string,
+  kind: DiagramShapeKind,
+  id: string,
+  doc: DiagramDoc,
+  req: DeleteReq,
+): Promise<void> {
+  const folder = diagramShapeFolder(diagPath, kind, id)
   if (!folder) return
-  const referenced = new Set(diagramDetailImageNames(doc, diagPath))
-  const requestId = mintRequestId()
-  let entries: FileTreeEntry[] = []
-  try {
-    const result = await codingRequest<{ entries?: FileTreeEntry[] }>(workspace, {
-      op: 'file',
-      body: { r: 'FileTree', root: workspace.root, path: folder, requestId },
-    })
-    entries = result.entries ?? []
-  } catch {
-    return
-  }
+  const detail = shapeDetailText(doc, kind, id) ?? ''
+  const referenced = new Set(shapeDetailImageNames(detail))
+  const entries = await listFolder(workspace, folder)
   const orphans = orphanDiagramNoteImages(entries, referenced)
-  if (!orphans.length) return
-  const req = useKoma.getState().req as DeleteReq
   for (const path of orphans) {
     req({ r: 'FileDelete', root: workspace.root, path, requestId: mintRequestId() })
   }
+}
+
+/** Per-shape orphan GC + legacy flat-folder cleanup. */
+export async function syncDiagramShapeNotes(
+  workspace: WorkspaceRef,
+  diagPath: string,
+  doc: DiagramDoc,
+  options?: { previous?: DiagramDoc | null },
+): Promise<void> {
+  const req = useKoma.getState().req as DeleteReq & WriteReq
+  await migrateLegacyShapeImages(workspace, diagPath, doc, req)
+  const previous = options?.previous ?? null
+  const refs: DiagramShapeRef[] = []
+  const seen = new Set<string>()
+  const add = (ref: DiagramShapeRef) => {
+    const key = `${ref.kind}:${ref.id}`
+    if (seen.has(key)) return
+    seen.add(key)
+    refs.push(ref)
+  }
+  for (const ref of shapesWithDetail(doc)) add(ref)
+  if (previous) {
+    for (const node of previous.nodes) {
+      if (node.detail?.trim()) add({ kind: 'node', id: node.id })
+    }
+    for (const edge of previous.edges) {
+      if (edge.detail?.trim()) add({ kind: 'edge', id: edge.id })
+    }
+  }
+  for (const ref of refs) {
+    await syncOneShapeFolder(workspace, diagPath, ref.kind, ref.id, doc, req)
+  }
+  const legacy = diagramFolder(diagPath)
+  if (!legacy) return
+  const allReferenced = new Set<string>()
+  for (const node of doc.nodes) shapeDetailImageNames(node.detail).forEach((n) => allReferenced.add(n))
+  for (const edge of doc.edges) shapeDetailImageNames(edge.detail).forEach((n) => allReferenced.add(n))
+  const legacyEntries = await listFolder(workspace, legacy)
+  const legacyOrphans = legacyEntries
+    .filter((e) => !e.isDir && noteImageFile(basename(e.path)))
+    .map((e) => e.path)
+    .filter((path) => {
+      const name = basename(path)
+      if (name === 'notes.md') return true
+      return !allReferenced.has(name)
+    })
+  for (const path of legacyOrphans) {
+    req({ r: 'FileDelete', root: workspace.root, path, requestId: mintRequestId() })
+  }
+}
+
+/** @deprecated Use syncDiagramShapeNotes */
+export async function syncDiagramNoteAssets(workspace: WorkspaceRef, diagPath: string, doc: DiagramDoc): Promise<void> {
+  await syncDiagramShapeNotes(workspace, diagPath, doc)
 }

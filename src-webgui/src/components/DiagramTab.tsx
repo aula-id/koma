@@ -19,8 +19,8 @@ import {
   diagramChatTitle,
 } from '../lib/diagramChat'
 import { pointInDiagramRect, type DiagramRect } from '../lib/diagramMermaid'
-import { syncDiagramNoteAssets } from '../lib/diagramNoteAttach'
-import { diagramFolder, publishDiagramNotes } from '../lib/diagramNotes'
+import { syncDiagramShapeNotes } from '../lib/diagramNoteAttach'
+import { diagramFolder, diagramShapeFolder, publishDiagramShapeNotes, shapeHeadingFor } from '../lib/diagramNotes'
 import {
   SHAPE_MIME,
   copyNode,
@@ -395,8 +395,13 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
         const restored = useKoma.getState().diagram.docs[key]?.doc
         if (restored) {
           const st = useKoma.getState()
-          publishDiagramNotes(st.req, tab.root, tab.path, restored, { previous })
-          void syncDiagramNoteAssets({ hostId: st.remoteState.hostId ?? 'local', root: tab.root }, tab.path, restored)
+          publishDiagramShapeNotes(st.req, tab.root, tab.path, restored, { previous })
+          void syncDiagramShapeNotes(
+            { hostId: st.remoteState.hostId ?? 'local', root: tab.root },
+            tab.path,
+            restored,
+            { previous },
+          )
         }
       })
       setEditing(null)
@@ -704,8 +709,13 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
     setRev((value) => value + 1)
     setEditing(null)
     const st = useKoma.getState()
-    publishDiagramNotes(st.req, tab.root, tab.path, parsed.doc, { previous: file.doc })
-    void syncDiagramNoteAssets({ hostId: st.remoteState.hostId ?? 'local', root: tab.root }, tab.path, parsed.doc)
+    publishDiagramShapeNotes(st.req, tab.root, tab.path, parsed.doc, { previous: file.doc })
+    void syncDiagramShapeNotes(
+      { hostId: st.remoteState.hostId ?? 'local', root: tab.root },
+      tab.path,
+      parsed.doc,
+      { previous: file.doc },
+    )
     updateDiagram(tab.root, tab.path, parsed.doc)
   }
 
@@ -1141,7 +1151,8 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
           <Properties
             doc={doc}
             root={tab.root}
-            assetDir={diagramFolder(tab.path) ?? ''}
+            diagPath={tab.path}
+            legacyAssetDir={diagramFolder(tab.path) ?? ''}
             selection={selection}
             onEdge={(id, patch) => patchEdge(id, patch)}
             onNode={(id, patch) => patchNode(id, patch)}
@@ -1383,7 +1394,8 @@ function PaintRow({
 function Properties({
   doc,
   root,
-  assetDir,
+  diagPath,
+  legacyAssetDir,
   selection,
   onEdge,
   onNode,
@@ -1394,7 +1406,8 @@ function Properties({
 }: {
   doc: DiagramDoc
   root: string
-  assetDir: string
+  diagPath: string
+  legacyAssetDir: string
   selection: Selection | null
   onEdge: (id: string, patch: Partial<DiagramEdge>) => void
   onNode: (id: string, patch: Partial<DiagramNode>) => void
@@ -1408,6 +1421,15 @@ function Properties({
   const edge = selection?.type === 'edge' ? doc.edges.find((item) => item.id === selection.id) : undefined
   const target = node ?? edge
   const selected = node ? 'node' : edge ? 'edge' : null
+  const shapeKind = node ? 'node' : edge ? 'edge' : null
+  const assetDir =
+    shapeKind && target ? diagramShapeFolder(diagPath, shapeKind, target.id) ?? '' : ''
+  const detailTitle =
+    target && shapeKind
+      ? node
+        ? `Detail · ${shapeHeadingFor(node.text, node.id)} (\`${node.id}\`)`
+        : `Detail · line (\`${edge!.id}\`)`
+      : 'Detail'
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-8 flex-none items-center gap-1 border-b border-koma-border px-2">
@@ -1420,15 +1442,19 @@ function Properties({
           <span className="px-1 text-[12px] text-koma-fg">Properties</span>
         )}
       </div>
-      {selected && tab === 'detail' && target ? (
-        <MarkdownNote
-          key={target.id}
-          value={target.detail ?? ''}
-          root={root}
-          assetDir={assetDir}
-          onChange={(detail) => onDetail(selected, target.id, detail)}
-          onDone={onTextDone}
-        />
+      {selected && tab === 'detail' && target && shapeKind ? (
+        <>
+          <p className="flex-none border-b border-koma-border px-3 py-1.5 text-[10px] text-koma-dim">{detailTitle}</p>
+          <MarkdownNote
+            key={target.id}
+            value={target.detail ?? ''}
+            root={root}
+            assetDir={assetDir}
+            legacyAssetDir={legacyAssetDir}
+            onChange={(detail) => onDetail(shapeKind, target.id, detail)}
+            onDone={onTextDone}
+          />
+        </>
       ) : node ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
           <CardSettings node={node} onChange={(patch) => onNode(node.id, patch)} onText={(text) => onText(node.id, text)} onTextDone={onTextDone} />

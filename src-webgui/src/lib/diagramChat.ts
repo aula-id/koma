@@ -8,8 +8,7 @@ import {
   rememberDiagramView,
   type DiagramRect,
 } from './diagramMermaid'
-import { attachDiagramDetailImages, attachDiagramNotesFile } from './diagramNoteAttach'
-import { diagramNotesPath } from './diagramNotes'
+import { attachDiagramShapesToComposer } from './diagramNoteAttach'
 
 function toast(text: string, kind: 'info' | 'error' = 'info') {
   useKoma.setState((s) => {
@@ -40,15 +39,8 @@ async function resolveDiagramDoc(root: string, path: string): Promise<DiagramDoc
 
 type DiagramSource = { root: string; path: string; notes?: DiagramDoc }
 
-function notesFor(doc: DiagramDoc, source?: DiagramSource): { path: string; doc: DiagramDoc } | undefined {
-  if (!source) return undefined
-  const path = diagramNotesPath(source.path)
-  if (!path) return undefined
-  return { path, doc: source.notes ?? doc }
-}
-
 function publish(doc: DiagramDoc, title: string, empty: string, source?: DiagramSource): string | null {
-  const mermaid = diagramToMermaid(doc, title, notesFor(doc, source))
+  const mermaid = diagramToMermaid(doc, title)
   if (!mermaid) {
     toast(empty)
     return null
@@ -56,10 +48,7 @@ function publish(doc: DiagramDoc, title: string, empty: string, source?: Diagram
   rememberDiagramView(mermaid, doc)
   useKoma.getState().addDiagramToChat({ title, mermaid, doc })
   if (source) {
-    const notesDoc = source.notes ?? doc
-    const preferWorkspaceFile = source.notes == null
-    void attachDiagramNotesFile(source.root, source.path, notesDoc, { preferWorkspaceFile })
-    void attachDiagramDetailImages(source.root, source.path, notesDoc)
+    void attachDiagramShapesToComposer(source.root, source.path, source.notes ?? doc)
   }
   return mermaid
 }
@@ -69,7 +58,7 @@ export function addDiagramDocToChat(doc: DiagramDoc, title: string, empty = 'Thi
 }
 
 export async function copyDiagramMermaid(doc: DiagramDoc, title: string, empty = 'This diagram is empty.', source?: DiagramSource) {
-  const mermaid = diagramToMermaid(doc, title, notesFor(doc, source))
+  const mermaid = diagramToMermaid(doc, title)
   if (!mermaid) {
     toast(empty)
     return

@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict'
 import { emptyDiagram } from './diagram.ts'
-import { diagramDetailImageNames, orphanDiagramNoteImages } from './diagramNoteAttach.ts'
-import { diagramFolder, diagramNotesPath, renderDiagramNotes } from './diagramNotes.ts'
+import { orphanDiagramNoteImages } from './diagramNoteAttach.ts'
+import {
+  diagramFolder,
+  diagramShapeFolder,
+  diagramShapeNotesPath,
+  renderDiagramNotes,
+  renderShapeNote,
+  shapeNoteAttachName,
+} from './diagramNotes.ts'
 import { normalizeDiagramNoteMarkdown, repairComposerImageMarkers } from './markdownNote.ts'
 
-assert.equal(diagramNotesPath('.koma/auth.diag'), '.koma/auth/notes.md')
 assert.equal(diagramFolder('.koma/auth.diag'), '.koma/auth')
-assert.equal(diagramNotesPath('auth.diag'), null)
+assert.equal(diagramShapeFolder('.koma/auth.diag', 'node', 'n1'), '.koma/auth/cards/n1')
+assert.equal(diagramShapeFolder('.koma/auth.diag', 'edge', 'e1'), '.koma/auth/lines/e1')
+assert.equal(diagramShapeNotesPath('.koma/auth.diag', 'node', 'n1'), '.koma/auth/cards/n1/notes.md')
 assert.equal(renderDiagramNotes(emptyDiagram(), '.koma/auth.diag'), '')
 
 {
@@ -16,29 +24,27 @@ assert.equal(renderDiagramNotes(emptyDiagram(), '.koma/auth.diag'), '')
     { id: 'n2', kind: 'rect', x: 0, y: 80, w: 10, h: 10, text: 'Home' },
   )
   doc.edges.push({ id: 'e1', from: 'n1', to: 'n2', text: 'submits', detail: 'Posts the form.' })
+  const nodeNote = renderShapeNote(doc, 'node', 'n1')
+  assert.equal(nodeNote.startsWith('# Login\n'), true)
+  assert.equal(nodeNote.includes('id: n1'), true)
+  assert.equal(nodeNote.includes('![wire](img-1.png)'), true)
+  const edgeNote = renderShapeNote(doc, 'edge', 'e1')
+  assert.equal(edgeNote.includes('# submits'), true)
+  assert.equal(edgeNote.includes('kind: line'), true)
+  assert.equal(shapeNoteAttachName(doc, 'node', 'n1'), 'login-n1-notes.md')
+  assert.equal(shapeNoteAttachName(doc, 'edge', 'e1').startsWith('line-submits-e1-notes.md'), true)
   const notes = renderDiagramNotes(doc, '.koma/auth.diag')
-  assert.equal(notes.startsWith('# auth\n'), true)
-  assert.equal(notes.includes('`.koma/auth/img.png`'), true)
-  assert.equal(notes.includes('## Login'), true)
-  assert.equal(notes.includes('id: n1'), true)
-  assert.equal(notes.includes('kind: rect'), true)
-  assert.equal(notes.includes('![wire](img-1.png)'), true)
-  assert.equal(notes.includes('## submits'), true)
-  assert.equal(notes.includes('kind: line'), true)
-  assert.equal(notes.includes('from: Login (`n1`)'), true)
-  assert.equal(notes.includes('to: Home (`n2`)'), true)
-  assert.equal(notes.includes('## Home'), false)
-  assert.deepEqual(diagramDetailImageNames(doc, '.koma/auth.diag').sort(), ['img-1.png'])
+  assert.equal(notes.includes('# Login'), true)
+  assert.equal(notes.includes('# submits'), true)
 }
 
 {
   const entries = [
-    { name: 'notes.md', path: '.koma/auth/notes.md', isDir: false },
-    { name: 'img-1.png', path: '.koma/auth/img-1.png', isDir: false },
-    { name: 'old.png', path: '.koma/auth/old.png', isDir: false },
-    { name: 'subdir', path: '.koma/auth/subdir', isDir: true },
+    { name: 'notes.md', path: '.koma/auth/cards/n1/notes.md', isDir: false },
+    { name: 'img-1.png', path: '.koma/auth/cards/n1/img-1.png', isDir: false },
+    { name: 'old.png', path: '.koma/auth/cards/n1/old.png', isDir: false },
   ]
-  assert.deepEqual(orphanDiagramNoteImages(entries, new Set(['img-1.png'])), ['.koma/auth/old.png'])
+  assert.deepEqual(orphanDiagramNoteImages(entries, new Set(['img-1.png'])), ['.koma/auth/cards/n1/old.png'])
 }
 
 {

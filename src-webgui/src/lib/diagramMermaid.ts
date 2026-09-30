@@ -12,8 +12,6 @@ import {
   type DiagramNode,
   type DiagramPoint,
 } from './diagram'
-import { diagramHasDetails } from './diagramNotes'
-
 export type DiagramRect = { x: number; y: number; w: number; h: number }
 
 const views = new Map<string, DiagramDoc>()
@@ -169,11 +167,7 @@ export function diagramToMermaid(doc: DiagramDoc, title?: string, notes?: { path
   const nodes = [...doc.nodes].sort((a, b) => a.y - b.y || a.x - b.x || a.id.localeCompare(b.id))
   const lines: string[] = ['flowchart TD']
   const heading = title?.replace(/[\r\n]/g, ' ').trim()
-  const notesDoc = notes?.doc ?? doc
-  const notesPath = notes && diagramHasDetails(notesDoc) ? notes.path.replace(/[\r\n]/g, ' ').trim() : ''
   if (heading) lines.push(`  %% ${heading}`)
-  else if (notesPath) lines.push('  %% Diagram')
-  if (notesPath) lines.push(`  %% notes: ${notesPath}`)
   for (const node of nodes) {
     const id = alias(node.id)
     if (node.kind === 'text') lines.push(`  %% koma-text ${id}`)
