@@ -325,21 +325,25 @@ export function Composer() {
     consumeComposerRefill()
   }, [composerRefill, consumeComposerRefill])
 
-  // Paste chips are session-local. A new session must not reuse marker #1's
-  // edited body, or bind a new paste onto the previous session's queue.
+  // Paste chips and the draft are session-local. Switching sessions must not
+  // keep the previous session's composer text, chips, or in-flight markers.
   useEffect(() => {
     setPasteTexts({})
     setLocalPastes([])
+    setDiagramChips([])
+    setDesignChips([])
+    setInput('')
     dirtyPastes.current.clear()
     markerInsertQueue.current = []
     submitArmed.current = false
+    consumePendingComposerAttachmentInserts()
     seenAttachmentMarkers.current = new Set(
       useKoma
         .getState()
         .session.attachments.filter((item) => item.kind === 'pasted_text' || item.kind === 'image')
         .map((item) => `${item.kind}:${item.markerN}`),
     )
-  }, [sessionId])
+  }, [sessionId, consumePendingComposerAttachmentInserts])
 
   // Steer cap: the daemon queues at most 5 pending mid-turn submits; the 6th is
   // dropped host-side with a toast, so gate send at the cap.
@@ -423,8 +427,8 @@ export function Composer() {
   }
 
   const submit = () => {
-    // The chip is editable immediately. Send waits until the snapshot has
-    // assigned `[Pasted Text #N]`, then flushes this same draft.
+    // Wait only for attaches that are actually in flight. Orphan queue rows
+    // (failed diagram image reads, session leftovers) must not swallow send.
     if (markerInsertQueue.current.some((row) => !row.cancelled && row.markerN == null)) {
       submitArmed.current = true
       return
@@ -564,29 +568,23 @@ export function Composer() {
     submitRef.current()
   }, [localPastes, attachments])
 
-  // If the daemon never stages the paste, stop blocking send and keep the
-  // draft text. The queue row is dropped so a later, different paste is not
-  // paired with this one.
+  // If the daemon never assigns a marker, stop blocking send. Covers image and
+  // paste rows (diagram attach used to leave image rows waiting forever).
   useEffect(() => {
-    const waiting = localPastes.some((item) =>
-      markerInsertQueue.current.some((row) => row.id === item.id && !row.cancelled && row.markerN == null),
-    )
+    const waiting = markerInsertQueue.current.some((row) => !row.cancelled && row.markerN == null)
     if (!waiting) return
     const timer = window.setTimeout(() => {
-      const stuck = new Set(
-        markerInsertQueue.current.filter((row) => row.markerN == null && !row.cancelled).map((row) => row.id),
-      )
-      if (!stuck.size) return
-      markerInsertQueue.current = markerInsertQueue.current.filter((row) => !stuck.has(row.id))
-      if (!submitArmed.current) return
-      submitArmed.current = false
-      const id = useKoma.getState().ui.toastSeq + 1
-      useKoma.setState((s) => ({
-        ui: { ...s.ui, toastSeq: id, toast: { id, text: 'Pasted text stayed in the draft. Press send again.', kind: 'error' } },
-      }))
-    }, 8000)
+      const stuck = markerInsertQueue.current.filter((row) => row.markerN == null && !row.cancelled)
+      if (!stuck.length) return
+      markerInsertQueue.current = markerInsertQueue.current.filter((row) => !stuck.some((item) => item.id === row.id))
+      if (submitArmed.current) {
+        submitArmed.current = false
+        submitRef.current()
+        return
+      }
+    }, 2500)
     return () => window.clearTimeout(timer)
-  }, [localPastes])
+  }, [localPastes, attachments, pendingComposerAttachmentInserts])
 
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     // Follow-ups list focus: when the queue owns keys, Enter edits, arrows move,

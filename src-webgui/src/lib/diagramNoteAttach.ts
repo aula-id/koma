@@ -5,13 +5,10 @@ import {
   bytesToBase64,
   diagramFolder,
   diagramShapeFolder,
-  diagramShapeNotesPath,
   renderShapeNote,
   shapeDetailImageNames,
   shapeDetailText,
-  shapeNoteAttachName,
   shapesWithDetail,
-  utf8ToBase64,
   writeWorkspaceBytes,
   type DiagramShapeKind,
   type DiagramShapeRef,
@@ -135,37 +132,23 @@ export async function migrateLegacyShapeImages(
 /** Stage each shape's notes + images as session attachment piles. */
 export async function attachDiagramShapesToComposer(root: string, diagPath: string, doc: DiagramDoc): Promise<void> {
   const st = useKoma.getState()
-  const req = st.req as FileReq & Parameters<typeof requestFileBytes>[0]
+  const req = st.req
   for (const { kind, id } of shapesWithDetail(doc)) {
-    const attachName = shapeNoteAttachName(doc, kind, id)
     const folder = diagramShapeFolder(diagPath, kind, id)
     const body = renderShapeNote(doc, kind, id)
     if (body.trim()) {
       st.stageComposerAttachmentInsert('pasted_text')
-      let attached = false
-      if (folder) {
-        const notesPath = diagramShapeNotesPath(diagPath, kind, id)
-        if (notesPath) {
-          const bytes = await readBytes(req, root, notesPath)
-          if (bytes?.length) {
-            req({ r: 'AttachFile', name: attachName, bytesB64: bytesToBase64(bytes), mime: 'text/markdown' })
-            attached = true
-          }
-        }
-      }
-      if (!attached) {
-        req({ r: 'AttachFile', name: attachName, bytesB64: utf8ToBase64(body), mime: 'text/markdown' })
-      }
+      req({ r: 'AttachPaste', text: body })
     }
     const detail = shapeDetailText(doc, kind, id)
     const names = shapeDetailImageNames(detail)
-    if (!folder || !names.length) continue
+    if (!names.length) continue
     const legacy = diagramFolder(diagPath)
     for (const name of names) {
-      st.stageComposerAttachmentInsert('image')
-      let bytes = await readBytes(req, root, `${folder}/${name}`)
+      let bytes = folder ? await readBytes(req, root, `${folder}/${name}`) : null
       if (!bytes?.length && legacy) bytes = await readBytes(req, root, `${legacy}/${name}`)
       if (!bytes?.length) continue
+      st.stageComposerAttachmentInsert('image')
       req({
         r: 'AttachFile',
         name,
