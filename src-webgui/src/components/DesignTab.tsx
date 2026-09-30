@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { AlignCenterHorizontal, AlignCenterVertical, AlignEndHorizontal, AlignEndVertical, AlignHorizontalSpaceBetween, AlignStartHorizontal, AlignStartVertical, AlignVerticalSpaceBetween, ArrowDown, ArrowRight, ChevronRight, Circle, Component, Eye, EyeOff, FlipHorizontal2, FlipVertical2, Frame, Group, Hand, Minus, MousePointer2, PenTool, Plus, RotateCw, Spline, Square, TextAlignCenter, TextAlignEnd, TextAlignStart, Type, PanelRightClose, PanelRightOpen, X } from 'lucide-react'
+import { KomaSelect } from './KomaSelect'
 import { TokenEditor } from './panels/DesignPanel'
 import { DesignMenu, type DesignMenuItem } from './DesignMenu'
 import { getDesignUi, publishDesignUi, type DesignLayerOp } from '../lib/designUi'
@@ -18,10 +19,11 @@ import {
   copyTree,
   createComponentFromFrame,
   createNode,
-  designChatNote,
+  designChatText,
   designChatTitle,
   applyDesignStyle,
   designCanvasBox,
+  designSelectionCanvasBox,
   designDrop,
   designLayerName,
   designObjectSnap,
@@ -1447,7 +1449,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   stepOutRef.current = stepOut
   const sendChat = () => {
     if (!chatQuery) return
-    const text = designChatNote(storedDoc, chatQuery)
+    const text = designChatText(storedDoc, chatQuery)
     const node = designQueryNode(storedDoc, chatQuery)
     if (!text || !node) return
     const png = designPngBase64(storedDoc, node)
@@ -1537,7 +1539,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
           onDrop={onDrop}
           style={{ backgroundColor: '#e6e8ed', ...canvasBackdrop(doc.snap, grid, view) }}
         >
-          <DesignRulers panX={view.panX} panY={view.panY} zoom={view.zoom} />
+          <DesignRulers panX={view.panX} panY={view.panY} zoom={view.zoom} bounds={selection.length ? designSelectionCanvasBox(doc, selection) : null} />
           <div className="pointer-events-none absolute left-0 top-0" style={{ transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`, transformOrigin: '0 0' }}>
             {flowBar ? (
               <div className="pointer-events-none absolute z-10" style={{ left: flowBar.x, top: flowBar.y, width: flowBar.w, height: flowBar.h, background: SELECTION }} />
@@ -1974,31 +1976,95 @@ function canvasBackdrop(snap: boolean, grid: number, view: View): { backgroundIm
   }
 }
 
-function DesignRulers({ panX, panY, zoom }: { panX: number; panY: number; zoom: number }) {
+const RULER_SIZE = 16
+const RULER_BADGE_EXCLUSION = 28
+
+function DesignRulers({ panX, panY, zoom, bounds }: { panX: number; panY: number; zoom: number; bounds: { x: number; y: number; w: number; h: number } | null }) {
   const step = zoom >= 32 ? 10 : zoom >= 8 ? 50 : zoom >= 2 ? 100 : 200
-  const ticks = (span: number, origin: number) => {
+  const ticks = (span: number, origin: number, edge?: number, edge2?: number) => {
     const start = Math.floor(-origin / zoom / step) * step - step
     const items: { at: number; label: number }[] = []
     for (let value = start; items.length < 80; value += step) {
       items.push({ at: origin + value * zoom, label: value })
     }
-    return items.filter((item) => item.at > -40 && item.at < span + 40)
+    return items.filter((item) => {
+      if (item.at <= -40 || item.at >= span + 40) return false
+      if (edge != null && (Math.abs(item.at - edge) < RULER_BADGE_EXCLUSION || Math.abs(item.at - (edge2 ?? edge)) < RULER_BADGE_EXCLUSION)) return false
+      return true
+    })
   }
   const span = 4096
+  const screen = bounds
+    ? {
+        sx1: bounds.x * zoom + panX,
+        sx2: (bounds.x + bounds.w) * zoom + panX,
+        sy1: bounds.y * zoom + panY,
+        sy2: (bounds.y + bounds.h) * zoom + panY,
+        wx1: Math.round(bounds.x),
+        wx2: Math.round(bounds.x + bounds.w),
+        wy1: Math.round(bounds.y),
+        wy2: Math.round(bounds.y + bounds.h),
+      }
+    : null
   return (
     <>
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 h-4 border-b border-koma-border bg-koma-panel/90 text-[9px] text-koma-dim">
-        {ticks(span, panX).map((tick) => (
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 h-4 overflow-hidden border-b border-koma-border bg-koma-panel/90 text-[9px] text-koma-dim">
+        {screen ? (
+          <div
+            className="absolute top-0 h-4 bg-[color-mix(in_srgb,var(--koma-accent)_30%,transparent)]"
+            style={{ left: Math.max(RULER_SIZE, screen.sx1), width: Math.max(0, screen.sx2 - Math.max(RULER_SIZE, screen.sx1)) }}
+          />
+        ) : null}
+        {ticks(span, panX, screen?.sx1, screen?.sx2).map((tick) => (
           <span key={`x${tick.label}`} className="absolute top-0 h-4 overflow-hidden pl-0.5 leading-4" style={{ left: tick.at }}>{tick.label}</span>
         ))}
+        {screen ? (
+          <>
+            <RulerBadge axis="horizontal" label={String(screen.wx1)} at={Math.max(RULER_SIZE, screen.sx1)} />
+            <RulerBadge axis="horizontal" label={String(screen.wx2)} at={screen.sx2} />
+          </>
+        ) : null}
       </div>
-      <div className="pointer-events-none absolute inset-y-0 left-0 z-20 w-4 border-r border-koma-border bg-koma-panel/90 text-[9px] text-koma-dim">
-        {ticks(span, panY).map((tick) => (
+      <div className="pointer-events-none absolute inset-y-0 left-0 z-20 w-4 overflow-hidden border-r border-koma-border bg-koma-panel/90 text-[9px] text-koma-dim">
+        {screen ? (
+          <div
+            className="absolute left-0 w-4 bg-[color-mix(in_srgb,var(--koma-accent)_30%,transparent)]"
+            style={{ top: Math.max(RULER_SIZE, screen.sy1), height: Math.max(0, screen.sy2 - Math.max(RULER_SIZE, screen.sy1)) }}
+          />
+        ) : null}
+        {ticks(span, panY, screen?.sy1, screen?.sy2).map((tick) => (
           <span key={`y${tick.label}`} className="absolute left-0 w-4 overflow-hidden pl-px leading-3" style={{ top: tick.at }}>{tick.label}</span>
         ))}
+        {screen ? (
+          <>
+            <RulerBadge axis="vertical" label={String(screen.wy1)} at={Math.max(RULER_SIZE, screen.sy1)} />
+            <RulerBadge axis="vertical" label={String(screen.wy2)} at={screen.sy2} />
+          </>
+        ) : null}
       </div>
       <div className="pointer-events-none absolute left-0 top-0 z-30 h-4 w-4 border-b border-r border-koma-border bg-koma-panel" />
     </>
+  )
+}
+
+function RulerBadge({ axis, label, at }: { axis: 'horizontal' | 'vertical'; label: string; at: number }) {
+  if (axis === 'horizontal') {
+    return (
+      <span
+        className="absolute top-0.5 z-10 -translate-x-1/2 rounded px-1 py-px text-[9px] font-medium leading-none text-white"
+        style={{ left: at, background: SELECTION }}
+      >
+        {label}
+      </span>
+    )
+  }
+  return (
+    <span
+      className="absolute z-10 rounded px-1 py-px text-[9px] font-medium leading-none text-white"
+      style={{ left: RULER_SIZE / 2, top: at, background: SELECTION, transform: 'translate(-50%, -50%) rotate(-90deg)' }}
+    >
+      {label}
+    </span>
   )
 }
 
@@ -2735,7 +2801,7 @@ function NodeSettings({
                 else setField({ fontSize })
               }} />
             </div>
-            <select
+            <KomaSelect
               aria-label="Weight"
               value={weightField.mixed ? '' : weightField.value}
               onChange={(event) => {
@@ -2743,13 +2809,13 @@ function NodeSettings({
                 if (weight !== 'regular' && weight !== 'medium' && weight !== 'bold') return
                 setField(weight === 'regular' ? {} : { weight }, weight === 'regular' ? ['weight'] : [])
               }}
-              className="h-7 flex-none rounded border border-koma-border bg-koma-bg px-1 text-[12px] text-koma-fg outline-none"
+              className="h-7 flex-none px-1 text-[12px]"
             >
               {weightField.mixed ? <option value="">Mixed</option> : null}
               <option value="regular">Regular</option>
               <option value="medium">Medium</option>
               <option value="bold">Bold</option>
-            </select>
+            </KomaSelect>
           </div>
           <label className="flex h-7 items-center gap-1 rounded border border-koma-border bg-koma-bg px-1.5">
             <span className="flex-none text-[11px] text-koma-dim">Font</span>
@@ -2997,20 +3063,21 @@ function KindMark({ kind }: { kind: DesignNode['kind'] }) {
 
 function SizeMode({ label, value, mixed, onChange }: { label: string; value: string; mixed?: boolean; onChange: (mode: 'fixed' | 'hug' | 'fill') => void }) {
   return (
-    <select
+    <KomaSelect
+      chevron={false}
       aria-label={label}
       value={mixed ? '' : value}
       onChange={(event) => {
         const mode = event.target.value
         if (mode === 'fixed' || mode === 'hug' || mode === 'fill') onChange(mode)
       }}
-      className="h-7 w-12 flex-none rounded border border-koma-border bg-koma-bg px-0.5 text-[10px] text-koma-fg outline-none"
+      className="h-7 w-12 flex-none px-0.5 text-[10px]"
     >
       {mixed ? <option value="">Mix</option> : null}
       <option value="fixed">Fix</option>
       <option value="hug">Hug</option>
       <option value="fill">Fill</option>
-    </select>
+    </KomaSelect>
   )
 }
 

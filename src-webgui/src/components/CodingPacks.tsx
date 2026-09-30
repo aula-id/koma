@@ -1,3 +1,4 @@
+import { KomaSelect } from './KomaSelect'
 import { useEffect, useRef, useState } from 'react'
 import { Package, RefreshCw, X } from 'lucide-react'
 import { useKoma, fileKey } from '../store/koma'
@@ -75,16 +76,16 @@ export function CodingPacks() {
   return <section role="dialog" aria-label="Language packs" className="absolute inset-x-10 bottom-6 z-40 flex max-h-[75vh] flex-col rounded-md border border-koma-border bg-koma-panel text-[11px] text-koma-fg shadow-xl" onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); close() } }}>
     <div className="flex h-8 items-center gap-2 border-b border-koma-border px-2">
       <Package size={12} /><span className="text-koma-dim">LANGUAGE PACKS</span>
-      <select aria-label="Language pack workspace" className="min-w-0 flex-1 bg-koma-panel" value={scope} disabled={busy} onChange={e => setWorkspace(known.find(w => workspaceKey(w) === e.target.value) ?? null)}>{known.map(w => <option key={workspaceKey(w)} value={workspaceKey(w)}>{w.hostId} · {w.root}</option>)}</select>
+      <KomaSelect aria-label="Language pack workspace" className="min-w-0 flex-1 bg-koma-panel" value={scope} disabled={busy} onChange={e => setWorkspace(known.find(w => workspaceKey(w) === e.target.value) ?? null)}>{known.map(w => <option key={workspaceKey(w)} value={workspaceKey(w)}>{w.hostId} · {w.root}</option>)}</KomaSelect>
       <button className={button} title="Refresh installed components" disabled={busy} onClick={() => setRefresh(n => n + 1)}><RefreshCw size={12} /></button>
       <button ref={closeRef} className={button} aria-label="Close language packs" onClick={close}><X size={12} /></button>
     </div>
     <div className="overflow-auto p-3 space-y-3">
       {!workspace && <p>Select a coding workspace first.</p>}
       {data && <>
-        <select aria-label="Language" className="bg-koma-panel border border-koma-border rounded px-2 py-1" value={packId} disabled={busy} onChange={e => setPackId(e.target.value)}>{data.packs.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select>
+        <KomaSelect aria-label="Language" className="bg-koma-panel border border-koma-border rounded px-2 py-1" value={packId} disabled={busy} onChange={e => setPackId(e.target.value)}>{data.packs.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</KomaSelect>
         {pack && <>
-          {pack.serverOptions.length > 1 && <label className="flex items-center gap-2 text-koma-dim">Language server<select aria-label="PHP language server" className="rounded border border-koma-border bg-koma-panel px-2 py-1 text-koma-fg" value={server} disabled={busy} onChange={e => { setServer(e.target.value); setPlan(null) }}>{pack.serverOptions.map(id => <option key={id} value={id}>{id}</option>)}</select></label>}
+          {pack.serverOptions.length > 1 && <label className="flex items-center gap-2 text-koma-dim">Language server<KomaSelect aria-label="PHP language server" className="rounded border border-koma-border bg-koma-panel px-2 py-1 text-koma-fg" value={server} disabled={busy} onChange={e => { setServer(e.target.value); setPlan(null) }}>{pack.serverOptions.map(id => <option key={id} value={id}>{id}</option>)}</KomaSelect></label>}
           <dl className="grid grid-cols-[90px_1fr] gap-1 break-all">
             <dt className="text-koma-dim">Runtime</dt><dd>{pack.runtime ?? (pack.runtimeName ? `${pack.runtimeName} · missing` : 'Not required')}</dd>
             <dt className="text-koma-dim">Language server</dt><dd>{pack.lsp ?? `${pack.server} · missing`}</dd>

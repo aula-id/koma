@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type For
 import { Check, Component, File, MessageSquare, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { BrailleSpinner } from '../BrailleSpinner'
+import { KomaSelect } from '../KomaSelect'
 import { DesignLayers } from '../DesignLayers'
 import { Empty, IconBtn } from './helpers'
 import { Select } from './form'
@@ -12,7 +13,7 @@ import {
   addDesignToken,
   componentView,
   deleteDesignComponent,
-  designChatNote,
+  designChatText,
   designChatTitle,
   designFileName,
   designQueryNode,
@@ -66,16 +67,16 @@ function TokenValue({ token, mode, onValue }: { token: DesignToken; mode: string
           }}
           className="h-5 w-12 rounded border border-koma-border bg-koma-bg px-1 text-[12px] text-koma-fg outline-none"
         />
-        <select
+        <KomaSelect
           aria-label={`${token.name} weight`}
           value={weight || 'regular'}
           onChange={(event) => onValue(`${size || '13'}/${event.target.value}`)}
-          className="h-5 rounded border border-koma-border bg-koma-bg text-[12px] text-koma-fg outline-none"
+          className="h-5 text-[12px]"
         >
           <option value="regular">Regular</option>
           <option value="medium">Medium</option>
           <option value="bold">Bold</option>
-        </select>
+        </KomaSelect>
       </span>
     )
   }
@@ -137,16 +138,13 @@ export function TokenEditor({ root, path, doc, query = '', onCommit }: { root: s
           onChange={(event) => setName(event.target.value)}
           className="h-6 min-w-0 flex-1 rounded border border-koma-border bg-koma-bg px-1.5 text-[12px] text-koma-fg outline-none"
         />
-        <select
-          aria-label="Token kind"
-          value={kind}
-          onChange={(event) => setKind(event.target.value as DesignTokenKind)}
-          className="h-6 rounded border border-koma-border bg-koma-bg text-[12px] text-koma-fg outline-none"
-        >
-          {TOKEN_KINDS.map((item) => (
-            <option key={item.kind} value={item.kind}>{item.label}</option>
-          ))}
-        </select>
+        <div className="w-[5.5rem] flex-none">
+          <Select
+            value={kind}
+            options={TOKEN_KINDS.map((item) => ({ value: item.kind, label: item.label }))}
+            onChange={(value) => setKind(value as DesignTokenKind)}
+          />
+        </div>
         <button type="submit" className="h-6 rounded px-1.5 text-koma-dim hover:bg-koma-hover hover:text-koma-fg">Add</button>
       </form>
       {error ? <p className="text-[11px] text-koma-error">{error}</p> : null}
@@ -511,7 +509,7 @@ export function DesignPanel() {
                       }}
                       onChat={() => {
                         const query = { component: component.id }
-                        const text = designChatNote(open.doc, query)
+                        const text = designChatText(open.doc, query)
                         const node = designQueryNode(open.doc, query)
                         if (!text || !node) return
                         const png = designPngBase64(open.doc, node)

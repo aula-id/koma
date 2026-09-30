@@ -1761,6 +1761,25 @@ export function designCanvasBox(doc: DesignDoc, id: string): DesignRect | null {
   return canvasBox(node, toCanvas)
 }
 
+/** Union canvas box for a selection, ignoring nodes nested under another selected node. */
+export function designSelectionCanvasBox(doc: DesignDoc, ids: string[]): DesignRect | null {
+  if (!ids.length) return null
+  const set = new Set(ids)
+  const top = ids.filter((id) => {
+    const path = pathToNode(doc, id)
+    if (!path || path.length < 2) return true
+    for (let index = 0; index < path.length - 1; index++) {
+      if (set.has(path[index].id)) return false
+    }
+    return true
+  })
+  const boxes = top.flatMap((id) => {
+    const box = designCanvasBox(doc, id)
+    return box ? [box] : []
+  })
+  return unionRects(boxes)
+}
+
 /** The moving union, and every other visible box. A moving node's descendants are not targets. */
 export function designSnapScene(doc: DesignDoc, ids: string[]): { moving: DesignRect; targets: DesignRect[] } | null {
   const movingBoxes: DesignRect[] = []
@@ -3088,7 +3107,7 @@ export function designCoordinateText(doc: DesignDoc, node: DesignNode): string {
   return lines.join('\n')
 }
 
-/** Coordinate list plus the fenced slice. The picture is attached separately. */
+/** Coordinate list plus the fenced slice. Prefer `designChatText` for chat chips. */
 export function designChatNote(doc: DesignDoc, query: DesignQuery): string | null {
   const fence = designChatText(doc, query)
   const node = designQueryNode(doc, query)
@@ -3116,6 +3135,16 @@ export function designFenceTitle(fence: string): string {
   }
 }
 
+/** Drop legacy coordinate dumps; chips + PNG carry design context now. */
+function stripLegacyDesignCoordinateProse(prose: string): string {
+  const rest = prose.split('\n').filter((line) => {
+    if (/^Attached image is the render\./.test(line.trim())) return false
+    if (/\d+[×x]\d+ at \(/i.test(line)) return false
+    return true
+  })
+  return rest.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 /** Pull fenced design slices out of a user message. The fence is what the model read. */
 export function splitDesignMessage(content: string): { prose: string; designs: { text: string; title: string }[] } {
   const designs: { text: string; title: string }[] = []
@@ -3123,5 +3152,6 @@ export function splitDesignMessage(content: string): { prose: string; designs: {
     designs.push({ text: fence, title: designFenceTitle(fence) })
     return ''
   })
-  return { prose: prose.replace(/\n{3,}/g, '\n\n').trim(), designs }
+  const trimmed = prose.replace(/\n{3,}/g, '\n\n').trim()
+  return { prose: stripLegacyDesignCoordinateProse(trimmed), designs }
 }
