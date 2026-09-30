@@ -6,7 +6,7 @@ import {
   type Spread,
 } from 'lexical'
 import { createContext, useContext, type DragEvent, type JSX } from 'react'
-import { GripVertical } from 'lucide-react'
+import { GripVertical, X } from 'lucide-react'
 import { chipPayloadFromWire, type ComposerChipKind, type ComposerChipPayload } from '../../lib/composerIpc'
 
 export const COMPOSER_CHIP_MIME = 'application/x-koma-chip'
@@ -15,6 +15,12 @@ export type ComposerChipActions = {
   onPasteChipDoubleClick?: (markerN: number) => void
   onImageChipDoubleClick?: (markerN: number) => void
   onFileChipDoubleClick?: (wireText: string) => void
+  onRemoveChip?: (payload: {
+    nodeKey: NodeKey
+    kind: ComposerChipKind
+    markerN: number | null
+    wireText: string
+  }) => void
 }
 
 export const ComposerChipContext = createContext<ComposerChipActions>({})
@@ -218,6 +224,19 @@ function ComposerChipView({
         <GripVertical size={11} className="opacity-50" />
       </span>
       <span className="truncate">{displayLabel}</span>
+      <button
+        type="button"
+        title="Remove"
+        aria-label={`Remove ${displayLabel}`}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation()
+          actions.onRemoveChip?.({ nodeKey, kind, markerN, wireText })
+        }}
+        className="flex-none rounded p-0.5 opacity-50 hover:bg-koma-hover hover:opacity-100"
+      >
+        <X size={10} />
+      </button>
     </span>
   )
 }

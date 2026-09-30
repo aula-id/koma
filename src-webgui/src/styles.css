@@ -118,6 +118,8 @@ html[data-computer-preparing="true"] .computer-preview-panel { visibility: hidde
   border: none;
   border-radius: 0;
   background: transparent;
+  position: relative;
+  z-index: 0;
 }
 .koma-md [data-streamdown="code-block-header"] {
   font-size: 10px;

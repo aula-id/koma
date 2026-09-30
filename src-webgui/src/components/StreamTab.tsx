@@ -101,10 +101,15 @@ function StreamHeader({
 function ThinkingBlock({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
   return (
-    <div className="mb-2">
+    <div className="relative z-20 mb-2">
       <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1 text-[11px] text-koma-dim opacity-70 transition-opacity hover:opacity-100"
+        type="button"
+        aria-expanded={open}
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((o) => !o)
+        }}
+        className="flex items-center gap-1 rounded px-0.5 text-[11px] text-koma-dim opacity-70 transition-opacity hover:bg-koma-hover/40 hover:opacity-100"
       >
         <Brain size={11} className="flex-none" />
         <span>thinking</span>

@@ -259,21 +259,34 @@ const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) 
 // by default while streaming so live thinking is visible, collapses once done.
 function ReasoningBlock({ text, defaultOpen }: { text: string; defaultOpen: boolean }) {
   const [open, setOpen] = useState(defaultOpen)
+  useEffect(() => {
+    if (defaultOpen) setOpen(true)
+  }, [defaultOpen])
+  const panelId = useRef(`reasoning-${Math.random().toString(36).slice(2, 9)}`).current
   return (
-    <div className="mb-1.5">
+    <div className="relative z-20 mb-1.5">
       <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1 text-[11px] text-koma-dim opacity-70 transition-opacity hover:opacity-100"
+        type="button"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((o) => !o)
+        }}
+        className="flex items-center gap-1 rounded px-0.5 text-[11px] text-koma-dim opacity-70 transition-opacity hover:bg-koma-hover/40 hover:opacity-100"
       >
         <Brain size={11} className="flex-none" />
         <span>reasoning</span>
         {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
       </button>
-      {open && (
-        <div className="mt-1 whitespace-pre-wrap border-l-2 border-koma-dim pl-2 text-[12px] italic text-koma-dim">
+      {open ? (
+        <div
+          id={panelId}
+          className="mt-1 whitespace-pre-wrap border-l-2 border-koma-dim pl-2 text-[12px] italic text-koma-dim"
+        >
           {text}
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -450,7 +463,7 @@ const AssistantMessage = memo(function AssistantMessage({
   return (
     <div className="flex gap-2">
       <Circle size={9} className="mt-[5px] flex-none fill-koma-fg text-koma-fg" />
-      <div className="min-w-0 flex-1">
+      <div className="relative min-w-0 flex-1">
         {hasReasoning && <ReasoningBlock text={reasoning as string} defaultOpen={streaming} />}
         {hasBody &&
           parts.map((part, index) =>

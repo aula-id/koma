@@ -58,6 +58,7 @@ import { ModeSelector } from './ModeSelector'
 import { CatMascot } from './CatMascot'
 import { DiagramSketch } from './DiagramVisual'
 import { chipPayloadForAttachMarker, chipPayloadForFileRef } from '../lib/composerIpc'
+import { looksLikeComposerMarkdown } from '../lib/composerMarkdownPaste'
 import { parseFileRefWire } from '../lib/composerChipOpen'
 import { ComposerPasteEditOverlay } from './ComposerPasteEditOverlay'
 import { LexicalMarkdownEditor, type LexicalEditorHandle } from './lexical/LexicalMarkdownEditor'
@@ -765,6 +766,7 @@ export function Composer() {
       toastError('Paste is larger than 2 MB')
       return true
     }
+    if (looksLikeComposerMarkdown(text)) return false
     if (!shouldCollapsePaste(text)) return false
     e.preventDefault()
     const id = mintDiagramChipId()
@@ -852,6 +854,17 @@ export function Composer() {
         const resolved = parseFileRefWire(wireText, workdirs)
         if (!resolved) return
         useKoma.getState().openCodingFile(resolved.root, resolved.path, { preview: false })
+      },
+      onRemoveChip: ({ nodeKey, kind, markerN }) => {
+        if (kind === 'image' && markerN != null) {
+          removeAttachment(markerN, 'image')
+          return
+        }
+        if (kind === 'paste' && markerN != null) {
+          removeAttachment(markerN, 'pasted_text')
+          return
+        }
+        editorApi.current?.removeComposerChip(nodeKey)
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1082,7 +1095,15 @@ export function Composer() {
               {attachments.filter((item) => showAttachmentChip(input, item, localPastes)).map((a) => (
                 <span
                   key={`${a.kind}:${a.markerN}`}
-                  className="flex items-center gap-1 rounded-lg border border-koma-border bg-koma-panel2 px-2 py-1 text-[11px] text-koma-fg opacity-90"
+                  tabIndex={0}
+                  role="group"
+                  aria-label={a.name}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Delete' && event.key !== 'Backspace') return
+                    event.preventDefault()
+                    removeAttachment(a.markerN, a.kind)
+                  }}
+                  className="flex items-center gap-1 rounded-lg border border-koma-border bg-koma-panel2 px-2 py-1 text-[11px] text-koma-fg opacity-90 focus:outline-none focus-visible:ring-1 focus-visible:ring-koma-accent"
                 >
                   {a.kind === 'pasted_text' ? (
                     <button

@@ -21,6 +21,8 @@ import {
 import { CheckListPlugin } from '@lexical/react/LexicalCheckListPlugin'
 import {
   $convertFromMarkdownString,
+  BOLD_ITALIC_STAR,
+  BOLD_ITALIC_UNDERSCORE,
   BOLD_STAR,
   BOLD_UNDERSCORE,
   CHECK_LIST,
@@ -76,7 +78,11 @@ import {
   findFileRefWireInText,
   type ComposerChipPayload,
 } from '../../lib/composerIpc'
-import { loneHttpUrl, looksLikeComposerMarkdown } from '../../lib/composerMarkdownPaste'
+import {
+  loneHttpUrl,
+  looksLikeComposerMarkdown,
+  markdownFromClipboardHtml,
+} from '../../lib/composerMarkdownPaste'
 import { safeNoteUrl } from '../../lib/markdownNote'
 import { $createNoteImageNode, $isNoteImageNode, NoteAssetsContext, NoteImageNode, type NoteAssets } from './noteImageNode'
 
@@ -89,6 +95,7 @@ export type LexicalEditorHandle = {
   insertChip: (payload: ComposerChipPayload, opts?: { atEnd?: boolean; trailingSpace?: boolean }) => void
   replacePendingAttachChip: (queueId: string, payload: ComposerChipPayload) => boolean
   removeAttachMarkerChip: (kind: 'image' | 'paste', markerN: number) => boolean
+  removeComposerChip: (nodeKey: string) => void
   setMarkdown: (markdown: string, edge?: 'start' | 'end') => void
   getMarkdown: () => string
   format: (kind: 'bold' | 'italic' | 'code' | 'strikethrough') => void
@@ -143,7 +150,17 @@ const imageTransformer: TextMatchTransformer = {
   type: 'text-match',
 }
 
-const INLINE: Transformer[] = [INLINE_CODE, BOLD_STAR, BOLD_UNDERSCORE, ITALIC_STAR, ITALIC_UNDERSCORE, STRIKETHROUGH, LINK]
+const INLINE: Transformer[] = [
+  INLINE_CODE,
+  BOLD_ITALIC_STAR,
+  BOLD_ITALIC_UNDERSCORE,
+  BOLD_STAR,
+  BOLD_UNDERSCORE,
+  ITALIC_STAR,
+  ITALIC_UNDERSCORE,
+  STRIKETHROUGH,
+  LINK,
+]
 const COMPOSER: Transformer[] = [
   CODE,
   HEADING,
@@ -442,6 +459,12 @@ function EditorPlugins({
         })
         return ok
       },
+      removeComposerChip: (nodeKey) => {
+        editor.update(() => {
+          const node = $getNodeByKey(nodeKey)
+          if ($isComposerChipNode(node)) node.remove()
+        })
+      },
       setMarkdown: applyMarkdown,
       getMarkdown: () => readMarkdown(editor, transformers),
       format: (kind) => {
@@ -605,8 +628,15 @@ function EditorPlugins({
           return true
         }
         if (profile === 'composer' && event instanceof ClipboardEvent) {
-          const plain = event.clipboardData?.getData('text/plain') ?? ''
-          if (plain && $pasteComposerPlainText(editor, transformers, plain)) {
+          const data = event.clipboardData
+          const plain = data?.getData('text/plain') ?? ''
+          const html = data?.getData('text/html') ?? ''
+          const fromHtml = html ? markdownFromClipboardHtml(html) : null
+          const candidate =
+            fromHtml && (!plain.trim() || (!looksLikeComposerMarkdown(plain) && fromHtml.trim().length > plain.trim().length))
+              ? fromHtml
+              : plain
+          if (candidate && $pasteComposerPlainText(editor, transformers, candidate)) {
             event.preventDefault()
             return true
           }
