@@ -42,7 +42,9 @@ import {
   layoutDesign,
   locateDesign,
   makeInstance,
+  effectiveInstanceChild,
   mergeDesignOverride,
+  pickVariant,
   moveDesignNode,
   nextVariantProps,
   nodeChrome,
@@ -242,6 +244,9 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const file = useKoma((s) => s.design.docs[key])
   const updateDesign = useKoma((s) => s.updateDesign)
   const saveDesign = useKoma((s) => s.saveDesign)
+  const setDesignFileUi = useKoma((s) => s.setDesignFileUi)
+  const setDesignPanelTab = useKoma((s) => s.setDesignPanelTab)
+  const panelTabId = useKoma((s) => s.design.panelTabId)
   const active = useKoma((s) => s.ui.activeTabId === tab.id && isTabVisible(s.ui, tab.id))
   const canvasRef = useRef<HTMLDivElement>(null)
   const pastRef = useRef<DesignDoc[]>([])
@@ -280,9 +285,12 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const [dragCursor, setDragCursor] = useState<string | null>(null)
   const [rev, setRev] = useState(0)
   const [focusId, setFocusId] = useState<string | null>(null)
+  const [overrideTargetId, setOverrideTargetId] = useState<string | null>(null)
   const focusRef = useRef<string | null>(null)
+  const overrideTargetRef = useRef<string | null>(null)
   toolRef.current = tool
   focusRef.current = focusId
+  overrideTargetRef.current = overrideTargetId
 
   useEffect(() => {
     pastRef.current = []
@@ -290,6 +298,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     setSelection([])
     setEditing(null)
     setFocusId(null)
+    setOverrideTargetId(null)
     setPen(null)
     setPenHover(null)
     setPenHandle(null)
@@ -316,13 +325,17 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   }, [tab.path, tab.root])
 
   useEffect(() => {
-    if (!active) {
-      const current = getDesignUi()
-      if (current && current.root === tab.root && current.path === tab.path) publishDesignUi(null)
-      return
-    }
-    publishDesignUi({ root: tab.root, path: tab.path, selection, focusId })
-  }, [active, focusId, selection, tab.path, tab.root])
+    if (active) setDesignPanelTab(tab.id)
+  }, [active, setDesignPanelTab, tab.id])
+
+  useEffect(() => {
+    setDesignFileUi(tab.root, tab.path, { selection, focusId, overrideTargetId })
+  }, [focusId, overrideTargetId, selection, setDesignFileUi, tab.path, tab.root])
+
+  useEffect(() => {
+    if (panelTabId !== tab.id) return
+    publishDesignUi({ root: tab.root, path: tab.path, selection, focusId, overrideTargetId })
+  }, [focusId, overrideTargetId, panelTabId, selection, tab.id, tab.path, tab.root])
 
   useEffect(() => {
     return () => {
@@ -355,6 +368,11 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     if (!focusId || !file) return
     if (!file.doc.components.some((component) => component.id === focusId)) setFocusId(null)
   }, [file, focusId])
+
+  useEffect(() => {
+    if (!overrideTargetId) return
+    if (selection.length !== 1) setOverrideTargetId(null)
+  }, [overrideTargetId, selection])
 
   const closeNudge = () => {
     if (nudgeTimerRef.current) {
@@ -1570,6 +1588,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 selectedIds={selection}
                 editing={editing}
                 dragCursor={dragCursor}
+                overrideTargetId={overrideTargetId}
                 onCorner={(id, corner, event) => {
                   event.preventDefault()
                   event.stopPropagation()
@@ -1596,6 +1615,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   if (point) setMenu({ x: clientX, y: clientY, canvasX: point.x, canvasY: point.y })
                 }}
                 onSelect={(id, event) => {
+                  setOverrideTargetId(null)
                   if (event.button === 1 || spaceRef.current || toolRef.current === 'pan') {
                     event.preventDefault()
                     event.stopPropagation()
@@ -1891,6 +1911,10 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
               onTypeBlur={() => {
                 labelNoted.current = false
               }}
+              onOverrideTarget={(childId) => {
+                if (childId && selected) setSelection([selected.id])
+                setOverrideTargetId(childId)
+              }}
             />
           ) : (
             <TokenEditor root={tab.root} path={tab.path} doc={storedDoc} onCommit={(next) => commitStored(next)} />
@@ -2037,6 +2061,7 @@ function DesignNodeView({
   editing,
   dragCursor,
   locked = false,
+  overrideTargetId = null,
   onSelect,
   onResize,
   onCorner,
@@ -2052,6 +2077,7 @@ function DesignNodeView({
   editing: string | null
   dragCursor: string | null
   locked?: boolean
+  overrideTargetId?: string | null
   onSelect: (id: string, event: ReactPointerEvent<HTMLDivElement>) => void
   onResize: (id: string, handle: DesignHandle, event: ReactPointerEvent<HTMLButtonElement>) => void
   onCorner: (id: string, corner: RadiusCorner, event: ReactPointerEvent<HTMLButtonElement>) => void
@@ -2065,6 +2091,7 @@ function DesignNodeView({
   const chrome = nodeChrome(visual ?? node)
   const style = textStyle(visual && node.kind !== 'instance' ? visual : node)
   const selected = selectedIds.includes(node.id)
+  const overrideMark = overrideTargetId === node.id
   const container = node.kind === 'frame' || node.kind === 'group'
   const bareFill = node.fill === 'none' || chrome.fill === 'none'
   const bareStroke = (node.kind === 'frame' || node.kind === 'group') && (!node.stroke || node.stroke === 'none')
@@ -2116,7 +2143,7 @@ function DesignNodeView({
         </span>
       ) : null}
       <div
-        className="absolute inset-0"
+        className={`absolute inset-0 ${overrideMark ? 'ring-2 ring-inset ring-[#9747ff]' : ''}`}
         style={{
           background: node.kind === 'line' || node.kind === 'vector' ? 'transparent' : fill,
           border: bareStroke || strokeOff || node.kind === 'line' || node.kind === 'vector' ? undefined : `${chrome.strokeWidth}px solid ${stroke}`,
@@ -2164,6 +2191,7 @@ function DesignNodeView({
             editing={editing}
             dragCursor={dragCursor}
             locked={locked || !!node.locked || node.kind === 'instance'}
+            overrideTargetId={overrideTargetId}
             onSelect={onSelect}
             onResize={onResize}
             onCorner={onCorner}
@@ -2227,6 +2255,7 @@ function NodeSettings({
   onType,
   onTypeFocus,
   onTypeBlur,
+  onOverrideTarget,
 }: {
   doc: DesignDoc
   nodes: DesignNode[]
@@ -2247,6 +2276,7 @@ function NodeSettings({
   onType: (fn: (node: DesignNode) => DesignNode) => void
   onTypeFocus: () => void
   onTypeBlur: () => void
+  onOverrideTarget?: (childId: string | null) => void
 }) {
   const [propName, setPropName] = useState('variant')
   const [propValue, setPropValue] = useState('')
@@ -2474,7 +2504,7 @@ function NodeSettings({
               <GeomField label="W" value={wField.value} mixed={wField.mixed} onChange={(w) => setField({ w: Math.max(1, w) }, ['wMode'])} />
             </div>
             {sizeModes ? (
-              <SizeMode label="Width sizing" value={wModeField.value} mixed={wModeField.mixed} onChange={(mode) => setField({ wMode: mode })} />
+              <SizeMode label="Width sizing" value={wModeField.value} mixed={wModeField.mixed} onChange={(mode) => setField(mode === 'fixed' ? {} : { wMode: mode }, mode === 'fixed' ? ['wMode'] : [])} />
             ) : null}
           </div>
           <div className="flex min-w-0 gap-1">
@@ -2482,7 +2512,7 @@ function NodeSettings({
               <GeomField label="H" value={hField.value} mixed={hField.mixed} onChange={(h) => setField({ h: Math.max(1, h) }, ['hMode'])} />
             </div>
             {sizeModes ? (
-              <SizeMode label="Height sizing" value={hModeField.value} mixed={hModeField.mixed} onChange={(mode) => setField({ hMode: mode })} />
+              <SizeMode label="Height sizing" value={hModeField.value} mixed={hModeField.mixed} onChange={(mode) => setField(mode === 'fixed' ? {} : { hMode: mode }, mode === 'fixed' ? ['hMode'] : [])} />
             ) : null}
           </div>
         </div>
@@ -2584,12 +2614,15 @@ function NodeSettings({
             <button
               type="button"
               aria-pressed={nodes.every((item) => item.wrap === true)}
-              onClick={() => onPatch((current) => {
-                const next = { ...current }
-                if (current.wrap) delete next.wrap
-                else next.wrap = true
-                return next
-              })}
+              onClick={() => {
+                const allOn = nodes.every((item) => item.wrap === true)
+                onPatch((current) => {
+                  const next = { ...current }
+                  if (allOn) delete next.wrap
+                  else next.wrap = true
+                  return next
+                })
+              }}
               className={`h-6 rounded px-2 ${nodes.every((item) => item.wrap) ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
             >
               {nodes.every((item) => item.wrap) ? 'On' : 'Off'}
@@ -2603,12 +2636,15 @@ function NodeSettings({
           <button
             type="button"
             aria-pressed={nodes.every((item) => item.clip !== false)}
-            onClick={() => onPatch((current) => {
-              const next = { ...current }
-              if (current.clip === false) delete next.clip
-              else next.clip = false
-              return next
-            })}
+            onClick={() => {
+              const allOn = nodes.every((item) => item.clip !== false)
+              onPatch((current) => {
+                const next = { ...current }
+                if (allOn) next.clip = false
+                else delete next.clip
+                return next
+              })
+            }}
             className={`h-6 rounded px-2 ${nodes.every((item) => item.clip !== false) ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
           >
             {nodes.every((item) => item.clip !== false) ? 'On' : 'Off'}
@@ -2621,12 +2657,15 @@ function NodeSettings({
           <button
             type="button"
             aria-pressed={absoluteField.value === 'on' && !absoluteField.mixed}
-            onClick={() => onPatch((current) => {
-              const next = { ...current }
-              if (current.absolute) delete next.absolute
-              else next.absolute = true
-              return next
-            })}
+            onClick={() => {
+              const allOn = nodes.every((item) => item.absolute === true)
+              onPatch((current) => {
+                const next = { ...current }
+                if (allOn) delete next.absolute
+                else next.absolute = true
+                return next
+              })
+            }}
             className={`h-6 rounded px-2 ${absoluteField.value === 'on' && !absoluteField.mixed ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
           >
             {absoluteField.mixed ? 'Mixed' : absoluteField.value === 'on' ? 'On' : 'Off'}
@@ -2761,7 +2800,14 @@ function NodeSettings({
         </Section>
       ) : null}
       {!multi && node.kind === 'instance' ? (
-        <InstanceOverrides doc={doc} node={node} onPatch={onPatch} onTypeFocus={onTypeFocus} onTypeBlur={onTypeBlur} />
+        <InstanceOverrides
+          doc={doc}
+          node={node}
+          onPatch={onPatch}
+          onTypeFocus={onTypeFocus}
+          onTypeBlur={onTypeBlur}
+          onPickTarget={onOverrideTarget}
+        />
       ) : null}
     </div>
   )
@@ -2774,10 +2820,26 @@ function instanceDescendants(node: DesignNode, into: DesignNode[]) {
   }
 }
 
-function InstanceOverrides({ doc, node, onPatch, onTypeFocus, onTypeBlur }: { doc: DesignDoc; node: DesignNode; onPatch: (fn: (node: DesignNode) => DesignNode) => void; onTypeFocus: () => void; onTypeBlur: () => void }) {
-  const visual = resolveInstanceTree(doc, node)
+function InstanceOverrides({
+  doc,
+  node,
+  onPatch,
+  onTypeFocus,
+  onTypeBlur,
+  onPickTarget,
+}: {
+  doc: DesignDoc
+  node: DesignNode
+  onPatch: (fn: (node: DesignNode) => DesignNode) => void
+  onTypeFocus: () => void
+  onTypeBlur: () => void
+  onPickTarget?: (childId: string | null) => void
+}) {
+  if (node.kind !== 'instance' || !node.component) return null
+  const component = doc.components.find((item) => item.id === node.component)
+  const variant = component ? pickVariant(component, node.variant) : null
   const rows: DesignNode[] = []
-  if (visual) instanceDescendants(visual, rows)
+  if (variant) instanceDescendants(variant.node, rows)
   if (!rows.length) return null
   const commitFill = (id: string, raw: string) => {
     const value = raw.trim()
@@ -2787,37 +2849,51 @@ function InstanceOverrides({ doc, node, onPatch, onTypeFocus, onTypeBlur }: { do
   return (
     <Section title="Overrides">
       {rows.map((child) => {
-        const hidden = child.visible === false
+        const effective = effectiveInstanceChild(doc, node, child.id)
+        if (!effective) return null
         const name = designLayerName(child)
+        const hidden = !effective.visible
         return (
           <div key={child.id} className="flex flex-col gap-1">
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
+            <button
+              type="button"
+              className="flex items-center gap-1 rounded text-left hover:bg-koma-hover"
+              onClick={() => onPickTarget?.(child.id)}
+            >
+              <span
+                role="button"
+                tabIndex={-1}
                 aria-label={hidden ? `Show ${name}` : `Hide ${name}`}
-                onClick={() => onPatch((current) => mergeDesignOverride(current, child.id, { visible: !hidden }))}
-                className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  const nextVisible = hidden
+                  onPatch((current) => mergeDesignOverride(current, child.id, { visible: nextVisible ? true : false }))
+                }}
+                className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim"
               >
                 {hidden ? <EyeOff size={14} /> : <Eye size={14} />}
-              </button>
+              </span>
               <span className="min-w-0 flex-1 truncate text-koma-fg">{name}</span>
-            </div>
+            </button>
             {child.kind === 'text' ? (
               <input
                 aria-label={`${name} text`}
-                value={child.text ?? ''}
-                onFocus={onTypeFocus}
+                value={effective.text}
+                onFocus={() => {
+                  onPickTarget?.(child.id)
+                  onTypeFocus()
+                }}
                 onBlur={onTypeBlur}
                 onChange={(event) => onPatch((current) => mergeDesignOverride(current, child.id, { text: event.target.value }))}
                 className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
               />
             ) : null}
             <input
-              key={`${child.id}:${child.fill ?? ''}`}
               aria-label={`${name} fill`}
-              defaultValue={child.fill && child.fill !== 'none' ? child.fill : ''}
+              value={effective.fill && effective.fill !== 'none' ? effective.fill : ''}
               placeholder="Fill"
-              onBlur={(event) => commitFill(child.id, event.target.value)}
+              onFocus={() => onPickTarget?.(child.id)}
+              onChange={(event) => commitFill(child.id, event.target.value)}
               className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
             />
           </div>

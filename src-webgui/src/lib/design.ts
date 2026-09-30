@@ -322,6 +322,54 @@ export function mergeDesignOverride(
   return next
 }
 
+export function findDesignOverride(instance: DesignNode, childId: string): DesignOverride | undefined {
+  if (instance.kind !== 'instance') return undefined
+  return instance.overrides?.find((item) => item.id === childId)
+}
+
+function findInComponentTree(node: DesignNode, id: string): DesignNode | null {
+  if (node.id === id) return node
+  for (const child of node.children ?? []) {
+    const found = findInComponentTree(child, id)
+    if (found) return found
+  }
+  return null
+}
+
+/** Variant defaults merged with instance override rows — for the overrides panel. */
+export function effectiveInstanceChild(
+  doc: DesignDoc,
+  instance: DesignNode,
+  childId: string,
+): {
+  text: string
+  fill: DesignRef | undefined
+  visible: boolean
+  hasTextOverride: boolean
+  hasFillOverride: boolean
+  hasVisibleOverride: boolean
+} | null {
+  if (instance.kind !== 'instance' || !instance.component) return null
+  const component = doc.components.find((item) => item.id === instance.component)
+  if (!component) return null
+  const variant = pickVariant(component, instance.variant)
+  if (!variant) return null
+  const base = findInComponentTree(variant.node, childId)
+  if (!base) return null
+  const row = findDesignOverride(instance, childId)
+  let visible = base.visible !== false
+  if (row?.visible === false) visible = false
+  else if (row?.visible === true) visible = true
+  return {
+    text: row?.text ?? base.text ?? '',
+    fill: row?.fill ?? base.fill,
+    visible,
+    hasTextOverride: row?.text != null,
+    hasFillOverride: row?.fill != null && row.fill !== '',
+    hasVisibleOverride: row?.visible != null,
+  }
+}
+
 export function resolveRef(doc: DesignDoc, ref: string): string {
   if (!ref || ref === 'none' || ref.startsWith('#')) return ref
   const token = doc.tokens.find((item) => item.name === ref)

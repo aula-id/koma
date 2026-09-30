@@ -23,14 +23,39 @@ export type DesignPendingCreate = {
   readReq: string | null
 }
 
+export type DesignFileUiState = {
+  selection: string[]
+  focusId: string | null
+  overrideTargetId: string | null
+}
+
 export type DesignSlice = {
   docs: Record<string, DesignFileState>
   pendingCreate: DesignPendingCreate | null
+  /** Design tab bound to the sidebar (survives switching to Chat). */
+  panelTabId: string | null
+  fileUi: Record<string, DesignFileUiState>
 }
+
+export const emptyDesignFileUi = (): DesignFileUiState => ({
+  selection: [],
+  focusId: null,
+  overrideTargetId: null,
+})
 
 export const initialDesign: DesignSlice = {
   docs: {},
   pendingCreate: null,
+  panelTabId: null,
+  fileUi: {},
+}
+
+export function dropDesignFileUi(fileUi: Record<string, DesignFileUiState>, root: string, path: string): Record<string, DesignFileUiState> {
+  const key = fileKey(root, path)
+  if (!(key in fileUi)) return fileUi
+  const next = { ...fileUi }
+  delete next[key]
+  return next
 }
 
 export function emptyDesignFile(partial?: Partial<DesignFileState>): DesignFileState {

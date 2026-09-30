@@ -1,7 +1,7 @@
 import { forgetCodingDraft } from '../../lib/coding-recovery'
 import type { StoreGet, StoreSet } from '../api'
 import { emptyFileState, fileKey } from '../coding'
-import { dropDesignDocs } from '../design'
+import { dropDesignDocs, dropDesignFileUi } from '../design'
 import { dropDiagramDocs } from '../diagram'
 import { setSplitDir as applySplitDir, toggleSplitDir as flipSplitDir, insertGroup, neighbourInGroup, normalizeGroups, reorderTab, resizeGroups } from '../editorGroups'
 import { tabBaseName } from '../initial'
@@ -117,10 +117,19 @@ export function tabActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openD
         closingDiagram && opts?.force
           ? { ...s.diagram, docs: dropDiagramDocs(s.diagram.docs, closingDiagram.root, closingDiagram.path) }
           : s.diagram
-      const design =
-        closingDesign && opts?.force
-          ? { ...s.design, docs: dropDesignDocs(s.design.docs, closingDesign.root, closingDesign.path) }
-          : s.design
+      let design = s.design
+      if (closingDesign && opts?.force) {
+        const fallbackPanel =
+          s.design.panelTabId === id
+            ? tabs.find((t) => t.kind === 'design')?.id ?? null
+            : s.design.panelTabId
+        design = {
+          ...s.design,
+          panelTabId: fallbackPanel,
+          docs: dropDesignDocs(s.design.docs, closingDesign.root, closingDesign.path),
+          fileUi: dropDesignFileUi(s.design.fileUi, closingDesign.root, closingDesign.path),
+        }
+      }
       return {
         ui: normalizeGroups({ ...normalized, tabs, activeTabId }),
         coding,

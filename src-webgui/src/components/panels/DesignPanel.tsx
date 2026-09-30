@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { Check, Component, File, MessageSquare, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { BrailleSpinner } from '../BrailleSpinner'
@@ -26,7 +26,8 @@ import {
   type DesignToken,
   type DesignTokenKind,
 } from '../../lib/design'
-import { emitDesignLayer, getDesignUi, subscribeDesignUi } from '../../lib/designUi'
+import { resolveDesignPanelTab } from '../../lib/designPanelTab'
+import { emitDesignLayer } from '../../lib/designUi'
 import { designPngBase64 } from '../../lib/designRender'
 
 const EMPTY_ROOTS: string[] = []
@@ -260,10 +261,8 @@ export function DesignPanel() {
   const refreshCodingDir = useKoma((s) => s.refreshCodingDir)
   const openDesignTab = useKoma((s) => s.openDesignTab)
   const createDesignFile = useKoma((s) => s.createDesignFile)
-  const designTab = useKoma((s) => {
-    const tab = s.ui.tabs.find((item) => item.id === s.ui.activeTabId)
-    return tab && tab.kind === 'design' ? tab : null
-  })
+  const designTab = useKoma(resolveDesignPanelTab)
+  const setDesignPanelTab = useKoma((s) => s.setDesignPanelTab)
   const renameCodingItem = useKoma((s) => s.renameCodingItem)
   const deleteCodingItem = useKoma((s) => s.deleteCodingItem)
   const req = useKoma((s) => s.req)
@@ -274,7 +273,6 @@ export function DesignPanel() {
   const [assetQuery, setAssetQuery] = useState('')
   const [deletingAsset, setDeletingAsset] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
-  const ui = useSyncExternalStore(subscribeDesignUi, getDesignUi, getDesignUi)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [menu, setMenu] = useState<null | { x: number; y: number; path: string }>(null)
@@ -350,10 +348,19 @@ export function DesignPanel() {
   }
 
   const open = designTab ? docs[fileKey(designTab.root, designTab.path)] : undefined
-  const sameFile = !!(ui && designTab && ui.root === designTab.root && ui.path === designTab.path)
-  const focusId = sameFile && ui ? ui.focusId : null
-  const selection = sameFile && ui ? ui.selection : []
+  const fileUi = useKoma((s) => (designTab ? s.design.fileUi[fileKey(designTab.root, designTab.path)] : undefined))
+  const focusId = fileUi?.focusId ?? null
+  const selection = fileUi?.selection ?? []
   const viewDoc = open && !open.loading ? (focusId ? componentView(open.doc, focusId) ?? open.doc : open.doc) : null
+
+  useEffect(() => {
+    if (!designTab) return
+    setDesignPanelTab(designTab.id)
+  }, [designTab, setDesignPanelTab])
+
+  useEffect(() => {
+    if (designTab) setFilesOpen(false)
+  }, [designTab?.id])
   const query = assetQuery.trim().toLowerCase()
   const components = (open?.doc.components ?? []).filter((component) => !query || component.name.toLowerCase().includes(query))
 
@@ -406,7 +413,7 @@ export function DesignPanel() {
               </button>
             )}
           >
-            <div className="max-h-40 overflow-y-auto">
+            <div className="max-h-28 overflow-y-auto">
               <FileList
                 activeRoot={activeRoot}
                 files={files}
@@ -430,7 +437,7 @@ export function DesignPanel() {
               />
             </div>
           </AccordionSection>
-          <AccordionSection title="Layers" open={layersOpen} onToggle={() => setLayersOpen((value) => !value)}>
+          <AccordionSection title="Layers" open={layersOpen} onToggle={() => setLayersOpen((value) => !value)} fill>
             {open?.loading ? (
               <div className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-koma-dim">
                 <BrailleSpinner size={13} />

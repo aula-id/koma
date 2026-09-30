@@ -4,6 +4,7 @@ export type DesignUiState = {
   path: string
   selection: string[]
   focusId: string | null
+  overrideTargetId: string | null
 }
 
 export type DesignLayerOp =

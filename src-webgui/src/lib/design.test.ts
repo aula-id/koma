@@ -17,6 +17,7 @@ import {
   canLeaveParent,
   designCanvasBox,
   designDrop,
+  effectiveInstanceChild,
   designObjectSnap,
   designPath,
   designSnapScene,
@@ -1022,4 +1023,25 @@ function sample(): DesignDoc {
   assert.equal(cornerDoc.screens[0].radiusTL, 0)
   assert.equal(cornerDoc.screens[0].radiusTR, 20)
   assert.equal(cornerDoc.screens[0].radius, 8)
+  const eff = effectiveInstanceChild(instDoc, placed, 'label')
+  assert.equal(eff?.text, 'Bye')
+  assert.equal(eff?.hasTextOverride, true)
+  const a = createNode('rect', 'a', 0, 0)
+  const b = createNode('rect', 'b', 0, 0)
+  const flat = { ...emptyDesign(), screens: [a, b] }
+  assert.equal(moveDesignNode(flat, 'a', 'b', 0), flat)
+  const flowRow = createNode('frame', 'flowRow', 0, 0)
+  flowRow.layout = 'row'
+  flowRow.w = 100
+  flowRow.h = 40
+  const kid = createNode('rect', 'kid', 0, 0)
+  kid.w = 20
+  kid.h = 20
+  kid.x = 4
+  kid.y = 4
+  kid.absolute = true
+  flowRow.children = [kid]
+  const laid = layoutDesign({ ...emptyDesign(), screens: [flowRow] })
+  assert.equal(laid.screens[0].children?.[0].x, 4)
+  assert.equal(laid.screens[0].children?.[0].y, 4)
 }

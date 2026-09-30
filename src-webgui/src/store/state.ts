@@ -668,4 +668,10 @@ export type KomaState = {
   updateDesign: (root: string, path: string, doc: DesignDoc) => void
   // `path` is `.koma/<name>.kdsgn`. Creates the file, then seeds an empty document.
   createDesignFile: (root: string, path: string) => void
+  setDesignPanelTab: (id: string | null) => void
+  setDesignFileUi: (
+    root: string,
+    path: string,
+    patch: Partial<import('./design').DesignFileUiState>,
+  ) => void
 }

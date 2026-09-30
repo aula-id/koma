@@ -1,13 +1,40 @@
 import { designTabId, serializeDesign, type DesignDoc } from '../../lib/design'
 import type { StoreGet, StoreSet } from '../api'
 import { baseName, fileKey, mintRequestId } from '../coding'
-import { emptyDesignFile } from '../design'
+import { emptyDesignFile, emptyDesignFileUi } from '../design'
 import { normalizeGroups } from '../editorGroups'
+import type { DesignFileUiState } from '../design'
 import type { KomaState } from '../state'
 import type { Tab } from '../types/tabs'
 
-export function designActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openDesignTab' | 'saveDesign' | 'updateDesign' | 'createDesignFile'> {
+export function designActions(set: StoreSet, get: StoreGet): Pick<
+  KomaState,
+  'openDesignTab' | 'saveDesign' | 'updateDesign' | 'createDesignFile' | 'setDesignPanelTab' | 'setDesignFileUi'
+> {
   return {
+    setDesignPanelTab: (id) => {
+      set((s) => (s.design.panelTabId === id ? s : { design: { ...s.design, panelTabId: id } }))
+    },
+    setDesignFileUi: (root, path, patch) => {
+      const key = fileKey(root, path)
+      set((s) => {
+        const prev = s.design.fileUi[key] ?? emptyDesignFileUi()
+        const next: DesignFileUiState = { ...prev, ...patch }
+        if (
+          prev.selection === next.selection &&
+          prev.focusId === next.focusId &&
+          prev.overrideTargetId === next.overrideTargetId
+        ) {
+          return s
+        }
+        return {
+          design: {
+            ...s.design,
+            fileUi: { ...s.design.fileUi, [key]: next },
+          },
+        }
+      })
+    },
     openDesignTab: (root, path) => {
       const id = designTabId(root, path)
       const key = fileKey(root, path)
@@ -23,12 +50,15 @@ export function designActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'op
           ? base.tabs
           : [...base.tabs, { id, kind: 'design', root, path, title: baseName(path) }]
         const ui = normalizeGroups({ ...base, tabs, activeTabId: id })
-        if (!readReq) return { ui }
+        if (!readReq) {
+          return { ui, design: { ...s.design, panelTabId: id } }
+        }
         const prev = s.design.docs[key]
         return {
           ui,
           design: {
             ...s.design,
+            panelTabId: id,
             docs: {
               ...s.design.docs,
               [key]: emptyDesignFile({
@@ -111,6 +141,8 @@ export function beginDesignSeed(set: StoreSet, get: StoreGet, root: string, path
     return {
       ui: normalizeGroups({ ...base, tabs, activeTabId: id }),
       design: {
+        ...s.design,
+        panelTabId: id,
         pendingCreate: { root, path, createReq: pending.createReq, readReq },
         docs: {
           ...s.design.docs,
