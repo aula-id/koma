@@ -1,6 +1,7 @@
 import { createContext, memo, useContext, useEffect, useRef, useState } from 'react'
 import { Streamdown } from 'streamdown'
 import { komaCode } from './komaShiki'
+import { komaLinkSafety } from './LinkSafetyModal'
 import { useKoma } from '../store/koma'
 import { luminance } from '../lib/luminance'
 
@@ -152,6 +153,7 @@ export const MessageBody = memo(function MessageBody({
         // Keep the code copy button; suppress the table/mermaid toolbars — the
         // 1:1 TUI grammar has no such affordances.
         controls={{ code: { copy: true, download: false }, table: false, mermaid: false }}
+        linkSafety={komaLinkSafety}
       >
         {body}
       </Streamdown>
