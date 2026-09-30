@@ -98,6 +98,52 @@ function blockStart(line: string): boolean {
   return /^(```+)/.test(line) || IMAGE_LINE.test(line) || HEADING.test(line) || QUOTE.test(line) || BULLET.test(line) || ORDERED.test(line)
 }
 
+const COMPOSER_IMAGE_MARKER = /^\s*\[Image #(\d+)\]\s*$/
+
+/** Canonical markdown for diagram detail (images on their own lines). */
+export function normalizeDiagramNoteMarkdown(markdown: string): string {
+  const stripped = markdown
+    .replace(/\[Image #\d+\]/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  if (!stripped) return ''
+  return serializeNote(parseNote(stripped))
+}
+
+/** Workspace image basenames already referenced in note markdown. */
+export function referencedNoteImageNames(markdown: string): Set<string> {
+  const names = new Set<string>()
+  for (const block of parseNote(markdown)) {
+    if (block.kind === 'image' && noteImageFile(block.src)) names.add(block.src)
+  }
+  for (const m of markdown.matchAll(/!\[[^\]]*]\(([^)\s]+)\)/g)) {
+    const base = m[1]?.split(/[/\\]/).pop() ?? ''
+    if (noteImageFile(base)) names.add(base)
+  }
+  return names
+}
+
+/** Replace mistaken composer `[Image #N]` markers with `![…](file)` when files exist. */
+export function repairComposerImageMarkers(markdown: string, spareImageNames: string[]): string {
+  if (!/\[Image #\d+\]/.test(markdown)) return markdown
+  const spare = [...spareImageNames]
+  let index = 0
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n')
+  const out: string[] = []
+  for (const line of lines) {
+    if (COMPOSER_IMAGE_MARKER.test(line)) {
+      const name = spare[index++]
+      if (name) out.push(`![image](${name})`)
+      continue
+    }
+    out.push(line.replace(/\[Image #\d+\]/g, () => {
+      const name = spare[index++]
+      return name ? `![image](${name})` : ''
+    }))
+  }
+  return out.join('\n')
+}
+
 export function serializeNote(blocks: NoteBlock[]): string {
   const parts: string[] = []
   for (const block of blocks) {

@@ -8,11 +8,13 @@ import {
   inlineToHtml,
   isNoteText,
   noteImageFile,
+  normalizeDiagramNoteMarkdown,
   parseNote,
   safeNoteUrl,
   serializeNote,
   type NoteBlock,
 } from '../lib/markdownNote'
+import { prepareDiagramNoteMarkdown } from '../lib/diagramNoteAttach'
 import { writeWorkspaceBytes } from '../lib/diagramNotes'
 import { mimeForPath } from '../lib/viewerKind'
 
@@ -173,7 +175,9 @@ export function MarkdownNote({
   onDone: () => void
 }) {
   const req = useKoma((s) => s.req)
+  const hostId = useKoma((s) => s.remoteState.hostId ?? 'local')
   const fileRef = useRef<HTMLInputElement>(null)
+  const [editorMarkdown, setEditorMarkdown] = useState(value)
   const apiRef = useRef<LexicalEditorHandle | null>(null)
   const localRef = useRef<Record<string, string>>({})
   const [link, setLink] = useState<string | null>(null)
@@ -185,6 +189,16 @@ export function MarkdownNote({
       for (const url of Object.values(localRef.current)) URL.revokeObjectURL(url)
     }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    void prepareDiagramNoteMarkdown({ hostId, root }, assetDir, value).then((md) => {
+      if (!cancelled) setEditorMarkdown(md)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [assetDir, hostId, root, value])
 
   const upload = async (file: File) => {
     const ext = imageExt(file)
@@ -276,8 +290,8 @@ export function MarkdownNote({
       ) : null}
       <LexicalMarkdownEditor
         profile="note"
-        markdown={value}
-        onMarkdown={onChange}
+        markdown={editorMarkdown}
+        onMarkdown={(markdown) => onChange(normalizeDiagramNoteMarkdown(markdown))}
         controlled
         placeholder="What this is for"
         apiRef={apiRef}

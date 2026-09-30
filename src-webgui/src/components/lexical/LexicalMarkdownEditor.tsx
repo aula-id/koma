@@ -83,7 +83,7 @@ import {
   looksLikeComposerMarkdown,
   markdownFromClipboardHtml,
 } from '../../lib/composerMarkdownPaste'
-import { safeNoteUrl } from '../../lib/markdownNote'
+import { normalizeDiagramNoteMarkdown, safeNoteUrl } from '../../lib/markdownNote'
 import { $createNoteImageNode, $isNoteImageNode, NoteAssetsContext, NoteImageNode, type NoteAssets } from './noteImageNode'
 
 export type LexicalProfile = 'composer' | 'inline' | 'note'
@@ -415,13 +415,14 @@ function EditorPlugins({
 
   const applyMarkdown = (next: string, edge?: 'start' | 'end') => {
     suppress.current = true
+    const prepared = profile === 'note' ? normalizeDiagramNoteMarkdown(next) : next
     editor.update(() => {
-      $convertFromMarkdownString(next, transformers, undefined, false)
+      $convertFromMarkdownString(prepared, transformers, undefined, false)
       if (profile === 'composer') $promoteFileRefChips()
       if (edge === 'end') $getRoot().selectEnd()
       else if (edge === 'start') $getRoot().selectStart()
     })
-    last.current = next
+    last.current = prepared
     queueMicrotask(() => {
       suppress.current = false
     })
@@ -515,7 +516,12 @@ function EditorPlugins({
             $getRoot().selectEnd()
             selection = $getSelection()
           }
-          if ($isRangeSelection(selection)) selection.insertNodes([$createNoteImageNode(alt, src)])
+          if ($isRangeSelection(selection)) {
+            const image = $createNoteImageNode(alt, src)
+            const block = $createParagraphNode()
+            block.append(image)
+            selection.insertNodes([block])
+          }
         })
       },
       isAtStart: () => {
@@ -650,6 +656,7 @@ function EditorPlugins({
     const unregisterOver = editor.registerCommand(
       DRAGOVER_COMMAND,
       (event) => {
+        if (profile !== 'composer') return false
         const types = event.dataTransfer ? Array.from(event.dataTransfer.types) : []
         if (!types.includes(COMPOSER_CHIP_MIME)) return false
         event.preventDefault()
@@ -661,6 +668,7 @@ function EditorPlugins({
     const unregisterDrop = editor.registerCommand(
       DROP_COMMAND,
       (event) => {
+        if (profile !== 'composer') return false
         const plain = event.dataTransfer?.getData('text/plain') ?? ''
         const mimeKey = event.dataTransfer?.getData(COMPOSER_CHIP_MIME) ?? ''
         const key =
@@ -789,8 +797,11 @@ export function LexicalMarkdownEditor({
   noteAssets?: NoteAssets
 }): JSX.Element {
   const nodes = useMemo(
-    () => [HeadingNode, QuoteNode, ListNode, ListItemNode, LinkNode, CodeNode, ComposerChipNode, NoteImageNode],
-    [],
+    () =>
+      profile === 'note'
+        ? [HeadingNode, QuoteNode, ListNode, ListItemNode, LinkNode, CodeNode, NoteImageNode]
+        : [HeadingNode, QuoteNode, ListNode, ListItemNode, LinkNode, CodeNode, ComposerChipNode, NoteImageNode],
+    [profile],
   )
   const initial = useRef(markdown)
   const body = (
@@ -819,7 +830,9 @@ export function LexicalMarkdownEditor({
           code: 'my-1 block overflow-x-auto rounded bg-koma-bg px-2 py-1 font-mono text-[11px]',
         },
         editorState: () => {
-          $convertFromMarkdownString(initial.current, transformersFor(profile), undefined, false)
+          const seed =
+            profile === 'note' ? normalizeDiagramNoteMarkdown(initial.current) : initial.current
+          $convertFromMarkdownString(seed, transformersFor(profile), undefined, false)
           if (profile === 'composer') $promoteFileRefChips()
         },
         onError: (error) => {

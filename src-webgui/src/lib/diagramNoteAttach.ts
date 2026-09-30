@@ -2,6 +2,12 @@
 
 import type { DiagramDoc } from './diagram'
 import { bytesToBase64, diagramFolder, diagramStem, renderDiagramNotes, utf8ToBase64 } from './diagramNotes'
+import {
+  normalizeDiagramNoteMarkdown,
+  noteImageFile,
+  referencedNoteImageNames,
+  repairComposerImageMarkers,
+} from './markdownNote'
 import { codingRequest, type WorkspaceRef } from './coding-service'
 import { requestFileBytes } from './filePreview'
 import { mintRequestId, type FileTreeEntry } from '../store/coding'
@@ -119,6 +125,36 @@ export async function attachDiagramDetailImages(root: string, diagPath: string, 
       /* missing or unreadable — skip */
     }
   }
+}
+
+async function listDiagramAssetFiles(workspace: WorkspaceRef, assetDir: string): Promise<string[]> {
+  const requestId = mintRequestId()
+  try {
+    const result = await codingRequest<{ entries?: FileTreeEntry[] }>(workspace, {
+      op: 'file',
+      body: { r: 'FileTree', root: workspace.root, path: assetDir, requestId },
+    })
+    return (result.entries ?? [])
+      .filter((entry) => !entry.isDir && noteImageFile(basename(entry.path)))
+      .map((entry) => basename(entry.path))
+  } catch {
+    return []
+  }
+}
+
+/** Load/repair diagram detail markdown (composer markers → workspace images). */
+export async function prepareDiagramNoteMarkdown(
+  workspace: WorkspaceRef,
+  assetDir: string,
+  markdown: string,
+): Promise<string> {
+  let md = markdown
+  if (/\[Image #\d+\]/.test(md) && assetDir) {
+    const files = await listDiagramAssetFiles(workspace, assetDir)
+    const spare = files.filter((name) => !referencedNoteImageNames(md).has(name))
+    md = repairComposerImageMarkers(md, spare)
+  }
+  return normalizeDiagramNoteMarkdown(md)
 }
 
 /** Delete images in `.koma/<stem>/` that are no longer referenced in diagram notes. */

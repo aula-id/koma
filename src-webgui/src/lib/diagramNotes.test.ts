@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { emptyDiagram } from './diagram.ts'
 import { diagramDetailImageNames, orphanDiagramNoteImages } from './diagramNoteAttach.ts'
 import { diagramFolder, diagramNotesPath, renderDiagramNotes } from './diagramNotes.ts'
+import { normalizeDiagramNoteMarkdown, repairComposerImageMarkers } from './markdownNote.ts'
 
 assert.equal(diagramNotesPath('.koma/auth.diag'), '.koma/auth/notes.md')
 assert.equal(diagramFolder('.koma/auth.diag'), '.koma/auth')
@@ -38,4 +39,13 @@ assert.equal(renderDiagramNotes(emptyDiagram(), '.koma/auth.diag'), '')
     { name: 'subdir', path: '.koma/auth/subdir', isDir: true },
   ]
   assert.deepEqual(orphanDiagramNoteImages(entries, new Set(['img-1.png'])), ['.koma/auth/old.png'])
+}
+
+{
+  const raw = 'can you see me?\n\n[Image #1]'
+  const repaired = repairComposerImageMarkers(raw, ['img-abc.png'])
+  assert.equal(repaired.includes('![image](img-abc.png)'), true)
+  const norm = normalizeDiagramNoteMarkdown(repaired)
+  assert.equal(norm.includes('[Image #1]'), false)
+  assert.equal(norm.includes('![image](img-abc.png)'), true)
 }
