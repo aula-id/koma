@@ -169,6 +169,13 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 }
             }
         }
+        GuiReq::ReadAttachment { marker_n } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::ReadAttachment { marker_n });
+                }
+            }
+        }
         // Omnisearch: run the daemon's @-palette fuzzy search; its one-shot
         // reply is re-pushed to JS as a `SearchResults` envelope by `push_loop`.
         GuiReq::FileSearch { query, limit } => {

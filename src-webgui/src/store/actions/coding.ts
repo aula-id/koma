@@ -2,6 +2,7 @@ import { backupCodingDocument, forgetCodingDraft, recordCodingHistory } from '..
 import { formatBeforeSave } from '../../lib/coding-save'
 import { codingRequest } from '../../lib/coding-service'
 import { queueReveal, uriToPath } from '../../lib/lsp-bridge'
+import { localFileTabId } from '../../lib/composerChipOpen'
 import { codingTabId, isMarkdownPath } from '../../lib/markdownPreview'
 import type { StoreGet, StoreSet } from '../api'
 import { baseName as codingBaseName, isPathOrDescendant as codingIsPathOrDescendant, emptyFileState, fileKey, mintRequestId } from '../coding'
@@ -9,7 +10,7 @@ import { insertGroup, normalizeGroups, reorderTab } from '../editorGroups'
 import type { KomaState } from '../state'
 import type { Tab } from '../types/tabs'
 
-export function codingActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'setBottomPanelTab' | 'refreshLsp' | 'lspInstall' | 'lspUninstall' | 'setProblemsOpen' | 'toggleProblemsOpen' | 'setLspDrawerOpen' | 'toggleLspDrawerOpen' | 'openDiagnostic' | 'openTerminalTab' | 'setActiveCodingRoot' | 'openCodingFile' | 'saveCodingFile' | 'revertCodingFile' | 'updateCodingContent' | 'createCodingItem' | 'renameCodingItem' | 'deleteCodingItem' | 'uploadCodingFile' | 'downloadCodingFile' | 'refreshCodingDir' | 'clearCodingConflict' | 'setCodingSearchQuery' | 'setCodingSearchReplace' | 'setCodingSearchFlag' | 'setCodingSearchGlobs' | 'searchCodingContent' | 'replaceCodingContentAll' | 'openCodingSearchHit'> {
+export function codingActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'setBottomPanelTab' | 'refreshLsp' | 'lspInstall' | 'lspUninstall' | 'setProblemsOpen' | 'toggleProblemsOpen' | 'setLspDrawerOpen' | 'toggleLspDrawerOpen' | 'openDiagnostic' | 'openTerminalTab' | 'setActiveCodingRoot' | 'openCodingFile' | 'openLocalFileTab' | 'saveCodingFile' | 'revertCodingFile' | 'updateCodingContent' | 'createCodingItem' | 'renameCodingItem' | 'deleteCodingItem' | 'uploadCodingFile' | 'downloadCodingFile' | 'refreshCodingDir' | 'clearCodingConflict' | 'setCodingSearchQuery' | 'setCodingSearchReplace' | 'setCodingSearchFlag' | 'setCodingSearchGlobs' | 'searchCodingContent' | 'replaceCodingContentAll' | 'openCodingSearchHit'> {
   return {
   setBottomPanelTab: (tab) => set({ bottomPanelTab: tab }),
   refreshLsp: () => {
@@ -96,6 +97,24 @@ export function codingActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'se
     }
   },
   setActiveCodingRoot: (root) => set((s) => ({ coding: { ...s.coding, activeRoot: root } })),
+  openLocalFileTab: (absPath, title) => {
+    const id = localFileTabId(absPath)
+    set((s) => {
+      const baseUi = normalizeGroups(s.ui)
+      const exists = baseUi.tabs.some((t) => t.id === id)
+      const tabs: Tab[] = exists
+        ? baseUi.tabs
+        : [...baseUi.tabs, { id, kind: 'localFile', absPath, title }]
+      return {
+        ui: {
+          ...baseUi,
+          tabs,
+          activeTabId: id,
+          groupActive: { ...baseUi.groupActive, [baseUi.activeGroupId]: id },
+        },
+      }
+    })
+  },
   openCodingFile: (root, path, opts) => {
     const preview = !!opts?.preview && isMarkdownPath(path)
     const id = codingTabId(root, path, preview)

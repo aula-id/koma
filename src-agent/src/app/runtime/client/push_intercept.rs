@@ -35,6 +35,23 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             push(json);
         }
     }
+    if let DaemonEvent::AttachmentLocated {
+        marker_n,
+        abs_path,
+        rel_path,
+        name,
+    } = &frame.event
+    {
+        let env = PushEnvelope::AttachmentLocated {
+            marker_n: *marker_n,
+            abs_path: abs_path.clone(),
+            rel_path: rel_path.clone(),
+            name: name.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
     if let DaemonEvent::FileSearchResults { query, items } = &frame.event {
         let env = PushEnvelope::SearchResults {
             query: query.clone(),

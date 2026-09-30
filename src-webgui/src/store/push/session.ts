@@ -4,6 +4,7 @@ import { useComputerPreview } from '../computerPreview'
 import { normalizeGroups } from '../editorGroups'
 import { applyPaletteVars, initialActivity, initialGit, initialGraph, initialImportGraph, makeBootstrapState, makeChatTab } from '../initial'
 import type { KomaState } from '../state'
+import { useKoma } from '../koma'
 import type { ChatMessage } from '../types/chat'
 import type { PushEnvelope } from '../types/envelope'
 
@@ -405,6 +406,9 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
         break
       case 'PasteBody':
         set((s) => ({ ui: { ...s.ui, pasteBody: { markerN: env.markerN, text: env.text } } }))
+        break
+      case 'AttachmentLocated':
+        useKoma.getState().openLocalFileTab(env.absPath, env.name)
         break
     default:
       return false

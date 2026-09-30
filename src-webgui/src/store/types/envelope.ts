@@ -119,6 +119,7 @@ export type PushEnvelope =
     }
   | { k: 'SearchResults'; query: string; items: SearchResultEntry[] }
   | { k: 'PasteBody'; markerN: number; text: string }
+  | { k: 'AttachmentLocated'; markerN: number; absPath: string; relPath: string; name: string }
   // Authoritative config projection (mcp/providers/models) — global, not
   // per-session. REPLACES the whole config slice, pushed on config change and
   // on (re)attach. Also carries the active palette (theme) — Config is pushed

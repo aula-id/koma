@@ -111,6 +111,8 @@ export type Tab =
   // Coding panel file editor tab. `root` is the absolute workspace root;
   // `path` is relative to root. Stable id `coding:${root}:${path}`.
   | { id: string; kind: 'codingFile'; root: string; path: string; title: string; preview?: boolean }
+  // Session attachment or other absolute-path preview (composer image chips).
+  | { id: string; kind: 'localFile'; absPath: string; title: string }
   // One diagram canvas per `.koma/<name>.diag`. Stable id `diagram:${root}:${path}`,
   // so several diagrams stay open at once and a second click only focuses.
   | { id: string; kind: 'diagram'; root: string; path: string; title: string }

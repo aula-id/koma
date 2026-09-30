@@ -517,6 +517,7 @@ fn push_snapshot_if_changed(
                             marker_n: a.marker_n,
                             name: a.file_name().to_string(),
                             kind: "image",
+                            rel_path: a.rel_path.clone(),
                         })
                         .collect();
                     let computer = super::push_rows::computer_observation(m, &s.id);
@@ -645,6 +646,7 @@ fn push_snapshot_if_changed(
                 a.file_name().to_string()
             },
             kind: if a.is_pasted_text() { "pasted_text" } else { "image" },
+            rel_path: a.rel_path.clone(),
         })
         .collect();
 

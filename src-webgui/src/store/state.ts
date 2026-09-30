@@ -630,6 +630,7 @@ export type KomaState = {
       split?: { side: 'before' | 'after'; dir: SplitDir }
     },
   ) => void
+  openLocalFileTab: (absPath: string, title: string) => void
   saveCodingFile: (root: string, path: string) => void
   revertCodingFile: (root: string, path: string) => void
   updateCodingContent: (root: string, path: string, content: string) => void

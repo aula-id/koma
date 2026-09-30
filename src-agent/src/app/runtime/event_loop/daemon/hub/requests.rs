@@ -314,6 +314,9 @@ impl DaemonHub {
             ClientRequest::ReadPaste { marker_n } => {
                 self.read_paste(idx, state, marker_n);
             }
+            ClientRequest::ReadAttachment { marker_n } => {
+                self.read_attachment(idx, state, marker_n);
+            }
 
             // Run a `!` shell command in the foreground session's cwd, no model
             // round-trip — the same `Action::Shell` the local composer's leading-`!`

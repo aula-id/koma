@@ -538,6 +538,7 @@ const InstalledExtensionTab = lazy(() => import('../components/InstalledExtensio
 
 // Coding panel Monaco editor — lazy so its chunk only loads when a file is opened.
 const CodeEditorTab = lazy(() => import('../components/CodeEditorTab'))
+const LocalFileTab = lazy(() => import('../components/LocalFileTab'))
 const MarkdownPreviewTab = lazy(() => import('../components/MarkdownPreviewTab'))
 
 // Interactive terminal tab — lazy so its chunk (xterm.js) only loads when the
@@ -586,6 +587,8 @@ function TabBody({ tab }: { tab: Exclude<Tab, { kind: 'chat' }> }) {
         <ExtensionPanelFrame extId={tab.extId} panelId={tab.panelId} title={tab.title} />
       ) : tab.kind === 'codingFile' ? (
         tab.preview ? <MarkdownPreviewTab tab={tab} /> : <CodeEditorTab tab={tab} />
+      ) : tab.kind === 'localFile' ? (
+        <LocalFileTab tab={tab} />
       ) : tab.kind === 'terminal' ? (
         <TerminalTab tab={tab} />
       ) : tab.kind === 'diagram' ? (

@@ -264,6 +264,7 @@ pub(super) struct PushAttachment {
     pub(super) marker_n: usize,
     pub(super) name: String,
     pub(super) kind: &'static str,
+    pub(super) rel_path: String,
 }
 
 /// One sub-agent row in a [`PushEnvelope::Snapshot`]. `name` is the agent definition

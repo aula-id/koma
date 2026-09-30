@@ -186,6 +186,11 @@ pub(super) enum GuiReq {
         #[serde(rename = "markerN")]
         marker_n: usize,
     },
+    /// Resolve a staged `[Image #N]` chip to its on-disk path for preview in a coding tab.
+    ReadAttachment {
+        #[serde(rename = "markerN")]
+        marker_n: usize,
+    },
     /// Omnisearch: fuzzy-search the workspace file index. Forwarded as
     /// [`ClientRequest::FileSearch`]; the daemon's one-shot reply is re-pushed to JS as a
     /// `SearchResults` envelope by the host `push_loop`. Select a result → `AttachPath`.

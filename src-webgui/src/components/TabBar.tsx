@@ -11,6 +11,7 @@ import {
   FileDiff,
   GitGraph,
   GraduationCap,
+  Image as ImageIcon,
   MessageSquare,
   Network,
   Package,
@@ -178,6 +179,8 @@ function tabVisual(
           </>
         ),
       }
+    case 'localFile':
+      return { Icon: ImageIcon, label: tab.title, title: tab.absPath }
     case 'gitTool':
       return { Icon: GitGraph, label: `${tab.dirty ? '● ' : ''}${tab.title}`, title: `${tab.root} · ${tab.path ?? tab.title}` }
     case 'diff':

@@ -38,6 +38,7 @@ import { ModeSelector } from './ModeSelector'
 import { CatMascot } from './CatMascot'
 import { DiagramSketch } from './DiagramVisual'
 import { chipPayloadForAttachMarker, chipPayloadForFileRef } from '../lib/composerIpc'
+import { parseFileRefWire } from '../lib/composerChipOpen'
 import { ComposerPasteEditOverlay } from './ComposerPasteEditOverlay'
 import { LexicalMarkdownEditor, type LexicalEditorHandle } from './lexical/LexicalMarkdownEditor'
 
@@ -801,10 +802,18 @@ export function Composer() {
   const chipActions = useMemo(
     () => ({
       onPasteChipDoubleClick: (markerN: number) => openPasteEditor(markerN),
+      onImageChipDoubleClick: (markerN: number) => {
+        req({ r: 'ReadAttachment', markerN })
+      },
+      onFileChipDoubleClick: (wireText: string) => {
+        const workdirs = (useKoma.getState().settingsValues?.workdir ?? []).filter(Boolean)
+        const resolved = parseFileRefWire(wireText, workdirs)
+        if (!resolved) return
+        useKoma.getState().openCodingFile(resolved.root, resolved.path, { preview: false })
+      },
     }),
-    // openPasteEditor closes over req/setState — stable enough for chip decorate
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [req],
   )
 
   const removeDiagramChip = (id: string) => {

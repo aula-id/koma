@@ -56,6 +56,7 @@ declare global {
     | { r: 'UpdatePaste'; markerN: number; text: string }
     // Load a staged paste body after reload.
     | { r: 'ReadPaste'; markerN: number }
+    | { r: 'ReadAttachment'; markerN: number }
     // Rename the foreground session (no id — daemon resolves current session,
     // mirrors RefreshHub/Submit's implicit-session pattern). Tag is `Rename`
     // to match the daemon's GuiReq variant.

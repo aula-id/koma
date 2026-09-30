@@ -241,6 +241,16 @@ pub(super) enum PushEnvelope {
         marker_n: usize,
         text: String,
     },
+    /// Resolved on-disk path for a staged image attachment (composer open-in-viewer).
+    AttachmentLocated {
+        #[serde(rename = "markerN")]
+        marker_n: usize,
+        #[serde(rename = "absPath")]
+        abs_path: String,
+        #[serde(rename = "relPath")]
+        rel_path: String,
+        name: String,
+    },
     /// The authoritative GLOBAL config catalogue for the Connector + MCP panels. React
     /// REPLACES its config slices on each push. Emitted whenever the projected config
     /// changes (a full snapshot carries it) and re-emitted on `Ready` (page reload) so a

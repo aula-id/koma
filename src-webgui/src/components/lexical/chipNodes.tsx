@@ -13,6 +13,8 @@ export const COMPOSER_CHIP_MIME = 'application/x-koma-chip'
 
 export type ComposerChipActions = {
   onPasteChipDoubleClick?: (markerN: number) => void
+  onImageChipDoubleClick?: (markerN: number) => void
+  onFileChipDoubleClick?: (wireText: string) => void
 }
 
 export const ComposerChipContext = createContext<ComposerChipActions>({})
@@ -149,6 +151,7 @@ export class ComposerChipNode extends DecoratorNode<JSX.Element> {
         displayLabel={this.__displayLabel}
         kind={this.__kind}
         markerN={this.__markerN}
+        wireText={this.__wireText}
         nodeKey={this.getKey()}
       />
     )
@@ -165,11 +168,13 @@ function ComposerChipView({
   displayLabel,
   kind,
   markerN,
+  wireText,
   nodeKey,
 }: {
   displayLabel: string
   kind: ComposerChipKind
   markerN: number | null
+  wireText: string
   nodeKey: NodeKey
 }) {
   const actions = useContext(ComposerChipContext)
@@ -183,12 +188,23 @@ function ComposerChipView({
 
   const onDoubleClick = () => {
     if (kind === 'paste' && markerN != null) actions.onPasteChipDoubleClick?.(markerN)
+    else if (kind === 'image' && markerN != null) actions.onImageChipDoubleClick?.(markerN)
+    else if (kind === 'file') actions.onFileChipDoubleClick?.(wireText)
   }
+
+  const title =
+    kind === 'paste'
+      ? 'Double-click to edit paste'
+      : kind === 'image'
+        ? 'Double-click to view image'
+        : kind === 'file'
+          ? 'Double-click to open file'
+          : 'Drag grip to move'
 
   return (
     <span
       contentEditable={false}
-      title={kind === 'paste' ? 'Double-click to edit paste' : 'Drag grip to move'}
+      title={title}
       onDoubleClick={onDoubleClick}
       className={`inline-flex max-w-full items-center gap-0.5 rounded-md border px-1 py-0.5 align-baseline text-[11px] ${kindClass(kind)}`}
     >
