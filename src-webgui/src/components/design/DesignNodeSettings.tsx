@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react'
+import { Plus } from 'lucide-react'
 import {
   AlignCenterHorizontal,
   AlignCenterVertical,
@@ -192,8 +193,9 @@ export function NodeSettings({
         </button>
       ) : null}
       {onAddToChat ? (
-        <button type="button" onClick={onAddToChat} className="h-7 rounded text-koma-dim hover:bg-koma-hover">
-          Add to chat
+        <button type="button" onClick={onAddToChat} className="flex h-7 items-center gap-1 rounded px-1 text-koma-dim hover:bg-koma-hover">
+          <Plus size={14} strokeWidth={2.25} />
+          Chat
         </button>
       ) : null}
       {componentName != null ? (

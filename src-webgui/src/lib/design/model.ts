@@ -1645,7 +1645,7 @@ export function designSelectionCanvasBox(doc: DesignDoc, ids: string[]): DesignR
 /** The moving union, and every other visible box. A moving node's descendants are not targets. */
 export function designSnapScene(doc: DesignDoc, ids: string[]): { moving: DesignRect; targets: DesignRect[] } | null {
   const movingBoxes: DesignRect[] = []
-  for (const id of ids) {
+  for (const id of designRoots(doc, ids)) {
     const box = designCanvasBox(doc, id)
     if (box) movingBoxes.push(box)
   }
@@ -1863,7 +1863,7 @@ export function applyDesignStyle(doc: DesignDoc, ids: string[], style: DesignSty
   return next
 }
 
-function designRoots(doc: DesignDoc, ids: string[]): string[] {
+export function designRoots(doc: DesignDoc, ids: string[]): string[] {
   const chosen = new Set(ids)
   return ids.filter((id) => {
     const path = pathToNode(doc, id)

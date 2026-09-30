@@ -94,20 +94,19 @@ export function DesignRulers({ panX, panY, zoom, bounds }: { panX: number; panY:
 }
 
 function RulerBadge({ axis, label, at }: { axis: 'horizontal' | 'vertical'; label: string; at: number }) {
+  const className =
+    'absolute z-10 rounded border border-koma-border bg-koma-panel px-1 py-px text-[9px] font-medium leading-none text-koma-fg shadow-sm'
   if (axis === 'horizontal') {
     return (
-      <span
-        className="absolute top-0.5 z-10 -translate-x-1/2 rounded px-1 py-px text-[9px] font-medium leading-none text-white"
-        style={{ left: at, background: SELECTION }}
-      >
+      <span className={`${className} top-0.5 -translate-x-1/2`} style={{ left: at }}>
         {label}
       </span>
     )
   }
   return (
     <span
-      className="absolute z-10 rounded px-1 py-px text-[9px] font-medium leading-none text-white"
-      style={{ left: RULER_SIZE / 2, top: at, background: SELECTION, transform: 'translate(-50%, -50%) rotate(-90deg)' }}
+      className={className}
+      style={{ left: RULER_SIZE / 2, top: at, transform: 'translate(-50%, -50%) rotate(-90deg)' }}
     >
       {label}
     </span>

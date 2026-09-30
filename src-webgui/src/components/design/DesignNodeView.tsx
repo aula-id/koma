@@ -75,7 +75,7 @@ export function DesignNodeView({
   const hitHere = !locked
   return (
     <div
-      className={`absolute ${hitHere ? 'pointer-events-auto' : 'pointer-events-none'}`}
+      className={`absolute select-none ${hitHere ? 'pointer-events-auto' : 'pointer-events-none'}`}
       style={{
         left: node.x,
         top: node.y,
@@ -99,7 +99,18 @@ export function DesignNodeView({
       }}
     >
       {container ? (
-        <span className="pointer-events-none absolute left-0 truncate text-[11px] text-koma-dim" style={{ top: -16, maxWidth: Math.max(node.w, 80) }}>
+        <span
+          className={`absolute left-0 truncate text-[11px] ${selected ? 'text-koma-fg' : 'text-koma-dim'} ${hitHere && !locked && !node.locked ? 'pointer-events-auto cursor-grab' : 'pointer-events-none'}`}
+          style={{ top: -16, maxWidth: Math.max(node.w, 80) }}
+          onPointerDown={
+            hitHere && !locked && !node.locked
+              ? (event) => {
+                  event.stopPropagation()
+                  onSelect(node.id, event)
+                }
+              : undefined
+          }
+        >
           {designLayerName(node)}
         </span>
       ) : null}

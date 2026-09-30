@@ -23,6 +23,7 @@ import {
   designChatTitle,
   applyDesignStyle,
   designCanvasBox,
+  designRoots,
   designSelectionCanvasBox,
   designDrop,
   designLayerName,
@@ -597,6 +598,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       }
       if (flowing && point && !drag.broke) drag.broke = true
       setFlowBar(null)
+      const moveIds = designRoots(live, drag.ids)
       if (!drag.scene) drag.scene = designSnapScene(live, drag.ids)
       const snap = drag.scene
         ? designObjectSnap(drag.scene.moving, drag.scene.targets, screenDx, screenDy, 5 / zoom)
@@ -604,7 +606,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       setSnapMarks(snap.guides.length || snap.measures.length ? { guides: snap.guides, measures: snap.measures } : null)
       let view = live
       let frozen: string | undefined
-      for (const id of drag.ids) {
+      for (const id of moveIds) {
         const located = locateDesign(view, id)
         const origin = drag.origins[id]
         if (!located || !origin) continue
@@ -1454,7 +1456,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         <div className="flex min-h-0 flex-1">
         <div
           ref={canvasRef}
-          className={`relative min-h-0 min-w-0 flex-1 overflow-hidden ${spaceDown || tool === 'pan' ? 'cursor-grab' : ''}`}
+          className={`relative min-h-0 min-w-0 flex-1 overflow-hidden select-none ${spaceDown || tool === 'pan' ? 'cursor-grab' : ''}`}
           onPointerDown={onCanvasPointerDown}
           onContextMenu={(event) => {
             event.preventDefault()
@@ -1725,9 +1727,10 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             <button
               type="button"
               onClick={sendChat}
-              className="h-6 rounded px-2 text-[12px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+              className="flex h-6 items-center gap-1 rounded px-2 text-[12px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
             >
-              Add to chat
+              <Plus size={13} strokeWidth={2.25} />
+              Chat
             </button>
           ) : null}
           <div className="ml-auto flex items-center gap-1">
