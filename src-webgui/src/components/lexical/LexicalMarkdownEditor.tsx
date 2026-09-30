@@ -34,17 +34,22 @@ import { $setBlocksType } from '@lexical/selection'
 import {
   $createParagraphNode,
   $createTextNode,
+  $getNearestNodeFromDOMNode,
+  $getNodeByKey,
   $getRoot,
   $getSelection,
   $isRangeSelection,
   $isTextNode,
+  COMMAND_PRIORITY_CRITICAL,
   COMMAND_PRIORITY_HIGH,
+  DRAGOVER_COMMAND,
+  DROP_COMMAND,
   FORMAT_TEXT_COMMAND,
   KEY_ENTER_COMMAND,
   PASTE_COMMAND,
   type LexicalEditor,
 } from 'lexical'
-import { $createComposerChipNode, $isComposerChipNode, ComposerChipNode } from './chipNodes'
+import { $createComposerChipNode, $isComposerChipNode, COMPOSER_CHIP_MIME, ComposerChipNode } from './chipNodes'
 import { $exportLexicalMarkdown } from './lexicalMarkdown'
 import { $createNoteImageNode, $isNoteImageNode, NoteAssetsContext, NoteImageNode, type NoteAssets } from './noteImageNode'
 
@@ -118,6 +123,45 @@ function transformersFor(profile: LexicalProfile): Transformer[] {
 }
 
 
+function namedImage(file: File): File {
+  if (file.name) return file
+  const ext = file.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
+  return new File([file], `clipboard.${ext}`, { type: file.type || 'image/png' })
+}
+
+function imageFilesFrom(data: DataTransfer | null): File[] {
+  if (!data) return []
+  const files: File[] = []
+  for (const item of Array.from(data.items ?? [])) {
+    if (!item.type.startsWith('image/')) continue
+    const file = item.getAsFile()
+    if (file) files.push(namedImage(file))
+  }
+  if (files.length) return files
+  for (const file of Array.from(data.files ?? [])) {
+    if (file.type.startsWith('image/')) files.push(namedImage(file))
+  }
+  return files
+}
+
+async function readClipboardImages(): Promise<File[]> {
+  if (!navigator.clipboard?.read) return []
+  try {
+    const items = await navigator.clipboard.read()
+    const files: File[] = []
+    for (const item of items) {
+      const type = item.types.find((entry) => entry.startsWith('image/'))
+      if (!type) continue
+      const blob = await item.getType(type)
+      const ext = type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
+      files.push(new File([blob], `clipboard.${ext}`, { type }))
+    }
+    return files
+  } catch {
+    return []
+  }
+}
+
 function $chipKnownTokens(tokens: readonly string[]) {
   const sorted = [...tokens].filter((token) => token.length > 0).sort((a, b) => b.length - a.length)
   if (!sorted.length) return
@@ -179,6 +223,7 @@ function EditorPlugins({
   onMarkdown,
   onKeyDown,
   onPaste,
+  onPasteFiles,
   onSubmit,
   apiRef,
   editorElementRef,
@@ -190,6 +235,7 @@ function EditorPlugins({
   onMarkdown: (markdown: string) => void
   onKeyDown?: (event: ReactKeyboardEvent<HTMLElement>) => void
   onPaste?: (event: ClipboardEvent) => boolean
+  onPasteFiles?: (files: File[]) => void
   onSubmit?: () => void
   apiRef?: { current: LexicalEditorHandle | null }
   editorElementRef?: (el: HTMLElement | null) => void
@@ -204,6 +250,9 @@ function EditorPlugins({
   onKeyDownRef.current = onKeyDown
   const onPasteRef = useRef(onPaste)
   onPasteRef.current = onPaste
+  const onPasteFilesRef = useRef(onPasteFiles)
+  onPasteFilesRef.current = onPasteFiles
+  const imagePasteAt = useRef(0)
   const onSubmitRef = useRef(onSubmit)
   onSubmitRef.current = onSubmit
 
@@ -338,14 +387,89 @@ function EditorPlugins({
   }, [editor, profile])
 
   useEffect(() => {
-    return editor.registerCommand(
+    const deliverImages = (files: File[]) => {
+      if (!files.length) return
+      const now = performance.now()
+      if (now - imagePasteAt.current < 400) return
+      imagePasteAt.current = now
+      onPasteFilesRef.current?.(files)
+    }
+    const onNativePaste = (event: ClipboardEvent) => {
+      const files = imageFilesFrom(event.clipboardData)
+      if (!files.length) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      deliverImages(files)
+    }
+    const root = editor.getRootElement()
+    root?.addEventListener('paste', onNativePaste, true)
+    const unregisterPaste = editor.registerCommand(
       PASTE_COMMAND,
       (event) => {
-        if (!(event instanceof ClipboardEvent)) return false
-        return onPasteRef.current?.(event) ?? false
+        const data = event && 'clipboardData' in event ? event.clipboardData : null
+        const files = imageFilesFrom(data)
+        if (files.length) {
+          event.preventDefault()
+          deliverImages(files)
+          return true
+        }
+        const types = data ? Array.from(data.types) : []
+        if (types.some((type) => type.startsWith('image/'))) {
+          event.preventDefault()
+          void readClipboardImages().then(deliverImages)
+          return true
+        }
+        if (event instanceof ClipboardEvent) return onPasteRef.current?.(event) ?? false
+        return false
+      },
+      COMMAND_PRIORITY_CRITICAL,
+    )
+    const unregisterOver = editor.registerCommand(
+      DRAGOVER_COMMAND,
+      (event) => {
+        if (!event.dataTransfer?.types.includes(COMPOSER_CHIP_MIME)) return false
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'move'
+        return true
       },
       COMMAND_PRIORITY_HIGH,
     )
+    const unregisterDrop = editor.registerCommand(
+      DROP_COMMAND,
+      (event) => {
+        const plain = event.dataTransfer?.getData('text/plain') ?? ''
+        const key = event.dataTransfer?.getData(COMPOSER_CHIP_MIME) || (plain.startsWith('koma-chip:') ? plain.slice('koma-chip:'.length) : '')
+        if (!key) return false
+        event.preventDefault()
+        const range = document.caretRangeFromPoint(event.clientX, event.clientY)
+        editor.update(() => {
+          const chip = $getNodeByKey(key)
+          if (!$isComposerChipNode(chip)) return
+          const created = $createComposerChipNode(chip.getTextContent(), chip.getTone())
+          const dom = range?.startContainer
+          const el = dom instanceof Element ? dom : dom?.parentElement ?? null
+          const nearest = el ? $getNearestNodeFromDOMNode(el) : null
+          if ($isTextNode(nearest) && dom instanceof Text && range) {
+            nearest.select(Math.min(range.startOffset, nearest.getTextContentSize()), Math.min(range.startOffset, nearest.getTextContentSize()))
+            const selection = $getSelection()
+            if ($isRangeSelection(selection)) selection.insertNodes([created])
+          } else if (nearest && nearest.getKey() !== chip.getKey()) {
+            nearest.insertAfter(created)
+          } else {
+            chip.insertAfter(created)
+          }
+          chip.remove()
+        })
+        return true
+      },
+      COMMAND_PRIORITY_HIGH,
+    )
+    return () => {
+      root?.removeEventListener('paste', onNativePaste, true)
+      unregisterPaste()
+      unregisterOver()
+      unregisterDrop()
+    }
   }, [editor])
 
   return (
@@ -394,6 +518,7 @@ export function LexicalMarkdownEditor({
   controlled = false,
   onKeyDown,
   onPaste,
+  onPasteFiles,
   onSubmit,
   onFocus,
   onBlur,
@@ -412,6 +537,7 @@ export function LexicalMarkdownEditor({
   controlled?: boolean
   onKeyDown?: (event: ReactKeyboardEvent<HTMLElement>) => void
   onPaste?: (event: ClipboardEvent) => boolean
+  onPasteFiles?: (files: File[]) => void
   onSubmit?: () => void
   onFocus?: () => void
   onBlur?: () => void
@@ -467,6 +593,7 @@ export function LexicalMarkdownEditor({
           onMarkdown={onMarkdown}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
+          onPasteFiles={onPasteFiles}
           onSubmit={onSubmit}
           apiRef={apiRef}
           editorElementRef={editorRef}

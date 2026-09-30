@@ -1065,6 +1065,9 @@ export function Composer() {
           apiRef={editorApi}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
+          onPasteFiles={(files) => {
+            void attachFiles(files)
+          }}
           className={`relative z-0 max-h-[200px] min-h-[22px] overflow-y-auto text-koma-fg caret-koma-fg ${COMPOSER_FIELD_CLASS}`}
         />
 
