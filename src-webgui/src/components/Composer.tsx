@@ -15,14 +15,20 @@ import {
 } from '../lib/codingRef'
 import { diagramViewForMermaid, mermaidTitle, splitDiagramMessage } from '../lib/diagramMermaid'
 import {
-  assignFreshPasteMarkers,
+  assignFreshMarkerInserts,
+  findAttachmentMarkerRanges,
+  imageMarker,
+  insertMarkerAt,
+  markerKeysInText,
+  type MarkerInsertRow,
+} from '../lib/composerMarkers'
+import {
   formatPasteFence,
   PASTE_SOFT_MAX_BYTES,
   pasteByteLength,
   pasteMarker,
   shouldCollapsePaste,
   splitPasteMessage,
-  type PasteMarkerRow,
   type PastedBlock,
 } from '../lib/pasteText'
 import type { DiagramDoc } from '../lib/diagram'
@@ -41,6 +47,27 @@ function mintDiagramChipId(): string {
 }
 
 type LocalPaste = PastedBlock & { id: string; markerN?: number }
+
+function attachmentMarkerInInput(
+  draft: string,
+  kind: 'image' | 'pasted_text' | 'file',
+  markerN: number,
+): boolean {
+  if (kind === 'image') return draft.includes(imageMarker(markerN))
+  if (kind === 'pasted_text') return draft.includes(pasteMarker(markerN))
+  return false
+}
+
+function showAttachmentChip(
+  draft: string,
+  att: { kind: 'image' | 'file' | 'pasted_text'; markerN: number },
+  localPastes: LocalPaste[],
+): boolean {
+  if (att.kind === 'file') return true
+  if (attachmentMarkerInInput(draft, att.kind, att.markerN)) return false
+  if (att.kind === 'pasted_text' && localPastes.some((chip) => chip.markerN === att.markerN)) return false
+  return true
+}
 
 function steerPreview(text: string): string {
   const pasted = splitPasteMessage(text)
@@ -190,7 +217,7 @@ const COMPOSER_FIELD_CLASS =
 // keeps line boxes (and caret row) aligned without changing visible glyphs.
 function renderComposerOverlay(text: string, pickedTokens: Set<string>): ReactNode {
   if (text === '') return null
-  const ranges = findChipRanges(text, pickedTokens)
+  const ranges = [...findChipRanges(text, pickedTokens), ...findAttachmentMarkerRanges(text)].sort((a, b) => a[0] - b[0])
   const tail = '\u200b'
   if (ranges.length === 0) return (
     <>
@@ -207,8 +234,12 @@ function renderComposerOverlay(text: string, pickedTokens: Set<string>): ReactNo
     // the label reads at normal (tinted) text color. Purely cosmetic — `part`
     // itself (unsplit) is what was matched/compared above.
     const m = part.match(/^(@(?:\[\d+\])?)([\s\S]*)$/)
+    const attach = /^\[(?:Image|Pasted Text) #\d+\]$/.test(part)
     nodes.push(
-      <span key={i} className="rounded-[4px] bg-koma-accent/15 px-[2px] -mx-[2px] text-koma-fg">
+      <span
+        key={i}
+        className={`rounded-[4px] px-[2px] -mx-[2px] ${attach ? 'bg-koma-warn/20 text-koma-fg' : 'bg-koma-accent/15 text-koma-fg'}`}
+      >
         {m ? (
           <>
             <span className="opacity-50">{m[1]}</span>
@@ -261,8 +292,9 @@ export function Composer() {
   localPastesRef.current = localPastes
   // Fresh pastes wait here until the snapshot assigns `[Pasted Text #N]`.
   // Recalled fences are not queued: they already have a body to splice back.
-  const attachQueue = useRef<PasteMarkerRow[]>([])
-  const seenPasteMarkers = useRef(new Set<number>())
+  const markerInsertQueue = useRef<MarkerInsertRow[]>([])
+  const seenAttachmentMarkers = useRef(new Set<string>())
+  const skipAttachmentReconcile = useRef(false)
   const submitArmed = useRef(false)
   const submitRef = useRef<() => void>(() => {})
   const [pasteTexts, setPasteTexts] = useState<Record<number, string>>({})
@@ -453,10 +485,13 @@ export function Composer() {
     setOpenPaste(null)
     setLocalPastes([])
     dirtyPastes.current.clear()
-    attachQueue.current = []
+    markerInsertQueue.current = []
     submitArmed.current = false
-    seenPasteMarkers.current = new Set(
-      useKoma.getState().session.attachments.filter((item) => item.kind === 'pasted_text').map((item) => item.markerN),
+    seenAttachmentMarkers.current = new Set(
+      useKoma
+        .getState()
+        .session.attachments.filter((item) => item.kind === 'pasted_text' || item.kind === 'image')
+        .map((item) => `${item.kind}:${item.markerN}`),
     )
   }, [sessionId])
 
@@ -523,7 +558,7 @@ export function Composer() {
     // The recalled draft replaces chips that were still waiting for a marker.
     // Cancel those rows so the late number is dropped instead of appearing
     // beside the recalled message.
-    for (const row of attachQueue.current) {
+    for (const row of markerInsertQueue.current) {
       if (row.markerN == null) row.cancelled = true
     }
     submitArmed.current = false
@@ -571,11 +606,11 @@ export function Composer() {
   const submit = () => {
     // The chip is editable immediately. Send waits until the snapshot has
     // assigned `[Pasted Text #N]`, then flushes this same draft.
-    if (attachQueue.current.some((row) => !row.cancelled && row.markerN == null)) {
+    if (markerInsertQueue.current.some((row) => !row.cancelled && row.markerN == null)) {
       submitArmed.current = true
       return
     }
-    const prose = input.trim()
+    const prose = input
     const mermaid = diagramChips.map((chip) => chip.mermaid).join('\n\n')
     const designs = designChips.map((chip) => chip.text).join('\n\n')
     const locals = localPastesRef.current
@@ -583,11 +618,16 @@ export function Composer() {
     const recalled = locals.filter((item) => item.markerN == null)
     const staged = attachments.filter((item) => item.kind === 'pasted_text' && !linked.has(item.markerN))
     const fences = recalled.map((item) => formatPasteFence(item)).join('\n\n')
-    const markers = [
-      ...locals.flatMap((item) => (item.markerN != null ? [pasteMarker(item.markerN)] : [])),
-      ...staged.map((item) => pasteMarker(item.markerN)),
+    const trailingMarkers = [
+      ...locals.flatMap((item) =>
+        item.markerN != null && !prose.includes(pasteMarker(item.markerN)) ? [pasteMarker(item.markerN)] : [],
+      ),
+      ...staged.flatMap((item) => (prose.includes(pasteMarker(item.markerN)) ? [] : [pasteMarker(item.markerN)])),
+      ...attachments.flatMap((item) =>
+        item.kind === 'image' && !prose.includes(imageMarker(item.markerN)) ? [imageMarker(item.markerN)] : [],
+      ),
     ]
-    const text = [prose, mermaid, designs, fences, markers.join(' ')].filter(Boolean).join('\n\n')
+    const text = [prose.trim() ? prose : '', mermaid, designs, fences, trailingMarkers.join(' ')].filter(Boolean).join('\n\n')
     const stagedPaste = staged.length > 0 || locals.some((item) => item.markerN != null)
     if (!text && !stagedPaste) return
     const bodies = [
@@ -650,7 +690,7 @@ export function Composer() {
     setOpenPaste(null)
     // Keep cancelled rows that are still waiting for a marker so the late
     // snapshot can drop the chip the user already removed.
-    attachQueue.current = attachQueue.current.filter((row) => row.cancelled && row.markerN == null)
+    markerInsertQueue.current = markerInsertQueue.current.filter((row) => row.cancelled && row.markerN == null)
     // Swap the mascot to a new random cat on every send.
     setMascotSwap((t) => t + 1)
     // Force the transcript back to the bottom on send (re-engages the W4
@@ -663,19 +703,44 @@ export function Composer() {
   // waiting, or drop a chip the user removed before the number came back.
   // A send that landed during the wait flushes once every live row is bound.
   useEffect(() => {
-    const assigned = assignFreshPasteMarkers(attachQueue.current, seenPasteMarkers.current, attachments)
+    const assigned = assignFreshMarkerInserts(markerInsertQueue.current, seenAttachmentMarkers.current, attachments)
     if (!assigned.length) return
-    const removals = assigned.filter((row) => row.cancelled && row.markerN != null)
-    const keeps = assigned.filter((row) => !row.cancelled && row.markerN != null)
+    const removals = assigned.filter((row) => row.cancelled)
+    const keeps = assigned.filter((row) => !row.cancelled)
     for (const row of removals) {
-      if (row.markerN == null) continue
-      req({ r: 'RemoveAttachment', markerN: row.markerN, kind: 'pasted_text' })
+      req({ r: 'RemoveAttachment', markerN: row.markerN, kind: row.kind })
     }
     if (keeps.length) {
-      setLocalPastes((prev) => prev.map((item) => {
-        const hit = keeps.find((row) => row.id === item.id)
-        return hit && hit.markerN != null ? { ...item, markerN: hit.markerN, n: hit.markerN } : item
-      }))
+      setLocalPastes((prev) =>
+        prev.map((item) => {
+          const q = markerInsertQueue.current.find((row) => row.id === item.id)
+          if (!q || q.markerN == null) return item
+          return { ...item, markerN: q.markerN, n: q.markerN }
+        }),
+      )
+      const ta = textareaRef.current
+      let caret = ta?.selectionStart ?? null
+      skipAttachmentReconcile.current = true
+      setInput((prev) => {
+        let next = prev
+        for (const row of keeps) {
+          if (next.includes(row.marker)) continue
+          const at = caret ?? next.length
+          const inserted = insertMarkerAt(next, at, row.marker)
+          next = inserted.text
+          caret = inserted.caret
+        }
+        return next
+      })
+      if (caret != null && ta) {
+        requestAnimationFrame(() => {
+          ta.selectionStart = caret!
+          ta.selectionEnd = caret!
+          skipAttachmentReconcile.current = false
+        })
+      } else {
+        skipAttachmentReconcile.current = false
+      }
     }
   }, [attachments, req])
 
@@ -683,9 +748,9 @@ export function Composer() {
   // Wait until the chip state shows the marker so the body edit is what we save.
   useEffect(() => {
     if (!submitArmed.current) return
-    if (attachQueue.current.some((row) => !row.cancelled && row.markerN == null)) return
+    if (markerInsertQueue.current.some((row) => !row.cancelled && row.markerN == null)) return
     const unmarked = localPastes.some((item) => {
-      const row = attachQueue.current.find((queued) => queued.id === item.id)
+      const row = markerInsertQueue.current.find((queued) => queued.id === item.id)
       return !!row && !row.cancelled && row.markerN != null && item.markerN == null
     })
     if (unmarked) return
@@ -698,15 +763,15 @@ export function Composer() {
   // paired with this one.
   useEffect(() => {
     const waiting = localPastes.some((item) =>
-      attachQueue.current.some((row) => row.id === item.id && !row.cancelled && row.markerN == null),
+      markerInsertQueue.current.some((row) => row.id === item.id && !row.cancelled && row.markerN == null),
     )
     if (!waiting) return
     const timer = window.setTimeout(() => {
       const stuck = new Set(
-        attachQueue.current.filter((row) => row.markerN == null && !row.cancelled).map((row) => row.id),
+        markerInsertQueue.current.filter((row) => row.markerN == null && !row.cancelled).map((row) => row.id),
       )
       if (!stuck.size) return
-      attachQueue.current = attachQueue.current.filter((row) => !stuck.has(row.id))
+      markerInsertQueue.current = markerInsertQueue.current.filter((row) => !stuck.has(row.id))
       if (!submitArmed.current) return
       submitArmed.current = false
       const id = useKoma.getState().ui.toastSeq + 1
@@ -779,20 +844,27 @@ export function Composer() {
       const end = ta.selectionEnd ?? 0
       if (start === end) {
         const text = ta.value
-        const ranges = findChipRanges(text, pickedTokensRef.current)
+        const ranges = [...findChipRanges(text, pickedTokensRef.current), ...findAttachmentMarkerRanges(text)].sort(
+          (a, b) => a[0] - b[0],
+        )
         const span =
           e.key === 'Backspace' ? chipRangeForBackspace(ranges, start) : chipRangeForDelete(ranges, start)
         if (span) {
           let [spanStart, spanEnd] = span
+          const slice = text.slice(spanStart, spanEnd)
+          const image = slice.match(/^\[Image #(\d+)\]$/)
+          const paste = slice.match(/^\[Pasted Text #(\d+)\]$/)
           // Eat exactly one trailing LITERAL SPACE along with the chip (the
           // space OmniSearchPalette always inserts after it) — NOT any
           // whitespace char, since a chip sitting at end-of-line in a
           // multi-line draft would otherwise eat the newline and merge the
           // next line up.
-          if (text[spanEnd] === ' ') spanEnd += 1
+          if (!image && !paste && text[spanEnd] === ' ') spanEnd += 1
           e.preventDefault()
           caretTargetRef.current = spanStart
           setInput(text.slice(0, spanStart) + text.slice(spanEnd))
+          if (image) req({ r: 'RemoveAttachment', markerN: Number(image[1]), kind: 'image' })
+          if (paste) req({ r: 'RemoveAttachment', markerN: Number(paste[1]), kind: 'pasted_text' })
           return
         }
       }
@@ -859,6 +931,13 @@ export function Composer() {
     setInput(val)
     if (val.trim() === '' && pendingRewindIndex !== null) clearRewind()
     resetHistory()
+    if (skipAttachmentReconcile.current) return
+    const present = markerKeysInText(val)
+    for (const att of useKoma.getState().session.attachments) {
+      if (att.kind !== 'image' && att.kind !== 'pasted_text') continue
+      const key = `${att.kind}:${att.markerN}`
+      if (!present.has(key)) req({ r: 'RemoveAttachment', markerN: att.markerN, kind: att.kind })
+    }
   }
 
   const attachFiles = async (files: FileList | File[]) => {
@@ -869,16 +948,28 @@ export function Composer() {
       // corrupting the session. Silently skip non-image files here; use
       // omnisearch to reference non-image workspace files by path instead.
       if (!file.type.startsWith('image/')) continue
+      const id = mintDiagramChipId()
+      markerInsertQueue.current.push({ id, kind: 'image', markerN: null, cancelled: false })
       try {
         const bytesB64 = await readFileAsBase64(file)
         req({ r: 'AttachFile', name: file.name, bytesB64, mime: file.type || undefined })
       } catch {
-        /* unreadable file — skip */
+        markerInsertQueue.current = markerInsertQueue.current.filter((row) => row.id !== id)
       }
     }
   }
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData?.items ?? [])
+    const imageItem = items.find((item) => item.type.startsWith('image/'))
+    if (imageItem) {
+      const file = imageItem.getAsFile()
+      if (file) {
+        e.preventDefault()
+        void attachFiles([file])
+        return
+      }
+    }
     const files = Array.from(e.clipboardData?.files ?? [])
     if (files.length > 0) {
       e.preventDefault()
@@ -896,7 +987,7 @@ export function Composer() {
     if (!shouldCollapsePaste(text)) return
     e.preventDefault()
     const id = mintDiagramChipId()
-    attachQueue.current.push({ id, markerN: null, cancelled: false })
+    markerInsertQueue.current.push({ id, kind: 'pasted_text', markerN: null, cancelled: false })
     setLocalPastes((prev) => [...prev, { id, n: 0, path: '', text }])
     req({ r: 'AttachPaste', text })
   }
@@ -935,9 +1026,14 @@ export function Composer() {
 
   const removeAttachment = (markerN: number, kind: 'image' | 'file' | 'pasted_text') => {
     req({ r: 'RemoveAttachment', markerN, kind })
+    if (kind === 'image' || kind === 'pasted_text') {
+      const marker = kind === 'image' ? imageMarker(markerN) : pasteMarker(markerN)
+      setInput((prev) => (prev.includes(marker) ? prev.replace(marker, '') : prev))
+    }
     if (kind === 'pasted_text') {
       dirtyPastes.current.delete(markerN)
       setOpenPaste((current) => (current === markerN ? null : current))
+      setLocalPastes((prev) => prev.filter((item) => item.markerN !== markerN))
     }
   }
 
@@ -1129,10 +1225,10 @@ export function Composer() {
           </div>
         )}
 
-        {attachments.some((item) => item.kind !== 'pasted_text' || !localPastes.some((chip) => chip.markerN === item.markerN)) && (
+        {attachments.some((item) => showAttachmentChip(input, item, localPastes)) && (
           <div className="flex flex-col gap-1">
             <div className="flex flex-wrap gap-1">
-              {attachments.filter((item) => item.kind !== 'pasted_text' || !localPastes.some((chip) => chip.markerN === item.markerN)).map((a) => (
+              {attachments.filter((item) => showAttachmentChip(input, item, localPastes)).map((a) => (
                 <span
                   key={`${a.kind}:${a.markerN}`}
                   className="flex items-center gap-1 rounded-lg border border-koma-border bg-koma-panel2 px-2 py-1 text-[11px] text-koma-fg opacity-90"
@@ -1178,41 +1274,6 @@ export function Composer() {
               ))}
           </div>
         )}
-        {localPastes.length > 0 && (
-          <div className="flex flex-col gap-1">
-            {localPastes.map((item) => {
-              const attaching = item.markerN == null && attachQueue.current.some((row) => row.id === item.id && !row.cancelled && row.markerN == null)
-              const label = item.markerN != null ? `Pasted Text #${item.markerN}` : attaching ? 'Attaching paste…' : 'Pasted text'
-              return (
-              <span key={item.id} className="rounded-lg border border-koma-border bg-koma-panel2 px-2 py-1 text-[11px] text-koma-fg">
-                <span className="flex items-center gap-1">
-                  <span className="min-w-0 flex-1 truncate">{label}</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const row = attachQueue.current.find((queued) => queued.id === item.id)
-                      if (row && row.markerN == null) row.cancelled = true
-                      else if (item.markerN != null) removeAttachment(item.markerN, 'pasted_text')
-                      setLocalPastes((prev) => prev.filter((chip) => chip.id !== item.id))
-                    }}
-                    aria-label={`Remove ${label}`}
-                    className="flex-none opacity-60 hover:opacity-100"
-                  >
-                    <X size={11} />
-                  </button>
-                </span>
-                <textarea
-                  value={item.text}
-                  aria-label={`Edit ${label}`}
-                  onChange={(e) => setLocalPastes((prev) => prev.map((chip) => (chip.id === item.id ? { ...chip, text: e.target.value } : chip)))}
-                  className="mt-1 max-h-40 min-h-16 w-full resize-y rounded border border-koma-border bg-koma-bg px-2 py-1 text-[12px] outline-none"
-                />
-              </span>
-              )
-            })}
-          </div>
-        )}
-
         {/* Wraps ONLY the textarea: a `relative z-0` positioning root for the
             chip overlay (absolute inset-0 behind it) — isolated as its own
             z-stacking context (explicit z-0 on a positioned element) so the
