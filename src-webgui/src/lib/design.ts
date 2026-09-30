@@ -11,7 +11,7 @@ export const DESIGN_MIN_H = 8
 
 export type DesignKind = 'frame' | 'group' | 'rect' | 'ellipse' | 'line' | 'vector' | 'text' | 'instance'
 export type DesignLayout = 'row' | 'column'
-export type DesignAlign = 'start' | 'center' | 'end'
+export type DesignAlign = 'start' | 'center' | 'end' | 'space'
 export type DesignSize = 'hug' | 'fill'
 export type DesignWeight = 'regular' | 'medium' | 'bold'
 export type DesignTextAlign = 'left' | 'center' | 'right'
@@ -51,6 +51,7 @@ export type DesignPenPoint = {
 const KINDS: readonly DesignKind[] = ['frame', 'group', 'rect', 'ellipse', 'line', 'vector', 'text', 'instance']
 const LAYOUTS: readonly DesignLayout[] = ['row', 'column']
 const ALIGNS: readonly DesignAlign[] = ['start', 'center', 'end']
+const JUSTIFIES: readonly DesignAlign[] = ['start', 'center', 'end', 'space']
 const SIZES: readonly DesignSize[] = ['hug', 'fill']
 const WEIGHTS: readonly DesignWeight[] = ['regular', 'medium', 'bold']
 const TEXT_ALIGNS: readonly DesignTextAlign[] = ['left', 'center', 'right']
@@ -428,6 +429,28 @@ export function resizeDesignNode(
   if (node.kind === 'vector' && node.vector && node.w > 0 && node.h > 0 && (w !== node.w || h !== node.h)) {
     next.vector = scaleVector(node.vector, w / node.w, h / node.h)
   }
+  if (node.kind === 'group' && node.children?.length && node.w > 0 && node.h > 0 && (w !== node.w || h !== node.h)) {
+    const sx = w / node.w
+    const sy = h / node.h
+    const ax = handle.includes('w') ? node.w : 0
+    const ay = handle.includes('n') ? node.h : 0
+    next.children = node.children.map((child) => scaleNodeBox(child, sx, sy, ax, ay, handle.includes('w') ? w : 0, handle.includes('n') ? h : 0))
+  }
+  return next
+}
+
+/** Scale a subtree about an anchor, then shift that anchor onto its new content point. */
+function scaleNodeBox(node: DesignNode, sx: number, sy: number, ax: number, ay: number, newAx: number, newAy: number): DesignNode {
+  const next: DesignNode = {
+    ...node,
+    x: ax + (node.x - ax) * sx + (newAx - ax),
+    y: ay + (node.y - ay) * sy + (newAy - ay),
+    w: Math.max(1, node.w * sx),
+    h: Math.max(1, node.h * sy),
+  }
+  if (node.vector && node.w > 0 && node.h > 0) next.vector = scaleVector(node.vector, next.w / node.w, next.h / node.h)
+  if (node.fontSize) next.fontSize = Math.max(1, node.fontSize * sy)
+  if (node.children?.length) next.children = node.children.map((child) => scaleNodeBox(child, sx, sy, 0, 0, 0, 0))
   return next
 }
 
@@ -505,9 +528,24 @@ export type DesignDrop = { kind: 'stay' } | { kind: 'move'; parentId: string | n
  * A release outside joins the frame under the pointer, or the canvas when there is none.
  * x/y are the border box in the new parent's space.
  */
+/** A locked ancestor keeps its descendants. A null next parent is the canvas. */
+export function canLeaveParent(doc: DesignDoc, id: string, nextParentId: string | null): boolean {
+  const path = pathToNode(doc, id)
+  if (!path) return false
+  for (let index = path.length - 2; index >= 0; index--) {
+    const ancestor = path[index]
+    if (!ancestor?.locked) continue
+    if (nextParentId == null) return false
+    const nextPath = pathToNode(doc, nextParentId)
+    if (!nextPath?.some((node) => node.id === ancestor.id)) return false
+  }
+  return true
+}
+
 export function designDrop(doc: DesignDoc, id: string, pointerX: number, pointerY: number): DesignDrop {
   const located = locateDesign(doc, id)
   if (!located) return { kind: 'stay' }
+  if (!canLeaveParent(doc, id, null)) return { kind: 'stay' }
   const target = frameAtPoint(doc, pointerX, pointerY, id)
   const path = target ? pathToNode(doc, target) : null
   const nested = !!(located.parentId && path?.some((node, index) => node.id === located.parentId && index < path.length - 1))
@@ -520,10 +558,55 @@ export function designDrop(doc: DesignDoc, id: string, pointerX: number, pointer
   return { kind: 'move', parentId: target, x: local.x, y: local.y }
 }
 
-/** Topmost node under a canvas point. */
-export function hitDesign(doc: DesignDoc, x: number, y: number): DesignNode | null {
+/**
+ * Topmost node under a canvas point.
+ * A group hit returns the group. Pass deep to step one level into that group.
+ * A frame hit returns the child under the pointer. Clipped frames ignore points outside the frame.
+ */
+export function hitDesign(doc: DesignDoc, x: number, y: number, deep = false): DesignNode | null {
   for (let i = doc.screens.length - 1; i >= 0; i--) {
-    const found = hitIn(doc.screens[i], x, y)
+    const found = hitIn(doc.screens[i], x, y, deep)
+    if (found) return found
+  }
+  return null
+}
+
+/**
+ * The node a click should select. A selected group, or a group that contains the selection,
+ * drills one level. Otherwise a group hit stays on the group, and deep steps into it once.
+ */
+export function selectDesignHit(doc: DesignDoc, x: number, y: number, selected: readonly string[], deep: boolean): string | null {
+  const entered = enteredGroup(doc, selected, x, y)
+  if (entered) return hitGroupChild(doc, entered, x, y)?.id ?? entered
+  return hitDesign(doc, x, y, deep)?.id ?? null
+}
+
+function enteredGroup(doc: DesignDoc, selected: readonly string[], x: number, y: number): string | null {
+  let bestId: string | null = null
+  let bestDepth = -1
+  for (const id of selected) {
+    const path = pathToNode(doc, id)
+    if (!path) continue
+    for (let index = 0; index < path.length; index++) {
+      const node = path[index]
+      if (!node || node.kind !== 'group' || !pointInDesign(doc, node.id, x, y)) continue
+      if (index >= bestDepth) {
+        bestId = node.id
+        bestDepth = index
+      }
+    }
+  }
+  return bestId
+}
+
+/** One level inside a group. A nested group is returned whole. */
+export function hitGroupChild(doc: DesignDoc, groupId: string, x: number, y: number): DesignNode | null {
+  const group = findDesignNode(doc, groupId)
+  const local = canvasToContent(doc, groupId, x, y)
+  if (!group || group.kind !== 'group' || !local) return null
+  const children = group.children ?? []
+  for (let i = children.length - 1; i >= 0; i--) {
+    const found = hitIn(children[i], local.x, local.y, false)
     if (found) return found
   }
   return null
@@ -892,11 +975,36 @@ export function wrapDesignNodes(doc: DesignDoc, ids: string[], kind: 'group' | '
   wrapper.w = Math.max(1, maxX - minX)
   wrapper.h = Math.max(1, maxY - minY)
   wrapper.children = ordered.map((node) => ({ ...node, x: node.x - minX, y: node.y - minY }))
-  const first = siblings.findIndex((item) => selected.has(item.id))
+  let front = -1
+  for (let i = 0; i < siblings.length; i++) if (selected.has(siblings[i].id)) front = i
   let insertAt = 0
-  for (let i = 0; i < first; i++) if (!selected.has(siblings[i].id)) insertAt += 1
+  for (let i = 0; i < front; i++) if (!selected.has(siblings[i].id)) insertAt += 1
   const removed = unique.reduce((current, item) => deleteDesignNode(current, item), doc)
   return insertDesignNodeAt(removed, parentId, wrapper, insertAt)
+}
+
+/** Replace a group with its children. Positions land in the parent's space, including the group's flip and rotation. */
+export function unwrapDesignNode(doc: DesignDoc, id: string): DesignDoc | null {
+  const located = locateDesign(doc, id)
+  if (!located || located.node.kind !== 'group') return null
+  const group = located.node
+  const children = group.children ?? []
+  const siblings = located.parentId == null ? doc.screens : findDesignNode(doc, located.parentId)?.children ?? []
+  const index = siblings.findIndex((item) => item.id === id)
+  if (index < 0) return null
+  let next = deleteDesignNode(doc, id)
+  children.forEach((child, offset) => {
+    const spun = spinToParent(group, child.x, child.y)
+    next = insertDesignNodeAt(next, located.parentId, { ...child, x: spun.x, y: spun.y }, index + offset)
+  })
+  return next
+}
+
+/** Index in document order for a drop on the reversed layer list. Above a row is a higher index. */
+export function layerDropIndex(siblingIds: readonly string[], targetId: string, place: 'before' | 'after'): number | null {
+  const index = siblingIds.indexOf(targetId)
+  if (index < 0) return null
+  return place === 'before' ? index + 1 : index
 }
 
 /** Add auto layout. Several nodes are framed first. A lone non-frame is framed too. */
@@ -1096,10 +1204,24 @@ export function contentAngle(doc: DesignDoc, parentId: string | null, degrees: n
 }
 
 export type DesignAlignAxis = 'horizontal' | 'vertical'
-export type DesignAlignEdge = 'min' | 'center' | 'max'
+export type DesignAlignEdge = 'min' | 'center' | 'max' | 'spread'
 
-/** Move nodes so one edge of each canvas box meets the selection’s box. Positions stay parent-relative. */
+/** Move nodes so one edge of each canvas box meets the selection’s box. One node meets its parent. Positions stay parent-relative. */
 export function alignDesignNodes(doc: DesignDoc, ids: readonly string[], axis: DesignAlignAxis, edge: DesignAlignEdge): DesignDoc {
+  if (ids.length === 1 && edge !== 'spread') {
+    const located = locateDesign(doc, ids[0])
+    if (!located?.parentId) return doc
+    const parent = findDesignNode(doc, located.parentId)
+    if (!parent) return doc
+    const node = located.node
+    const x = axis === 'horizontal' ? edge === 'min' ? 0 : edge === 'max' ? parent.w - node.w : (parent.w - node.w) / 2 : node.x
+    const y = axis === 'vertical' ? edge === 'min' ? 0 : edge === 'max' ? parent.h - node.h : (parent.h - node.h) / 2 : node.y
+    return updateDesignNode(doc, node.id, (current) => {
+      const moved: DesignNode = { ...current, x, y }
+      if (parent.layout && !current.absolute) moved.absolute = true
+      return moved
+    })
+  }
   const boxes: { id: string; parentId: string | null; box: { x: number; y: number; w: number; h: number }; stick: boolean }[] = []
   for (const id of ids) {
     const path = pathToNode(doc, id)
@@ -1123,6 +1245,34 @@ export function alignDesignNodes(doc: DesignDoc, ids: readonly string[], axis: D
     })
   }
   if (boxes.length < 2) return doc
+  if (edge === 'spread') {
+    if (boxes.length < 3) return doc
+    const ordered = boxes.slice().sort((a, b) => axis === 'horizontal' ? a.box.x - b.box.x : a.box.y - b.box.y)
+    const first = ordered[0]
+    const last = ordered[ordered.length - 1]
+    const span = axis === 'horizontal' ? last.box.x + last.box.w - first.box.x : last.box.y + last.box.h - first.box.y
+    const used = ordered.reduce((sum, item) => sum + (axis === 'horizontal' ? item.box.w : item.box.h), 0)
+    const gap = (span - used) / (ordered.length - 1)
+    let cursor = axis === 'horizontal' ? first.box.x : first.box.y
+    const moves: { id: string; x: number; y: number; stick: boolean }[] = []
+    for (const item of ordered) {
+      const dx = axis === 'horizontal' ? cursor - item.box.x : 0
+      const dy = axis === 'vertical' ? cursor - item.box.y : 0
+      const delta = canvasDeltaToSpace(doc, item.parentId, dx, dy)
+      const node = locateDesign(doc, item.id)?.node
+      if (node) moves.push({ id: item.id, x: node.x + delta.x, y: node.y + delta.y, stick: item.stick })
+      cursor += (axis === 'horizontal' ? item.box.w : item.box.h) + gap
+    }
+    let next = doc
+    for (const move of moves) {
+      next = updateDesignNode(next, move.id, (node) => {
+        const moved: DesignNode = { ...node, x: move.x, y: move.y }
+        if (move.stick) moved.absolute = true
+        return moved
+      })
+    }
+    return next
+  }
   const minX = Math.min(...boxes.map((item) => item.box.x))
   const minY = Math.min(...boxes.map((item) => item.box.y))
   const maxX = Math.max(...boxes.map((item) => item.box.x + item.box.w))
@@ -1320,8 +1470,44 @@ function layoutNode(node: DesignNode, frozenId?: string): DesignNode {
     })
     if (changed) next = { ...node, children }
   }
+  if (next.kind === 'group') next = fitGroup(next)
   if (next.kind !== 'frame' || !next.layout) return next
   return placeFlow(next, frozenId)
+}
+
+/** Pull a group's box onto the union of its children without moving them on the canvas. */
+function fitGroup(group: DesignNode): DesignNode {
+  const children = group.children
+  if (!children?.length) return group
+  const boxes = children.map(nodeBounds)
+  const minX = Math.min(...boxes.map((box) => box.x))
+  const minY = Math.min(...boxes.map((box) => box.y))
+  const maxX = Math.max(...boxes.map((box) => box.x + box.w))
+  const maxY = Math.max(...boxes.map((box) => box.y + box.h))
+  const w = Math.max(1, maxX - minX)
+  const h = Math.max(1, maxY - minY)
+  if (minX === 0 && minY === 0 && w === group.w && h === group.h) return group
+  const shifted = children.map((child) => child.x === child.x - minX && child.y === child.y - minY ? child : { ...child, x: child.x - minX, y: child.y - minY })
+  const origin = groupOrigin(group, minX, minY, w, h)
+  return { ...group, x: origin.x, y: origin.y, w, h, children: shifted }
+}
+
+/** Parent-space origin after the content union slides to (0, 0). Flip and rotation keep each child put. */
+function groupOrigin(group: DesignNode, minX: number, minY: number, w: number, h: number): DesignVectorPoint {
+  const spun = (x: number, y: number) => {
+    const scaledX = x * (group.flipX ? -1 : 1)
+    const scaledY = y * (group.flipY ? -1 : 1)
+    return rotateAround(scaledX, scaledY, 0, 0, group.rotation ?? 0)
+  }
+  const oldCenter = { x: group.w / 2, y: group.h / 2 }
+  const newCenter = { x: w / 2, y: h / 2 }
+  const spunOld = spun(oldCenter.x, oldCenter.y)
+  const spunNew = spun(newCenter.x, newCenter.y)
+  const spunMin = spun(minX, minY)
+  return {
+    x: group.x + (oldCenter.x - spunOld.x) - (newCenter.x - spunNew.x) + spunMin.x,
+    y: group.y + (oldCenter.y - spunOld.y) - (newCenter.y - spunNew.y) + spunMin.y,
+  }
 }
 
 function placeFlow(frame: DesignNode, frozenId?: string): DesignNode {
@@ -1364,9 +1550,11 @@ function placeFlow(frame: DesignNode, frozenId?: string): DesignNode {
     return { child, main: Math.max(8, main), cross: Math.max(8, cross) }
   })
   const used = measured.reduce((sum, item) => sum + item.main, 0) + gaps
+  const space = justify === 'space' && measured.length > 1
+  const between = space ? Math.max(0, (innerMain - measured.reduce((sum, item) => sum + item.main, 0)) / (measured.length - 1)) : gap
   let cursor = pad
-  if (justify === 'center') cursor = pad + Math.max(0, innerMain - used) / 2
-  if (justify === 'end') cursor = pad + Math.max(0, innerMain - used)
+  if (!space && justify === 'center') cursor = pad + Math.max(0, innerMain - used) / 2
+  if (!space && justify === 'end') cursor = pad + Math.max(0, innerMain - used)
   const placed = new Map<string, DesignNode>()
   for (const item of measured) {
     const crossPos = align === 'center' ? pad + (innerCross - item.cross) / 2 : align === 'end' ? pad + innerCross - item.cross : pad
@@ -1375,7 +1563,7 @@ function placeFlow(frame: DesignNode, frozenId?: string): DesignNode {
     const w = horizontal ? item.main : item.cross
     const h = horizontal ? item.cross : item.main
     placed.set(item.child.id, item.child.x === x && item.child.y === y && item.child.w === w && item.child.h === h ? item.child : { ...item.child, x, y, w, h })
-    cursor += item.main + gap
+    cursor += item.main + between
   }
   const nextChildren = children.map((child) => placed.get(child.id) ?? child)
   if (width === frame.w && height === frame.h && nextChildren.every((child, index) => child === children[index])) return frame
@@ -1400,15 +1588,28 @@ function locateIn(node: DesignNode, id: string): { node: DesignNode; parentId: s
   return null
 }
 
-function hitIn(node: DesignNode, x: number, y: number): DesignNode | null {
+function hitIn(node: DesignNode, x: number, y: number, deep: boolean): DesignNode | null {
   if (node.visible === false || node.locked) return null
   const local = parentPointToContent(node, x, y)
-  if (!insideNode(node, local, node.kind === 'line' ? 6 : 0)) return null
+  const inside = insideNode(node, local, node.kind === 'line' ? 6 : 0)
+  if (node.kind === 'group') {
+    if (!inside) return null
+    if (deep) {
+      const children = node.children ?? []
+      for (let i = children.length - 1; i >= 0; i--) {
+        const found = hitIn(children[i], local.x, local.y, false)
+        if (found) return found
+      }
+    }
+    return node
+  }
+  if ((node.kind === 'frame' || node.kind === 'instance') && !inside) return null
   const children = node.children ?? []
   for (let i = children.length - 1; i >= 0; i--) {
-    const found = hitIn(children[i], local.x, local.y)
+    const found = hitIn(children[i], local.x, local.y, deep)
     if (found) return found
   }
+  if (!inside) return null
   return node
 }
 
@@ -1568,7 +1769,7 @@ function parseNode(value: unknown): DesignNode | null {
     if (gap != null && gap > 0) node.gap = gap
     if (pad != null && pad > 0) node.pad = pad
     const align = oneOf(row.align, ALIGNS)
-    const justify = oneOf(row.justify, ALIGNS)
+    const justify = oneOf(row.justify, JUSTIFIES)
     if (align && align !== 'start') node.align = align
     if (justify && justify !== 'start') node.justify = justify
   }

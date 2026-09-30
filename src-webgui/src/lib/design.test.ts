@@ -13,6 +13,7 @@ import {
   designChatNote,
   designChatText,
   designCoordinateText,
+  canLeaveParent,
   designDrop,
   designPath,
   designQueryNode,
@@ -32,6 +33,9 @@ import {
   stackDesign,
   vectorSvgPath,
   wrapDesignNodes,
+  unwrapDesignNode,
+  layerDropIndex,
+  hitGroupChild,
   dropDesignToken,
   layoutDesign,
   reorderDesignNode,
@@ -661,6 +665,11 @@ function sample(): DesignDoc {
   assert.equal(designDrop(doc, 'r', 120, 140).kind, 'stay')
   const outside = designDrop(doc, 'r', 900, 900)
   assert.equal(outside.kind, 'move')
+  const lockedFrame = setDesignLocked(doc, 'board', true)
+  assert.equal(designDrop(lockedFrame, 'r', 900, 900).kind, 'stay')
+  assert.equal(canLeaveParent(lockedFrame, 'r', null), false)
+  assert.equal(canLeaveParent(lockedFrame, 'r', 'board'), true)
+  assert.equal(designDrop(setDesignLocked(lockedFrame, 'board', false), 'r', 900, 900).kind, 'move')
   if (outside.kind === 'move') {
     assert.equal(outside.parentId, null)
     assert.equal(outside.x, 70)
@@ -679,4 +688,59 @@ function sample(): DesignDoc {
   assert.equal(deleteDesignComponent(doc, 'missing'), null)
   assert.ok(designCoordinateText(doc, frame).includes('Rectangle 100×100 at (40, 50)'))
   assert.ok(designCoordinateText(doc, frame).includes('flipX'))
+}
+
+{
+  const frame = createNode('frame', 'board', 0, 0)
+  frame.w = 400
+  frame.h = 200
+  const a = createNode('rect', 'a', 10, 20)
+  a.w = 40
+  a.h = 30
+  const b = createNode('rect', 'b', 80, 40)
+  b.w = 30
+  b.h = 20
+  const c = createNode('rect', 'c', 140, 10)
+  c.w = 20
+  c.h = 20
+  frame.children = [a, b, c]
+  const doc = { ...emptyDesign(), screens: [frame] }
+  const grouped = wrapDesignNodes(doc, ['a', 'c'], 'group', 'g')
+  assert.deepEqual(grouped?.screens[0].children?.map((node) => node.id), ['b', 'g'])
+  assert.equal(nodeBoxOrigin(grouped!, 'a')?.x, 10)
+  assert.equal(nodeBoxOrigin(grouped!, 'a')?.y, 20)
+  assert.equal(nodeBoxOrigin(grouped!, 'c')?.x, 140)
+  assert.equal(hitDesign(grouped!, 20, 30)?.id, 'g')
+  assert.equal(hitDesign(grouped!, 20, 30, true)?.id, 'a')
+  assert.equal(hitDesign(grouped!, 90, 55)?.id, 'b')
+  const shifted = updateDesignNode(grouped!, 'a', (node) => ({ ...node, x: node.x + 30 }))
+  const fitted = layoutDesign(shifted)
+  assert.equal(nodeBoxOrigin(fitted, 'a')?.x, 40)
+  assert.equal(nodeBoxOrigin(fitted, 'a')?.y, 20)
+  const flipped = flipDesignNode(grouped!, 'g', 'x')
+  const opened = unwrapDesignNode(flipped, 'g')
+  assert.equal(opened?.screens[0].children?.map((node) => node.id).join(','), 'b,a,c')
+  assert.equal(nodeBoxOrigin(opened!, 'a')?.x, nodeBoxOrigin(flipped, 'a')?.x)
+  assert.equal(nodeBoxOrigin(opened!, 'a')?.y, nodeBoxOrigin(flipped, 'a')?.y)
+  assert.equal(layerDropIndex(['a', 'b', 'c'], 'b', 'before'), 2)
+  assert.equal(layerDropIndex(['a', 'b', 'c'], 'b', 'after'), 1)
+  const raised = moveDesignNode({ ...emptyDesign(), screens: [a, b, c] }, 'a', null, layerDropIndex(['a', 'b', 'c'], 'b', 'before') ?? 0)
+  assert.deepEqual(raised.screens.map((node) => node.id), ['b', 'a', 'c'])
+  const row = createNode('frame', 'row', 0, 0)
+  row.w = 200
+  row.h = 40
+  row.layout = 'row'
+  row.pad = 10
+  row.justify = 'space'
+  const left = createNode('rect', 'l', 0, 0)
+  left.w = 40
+  left.h = 20
+  const right = createNode('rect', 'r', 0, 0)
+  right.w = 40
+  right.h = 20
+  row.children = [left, right]
+  const spaced = layoutDesign({ ...emptyDesign(), screens: [row] })
+  assert.equal(spaced.screens[0].children?.[0].x, 10)
+  assert.equal(spaced.screens[0].children?.[1].x, 150)
+  assert.equal(hitGroupChild(grouped!, 'g', 20, 30)?.id, 'a')
 }

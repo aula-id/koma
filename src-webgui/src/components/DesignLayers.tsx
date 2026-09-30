@@ -1,6 +1,6 @@
-import { useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { ChevronRight, Circle, Component, Eye, EyeOff, Frame, Group, Lock, LockOpen, Minus, Spline, Square, Type } from 'lucide-react'
-import { designLayerName, isDesignContainer, type DesignDoc, type DesignNode } from '../lib/design'
+import { designLayerName, designPath, isDesignContainer, layerDropIndex, type DesignDoc, type DesignNode } from '../lib/design'
 
 const LAYER_MIME = 'application/x-koma-layer'
 let layerDrag: { x: number; y: number } | null = null
@@ -26,6 +26,23 @@ export function DesignLayers({
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<string | null>(null)
+  const selectedId = selection[selection.length - 1] ?? null
+  useEffect(() => {
+    if (!selectedId) return
+    const path = designPath(doc, selectedId) ?? []
+    setCollapsed((current) => {
+      let changed = false
+      const next = new Set(current)
+      for (const node of path) {
+        if (node.id !== selectedId && next.delete(node.id)) changed = true
+      }
+      return changed ? next : current
+    })
+  }, [doc, selectedId])
+  useEffect(() => {
+    if (!selectedId) return
+    document.querySelector(`[data-layer-id="${CSS.escape(selectedId)}"]`)?.scrollIntoView({ block: 'nearest' })
+  }, [collapsed, doc, selectedId])
   const screens = doc.screens.slice().reverse()
   return (
     <aside className="flex min-h-0 flex-1 flex-col" onContextMenu={(event) => event.preventDefault()}>
@@ -124,9 +141,9 @@ function LayerList({
                   onMove(dragId, node.id, children.length)
                   return
                 }
-                const index = siblings.findIndex((item) => item.id === node.id)
-                if (index < 0) return
-                onMove(dragId, parentId, place === 'before' ? index + 1 : index)
+                const index = layerDropIndex(siblings.map((item) => item.id), node.id, place)
+                if (index == null) return
+                onMove(dragId, parentId, index)
               }}
             />
             {container && open ? (
@@ -221,6 +238,7 @@ function LayerRow({
         const dragId = event.dataTransfer.getData(LAYER_MIME)
         if (dragId && dragId !== node.id) onDrop(dragId, next)
       }}
+      data-layer-id={node.id}
       className={`group relative flex h-7 items-center gap-1 pr-1 text-[12px] ${selected ? 'bg-koma-accent/20 text-koma-fg' : 'text-koma-fg/80 hover:bg-koma-hover'} ${hidden ? 'opacity-45' : ''}`}
       style={{ paddingLeft: 8 + depth * 14 }}
       onClick={(event) => onSelect(event.shiftKey)}

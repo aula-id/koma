@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { AlignCenterHorizontal, AlignCenterVertical, AlignEndHorizontal, AlignEndVertical, AlignStartHorizontal, AlignStartVertical, ChevronRight, Circle, Frame, Hand, Minus, MousePointer2, PenTool, Plus, Square, Type, PanelRightClose, PanelRightOpen, X } from 'lucide-react'
+import { AlignCenterHorizontal, AlignCenterVertical, AlignEndHorizontal, AlignEndVertical, AlignHorizontalSpaceBetween, AlignStartHorizontal, AlignStartVertical, AlignVerticalSpaceBetween, ArrowDown, ArrowRight, ChevronRight, Circle, Component, Eye, EyeOff, FlipHorizontal2, FlipVertical2, Frame, Group, Hand, Minus, MousePointer2, PenTool, Plus, RotateCw, Spline, Square, TextAlignCenter, TextAlignEnd, TextAlignStart, Type, PanelRightClose, PanelRightOpen, X } from 'lucide-react'
 import { TokenEditor } from './panels/DesignPanel'
 import { DesignMenu, type DesignMenuItem } from './DesignMenu'
 import { getDesignUi, publishDesignUi, type DesignLayerOp } from '../lib/designUi'
@@ -9,6 +9,7 @@ import {
   alignDesignNodes,
   addComponentVariant,
   autoLayoutDesign,
+  canLeaveParent,
   canvasDeltaToSpace,
   canvasToContent,
   componentView,
@@ -44,6 +45,7 @@ import {
   resizeDesignNode,
   resolveInstanceTree,
   resolveRef,
+  selectDesignHit,
   selectDesignRect,
   sharedValue,
   serializeDesign,
@@ -58,6 +60,7 @@ import {
   updateDesignNode,
   vectorSvgPath,
   writeComponentView,
+  unwrapDesignNode,
   wrapDesignNodes,
   type DesignAlignAxis,
   type DesignAlignEdge,
@@ -105,6 +108,7 @@ type DesignCommands = {
   paste: (at?: { x: number; y: number }) => void
   remove: () => void
   wrap: (kind: 'group' | 'frame') => void
+  unwrap: () => void
   order: (order: DesignOrder) => void
   flip: (axis: 'x' | 'y') => void
   hide: () => void
@@ -733,9 +737,15 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         commandsRef.current?.paste()
         return
       }
-      if (meta && event.key.toLowerCase() === 'g') {
+      if (meta && !event.altKey && event.key.toLowerCase() === 'g') {
         event.preventDefault()
-        commandsRef.current?.wrap(event.shiftKey ? 'frame' : 'group')
+        if (event.shiftKey) commandsRef.current?.unwrap()
+        else commandsRef.current?.wrap('group')
+        return
+      }
+      if (meta && event.altKey && !event.shiftKey && event.key.toLowerCase() === 'g') {
+        event.preventDefault()
+        commandsRef.current?.wrap('frame')
         return
       }
       if (meta && event.shiftKey && event.key.toLowerCase() === 'h') {
@@ -944,6 +954,23 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       commit(next)
       setSelection([id])
     },
+    unwrap: () => {
+      const open = viewDoc()
+      const ids = selectionRef.current
+      if (!open || !ids.length) return
+      let next = open.doc
+      const released: string[] = []
+      for (const id of ids) {
+        const children = findDesignNode(next, id)?.children?.map((child) => child.id) ?? []
+        const unwrapped = unwrapDesignNode(next, id)
+        if (!unwrapped) continue
+        next = unwrapped
+        released.push(...children)
+      }
+      if (!released.length || serializeDesign(next) === serializeDesign(open.doc)) return
+      commit(next)
+      setSelection(released)
+    },
     order: (order) => {
       const open = viewDoc()
       const ids = selectionRef.current
@@ -1032,6 +1059,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     }
     if (action.op === 'move') {
       if (focusRef.current && action.parentId == null && locateDesign(open.doc, action.id)?.parentId != null) return
+      if (!canLeaveParent(open.doc, action.id, action.parentId)) return
       commit(moveDesignNode(open.doc, action.id, action.parentId, action.index))
       return
     }
@@ -1349,12 +1377,16 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   if (event.button !== 0 || toolRef.current !== 'select') return
                   event.preventDefault()
                   event.stopPropagation()
-                  const ids = event.shiftKey ? selection.includes(id) ? selection.filter((item) => item !== id) : [...selection, id] : selection.includes(id) ? selection : [id]
+                  const storedNow = useKoma.getState().design.docs[key]?.doc
+                  const current = storedNow ? editingDoc(storedNow, focusRef.current) : doc
+                  const point = toDoc(event.clientX, event.clientY)
+                  const target = point ? selectDesignHit(current, point.x, point.y, selectionRef.current, event.detail >= 2) ?? id : id
+                  const previous = selectionRef.current
+                  const ids = event.shiftKey ? previous.includes(target) ? previous.filter((item) => item !== target) : [...previous, target] : previous.includes(target) ? previous : [target]
+                  selectionRef.current = ids
                   setSelection(ids)
                   setPropsOpen(true)
                   if (event.shiftKey) return
-                  const storedNow = useKoma.getState().design.docs[key]?.doc
-                  const current = storedNow ? editingDoc(storedNow, focusRef.current) : doc
                   const origins: Record<string, { x: number; y: number }> = {}
                   for (const item of ids) {
                     const row = locateDesign(current, item)
@@ -1607,7 +1639,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 if (next) commitStored(next)
               } : undefined}
               onAddToChat={!multi && chatQuery ? sendChat : undefined}
-              onAlign={multi ? (axis, edge) => {
+              onAlign={selectedNodes.length && (multi || everyParent) ? (axis, edge) => {
                 const stored = useKoma.getState().design.docs[key]?.doc
                 if (!stored) return
                 commit(alignDesignNodes(editingDoc(stored, focusRef.current), selection, axis, edge))
@@ -1647,6 +1679,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             else if (id === 'paste-here') commands.paste({ x: here.canvasX, y: here.canvasY })
             else if (id === 'front' || id === 'forward' || id === 'backward' || id === 'back') commands.order(id)
             else if (id === 'group') commands.wrap('group')
+            else if (id === 'ungroup') commands.unwrap()
             else if (id === 'frame-selection') commands.wrap('frame')
             else if (id === 'auto') commands.auto()
             else if (id === 'component') commands.component()
@@ -1712,6 +1745,7 @@ function designMenuItems(doc: DesignDoc, selection: string[], x: number, y: numb
   const selected = selection.length > 0
   const rows = selection.map((id) => locateDesign(doc, id))
   const sameParent = rows.length > 0 && rows.every((row) => row && row.parentId === rows[0]?.parentId)
+  const canUngroup = rows.some((row) => row?.node.kind === 'group')
   const stack = stackDesign(doc, x, y).slice(0, 12)
   return [
     { id: 'copy', label: 'Copy', shortcut: '⌘C', disabled: !sameParent },
@@ -1726,7 +1760,8 @@ function designMenuItems(doc: DesignDoc, selection: string[], x: number, y: numb
     { id: 'back', label: 'Send to back', shortcut: '⌘[', disabled: !selected },
     { id: 'divider-3', label: '' },
     { id: 'group', label: 'Group selection', shortcut: '⌘G', disabled: !sameParent },
-    { id: 'frame-selection', label: 'Frame selection', shortcut: '⇧⌘G', disabled: !sameParent },
+    { id: 'ungroup', label: 'Ungroup', shortcut: '⇧⌘G', disabled: !canUngroup },
+    { id: 'frame-selection', label: 'Frame selection', shortcut: '⌥⌘G', disabled: !sameParent },
     { id: 'auto', label: 'Add auto layout', disabled: !sameParent },
     { id: 'component', label: 'Create component', disabled: !canComponent },
     { id: 'divider-4', label: '' },
@@ -2036,6 +2071,15 @@ function NodeSettings({
   const colorField = textOf((item) => textStyle(item).color || 'none')
   const absoluteField = textOf((item) => (item.absolute ? 'on' : 'off'))
   const flows = nodes.every((item) => item.layout === 'row' || item.layout === 'column')
+  const flipXOn = nodes.every((item) => !!item.flipX)
+  const flipYOn = nodes.every((item) => !!item.flipY)
+  const columnLayout = !layoutField.mixed && layoutField.value === 'column'
+  const setJustify = (justify: 'start' | 'center' | 'end' | 'space') => {
+    setField(justify === 'start' ? {} : { justify }, justify === 'start' ? ['justify'] : [])
+  }
+  const setCross = (align: 'start' | 'center' | 'end') => {
+    setField(align === 'start' ? {} : { align }, align === 'start' ? ['align'] : [])
+  }
   return (
     <div className="flex flex-col gap-3 px-3 pb-3 text-[12px]">
       {onMakeComponent ? (
@@ -2113,11 +2157,14 @@ function NodeSettings({
         </button>
       ) : null}
       {multi ? null : (
-        <label className="flex flex-col gap-1">
-          <span className="text-koma-dim">{node.kind === 'text' || node.kind === 'instance' ? 'Text' : 'Name'}</span>
+        <label className="flex items-center gap-1">
+          <span className={`flex h-7 w-7 flex-none items-center justify-center ${node.kind === 'instance' ? 'text-[#9747ff]' : 'text-koma-dim'}`}>
+            <KindMark kind={node.kind} />
+          </span>
           <input
+            aria-label={node.kind === 'text' || node.kind === 'instance' ? 'Text' : 'Name'}
             value={node.kind === 'text' || node.kind === 'instance' ? node.text ?? '' : node.name ?? ''}
-            placeholder={node.kind === 'instance' ? 'Override' : undefined}
+            placeholder={node.kind === 'instance' ? 'Override' : node.kind === 'text' ? 'Text' : 'Name'}
             onFocus={onTypeFocus}
             onBlur={onTypeBlur}
             onChange={(event) => {
@@ -2133,34 +2180,50 @@ function NodeSettings({
                 return { ...current, name: value || undefined }
               })
             }}
-            className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+            className="h-7 min-w-0 flex-1 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
           />
         </label>
       )}
-      <Section title="Position">
-        {multi && onAlign ? (
-          <div className="flex items-center justify-between gap-1">
-            <div className="flex gap-0.5">
-              <AlignButton label="Align left" onClick={() => onAlign('horizontal', 'min')}><AlignStartVertical size={14} /></AlignButton>
-              <AlignButton label="Align center" onClick={() => onAlign('horizontal', 'center')}><AlignCenterVertical size={14} /></AlignButton>
-              <AlignButton label="Align right" onClick={() => onAlign('horizontal', 'max')}><AlignEndVertical size={14} /></AlignButton>
-            </div>
-            <div className="flex gap-0.5">
-              <AlignButton label="Align top" onClick={() => onAlign('vertical', 'min')}><AlignStartHorizontal size={14} /></AlignButton>
-              <AlignButton label="Align middle" onClick={() => onAlign('vertical', 'center')}><AlignCenterHorizontal size={14} /></AlignButton>
-              <AlignButton label="Align bottom" onClick={() => onAlign('vertical', 'max')}><AlignEndHorizontal size={14} /></AlignButton>
-            </div>
+      {onAlign ? (
+        <div className="flex flex-wrap items-center gap-1">
+          <div className="flex gap-0.5">
+            <AlignButton label="Align left" onClick={() => onAlign('horizontal', 'min')}><AlignStartVertical size={14} /></AlignButton>
+            <AlignButton label="Align center" onClick={() => onAlign('horizontal', 'center')}><AlignCenterVertical size={14} /></AlignButton>
+            <AlignButton label="Align right" onClick={() => onAlign('horizontal', 'max')}><AlignEndVertical size={14} /></AlignButton>
           </div>
-        ) : null}
+          <div className="flex gap-0.5">
+            <AlignButton label="Align top" onClick={() => onAlign('vertical', 'min')}><AlignStartHorizontal size={14} /></AlignButton>
+            <AlignButton label="Align middle" onClick={() => onAlign('vertical', 'center')}><AlignCenterHorizontal size={14} /></AlignButton>
+            <AlignButton label="Align bottom" onClick={() => onAlign('vertical', 'max')}><AlignEndHorizontal size={14} /></AlignButton>
+          </div>
+          {nodes.length >= 3 && hasParent ? (
+            <div className="flex gap-0.5">
+              <AlignButton label="Distribute horizontal" onClick={() => onAlign('horizontal', 'spread')}><AlignHorizontalSpaceBetween size={14} /></AlignButton>
+              <AlignButton label="Distribute vertical" onClick={() => onAlign('vertical', 'spread')}><AlignVerticalSpaceBetween size={14} /></AlignButton>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      <Section title="Position">
         <div className="grid grid-cols-2 gap-1">
           <GeomField label="X" value={xField.value} mixed={xField.mixed} onChange={(x) => setField({ x })} />
           <GeomField label="Y" value={yField.value} mixed={yField.mixed} onChange={(y) => setField({ y })} />
-          {multi ? (
-            <>
+          <div className="flex min-w-0 gap-1">
+            <div className="min-w-0 flex-1">
               <GeomField label="W" value={wField.value} mixed={wField.mixed} onChange={(w) => setField({ w: Math.max(1, w) }, ['wMode'])} />
+            </div>
+            {sizeModes ? (
+              <SizeMode label="Width sizing" value={wModeField.value} mixed={wModeField.mixed} onChange={(mode) => setField(mode === 'fixed' ? {} : { wMode: mode }, mode === 'fixed' ? ['wMode'] : [])} />
+            ) : null}
+          </div>
+          <div className="flex min-w-0 gap-1">
+            <div className="min-w-0 flex-1">
               <GeomField label="H" value={hField.value} mixed={hField.mixed} onChange={(h) => setField({ h: Math.max(1, h) }, ['hMode'])} />
-            </>
-          ) : null}
+            </div>
+            {sizeModes ? (
+              <SizeMode label="Height sizing" value={hModeField.value} mixed={hModeField.mixed} onChange={(mode) => setField(mode === 'fixed' ? {} : { hMode: mode }, mode === 'fixed' ? ['hMode'] : [])} />
+            ) : null}
+          </div>
         </div>
         <div className="flex items-center gap-1">
           <div className="min-w-0 flex-1">
@@ -2169,100 +2232,76 @@ function NodeSettings({
               setField(wrapped ? { rotation: wrapped } : {}, wrapped ? [] : ['rotation'])
             }} />
           </div>
-          <button type="button" aria-label="Flip horizontal" title="Flip horizontal" onClick={() => onPatch((current) => {
+          <AlignButton label="Flip horizontal" pressed={flipXOn} onClick={() => onPatch((current) => {
             const next = { ...current }
             if (current.flipX) delete next.flipX
             else next.flipX = true
             return next
-          })} className="h-7 rounded px-2 text-koma-dim hover:bg-koma-hover hover:text-koma-fg">Flip H</button>
-          <button type="button" aria-label="Flip vertical" title="Flip vertical" onClick={() => onPatch((current) => {
+          })}><FlipHorizontal2 size={14} /></AlignButton>
+          <AlignButton label="Flip vertical" pressed={flipYOn} onClick={() => onPatch((current) => {
             const next = { ...current }
             if (current.flipY) delete next.flipY
             else next.flipY = true
             return next
-          })} className="h-7 rounded px-2 text-koma-dim hover:bg-koma-hover hover:text-koma-fg">Flip V</button>
-          <button type="button" aria-label="Rotate 90 degrees" title="Rotate 90 degrees" onClick={() => onPatch((current) => {
+          })}><FlipVertical2 size={14} /></AlignButton>
+          <AlignButton label="Rotate 90 degrees" onClick={() => onPatch((current) => {
             const wrapped = (((current.rotation ?? 0) + 90) % 360 + 360) % 360
             const next = { ...current }
             if (wrapped) next.rotation = wrapped
             else delete next.rotation
             return next
-          })} className="h-7 rounded px-2 text-koma-dim hover:bg-koma-hover hover:text-koma-fg">90°</button>
+          })}><RotateCw size={14} /></AlignButton>
         </div>
       </Section>
-      {!multi || allFrames ? (
+      {allFrames || hasParent ? (
       <Section title="Layout">
-        {multi ? null : (
-          <div className="grid grid-cols-2 gap-1">
-            <GeomField label="W" value={node.w} onChange={(w) => setField({ w: Math.max(1, w) }, ['wMode'])} />
-            <GeomField label="H" value={node.h} onChange={(h) => setField({ h: Math.max(1, h) }, ['hMode'])} />
-          </div>
-        )}
       {allFrames ? (
-        <Choices
-          label="Layout"
-          mixed={layoutField.mixed}
-          value={layoutField.value}
-          options={[
-            { value: 'free', label: 'Free' },
-            { value: 'row', label: 'Row' },
-            { value: 'column', label: 'Column' },
-          ]}
-          onChange={(layout) => setField(layout === 'free' ? {} : { layout }, layout === 'free' ? ['layout'] : [])}
-        />
+        <div className="flex gap-0.5">
+          <AlignButton label="Free" pressed={!layoutField.mixed && layoutField.value === 'free'} onClick={() => setField({}, ['layout'])}><Square size={14} /></AlignButton>
+          <AlignButton label="Row" pressed={!layoutField.mixed && layoutField.value === 'row'} onClick={() => setField({ layout: 'row' })}><ArrowRight size={14} /></AlignButton>
+          <AlignButton label="Column" pressed={!layoutField.mixed && layoutField.value === 'column'} onClick={() => setField({ layout: 'column' })}><ArrowDown size={14} /></AlignButton>
+        </div>
       ) : null}
       {flows ? (
         <>
-          <GeomField label="Gap" value={gapField.value} mixed={gapField.mixed} onChange={(gap) => setField(gap > 0 ? { gap } : {}, gap > 0 ? [] : ['gap'])} />
-          <GeomField label="Pad" value={padField.value} mixed={padField.mixed} onChange={(pad) => setField(pad > 0 ? { pad } : {}, pad > 0 ? [] : ['pad'])} />
-          <Choices
-            label="Align"
-            mixed={justifyField.mixed}
-            value={justifyField.value}
-            options={[
-              { value: 'start', label: 'Start' },
-              { value: 'center', label: 'Center' },
-              { value: 'end', label: 'End' },
-            ]}
-            onChange={(justify) => setField(justify === 'start' ? {} : { justify }, justify === 'start' ? ['justify'] : [])}
-          />
-          <Choices
-            label="Cross"
-            mixed={alignField.mixed}
-            value={alignField.value}
-            options={[
-              { value: 'start', label: 'Start' },
-              { value: 'center', label: 'Center' },
-              { value: 'end', label: 'End' },
-            ]}
-            onChange={(align) => setField(align === 'start' ? {} : { align }, align === 'start' ? ['align'] : [])}
-          />
-        </>
-      ) : null}
-      {sizeModes ? (
-        <>
-          <Choices
-            label="Width"
-            mixed={wModeField.mixed}
-            value={wModeField.value}
-            options={[
-              { value: 'fixed', label: 'Fixed' },
-              { value: 'hug', label: 'Hug' },
-              { value: 'fill', label: 'Fill' },
-            ]}
-            onChange={(mode) => setField(mode === 'fixed' ? {} : { wMode: mode }, mode === 'fixed' ? ['wMode'] : [])}
-          />
-          <Choices
-            label="Height"
-            mixed={hModeField.mixed}
-            value={hModeField.value}
-            options={[
-              { value: 'fixed', label: 'Fixed' },
-              { value: 'hug', label: 'Hug' },
-              { value: 'fill', label: 'Fill' },
-            ]}
-            onChange={(mode) => setField(mode === 'fixed' ? {} : { hMode: mode }, mode === 'fixed' ? ['hMode'] : [])}
-          />
+          <div className="grid grid-cols-2 gap-1">
+            <GeomField label="Gap" value={gapField.value} mixed={gapField.mixed} onChange={(gap) => setField(gap > 0 ? { gap } : {}, gap > 0 ? [] : ['gap'])} />
+            <GeomField label="Pad" value={padField.value} mixed={padField.mixed} onChange={(pad) => setField(pad > 0 ? { pad } : {}, pad > 0 ? [] : ['pad'])} />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex gap-0.5">
+              {columnLayout ? (
+                <>
+                  <AlignButton label="Align top" pressed={!justifyField.mixed && justifyField.value === 'start'} onClick={() => setJustify('start')}><AlignStartHorizontal size={14} /></AlignButton>
+                  <AlignButton label="Align middle" pressed={!justifyField.mixed && justifyField.value === 'center'} onClick={() => setJustify('center')}><AlignCenterHorizontal size={14} /></AlignButton>
+                  <AlignButton label="Align bottom" pressed={!justifyField.mixed && justifyField.value === 'end'} onClick={() => setJustify('end')}><AlignEndHorizontal size={14} /></AlignButton>
+                  <AlignButton label="Space between" pressed={!justifyField.mixed && justifyField.value === 'space'} onClick={() => setJustify('space')}><AlignVerticalSpaceBetween size={14} /></AlignButton>
+                </>
+              ) : (
+                <>
+                  <AlignButton label="Align left" pressed={!justifyField.mixed && justifyField.value === 'start'} onClick={() => setJustify('start')}><AlignStartVertical size={14} /></AlignButton>
+                  <AlignButton label="Align center" pressed={!justifyField.mixed && justifyField.value === 'center'} onClick={() => setJustify('center')}><AlignCenterVertical size={14} /></AlignButton>
+                  <AlignButton label="Align right" pressed={!justifyField.mixed && justifyField.value === 'end'} onClick={() => setJustify('end')}><AlignEndVertical size={14} /></AlignButton>
+                  <AlignButton label="Space between" pressed={!justifyField.mixed && justifyField.value === 'space'} onClick={() => setJustify('space')}><AlignHorizontalSpaceBetween size={14} /></AlignButton>
+                </>
+              )}
+            </div>
+            <div className="flex gap-0.5">
+              {columnLayout ? (
+                <>
+                  <AlignButton label="Align left" pressed={!alignField.mixed && alignField.value === 'start'} onClick={() => setCross('start')}><AlignStartVertical size={14} /></AlignButton>
+                  <AlignButton label="Align center" pressed={!alignField.mixed && alignField.value === 'center'} onClick={() => setCross('center')}><AlignCenterVertical size={14} /></AlignButton>
+                  <AlignButton label="Align right" pressed={!alignField.mixed && alignField.value === 'end'} onClick={() => setCross('end')}><AlignEndVertical size={14} /></AlignButton>
+                </>
+              ) : (
+                <>
+                  <AlignButton label="Align top" pressed={!alignField.mixed && alignField.value === 'start'} onClick={() => setCross('start')}><AlignStartHorizontal size={14} /></AlignButton>
+                  <AlignButton label="Align middle" pressed={!alignField.mixed && alignField.value === 'center'} onClick={() => setCross('center')}><AlignCenterHorizontal size={14} /></AlignButton>
+                  <AlignButton label="Align bottom" pressed={!alignField.mixed && alignField.value === 'end'} onClick={() => setCross('end')}><AlignEndHorizontal size={14} /></AlignButton>
+                </>
+              )}
+            </div>
+          </div>
         </>
       ) : null}
       {hasParent ? (
@@ -2286,42 +2325,24 @@ function NodeSettings({
       </Section>
       ) : null}
       <Section title="Appearance">
-        <GeomField label="Opacity" suffix="%" value={opacityField.value} mixed={opacityField.mixed} onChange={(value) => {
-          const opacity = Math.min(100, Math.max(0, value)) / 100
-          setField(opacity < 1 ? { opacity } : {}, opacity < 1 ? [] : ['opacity'])
-        }} />
-        {showRadius ? (
-          <label className="flex flex-col gap-1">
-            <span className="text-koma-dim">Corner radius{radiusField.mixed ? ' · Mixed' : ''}</span>
-            {radiusTokens.length ? (
-              <div className="flex flex-wrap gap-1">
-                {radiusTokens.map((token) => (
-                  <button
-                    key={token.name}
-                    type="button"
-                    aria-pressed={!radiusField.mixed && node.radius === token.name}
-                    onClick={() => setField({ radius: token.name })}
-                    className={`h-6 rounded px-1.5 ${!radiusField.mixed && node.radius === token.name ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
-                  >
-                    {token.name}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            <input
-              type="number"
-              min={0}
-              value={radiusField.mixed ? '' : typeof node.radius === 'number' ? node.radius : Number(resolveRef(doc, typeof node.radius === 'string' ? node.radius : '')) || 0}
-              placeholder={radiusField.mixed ? 'Mixed' : undefined}
-              onChange={(event) => {
-                const radius = Number(event.target.value)
-                if (!Number.isFinite(radius) || radius <= 0) setField({}, ['radius'])
+        <div className={`grid gap-1 ${showRadius ? 'grid-cols-2' : 'grid-cols-1'}`}>
+          <GeomField label="Opacity" suffix="%" value={opacityField.value} mixed={opacityField.mixed} onChange={(value) => {
+            const opacity = Math.min(100, Math.max(0, value)) / 100
+            setField(opacity < 1 ? { opacity } : {}, opacity < 1 ? [] : ['opacity'])
+          }} />
+          {showRadius ? (
+            <RadiusField
+              value={radiusField.mixed ? undefined : node.radius}
+              mixed={radiusField.mixed}
+              resolved={typeof node.radius === 'number' ? String(node.radius) : resolveRef(doc, typeof node.radius === 'string' ? node.radius : '')}
+              tokens={radiusTokens}
+              onChange={(radius) => {
+                if (radius == null) setField({}, ['radius'])
                 else setField({ radius })
               }}
-              className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
             />
-          </label>
-        ) : null}
+          ) : null}
+        </div>
       </Section>
       <Section title="Fill">
         <PaintRow
@@ -2342,46 +2363,41 @@ function NodeSettings({
           fallback="#8b93b8"
           resolved={resolveRef(doc, chrome.stroke)}
           tokens={colorTokens}
+          weight={strokeWidthField}
+          onWeight={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])}
           onChange={(next) => paintChange('stroke', next)}
         />
-        <GeomField label="Weight" value={strokeWidthField.value} mixed={strokeWidthField.mixed} onChange={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])} />
       </Section>
       {allText ? (
         <Section title="Text">
-          <GeomField label="Size" value={fontSizeField.value} mixed={fontSizeField.mixed} onChange={(fontSize) => {
-            if (!Number.isFinite(fontSize) || fontSize <= 0 || fontSize === 13) setField({}, ['fontSize'])
-            else setField({ fontSize })
-          }} />
-          <GeomField label="Line" value={lineField.value} mixed={lineField.mixed} onChange={(lineHeight) => {
-            if (!Number.isFinite(lineHeight) || lineHeight <= 0) setField({}, ['lineHeight'])
-            else setField({ lineHeight })
-          }} />
-          <GeomField label="Spacing" value={trackingField.value} mixed={trackingField.mixed} onChange={(letterSpacing) => {
-            if (!Number.isFinite(letterSpacing) || letterSpacing === 0) setField({}, ['letterSpacing'])
-            else setField({ letterSpacing })
-          }} />
-          <Choices
-            label="Weight"
-            mixed={weightField.mixed}
-            value={weightField.value}
-            options={[
-              { value: 'regular', label: 'Regular' },
-              { value: 'medium', label: 'Medium' },
-              { value: 'bold', label: 'Bold' },
-            ]}
-            onChange={(weight) => setField(weight === 'regular' ? {} : { weight }, weight === 'regular' ? ['weight'] : [])}
-          />
-          <Choices
-            label="Align"
-            mixed={textAlignField.mixed}
-            value={textAlignField.value}
-            options={[
-              { value: 'left', label: 'Left' },
-              { value: 'center', label: 'Center' },
-              { value: 'right', label: 'Right' },
-            ]}
-            onChange={(align) => setField(align === 'left' ? {} : { textAlign: align }, align === 'left' ? ['textAlign'] : [])}
-          />
+          <div className="flex items-center gap-1">
+            <div className="min-w-0 flex-1">
+              <GeomField label="Size" value={fontSizeField.value} mixed={fontSizeField.mixed} onChange={(fontSize) => {
+                if (!Number.isFinite(fontSize) || fontSize <= 0 || fontSize === 13) setField({}, ['fontSize'])
+                else setField({ fontSize })
+              }} />
+            </div>
+            <select
+              aria-label="Weight"
+              value={weightField.mixed ? '' : weightField.value}
+              onChange={(event) => {
+                const weight = event.target.value
+                if (weight !== 'regular' && weight !== 'medium' && weight !== 'bold') return
+                setField(weight === 'regular' ? {} : { weight }, weight === 'regular' ? ['weight'] : [])
+              }}
+              className="h-7 flex-none rounded border border-koma-border bg-koma-bg px-1 text-[12px] text-koma-fg outline-none"
+            >
+              {weightField.mixed ? <option value="">Mixed</option> : null}
+              <option value="regular">Regular</option>
+              <option value="medium">Medium</option>
+              <option value="bold">Bold</option>
+            </select>
+          </div>
+          <div className="flex gap-0.5">
+            <AlignButton label="Align left" pressed={!textAlignField.mixed && textAlignField.value === 'left'} onClick={() => setField({}, ['textAlign'])}><TextAlignStart size={14} /></AlignButton>
+            <AlignButton label="Align center" pressed={!textAlignField.mixed && textAlignField.value === 'center'} onClick={() => setField({ textAlign: 'center' })}><TextAlignCenter size={14} /></AlignButton>
+            <AlignButton label="Align right" pressed={!textAlignField.mixed && textAlignField.value === 'right'} onClick={() => setField({ textAlign: 'right' })}><TextAlignEnd size={14} /></AlignButton>
+          </div>
           <PaintRow
             label="Color"
             mixed={colorField.mixed}
@@ -2391,6 +2407,16 @@ function NodeSettings({
             tokens={colorTokens}
             onChange={(next) => setField(next && next !== 'none' ? { color: next } : {}, next && next !== 'none' ? [] : ['color'])}
           />
+          <div className="grid grid-cols-2 gap-1">
+            <GeomField label="Line" value={lineField.value} mixed={lineField.mixed} onChange={(lineHeight) => {
+              if (!Number.isFinite(lineHeight) || lineHeight <= 0) setField({}, ['lineHeight'])
+              else setField({ lineHeight })
+            }} />
+            <GeomField label="Spacing" value={trackingField.value} mixed={trackingField.mixed} onChange={(letterSpacing) => {
+              if (!Number.isFinite(letterSpacing) || letterSpacing === 0) setField({}, ['letterSpacing'])
+              else setField({ letterSpacing })
+            }} />
+          </div>
         </Section>
       ) : null}
     </div>
@@ -2414,7 +2440,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-function GeomField({ label, value, mixed, suffix, onChange }: { label: string; value: number; mixed?: boolean; suffix?: string; onChange: (value: number) => void }) {
+function GeomField({ label, ariaLabel, value, mixed, suffix, onChange }: { label: string; ariaLabel?: string; value: number; mixed?: boolean; suffix?: string; onChange: (value: number) => void }) {
   return (
     <label className="flex h-7 items-center gap-1 rounded border border-koma-border bg-koma-bg px-1.5">
       <span className="flex-none text-[11px] text-koma-dim">{label}</span>
@@ -2422,7 +2448,7 @@ function GeomField({ label, value, mixed, suffix, onChange }: { label: string; v
         type="number"
         value={mixed ? '' : Number.isFinite(value) ? Math.round(value * 100) / 100 : 0}
         placeholder={mixed ? 'Mixed' : undefined}
-        aria-label={label}
+        aria-label={ariaLabel ?? label}
         onChange={(event) => {
           const next = Number(event.target.value)
           if (Number.isFinite(next)) onChange(next)
@@ -2434,11 +2460,112 @@ function GeomField({ label, value, mixed, suffix, onChange }: { label: string; v
   )
 }
 
-function AlignButton({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
+function AlignButton({ label, pressed, onClick, children }: { label: string; pressed?: boolean; onClick: () => void; children: ReactNode }) {
   return (
-    <button type="button" aria-label={label} title={label} onClick={onClick} className="flex h-7 w-7 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg">
+    <button type="button" aria-label={label} title={label} aria-pressed={pressed} onClick={onClick} className={`flex h-7 w-7 flex-none items-center justify-center rounded ${pressed ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}>
       {children}
     </button>
+  )
+}
+
+function KindMark({ kind }: { kind: DesignNode['kind'] }) {
+  const props = { size: 14, strokeWidth: 2 }
+  if (kind === 'frame') return <Frame {...props} />
+  if (kind === 'group') return <Group {...props} />
+  if (kind === 'ellipse') return <Circle {...props} />
+  if (kind === 'line') return <Minus {...props} />
+  if (kind === 'vector') return <Spline {...props} />
+  if (kind === 'text') return <Type {...props} />
+  if (kind === 'instance') return <Component {...props} />
+  return <Square {...props} />
+}
+
+function SizeMode({ label, value, mixed, onChange }: { label: string; value: string; mixed?: boolean; onChange: (mode: 'fixed' | 'hug' | 'fill') => void }) {
+  return (
+    <select
+      aria-label={label}
+      value={mixed ? '' : value}
+      onChange={(event) => {
+        const mode = event.target.value
+        if (mode === 'fixed' || mode === 'hug' || mode === 'fill') onChange(mode)
+      }}
+      className="h-7 w-12 flex-none rounded border border-koma-border bg-koma-bg px-0.5 text-[10px] text-koma-fg outline-none"
+    >
+      {mixed ? <option value="">Mix</option> : null}
+      <option value="fixed">Fix</option>
+      <option value="hug">Hug</option>
+      <option value="fill">Fill</option>
+    </select>
+  )
+}
+
+function RadiusField({ value, mixed, resolved, tokens, onChange }: { value: number | string | undefined; mixed?: boolean; resolved?: string; tokens: { name: string }[]; onChange: (radius: number | string | null) => void }) {
+  const [open, setOpen] = useState(false)
+  const token = !mixed && typeof value === 'string' ? value : ''
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <label className="flex h-7 items-center gap-1 rounded border border-koma-border bg-koma-bg px-1.5">
+        <span className="flex-none text-[11px] text-koma-dim">R</span>
+        {tokens.length ? (
+          <button
+            type="button"
+            aria-label="Corner radius token"
+            aria-expanded={open}
+            aria-pressed={!!token}
+            onClick={() => setOpen((current) => !current)}
+            className={`h-4 w-4 flex-none rounded-full border border-koma-border ${token ? 'bg-koma-accent' : 'bg-transparent'}`}
+          />
+        ) : null}
+        <input
+          type={token ? 'text' : 'number'}
+          min={token ? undefined : 0}
+          aria-label="Corner radius"
+          value={mixed ? '' : token || (typeof value === 'number' ? value : 0)}
+          placeholder={mixed ? 'Mixed' : undefined}
+          onChange={(event) => {
+            const raw = event.target.value.trim()
+            const named = tokens.find((item) => item.name === raw)
+            if (named) {
+              onChange(named.name)
+              return
+            }
+            const radius = Number(raw)
+            if (!raw || !Number.isFinite(radius) || radius <= 0) onChange(null)
+            else onChange(radius)
+          }}
+          className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
+        />
+      </label>
+      {open ? (
+        <div className="flex flex-col gap-0.5 rounded border border-koma-border p-1">
+          <button
+            type="button"
+            onClick={() => {
+              const radius = Number(resolved)
+              onChange(Number.isFinite(radius) && radius > 0 ? radius : null)
+              setOpen(false)
+            }}
+            className="h-6 rounded px-1 text-left text-[12px] text-koma-dim hover:bg-koma-hover"
+          >
+            Number
+          </button>
+          {tokens.map((item) => (
+            <button
+              key={item.name}
+              type="button"
+              aria-pressed={token === item.name}
+              onClick={() => {
+                onChange(item.name)
+                setOpen(false)
+              }}
+              className={`h-6 rounded px-1 text-left text-[12px] ${token === item.name ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
+            >
+              {item.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -2509,42 +2636,125 @@ function NumberField({ label, value, onChange }: { label: string; value: number;
   )
 }
 
-function PaintRow({ label, value, mixed, fallback, resolved, tokens, onChange }: { label: string; value: string; mixed?: boolean; fallback: string; resolved?: string; tokens?: { name: string }[]; onChange: (next: string | null) => void }) {
+function colorInputHex(value: string, fallback: string): string {
+  const source = /^#[0-9a-fA-F]{3,8}$/.test(value) ? value : fallback
+  const body = source.slice(1)
+  if (/^[0-9a-fA-F]{6}$/.test(body) || /^[0-9a-fA-F]{8}$/.test(body)) return `#${body.slice(0, 6).toLowerCase()}`
+  if (/^[0-9a-fA-F]{3}$/.test(body)) return `#${body[0]}${body[0]}${body[1]}${body[1]}${body[2]}${body[2]}`.toLowerCase()
+  return '#000000'
+}
+
+function PaintRow({ label, value, mixed, fallback, resolved, tokens, weight, onWeight, onChange }: { label: string; value: string; mixed?: boolean; fallback: string; resolved?: string; tokens?: { name: string }[]; weight?: { value: number; mixed?: boolean }; onWeight?: (value: number) => void; onChange: (next: string | null) => void }) {
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState<string | null>(null)
   const on = !mixed && value !== 'none'
   const hex = value.startsWith('#') ? value : resolved?.startsWith('#') ? resolved : fallback
+  const picker = colorInputHex(hex, fallback)
   const swatch = value.startsWith('#') ? value : resolved?.startsWith('#') ? resolved : on ? 'var(--color-koma-panel)' : 'transparent'
+  const shown = mixed ? '' : value === 'none' ? '' : value
+  const commitText = (raw: string) => {
+    const trimmed = raw.trim()
+    setDraft(null)
+    if (!trimmed || trimmed.toLowerCase() === 'none') {
+      onChange('none')
+      return
+    }
+    const named = tokens?.find((token) => token.name === trimmed)
+    if (named) {
+      onChange(named.name)
+      return
+    }
+    const body = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed
+    if (/^[0-9a-fA-F]{3}$|^[0-9a-fA-F]{6}$|^[0-9a-fA-F]{8}$/.test(body)) onChange(`#${body.toLowerCase()}`)
+  }
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-1">
-        <label className="relative h-6 w-6 flex-none overflow-hidden rounded border border-koma-border">
-          <span className="absolute inset-0" style={{ background: swatch }} />
+        {tokens?.length ? (
+          <button
+            type="button"
+            aria-label={`${label} swatch`}
+            aria-expanded={open}
+            onClick={() => setOpen((current) => !current)}
+            className="h-7 w-7 flex-none rounded border border-koma-border"
+            style={{ background: swatch }}
+          />
+        ) : (
+          <label className="relative h-7 w-7 flex-none overflow-hidden rounded border border-koma-border">
+            <span className="absolute inset-0" style={{ background: swatch }} />
+            <input
+              type="color"
+              aria-label={`${label} color`}
+              value={picker}
+              onChange={(event) => onChange(event.target.value.toLowerCase())}
+              className="absolute inset-0 cursor-pointer opacity-0"
+            />
+          </label>
+        )}
+        <input
+          aria-label={`${label} hex`}
+          value={draft ?? shown}
+          placeholder={mixed ? 'Mixed' : value === 'none' ? 'None' : '#hex'}
+          onChange={(event) => {
+            const raw = event.target.value
+            const trimmed = raw.trim()
+            const named = tokens?.find((token) => token.name === trimmed)
+            const body = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed
+            if (named) {
+              setDraft(null)
+              onChange(named.name)
+              return
+            }
+            if (/^[0-9a-fA-F]{6}$|^[0-9a-fA-F]{8}$/.test(body)) {
+              setDraft(null)
+              onChange(`#${body.toLowerCase()}`)
+              return
+            }
+            setDraft(raw)
+          }}
+          onBlur={() => {
+            if (draft != null) commitText(draft)
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && draft != null) commitText(draft)
+          }}
+          className="h-7 min-w-0 flex-1 rounded border border-koma-border bg-koma-bg px-1.5 text-[12px] text-koma-fg outline-none"
+        />
+        <button
+          type="button"
+          aria-label={`${label} visibility`}
+          aria-pressed={on}
+          title={mixed ? 'Mixed' : on ? 'On' : 'Off'}
+          onClick={() => onChange(mixed || on ? 'none' : null)}
+          className={`flex h-7 w-7 flex-none items-center justify-center rounded ${on ? 'text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}
+        >
+          {on ? <Eye size={14} /> : <EyeOff size={14} />}
+        </button>
+        {weight && onWeight ? (
+          <div className="w-16 flex-none">
+            <GeomField label="W" ariaLabel="Weight" value={weight.value} mixed={weight.mixed} onChange={onWeight} />
+          </div>
+        ) : null}
+      </div>
+      {open && tokens?.length ? (
+        <div className="flex flex-col gap-1 rounded border border-koma-border p-1">
           <input
             type="color"
             aria-label={`${label} color`}
-            value={hex}
+            value={picker}
             onChange={(event) => onChange(event.target.value.toLowerCase())}
-            className="absolute inset-0 cursor-pointer opacity-0"
+            className="h-7 w-full cursor-pointer bg-transparent"
           />
-        </label>
-        <span className="min-w-0 flex-1 truncate text-[12px] text-koma-fg">{mixed ? 'Mixed' : on ? value : 'None'}</span>
-        <button
-          type="button"
-          aria-pressed={on}
-          onClick={() => onChange(mixed || on ? 'none' : null)}
-          className={`h-6 flex-none rounded px-2 ${on ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
-        >
-          {mixed ? 'Mixed' : on ? 'On' : 'Off'}
-        </button>
-      </div>
-      {tokens?.length ? (
-        <div className="flex flex-wrap gap-1">
           {tokens.map((token) => (
             <button
               key={token.name}
               type="button"
               aria-pressed={value === token.name}
-              onClick={() => onChange(token.name)}
-              className={`h-6 rounded px-1.5 ${value === token.name ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
+              onClick={() => {
+                onChange(token.name)
+                setOpen(false)
+              }}
+              className={`h-6 rounded px-1 text-left text-[12px] ${value === token.name ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
             >
               {token.name}
             </button>
