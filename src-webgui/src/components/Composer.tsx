@@ -6,9 +6,8 @@ import {
   type ClipboardEvent,
   type DragEvent,
   type KeyboardEvent,
-  type ReactNode,
 } from 'react'
-import { ArrowUp, Bold, Code, Eye, EyeOff, Frame, Italic, Layers, Paperclip, Search, Square, X } from 'lucide-react'
+import { ArrowUp, Bold, Code, Frame, Italic, Layers, Paperclip, Search, Square, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import {
   readCodingPathDragData,
@@ -18,10 +17,7 @@ import {
   assignFreshMarkerInserts,
   attachmentMarkersRemoved,
   attachmentQueueStillPending,
-  findAttachmentMarkerRanges,
   imageMarker,
-  insertMarkerAt,
-  markerKeysInText,
   type MarkerInsertRow,
 } from '../lib/composerMarkers'
 import {
@@ -41,14 +37,11 @@ import { ModeSelector } from './ModeSelector'
 import { CatMascot } from './CatMascot'
 import { DiagramSketch } from './DiagramVisual'
 import { ComposerPileBar } from './ComposerPileBar'
-import { MessageBody } from './MessageBody'
 import {
-  composerPreviewMarkdown,
   listComposerTokens,
   moveComposerToken,
-  wrapSelection,
 } from '../lib/composerSegments'
-import { inlineToHtml } from '../lib/markdownNote'
+import { LexicalMarkdownEditor, type LexicalEditorHandle } from './lexical/LexicalMarkdownEditor'
 
 type DiagramChip = { id: string; title: string; mermaid: string; doc: DiagramDoc }
 type DesignChip = { id: string; title: string; text: string }
@@ -131,156 +124,8 @@ function readFileAsBase64(file: File): Promise<string> {
   })
 }
 
-// --- Inline file-ref chips ---------------------------------------------------
-// TUI parity: picking a file in OmniSearchPalette inserts a `@<label>` token
-// (see OmniSearchPalette.tsx) — the same wire text the TUI composer produces
-// and sends verbatim to the model. This composer paints those tokens as
-// inline pills (Google-Docs-style) via a transparent-text textarea layered
-// over a mirrored overlay.
-//
-// Chips are tracked as SUBSTRING RANGES, not whitespace-delimited tokens — a
-// real filename label can itself contain a space ("My Notes.md" -> the
-// inserted text is `@My Notes.md `, which whitespace-splits into TWO runs,
-// "@My" and "Notes.md"). Splitting on whitespace would silently break both
-// the pill and the atomic delete for any such label, so instead:
-//  1. Scan for exact, non-overlapping occurrences of every token this session
-//     inserted (pickedTokensRef, longest tokens matched first so a token that
-//     happens to be a prefix/substring of another can't shadow-steal it).
-//  2. Layer in `@[<n>]<path>` multi-root-sentinel matches (a SEPARATE,
-//     non-anchored regex pass over the raw text, not a whitespace-token
-//     test) for any range not already claimed by (1) — this is what keeps a
-//     multi-root chip recognizable after a reload/history-recall even though
-//     pickedTokensRef itself doesn't survive either (accepted asymmetry: a
-//     single-root label with no `[N]` prefix has no shape to fall back on,
-//     so it loses its chip after a reload).
-// The resulting ranges drive both the overlay renderer and the atomic-delete
-// keydown handler below — one source of truth for "what's a chip".
-
-// All non-overlapping chip ranges in `text`, sorted by start offset.
-function findChipRanges(text: string, pickedTokens: Set<string>): Array<[number, number]> {
-  const ranges: Array<[number, number]> = []
-  const isClaimed = (s: number, e: number) => ranges.some(([rs, re]) => s < re && e > rs)
-
-  // Pass 1: exact picked-token substrings, longest first.
-  const tokens = Array.from(pickedTokens)
-    .filter((t) => t.length > 0)
-    .sort((a, b) => b.length - a.length)
-  for (const token of tokens) {
-    let from = 0
-    while (from <= text.length - token.length) {
-      const idx = text.indexOf(token, from)
-      if (idx === -1) break
-      const end = idx + token.length
-      if (!isClaimed(idx, end)) ranges.push([idx, end])
-      from = idx + 1
-    }
-  }
-
-  // Pass 2: multi-root sentinel shape, anywhere it isn't already claimed.
-  const sentinelRe = /@\[\d+\]\S+/g
-  let m: RegExpExecArray | null
-  while ((m = sentinelRe.exec(text))) {
-    const idx = m.index
-    const end = idx + m[0].length
-    if (!isClaimed(idx, end)) ranges.push([idx, end])
-  }
-
-  ranges.sort((a, b) => a[0] - b[0])
-  return ranges
-}
-
-// Backspace: fires for the range the caret sits AFTER or INSIDE
-// (start < pos <= end) — there has to be actual chip text immediately to the
-// caret's left, not just a chip that happens to start right at the caret.
-function chipRangeForBackspace(
-  ranges: Array<[number, number]>,
-  pos: number,
-): [number, number] | null {
-  return ranges.find(([s, e]) => pos > s && pos <= e) ?? null
-}
-
-// Delete: fires for the range the caret sits BEFORE or INSIDE
-// (start <= pos < end).
-function chipRangeForDelete(
-  ranges: Array<[number, number]>,
-  pos: number,
-): [number, number] | null {
-  return ranges.find(([s, e]) => pos >= s && pos < e) ?? null
-}
-
-// Shared typography for the transparent textarea + its mirrored chip overlay.
-// MUST stay identical on both layers — any padding/line-height/wrap mismatch
-// drifts the caret vs painted text. Integer line-height (not leading-relaxed's
-// 1.625 × 14px = 22.75) avoids cumulative subpixel rounding that shows up as
-// caret misalignment after ~8–10 lines.
 const COMPOSER_FIELD_CLASS =
   'm-0 box-border w-full whitespace-pre-wrap break-words p-0 text-[14px] leading-[22px] [overflow-wrap:anywhere] [tab-size:4]'
-
-const COMPOSER_OVERLAY_MD =
-  '[&_strong]:font-semibold [&_em]:italic [&_code]:rounded [&_code]:bg-koma-panel2 [&_code]:px-0.5 [&_code]:text-[13px]'
-
-function renderComposerProse(slice: string, key: string): ReactNode {
-  if (!slice) return null
-  return (
-    <span
-      key={key}
-      className={COMPOSER_OVERLAY_MD}
-      dangerouslySetInnerHTML={{ __html: inlineToHtml(slice) }}
-    />
-  )
-}
-
-// Overlay renderer: walks the chip ranges in order, emitting the untouched
-// in-between text verbatim and wrapping each range's slice in a tinted pill
-// span. The plain-text pieces + pill contents concatenate back to EXACTLY
-// `text` — this must stay character-identical (same glyphs, same wrapping),
-// since it paints directly behind the transparent textarea and has to line
-// up with the real caret/selection pixel-for-pixel.
-//
-// A trailing `\n` does not paint an empty line in a normal block box the way
-// a textarea does, so we append a zero-width space after the content. That
-// keeps line boxes (and caret row) aligned without changing visible glyphs.
-function renderComposerOverlay(text: string, pickedTokens: Set<string>): ReactNode {
-  if (text === '') return null
-  const ranges = [...findChipRanges(text, pickedTokens), ...findAttachmentMarkerRanges(text)].sort((a, b) => a[0] - b[0])
-  const tail = '\u200b'
-  if (ranges.length === 0) return (
-    <>
-      {renderComposerProse(text, 'prose')}
-      {tail}
-    </>
-  )
-  const nodes: ReactNode[] = []
-  let cursor = 0
-  ranges.forEach(([start, end], i) => {
-    if (start > cursor) nodes.push(renderComposerProse(text.slice(cursor, start), `prose-${i}`))
-    const part = text.slice(start, end)
-    // Dim the `@` (and multi-root `[N]`) prefix inside the pill; the rest of
-    // the label reads at normal (tinted) text color. Purely cosmetic — `part`
-    // itself (unsplit) is what was matched/compared above.
-    const m = part.match(/^(@(?:\[\d+\])?)([\s\S]*)$/)
-    const attach = /^\[(?:Image|Pasted Text) #\d+\]$/.test(part)
-    nodes.push(
-      <span
-        key={i}
-        className={`rounded-[4px] px-[2px] -mx-[2px] ${attach ? 'bg-koma-warn/20 text-koma-fg' : 'bg-koma-accent/15 text-koma-fg'}`}
-      >
-        {m ? (
-          <>
-            <span className="opacity-50">{m[1]}</span>
-            {m[2]}
-          </>
-        ) : (
-          part
-        )}
-      </span>,
-    )
-    cursor = end
-  })
-  if (cursor < text.length) nodes.push(renderComposerProse(text.slice(cursor), 'prose-tail'))
-  nodes.push(tail)
-  return nodes
-}
 
 // Composer: message textarea + send, plus attach affordances (file-picker
 // button, drag-drop onto the composer, clipboard-image paste) and the
@@ -306,8 +151,7 @@ export function Composer() {
   const clearRewind = useKoma((s) => s.clearRewind)
   const requestScrollBottom = useKoma((s) => s.requestScrollBottom)
   const [input, setInput] = useState('')
-  const [previewOpen, setPreviewOpen] = useState(false)
-  const [previewMd, setPreviewMd] = useState('')
+  draftRef.current = input
   const [diagramChips, setDiagramChips] = useState<DiagramChip[]>([])
   const diagramChipsRef = useRef<DiagramChip[]>([])
   diagramChipsRef.current = diagramChips
@@ -338,8 +182,9 @@ export function Composer() {
   const consumeDesignChatQueue = useKoma((s) => s.consumeDesignChatQueue)
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const overlayRef = useRef<HTMLDivElement>(null)
+  const editorApi = useRef<LexicalEditorHandle | null>(null)
+  const draftRef = useRef('')
+  const echoDraft = useRef(false)
   // Tokens this session has inserted via the omnisearch picker (bare, e.g.
   // "@downloads/file.pdf" or "@[1]downloads/file.pdf" — never with the
   // trailing space) — read by the overlay renderer + atomic chip-delete below
@@ -355,80 +200,14 @@ export function Composer() {
   // `working` so a stale word never flashes on the next turn.
   const [thinkingWord, setThinkingWord] = useState('')
 
-  // Tracks the textarea's width across ResizeObserver/window-resize firings so
-  // the reflow handler below only re-autosizes when the width actually
-  // changed (a height-only firing — e.g. the autosize effect's own mutation
-  // observed indirectly via the parent wrapper — would otherwise loop).
-  const lastWidthRef = useRef(0)
-
-  // Auto-grow the textarea to fit its content, up to a cap (then it scrolls).
-  // Shared by the [input] effect (every keystroke / programmatic change) and
-  // the reflow handler below (width changes with the SAME text).
-  const autosizeTextarea = () => {
-    const ta = textareaRef.current
-    if (!ta) return
-    ta.style.height = 'auto'
-    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`
-  }
-
-  // Runs on every input change (incl. programmatic clears + omnisearch inserts).
-  // Also parks the caret at the END of the text when a history recall just
-  // replaced it (caretToEndRef, set by recallHistory below) — a plain typed
-  // change never needs this, the browser already tracks the caret for that.
   useEffect(() => {
-    const ta = textareaRef.current
-    if (!ta) return
-    autosizeTextarea()
-    if (caretTargetRef.current !== null) {
-      // Atomic chip-delete (below) requested a precise caret position — the
-      // deleted token's start — rather than "end of text".
-      ta.setSelectionRange(caretTargetRef.current, caretTargetRef.current)
-      caretTargetRef.current = null
-    } else if (caretToEndRef.current) {
-      ta.setSelectionRange(ta.value.length, ta.value.length)
-      caretToEndRef.current = false
+    if (echoDraft.current) {
+      echoDraft.current = false
+      return
     }
-    // Height just changed (auto-grow above); keep the chip overlay's scroll
-    // glued to the textarea (rAF catches post-keystroke caret auto-scroll).
-    syncOverlayScrollSoon()
+    editorApi.current?.setMarkdown(input, caretToEndRef.current ? 'end' : undefined)
+    caretToEndRef.current = false
   }, [input])
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setPreviewMd(composerPreviewMarkdown(input)), 120)
-    return () => window.clearTimeout(timer)
-  }, [input])
-
-  // Keep the composer correct across REFLOWS — not just keystrokes (the
-  // [input] effect above). A width change (window resize, sidebar
-  // collapse/expand) reflows the textarea's wrapped-line layout, which changes
-  // its natural `scrollHeight` for the SAME text — so the height set by the
-  // last autosize goes stale until the next keystroke recomputes it. A
-  // `ResizeObserver` on the PARENT wrapper (not the textarea itself — observing
-  // the element whose height this handler mutates would invite observer
-  // loops) catches that; the `window resize` listener stays as a fallback for
-  // environments where the observer doesn't fire. Both funnel through the same
-  // width-gated handler so a height-only firing (e.g. the autosize mutation
-  // itself, reflected onto the wrapper) is a no-op. Fires once on mount too,
-  // in case anything sizes late.
-  useEffect(() => {
-    const wrapper = textareaRef.current?.parentElement ?? null
-    const handleReflow = () => {
-      const width = wrapper?.clientWidth ?? 0
-      if (width === lastWidthRef.current) return
-      lastWidthRef.current = width
-      autosizeTextarea()
-      syncOverlayScrollSoon()
-    }
-    handleReflow()
-    const observer = wrapper ? new ResizeObserver(handleReflow) : null
-    if (wrapper) observer?.observe(wrapper)
-    window.addEventListener('resize', handleReflow)
-    return () => {
-      observer?.disconnect()
-      window.removeEventListener('resize', handleReflow)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   // Thinking-bubble: while working, pick a fresh word immediately, then
   // re-randomize every 1000ms (avoiding an immediate repeat) until working
@@ -462,8 +241,10 @@ export function Composer() {
     // renders/deletes as a single unit even though it has no `@` prefix.
     const token = composerInsert.trimEnd()
     if (token) pickedTokensRef.current.add(token)
-    setInput((prev) => (prev.length > 0 ? `${prev} ${composerInsert}` : composerInsert))
+    const prefix = draftRef.current.length > 0 ? ' ' : ''
+    editorApi.current?.appendText(`${prefix}${composerInsert}`)
     consumeComposerInsert()
+    editorApi.current?.focus()
   }, [composerInsert, consumeComposerInsert])
 
   // A diagram reference is a drawing chip. The Mermaid stays on the chip until
@@ -475,7 +256,7 @@ export function Composer() {
       ...diagramChatQueue.map((item) => ({ id: mintDiagramChipId(), ...item })),
     ])
     consumeDiagramChatQueue()
-    textareaRef.current?.focus()
+    editorApi.current?.focus()
   }, [diagramChatQueue, consumeDiagramChatQueue])
 
   // A design reference is a chip. The kdsgn fence stays on the chip until send.
@@ -486,7 +267,7 @@ export function Composer() {
       ...designChatQueue.map((item) => ({ id: mintDiagramChipId(), ...item })),
     ])
     consumeDesignChatQueue()
-    textareaRef.current?.focus()
+    editorApi.current?.focus()
   }, [designChatQueue, consumeDesignChatQueue])
 
   useEffect(() => {
@@ -549,7 +330,7 @@ export function Composer() {
     refillComposer(text)
     req({ r: 'EditSteer', index })
     setSteerFocus(false)
-    textareaRef.current?.focus()
+    editorApi.current?.focus()
   }
 
   const removeSteerAt = (index: number) => {
@@ -600,24 +381,6 @@ export function Composer() {
     setInput(draft.prose)
   }
 
-  // Keep the chip overlay's scroll position glued to the textarea's — has to
-  // track both user scrolling (wheel/keys inside a >200px-tall draft, once
-  // the textarea itself scrolls internally) and programmatic height changes
-  // (the autosize effect above). Also re-sync on the next frame: after a
-  // keystroke the browser may auto-scroll the caret into view *after* our
-  // layout effect, and without a follow-up the overlay lags one paint.
-  const syncOverlayScroll = () => {
-    const overlay = overlayRef.current
-    const ta = textareaRef.current
-    if (!overlay || !ta) return
-    overlay.scrollTop = ta.scrollTop
-    overlay.scrollLeft = ta.scrollLeft
-  }
-  const syncOverlayScrollSoon = () => {
-    syncOverlayScroll()
-    requestAnimationFrame(syncOverlayScroll)
-  }
-
   // Read straight off the store (no subscription — this only runs on an
   // Up/Down keypress, not every render) for user-authored, plain messages:
   // role==='user', no `kind` (excludes 'shell'/'bashNudge' — recalling a
@@ -642,7 +405,7 @@ export function Composer() {
       submitArmed.current = true
       return
     }
-    const prose = input
+    const prose = editorApi.current?.getMarkdown() ?? input
     const mermaid = diagramChips.map((chip) => chip.mermaid).join('\n\n')
     const designs = designChips.map((chip) => chip.text).join('\n\n')
     const locals = localPastesRef.current
@@ -750,29 +513,14 @@ export function Composer() {
           return { ...item, markerN: q.markerN, n: q.markerN }
         }),
       )
-      const ta = textareaRef.current
-      let caret = ta?.selectionStart ?? null
       skipAttachmentReconcile.current = true
-      setInput((prev) => {
-        let next = prev
-        for (const row of keeps) {
-          if (next.includes(row.marker)) continue
-          const at = caret ?? next.length
-          const inserted = insertMarkerAt(next, at, row.marker)
-          next = inserted.text
-          caret = inserted.caret
-        }
-        return next
-      })
-      if (caret != null && ta) {
-        requestAnimationFrame(() => {
-          ta.selectionStart = caret!
-          ta.selectionEnd = caret!
-          skipAttachmentReconcile.current = false
-        })
-      } else {
-        skipAttachmentReconcile.current = false
+      for (const row of keeps) {
+        if (draftRef.current.includes(row.marker)) continue
+        editorApi.current?.insertText(row.marker)
       }
+      queueMicrotask(() => {
+        skipAttachmentReconcile.current = false
+      })
     }
   }, [attachments, req])
 
@@ -814,7 +562,7 @@ export function Composer() {
     return () => window.clearTimeout(timer)
   }, [localPastes])
 
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+  const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     // Follow-ups list focus: when the queue owns keys, Enter edits, arrows move,
     // Delete removes, Esc unfocuses (does not clear). Ctrl+X clears all below.
     if (steerFocus && pendingSteer.length > 0) {
@@ -865,48 +613,11 @@ export function Composer() {
       setSteerFocus(false)
       return
     }
-    // Atomic chip delete: Backspace/Delete next to (or inside) a chip-eligible
-    // `@label` range removes the WHOLE range in one keystroke instead of
-    // eating it character by character. Gated on isComposing so an IME
-    // candidate-confirm Backspace never gets hijacked. Non-collapsed
-    // selections (start !== end) fall through to native behavior untouched.
-    if ((e.key === 'Backspace' || e.key === 'Delete') && !e.nativeEvent.isComposing) {
-      const ta = e.currentTarget
-      const start = ta.selectionStart ?? 0
-      const end = ta.selectionEnd ?? 0
-      if (start === end) {
-        const text = ta.value
-        const ranges = [...findChipRanges(text, pickedTokensRef.current), ...findAttachmentMarkerRanges(text)].sort(
-          (a, b) => a[0] - b[0],
-        )
-        const span =
-          e.key === 'Backspace' ? chipRangeForBackspace(ranges, start) : chipRangeForDelete(ranges, start)
-        if (span) {
-          let [spanStart, spanEnd] = span
-          const slice = text.slice(spanStart, spanEnd)
-          const image = slice.match(/^\[Image #(\d+)\]$/)
-          const paste = slice.match(/^\[Pasted Text #(\d+)\]$/)
-          // Eat exactly one trailing LITERAL SPACE along with the chip (the
-          // space OmniSearchPalette always inserts after it) — NOT any
-          // whitespace char, since a chip sitting at end-of-line in a
-          // multi-line draft would otherwise eat the newline and merge the
-          // next line up.
-          if (!image && !paste && text[spanEnd] === ' ') spanEnd += 1
-          e.preventDefault()
-          caretTargetRef.current = spanStart
-          setInput(text.slice(0, spanStart) + text.slice(spanEnd))
-          if (image) req({ r: 'RemoveAttachment', markerN: Number(image[1]), kind: 'image' })
-          if (paste) req({ r: 'RemoveAttachment', markerN: Number(paste[1]), kind: 'pasted_text' })
-          return
-        }
-      }
-    }
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       // Omnisearch owns Up/Down for its own result-list navigation while open.
       if (omnisearchOpen) return
-      const ta = e.currentTarget
-      const firstLine = !ta.value.slice(0, ta.selectionStart ?? 0).includes('\n')
-      const lastLine = !ta.value.slice(ta.selectionEnd ?? ta.value.length).includes('\n')
+      const firstLine = editorApi.current?.isAtStart() ?? false
+      const lastLine = editorApi.current?.isAtEnd() ?? false
       // From the first composer line, ↑ enters the follow-ups list when non-empty.
       if (e.key === 'ArrowUp' && firstLine && pendingSteer.length > 0) {
         e.preventDefault()
@@ -958,9 +669,10 @@ export function Composer() {
   // user edit fires onChange; programmatic refills (rewind/omnisearch/history
   // recall) go through setInput directly, so staging a rewind never
   // self-cancels here. A user edit also resets any in-progress history walk.
-  const onChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value
-    const removed = attachmentMarkersRemoved(input, val)
+  const onDraft = (val: string) => {
+    const removed = attachmentMarkersRemoved(draftRef.current, val)
+    echoDraft.current = val !== input
+    draftRef.current = val
     setInput(val)
     if (val.trim() === '' && pendingRewindIndex !== null) clearRewind()
     resetHistory()
@@ -994,7 +706,7 @@ export function Composer() {
     }
   }
 
-  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+  const onPaste = (e: ClipboardEvent<HTMLElement>): boolean => {
     const items = Array.from(e.clipboardData?.items ?? [])
     const imageItem = items.find((item) => item.type.startsWith('image/'))
     if (imageItem) {
@@ -1002,29 +714,30 @@ export function Composer() {
       if (file) {
         e.preventDefault()
         void attachFiles([file])
-        return
+        return true
       }
     }
     const files = Array.from(e.clipboardData?.files ?? [])
     if (files.length > 0) {
       e.preventDefault()
       void attachFiles(files)
-      return
+      return true
     }
     const raw = e.clipboardData?.getData('text/plain') ?? ''
-    if (!raw) return
+    if (!raw) return false
     const text = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
     if (pasteByteLength(text) > PASTE_SOFT_MAX_BYTES) {
       e.preventDefault()
       toastError('Paste is larger than 2 MB')
-      return
+      return true
     }
-    if (!shouldCollapsePaste(text)) return
+    if (!shouldCollapsePaste(text)) return false
     e.preventDefault()
     const id = mintDiagramChipId()
     markerInsertQueue.current.push({ id, kind: 'pasted_text', markerN: null, cancelled: false })
     setLocalPastes((prev) => [...prev, { id, n: 0, path: '', text }])
     req({ r: 'AttachPaste', text })
+    return true
   }
 
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
@@ -1098,30 +811,19 @@ export function Composer() {
     !atSteerCap
   const pileTokens = listComposerTokens(input, pickedTokensRef.current)
 
-  const applyMarkdownWrap = (before: string, after: string) => {
-    const ta = textareaRef.current
-    if (!ta) return
-    const start = ta.selectionStart ?? 0
-    const end = ta.selectionEnd ?? 0
-    const wrapped = wrapSelection(input, start, end, before, after)
-    setInput(wrapped.text)
-    requestAnimationFrame(() => {
-      ta.focus()
-      ta.setSelectionRange(wrapped.caretStart, wrapped.caretEnd)
-    })
+  const applyFormat = (kind: 'bold' | 'italic' | 'code') => {
+    editorApi.current?.format(kind)
   }
 
   const movePileToken = (fromStart: number, fromEnd: number, toIndex: number) => {
     const at = Math.min(toIndex, input.length)
     const { text, caret } = moveComposerToken(input, fromStart, fromEnd, at)
     skipAttachmentReconcile.current = true
+    caretToEndRef.current = true
     setInput(text)
-    requestAnimationFrame(() => {
-      const ta = textareaRef.current
-      if (!ta) return
-      ta.focus()
-      ta.setSelectionRange(caret, caret)
+    queueMicrotask(() => {
       skipAttachmentReconcile.current = false
+      editorApi.current?.focus()
     })
   }
 
@@ -1349,68 +1051,29 @@ export function Composer() {
         <ComposerPileBar tokens={pileTokens} draftLength={input.length} onMove={movePileToken} />
 
         <div className="flex items-center gap-0.5">
-          <button type="button" className={formatButton} title="Bold" aria-label="Bold" onClick={() => applyMarkdownWrap('**', '**')}>
+          <button type="button" className={formatButton} title="Bold" aria-label="Bold" onMouseDown={(event) => event.preventDefault()} onClick={() => applyFormat('bold')}>
             <Bold size={14} />
           </button>
-          <button type="button" className={formatButton} title="Italic" aria-label="Italic" onClick={() => applyMarkdownWrap('_', '_')}>
+          <button type="button" className={formatButton} title="Italic" aria-label="Italic" onMouseDown={(event) => event.preventDefault()} onClick={() => applyFormat('italic')}>
             <Italic size={14} />
           </button>
-          <button type="button" className={formatButton} title="Inline code" aria-label="Inline code" onClick={() => applyMarkdownWrap('`', '`')}>
+          <button type="button" className={formatButton} title="Inline code" aria-label="Inline code" onMouseDown={(event) => event.preventDefault()} onClick={() => applyFormat('code')}>
             <Code size={14} />
           </button>
-          <button
-            type="button"
-            className={formatButton}
-            title={previewOpen ? 'Hide markdown preview' : 'Show markdown preview'}
-            aria-label={previewOpen ? 'Hide markdown preview' : 'Show markdown preview'}
-            aria-pressed={previewOpen}
-            onClick={() => setPreviewOpen((open) => !open)}
-          >
-            {previewOpen ? <EyeOff size={14} /> : <Eye size={14} />}
-          </button>
         </div>
 
-        {previewOpen && previewMd.trim() ? (
-          <div className="max-h-36 overflow-y-auto rounded-lg border border-koma-border/80 bg-koma-bg/40 px-2 py-1.5">
-            <MessageBody text={previewMd} streaming />
-          </div>
-        ) : null}
-
-        {/* Wraps ONLY the textarea: a `relative z-0` positioning root for the
-            chip overlay (absolute inset-0 behind it) — isolated as its own
-            z-stacking context (explicit z-0 on a positioned element) so the
-            overlay/textarea's internal z-0/z-10 ordering never competes with
-            the card-level mascot/thinking-bubble (both z-10) above. */}
-        <div className="relative z-0">
-          {/* Chip overlay: mirrors the textarea's text behind it (see
-              renderComposerOverlay above), painting chip-eligible `@label`
-              tokens as tinted pills. pointer-events-none so it never steals
-              clicks/caret placement from the (visually transparent, but very
-              much alive) textarea layered on top of it.
-              Same field class + overflow-y:auto + stable gutter as the
-              textarea so wrap width and line boxes stay pixel-aligned once
-              the draft hits max-height and a scrollbar appears. */}
-          <div
-            ref={overlayRef}
-            aria-hidden="true"
-            className={`pointer-events-none absolute inset-0 z-0 overflow-x-hidden overflow-y-auto text-koma-fg [scrollbar-gutter:stable] ${COMPOSER_FIELD_CLASS} ${COMPOSER_OVERLAY_MD}`}
-          >
-            {renderComposerOverlay(input, pickedTokensRef.current)}
-          </div>
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={onChange}
-            onKeyDown={onKeyDown}
-            onPaste={onPaste}
-            onScroll={syncOverlayScroll}
-            placeholder="Message koma…"
-            rows={1}
-            className={`relative z-10 max-h-[200px] min-h-[22px] resize-none overflow-x-hidden overflow-y-auto bg-transparent outline-none [scrollbar-gutter:stable] caret-koma-fg placeholder:text-koma-fg placeholder:opacity-40 ${COMPOSER_FIELD_CLASS} ${
-              input === '' ? 'text-koma-fg' : 'text-transparent'
-            }`}
-          />
-        </div>
+        <LexicalMarkdownEditor
+          profile="composer"
+          markdown={input}
+          onMarkdown={onDraft}
+          tokens={[...pickedTokensRef.current]}
+          placeholder="Message koma…"
+          ariaLabel="Message"
+          apiRef={editorApi}
+          onKeyDown={onKeyDown}
+          onPaste={onPaste}
+          className={`relative z-0 max-h-[200px] min-h-[22px] overflow-y-auto text-koma-fg caret-koma-fg ${COMPOSER_FIELD_CLASS}`}
+        />
 
         <div className="flex min-w-0 items-center justify-between gap-1">
           <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden @max-xs/chat:gap-0">
