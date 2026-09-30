@@ -3,7 +3,7 @@ import type { StoreGet, StoreSet } from '../api'
 import { emptyFileState, fileKey } from '../coding'
 import { dropDesignDocs, dropDesignFileUi } from '../design'
 import { dropDiagramDocs } from '../diagram'
-import { setSplitDir as applySplitDir, toggleSplitDir as flipSplitDir, insertGroup, neighbourInGroup, normalizeGroups, reorderTab, resizeGroups } from '../editorGroups'
+import { setSplitDir as applySplitDir, toggleSplitDir as flipSplitDir, insertGroup, neighbourInGroup, normalizeGroups, reorderTab, resizeSplit } from '../editorGroups'
 import { tabBaseName } from '../initial'
 import type { KomaState } from '../state'
 import type { Tab } from '../types/tabs'
@@ -266,9 +266,8 @@ export function tabActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openD
       return {
         ui: normalizeGroups({
           ...ui,
+          splitTree: inserted.splitTree,
           groups: inserted.groups,
-          groupSizes: inserted.groupSizes,
-          splitDir: inserted.splitDir,
           tabGroup: { ...ui.tabGroup, [tabId]: inserted.id },
           groupActive: { ...ui.groupActive, [inserted.id]: tabId },
           activeGroupId: inserted.id,
@@ -278,26 +277,28 @@ export function tabActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openD
     })
     get().syncStreamView()
   },
-  toggleSplitDir: () =>
+  toggleSplitDir: (groupId) =>
     set((s) => {
       const ui = normalizeGroups(s.ui)
-      const next = flipSplitDir(ui)
+      const next = flipSplitDir(ui, groupId)
       if (!next) return s
-      return { ui: { ...ui, splitDir: next.splitDir } }
+      return { ui: normalizeGroups({ ...ui, splitTree: next.splitTree }) }
     }),
-  setSplitDir: (dir) =>
+  setSplitDir: (dir, groupId) =>
     set((s) => {
       const ui = normalizeGroups(s.ui)
-      const next = applySplitDir(ui, dir)
+      const next = applySplitDir(ui, dir, groupId)
       if (!next) return s
-      return { ui: { ...ui, splitDir: next.splitDir } }
+      return { ui: normalizeGroups({ ...ui, splitTree: next.splitTree }) }
     }),
-  resizeEditorGroups: (index, deltaPx, totalPx) =>
+  resizeEditorGroups: (splitId, deltaPx, totalPx) =>
     set((s) => {
       const ui = normalizeGroups(s.ui)
-      const groupSizes = resizeGroups(ui.groups, ui.groupSizes, index, deltaPx, totalPx)
-      if (groupSizes === ui.groupSizes) return s
-      return { ui: { ...ui, groupSizes } }
+      const tree = ui.splitTree
+      if (!tree) return s
+      const splitTree = resizeSplit(tree, splitId, deltaPx, totalPx)
+      if (splitTree === tree) return s
+      return { ui: { ...ui, splitTree } }
     }),
   }
 }

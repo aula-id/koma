@@ -212,7 +212,7 @@ function TabContextMenu({
 }) {
   const splitTab = useKoma((s) => s.splitTab)
   const toggleSplitDir = useKoma((s) => s.toggleSplitDir)
-  const splitDir = useKoma((s) => s.ui.splitDir)
+  const paneDir = useKoma((s) => s.ui.groupSplitDir?.[groupId])
   const tab = useKoma((s) => s.ui.tabs.find((t) => t.id === state.tabId))
   const openCodingFile = useKoma((s) => s.openCodingFile)
   const ref = useRef<HTMLDivElement>(null)
@@ -291,17 +291,18 @@ function TabContextMenu({
             Split Down
           </button>
         </>
-      ) : canToggle ? (
+      ) : null}
+      {canToggle ? (
         <button
           type="button"
           className={item}
           onClick={() => {
-            toggleSplitDir()
+            toggleSplitDir(groupId)
             onClose()
           }}
         >
-          {splitDir === 'row' ? <Rows2 size={13} /> : <Columns2 size={13} />}
-          {splitDir === 'row' ? 'Stack Vertically' : 'Split Horizontally'}
+          {paneDir === 'row' ? <Rows2 size={13} /> : <Columns2 size={13} />}
+          {paneDir === 'row' ? 'Stack Vertically' : 'Split Horizontally'}
         </button>
       ) : null}
       {state.tabId !== 'chat' && (
@@ -359,6 +360,7 @@ export function TabBar({ groupId, focused }: Props) {
       activeGroupId: s.ui.activeGroupId,
       activeTabId: s.ui.activeTabId,
       splitDir: s.ui.splitDir,
+      groupSplitDir: s.ui.groupSplitDir,
     })),
   )
   const ui = useMemo(
@@ -371,7 +373,8 @@ export function TabBar({ groupId, focused }: Props) {
         activeGroupId: layoutBits.activeGroupId,
         activeTabId: layoutBits.activeTabId,
         splitDir: layoutBits.splitDir,
-        // Sizes are unused for strip paint; empty map is fine (normalize fills 1s).
+        groupSplitDir: layoutBits.groupSplitDir,
+        // Sizes/tree are unused for strip paint; empty map is fine (normalize fills 1s).
         groupSizes: {},
       }),
     [layoutBits],
@@ -589,7 +592,7 @@ export function TabBar({ groupId, focused }: Props) {
       el.removeEventListener('scroll', schedule)
       if (raf) cancelAnimationFrame(raf)
     }
-  }, [checkOverflow, tabs, ui.groups.length])
+  }, [checkOverflow, tabs, ui.groups?.length])
 
   // Reveal the active tab once when selection or strip membership changes.
   useEffect(() => {
@@ -608,7 +611,7 @@ export function TabBar({ groupId, focused }: Props) {
     return () => cancelAnimationFrame(raf)
   }, [activeTabId, checkOverflow, tabs.length])
 
-  if (ui.tabs.length <= 1 && ui.groups.length <= 1) return null
+  if ((ui.tabs?.length ?? 0) <= 1 && (ui.groups?.length ?? 0) <= 1) return null
 
   const counts = new Map<string, number>()
   for (const t of ui.tabs) {
@@ -655,23 +658,24 @@ export function TabBar({ groupId, focused }: Props) {
     moveTabToGroup(tabId, groupId, beforeId)
   }
 
-  const canSplit = ui.groups.length < MAX_GROUPS
-  const canToggle = ui.groups.length >= 2
+  const canSplit = (ui.groups?.length ?? 0) < MAX_GROUPS
+  const paneDir = layoutBits.groupSplitDir?.[groupId]
+  const canToggle = paneDir != null
   const activeCanSplit = activeTabId !== 'chat' && canSplit
   // Always mount the layout control slot (both strips) so focus swaps never
   // change strip width by 28px and re-fire overflow RO on the neighbour bar.
   const layoutEnabled = focused && (canToggle || activeCanSplit)
   const LayoutIcon = canToggle
-    ? ui.splitDir === 'row'
+    ? paneDir === 'row'
       ? Rows2
       : Columns2
     : Columns2
   const layoutLabel = !focused
     ? 'Focus this group to change layout'
     : canToggle
-      ? ui.splitDir === 'row'
-        ? 'Stack editors vertically'
-        : 'Split editors horizontally'
+      ? paneDir === 'row'
+        ? 'Stack this split vertically'
+        : 'Split this pair horizontally'
       : activeCanSplit
         ? 'Split editor right'
         : 'Select a non-chat tab to split'
@@ -804,7 +808,7 @@ export function TabBar({ groupId, focused }: Props) {
             return
           }
           if (canToggle) {
-            toggleSplitDir()
+            toggleSplitDir(groupId)
             return
           }
           if (activeCanSplit) splitTab(activeTabId, groupId, 'after', 'row')

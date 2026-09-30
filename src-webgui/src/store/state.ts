@@ -560,20 +560,19 @@ export type KomaState = {
   // Move/reorder one tab into an existing pane. `beforeId: null` appends it to
   // that pane's strip. The permanent chat tab cannot be moved.
   moveTabToGroup: (tabId: string, groupId: EditorGroupId, beforeId?: string | null) => void
-  // Create the second pane and move one tab into it (max two groups). Prefer
-  // toggleSplitDir once already split — a second split is refused.
+  // Split `targetGroupId` into a nested pair and move `tabId` into the new leaf.
   splitTab: (
     tabId: string,
     targetGroupId: EditorGroupId,
     side: 'before' | 'after',
     dir: SplitDir,
   ) => void
-  // Flip the two-pane axis in place (row ↔ col). No-op when unsplit.
-  toggleSplitDir: () => void
-  // Set the two-pane axis explicitly. No-op when unsplit or already that dir.
-  setSplitDir: (dir: SplitDir) => void
-  // Resize the divider between group[index] and group[index + 1].
-  resizeEditorGroups: (index: number, deltaPx: number, totalPx: number) => void
+  // Flip the parent split of `groupId` (focused leaf when omitted).
+  toggleSplitDir: (groupId?: EditorGroupId) => void
+  // Set the parent split axis of `groupId`. No-op when unsplit or already that dir.
+  setSplitDir: (dir: SplitDir, groupId?: EditorGroupId) => void
+  // Resize the divider of a split node.
+  resizeEditorGroups: (splitId: string, deltaPx: number, totalPx: number) => void
   // The UsageFooter PLAN badge click (Plan mode only): bump `focusPlanTick` so
   // RootLayout opens the Explore sidebar/panel and ExplorePanel expands its
   // PLAN section in response.

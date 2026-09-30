@@ -229,6 +229,8 @@ export function pushAgents(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
             groupActive: hostView?.ui.groupActive ?? { [DEFAULT_GROUP]: 'chat' },
             activeGroupId: hostView?.ui.activeGroupId ?? DEFAULT_GROUP,
             splitDir: hostView?.ui.splitDir ?? 'row', groupSizes: hostView?.ui.groupSizes ?? { [DEFAULT_GROUP]: 1 },
+            splitTree: hostView?.ui.splitTree ?? { type: 'leaf' as const, id: DEFAULT_GROUP },
+            groupSplitDir: hostView?.ui.groupSplitDir ?? {},
           }) : s.ui
           const codingReset = hostChanged ? { coding: { ...(hostView?.coding ?? initialCoding), _sessionGen: s.coding._sessionGen + 1 } } : {}
           const diagramReset = hostChanged ? { diagram: hostView?.diagram ?? initialDiagram } : {}

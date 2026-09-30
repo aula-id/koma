@@ -135,6 +135,8 @@ export const initialUi: UiSlice = {
   activeGroupId: DEFAULT_GROUP,
   splitDir: 'row',
   groupSizes: { [DEFAULT_GROUP]: 1 },
+  splitTree: { type: 'leaf', id: DEFAULT_GROUP },
+  groupSplitDir: {},
   focusPlanTick: 0,
   usageScope: 'all',
   loading: null,

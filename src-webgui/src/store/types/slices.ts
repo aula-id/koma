@@ -1,5 +1,5 @@
 import type { DiagramDoc } from '../../lib/diagram'
-import type { EditorGroupId, SplitDir } from '../editorGroups'
+import type { EditorGroupId, EditorLayoutNode, SplitDir } from '../editorGroups'
 import type { AnalyticsData, AnalyticsMetric, AnalyticsRange, AnalyticsScope } from './analytics'
 import type { ChatMessage, PaletteInfo } from './chat'
 import type { ActivityCommit, CommitDetail, GitCommitNode } from './git'
@@ -242,6 +242,8 @@ export type UiSlice = {
   activeGroupId: EditorGroupId
   splitDir: SplitDir
   groupSizes: Record<EditorGroupId, number>
+  splitTree: EditorLayoutNode
+  groupSplitDir: Record<EditorGroupId, SplitDir>
   // Monotonic tick bumped by `focusPlanSection` (the UsageFooter PLAN badge
   // click): a cross-tree signal, mirrors `scrollTick`. RootLayout watches it
   // to open the Explore sidebar/panel; ExplorePanel watches it to expand its

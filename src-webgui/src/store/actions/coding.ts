@@ -140,14 +140,13 @@ export function codingActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'se
 
       if (opts?.split) {
         // Edge drop: open the file into a new adjacent pane (or the target
-        // group when we're already at MAX_GROUPS).
+        // group when the live pane count is already at MAX_GROUPS).
         const inserted = insertGroup(ui, targetGroup, opts.split.side, opts.split.dir)
         if (inserted) {
           ui = {
             ...ui,
+            splitTree: inserted.splitTree,
             groups: inserted.groups,
-            groupSizes: inserted.groupSizes,
-            splitDir: inserted.splitDir,
             tabGroup: { ...ui.tabGroup, [id]: inserted.id },
             groupActive: { ...ui.groupActive, [inserted.id]: id },
             activeGroupId: inserted.id,

@@ -36,12 +36,16 @@ import { hasCodingPathDrag, readCodingPathDragData } from '../lib/codingRef'
 import {
   MAX_GROUPS,
   dropZoneFor,
-  gridLayout,
+  findSplit,
+  gridLayoutFromTree,
   groupOf,
   isTabVisible,
+  leafIds,
   normalizeGroups,
   type DropZone,
   type EditorGroupId,
+  type SplitDir,
+  type SplitNodeId,
 } from '../store/editorGroups'
 import type { Tab } from '../store/koma'
 
@@ -655,13 +659,13 @@ function TabbedMain() {
   const openCodingFile = useKoma((s) => s.openCodingFile)
   // splitTab already selected above for the keyboard shortcut.
   const layout = useMemo(
-    () => gridLayout(ui.groups, ui.groupSizes, ui.splitDir),
-    [ui.groupSizes, ui.groups, ui.splitDir],
+    () => gridLayoutFromTree(ui.splitTree ?? { type: 'leaf', id: ui.groups?.[0] ?? 'g0' }),
+    [ui.splitTree, ui.groups],
   )
 
   // After 2→1 collapse, some WebViews keep the previous multi-track paint until
   // a forced reflow. Nudge when the live group count drops to one.
-  const groupCount = ui.groups.length
+  const groupCount = ui.groups?.length ?? 0
   useLayoutEffect(() => {
     if (groupCount !== 1) return
     const el = gridRef.current
@@ -837,15 +841,15 @@ function TabbedMain() {
     }
   }, [])
 
-  // Split (Ctrl/Cmd+\): create the second pane, or flip axis when already split.
-  // Group focus is Ctrl/Cmd+1..2 only (max two panes).
+  // Split (Ctrl/Cmd+\): nest a pane, or flip the focused leaf's parent.
+  // Group focus is Ctrl/Cmd+1..8 in tree order.
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return
       if (e.key === '\\') {
-        if (ui.groups.length >= 2) {
+        if (ui.groupSplitDir?.[ui.activeGroupId]) {
           e.preventDefault()
-          toggleSplitDir()
+          toggleSplitDir(ui.activeGroupId)
           return
         }
         if (ui.activeTabId === 'chat' || ui.groups.length >= MAX_GROUPS) return
@@ -862,16 +866,24 @@ function TabbedMain() {
     }
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
-  }, [focusGroup, splitTab, toggleSplitDir, ui.activeGroupId, ui.activeTabId, ui.groups])
+  }, [focusGroup, splitTab, toggleSplitDir, ui.activeGroupId, ui.activeTabId, ui.groupSplitDir, ui.groups])
 
-  const startResize = (index: number, e: ReactMouseEvent) => {
+  const startResize = (splitId: SplitNodeId, dir: SplitDir, e: ReactMouseEvent) => {
     e.preventDefault()
-    const dir = ui.splitDir
-    let prev = dir === 'row' ? e.clientX : e.clientY
-    const total =
-      dir === 'row'
+    const tree = ui.splitTree
+    const split = tree ? findSplit(tree, splitId) : null
+    const ids = split ? leafIds(split) : []
+    const rects = ids
+      .map((id) => paneEls.current.get(id)?.getBoundingClientRect())
+      .filter((r): r is DOMRect => !!r)
+    const total = rects.length
+      ? dir === 'row'
+        ? Math.max(...rects.map((r) => r.right)) - Math.min(...rects.map((r) => r.left))
+        : Math.max(...rects.map((r) => r.bottom)) - Math.min(...rects.map((r) => r.top))
+      : dir === 'row'
         ? (gridRef.current?.clientWidth ?? 1)
         : (gridRef.current?.clientHeight ?? 1)
+    let prev = dir === 'row' ? e.clientX : e.clientY
     let raf = 0
     let pending: number | null = null
     const flush = () => {
@@ -879,7 +891,7 @@ function TabbedMain() {
       if (pending == null) return
       const d = pending
       pending = null
-      resizeGroups(index, d, total)
+      resizeGroups(splitId, d, total)
     }
     const move = (ev: MouseEvent) => {
       const next = dir === 'row' ? ev.clientX : ev.clientY
@@ -968,20 +980,18 @@ function TabbedMain() {
           </div>
         ))}
 
-        {layout.cells.map((cell, index) =>
-          cell.grip ? (
+        {layout.grips.map((grip) => (
             <div
-              key={`grip:${cell.id}`}
-              style={cell.grip}
-              onMouseDown={(e) => startResize(index, e)}
+              key={`grip:${grip.id}`}
+              style={grip.cell}
+              onMouseDown={(e) => startResize(grip.id, grip.dir, e)}
               className={`z-30 bg-koma-panel2 hover:bg-koma-grip ${
-                ui.splitDir === 'row'
+                grip.dir === 'row'
                   ? 'cursor-ew-resize border-l border-koma-border'
                   : 'cursor-ns-resize border-t border-koma-border'
               }`}
             />
-          ) : null,
-        )}
+        ))}
       </div>
       <BottomPanel />
       <UsageFooter />

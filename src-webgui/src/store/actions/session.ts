@@ -289,6 +289,8 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
         activeGroupId: DEFAULT_GROUP,
         splitDir: 'row' as const,
         groupSizes: { [DEFAULT_GROUP]: 1 },
+        splitTree: { type: 'leaf' as const, id: DEFAULT_GROUP },
+        groupSplitDir: {},
         switchingTo: null,
         // Defensive: also drop any stale startup splash — it described the
         // now-dead session's warm-up and must not linger over StartScreen.
