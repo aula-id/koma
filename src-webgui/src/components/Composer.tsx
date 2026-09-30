@@ -36,10 +36,9 @@ import {
 import { diagramViewForMermaid, mermaidTitle, splitDiagramMessage } from '../lib/diagramMermaid'
 import {
   assignFreshMarkerInserts,
-  attachmentMarkersRemoved,
-  attachmentQueueStillPending,
   imageMarker,
-  markerLabel,
+  listedComposerAttachments,
+  trailingAttachmentMarkers,
   type MarkerInsertRow,
 } from '../lib/composerMarkers'
 import {
@@ -58,7 +57,14 @@ import { EffortPicker } from './EffortPicker'
 import { ModeSelector } from './ModeSelector'
 import { CatMascot } from './CatMascot'
 import { DiagramSketch } from './DiagramVisual'
-import { chipPayloadForAttachMarker, chipPayloadForFileRef } from '../lib/composerIpc'
+import {
+  chipPayloadForAttachMarker,
+  chipPayloadForFileRef,
+  COMPOSER_ATTACHMENT_MIME,
+  composerAttachmentPlain,
+  hasComposerAttachmentDrag,
+  writeComposerAttachmentDrag,
+} from '../lib/composerIpc'
 import { looksLikeComposerMarkdown } from '../lib/composerMarkdownPaste'
 import { parseFileRefWire } from '../lib/composerChipOpen'
 import { ComposerPasteEditOverlay } from './ComposerPasteEditOverlay'
@@ -72,27 +78,6 @@ function mintDiagramChipId(): string {
 }
 
 type LocalPaste = PastedBlock & { id: string; markerN?: number }
-
-function attachmentMarkerInInput(
-  draft: string,
-  kind: 'image' | 'pasted_text' | 'file',
-  markerN: number,
-): boolean {
-  if (kind === 'image') return draft.includes(imageMarker(markerN))
-  if (kind === 'pasted_text') return draft.includes(pasteMarker(markerN))
-  return false
-}
-
-function showAttachmentChip(
-  draft: string,
-  att: { kind: 'image' | 'file' | 'pasted_text'; markerN: number },
-  localPastes: LocalPaste[],
-): boolean {
-  if (att.kind === 'file') return true
-  if (attachmentMarkerInInput(draft, att.kind, att.markerN)) return false
-  if (att.kind === 'pasted_text' && localPastes.some((chip) => chip.markerN === att.markerN)) return false
-  return true
-}
 
 function steerPreview(text: string): string {
   const pasted = splitPasteMessage(text)
@@ -187,7 +172,6 @@ export function Composer() {
   // Recalled fences are not queued: they already have a body to splice back.
   const markerInsertQueue = useRef<MarkerInsertRow[]>([])
   const seenAttachmentMarkers = useRef(new Set<string>())
-  const skipAttachmentReconcile = useRef(false)
   const submitArmed = useRef(false)
   const submitRef = useRef<() => void>(() => {})
   const [pasteTexts, setPasteTexts] = useState<Record<number, string>>({})
@@ -286,16 +270,6 @@ export function Composer() {
     editorApi.current?.focus()
   }, [diagramChatQueue, consumeDiagramChatQueue])
 
-  const insertAttachmentChip = (kind: 'image' | 'pasted_text', markerN: number, queueId?: string) => {
-    const marker = markerLabel(kind, markerN)
-    if (draftRef.current.includes(marker)) return
-    editorApi.current?.insertChip(chipPayloadForAttachMarker(kind, markerN, queueId), {
-      atEnd: true,
-      trailingSpace: true,
-    })
-    draftRef.current = `${draftRef.current}${draftRef.current && !draftRef.current.endsWith(' ') ? ' ' : ''}${marker} `
-  }
-
   const flushAttachmentInserts = () => {
     const assigned = assignFreshMarkerInserts(markerInsertQueue.current, seenAttachmentMarkers.current, attachments)
     const removals = assigned.filter((row) => row.cancelled)
@@ -303,7 +277,6 @@ export function Composer() {
     for (const row of removals) {
       req({ r: 'RemoveAttachment', markerN: row.markerN, kind: row.kind })
     }
-    skipAttachmentReconcile.current = true
     if (keeps.length) {
       setLocalPastes((prev) =>
         prev.map((item) => {
@@ -312,15 +285,7 @@ export function Composer() {
           return { ...item, markerN: q.markerN, n: q.markerN }
         }),
       )
-      for (const row of keeps) insertAttachmentChip(row.kind, row.markerN, row.id)
     }
-    for (const att of attachments) {
-      if (att.kind !== 'image' && att.kind !== 'pasted_text') continue
-      insertAttachmentChip(att.kind, att.markerN)
-    }
-    queueMicrotask(() => {
-      skipAttachmentReconcile.current = false
-    })
   }
 
   useEffect(() => {
@@ -482,15 +447,7 @@ export function Composer() {
     const recalled = locals.filter((item) => item.markerN == null)
     const staged = attachments.filter((item) => item.kind === 'pasted_text' && !linked.has(item.markerN))
     const fences = recalled.map((item) => formatPasteFence(item)).join('\n\n')
-    const trailingMarkers = [
-      ...locals.flatMap((item) =>
-        item.markerN != null && !prose.includes(pasteMarker(item.markerN)) ? [pasteMarker(item.markerN)] : [],
-      ),
-      ...staged.flatMap((item) => (prose.includes(pasteMarker(item.markerN)) ? [] : [pasteMarker(item.markerN)])),
-      ...attachments.flatMap((item) =>
-        item.kind === 'image' && !prose.includes(imageMarker(item.markerN)) ? [imageMarker(item.markerN)] : [],
-      ),
-    ]
+    const trailingMarkers = trailingAttachmentMarkers(prose, attachments, locals)
     const text = [prose.trim() ? prose : '', mermaid, designs, fences, trailingMarkers.join(' ')].filter(Boolean).join('\n\n')
     const stagedPaste = staged.length > 0 || locals.some((item) => item.markerN != null)
     if (!text && !stagedPaste) return
@@ -562,9 +519,8 @@ export function Composer() {
   }
   submitRef.current = submit
 
-  // Snapshot assigned marker numbers. Bind them onto the chips that are still
-  // waiting, or drop a chip the user removed before the number came back.
-  // A send that landed during the wait flushes once every live row is bound.
+  // Snapshot assigned marker numbers. Bind them onto queue rows so Send is
+  // not blocked and cancelled in-flight attaches can still be dropped.
   useEffect(() => {
     flushAttachmentInserts()
   }, [attachments, req])
@@ -727,22 +683,11 @@ export function Composer() {
   }
 
   const onDraft = (val: string) => {
-    const removed = attachmentMarkersRemoved(draftRef.current, val)
     echoDraft.current = val !== input
     draftRef.current = val
     setInput(val)
     if (val.trim() === '' && pendingRewindIndex !== null) clearRewind()
     resetHistory()
-    if (skipAttachmentReconcile.current) return
-    cancelMarkerQueueRows(removed)
-    const queue = markerInsertQueue.current
-    for (const att of useKoma.getState().session.attachments) {
-      if (att.kind !== 'image' && att.kind !== 'pasted_text') continue
-      const key = `${att.kind}:${att.markerN}`
-      if (!removed.has(key)) continue
-      if (attachmentQueueStillPending(queue, att.kind, att.markerN)) continue
-      req({ r: 'RemoveAttachment', markerN: att.markerN, kind: att.kind })
-    }
   }
 
   const attachFiles = async (files: FileList | File[]) => {
@@ -800,6 +745,12 @@ export function Composer() {
   }
 
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    const types = Array.from(e.dataTransfer.types)
+    if (hasComposerAttachmentDrag(types)) {
+      e.preventDefault()
+      setDragOver(false)
+      return
+    }
     e.preventDefault()
     setDragOver(false)
     // Coding tree path reference (not a file upload).
@@ -814,6 +765,16 @@ export function Composer() {
   }
 
   const onDragOver = (e: DragEvent<HTMLDivElement>) => {
+    const types = Array.from(e.dataTransfer.types)
+    if (hasComposerAttachmentDrag(types)) {
+      e.preventDefault()
+      try {
+        e.dataTransfer.dropEffect = 'copy'
+      } catch {
+        /* ignore */
+      }
+      return
+    }
     // Accept coding-tree path drags and external image files.
     e.preventDefault()
     setDragOver(true)
@@ -835,15 +796,26 @@ export function Composer() {
     if (kind === 'image' || kind === 'pasted_text') {
       cancelMarkerQueueRows(new Set([`${kind}:${markerN}`]))
       const chipKind = kind === 'image' ? 'image' : 'paste'
-      const hadChip = editorApi.current?.removeAttachMarkerChip(chipKind, markerN) ?? false
-      if (!hadChip) {
-        req({ r: 'RemoveAttachment', markerN, kind })
-        const marker = kind === 'image' ? imageMarker(markerN) : pasteMarker(markerN)
-        setInput((prev) => (prev.includes(marker) ? prev.replace(marker, '') : prev))
-      }
-      return
+      editorApi.current?.removeAttachMarkerChip(chipKind, markerN)
+      const marker = kind === 'image' ? imageMarker(markerN) : pasteMarker(markerN)
+      setInput((prev) => (prev.includes(marker) ? prev.replace(marker, '') : prev))
     }
     req({ r: 'RemoveAttachment', markerN, kind })
+  }
+
+  const stripAttachments = useMemo(
+    () => listedComposerAttachments(input, attachments, localPastes),
+    [input, attachments, localPastes],
+  )
+
+  const removeListedAttachment = (item: (typeof stripAttachments)[number]) => {
+    if (item.kind === 'pasted_text' && item.markerN == null && item.id) {
+      const row = markerInsertQueue.current.find((queued) => queued.id === item.id)
+      if (row) row.cancelled = true
+      setLocalPastes((prev) => prev.filter((paste) => paste.id !== item.id))
+      return
+    }
+    if (item.markerN != null) removeAttachment(item.markerN, item.kind)
   }
 
   const editPaste = (markerN: number, text: string) => {
@@ -862,6 +834,8 @@ export function Composer() {
   }
 
   const insertAttachmentIntoDraft = (kind: 'image' | 'pasted_text', markerN: number) => {
+    const marker = kind === 'image' ? imageMarker(markerN) : pasteMarker(markerN)
+    if (draftRef.current.includes(marker)) return
     editorApi.current?.insertChip(chipPayloadForAttachMarker(kind, markerN), { trailingSpace: true })
     editorApi.current?.focus()
   }
@@ -878,15 +852,7 @@ export function Composer() {
         if (!resolved) return
         useKoma.getState().openCodingFile(resolved.root, resolved.path, { preview: false })
       },
-      onRemoveChip: ({ nodeKey, kind, markerN }) => {
-        if (kind === 'image' && markerN != null) {
-          removeAttachment(markerN, 'image')
-          return
-        }
-        if (kind === 'paste' && markerN != null) {
-          removeAttachment(markerN, 'pasted_text')
-          return
-        }
+      onRemoveChip: ({ nodeKey }) => {
         editorApi.current?.removeComposerChip(nodeKey)
       },
     }),
@@ -1112,52 +1078,68 @@ export function Composer() {
           </div>
         )}
 
-        {attachments.some((item) => showAttachmentChip(input, item, localPastes)) && (
+        {stripAttachments.length > 0 && (
           <div className="flex flex-col gap-1">
             <div className="flex flex-wrap gap-1">
-              {attachments.filter((item) => showAttachmentChip(input, item, localPastes)).map((a) => (
+              {stripAttachments.map((item) => {
+                const canPlace = (item.kind === 'image' || item.kind === 'pasted_text') && item.markerN != null
+                return (
                 <span
-                  key={`${a.kind}:${a.markerN}`}
+                  key={item.key}
                   tabIndex={0}
                   role="group"
-                  aria-label={a.name}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Delete' && event.key !== 'Backspace') return
-                    event.preventDefault()
-                    removeAttachment(a.markerN, a.kind)
+                  aria-label={item.name}
+                  draggable={canPlace}
+                  title={canPlace ? 'Drag into the message to place. Click to insert at the caret.' : undefined}
+                  onDragStart={(event) => {
+                    if (!canPlace || item.markerN == null) {
+                      event.preventDefault()
+                      return
+                    }
+                    const payload = { kind: item.kind as 'image' | 'pasted_text', markerN: item.markerN }
+                    event.dataTransfer.setData(COMPOSER_ATTACHMENT_MIME, writeComposerAttachmentDrag(payload))
+                    event.dataTransfer.setData('text/plain', composerAttachmentPlain(payload))
+                    event.dataTransfer.effectAllowed = 'copy'
                   }}
-                  className="flex items-center gap-1 rounded-lg border border-koma-border bg-koma-panel2 px-2 py-1 text-[11px] text-koma-fg opacity-90 focus:outline-none focus-visible:ring-1 focus-visible:ring-koma-accent"
+                  onClick={(event) => {
+                    if ((event.target as HTMLElement).closest('button')) return
+                    if (canPlace && item.markerN != null) insertAttachmentIntoDraft(item.kind as 'image' | 'pasted_text', item.markerN)
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Delete' || event.key === 'Backspace') {
+                      event.preventDefault()
+                      removeListedAttachment(item)
+                      return
+                    }
+                    if ((event.key === 'Enter' || event.key === ' ') && canPlace && item.markerN != null) {
+                      event.preventDefault()
+                      insertAttachmentIntoDraft(item.kind as 'image' | 'pasted_text', item.markerN)
+                    }
+                  }}
+                  className={`flex items-center gap-1 rounded-lg border border-koma-border bg-koma-panel2 px-2 py-1 text-[11px] text-koma-fg opacity-90 focus:outline-none focus-visible:ring-1 focus-visible:ring-koma-accent ${canPlace ? 'cursor-grab' : ''}`}
                 >
-                  {a.kind === 'pasted_text' ? (
+                  {item.kind === 'pasted_text' && item.markerN != null ? (
                     <button
                       type="button"
                       className="max-w-[180px] truncate text-left"
-                      onClick={() => openPasteEditor(a.markerN)}
+                      onClick={() => openPasteEditor(item.markerN!)}
                     >
-                      {a.name}
+                      {item.name}
                     </button>
                   ) : (
-                    <span className="max-w-[140px] truncate">{a.name}</span>
-                  )}
-                  {(a.kind === 'image' || a.kind === 'pasted_text') && (
-                    <button
-                      type="button"
-                      title="Add attachment marker to the message body"
-                      className="rounded px-1 text-[10px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
-                      onClick={() => insertAttachmentIntoDraft(a.kind, a.markerN)}
-                    >
-                      Add
-                    </button>
+                    <span className="max-w-[140px] truncate">{item.name}</span>
                   )}
                   <button
-                    onClick={() => removeAttachment(a.markerN, a.kind)}
-                    aria-label={`Remove ${a.name}`}
+                    type="button"
+                    onClick={() => removeListedAttachment(item)}
+                    aria-label={`Remove ${item.name}`}
                     className="flex-none opacity-60 transition-opacity hover:opacity-100"
                   >
                     <X size={11} />
                   </button>
                 </span>
-              ))}
+                )
+              })}
             </div>
           </div>
         )}

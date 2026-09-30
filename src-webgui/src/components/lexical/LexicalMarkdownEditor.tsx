@@ -76,8 +76,12 @@ import {
 } from './chipNodes'
 import { $exportLexicalMarkdown } from './lexicalMarkdown'
 import {
+  chipPayloadForAttachMarker,
   chipPayloadFromWire,
+  COMPOSER_ATTACHMENT_MIME,
   findFileRefWireInText,
+  hasComposerAttachmentDrag,
+  readComposerAttachmentDrag,
   type ComposerChipPayload,
 } from '../../lib/composerIpc'
 import {
@@ -321,18 +325,59 @@ function $replaceChipByQueueId(queueId: string, payload: ComposerChipPayload): b
   return false
 }
 
-function $removeAttachMarkerChips(kind: 'image' | 'paste', markerN: number): boolean {
-  let removed = false
+function $findAttachMarkerChip(kind: 'image' | 'paste', markerN: number): ComposerChipNode | null {
   const stack: LexicalNode[] = [$getRoot()]
   while (stack.length) {
     const node = stack.pop()!
     if ($isComposerChipNode(node) && node.getChipKind() === kind && node.getMarkerN() === markerN) {
-      node.remove()
-      removed = true
+      return node
     }
     if ($isElementNode(node)) stack.push(...node.getChildren())
   }
-  return removed
+  return null
+}
+
+function $removeAttachMarkerChips(kind: 'image' | 'paste', markerN: number): boolean {
+  const chip = $findAttachMarkerChip(kind, markerN)
+  if (!chip) return false
+  chip.remove()
+  return true
+}
+
+function $caretRangeFromPoint(clientX: number, clientY: number): Range | null {
+  return typeof document.caretRangeFromPoint === 'function'
+    ? document.caretRangeFromPoint(clientX, clientY)
+    : null
+}
+
+function $insertChipAtClientPoint(
+  payload: ComposerChipPayload,
+  clientX: number,
+  clientY: number,
+  trailingSpace: boolean,
+): void {
+  const range = $caretRangeFromPoint(clientX, clientY)
+  const created = $createComposerChipNode(payload)
+  const dom = range?.startContainer
+  const el = dom instanceof Element ? dom : dom?.parentElement ?? null
+  const nearest = el ? $getNearestNodeFromDOMNode(el) : null
+  if ($isTextNode(nearest) && range) {
+    const offset = Math.min(range.startOffset, nearest.getTextContentSize())
+    nearest.select(offset, offset)
+    const selection = $getSelection()
+    if ($isRangeSelection(selection)) selection.insertNodes([created])
+    else nearest.insertAfter(created)
+  } else if ($isComposerChipNode(nearest)) {
+    nearest.insertAfter(created)
+  } else {
+    $prepareInsert(true)
+    const selection = $getSelection()
+    if ($isRangeSelection(selection)) selection.insertNodes([created])
+  }
+  if (trailingSpace) {
+    const selection = $getSelection()
+    if ($isRangeSelection(selection)) selection.insertNodes([$createTextNode(' ')])
+  }
 }
 
 /** Backspace/Delete on a collapsed caret beside an inline pile chip. */
@@ -789,9 +834,10 @@ function EditorPlugins({
       (event) => {
         if (profile !== 'composer') return false
         const types = event.dataTransfer ? Array.from(event.dataTransfer.types) : []
-        if (!types.includes(COMPOSER_CHIP_MIME)) return false
+        const fromStrip = hasComposerAttachmentDrag(types)
+        if (!types.includes(COMPOSER_CHIP_MIME) && !fromStrip) return false
         event.preventDefault()
-        if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+        if (event.dataTransfer) event.dataTransfer.dropEffect = fromStrip ? 'copy' : 'move'
         return true
       },
       COMMAND_PRIORITY_HIGH,
@@ -801,6 +847,16 @@ function EditorPlugins({
       (event) => {
         if (profile !== 'composer') return false
         const plain = event.dataTransfer?.getData('text/plain') ?? ''
+        const attach = readComposerAttachmentDrag(event.dataTransfer?.getData(COMPOSER_ATTACHMENT_MIME), plain)
+        if (attach) {
+          event.preventDefault()
+          editor.update(() => {
+            const chipKind = attach.kind === 'image' ? 'image' : 'paste'
+            if ($findAttachMarkerChip(chipKind, attach.markerN)) return
+            $insertChipAtClientPoint(chipPayloadForAttachMarker(attach.kind, attach.markerN), event.clientX, event.clientY, true)
+          })
+          return true
+        }
         const mimeKey = event.dataTransfer?.getData(COMPOSER_CHIP_MIME) ?? ''
         const key =
           mimeKey && mimeKey !== 'marker'
@@ -810,10 +866,6 @@ function EditorPlugins({
               : ''
         if (!key) return false
         event.preventDefault()
-        const range =
-          typeof document.caretRangeFromPoint === 'function'
-            ? document.caretRangeFromPoint(event.clientX, event.clientY)
-            : null
         editor.update(() => {
           const existing = $getNodeByKey(key)
           const chip = existing && $isComposerChipNode(existing) ? existing : null
@@ -825,22 +877,8 @@ function EditorPlugins({
             markerN: chip.getMarkerN(),
             queueId: chip.getQueueId(),
           }
-          const created = $createComposerChipNode(payload)
-          const dom = range?.startContainer
-          const el = dom instanceof Element ? dom : dom?.parentElement ?? null
-          const nearest = el ? $getNearestNodeFromDOMNode(el) : null
-          if ($isTextNode(nearest) && range) {
-            const offset = Math.min(range.startOffset, nearest.getTextContentSize())
-            nearest.select(offset, offset)
-            const selection = $getSelection()
-            if ($isRangeSelection(selection)) selection.insertNodes([created])
-            else nearest.insertAfter(created)
-          } else {
-            $prepareInsert(true)
-            const selection = $getSelection()
-            if ($isRangeSelection(selection)) selection.insertNodes([created])
-          }
-          if (chip.getKey() !== created.getKey()) chip.remove()
+          $insertChipAtClientPoint(payload, event.clientX, event.clientY, false)
+          chip.remove()
         })
         return true
       },

@@ -71,18 +71,67 @@ export function chipPayloadForFileRef(wireText: string): ComposerChipPayload {
 }
 
 export function chipPayloadForAttachMarker(
-  kind: 'image' | 'paste',
+  kind: 'image' | 'paste' | 'pasted_text',
   markerN: number,
   queueId?: string | null,
 ): ComposerChipPayload {
-  const wireText = kind === 'image' ? imageMarker(markerN) : pasteMarker(markerN)
+  const chipKind = kind === 'image' ? 'image' : 'paste'
+  const wireText = chipKind === 'image' ? imageMarker(markerN) : pasteMarker(markerN)
   return {
-    kind: kind === 'image' ? 'image' : 'paste',
+    kind: chipKind,
     wireText,
     displayLabel: displayLabelForWire(wireText),
     markerN,
     queueId: queueId ?? null,
   }
+}
+
+export const COMPOSER_ATTACHMENT_MIME = 'application/x-koma-attachment'
+export const COMPOSER_ATTACHMENT_PLAIN_PREFIX = 'koma-attachment:'
+
+export type ComposerAttachmentDrag = {
+  kind: 'image' | 'pasted_text'
+  markerN: number
+}
+
+export function writeComposerAttachmentDrag(data: ComposerAttachmentDrag): string {
+  return JSON.stringify(data)
+}
+
+export function readComposerAttachmentDrag(
+  raw: string | null | undefined,
+  plain?: string | null,
+): ComposerAttachmentDrag | null {
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as Partial<ComposerAttachmentDrag>
+      if ((parsed.kind === 'image' || parsed.kind === 'pasted_text') && Number.isFinite(parsed.markerN)) {
+        return { kind: parsed.kind, markerN: Number(parsed.markerN) }
+      }
+    } catch {
+      /* fall through to plain */
+    }
+  }
+  if (plain?.startsWith(COMPOSER_ATTACHMENT_PLAIN_PREFIX)) {
+    const rest = plain.slice(COMPOSER_ATTACHMENT_PLAIN_PREFIX.length)
+    const colon = rest.lastIndexOf(':')
+    if (colon > 0) {
+      const kind = rest.slice(0, colon)
+      const markerN = Number(rest.slice(colon + 1))
+      if ((kind === 'image' || kind === 'pasted_text') && Number.isFinite(markerN)) {
+        return { kind, markerN }
+      }
+    }
+  }
+  return null
+}
+
+export function composerAttachmentPlain(data: ComposerAttachmentDrag): string {
+  return `${COMPOSER_ATTACHMENT_PLAIN_PREFIX}${data.kind}:${data.markerN}`
+}
+
+export function hasComposerAttachmentDrag(types: readonly string[]): boolean {
+  return types.includes(COMPOSER_ATTACHMENT_MIME)
 }
 
 /** After markdown import, promote plain @ refs in text nodes to chips. */

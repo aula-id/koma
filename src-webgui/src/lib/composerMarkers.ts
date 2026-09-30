@@ -51,6 +51,98 @@ export function attachmentMarkersRemoved(prevText: string, nextText: string): Se
   return removed
 }
 
+export function attachmentMarkerInDraft(
+  draft: string,
+  kind: 'image' | 'pasted_text' | 'file',
+  markerN: number,
+): boolean {
+  if (kind === 'image') return draft.includes(imageMarker(markerN))
+  if (kind === 'pasted_text') return draft.includes(pasteMarker(markerN))
+  return false
+}
+
+export type ListedComposerAttachment = {
+  key: string
+  kind: 'image' | 'file' | 'pasted_text'
+  markerN: number | null
+  name: string
+  id?: string
+}
+
+/** Unplaced session attachments plus in-flight pastes for the composer strip. */
+export function listedComposerAttachments(
+  draft: string,
+  attachments: Array<{ kind: 'image' | 'file' | 'pasted_text'; markerN: number; name: string }>,
+  localPastes: Array<{ id: string; markerN?: number; n?: number }>,
+): ListedComposerAttachment[] {
+  const listed: ListedComposerAttachment[] = []
+  const seen = new Set<string>()
+  for (const att of attachments) {
+    if (att.kind !== 'file' && attachmentMarkerInDraft(draft, att.kind, att.markerN)) continue
+    const key = `${att.kind}:${att.markerN}`
+    listed.push({ key, kind: att.kind, markerN: att.markerN, name: att.name })
+    seen.add(key)
+  }
+  let unmatchedSessionPastes = attachments.filter(
+    (att) =>
+      att.kind === 'pasted_text' &&
+      !attachmentMarkerInDraft(draft, att.kind, att.markerN) &&
+      !localPastes.some((paste) => paste.markerN === att.markerN),
+  ).length
+  for (const paste of localPastes) {
+    if (paste.markerN != null) {
+      const key = `pasted_text:${paste.markerN}`
+      if (seen.has(key) || attachmentMarkerInDraft(draft, 'pasted_text', paste.markerN)) continue
+      listed.push({
+        key: paste.id,
+        kind: 'pasted_text',
+        markerN: paste.markerN,
+        name: `Pasted Text #${paste.markerN}`,
+        id: paste.id,
+      })
+      seen.add(key)
+      continue
+    }
+    if (unmatchedSessionPastes > 0) {
+      unmatchedSessionPastes -= 1
+      continue
+    }
+    listed.push({
+      key: paste.id,
+      kind: 'pasted_text',
+      markerN: null,
+      name: 'Pasted Text',
+      id: paste.id,
+    })
+  }
+  return listed
+}
+
+/** Markers appended on send when the user never dropped the pile into the draft. */
+export function trailingAttachmentMarkers(
+  prose: string,
+  attachments: Array<{ kind: string; markerN: number }>,
+  localPastes: Array<{ markerN?: number }>,
+): string[] {
+  const markers: string[] = []
+  const seen = new Set<string>()
+  const add = (marker: string) => {
+    if (seen.has(marker) || prose.includes(marker)) return
+    seen.add(marker)
+    markers.push(marker)
+  }
+  for (const item of localPastes) {
+    if (item.markerN != null) add(pasteMarker(item.markerN))
+  }
+  for (const item of attachments) {
+    if (item.kind === 'pasted_text') add(pasteMarker(item.markerN))
+  }
+  for (const item of attachments) {
+    if (item.kind === 'image') add(imageMarker(item.markerN))
+  }
+  return markers
+}
+
 /** True while a paste/image row is still waiting on the daemon marker number. */
 export function attachmentQueueStillPending(
   queue: readonly { kind: 'image' | 'pasted_text'; markerN: number | null; cancelled: boolean }[],

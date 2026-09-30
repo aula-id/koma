@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict'
 import {
   chipKindFromWire,
+  chipPayloadForAttachMarker,
   chipPayloadForFileRef,
   chipPayloadFromWire,
+  composerAttachmentPlain,
   displayLabelForWire,
+  hasComposerAttachmentDrag,
+  readComposerAttachmentDrag,
+  writeComposerAttachmentDrag,
 } from './composerIpc.ts'
 
 assert.equal(chipKindFromWire('@bump.sh'), 'file')
@@ -21,5 +26,16 @@ const image = chipPayloadFromWire('[Image #1]')
 assert.equal(image.kind, 'image')
 assert.equal(image.markerN, 1)
 assert.equal(image.displayLabel, 'Image 1')
+
+const pasteChip = chipPayloadForAttachMarker('pasted_text', 4)
+assert.equal(pasteChip.kind, 'paste')
+assert.equal(pasteChip.wireText, '[Pasted Text #4]')
+
+const drag = { kind: 'image' as const, markerN: 1 }
+assert.deepEqual(readComposerAttachmentDrag(writeComposerAttachmentDrag(drag)), drag)
+assert.deepEqual(readComposerAttachmentDrag(null, composerAttachmentPlain(drag)), drag)
+assert.equal(readComposerAttachmentDrag('nope', 'plain'), null)
+assert.equal(hasComposerAttachmentDrag(['text/plain']), false)
+assert.equal(hasComposerAttachmentDrag(['application/x-koma-attachment']), true)
 
 console.log('composerIpc.test.ts ok')
