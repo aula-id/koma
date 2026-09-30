@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -36,11 +37,8 @@ import { EffortPicker } from './EffortPicker'
 import { ModeSelector } from './ModeSelector'
 import { CatMascot } from './CatMascot'
 import { DiagramSketch } from './DiagramVisual'
-import { ComposerPileBar } from './ComposerPileBar'
-import {
-  listComposerTokens,
-  moveComposerToken,
-} from '../lib/composerSegments'
+import { chipPayloadForAttachMarker, chipPayloadForFileRef } from '../lib/composerIpc'
+import { ComposerPasteEditOverlay } from './ComposerPasteEditOverlay'
 import { LexicalMarkdownEditor, type LexicalEditorHandle } from './lexical/LexicalMarkdownEditor'
 
 type DiagramChip = { id: string; title: string; mermaid: string; doc: DiagramDoc }
@@ -173,7 +171,6 @@ export function Composer() {
   const pasteTextsRef = useRef(pasteTexts)
   pasteTextsRef.current = pasteTexts
   const dirtyPastes = useRef(new Set<number>())
-  const [openPaste, setOpenPaste] = useState<number | null>(null)
   const pasteBody = useKoma((s) => s.ui.pasteBody)
   const consumePasteBody = useKoma((s) => s.consumePasteBody)
   const sessionId = useKoma((s) => s.session.id)
@@ -191,7 +188,7 @@ export function Composer() {
   // to decide which whitespace-delimited draft tokens are chip-eligible.
   // Add-only: stale entries that no longer appear in the text are harmless,
   // this is only ever membership-tested, never iterated positionally.
-  const pickedTokensRef = useRef<Set<string>>(new Set())
+  const [pasteEditMarker, setPasteEditMarker] = useState<number | null>(null)
   // Mascot swap-on-send: bumped once per submit, telling CatMascot to pick a
   // different random cat. Otherwise it just keeps looping the current one.
   const [mascotSwap, setMascotSwap] = useState(0)
@@ -237,14 +234,17 @@ export function Composer() {
   // see attachFiles below), then ack so it doesn't re-fire on rerender.
   useEffect(() => {
     if (composerInsert === null) return
-    // Record the bare token (no trailing space) as chip-eligible for the
-    // overlay + atomic-delete below — covers both the `@label ` common case
-    // and the raw-path fallback (empty label), so a fallback insert still
-    // renders/deletes as a single unit even though it has no `@` prefix.
-    const token = composerInsert.trimEnd()
-    if (token) pickedTokensRef.current.add(token)
     const prefix = draftRef.current.length > 0 ? ' ' : ''
-    editorApi.current?.appendText(`${prefix}${composerInsert}`)
+    const piece = `${prefix}${composerInsert}`
+    const wire = piece.trim()
+    if (wire.startsWith('@')) {
+      editorApi.current?.insertChip(chipPayloadForFileRef(wire), {
+        atEnd: true,
+        trailingSpace: piece.endsWith(' '),
+      })
+    } else if (wire) {
+      editorApi.current?.appendText(piece)
+    }
     consumeComposerInsert()
     editorApi.current?.focus()
   }, [composerInsert, consumeComposerInsert])
@@ -297,7 +297,6 @@ export function Composer() {
   // edited body, or bind a new paste onto the previous session's queue.
   useEffect(() => {
     setPasteTexts({})
-    setOpenPaste(null)
     setLocalPastes([])
     dirtyPastes.current.clear()
     markerInsertQueue.current = []
@@ -475,7 +474,6 @@ export function Composer() {
     setDiagramChips([])
     setDesignChips([])
     setLocalPastes([])
-    setOpenPaste(null)
     // Keep cancelled rows that are still waiting for a marker so the late
     // snapshot can drop the chip the user already removed.
     markerInsertQueue.current = markerInsertQueue.current.filter((row) => row.cancelled && row.markerN == null)
@@ -509,7 +507,10 @@ export function Composer() {
       skipAttachmentReconcile.current = true
       for (const row of keeps) {
         if (draftRef.current.includes(row.marker)) continue
-        editorApi.current?.insertText(row.marker)
+        editorApi.current?.insertChip(chipPayloadForAttachMarker(row.kind, row.markerN, row.id), {
+          atEnd: true,
+          trailingSpace: true,
+        })
       }
       queueMicrotask(() => {
         skipAttachmentReconcile.current = false
@@ -773,7 +774,6 @@ export function Composer() {
     }
     if (kind === 'pasted_text') {
       dirtyPastes.current.delete(markerN)
-      setOpenPaste((current) => (current === markerN ? null : current))
       setLocalPastes((prev) => prev.filter((item) => item.markerN !== markerN))
     }
   }
@@ -782,6 +782,30 @@ export function Composer() {
     dirtyPastes.current.add(markerN)
     setPasteTexts((prev) => ({ ...prev, [markerN]: text }))
   }
+
+  const openPasteEditor = (markerN: number) => {
+    setPasteEditMarker(markerN)
+    if (pasteTextsRef.current[markerN] == null) req({ r: 'ReadPaste', markerN })
+  }
+
+  const savePasteFromOverlay = (markerN: number, text: string) => {
+    editPaste(markerN, text)
+    req({ r: 'UpdatePaste', markerN, text })
+  }
+
+  const insertAttachmentIntoDraft = (kind: 'image' | 'pasted_text', markerN: number) => {
+    editorApi.current?.insertChip(chipPayloadForAttachMarker(kind, markerN), { trailingSpace: true })
+    editorApi.current?.focus()
+  }
+
+  const chipActions = useMemo(
+    () => ({
+      onPasteChipDoubleClick: (markerN: number) => openPasteEditor(markerN),
+    }),
+    // openPasteEditor closes over req/setState — stable enough for chip decorate
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
 
   const removeDiagramChip = (id: string) => {
     const next = diagramChips.filter((chip) => chip.id !== id)
@@ -802,22 +826,8 @@ export function Composer() {
       localPastes.length > 0 ||
       attachments.some((item) => item.kind === 'pasted_text' || item.kind === 'image')) &&
     !atSteerCap
-  const pileTokens = listComposerTokens(input, pickedTokensRef.current)
-
   const applyFormat = (kind: 'bold' | 'italic' | 'code') => {
     editorApi.current?.format(kind)
-  }
-
-  const movePileToken = (fromStart: number, fromEnd: number, toIndex: number) => {
-    const at = Math.min(toIndex, input.length)
-    const { text, caret } = moveComposerToken(input, fromStart, fromEnd, at)
-    skipAttachmentReconcile.current = true
-    caretToEndRef.current = true
-    setInput(text)
-    queueMicrotask(() => {
-      skipAttachmentReconcile.current = false
-      editorApi.current?.focus()
-    })
   }
 
   const formatButton =
@@ -827,7 +837,7 @@ export function Composer() {
     // claude.ai-style composer pinned at the bottom: a single rounded card
     // (textarea on top, an action bar below) that grows with its content. Drag
     // a file anywhere over the card to attach; the card rings on drag-over.
-    <div className="px-2 pb-3 pt-1" data-tour="composer">
+    <div className="relative px-2 pb-3 pt-1" data-tour="composer">
       {/* Follow-ups queue: submits made while the turn is cooking are queued
           daemon-side (cap 5). Selectable list — click or ↑ from composer. */}
       {pendingSteer.length > 0 && (
@@ -998,30 +1008,28 @@ export function Composer() {
               {attachments.filter((item) => showAttachmentChip(input, item, localPastes)).map((a) => (
                 <span
                   key={`${a.kind}:${a.markerN}`}
-                  draggable={a.kind === 'image' || a.kind === 'pasted_text'}
-                  title={a.kind === 'image' || a.kind === 'pasted_text' ? 'Drag into the message' : undefined}
-                  onDragStart={(event) => {
-                    if (a.kind !== 'image' && a.kind !== 'pasted_text') return
-                    const label = a.kind === 'image' ? imageMarker(a.markerN) : pasteMarker(a.markerN)
-                    event.dataTransfer.setData('application/x-koma-chip', 'marker')
-                    event.dataTransfer.setData('text/plain', `koma-marker:${label}`)
-                    event.dataTransfer.effectAllowed = 'copy'
-                  }}
-                  className="flex cursor-grab items-center gap-1 rounded-lg border border-koma-border bg-koma-panel2 px-2 py-1 text-[11px] text-koma-fg opacity-90 active:cursor-grabbing"
+                  className="flex items-center gap-1 rounded-lg border border-koma-border bg-koma-panel2 px-2 py-1 text-[11px] text-koma-fg opacity-90"
                 >
                   {a.kind === 'pasted_text' ? (
                     <button
                       type="button"
                       className="max-w-[180px] truncate text-left"
-                      onClick={() => {
-                        setOpenPaste((current) => (current === a.markerN ? null : a.markerN))
-                        if (pasteTextsRef.current[a.markerN] == null) req({ r: 'ReadPaste', markerN: a.markerN })
-                      }}
+                      onClick={() => openPasteEditor(a.markerN)}
                     >
                       {a.name}
                     </button>
                   ) : (
                     <span className="max-w-[140px] truncate">{a.name}</span>
+                  )}
+                  {(a.kind === 'image' || a.kind === 'pasted_text') && (
+                    <button
+                      type="button"
+                      title="Insert into message"
+                      className="rounded px-1 text-[10px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+                      onClick={() => insertAttachmentIntoDraft(a.kind, a.markerN)}
+                    >
+                      Insert
+                    </button>
                   )}
                   <button
                     onClick={() => removeAttachment(a.markerN, a.kind)}
@@ -1033,25 +1041,8 @@ export function Composer() {
                 </span>
               ))}
             </div>
-            {attachments
-              .filter((item) => item.kind === 'pasted_text' && item.markerN === openPaste && !localPastes.some((chip) => chip.markerN === item.markerN))
-              .map((item) => (
-                pasteTexts[item.markerN] == null ? (
-                  <p key={`edit-${item.markerN}`} className="px-2 py-1.5 text-[12px] text-koma-dim">Loading pasted text…</p>
-                ) : (
-                  <textarea
-                    key={`edit-${item.markerN}`}
-                    value={pasteTexts[item.markerN]}
-                    aria-label={`Edit ${item.name}`}
-                    onChange={(e) => editPaste(item.markerN, e.target.value)}
-                    className="max-h-40 min-h-16 w-full resize-y rounded-lg border border-koma-border bg-koma-bg px-2 py-1.5 text-[12px] text-koma-fg outline-none"
-                  />
-                )
-              ))}
           </div>
         )}
-        <ComposerPileBar tokens={pileTokens} draftLength={input.length} onMove={movePileToken} />
-
         <div className="flex items-center gap-0.5">
           <button type="button" className={formatButton} title="Bold" aria-label="Bold" onMouseDown={(event) => event.preventDefault()} onClick={() => applyFormat('bold')}>
             <Bold size={14} />
@@ -1068,7 +1059,7 @@ export function Composer() {
           profile="composer"
           markdown={input}
           onMarkdown={onDraft}
-          tokens={[...pickedTokensRef.current]}
+          chipActions={chipActions}
           placeholder="Message koma…"
           ariaLabel="Message"
           apiRef={editorApi}
@@ -1150,6 +1141,21 @@ export function Composer() {
           </div>
         </div>
       </div>
+      {pasteEditMarker != null && (
+        pasteTexts[pasteEditMarker] == null ? (
+          <div className="absolute inset-0 z-[60] flex items-center justify-center bg-koma-bg/70">
+            <p className="text-[13px] text-koma-dim">Loading pasted text…</p>
+          </div>
+        ) : (
+          <ComposerPasteEditOverlay
+            markerN={pasteEditMarker}
+            title={attachments.find((item) => item.kind === 'pasted_text' && item.markerN === pasteEditMarker)?.name ?? `Paste ${pasteEditMarker}`}
+            initialText={pasteTexts[pasteEditMarker]}
+            onSave={savePasteFromOverlay}
+            onClose={() => setPasteEditMarker(null)}
+          />
+        )
+      )}
     </div>
   )
 }

@@ -38,6 +38,7 @@ import {
   $getNodeByKey,
   $getRoot,
   $getSelection,
+  $isElementNode,
   $isRangeSelection,
   $isTextNode,
   COMMAND_PRIORITY_CRITICAL,
@@ -48,9 +49,22 @@ import {
   KEY_ENTER_COMMAND,
   PASTE_COMMAND,
   type LexicalEditor,
+  type LexicalNode,
 } from 'lexical'
-import { $createComposerChipNode, $isComposerChipNode, COMPOSER_CHIP_MIME, ComposerChipNode } from './chipNodes'
+import {
+  $createComposerChipNode,
+  $isComposerChipNode,
+  COMPOSER_CHIP_MIME,
+  ComposerChipContext,
+  ComposerChipNode,
+  type ComposerChipActions,
+} from './chipNodes'
 import { $exportLexicalMarkdown } from './lexicalMarkdown'
+import {
+  chipPayloadFromWire,
+  findFileRefWireInText,
+  type ComposerChipPayload,
+} from '../../lib/composerIpc'
 import { $createNoteImageNode, $isNoteImageNode, NoteAssetsContext, NoteImageNode, type NoteAssets } from './noteImageNode'
 
 export type LexicalProfile = 'composer' | 'inline' | 'note'
@@ -59,6 +73,8 @@ export type LexicalEditorHandle = {
   focus: () => void
   insertText: (text: string) => void
   appendText: (text: string) => void
+  insertChip: (payload: ComposerChipPayload, opts?: { atEnd?: boolean; trailingSpace?: boolean }) => void
+  replacePendingAttachChip: (queueId: string, payload: ComposerChipPayload) => boolean
   setMarkdown: (markdown: string, edge?: 'start' | 'end') => void
   getMarkdown: () => string
   format: (kind: 'bold' | 'italic' | 'code') => void
@@ -74,15 +90,15 @@ export type LexicalEditorHandle = {
 }
 
 const MARKER = /\[(?:Image|Pasted Text) #\d+\]/
-const FILE_SENTINEL = /@\[\d+\]\S+/
+const FILE_REF = /(?:@\[\d+\]\S+|@\S+)/
 
 const markerTransformer: TextMatchTransformer = {
   dependencies: [ComposerChipNode],
-  export: (node) => ($isComposerChipNode(node) && node.getTextContent().startsWith('[') ? node.getTextContent() : null),
+  export: (node) => ($isComposerChipNode(node) && node.getWireText().startsWith('[') ? node.getWireText() : null),
   importRegExp: MARKER,
   regExp: /\[(?:Image|Pasted Text) #\d+\]$/,
   replace: (node, match) => {
-    node.replace($createComposerChipNode(match[0], 'attach'))
+    node.replace($createComposerChipNode(chipPayloadFromWire(match[0])))
   },
   trigger: ']',
   type: 'text-match',
@@ -90,11 +106,11 @@ const markerTransformer: TextMatchTransformer = {
 
 const fileTransformer: TextMatchTransformer = {
   dependencies: [ComposerChipNode],
-  export: (node) => ($isComposerChipNode(node) && node.getTextContent().startsWith('@') ? node.getTextContent() : null),
-  importRegExp: FILE_SENTINEL,
-  regExp: /@\[\d+\]\S+$/,
+  export: (node) => ($isComposerChipNode(node) && node.getWireText().startsWith('@') ? node.getWireText() : null),
+  importRegExp: FILE_REF,
+  regExp: /(?:@\[\d+\]\S+|@\S+)$/,
   replace: (node, match) => {
-    node.replace($createComposerChipNode(match[0], 'file'))
+    node.replace($createComposerChipNode(chipPayloadFromWire(match[0])))
   },
   trigger: ' ',
   type: 'text-match',
@@ -162,27 +178,47 @@ async function readClipboardImages(): Promise<File[]> {
   }
 }
 
-function $chipKnownTokens(tokens: readonly string[]) {
-  const sorted = [...tokens].filter((token) => token.length > 0).sort((a, b) => b.length - a.length)
-  if (!sorted.length) return
+function $promoteFileRefChips() {
   let guard = 0
   while (guard < 40) {
     guard += 1
     let replaced = false
     for (const textNode of $getRoot().getAllTextNodes()) {
       const text = textNode.getTextContent()
-      const token = sorted.find((item) => text.includes(item))
+      const tokens = findFileRefWireInText(text)
+      const token = tokens[0]
       if (!token) continue
       const index = text.indexOf(token)
       const parts = textNode.splitText(index, index + token.length)
       const target = parts.find((part) => part.getTextContent() === token)
       if (!target) continue
-      target.replace($createComposerChipNode(token, 'file'))
+      target.replace($createComposerChipNode(chipPayloadFromWire(token)))
       replaced = true
       break
     }
     if (!replaced) break
   }
+}
+
+function $insertComposerChip(payload: ComposerChipPayload, atEnd: boolean, trailingSpace: boolean) {
+  $prepareInsert(atEnd)
+  const active = $getSelection()
+  if (!$isRangeSelection(active)) return
+  active.insertNodes([$createComposerChipNode(payload)])
+  if (trailingSpace) active.insertNodes([$createTextNode(' ')])
+}
+
+function $replaceChipByQueueId(queueId: string, payload: ComposerChipPayload): boolean {
+  const stack: LexicalNode[] = [$getRoot()]
+  while (stack.length) {
+    const node = stack.pop()!
+    if ($isComposerChipNode(node) && node.getQueueId() === queueId) {
+      node.replace($createComposerChipNode(payload))
+      return true
+    }
+    if ($isElementNode(node)) stack.push(...node.getChildren())
+  }
+  return false
 }
 
 function $prepareInsert(atEnd: boolean) {
@@ -196,21 +232,17 @@ function $prepareInsert(atEnd: boolean) {
   if (atEnd || !$isRangeSelection($getSelection())) root.selectEnd()
 }
 
-function $insertPiece(text: string, tokens: readonly string[], atEnd = false) {
+function $insertPiece(text: string, atEnd = false) {
   $prepareInsert(atEnd)
   const active = $getSelection()
   if (!$isRangeSelection(active)) return
   const trimmed = text.trim()
-  const marker = trimmed.match(/^\[(?:Image|Pasted Text) #\d+\]$/)
-  if (marker) {
-    active.insertNodes([$createComposerChipNode(trimmed, 'attach')])
-    if (text.endsWith(' ')) active.insertNodes([$createTextNode(' ')])
+  if (/^\[(?:Image|Pasted Text) #\d+\]$/.test(trimmed)) {
+    $insertComposerChip(chipPayloadFromWire(trimmed), false, text.endsWith(' '))
     return
   }
-  const token = [...tokens].sort((a, b) => b.length - a.length).find((item) => item.length > 0 && text.includes(item))
-  if (token && text.trim() === token) {
-    active.insertNodes([$createComposerChipNode(token, 'file')])
-    if (text.endsWith(' ')) active.insertNodes([$createTextNode(' ')])
+  if (/^@/.test(trimmed) && text.trim() === trimmed) {
+    $insertComposerChip(chipPayloadFromWire(trimmed), false, text.endsWith(' '))
     return
   }
   active.insertText(text)
@@ -227,7 +259,6 @@ function readMarkdown(editor: LexicalEditor, _transformers: Transformer[]): stri
 function EditorPlugins({
   profile,
   markdown,
-  tokens,
   controlled,
   onMarkdown,
   onKeyDown,
@@ -239,7 +270,6 @@ function EditorPlugins({
 }: {
   profile: LexicalProfile
   markdown: string
-  tokens: readonly string[]
   controlled: boolean
   onMarkdown: (markdown: string) => void
   onKeyDown?: (event: ReactKeyboardEvent<HTMLElement>) => void
@@ -253,8 +283,6 @@ function EditorPlugins({
   const transformers = useMemo(() => transformersFor(profile), [profile])
   const suppress = useRef(false)
   const last = useRef<string | null>(null)
-  const tokensRef = useRef(tokens)
-  tokensRef.current = tokens
   const onKeyDownRef = useRef(onKeyDown)
   onKeyDownRef.current = onKeyDown
   const onPasteRef = useRef(onPaste)
@@ -269,7 +297,7 @@ function EditorPlugins({
     suppress.current = true
     editor.update(() => {
       $convertFromMarkdownString(next, transformers, undefined, false)
-      if (profile === 'composer') $chipKnownTokens(tokensRef.current)
+      if (profile === 'composer') $promoteFileRefChips()
       if (edge === 'end') $getRoot().selectEnd()
       else if (edge === 'start') $getRoot().selectStart()
     })
@@ -284,13 +312,25 @@ function EditorPlugins({
       focus: () => editor.focus(),
       insertText: (text) => {
         editor.update(() => {
-          $insertPiece(text, tokensRef.current, false)
+          $insertPiece(text, false)
         })
       },
       appendText: (text) => {
         editor.update(() => {
-          $insertPiece(text, tokensRef.current, true)
+          $insertPiece(text, true)
         })
+      },
+      insertChip: (payload, opts) => {
+        editor.update(() => {
+          $insertComposerChip(payload, opts?.atEnd ?? false, opts?.trailingSpace ?? false)
+        })
+      },
+      replacePendingAttachChip: (queueId, payload) => {
+        let ok = false
+        editor.update(() => {
+          ok = $replaceChipByQueueId(queueId, payload)
+        })
+        return ok
       },
       setMarkdown: applyMarkdown,
       getMarkdown: () => readMarkdown(editor, transformers),
@@ -454,17 +494,24 @@ function EditorPlugins({
             : plain.startsWith('koma-chip:')
               ? plain.slice('koma-chip:'.length)
               : ''
-        const marker = plain.startsWith('koma-marker:') ? plain.slice('koma-marker:'.length) : ''
-        if (!marker && !key) return false
+        if (!key) return false
         event.preventDefault()
-        const range = document.caretRangeFromPoint(event.clientX, event.clientY)
+        const range =
+          typeof document.caretRangeFromPoint === 'function'
+            ? document.caretRangeFromPoint(event.clientX, event.clientY)
+            : null
         editor.update(() => {
-          const existing = key ? $getNodeByKey(key) : null
+          const existing = $getNodeByKey(key)
           const chip = existing && $isComposerChipNode(existing) ? existing : null
-          const label = chip ? chip.getTextContent() : marker
-          if (!label) return
-          const tone = chip ? chip.getTone() : 'attach'
-          const created = $createComposerChipNode(label, tone)
+          if (!chip) return
+          const payload: ComposerChipPayload = {
+            kind: chip.getChipKind(),
+            wireText: chip.getWireText(),
+            displayLabel: chip.getDisplayLabel(),
+            markerN: chip.getMarkerN(),
+            queueId: chip.getQueueId(),
+          }
+          const created = $createComposerChipNode(payload)
           const dom = range?.startContainer
           const el = dom instanceof Element ? dom : dom?.parentElement ?? null
           const nearest = el ? $getNearestNodeFromDOMNode(el) : null
@@ -474,16 +521,12 @@ function EditorPlugins({
             const selection = $getSelection()
             if ($isRangeSelection(selection)) selection.insertNodes([created])
             else nearest.insertAfter(created)
-          } else if (nearest && nearest.getKey() !== chip?.getKey()) {
-            nearest.insertAfter(created)
-          } else if (chip) {
-            chip.insertAfter(created)
           } else {
             $prepareInsert(true)
             const selection = $getSelection()
             if ($isRangeSelection(selection)) selection.insertNodes([created])
           }
-          if (chip && chip.getKey() !== created.getKey()) chip.remove()
+          if (chip.getKey() !== created.getKey()) chip.remove()
         })
         return true
       },
@@ -539,8 +582,8 @@ export function LexicalMarkdownEditor({
   style,
   placeholder,
   ariaLabel,
-  tokens = [],
   controlled = false,
+  chipActions,
   onKeyDown,
   onPaste,
   onPasteFiles,
@@ -558,8 +601,8 @@ export function LexicalMarkdownEditor({
   style?: CSSProperties
   placeholder?: string
   ariaLabel?: string
-  tokens?: readonly string[]
   controlled?: boolean
+  chipActions?: ComposerChipActions
   onKeyDown?: (event: ReactKeyboardEvent<HTMLElement>) => void
   onPaste?: (event: ClipboardEvent) => boolean
   onPasteFiles?: (files: File[]) => void
@@ -596,35 +639,36 @@ export function LexicalMarkdownEditor({
         },
         editorState: () => {
           $convertFromMarkdownString(initial.current, transformersFor(profile), undefined, false)
-          if (profile === 'composer') $chipKnownTokens(tokens)
+          if (profile === 'composer') $promoteFileRefChips()
         },
         onError: (error) => {
           throw error
         },
       }}
     >
-      <div
-        className={`relative ${className ?? ''}`}
-        style={style}
-        aria-label={ariaLabel}
-        onFocus={onFocus}
-        onBlur={onBlur}
-      >
-        <EditorPlugins
-          profile={profile}
-          markdown={markdown}
-          tokens={tokens}
-          controlled={controlled}
-          onMarkdown={onMarkdown}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          onPasteFiles={onPasteFiles}
-          onSubmit={onSubmit}
-          apiRef={apiRef}
-          editorElementRef={editorRef}
-        />
-        {placeholder ? <Placeholder text={placeholder} /> : null}
-      </div>
+      <ComposerChipContext.Provider value={chipActions ?? {}}>
+        <div
+          className={`relative ${className ?? ''}`}
+          style={style}
+          aria-label={ariaLabel}
+          onFocus={onFocus}
+          onBlur={onBlur}
+        >
+          <EditorPlugins
+            profile={profile}
+            markdown={markdown}
+            controlled={controlled}
+            onMarkdown={onMarkdown}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            onPasteFiles={onPasteFiles}
+            onSubmit={onSubmit}
+            apiRef={apiRef}
+            editorElementRef={editorRef}
+          />
+          {placeholder ? <Placeholder text={placeholder} /> : null}
+        </div>
+      </ComposerChipContext.Provider>
     </LexicalComposer>
   )
   if (!noteAssets) return body
