@@ -404,17 +404,10 @@ function EditorPlugins({
     }
     const onNativePaste = (event: ClipboardEvent) => {
       const files = imageFilesFrom(event.clipboardData)
-      if (files.length) {
-        event.preventDefault()
-        event.stopPropagation()
-        deliverImages(files)
-        return
-      }
-      const types = event.clipboardData ? Array.from(event.clipboardData.types) : []
-      if (!types.some((type) => type.startsWith('image/'))) return
+      if (!files.length) return
       event.preventDefault()
       event.stopPropagation()
-      void readClipboardImages().then(deliverImages)
+      deliverImages(files)
     }
     const root = editor.getRootElement()
     root?.addEventListener('paste', onNativePaste, true)
@@ -454,17 +447,23 @@ function EditorPlugins({
       DROP_COMMAND,
       (event) => {
         const plain = event.dataTransfer?.getData('text/plain') ?? ''
-        const key = event.dataTransfer?.getData(COMPOSER_CHIP_MIME) || (plain.startsWith('koma-chip:') ? plain.slice('koma-chip:'.length) : '')
+        const mimeKey = event.dataTransfer?.getData(COMPOSER_CHIP_MIME) ?? ''
+        const key =
+          mimeKey && mimeKey !== 'marker'
+            ? mimeKey
+            : plain.startsWith('koma-chip:')
+              ? plain.slice('koma-chip:'.length)
+              : ''
         const marker = plain.startsWith('koma-marker:') ? plain.slice('koma-marker:'.length) : ''
-        if (!key && !marker) return false
+        if (!marker && !key) return false
         event.preventDefault()
         const range = document.caretRangeFromPoint(event.clientX, event.clientY)
         editor.update(() => {
           const existing = key ? $getNodeByKey(key) : null
           const chip = existing && $isComposerChipNode(existing) ? existing : null
           const label = chip ? chip.getTextContent() : marker
-          const tone = chip ? chip.getTone() : 'attach'
           if (!label) return
+          const tone = chip ? chip.getTone() : 'attach'
           const created = $createComposerChipNode(label, tone)
           const dom = range?.startContainer
           const el = dom instanceof Element ? dom : dom?.parentElement ?? null
