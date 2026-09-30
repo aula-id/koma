@@ -151,6 +151,7 @@ export function Composer() {
   const clearRewind = useKoma((s) => s.clearRewind)
   const requestScrollBottom = useKoma((s) => s.requestScrollBottom)
   const [input, setInput] = useState('')
+  const draftRef = useRef('')
   draftRef.current = input
   const [diagramChips, setDiagramChips] = useState<DiagramChip[]>([])
   const diagramChipsRef = useRef<DiagramChip[]>([])
@@ -183,7 +184,6 @@ export function Composer() {
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const editorApi = useRef<LexicalEditorHandle | null>(null)
-  const draftRef = useRef('')
   const echoDraft = useRef(false)
   // Tokens this session has inserted via the omnisearch picker (bare, e.g.
   // "@downloads/file.pdf" or "@[1]downloads/file.pdf" — never with the
@@ -199,6 +199,8 @@ export function Composer() {
   // effect below). Empty when idle; the bubble itself is hidden via
   // `working` so a stale word never flashes on the next turn.
   const [thinkingWord, setThinkingWord] = useState('')
+  const caretToEndRef = useRef(false)
+  const caretTargetRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (echoDraft.current) {
@@ -348,15 +350,6 @@ export function Composer() {
   const stashChipsRef = useRef<DiagramChip[]>([])
   const stashDesignsRef = useRef<DesignChip[]>([])
   const stashPastesRef = useRef<LocalPaste[]>([])
-  // Flags the [input] auto-grow effect above to also park the caret at the end
-  // of the text a recall just injected (a plain typed change never needs this).
-  const caretToEndRef = useRef(false)
-  // Set by the atomic chip-delete handler (below) to park the caret at a
-  // precise offset — the deleted token's start — after the [input] effect's
-  // setInput-triggered rerender. Parallels caretToEndRef, but for an exact
-  // position instead of "end of text"; checked first since it's the more
-  // specific request.
-  const caretTargetRef = useRef<number | null>(null)
 
   const resetHistory = () => {
     histIdxRef.current = -1
