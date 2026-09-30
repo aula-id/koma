@@ -19,9 +19,16 @@ import {
   createNode,
   designChatNote,
   designChatTitle,
+  applyDesignStyle,
+  designCanvasBox,
   designDrop,
   designLayerName,
+  designObjectSnap,
+  designSnapScene,
+  designStyle,
+  duplicateDesignNodes,
   flowBreakBar,
+  frameDesignView,
   flowInsertIndex,
   inFlowBand,
   designPath,
@@ -39,6 +46,7 @@ import {
   nodeChrome,
   nodeFromPen,
   nodeOrigin,
+  nudgeDesignNodes,
   orderDesignNode,
   parseDesign,
   placeDesignNode,
@@ -48,6 +56,7 @@ import {
   resizeDesignNode,
   resolveInstanceTree,
   resolveRef,
+  selectAllDesign,
   selectDesignHit,
   selectDesignRect,
   sharedValue,
@@ -69,8 +78,12 @@ import {
   type DesignAlignEdge,
   type DesignDoc,
   type DesignFlowBar,
+  type DesignGuide,
   type DesignHandle,
+  type DesignMeasure,
   type DesignOrder,
+  type DesignRect,
+  type DesignStyle,
   type DesignPenPoint,
   type DesignQuery,
   type DesignNode,
@@ -110,6 +123,12 @@ type PenDraft = { id: string; parentId: string | null; points: DesignPenPoint[] 
 type DesignCommands = {
   copy: () => void
   paste: (at?: { x: number; y: number }) => void
+  duplicate: () => void
+  copyStyle: () => void
+  pasteStyle: () => void
+  selectAll: () => void
+  nudge: (dx: number, dy: number, duplicate: boolean) => void
+  zoom: (scope: 'all' | 'selection') => void
   remove: () => void
   wrap: (kind: 'group' | 'frame') => void
   unwrap: () => void
@@ -123,7 +142,7 @@ type DesignCommands = {
 }
 type RadiusCorner = 'tl' | 'tr' | 'bl' | 'br'
 type Drag =
-  | { kind: 'move'; ids: string[]; startX: number; startY: number; origins: Record<string, { x: number; y: number }>; remembered: boolean; moved: boolean; broke: boolean }
+  | { kind: 'move'; ids: string[]; startX: number; startY: number; origins: Record<string, { x: number; y: number }>; remembered: boolean; moved: boolean; broke: boolean; alt: boolean; scene: { moving: DesignRect; targets: DesignRect[] } | null }
   | { kind: 'resize'; id: string; handle: DesignHandle; startX: number; startY: number; node: DesignNode; remembered: boolean }
   | { kind: 'radius'; id: string; corner: RadiusCorner; startX: number; startY: number; radius: number; node: DesignNode; remembered: boolean }
   | { kind: 'pan'; lastX: number; lastY: number }
@@ -132,6 +151,7 @@ type Drag =
   | { kind: 'pen'; index: number; space: boolean }
 
 let copiedShape: { nodes: DesignNode[]; parentId: string | null } | null = null
+let copiedStyle: DesignStyle | null = null
 let mintSeq = 0
 
 function drawnBox(x0: number, y0: number, x1: number, y1: number, grid: number, snap: boolean) {
@@ -224,6 +244,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const canvasRef = useRef<HTMLDivElement>(null)
   const pastRef = useRef<DesignDoc[]>([])
   const futureRef = useRef<DesignDoc[]>([])
+  const nudgeOpenRef = useRef(false)
+  const nudgeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dragRef = useRef<Drag | null>(null)
   const labelNoted = useRef(false)
   const spaceRef = useRef(false)
@@ -238,6 +260,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const [propsOpen, setPropsOpen] = useState(true)
   const [ghost, setGhost] = useState<Ghost | null>(null)
   const [flowBar, setFlowBar] = useState<DesignFlowBar | null>(null)
+  const [snapMarks, setSnapMarks] = useState<{ guides: DesignGuide[]; measures: DesignMeasure[] } | null>(null)
   const [pen, setPen] = useState<PenDraft | null>(null)
   const [penHover, setPenHover] = useState<{ x: number; y: number } | null>(null)
   const [penHandle, setPenHandle] = useState<number | null>(null)
@@ -301,6 +324,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
 
   useEffect(() => {
     return () => {
+      if (nudgeTimerRef.current) clearTimeout(nudgeTimerRef.current)
       const current = getDesignUi()
       if (current && current.root === tab.root && current.path === tab.path) publishDesignUi(null)
     }
@@ -330,7 +354,16 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     if (!file.doc.components.some((component) => component.id === focusId)) setFocusId(null)
   }, [file, focusId])
 
+  const closeNudge = () => {
+    if (nudgeTimerRef.current) {
+      clearTimeout(nudgeTimerRef.current)
+      nudgeTimerRef.current = null
+    }
+    nudgeOpenRef.current = false
+  }
+
   const note = (doc: DesignDoc) => {
+    closeNudge()
     pastRef.current.push(doc)
     if (pastRef.current.length > UNDO_CAP) pastRef.current.shift()
     futureRef.current = []
@@ -364,6 +397,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   commitRef.current = commit
 
   const undo = () => {
+    closeNudge()
     const prev = pastRef.current.pop()
     if (!prev) return
     const current = useKoma.getState().design.docs[key]?.doc
@@ -373,6 +407,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     updateDesign(tab.root, tab.path, prev)
   }
   const redo = () => {
+    closeNudge()
     const next = futureRef.current.pop()
     if (!next) return
     const current = useKoma.getState().design.docs[key]?.doc
@@ -411,6 +446,20 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       x: (clientX - rect.left - current.panX) / current.zoom,
       y: (clientY - rect.top - current.panY) / current.zoom,
     }
+  }
+
+  const zoomTo = (ids: string[] | null) => {
+    const stored = useKoma.getState().design.docs[key]?.doc
+    const canvas = canvasRef.current
+    if (!stored || !canvas) return
+    const open = editingDoc(stored, focusRef.current)
+    const targets = ids?.length ? ids : open.screens.map((screen) => screen.id)
+    const boxes = targets.flatMap((id) => {
+      const box = designCanvasBox(open, id)
+      return box ? [box] : []
+    })
+    const framed = frameDesignView(boxes, canvas.clientWidth, canvas.clientHeight, ZOOM_MIN, ZOOM_MAX)
+    if (framed) applyView(framed)
   }
 
   const zoomAt = (clientX: number, clientY: number, nextZoom: number) => {
@@ -586,17 +635,47 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       }
       if (Math.hypot(screenDx, screenDy) < 4) return
       drag.moved = true
+      let live = doc
+      if (drag.alt) {
+        const duplicated = duplicateDesignNodes(live, drag.ids, 0, 0, () => mintId('n'))
+        if (duplicated) {
+          drag.alt = false
+          drag.ids = duplicated.ids
+          const origins: Record<string, { x: number; y: number }> = {}
+          const laid = layoutDesign(duplicated.doc)
+          for (const id of duplicated.ids) {
+            const row = locateDesign(laid, id)
+            if (row) origins[id] = { x: row.node.x, y: row.node.y }
+          }
+          drag.origins = origins
+          const copied = projectDoc(stored, focus, laid)
+          if (!drag.remembered) {
+            noteRef.current(stored)
+            drag.remembered = true
+          }
+          updateRef.current(tab.root, tab.path, copied)
+          selectionRef.current = duplicated.ids
+          setSelection(duplicated.ids)
+          live = laid
+        }
+      }
       const flowId = drag.ids.length === 1 ? drag.ids[0] : null
-      const flowLocated = flowId ? locateDesign(doc, flowId) : null
-      const flowParent = flowLocated?.parentId ? findDesignNode(doc, flowLocated.parentId) : null
+      const flowLocated = flowId ? locateDesign(live, flowId) : null
+      const flowParent = flowLocated?.parentId ? findDesignNode(live, flowLocated.parentId) : null
       const flowing = !!(flowId && flowLocated && flowParent?.layout && !flowLocated.node.absolute)
-      if (flowing && flowId && flowParent && point && !drag.broke && inFlowBand(doc, flowParent.id, point.x, point.y)) {
-        setFlowBar(flowBreakBar(doc, flowParent.id, flowId, point.x, point.y))
+      if (flowing && flowId && flowParent && point && !drag.broke && inFlowBand(live, flowParent.id, point.x, point.y)) {
+        setSnapMarks(null)
+        setFlowBar(flowBreakBar(live, flowParent.id, flowId, point.x, point.y))
         return
       }
       if (flowing && point && !drag.broke) drag.broke = true
       setFlowBar(null)
-      let view = doc
+      if (!drag.scene) drag.scene = designSnapScene(live, drag.ids)
+      const snap = drag.scene
+        ? designObjectSnap(drag.scene.moving, drag.scene.targets, screenDx, screenDy, 5 / zoom)
+        : { dx: screenDx, dy: screenDy, snappedX: false, snappedY: false, guides: [], measures: [] }
+      setSnapMarks(snap.guides.length || snap.measures.length ? { guides: snap.guides, measures: snap.measures } : null)
+      let view = live
       let frozen: string | undefined
       for (const id of drag.ids) {
         const located = locateDesign(view, id)
@@ -604,9 +683,9 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         if (!located || !origin) continue
         const parent = located.parentId ? findDesignNode(view, located.parentId) : null
         if (parent?.layout && !located.node.absolute) frozen = id
-        const delta = canvasDeltaToSpace(view, located.parentId, screenDx, screenDy)
-        const x = snapDesign(origin.x + delta.x, doc.grid, doc.snap)
-        const y = snapDesign(origin.y + delta.y, doc.grid, doc.snap)
+        const delta = canvasDeltaToSpace(view, located.parentId, snap.dx, snap.dy)
+        const x = snap.snappedX ? origin.x + delta.x : snapDesign(origin.x + delta.x, doc.grid, doc.snap)
+        const y = snap.snappedY ? origin.y + delta.y : snapDesign(origin.y + delta.y, doc.grid, doc.snap)
         view = updateDesignNode(view, id, (node) => ({ ...node, x, y }))
       }
       const next = projectDoc(stored, focus, layoutDesign(view, frozen))
@@ -623,6 +702,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       setDragCursor(null)
       setGhost(null)
       setFlowBar(null)
+      setSnapMarks(null)
       if (drag?.kind === 'pen') setPenHandle(null)
       if (!drag || drag.kind === 'pan' || drag.kind === 'pen') return
       const stored = useKoma.getState().design.docs[key]?.doc
@@ -734,6 +814,16 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         redoRef.current()
         return
       }
+      if (meta && event.altKey && !event.shiftKey && event.key.toLowerCase() === 'c') {
+        event.preventDefault()
+        commandsRef.current?.copyStyle()
+        return
+      }
+      if (meta && event.altKey && !event.shiftKey && event.key.toLowerCase() === 'v') {
+        event.preventDefault()
+        commandsRef.current?.pasteStyle()
+        return
+      }
       if (meta && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'c') {
         event.preventDefault()
         commandsRef.current?.copy()
@@ -742,6 +832,16 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       if (meta && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'v') {
         event.preventDefault()
         commandsRef.current?.paste()
+        return
+      }
+      if (meta && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'd') {
+        event.preventDefault()
+        commandsRef.current?.duplicate()
+        return
+      }
+      if (meta && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'a') {
+        event.preventDefault()
+        commandsRef.current?.selectAll()
         return
       }
       if (meta && !event.altKey && event.key.toLowerCase() === 'g') {
@@ -779,6 +879,19 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       if (event.key === 'Delete' || event.key === 'Backspace') {
         event.preventDefault()
         commandsRef.current?.remove()
+        return
+      }
+      if (!meta && !event.altKey && event.shiftKey && (event.code === 'Digit1' || event.code === 'Digit2')) {
+        event.preventDefault()
+        commandsRef.current?.zoom(event.code === 'Digit1' ? 'all' : 'selection')
+        return
+      }
+      if (!meta && (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        event.preventDefault()
+        const step = event.shiftKey ? 10 : 1
+        const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0
+        const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0
+        commandsRef.current?.nudge(dx, dy, event.altKey)
         return
       }
       if (!meta && !event.shiftKey && !event.altKey) {
@@ -940,6 +1053,70 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       commit(next)
       setSelection(pasted.map((node) => node.id))
       setPropsOpen(true)
+    },
+    duplicate: () => {
+      const open = viewDoc()
+      const ids = selectionRef.current
+      if (!open || !ids.length || file?.loading) return
+      const step = open.doc.snap && open.doc.grid > 0 ? open.doc.grid : 10
+      const duplicated = duplicateDesignNodes(open.doc, ids, step, step, () => mintId('n'))
+      if (!duplicated) return
+      commit(duplicated.doc)
+      setSelection(duplicated.ids)
+      setPropsOpen(true)
+    },
+    copyStyle: () => {
+      const open = viewDoc()
+      const id = selectionRef.current[selectionRef.current.length - 1]
+      if (!open || !id) return
+      const located = locateDesign(open.doc, id)
+      if (!located) return
+      copiedStyle = designStyle(located.node)
+    },
+    pasteStyle: () => {
+      const open = viewDoc()
+      const ids = selectionRef.current
+      if (!open || !ids.length || !copiedStyle) return
+      commit(applyDesignStyle(open.doc, ids, copiedStyle))
+    },
+    selectAll: () => {
+      const open = viewDoc()
+      if (!open) return
+      setSelection(selectAllDesign(open.doc, selectionRef.current))
+      setPropsOpen(true)
+    },
+    nudge: (dx, dy, duplicate) => {
+      const open = viewDoc()
+      if (!open || file?.loading) return
+      let view = open.doc
+      let ids = selectionRef.current
+      if (!ids.length) return
+      if (duplicate) {
+        const copied = duplicateDesignNodes(view, ids, 0, 0, () => mintId('n'))
+        if (!copied) return
+        view = copied.doc
+        ids = copied.ids
+        selectionRef.current = ids
+        setSelection(ids)
+      }
+      view = nudgeDesignNodes(view, ids, dx, dy)
+      const stored = useKoma.getState().design.docs[key]?.doc
+      if (!stored) return
+      const next = projectDoc(stored, focusRef.current, layoutDesign(view))
+      if (serializeDesign(stored) === serializeDesign(next)) return
+      if (!nudgeOpenRef.current) {
+        note(stored)
+        nudgeOpenRef.current = true
+      }
+      if (nudgeTimerRef.current) clearTimeout(nudgeTimerRef.current)
+      nudgeTimerRef.current = setTimeout(() => {
+        nudgeTimerRef.current = null
+        nudgeOpenRef.current = false
+      }, 300)
+      updateDesign(tab.root, tab.path, next)
+    },
+    zoom: (scope) => {
+      zoomTo(scope === 'all' ? null : selectionRef.current)
     },
     remove: () => {
       const open = viewDoc()
@@ -1343,6 +1520,43 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             {flowBar ? (
               <div className="pointer-events-none absolute z-10" style={{ left: flowBar.x, top: flowBar.y, width: flowBar.w, height: flowBar.h, background: SELECTION }} />
             ) : null}
+            {snapMarks?.guides.map((guide, index) => (
+              <div
+                key={`guide-${guide.axis}-${index}`}
+                className="pointer-events-none absolute z-10"
+                style={guide.axis === 'x'
+                  ? { left: guide.at, top: guide.from, width: 1 / Math.max(view.zoom, 0.25), height: Math.max(guide.to - guide.from, 1), background: SELECTION }
+                  : { left: guide.from, top: guide.at, width: Math.max(guide.to - guide.from, 1), height: 1 / Math.max(view.zoom, 0.25), background: SELECTION }}
+              />
+            ))}
+            {snapMarks?.measures.map((measure, index) => (
+              <div
+                key={`measure-${measure.axis}-${index}`}
+                className="pointer-events-none absolute z-10"
+                style={{
+                  left: measure.x,
+                  top: measure.y,
+                  width: measure.axis === 'x' ? measure.length : 1 / Math.max(view.zoom, 0.25),
+                  height: measure.axis === 'y' ? measure.length : 1 / Math.max(view.zoom, 0.25),
+                  background: SELECTION,
+                }}
+              >
+                <span
+                  className="absolute whitespace-nowrap rounded px-1"
+                  style={{
+                    left: measure.axis === 'x' ? measure.length / 2 : 0,
+                    top: measure.axis === 'y' ? measure.length / 2 : 0,
+                    transform: 'translate(-50%, -50%)',
+                    fontSize: 11 / Math.max(view.zoom, 0.25),
+                    lineHeight: 1.2,
+                    color: SELECTION,
+                    background: '#e6e8ed',
+                  }}
+                >
+                  {measure.label}
+                </span>
+              </div>
+            ))}
             {doc.screens.map((screen) => (
               <DesignNodeView
                 key={screen.id}
@@ -1412,6 +1626,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                     remembered: false,
                     moved: false,
                     broke: false,
+                    alt: event.altKey,
+                    scene: null,
                   }
                   setDragCursor('grabbing')
                 }}
@@ -1570,6 +1786,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
               <Minus size={15} strokeWidth={2.25} />
             </ToolButton>
             <span className="w-14 text-center text-[11px] text-koma-dim">{Math.round(view.zoom * 100)}%</span>
+            <button type="button" title="Zoom to fit (⇧1)" className="h-6 rounded px-1.5 text-[11px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={() => zoomTo(null)}>Fit</button>
+            <button type="button" title="Zoom to selection (⇧2)" className="h-6 rounded px-1.5 text-[11px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={() => zoomTo(selection)}>Selection</button>
             <ToolButton label="Zoom in" selected={false} onClick={() => {
               const rect = canvasRef.current?.getBoundingClientRect()
               if (!rect) return
@@ -1679,7 +1897,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         <DesignMenu
           x={menu.x}
           y={menu.y}
-          items={designMenuItems(doc, selection, menu.canvasX, menu.canvasY, !!copiedShape?.nodes.length, !focusId && selection.length === 1 && findDesignNode(doc, selection[0])?.kind === 'frame')}
+          items={designMenuItems(doc, selection, menu.canvasX, menu.canvasY, !!copiedShape?.nodes.length, copiedStyle != null, !focusId && selection.length === 1 && findDesignNode(doc, selection[0])?.kind === 'frame')}
           onClose={() => setMenu(null)}
           onPick={(id) => {
             const here = menu
@@ -1689,6 +1907,9 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             if (id === 'copy') commands.copy()
             else if (id === 'paste') commands.paste()
             else if (id === 'paste-here') commands.paste({ x: here.canvasX, y: here.canvasY })
+            else if (id === 'duplicate') commands.duplicate()
+            else if (id === 'copy-style') commands.copyStyle()
+            else if (id === 'paste-style') commands.pasteStyle()
             else if (id === 'front' || id === 'forward' || id === 'backward' || id === 'back') commands.order(id)
             else if (id === 'group') commands.wrap('group')
             else if (id === 'ungroup') commands.unwrap()
@@ -1753,7 +1974,7 @@ function DesignRulers({ panX, panY, zoom }: { panX: number; panY: number; zoom: 
   )
 }
 
-function designMenuItems(doc: DesignDoc, selection: string[], x: number, y: number, canPaste: boolean, canComponent: boolean): DesignMenuItem[] {
+function designMenuItems(doc: DesignDoc, selection: string[], x: number, y: number, canPaste: boolean, canPasteStyle: boolean, canComponent: boolean): DesignMenuItem[] {
   const selected = selection.length > 0
   const rows = selection.map((id) => locateDesign(doc, id))
   const sameParent = rows.length > 0 && rows.every((row) => row && row.parentId === rows[0]?.parentId)
@@ -1763,6 +1984,9 @@ function designMenuItems(doc: DesignDoc, selection: string[], x: number, y: numb
     { id: 'copy', label: 'Copy', shortcut: '⌘C', disabled: !sameParent },
     { id: 'paste', label: 'Paste', shortcut: '⌘V', disabled: !canPaste },
     { id: 'paste-here', label: 'Paste here', disabled: !canPaste },
+    { id: 'duplicate', label: 'Duplicate', shortcut: '⌘D', disabled: !selected },
+    { id: 'copy-style', label: 'Copy style', shortcut: '⌥⌘C', disabled: !selected },
+    { id: 'paste-style', label: 'Paste style', shortcut: '⌥⌘V', disabled: !canPasteStyle || !selected },
     { id: 'divider-1', label: '' },
     { id: 'select-layer', label: 'Select layer', disabled: stack.length === 0, children: stack.map((node) => ({ id: `select:${node.id}`, label: designLayerName(node) })) },
     { id: 'divider-2', label: '' },

@@ -3,6 +3,7 @@ import {
   alignDesignNodes,
   addComponentVariant,
   addDesignToken,
+  applyDesignStyle,
   applyOverrides,
   componentView,
   copyTree,
@@ -14,8 +15,12 @@ import {
   designChatText,
   designCoordinateText,
   canLeaveParent,
+  designCanvasBox,
   designDrop,
+  designObjectSnap,
   designPath,
+  designSnapScene,
+  designStyle,
   designQueryNode,
   nodeBoxOrigin,
   designFenceTitle,
@@ -39,14 +44,18 @@ import {
   dropDesignToken,
   layoutDesign,
   reorderDesignNode,
+  duplicateDesignNodes,
   emptyDesign,
+  findDesignNode,
   frameAtPoint,
+  frameDesignView,
   hitDesign,
   selectDesignHit,
   insertDesignNode,
   isDesignPath,
   nodeChrome,
   nodeOrigin,
+  nudgeDesignNodes,
   parseDesign,
   pickVariant,
   placeDesignNode,
@@ -55,6 +64,7 @@ import {
   resetInstanceOverrides,
   resolveInstanceTree,
   resolveRef,
+  selectAllDesign,
   serializeDesign,
   sharedValue,
   setDesignMode,
@@ -816,4 +826,89 @@ function sample(): DesignDoc {
   assert.equal(hitDesign(instDoc, 20, 20, true)?.id, 'inner')
   assert.equal(selectDesignHit(instDoc, 20, 20, ['inst'], false), 'inner')
   assert.equal(hitDesign(instDoc, 40, 80)?.id, 'host')
+}
+
+{
+  const board = createNode('frame', 'board', 0, 0)
+  const a = createNode('rect', 'a', 10, 20)
+  const b = createNode('rect', 'b', 40, 20)
+  const c = createNode('rect', 'c', 80, 20)
+  board.children = [a, b, c]
+  const doc = { ...emptyDesign(), screens: [board] }
+  const nudged = nudgeDesignNodes(doc, ['b'], 3, -2)
+  assert.equal(findDesignNode(nudged, 'b')?.x, 43)
+  assert.equal(findDesignNode(nudged, 'b')?.y, 18)
+  assert.equal(findDesignNode(nudged, 'a')?.x, 10)
+  const locked = setDesignLocked(doc, 'b', true)
+  assert.equal(findDesignNode(nudgeDesignNodes(locked, ['b'], 5, 0), 'b')?.x, 40)
+  board.layout = 'row'
+  const row = { ...emptyDesign(), screens: [board] }
+  assert.deepEqual(nudgeDesignNodes(row, ['b'], 1, 0).screens[0]?.children?.map((node) => node.id), ['a', 'c', 'b'])
+  assert.deepEqual(nudgeDesignNodes(row, ['b'], 0, -1).screens[0]?.children?.map((node) => node.id), ['a', 'b', 'c'])
+  assert.deepEqual(nudgeDesignNodes(row, ['a', 'b'], 1, 0).screens[0]?.children?.map((node) => node.id), ['c', 'a', 'b'])
+  let seq = 0
+  const copied = duplicateDesignNodes({ ...emptyDesign(), screens: [{ ...board, layout: undefined, children: [a, b, c] }] }, ['a', 'c'], 10, 8, () => `copy${++seq}`)
+  assert.ok(copied)
+  assert.deepEqual(copied?.ids, ['copy2', 'copy1'])
+  assert.deepEqual(copied?.doc.screens[0]?.children?.map((node) => node.id), ['a', 'copy2', 'b', 'c', 'copy1'])
+  assert.equal(findDesignNode(copied!.doc, 'copy2')?.x, 20)
+  assert.equal(findDesignNode(copied!.doc, 'copy2')?.y, 28)
+  const lockedCopy = duplicateDesignNodes(setDesignLocked(doc, 'a', true), ['a'], 0, 0, () => 'copy')
+  assert.equal(findDesignNode(lockedCopy!.doc, 'copy')?.locked, undefined)
+  const group = createNode('group', 'g', 0, 0)
+  group.children = [a]
+  let nestedSeq = 0
+  const nested = duplicateDesignNodes({ ...emptyDesign(), screens: [group] }, ['g', 'a'], 4, 4, () => `nest${++nestedSeq}`)
+  assert.deepEqual(nested?.ids, ['nest1'])
+  assert.notEqual(findDesignNode(nested!.doc, 'nest1')?.children?.[0]?.id, 'a')
+  assert.deepEqual(selectAllDesign(doc, []), ['board'])
+  assert.deepEqual(selectAllDesign(doc, ['b']), ['a', 'b', 'c'])
+  const other = createNode('frame', 'other', 400, 0)
+  assert.deepEqual(selectAllDesign({ ...doc, screens: [board, other] }, ['b', 'other']), ['board', 'other'])
+  const styled = createNode('text', 'label', 0, 0)
+  styled.fill = '#ff0000'
+  styled.fontSize = 20
+  styled.color = '#111111'
+  const plain = createNode('rect', 'plain', 0, 0)
+  const text = createNode('text', 'word', 0, 0)
+  const style = designStyle(styled)
+  const painted = applyDesignStyle({ ...emptyDesign(), screens: [plain, text] }, ['plain', 'word'], style)
+  assert.equal(findDesignNode(painted, 'plain')?.fill, '#ff0000')
+  assert.equal(findDesignNode(painted, 'plain')?.fontSize, undefined)
+  assert.equal(findDesignNode(painted, 'word')?.fontSize, 20)
+  assert.equal(findDesignNode(painted, 'word')?.color, '#111111')
+  const held = applyDesignStyle(setDesignLocked({ ...emptyDesign(), screens: [plain] }, 'plain', true), ['plain'], style)
+  assert.equal(findDesignNode(held, 'plain')?.fill, '#d9d9d9')
+  const left = createNode('rect', 'left', 0, 0)
+  left.w = 100
+  left.h = 100
+  const right = createNode('rect', 'right', 200, 0)
+  right.w = 100
+  right.h = 100
+  const snapDoc = { ...emptyDesign(), screens: [left, right] }
+  const scene = designSnapScene(snapDoc, ['right'])
+  assert.ok(scene)
+  const snapped = designObjectSnap(scene!.moving, scene!.targets, -96, 0, 5)
+  assert.equal(snapped.snappedX, true)
+  assert.equal(snapped.dx, -100)
+  assert.equal(snapped.guides[0]?.axis, 'x')
+  assert.equal(snapped.guides[0]?.at, 100)
+  const apart = designObjectSnap(scene!.moving, scene!.targets, -40, 0, 5)
+  assert.equal(apart.snappedX, false)
+  assert.equal(apart.dx, -40)
+  const gap = designObjectSnap(scene!.moving, scene!.targets, 0, 12, 5)
+  assert.equal(gap.measures.find((item) => item.axis === 'x')?.label, '100')
+  const frame = createNode('frame', 'frame', 0, 0)
+  frame.w = 400
+  frame.h = 300
+  const child = createNode('rect', 'child', 10, 10)
+  frame.children = [child]
+  const inside = designSnapScene({ ...emptyDesign(), screens: [frame] }, ['child'])
+  const toEdge = designObjectSnap(inside!.moving, inside!.targets, -6, 0, 5)
+  assert.equal(toEdge.dx, -10)
+  assert.equal(designCanvasBox(snapDoc, 'right')?.x, 200)
+  const framed = frameDesignView([{ x: 0, y: 0, w: 100, h: 100 }], 216, 216, 0.25, 64)
+  assert.equal(framed?.zoom, 1.52)
+  assert.equal(framed?.panX, 16)
+  assert.equal(framed?.panY, 16)
 }

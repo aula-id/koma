@@ -1519,6 +1519,404 @@ function boxInside(inner: { x: number; y: number; w: number; h: number }, outer:
   return inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.w <= outer.x + outer.w && inner.y + inner.h <= outer.y + outer.h
 }
 
+export type DesignRect = { x: number; y: number; w: number; h: number }
+
+export type DesignGuide = { axis: 'x' | 'y'; at: number; from: number; to: number }
+
+export type DesignMeasure = { axis: 'x' | 'y'; x: number; y: number; length: number; label: string }
+
+export type DesignSnap = {
+  dx: number
+  dy: number
+  snappedX: boolean
+  snappedY: boolean
+  guides: DesignGuide[]
+  measures: DesignMeasure[]
+}
+
+export type DesignStyle = {
+  fill?: string
+  stroke?: string
+  strokeWidth?: number
+  radius?: number | string
+  opacity?: number
+  fontSize?: number
+  weight?: DesignWeight
+  textAlign?: DesignTextAlign
+  lineHeight?: number
+  letterSpacing?: number
+  color?: string
+}
+
+/** Axis-aligned canvas box, including this node's flip and rotation. */
+export function designCanvasBox(doc: DesignDoc, id: string): DesignRect | null {
+  const path = pathToNode(doc, id)
+  if (!path?.length) return null
+  let toCanvas = (x: number, y: number) => ({ x, y })
+  for (let index = 0; index < path.length - 1; index++) {
+    const node = path[index]
+    const outer = toCanvas
+    toCanvas = (x, y) => {
+      const spun = spinToParent(node, x, y)
+      return outer(spun.x, spun.y)
+    }
+  }
+  const node = path[path.length - 1]
+  if (!node) return null
+  return canvasBox(node, toCanvas)
+}
+
+/** The moving union, and every other visible box. A moving node's descendants are not targets. */
+export function designSnapScene(doc: DesignDoc, ids: string[]): { moving: DesignRect; targets: DesignRect[] } | null {
+  const movingBoxes: DesignRect[] = []
+  for (const id of ids) {
+    const box = designCanvasBox(doc, id)
+    if (box) movingBoxes.push(box)
+  }
+  const moving = unionRects(movingBoxes)
+  if (!moving) return null
+  const targets: DesignRect[] = []
+  const skip = new Set(ids)
+  for (const screen of doc.screens) collectSnapBoxes(screen, (x, y) => ({ x, y }), skip, targets)
+  return { moving, targets }
+}
+
+/**
+ * Snap a canvas move to other boxes' edges and centers.
+ * dx/dy are the proposed canvas delta. The result is the delta that lands on the snap.
+ */
+export function designObjectSnap(moving: DesignRect, targets: DesignRect[], dx: number, dy: number, threshold: number): DesignSnap {
+  const proposed = { x: moving.x + dx, y: moving.y + dy, w: moving.w, h: moving.h }
+  const xSnap = snapAxis(proposed.x, proposed.x + proposed.w, targets, 'x', threshold)
+  const ySnap = snapAxis(proposed.y, proposed.y + proposed.h, targets, 'y', threshold)
+  const landed = {
+    x: proposed.x + (xSnap?.delta ?? 0),
+    y: proposed.y + (ySnap?.delta ?? 0),
+    w: proposed.w,
+    h: proposed.h,
+  }
+  const guides: DesignGuide[] = []
+  if (xSnap) guides.push({ axis: 'x', at: xSnap.at, ...guideSpan(xSnap.at, 'x', landed, targets) })
+  if (ySnap) guides.push({ axis: 'y', at: ySnap.at, ...guideSpan(ySnap.at, 'y', landed, targets) })
+  return {
+    dx: dx + (xSnap?.delta ?? 0),
+    dy: dy + (ySnap?.delta ?? 0),
+    snappedX: xSnap != null,
+    snappedY: ySnap != null,
+    guides,
+    measures: designMeasures(landed, targets),
+  }
+}
+
+/** Fit boxes in a viewport. The canvas rulers occupy the top and left 16px. */
+export function frameDesignView(
+  boxes: DesignRect[],
+  width: number,
+  height: number,
+  minZoom: number,
+  maxZoom: number,
+): { panX: number; panY: number; zoom: number } | null {
+  const union = unionRects(boxes.filter((box) => box.w > 0 && box.h > 0))
+  if (!union || width < 1 || height < 1) return null
+  const pad = 48
+  const origin = 16
+  const viewW = Math.max(1, width - origin - pad)
+  const viewH = Math.max(1, height - origin - pad)
+  const zoom = Math.min(maxZoom, Math.max(minZoom, Math.min(viewW / union.w, viewH / union.h)))
+  return {
+    zoom,
+    panX: origin + (viewW - union.w * zoom) / 2 - union.x * zoom,
+    panY: origin + (viewH - union.h * zoom) / 2 - union.y * zoom,
+  }
+}
+
+/**
+ * Move a selection by a canvas pixel step.
+ * An in-flow auto-layout child reorders on the main axis and ignores the cross axis.
+ * A locked node stays. A selected descendant of another selected node stays with its parent.
+ */
+export function nudgeDesignNodes(doc: DesignDoc, ids: string[], dx: number, dy: number): DesignDoc {
+  if (!dx && !dy) return doc
+  const roots = designRoots(doc, ids).flatMap((id) => {
+    const row = locateDesign(doc, id)
+    return row && !row.node.locked ? [row] : []
+  })
+  if (!roots.length) return doc
+  let next = doc
+  const flow: { id: string; sign: number; parentId: string }[] = []
+  const flowing = new Set<string>()
+  for (const row of roots) {
+    const parent = row.parentId ? findDesignNode(doc, row.parentId) : null
+    if (parent?.layout && !row.node.absolute && row.parentId) {
+      const main = parent.layout === 'row' ? dx : dy
+      if (!main) continue
+      flow.push({ id: row.node.id, sign: main > 0 ? 1 : -1, parentId: row.parentId })
+      flowing.add(row.node.id)
+      continue
+    }
+    next = updateDesignNode(next, row.node.id, (node) => ({ ...node, x: node.x + dx, y: node.y + dy }))
+  }
+  const byParent = new Map<string, { id: string; sign: number }[]>()
+  for (const item of flow) {
+    const list = byParent.get(item.parentId) ?? []
+    list.push({ id: item.id, sign: item.sign })
+    byParent.set(item.parentId, list)
+  }
+  for (const items of byParent.values()) {
+    const sign = items[0]?.sign ?? 0
+    const pending = items.slice()
+    pending.sort((a, b) => flowIndex(next, b.id) - flowIndex(next, a.id))
+    if (sign < 0) pending.reverse()
+    for (const item of pending) {
+      const located = locateDesign(next, item.id)
+      const parent = located?.parentId ? findDesignNode(next, located.parentId) : null
+      const siblings = (parent?.children ?? []).filter((child) => !child.absolute)
+      const index = siblings.findIndex((child) => child.id === item.id)
+      const dest = index + item.sign
+      const neighbor = siblings[dest]
+      if (index < 0 || !neighbor || flowing.has(neighbor.id)) continue
+      next = reorderDesignNode(next, item.id, dest)
+    }
+  }
+  return next
+}
+
+/** Copy a selection into the same parents, one slot in front, shifted by dx/dy. Copies are unlocked. */
+export function duplicateDesignNodes(
+  doc: DesignDoc,
+  ids: string[],
+  dx: number,
+  dy: number,
+  mint: () => string,
+): { doc: DesignDoc; ids: string[] } | null {
+  const roots = designRoots(doc, ids)
+  const made: { source: string; id: string }[] = []
+  let next = doc
+  const byParent = new Map<string | null, string[]>()
+  for (const id of roots) {
+    const row = locateDesign(next, id)
+    if (!row) continue
+    const list = byParent.get(row.parentId) ?? []
+    list.push(id)
+    byParent.set(row.parentId, list)
+  }
+  for (const [parentId, list] of byParent) {
+    const ordered = list.slice().sort((a, b) => siblingIndex(next, b) - siblingIndex(next, a))
+    for (const id of ordered) {
+      const row = locateDesign(next, id)
+      if (!row) continue
+      const index = siblingIndex(next, id)
+      if (index < 0) continue
+      const copy = copyTree(row.node, mint, dx, dy)
+      delete copy.locked
+      next = insertDesignNodeAt(next, parentId, copy, index + 1)
+      made.push({ source: id, id: copy.id })
+    }
+  }
+  if (!made.length) return null
+  const rank = new Map(ids.map((id, index) => [id, index]))
+  made.sort((a, b) => (rank.get(a.source) ?? 0) - (rank.get(b.source) ?? 0))
+  return { doc: next, ids: made.map((item) => item.id) }
+}
+
+/** Every sibling of the selection. An empty or mixed selection selects the screens. */
+export function selectAllDesign(doc: DesignDoc, ids: string[]): string[] {
+  const rows = ids.flatMap((id) => {
+    const row = locateDesign(doc, id)
+    return row ? [row] : []
+  })
+  const parentId = rows[0]?.parentId
+  const same = rows.length > 0 && rows.every((row) => row.parentId === parentId)
+  if (!same || parentId == null) return doc.screens.map((screen) => screen.id)
+  return findDesignNode(doc, parentId)?.children?.map((child) => child.id) ?? []
+}
+
+/** Paint and text fields that are actually set. Omitted fields are left alone on paste. */
+export function designStyle(node: DesignNode): DesignStyle {
+  const style: DesignStyle = {}
+  if (node.fill !== undefined) style.fill = node.fill
+  if (node.stroke !== undefined) style.stroke = node.stroke
+  if (node.strokeWidth !== undefined) style.strokeWidth = node.strokeWidth
+  if (node.radius !== undefined) style.radius = node.radius
+  if (node.opacity !== undefined) style.opacity = node.opacity
+  if (node.fontSize !== undefined) style.fontSize = node.fontSize
+  if (node.weight !== undefined) style.weight = node.weight
+  if (node.textAlign !== undefined) style.textAlign = node.textAlign
+  if (node.lineHeight !== undefined) style.lineHeight = node.lineHeight
+  if (node.letterSpacing !== undefined) style.letterSpacing = node.letterSpacing
+  if (node.color !== undefined) style.color = node.color
+  return style
+}
+
+/** Write a copied style. Text fields land on text nodes. Locked nodes stay. */
+export function applyDesignStyle(doc: DesignDoc, ids: string[], style: DesignStyle): DesignDoc {
+  let next = doc
+  for (const id of ids) {
+    next = updateDesignNode(next, id, (node) => {
+      if (node.locked) return node
+      const copy: DesignNode = { ...node }
+      if (style.fill !== undefined) copy.fill = style.fill
+      if (style.stroke !== undefined) copy.stroke = style.stroke
+      if (style.strokeWidth !== undefined) copy.strokeWidth = style.strokeWidth
+      if (style.radius !== undefined) copy.radius = style.radius
+      if (style.opacity !== undefined) copy.opacity = style.opacity
+      if (node.kind !== 'text') return copy
+      if (style.fontSize !== undefined) copy.fontSize = style.fontSize
+      if (style.weight !== undefined) copy.weight = style.weight
+      if (style.textAlign !== undefined) copy.textAlign = style.textAlign
+      if (style.lineHeight !== undefined) copy.lineHeight = style.lineHeight
+      if (style.letterSpacing !== undefined) copy.letterSpacing = style.letterSpacing
+      if (style.color !== undefined) copy.color = style.color
+      return copy
+    })
+  }
+  return next
+}
+
+function designRoots(doc: DesignDoc, ids: string[]): string[] {
+  const chosen = new Set(ids)
+  return ids.filter((id) => {
+    const path = pathToNode(doc, id)
+    if (!path) return false
+    return !path.slice(0, -1).some((node) => chosen.has(node.id))
+  })
+}
+
+function siblingIndex(doc: DesignDoc, id: string): number {
+  const row = locateDesign(doc, id)
+  if (!row) return -1
+  const siblings = row.parentId == null ? doc.screens : findDesignNode(doc, row.parentId)?.children ?? []
+  return siblings.findIndex((node) => node.id === id)
+}
+
+function flowIndex(doc: DesignDoc, id: string): number {
+  const row = locateDesign(doc, id)
+  const parent = row?.parentId ? findDesignNode(doc, row.parentId) : null
+  return (parent?.children ?? []).filter((child) => !child.absolute).findIndex((child) => child.id === id)
+}
+
+function unionRects(rects: DesignRect[]): DesignRect | null {
+  if (!rects.length) return null
+  let x0 = Infinity
+  let y0 = Infinity
+  let x1 = -Infinity
+  let y1 = -Infinity
+  for (const rect of rects) {
+    x0 = Math.min(x0, rect.x)
+    y0 = Math.min(y0, rect.y)
+    x1 = Math.max(x1, rect.x + rect.w)
+    y1 = Math.max(y1, rect.y + rect.h)
+  }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+}
+
+function collectSnapBoxes(
+  node: DesignNode,
+  toCanvas: (x: number, y: number) => DesignVectorPoint,
+  skip: Set<string>,
+  into: DesignRect[],
+) {
+  if (node.visible === false || skip.has(node.id)) return
+  into.push(canvasBox(node, toCanvas))
+  if (!node.children?.length) return
+  const outer = toCanvas
+  const next = (x: number, y: number) => {
+    const spun = spinToParent(node, x, y)
+    return outer(spun.x, spun.y)
+  }
+  for (const child of node.children) collectSnapBoxes(child, next, skip, into)
+}
+
+function snapAxis(
+  min: number,
+  max: number,
+  targets: DesignRect[],
+  axis: 'x' | 'y',
+  threshold: number,
+): { delta: number; at: number } | null {
+  const mid = (min + max) / 2
+  const moving = [min, mid, max]
+  let best: { abs: number; delta: number; at: number; rank: number } | null = null
+  for (const target of targets) {
+    const start = axis === 'x' ? target.x : target.y
+    const end = start + (axis === 'x' ? target.w : target.h)
+    const points = [start, (start + end) / 2, end]
+    for (let movingIndex = 0; movingIndex < moving.length; movingIndex++) {
+      for (let targetIndex = 0; targetIndex < points.length; targetIndex++) {
+        const at = points[targetIndex]
+        const from = moving[movingIndex]
+        if (at == null || from == null) continue
+        const delta = at - from
+        const abs = Math.abs(delta)
+        if (abs > threshold) continue
+        const rank = movingIndex === 1 || targetIndex === 1 ? 1 : 0
+        if (!best || abs < best.abs - 0.01 || (Math.abs(abs - best.abs) <= 0.01 && rank < best.rank)) {
+          best = { abs, delta, at, rank }
+        }
+      }
+    }
+  }
+  return best ? { delta: best.delta, at: best.at } : null
+}
+
+function guideSpan(at: number, axis: 'x' | 'y', moving: DesignRect, targets: DesignRect[]): { from: number; to: number } {
+  let from = axis === 'x' ? moving.y : moving.x
+  let to = from + (axis === 'x' ? moving.h : moving.w)
+  for (const target of targets) {
+    const start = axis === 'x' ? target.x : target.y
+    const end = start + (axis === 'x' ? target.w : target.h)
+    const mid = (start + end) / 2
+    if (Math.abs(start - at) > 0.5 && Math.abs(end - at) > 0.5 && Math.abs(mid - at) > 0.5) continue
+    const cross = axis === 'x' ? target.y : target.x
+    const crossEnd = cross + (axis === 'x' ? target.h : target.w)
+    from = Math.min(from, cross)
+    to = Math.max(to, crossEnd)
+  }
+  return { from, to }
+}
+
+function designMeasures(moved: DesignRect, targets: DesignRect[]): DesignMeasure[] {
+  const measures: DesignMeasure[] = []
+  const overlap = (a0: number, a1: number, b0: number, b1: number) => Math.min(a1, b1) - Math.max(a0, b0)
+  let left: { gap: number; target: DesignRect } | null = null
+  let right: { gap: number; target: DesignRect } | null = null
+  let above: { gap: number; target: DesignRect } | null = null
+  let below: { gap: number; target: DesignRect } | null = null
+  for (const target of targets) {
+    const vertical = overlap(moved.y, moved.y + moved.h, target.y, target.y + target.h)
+    const horizontal = overlap(moved.x, moved.x + moved.w, target.x, target.x + target.w)
+    const gapLeft = moved.x - (target.x + target.w)
+    const gapRight = target.x - (moved.x + moved.w)
+    const gapAbove = moved.y - (target.y + target.h)
+    const gapBelow = target.y - (moved.y + moved.h)
+    if (vertical > 0 && gapLeft >= 0.5 && (!left || gapLeft < left.gap)) left = { gap: gapLeft, target }
+    if (vertical > 0 && gapRight >= 0.5 && (!right || gapRight < right.gap)) right = { gap: gapRight, target }
+    if (horizontal > 0 && gapAbove >= 0.5 && (!above || gapAbove < above.gap)) above = { gap: gapAbove, target }
+    if (horizontal > 0 && gapBelow >= 0.5 && (!below || gapBelow < below.gap)) below = { gap: gapBelow, target }
+  }
+  if (left) {
+    const top = Math.max(moved.y, left.target.y)
+    const bottom = Math.min(moved.y + moved.h, left.target.y + left.target.h)
+    measures.push({ axis: 'x', x: left.target.x + left.target.w, y: (top + bottom) / 2, length: left.gap, label: String(Math.round(left.gap)) })
+  }
+  if (right) {
+    const top = Math.max(moved.y, right.target.y)
+    const bottom = Math.min(moved.y + moved.h, right.target.y + right.target.h)
+    measures.push({ axis: 'x', x: moved.x + moved.w, y: (top + bottom) / 2, length: right.gap, label: String(Math.round(right.gap)) })
+  }
+  if (above) {
+    const start = Math.max(moved.x, above.target.x)
+    const end = Math.min(moved.x + moved.w, above.target.x + above.target.w)
+    measures.push({ axis: 'y', x: (start + end) / 2, y: above.target.y + above.target.h, length: above.gap, label: String(Math.round(above.gap)) })
+  }
+  if (below) {
+    const start = Math.max(moved.x, below.target.x)
+    const end = Math.min(moved.x + moved.w, below.target.x + below.target.w)
+    measures.push({ axis: 'y', x: (start + end) / 2, y: moved.y + moved.h, length: below.gap, label: String(Math.round(below.gap)) })
+  }
+  return measures
+}
+
 /** Move a flow child to a new index among its non-absolute siblings. */
 export function reorderDesignNode(doc: DesignDoc, id: string, index: number): DesignDoc {
   const located = locateDesign(doc, id)
