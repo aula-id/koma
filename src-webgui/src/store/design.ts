@@ -50,7 +50,22 @@ export const initialDesign: DesignSlice = {
   fileUi: {},
 }
 
-export function dropDesignFileUi(fileUi: Record<string, DesignFileUiState>, root: string, path: string): Record<string, DesignFileUiState> {
+/** Fill missing design-slice fields so UI never indexes undefined. */
+export function normalizeDesignSlice(design: Partial<DesignSlice> | null | undefined): DesignSlice {
+  return {
+    docs: design?.docs ?? {},
+    pendingCreate: design?.pendingCreate ?? null,
+    panelTabId: design?.panelTabId ?? null,
+    fileUi: design?.fileUi ?? {},
+  }
+}
+
+export function dropDesignFileUi(
+  fileUi: Record<string, DesignFileUiState> | null | undefined,
+  root: string,
+  path: string,
+): Record<string, DesignFileUiState> {
+  if (!fileUi) return {}
   const key = fileKey(root, path)
   if (!(key in fileUi)) return fileUi
   const next = { ...fileUi }
@@ -101,12 +116,12 @@ export type DesignReadClaim = {
 /** Claim a FileRead that this slice issued. Null means another buffer owns it. */
 export function claimDesignRead(design: DesignSlice, env: ReadEnv): DesignReadClaim | null {
   const key = fileKey(env.root, env.path)
-  const prev = design.docs[key]
+  const prev = design?.docs?.[key]
   if (!prev || prev.readReq !== env.requestId) return null
   const seeding = design.pendingCreate?.readReq === env.requestId
   if (env.error || env.binary || env.tooLarge || env.content == null) {
     return {
-      design: {
+      design: normalizeDesignSlice({
         ...design,
         pendingCreate: seeding ? null : design.pendingCreate,
         docs: {
@@ -120,7 +135,7 @@ export function claimDesignRead(design: DesignSlice, env: ReadEnv): DesignReadCl
             error: env.error ?? (env.binary ? 'This file is not text' : env.tooLarge ? 'This file is too large' : 'Could not read this design'),
           },
         },
-      },
+      }),
     }
   }
   // A just-created file is empty. Fill it with an empty design, using the
@@ -130,7 +145,8 @@ export function claimDesignRead(design: DesignSlice, env: ReadEnv): DesignReadCl
     const content = serializeDesign(doc)
     const requestId = `dsgn-save-${env.requestId}`
     return {
-      design: {
+      design: normalizeDesignSlice({
+        ...design,
         pendingCreate: null,
         docs: {
           ...design.docs,
@@ -143,14 +159,14 @@ export function claimDesignRead(design: DesignSlice, env: ReadEnv): DesignReadCl
             pendingSaveText: content,
           }),
         },
-      },
+      }),
       save: { root: env.root, path: env.path, content, fingerprint: env.fingerprint, requestId },
     }
   }
   const parsed = parseDesign(env.content)
   const text = serializeDesign(parsed.doc)
   return {
-    design: {
+    design: normalizeDesignSlice({
       ...design,
       pendingCreate: seeding ? null : design.pendingCreate,
       docs: {
@@ -162,17 +178,17 @@ export function claimDesignRead(design: DesignSlice, env: ReadEnv): DesignReadCl
           error: parsed.error,
         }),
       },
-    },
+    }),
   }
 }
 
 /** Claim a FileSave that this slice issued. Null means another buffer owns it. */
 export function claimDesignSave(design: DesignSlice, env: SaveEnv): DesignSlice | null {
   const key = fileKey(env.root, env.path)
-  const prev = design.docs[key]
+  const prev = design?.docs?.[key]
   if (!prev || prev.saveReq !== env.requestId) return null
   if (env.error) {
-    return {
+    return normalizeDesignSlice({
       ...design,
       docs: {
         ...design.docs,
@@ -184,11 +200,11 @@ export function claimDesignSave(design: DesignSlice, env: SaveEnv): DesignSlice 
           error: env.error,
         },
       },
-    }
+    })
   }
   const latest = serializeDesign(prev.doc)
   const written = prev.pendingSaveText ?? latest
-  return {
+  return normalizeDesignSlice({
     ...design,
     docs: {
       ...design.docs,
@@ -203,15 +219,16 @@ export function claimDesignSave(design: DesignSlice, env: SaveEnv): DesignSlice 
         error: null,
       },
     },
-  }
+  })
 }
 
 export function remapDesignDocs(
-  docs: Record<string, DesignFileState>,
+  docs: Record<string, DesignFileState> | null | undefined,
   root: string,
   oldPath: string,
   newPath: string,
 ): Record<string, DesignFileState> {
+  if (!docs) return {}
   let changed = false
   const next: Record<string, DesignFileState> = {}
   const prefix = `${root}:`
@@ -232,10 +249,11 @@ export function remapDesignDocs(
 }
 
 export function dropDesignDocs(
-  docs: Record<string, DesignFileState>,
+  docs: Record<string, DesignFileState> | null | undefined,
   root: string,
   path: string,
 ): Record<string, DesignFileState> {
+  if (!docs) return {}
   let changed = false
   const next: Record<string, DesignFileState> = {}
   const prefix = `${root}:`

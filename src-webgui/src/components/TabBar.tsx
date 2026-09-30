@@ -438,7 +438,7 @@ export function TabBar({ groupId, focused }: Props) {
   }, [diagramDirtySig])
   const designDirtySig = useKoma((s) => {
     const parts: [string, string][] = []
-    for (const [k, doc] of Object.entries(s.design.docs)) {
+    for (const [k, doc] of Object.entries(s.design?.docs ?? {})) {
       if (!doc || !(doc.dirty || doc.saving)) continue
       parts.push([k, `${doc.dirty ? 1 : 0}${doc.saving ? 1 : 0}${doc.savedText == null ? 1 : 0}`])
     }

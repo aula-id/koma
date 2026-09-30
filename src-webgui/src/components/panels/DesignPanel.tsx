@@ -30,8 +30,10 @@ import {
 import { resolveDesignPanelTab } from '../../lib/designPanelTab'
 import { emitDesignLayer } from '../../lib/designUi'
 import { designPngBase64 } from '../../lib/designRender'
+import type { DesignFileState } from '../../store/design'
 
 const EMPTY_ROOTS: string[] = []
+const EMPTY_DESIGN_DOCS: Record<string, DesignFileState> = {}
 const TOKEN_KINDS: { kind: DesignTokenKind; label: string }[] = [
   { kind: 'color', label: 'Color' },
   { kind: 'space', label: 'Space' },
@@ -254,7 +256,7 @@ export function DesignPanel() {
   const workdir = useKoma((s) => s.settingsValues?.workdir ?? EMPTY_ROOTS)
   const activeRoot = useKoma((s) => s.coding.activeRoot)
   const dir = useKoma((s) => (activeRoot ? s.coding.dirs[fileKey(activeRoot, '.koma')] : undefined))
-  const docs = useKoma((s) => s.design.docs)
+  const docs = useKoma((s) => s.design?.docs ?? EMPTY_DESIGN_DOCS)
   const setActiveCodingRoot = useKoma((s) => s.setActiveCodingRoot)
   const refreshCodingDir = useKoma((s) => s.refreshCodingDir)
   const openDesignTab = useKoma((s) => s.openDesignTab)
@@ -346,7 +348,9 @@ export function DesignPanel() {
   }
 
   const open = designTab ? docs[fileKey(designTab.root, designTab.path)] : undefined
-  const fileUi = useKoma((s) => (designTab ? s.design.fileUi[fileKey(designTab.root, designTab.path)] : undefined))
+  const fileUi = useKoma((s) =>
+    designTab ? s.design?.fileUi?.[fileKey(designTab.root, designTab.path)] : undefined,
+  )
   const focusId = fileUi?.focusId ?? null
   const selection = fileUi?.selection ?? []
   const viewDoc = open && !open.loading ? (focusId ? componentView(open.doc, focusId) ?? open.doc : open.doc) : null

@@ -62,7 +62,7 @@ export function tabActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openD
       return closing && closing.kind === 'design' ? closing : null
     })()
     if (closingDesign) {
-      const doc = get().design.docs[fileKey(closingDesign.root, closingDesign.path)]
+      const doc = get().design?.docs?.[fileKey(closingDesign.root, closingDesign.path)]
       if (doc?.saving) return
       if (doc?.dirty && !opts?.force) return
     }
@@ -120,14 +120,14 @@ export function tabActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openD
       let design = s.design
       if (closingDesign && opts?.force) {
         const fallbackPanel =
-          s.design.panelTabId === id
+          s.design?.panelTabId === id
             ? tabs.find((t) => t.kind === 'design')?.id ?? null
-            : s.design.panelTabId
+            : s.design?.panelTabId ?? null
         design = {
           ...s.design,
           panelTabId: fallbackPanel,
-          docs: dropDesignDocs(s.design.docs, closingDesign.root, closingDesign.path),
-          fileUi: dropDesignFileUi(s.design.fileUi, closingDesign.root, closingDesign.path),
+          docs: dropDesignDocs(s.design?.docs, closingDesign.root, closingDesign.path),
+          fileUi: dropDesignFileUi(s.design?.fileUi, closingDesign.root, closingDesign.path),
         }
       }
       return {

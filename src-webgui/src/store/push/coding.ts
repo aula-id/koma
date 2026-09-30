@@ -11,7 +11,7 @@ import { beginDesignSeed } from '../actions/design'
 import { beginDiagramSeed } from '../actions/diagram'
 import type { StoreGet, StoreSet } from '../api'
 import { baseName as codingBaseName, isPathOrDescendant as codingIsPathOrDescendant, remapPath as codingRemapPath, fileKey, mintRequestId, reduceFileContentReplace, reduceFileContentSearch, reduceFileCreate, reduceFileDelete, reduceFileRead, reduceFileRename, reduceFileSave, reduceFileTree, reduceFileWriteBytes } from '../coding'
-import { claimDesignRead, claimDesignSave, dropDesignDocs, remapDesignDocs } from '../design'
+import { claimDesignRead, claimDesignSave, dropDesignDocs, normalizeDesignSlice, remapDesignDocs } from '../design'
 import { claimDiagramRead, claimDiagramSave, dropDiagramDocs, remapDiagramDocs } from '../diagram'
 import { normalizeGroups } from '../editorGroups'
 import type { PushEnvelope } from '../types/envelope'
@@ -254,7 +254,7 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
           break
         }
         const designKey = fileKey(env.root, env.path)
-        const designBefore = get().design.docs[designKey]
+        const designBefore = get().design?.docs?.[designKey]
         const designSaved = claimDesignSave(get().design, env)
         if (designSaved) {
           set({ design: designSaved })
@@ -359,14 +359,14 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
               beginDiagramSeed(set, get, pending.root, pending.path)
             }
           }
-          const designPending = get().design.pendingCreate
+          const designPending = get().design?.pendingCreate
           if (designPending && designPending.createReq === env.requestId) {
             if (env.error) {
               set((s) => ({
-                design: {
+                design: normalizeDesignSlice({
                   ...s.design,
-                  pendingCreate: s.design.pendingCreate?.createReq === env.requestId ? null : s.design.pendingCreate,
-                },
+                  pendingCreate: s.design?.pendingCreate?.createReq === env.requestId ? null : s.design?.pendingCreate ?? null,
+                }),
               }))
             } else {
               beginDesignSeed(set, get, designPending.root, designPending.path)
@@ -437,7 +437,7 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
           return {
             coding,
             diagram: { ...s.diagram, docs: remapDiagramDocs(s.diagram.docs, env.root, env.oldPath, env.newPath) },
-            design: { ...s.design, docs: remapDesignDocs(s.design.docs, env.root, env.oldPath, env.newPath) },
+            design: normalizeDesignSlice({ ...s.design, docs: remapDesignDocs(s.design?.docs, env.root, env.oldPath, env.newPath) }),
             ui: normalizeGroups({ ...s.ui, tabs, activeTabId, tabGroup, groupActive }),
           }
         })
@@ -504,7 +504,7 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
           return {
             coding,
             diagram: { ...s.diagram, docs: dropDiagramDocs(s.diagram.docs, env.root, env.path) },
-            design: { ...s.design, docs: dropDesignDocs(s.design.docs, env.root, env.path) },
+            design: normalizeDesignSlice({ ...s.design, docs: dropDesignDocs(s.design?.docs, env.root, env.path) }),
             ui: { ...s.ui, tabs, activeTabId },
           }
         })

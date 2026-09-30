@@ -90,7 +90,7 @@ export function CodingHistory() {
       if (controller.signal.aborted) return
       const current = useKoma.getState().coding.files[fileKey(context.workspace.root, selected.path)]
       const diagram = isDiagramPath(selected.path) ? useKoma.getState().diagram.docs[fileKey(context.workspace.root, selected.path)] : undefined
-      const design = isDesignPath(selected.path) ? useKoma.getState().design.docs[fileKey(context.workspace.root, selected.path)] : undefined
+      const design = isDesignPath(selected.path) ? useKoma.getState().design?.docs?.[fileKey(context.workspace.root, selected.path)] : undefined
       const backup = 'backup' in value ? value.backup as CodingBackup : undefined
       setSnapshot({ ...value, baseline: design ? serializeDesign(design.doc) : diagram ? serializeDiagram(diagram.doc) : current?.content ?? backup?.savedContent ?? '' })
     }).catch(e => { if (!controller.signal.aborted) setError(e.message) })
@@ -123,7 +123,7 @@ export function CodingHistory() {
     const { workspace } = context
     const key = fileKey(workspace.root, selected.path)
     if (isDesignPath(selected.path) && !context.disk) {
-      const design = useKoma.getState().design.docs[key]
+      const design = useKoma.getState().design?.docs?.[key]
       if (!design) { setError('Open the design before restoring its history.'); return }
       if (design.saving || design.loading) { setError('Wait for this design to finish loading or saving.'); return }
       const currentText = serializeDesign(design.doc)
@@ -135,7 +135,7 @@ export function CodingHistory() {
       try {
         if (currentText !== snapshot.content) await checkpointCodingDocument(workspace, selected.path, currentText, 'Before restore')
         const state = useKoma.getState()
-        const still = state.design.docs[key]
+        const still = state.design?.docs?.[key]
         if ((state.remoteState.hostId ?? 'local') !== workspace.hostId || !still || serializeDesign(still.doc) !== currentText) throw new Error('The design changed. Reopen the preview.')
         if (currentText !== snapshot.content) {
           window.dispatchEvent(new CustomEvent('koma-design-restore', { detail: { root: workspace.root, path: selected.path } }))

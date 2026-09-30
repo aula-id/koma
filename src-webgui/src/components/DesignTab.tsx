@@ -145,12 +145,12 @@ import { PenOverlay } from './design/DesignPropertyFields'
 
 export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const key = fileKey(tab.root, tab.path)
-  const file = useKoma((s) => s.design.docs[key])
+  const file = useKoma((s) => s.design?.docs?.[key])
   const updateDesign = useKoma((s) => s.updateDesign)
   const saveDesign = useKoma((s) => s.saveDesign)
   const setDesignFileUi = useKoma((s) => s.setDesignFileUi)
   const setDesignPanelTab = useKoma((s) => s.setDesignPanelTab)
-  const panelTabId = useKoma((s) => s.design.panelTabId)
+  const panelTabId = useKoma((s) => s.design?.panelTabId)
   const active = useKoma((s) => s.ui.activeTabId === tab.id && isTabVisible(s.ui, tab.id))
   const canvasRef = useRef<HTMLDivElement>(null)
   const pastRef = useRef<DesignDoc[]>([])
@@ -313,7 +313,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   noteRef.current = note
 
   const commit = (view: DesignDoc) => {
-    const stored = useKoma.getState().design.docs[key]?.doc
+    const stored = useKoma.getState().design?.docs?.[key]?.doc
     if (!stored) return
     const next = projectDoc(stored, focusRef.current, layoutDesign(view))
     if (serializeDesign(stored) === serializeDesign(next)) return
@@ -321,7 +321,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     updateDesign(tab.root, tab.path, next)
   }
   const commitStored = (next: DesignDoc, noteOnce = false) => {
-    const stored = useKoma.getState().design.docs[key]?.doc
+    const stored = useKoma.getState().design?.docs?.[key]?.doc
     if (!stored) return
     const laid = layoutDesign(next)
     if (serializeDesign(stored) === serializeDesign(laid)) return
@@ -340,7 +340,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     closeNudge()
     const prev = pastRef.current.pop()
     if (!prev) return
-    const current = useKoma.getState().design.docs[key]?.doc
+    const current = useKoma.getState().design?.docs?.[key]?.doc
     if (current) futureRef.current.push(current)
     setRev((value) => value + 1)
     setEditing(null)
@@ -350,7 +350,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     closeNudge()
     const next = futureRef.current.pop()
     if (!next) return
-    const current = useKoma.getState().design.docs[key]?.doc
+    const current = useKoma.getState().design?.docs?.[key]?.doc
     if (current) pastRef.current.push(current)
     setRev((value) => value + 1)
     setEditing(null)
@@ -362,7 +362,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   redoRef.current = redo
 
   const revert = () => {
-    const saved = useKoma.getState().design.docs[key]?.savedText
+    const saved = useKoma.getState().design?.docs?.[key]?.savedText
     if (!saved) return
     const parsed = parseDesign(saved)
     if (parsed.error) return
@@ -389,7 +389,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   }
 
   const zoomTo = (ids: string[] | null) => {
-    const stored = useKoma.getState().design.docs[key]?.doc
+    const stored = useKoma.getState().design?.docs?.[key]?.doc
     const canvas = canvasRef.current
     if (!stored || !canvas) return
     const open = editingDoc(stored, focusRef.current)
@@ -433,7 +433,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       setRev((value) => value + 1)
     }
     const commitDrawn = (doc: DesignDoc, drag: Extract<Drag, { kind: 'draw' }>) => {
-      const stored = useKoma.getState().design.docs[key]?.doc
+      const stored = useKoma.getState().design?.docs?.[key]?.doc
       if (!stored) return
       const tiny = Math.hypot(drag.x1 - drag.x0, drag.y1 - drag.y0) < 4
       const id = mintId(drag.shape[0])
@@ -506,7 +506,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
           drag.y0 = corners.y0
           drag.x1 = corners.x1
           drag.y1 = corners.y1
-          const stored = useKoma.getState().design.docs[key]?.doc
+          const stored = useKoma.getState().design?.docs?.[key]?.doc
           const doc = stored ? editingDoc(stored, focusRef.current) : null
           const box = drawnBox(drag.x0, drag.y0, drag.x1, drag.y1, doc?.grid ?? 8, !!doc?.snap)
           setGhost({ kind: 'shape', shape: drag.shape, ...box, rotation: 0 })
@@ -533,7 +533,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         return
       }
       if (drag.kind !== 'move' && drag.kind !== 'resize' && drag.kind !== 'radius') return
-      const stored = useKoma.getState().design.docs[key]?.doc
+      const stored = useKoma.getState().design?.docs?.[key]?.doc
       if (!stored) return
       const focus = focusRef.current
       const doc = editingDoc(stored, focus)
@@ -648,7 +648,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       setSnapMarks(null)
       if (drag?.kind === 'pen') setPenHandle(null)
       if (!drag || drag.kind === 'pan' || drag.kind === 'pen') return
-      const stored = useKoma.getState().design.docs[key]?.doc
+      const stored = useKoma.getState().design?.docs?.[key]?.doc
       if (!stored) return
       const focus = focusRef.current
       const doc = editingDoc(stored, focus)
@@ -691,7 +691,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       const detail = (event as CustomEvent<{ root: string; path: string; doc: DesignDoc }>).detail
       if (!detail || detail.root !== tab.root || detail.path !== tab.path) return
       event.preventDefault()
-      const stored = useKoma.getState().design.docs[key]?.doc
+      const stored = useKoma.getState().design?.docs?.[key]?.doc
       if (!stored || serializeDesign(stored) === serializeDesign(detail.doc)) return
       noteRef.current(stored)
       updateRef.current(tab.root, tab.path, detail.doc)
@@ -866,7 +866,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   }, [active, file?.loading, key, saveDesign, selection, tab.path, tab.root])
 
   const placeAt = (kind: DrawShape, point: { x: number; y: number }) => {
-    const stored = useKoma.getState().design.docs[key]?.doc
+    const stored = useKoma.getState().design?.docs?.[key]?.doc
     if (!stored) return
     const doc = editingDoc(stored, focusRef.current)
     const parent = kind === 'frame' || focusRef.current ? frameAtPoint(doc, point.x, point.y, '') : null
@@ -897,7 +897,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   }
 
   const applyPen = (draft: PenDraft, closed = false) => {
-    const stored = useKoma.getState().design.docs[key]?.doc
+    const stored = useKoma.getState().design?.docs?.[key]?.doc
     if (!stored) return
     const focus = focusRef.current
     const doc = editingDoc(stored, focus)
@@ -938,7 +938,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   penApplyRef.current = applyPen
 
   const viewDoc = () => {
-    const stored = useKoma.getState().design.docs[key]?.doc
+    const stored = useKoma.getState().design?.docs?.[key]?.doc
     if (!stored) return null
     return { stored, doc: editingDoc(stored, focusRef.current) }
   }
@@ -1045,7 +1045,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         setSelection(ids)
       }
       view = nudgeDesignNodes(view, ids, dx, dy)
-      const stored = useKoma.getState().design.docs[key]?.doc
+      const stored = useKoma.getState().design?.docs?.[key]?.doc
       if (!stored) return
       const next = projectDoc(stored, focusRef.current, layoutDesign(view))
       if (serializeDesign(stored) === serializeDesign(next)) return
@@ -1142,7 +1142,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       if (next) commit(next)
     },
     component: () => {
-      const stored = useKoma.getState().design.docs[key]?.doc
+      const stored = useKoma.getState().design?.docs?.[key]?.doc
       const id = selectionRef.current.length === 1 ? selectionRef.current[0] : null
       if (!stored || !id || focusRef.current) return
       const componentId = mintId('c')
@@ -1264,7 +1264,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     }
     if (tool === 'frame' || tool === 'rect' || tool === 'ellipse' || tool === 'line' || tool === 'text') {
       event.preventDefault()
-      const stored = useKoma.getState().design.docs[key]?.doc
+      const stored = useKoma.getState().design?.docs?.[key]?.doc
       const doc = stored ? editingDoc(stored, focusRef.current) : null
       dragRef.current = {
         kind: 'draw',
@@ -1279,7 +1279,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       }
       return
     }
-    const storedNow = useKoma.getState().design.docs[key]?.doc
+    const storedNow = useKoma.getState().design?.docs?.[key]?.doc
     const current = storedNow ? editingDoc(storedNow, focusRef.current) : null
     if (!current) return
     const resolved = resolveDesignSelectHit(current, point.x, point.y, enteredContainerRef.current)
@@ -1326,7 +1326,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const placeInstance = (componentId: string, point: { x: number; y: number }) => {
     focusRef.current = null
     setFocusId(null)
-    const stored = useKoma.getState().design.docs[key]?.doc
+    const stored = useKoma.getState().design?.docs?.[key]?.doc
     if (!stored) return
     const node = makeInstance(stored, componentId, mintId('i'), 0, 0)
     if (!node) return
@@ -1401,7 +1401,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const chain = selectedId ? designPath(doc, selectedId) ?? [] : []
   const enteredBox = enteredContainerId ? designCanvasBox(doc, enteredContainerId) : null
   const enterContainerAt = (containerId: string, clientX: number, clientY: number) => {
-    const storedNow = useKoma.getState().design.docs[key]?.doc
+    const storedNow = useKoma.getState().design?.docs?.[key]?.doc
     const current = storedNow ? editingDoc(storedNow, focusRef.current) : doc
     const point = toDoc(clientX, clientY)
     setEnteredContainerId(containerId)
@@ -1465,7 +1465,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
 
   const patchSelected = (fn: (node: DesignNode) => DesignNode, noteOnce = false) => {
     if (!selection.length) return
-    const stored = useKoma.getState().design.docs[key]?.doc
+    const stored = useKoma.getState().design?.docs?.[key]?.doc
     if (!stored) return
     let view = editingDoc(stored, focusRef.current)
     for (const id of selection) view = updateDesignNode(view, id, fn)
@@ -1624,7 +1624,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   event.preventDefault()
                   event.stopPropagation()
                   setSelection([id])
-                  const storedNow = useKoma.getState().design.docs[key]?.doc
+                  const storedNow = useKoma.getState().design?.docs?.[key]?.doc
                   const locatedNow = locateDesign(storedNow ? editingDoc(storedNow, focusRef.current) : doc, id)
                   if (!locatedNow) return
                   const raw = locatedNow.node.radius
@@ -1656,7 +1656,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   if (event.button !== 0 || toolRef.current !== 'select') return
                   event.preventDefault()
                   event.stopPropagation()
-                  const storedNow = useKoma.getState().design.docs[key]?.doc
+                  const storedNow = useKoma.getState().design?.docs?.[key]?.doc
                   const current = storedNow ? editingDoc(storedNow, focusRef.current) : doc
                   const point = toDoc(event.clientX, event.clientY)
                   let target = id
@@ -1712,7 +1712,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   event.preventDefault()
                   event.stopPropagation()
                   setSelection([id])
-                  const storedNow = useKoma.getState().design.docs[key]?.doc
+                  const storedNow = useKoma.getState().design?.docs?.[key]?.doc
                   const located = locateDesign(storedNow ? editingDoc(storedNow, focusRef.current) : doc, id)
                   if (!located || located.node.locked) return
                   const node = { ...located.node }
@@ -1736,7 +1736,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   labelNoted.current = false
                 }}
                 onText={(id, text) => {
-                  const stored = useKoma.getState().design.docs[key]?.doc
+                  const stored = useKoma.getState().design?.docs?.[key]?.doc
                   if (!stored) return
                   const view = updateDesignNode(editingDoc(stored, focusRef.current), id, (node) => ({ ...node, text }))
                   const next = projectDoc(stored, focusRef.current, layoutDesign(view))
@@ -1927,38 +1927,38 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
               axes={!multi && selected?.kind === 'instance' ? instanceAxes(storedDoc, selected) : null}
               onMakeComponent={!multi && !focusId && selected?.kind === 'frame' ? () => commandsRef.current?.component() : undefined}
               onAddVariant={!multi && focusId ? () => {
-                const stored = useKoma.getState().design.docs[key]?.doc
+                const stored = useKoma.getState().design?.docs?.[key]?.doc
                 const component = stored?.components.find((item) => item.id === focusId)
                 if (!stored || !component) return
                 const next = addComponentVariant(stored, focusId, nextVariantProps(component.variants), () => mintId('n'))
                 if (next) commitStored(next)
               } : undefined}
               onVariantProps={!multi && focusId && selectedVariant ? (props) => {
-                const stored = useKoma.getState().design.docs[key]?.doc
+                const stored = useKoma.getState().design?.docs?.[key]?.doc
                 if (!stored || !selectedId) return
                 const next = setVariantProps(stored, focusId, selectedId, props)
                 if (next) commitStored(next, true)
               } : undefined}
               onRenameComponent={!multi && focusId ? (name) => {
-                const stored = useKoma.getState().design.docs[key]?.doc
+                const stored = useKoma.getState().design?.docs?.[key]?.doc
                 if (!stored) return
                 const next = renameComponent(stored, focusId, name)
                 if (next) commitStored(next, true)
               } : undefined}
               onInstanceVariant={!multi && selected?.kind === 'instance' ? (props) => {
-                const stored = useKoma.getState().design.docs[key]?.doc
+                const stored = useKoma.getState().design?.docs?.[key]?.doc
                 if (!stored) return
                 const next = setInstanceVariant(stored, selected.id, props)
                 if (next) commitStored(next)
               } : undefined}
               onAddToChat={!multi && chatQuery ? sendChat : undefined}
               onAlign={selectedNodes.length && (multi || everyParent) ? (axis, edge) => {
-                const stored = useKoma.getState().design.docs[key]?.doc
+                const stored = useKoma.getState().design?.docs?.[key]?.doc
                 if (!stored) return
                 commit(alignDesignNodes(editingDoc(stored, focusRef.current), selection, axis, edge))
               } : undefined}
               onResetInstance={!multi && selected?.kind === 'instance' && (selected.text || selected.fill || selected.overrides?.length) ? () => {
-                const stored = useKoma.getState().design.docs[key]?.doc
+                const stored = useKoma.getState().design?.docs?.[key]?.doc
                 if (!stored) return
                 commitStored(resetInstanceOverrides(stored, selected.id))
               } : undefined}
